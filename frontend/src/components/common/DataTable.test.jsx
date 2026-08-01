@@ -83,6 +83,53 @@ describe('DataTable', () => {
     expect(container.querySelectorAll('tbody .data-row')).toHaveLength(2);
   });
 
+  it('applies numeric alignment and custom column classes to headers and cells', () => {
+    const columns = [
+      baseColumns[0],
+      { ...baseColumns[1], align: 'right', className: 'numeric-cell' },
+    ];
+    render(
+      <DataTable
+        columns={columns}
+        rows={makeRows(1)}
+        getRowKey={(row) => row.id}
+        gridClassName="employee-table"
+      />,
+    );
+
+    const ageHeader = screen.getByRole('columnheader', { name: /Age/ });
+    const ageCell = screen.getByRole('cell', { name: '20' });
+    expect(ageHeader.className).toContain('text-right');
+    expect(ageHeader.className).toContain('numeric-cell');
+    expect(ageCell.className).toContain('text-right');
+    expect(ageCell.className).toContain('numeric-cell');
+  });
+
+  it('renders an optional semantic footer with the filtered/sorted rows before pagination', () => {
+    const rows = makeRows(25);
+    const { container } = render(
+      <DataTable
+        columns={baseColumns}
+        rows={rows}
+        getRowKey={(row) => row.id}
+        gridClassName="employee-table"
+        pageSize={10}
+        footerRow={({ rows: visibleRows }) => (
+          <tr className="employee-table employee-total-row">
+            <th scope="row">Total</th>
+            <td>{visibleRows.length}</td>
+          </tr>
+        )}
+      />,
+    );
+
+    const footer = container.querySelector('tfoot');
+    expect(footer).toBeTruthy();
+    expect(footer.querySelector('th').getAttribute('scope')).toBe('row');
+    expect(footer.textContent).toContain('Total');
+    expect(footer.textContent).toContain('25');
+  });
+
   it('slices rows per page and prev/next buttons navigate', () => {
     const rows = makeRows(25);
     render(
@@ -759,6 +806,121 @@ describe('DataTable', () => {
         fireEvent.click(screen.getByText('Employee 01').closest('tr'));
         expect(onRowClick).toHaveBeenCalledWith(rows[0]);
       });
+    });
+  });
+
+  describe('onRowSelect', () => {
+    function actionColumnsWithButton(onAction) {
+      return [
+        ...baseColumns,
+        {
+          key: 'action',
+          header: 'Action',
+          render: (row) => (
+            <button type="button" onClick={() => onAction(row.id)}>
+              Secondary {row.name}
+            </button>
+          ),
+        },
+      ];
+    }
+
+    it('adds selectable row semantics only for the explicit selection contract', () => {
+      const rows = makeRows(2);
+      render(
+        <DataTable
+          columns={baseColumns}
+          rows={rows}
+          getRowKey={(row) => row.id}
+          gridClassName="employee-table"
+          onRowSelect={() => {}}
+          isRowSelected={(row) => row.id === 2}
+        />,
+      );
+
+      const first = screen.getByText('Employee 01').closest('tr');
+      const second = screen.getByText('Employee 02').closest('tr');
+      expect(first.getAttribute('role')).toBe('row');
+      expect(first.getAttribute('tabindex')).toBe('-1');
+      expect(second.getAttribute('tabindex')).toBe('0');
+      // Item 4d fix (Opus review, 2026-07-31): `aria-selected` is only valid ARIA on a row inside a
+      // `grid`/`treegrid` -- this is a plain `<table>`/`role="row"`, so it now uses `aria-current`
+      // (a global ARIA state, valid on any role) instead. See the render in DataTable.jsx.
+      expect(first.getAttribute('aria-current')).toBe('false');
+      expect(second.getAttribute('aria-current')).toBe('true');
+    });
+
+    it('keeps one row in the Tab order and moves focus within rows with arrow keys', () => {
+      const rows = makeRows(3);
+      render(
+        <DataTable
+          columns={baseColumns}
+          rows={rows}
+          getRowKey={(row) => row.id}
+          gridClassName="employee-table"
+          onRowSelect={() => {}}
+          isRowSelected={() => false}
+        />,
+      );
+
+      const first = screen.getByText('Employee 01').closest('tr');
+      const second = screen.getByText('Employee 02').closest('tr');
+      const third = screen.getByText('Employee 03').closest('tr');
+      expect(first.getAttribute('tabindex')).toBe('0');
+      expect(second.getAttribute('tabindex')).toBe('-1');
+
+      first.focus();
+      fireEvent.keyDown(first, { key: 'ArrowDown' });
+
+      expect(document.activeElement).toBe(second);
+      expect(first.getAttribute('tabindex')).toBe('-1');
+      expect(second.getAttribute('tabindex')).toBe('0');
+
+      fireEvent.keyDown(second, { key: 'End' });
+      expect(document.activeElement).toBe(third);
+      expect(third.getAttribute('tabindex')).toBe('0');
+    });
+
+    it('renders an optional native table caption', () => {
+      render(
+        <DataTable
+          columns={baseColumns}
+          rows={makeRows(1)}
+          getRowKey={(row) => row.id}
+          gridClassName="employee-table"
+          caption="บัญชีเงินเดือน"
+        />,
+      );
+
+      const caption = screen.getByText('บัญชีเงินเดือน');
+      expect(caption.tagName).toBe('CAPTION');
+      expect(caption.className).toContain('sr-only');
+    });
+
+    it('selects from click, Enter, and Space without double-firing nested controls', () => {
+      const onRowSelect = vi.fn();
+      const onAction = vi.fn();
+      const rows = makeRows(1);
+      render(
+        <DataTable
+          columns={actionColumnsWithButton(onAction)}
+          rows={rows}
+          getRowKey={(row) => row.id}
+          gridClassName="employee-table"
+          onRowSelect={onRowSelect}
+          isRowSelected={() => false}
+        />,
+      );
+
+      const row = screen.getByText('Employee 01').closest('tr');
+      fireEvent.click(row);
+      fireEvent.keyDown(row, { key: 'Enter' });
+      fireEvent.keyDown(row, { key: ' ' });
+      fireEvent.click(screen.getByRole('button', { name: 'Secondary Employee 01' }));
+
+      expect(onRowSelect).toHaveBeenCalledTimes(3);
+      expect(onRowSelect).toHaveBeenCalledWith(rows[0]);
+      expect(onAction).toHaveBeenCalledWith(1);
     });
   });
 

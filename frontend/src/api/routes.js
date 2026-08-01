@@ -158,14 +158,26 @@ export const API_ROUTES = {
     process: '/api/payroll/process',
     export: (periodId, kind, effectiveDate) =>
       `/api/payroll/${periodId}/export/${kind}${effectiveDate ? `?effectiveDate=${effectiveDate}` : ''}`,
+    // Preview-time detail xlsx export (2026-07-30): HR must be able to review a month's full detail
+    // BEFORE processing it (e.g. a live-but-unprocessed month) -- there is no periodId yet, so this
+    // POSTs the same payload /preview does. Only payroll-detail supports this. Mirrors
+    // PayrollController#exportPreview.
+    exportPreview: (kind, effectiveDate) =>
+      `/api/payroll/preview/export/${kind}${effectiveDate ? `?effectiveDate=${effectiveDate}` : ''}`,
     payslip: (periodId, lineId) => `/api/payroll/${periodId}/lines/${lineId}/payslip.pdf`,
     ownPayslip: (periodId) => `/api/payroll/${periodId}/payslip/me`,
+    // Bulk payslip ZIP (2026-07-30): every payslip for a processed period, so HR can review the
+    // whole batch before distribute() emails it to everyone. Mirrors PayrollController#bulkPayslipZip.
+    payslipsZip: (periodId) => `/api/payroll/${periodId}/payslips.zip`,
     distribute: (periodId) => `/api/payroll/${periodId}/distribute`,
     taxAllowances: '/api/payroll/tax-allowances',
     ytdSeed: '/api/payroll/ytd-seed',
     // P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix. Mirrors
     // PayrollController's component-tax-treatments mapping.
     componentTaxTreatments: '/api/payroll/component-tax-treatments',
+    // Payroll input draft (2026-07-30): HR's in-progress, not-yet-processed inputs, persisted so a
+    // browser reload restores exactly what was typed. Mirrors PayrollController's input-draft mapping.
+    inputDraft: '/api/payroll/input-draft',
   },
   priceImport: {
     factories: '/api/price-import/factories',

@@ -69,7 +69,12 @@ export function formatAddress(address) {
 
 export function formatMoney(value) {
   if (value === null || value === undefined || value === '') return '-';
-  return `฿${Number(value).toLocaleString('en-US')}`;
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return '-';
+  return `฿${amount.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 export function initialsFromName(name = '') {

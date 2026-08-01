@@ -17,6 +17,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.payroll.export.PayrollDetailIdentityDto;
 import th.co.glr.hr.payroll.export.PayrollExportRow;
 import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentSsoInclusionUpsertRequest;
 import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentTaxTreatmentUpsertRequest;
@@ -48,7 +49,8 @@ public class PayrollRepository {
                    COALESCE(e.current_salary, 0) AS base_salary,
                    COALESCE(e.director_remuneration, 0) AS director_remuneration,
                    e.withholding_tax_override AS withholding_tax_override,
-                   e.date_of_birth AS date_of_birth
+                   e.date_of_birth AS date_of_birth,
+                   e.pay_type AS pay_type
               FROM hr.employee e
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
               LEFT JOIN hr.employee_bank_account ba ON ba.employee_id = e.employee_id
@@ -70,7 +72,12 @@ public class PayrollRepository {
                 rs.getBigDecimal("withholding_tax_override"),
                 // Drives the ยกเว้นเงินได้ 190,000 for taxpayers aged 65+ (V93). Nullable: a missing
                 // date of birth means the exemption is not granted on an assumption.
-                rs.getObject("date_of_birth", LocalDate.class)
+                rs.getObject("date_of_birth", LocalDate.class),
+                // Daily-rate support (2026-07-30): raw CHAR(1) code ('M'/'D'/null). Read raw --
+                // NULL means "never set" (172 legacy rows + any created before V1's default), which
+                // PayrollEmployeeSnapshot#dailyRatePay() and PayrollService treat as monthly, same as
+                // EmployeeRepository#payTypeLabel already does for display.
+                rs.getString("pay_type")
             ));
     }
 
@@ -537,6 +544,157 @@ public class PayrollRepository {
                     .addValue("documentReference", item.documentReference())
                     .addValue("updatedById", updatedById));
         }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Payroll input draft (2026-07-30). HR's typed-but-not-yet-processed per-run inputs -- see
+    // PayrollInputDraftDtos and PayrollService#getInputDraft/#saveInputDraft. hr.payroll_input_draft
+    // (V104) is a separate table from hr.payroll_line: payroll_line is the engine's computed OUTPUT;
+    // a draft is raw HR-typed input only, never read by PayrollCalculator, with no bearing on
+    // payroll math whatsoever.
+    // ------------------------------------------------------------------------------------------
+
+    /** Every saved draft row for a month, one per employee who has ever saved a draft for it. */
+    public List<PayrollEmployeeInputRequest> findInputDrafts(LocalDate payrollMonth) {
+        return jdbc.query("""
+            SELECT employee_id, special_pay_1, special_pay_2, special_pay_3, special_pay_4, special_pay_5,
+                   special_pay_6, special_pay_7, special_pay_8, special_pay_9,
+                   non_taxable_income, unpaid_leave_days, student_loan_deduction, legal_execution_deduction,
+                   other_post_tax_deductions, warning_letter_deduction, customer_return_deduction,
+                   other_pretax_deduction, withholding_tax_override,
+                   meal_allowance, per_diem_exempt, per_diem_taxable, per_diem_basis,
+                   bonus_pay, other_one_off_pay, customer_return_already_earned, garnishment_type,
+                   days_worked
+              FROM hr.payroll_input_draft
+             WHERE payroll_month = :payrollMonth
+             ORDER BY employee_id
+            """,
+            Map.of("payrollMonth", payrollMonth),
+            (rs, rowNum) -> new PayrollEmployeeInputRequest(
+                rs.getLong("employee_id"),
+                money(rs.getBigDecimal("special_pay_1")), money(rs.getBigDecimal("special_pay_2")),
+                money(rs.getBigDecimal("special_pay_3")), money(rs.getBigDecimal("special_pay_4")),
+                money(rs.getBigDecimal("special_pay_5")), money(rs.getBigDecimal("special_pay_6")),
+                money(rs.getBigDecimal("special_pay_7")), money(rs.getBigDecimal("special_pay_8")),
+                money(rs.getBigDecimal("special_pay_9")),
+                money(rs.getBigDecimal("non_taxable_income")), money(rs.getBigDecimal("unpaid_leave_days")),
+                money(rs.getBigDecimal("student_loan_deduction")), money(rs.getBigDecimal("legal_execution_deduction")),
+                money(rs.getBigDecimal("other_post_tax_deductions")),
+                // Tax-allowance fields are never part of a draft -- see this table's own comment
+                // above; they are the standing declaration, edited only via /api/payroll/tax-allowances.
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                money(rs.getBigDecimal("warning_letter_deduction")), money(rs.getBigDecimal("customer_return_deduction")),
+                money(rs.getBigDecimal("other_pretax_deduction")),
+                // Nullable/meaningful, read raw (no money() coercion) -- NULL = "no per-run override
+                // typed", distinct from an explicit 0. Same convention as every other reader of this
+                // column (e.g. the payroll_line row mapper below).
+                rs.getBigDecimal("withholding_tax_override"),
+                money(rs.getBigDecimal("meal_allowance")), money(rs.getBigDecimal("per_diem_exempt")),
+                money(rs.getBigDecimal("per_diem_taxable")),
+                rs.getString("per_diem_basis") == null ? null : PerDiemBasis.valueOf(rs.getString("per_diem_basis")),
+                money(rs.getBigDecimal("bonus_pay")), money(rs.getBigDecimal("other_one_off_pay")),
+                rs.getBoolean("customer_return_already_earned"),
+                rs.getString("garnishment_type") == null ? null : PayrollGarnishmentType.valueOf(rs.getString("garnishment_type")),
+                null,
+                rs.getBigDecimal("days_worked")
+            ));
+    }
+
+    /** Upsert one draft row per submitted input, keyed on (employee_id, payroll_month). */
+    public void saveInputDrafts(LocalDate payrollMonth, List<PayrollEmployeeInputRequest> inputs, Long updatedById) {
+        for (PayrollEmployeeInputRequest item : inputs) {
+            jdbc.update("""
+                INSERT INTO hr.payroll_input_draft (
+                    employee_id, payroll_month,
+                    special_pay_1, special_pay_2, special_pay_3, special_pay_4, special_pay_5,
+                    special_pay_6, special_pay_7, special_pay_8, special_pay_9,
+                    non_taxable_income, unpaid_leave_days, student_loan_deduction, legal_execution_deduction,
+                    other_post_tax_deductions, warning_letter_deduction, customer_return_deduction,
+                    other_pretax_deduction, withholding_tax_override,
+                    meal_allowance, per_diem_exempt, per_diem_taxable, per_diem_basis,
+                    bonus_pay, other_one_off_pay, customer_return_already_earned, garnishment_type,
+                    days_worked, updated_by, updated_at
+                ) VALUES (
+                    :employeeId, :payrollMonth,
+                    :specialPay1, :specialPay2, :specialPay3, :specialPay4, :specialPay5,
+                    :specialPay6, :specialPay7, :specialPay8, :specialPay9,
+                    :nonTaxableIncome, :unpaidLeaveDays, :studentLoanDeduction, :legalExecutionDeduction,
+                    :otherPostTaxDeductions, :warningLetterDeduction, :customerReturnDeduction,
+                    :otherPretaxDeduction, :withholdingTaxOverride,
+                    :mealAllowance, :perDiemExempt, :perDiemTaxable, :perDiemBasis,
+                    :bonusPay, :otherOneOffPay, :customerReturnAlreadyEarned, :garnishmentType,
+                    :daysWorked, :updatedById, now()
+                )
+                ON CONFLICT (employee_id, payroll_month) DO UPDATE SET
+                    special_pay_1 = EXCLUDED.special_pay_1, special_pay_2 = EXCLUDED.special_pay_2,
+                    special_pay_3 = EXCLUDED.special_pay_3, special_pay_4 = EXCLUDED.special_pay_4,
+                    special_pay_5 = EXCLUDED.special_pay_5, special_pay_6 = EXCLUDED.special_pay_6,
+                    special_pay_7 = EXCLUDED.special_pay_7, special_pay_8 = EXCLUDED.special_pay_8,
+                    special_pay_9 = EXCLUDED.special_pay_9,
+                    non_taxable_income = EXCLUDED.non_taxable_income,
+                    unpaid_leave_days = EXCLUDED.unpaid_leave_days,
+                    student_loan_deduction = EXCLUDED.student_loan_deduction,
+                    legal_execution_deduction = EXCLUDED.legal_execution_deduction,
+                    other_post_tax_deductions = EXCLUDED.other_post_tax_deductions,
+                    warning_letter_deduction = EXCLUDED.warning_letter_deduction,
+                    customer_return_deduction = EXCLUDED.customer_return_deduction,
+                    other_pretax_deduction = EXCLUDED.other_pretax_deduction,
+                    withholding_tax_override = EXCLUDED.withholding_tax_override,
+                    meal_allowance = EXCLUDED.meal_allowance,
+                    per_diem_exempt = EXCLUDED.per_diem_exempt,
+                    per_diem_taxable = EXCLUDED.per_diem_taxable,
+                    per_diem_basis = EXCLUDED.per_diem_basis,
+                    bonus_pay = EXCLUDED.bonus_pay,
+                    other_one_off_pay = EXCLUDED.other_one_off_pay,
+                    customer_return_already_earned = EXCLUDED.customer_return_already_earned,
+                    garnishment_type = EXCLUDED.garnishment_type,
+                    days_worked = EXCLUDED.days_worked,
+                    updated_by = EXCLUDED.updated_by,
+                    updated_at = now()
+                """,
+                new MapSqlParameterSource()
+                    .addValue("employeeId", item.employeeId())
+                    .addValue("payrollMonth", payrollMonth)
+                    .addValue("specialPay1", safe(item.specialPay1()))
+                    .addValue("specialPay2", safe(item.specialPay2()))
+                    .addValue("specialPay3", safe(item.specialPay3()))
+                    .addValue("specialPay4", safe(item.specialPay4()))
+                    .addValue("specialPay5", safe(item.specialPay5()))
+                    .addValue("specialPay6", safe(item.specialPay6()))
+                    .addValue("specialPay7", safe(item.specialPay7()))
+                    .addValue("specialPay8", safe(item.specialPay8()))
+                    .addValue("specialPay9", safe(item.specialPay9()))
+                    .addValue("nonTaxableIncome", safe(item.nonTaxableIncome()))
+                    .addValue("unpaidLeaveDays", safe(item.unpaidLeaveDays()))
+                    .addValue("studentLoanDeduction", safe(item.studentLoanDeduction()))
+                    .addValue("legalExecutionDeduction", safe(item.legalExecutionDeduction()))
+                    .addValue("otherPostTaxDeductions", safe(item.otherPostTaxDeductions()))
+                    .addValue("warningLetterDeduction", safe(item.warningLetterDeduction()))
+                    .addValue("customerReturnDeduction", safe(item.customerReturnDeduction()))
+                    .addValue("otherPretaxDeduction", safe(item.otherPretaxDeduction()))
+                    .addValue("withholdingTaxOverride", item.withholdingTaxOverride())
+                    .addValue("mealAllowance", safe(item.mealAllowance()))
+                    .addValue("perDiemExempt", safe(item.perDiemExempt()))
+                    .addValue("perDiemTaxable", safe(item.perDiemTaxable()))
+                    .addValue("perDiemBasis", item.perDiemBasis() == null ? null : item.perDiemBasis().name())
+                    .addValue("bonusPay", safe(item.bonusPay()))
+                    .addValue("otherOneOffPay", safe(item.otherOneOffPay()))
+                    .addValue("customerReturnAlreadyEarned", Boolean.TRUE.equals(item.customerReturnAlreadyEarned()))
+                    .addValue("garnishmentType", item.garnishmentType() == null ? null : item.garnishmentType().name())
+                    .addValue("daysWorked", item.daysWorked())
+                    .addValue("updatedById", updatedById));
+        }
+    }
+
+    /**
+     * Clears every draft row for a month. Called once {@link PayrollService#process} succeeds, in
+     * the same transaction, so a stale draft can never resurrect over real submitted values on a
+     * later reload -- the whole point of a draft is to hold HR's place until the month is
+     * processed, not to survive past it.
+     */
+    public void deleteInputDrafts(LocalDate payrollMonth) {
+        jdbc.update("DELETE FROM hr.payroll_input_draft WHERE payroll_month = :payrollMonth",
+            Map.of("payrollMonth", payrollMonth));
     }
 
     // ------------------------------------------------------------------------------------------
@@ -1049,7 +1207,16 @@ public class PayrollRepository {
                    pl.withholding_tax_regular_limb, pl.withholding_tax_cumulative_limb,
                    pl.customer_return_already_earned, pl.garnishment_type,
                    pl.meal_allowance, pl.per_diem_exempt, pl.per_diem_taxable, pl.per_diem_basis,
-                   pl.customer_return_requested
+                   pl.customer_return_requested,
+                   pl.days_worked,
+                   -- Finding 3 fix (Opus review, 2026-07-30): was e.pay_type, read LIVE off the
+                   -- employee join -- so editing an employee's pay_type after processing retroactively
+                   -- changed how an already-processed historical line reported itself (the days-worked
+                   -- field would vanish from the UI while days_worked stayed on the row, and a
+                   -- reprocess would silently recompute SALARY as the bare rate again). pl.pay_type is
+                   -- frozen at processing time (see V103), the same pattern
+                   -- hr.overtime_request.salary_basis already uses for an identical reason.
+                   pl.pay_type
               FROM hr.payroll_line pl
               JOIN hr.employee e ON e.employee_id = pl.employee_id
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
@@ -1111,6 +1278,58 @@ public class PayrollRepository {
                 rs.getBigDecimal("withholding_tax"),
                 rs.getBigDecimal("sso_wage_base"),
                 rs.getBigDecimal("social_security")));
+    }
+
+    /**
+     * Identity/salary-history enrichment for {@code PayrollDetailExporter} only — see {@link
+     * PayrollDetailIdentityDto}'s javadoc for exactly what each field means and why. Read-only,
+     * no payroll math; two cheap queries (not a join into {@link #findLines}) so that method's
+     * shape and every existing caller/test stay untouched.
+     */
+    public Map<Long, PayrollDetailIdentityDto> findDetailIdentity(Collection<Long> employeeIds) {
+        if (employeeIds == null || employeeIds.isEmpty()) {
+            return Map.of();
+        }
+        // Built with a plain mutable map, NOT Map.entry()/Collectors.toMap() -- both reject a null
+        // value, and hire_date is frequently null (an employee seeded/onboarded without one), which
+        // must round-trip as null (no hire date on file), not blow up the whole export.
+        Map<Long, LocalDate> hireDates = new LinkedHashMap<>();
+        jdbc.query("""
+            SELECT employee_id, hire_date
+              FROM hr.employee
+             WHERE employee_id IN (:employeeIds)
+            """,
+            Map.of("employeeIds", employeeIds),
+            (rs, rowNum) -> {
+                hireDates.put(rs.getLong("employee_id"), rs.getObject("hire_date", LocalDate.class));
+                return null;
+            });
+
+        Map<Long, LocalDate[]> lastAdjustedDate = new LinkedHashMap<>();
+        Map<Long, BigDecimal> lastAdjustedAmount = new LinkedHashMap<>();
+        jdbc.query("""
+            SELECT DISTINCT ON (sh.employee_id) sh.employee_id, sh.effective_date, sh.new_amount
+              FROM hr.salary_history sh
+             WHERE sh.employee_id IN (:employeeIds)
+             ORDER BY sh.employee_id, sh.effective_date DESC NULLS LAST, sh.salary_id DESC
+            """,
+            Map.of("employeeIds", employeeIds),
+            (rs, rowNum) -> {
+                long employeeId = rs.getLong("employee_id");
+                lastAdjustedDate.put(employeeId, new LocalDate[] {rs.getObject("effective_date", LocalDate.class)});
+                lastAdjustedAmount.put(employeeId, rs.getBigDecimal("new_amount"));
+                return null;
+            });
+
+        Map<Long, PayrollDetailIdentityDto> result = new LinkedHashMap<>();
+        for (Long employeeId : employeeIds) {
+            LocalDate[] adjustedHolder = lastAdjustedDate.get(employeeId);
+            result.put(employeeId, new PayrollDetailIdentityDto(
+                hireDates.get(employeeId),
+                adjustedHolder == null ? null : adjustedHolder[0],
+                lastAdjustedAmount.get(employeeId)));
+        }
+        return result;
     }
 
     public Map<Long, String> findEmployeeEmailsByIds(Collection<Long> employeeIds) {
@@ -1293,7 +1512,8 @@ public class PayrollRepository {
                 withholding_tax_regular_limb, withholding_tax_cumulative_limb,
                 customer_return_already_earned, garnishment_type,
                 meal_allowance, per_diem_exempt, per_diem_taxable, per_diem_basis,
-                customer_return_requested
+                customer_return_requested,
+                days_worked, pay_type
             )
             VALUES (
                 :periodId, :employeeId, :baseSalary, :dailyRate, :hourlyRate,
@@ -1318,7 +1538,8 @@ public class PayrollRepository {
                 :withholdingTaxRegularLimb, :withholdingTaxCumulativeLimb,
                 :customerReturnAlreadyEarned, :garnishmentType,
                 :mealAllowance, :perDiemExempt, :perDiemTaxable, :perDiemBasis,
-                :customerReturnRequested
+                :customerReturnRequested,
+                :daysWorked, :payType
             )
             """,
             new MapSqlParameterSource()
@@ -1390,7 +1611,16 @@ public class PayrollRepository {
                 .addValue("perDiemBasis", line.perDiemBasis())
                 // D1 fix (fourth reachability audit, 2026-07-30, V101): the raw entered amount,
                 // always -- see PayrollLineDto#customerReturnRequested's own javadoc.
-                .addValue("customerReturnRequested", safe(line.customerReturnRequested())));
+                .addValue("customerReturnRequested", safe(line.customerReturnRequested()))
+                // Daily-rate support (2026-07-30): nullable -- read raw so SQL NULL stays null
+                // (no COALESCE), same reasoning as withholdingTaxOverride above. NULL for every
+                // monthly employee and for any daily-rate line where HR typed nothing this run.
+                .addValue("daysWorked", line.daysWorked())
+                // Finding 3 fix (Opus review, 2026-07-30): freeze the employee's pay_type AS OF THIS
+                // RUN onto the line -- see this method's SELECT-side comment in findLines and V103's
+                // pay_type column comment for the full rationale (mirrors hr.overtime_request
+                // .salary_basis).
+                .addValue("payType", line.payType()));
     }
 
     private PayrollPeriodDto toPeriod(PayrollPeriodHeader header, List<PayrollLineDto> lines) {
@@ -1476,7 +1706,11 @@ public class PayrollRepository {
             money(rs.getBigDecimal("per_diem_exempt")),
             money(rs.getBigDecimal("per_diem_taxable")),
             rs.getString("per_diem_basis"),
-            money(rs.getBigDecimal("customer_return_requested"))
+            money(rs.getBigDecimal("customer_return_requested")),
+            // Daily-rate support (2026-07-30): nullable -- read raw (no money()) so a monthly
+            // employee's line, which never has this figure, stays null rather than a misleading 0.00.
+            rs.getBigDecimal("days_worked"),
+            rs.getString("pay_type")
         );
     }
 

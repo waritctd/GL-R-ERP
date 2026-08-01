@@ -249,11 +249,16 @@ class DashboardRepositoryIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     private void insertCommission(long salesRepId, LocalDate payrollMonth) {
+        // V102 (chk_invoice_details_evidence_present) requires every row to show a real
+        // attachment OR a recognized evidence_provenance -- this fixture has neither an
+        // attachment nor any interest in ข้อ 15 evidence, so it supplies the same
+        // PRE_ERP_PAPER_APPROVAL value V102's own inline backfill uses for exactly this shape
+        // (attachment-less, dashboard/reporting-only test data), rather than leaving it NULL.
         Number invoiceId = jdbc.queryForObject("""
             INSERT INTO sales.invoice_details (
-                invoice_number, invoice_date, gross_amount
+                invoice_number, invoice_date, gross_amount, evidence_provenance
             )
-            VALUES ('INV-1', :invoiceDate, 1000)
+            VALUES ('INV-1', :invoiceDate, 1000, 'PRE_ERP_PAPER_APPROVAL')
             RETURNING invoice_id
             """, Map.of("invoiceDate", payrollMonth), Number.class);
         jdbc.update("""

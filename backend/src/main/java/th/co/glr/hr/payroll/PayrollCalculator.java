@@ -547,7 +547,15 @@ public class PayrollCalculator {
         cumulativeSum = money(cumulativeSum);
 
         BigDecimal baseSalary = money(input.amountOf(PayrollComponent.SALARY));
-        BigDecimal dailyRate = baseSalary.divide(THIRTY, RATE_SCALE, RoundingMode.HALF_UP);
+        // Daily-rate support (2026-07-30): for a pay_type = 'D' employee, baseSalary here is this
+        // PERIOD'S GROSS pay (rate * daysWorked, computed by PayrollService#calculateLine) -- dividing
+        // it by 30 would derive a wrong, days-worked-dependent "daily rate" (e.g. ฿11,250/30 = ฿375
+        // when the true rate is ฿450). dailyRateOverride carries the employee's ACTUAL per-day rate
+        // (hr.employee.current_salary) straight through in that case; null (every monthly employee)
+        // reproduces the pre-existing baseSalary/30 derivation exactly.
+        BigDecimal dailyRate = input.dailyRateOverride() != null
+            ? money(input.dailyRateOverride())
+            : baseSalary.divide(THIRTY, RATE_SCALE, RoundingMode.HALF_UP);
         BigDecimal hourlyRate = dailyRate.divide(EIGHT, RATE_SCALE, RoundingMode.HALF_UP);
         BigDecimal unpaidLeaveDays = quantity(input.unpaidLeaveDays());
         BigDecimal unpaidLeaveDeduction = money(dailyRate.multiply(unpaidLeaveDays));

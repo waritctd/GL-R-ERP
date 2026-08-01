@@ -1,4 +1,4 @@
-import { Fragment, isValidElement, useEffect, useMemo, useState } from 'react';
+import { Fragment, isValidElement, useEffect, useMemo, useRef, useState } from 'react';
 import {
   getCoreRowModel,
   getFilteredRowModel,
@@ -173,6 +173,7 @@ export function DataTable({
   sort,
   onSortChange,
   toolbarExtra,
+  caption,
   stickyHeader = false,
   exportable = false,
   onExportCsv,
@@ -180,6 +181,10 @@ export function DataTable({
   // Optional per-row detail panel. Return an element to expand that row, null to leave it
   // collapsed. Callers should expose their own explicit expand/open control.
   renderExpanded,
+  // Optional semantic table footer. Receives the filtered/sorted rows before pagination so callers
+  // can reconcile the full visible result set, not just the current page.
+  footerRow,
+  showPagination = true,
   // Optional row-level navigation/activation. Purely additive and default-off:
   // every existing caller that omits this prop renders and behaves exactly as
   // before. When provided, clicking the desktop `<tr>` (outside of a nested
@@ -198,6 +203,19 @@ export function DataTable({
   // (`mobileCard`) already expects callers to give each card its own
   // explicit open affordance (see e.g. TicketListPage's `DealOpenButton`).
   onRowClick,
+  // Optional row selection. Unlike `onRowClick` navigation above, selection is
+  // a stateful table interaction: the row itself becomes focusable and exposes
+  // `aria-current` (see the render below for why not `aria-selected`) so callers
+  // can use the whole row as the selection target without hiding the cells
+  // behind a `role="button"` name. Only one selectable row sits in the Tab
+  // order at a time; ArrowUp/ArrowDown/Home/End move focus within the rows.
+  onRowSelect,
+  isRowSelected,
+  // Overlay/detail callers can opt into focusing the clicked row before the
+  // detail opens so a dialog focus-restoration hook has the row as its origin.
+  // Persistent side panels should leave this false so mouse clicks do not
+  // steal focus from the user's current toolbar/control.
+  focusRowOnSelectClick = false,
 }) {
   // Below 720px a dense grid crushes every column into an unreadable stub
   // (ids as "PR-…", clipped badges). When a page supplies `mobileCard`, render
@@ -237,6 +255,7 @@ export function DataTable({
     onSortChange?.(first ? { key: first.id, dir: first.desc ? 'desc' : 'asc' } : null);
   };
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize });
+  const rowRefs = useRef(new Map());
 
   const columnMap = useMemo(
     () => new Map(columns.map((column) => [column.key, column])),
@@ -286,6 +305,17 @@ export function DataTable({
 
   const sortedRows = table.getPrePaginationRowModel().rows.map((row) => row.original);
   const pageRows = table.getPaginationRowModel().rows.map((row) => row.original);
+  const selectable = typeof onRowSelect === 'function';
+  const pageRowKeys = useMemo(
+    () => pageRows.map((row) => getRowKey(row)),
+    [pageRows, getRowKey],
+  );
+  const selectedPageRow = selectable && typeof isRowSelected === 'function'
+    ? pageRows.find((row) => Boolean(isRowSelected(row)))
+    : null;
+  const selectedRowKey = selectedPageRow ? getRowKey(selectedPageRow) : null;
+  const fallbackRowKey = selectedRowKey ?? pageRowKeys[0] ?? null;
+  const [activeRowKey, setActiveRowKey] = useState(null);
   const totalPages = Math.max(1, table.getPageCount());
   const safePage = Math.min(pagination.pageIndex + 1, totalPages);
   const from = sortedRows.length === 0 ? 0 : (safePage - 1) * pageSize + 1;
@@ -349,6 +379,11 @@ export function DataTable({
     }
   }, [pagination.pageIndex, totalPages]);
 
+  useEffect(() => {
+    if (!selectable) return;
+    setActiveRowKey((current) => (pageRowKeys.some((key) => Object.is(key, current)) ? current : fallbackRowKey));
+  }, [fallbackRowKey, pageRowKeys, selectable]);
+
   function handleSort(key) {
     setSorting((current) => {
       if (current[0]?.id === key) return [{ id: key, desc: !current[0].desc }];
@@ -357,13 +392,11 @@ export function DataTable({
     setPagination((current) => ({ ...current, pageIndex: 0 }));
   }
 
-  // Mouse-only activation (FIX A/D): there is no row-level keydown handler
-  // any more — the row is not a focusable target, so there is nothing for a
-  // key-repeat guard to protect. Keyboard activation lives on the caller's
-  // own identity `<Link>` instead, which gets native Enter activation (and
-  // no auto-repeat spam, since a browser only fires `click` once per Enter
-  // press on a link) for free.
-  function handleRowActivateClick(event, row) {
+  // Mouse-only navigation activation (FIX A/D): `onRowClick` still does not
+  // make the row a keyboard target. Keyboard selection is handled separately
+  // by the explicit `onRowSelect` contract below.
+  function handleRowActivateClick(event, row, activate, rowKey) {
+    if (typeof activate !== 'function') return;
     // FIX F5: `cursor-pointer` advertises the whole row as clickable, so a
     // cmd/ctrl/shift/alt-click anywhere in the row (not just on the identity
     // `<Link>`, which already handles this correctly on its own) must bail
@@ -400,7 +433,39 @@ export function DataTable({
       ? window.getSelection()?.toString()
       : '';
     if (selectionText) return;
-    onRowClick(row);
+    if (selectable) {
+      setActiveRowKey(rowKey);
+      if (focusRowOnSelectClick) event.currentTarget.focus();
+    }
+    activate(row);
+  }
+
+  function focusRowByKey(rowKey) {
+    setActiveRowKey(rowKey);
+    rowRefs.current.get(rowKey)?.focus();
+  }
+
+  function handleSelectableRowKeyDown(event, row, rowKey) {
+    if (event.target !== event.currentTarget) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      setActiveRowKey(rowKey);
+      onRowSelect?.(row);
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const currentIndex = pageRowKeys.findIndex((key) => Object.is(key, rowKey));
+    if (currentIndex === -1) return;
+    event.preventDefault();
+    const lastIndex = pageRowKeys.length - 1;
+    const nextIndex = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? lastIndex
+        : event.key === 'ArrowDown'
+          ? Math.min(currentIndex + 1, lastIndex)
+          : Math.max(currentIndex - 1, 0);
+    focusRowByKey(pageRowKeys[nextIndex]);
   }
 
   function handleExportCsv() {
@@ -413,6 +478,13 @@ export function DataTable({
   }
 
   const skeletonRowCount = Math.min(pageSize, 8);
+
+  function columnClassName(column, row) {
+    const extraClassName = typeof column.className === 'function'
+      ? column.className(row)
+      : column.className;
+    return cn(column.align === 'right' && 'text-right', extraClassName);
+  }
 
   function renderErrorRegion() {
     if (!hasError) return null;
@@ -530,7 +602,7 @@ export function DataTable({
             })}
           </ul>
         )}
-        {renderPagination()}
+        {showPagination ? renderPagination() : null}
       </section>
     );
   }
@@ -540,6 +612,7 @@ export function DataTable({
       <section className="table-panel" aria-busy={loading ? 'true' : undefined}>
         {(loading || sortedRows.length > 0) ? (
           <table className="data-table-table">
+            {caption ? <caption className="sr-only">{caption}</caption> : null}
             <thead>
               <tr className={`${gridClassName} table-head${stickyHeader ? ' is-sticky' : ''}`}>
                 {columns.map((column) => (
@@ -549,7 +622,7 @@ export function DataTable({
                     aria-sort={column.sortable
                       ? (sortKey === column.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none')
                       : undefined}
-                    className={column.align === 'right' ? 'text-right' : undefined}
+                    className={columnClassName(column)}
                   >
                     {column.sortable ? (
                       <SortHeader
@@ -582,9 +655,21 @@ export function DataTable({
                   const extraClassName = rowClassName ? ` ${rowClassName(row)}` : '';
                   const style = rowStyle ? rowStyle(row) : undefined;
                   const expanded = renderExpanded ? renderExpanded(row) : null;
+                  const selected = selectable && typeof isRowSelected === 'function'
+                    ? Boolean(isRowSelected(row))
+                    : false;
+                  const activateRow = selectable ? onRowSelect : onRowClick;
+                  const currentTabStop = selectable && Object.is(key, activeRowKey ?? fallbackRowKey);
                   return (
                     <Fragment key={key}>
                       <tr
+                        ref={selectable ? (node) => {
+                          if (node) {
+                            rowRefs.current.set(key, node);
+                          } else {
+                            rowRefs.current.delete(key);
+                          }
+                        } : undefined}
                         className={cn(
                           `${gridClassName} data-row${extraClassName}`,
                           // `hover:bg-surface-hover` (#fbfcff on a white surface) reads as
@@ -595,15 +680,32 @@ export function DataTable({
                           // see the `onRowClick` doc comment above for why. Keyboard
                           // activation and the row's accessible name now come from the
                           // caller's own identity-column `<Link>`.
-                          onRowClick && 'cursor-pointer transition-colors hover:bg-surface-subtle',
+                          (onRowClick || selectable) && 'cursor-pointer transition-colors hover:bg-surface-subtle',
+                          selectable && 'is-selectable',
+                          selected && 'is-selected',
                         )}
                         style={style}
-                        onClick={onRowClick ? (event) => handleRowActivateClick(event, row) : undefined}
+                        role={selectable ? 'row' : undefined}
+                        tabIndex={selectable ? (currentTabStop ? 0 : -1) : undefined}
+                        // Item 4d fix (2026-07-31): `aria-selected` is only valid ARIA on a row that
+                        // is a descendant of a `grid`/`treegrid` (WAI-ARIA `aria-selected` "Used in
+                        // roles": option, row (grid/treegrid only), tab, ...) -- this is a plain
+                        // `<table>`/`role="row"` with no grid ancestor, so assistive tech is not
+                        // guaranteed to announce it (and implementing a real `grid` here would mean
+                        // full arrow-key grid navigation, out of scope for this fix). `aria-current`
+                        // is a GLOBAL ARIA state valid on any role, and "true"/"false" here reads as
+                        // "the current item in this set of rows" -- a legitimate, valid stand-in that
+                        // needs no markup change beyond the attribute name. The visible "✓ เลือกอยู่"
+                        // text cue callers render in their identity column (e.g. PayrollPage.jsx) is
+                        // unaffected and stays the primary, always-reliable signal either way.
+                        aria-current={selectable ? selected : undefined}
+                        onClick={activateRow ? (event) => handleRowActivateClick(event, row, activateRow, key) : undefined}
+                        onKeyDown={selectable ? (event) => handleSelectableRowKeyDown(event, row, key) : undefined}
                       >
                         {columns.map((column) => (
                           <td
                             key={column.key}
-                            className={column.align === 'right' ? 'text-right' : undefined}
+                            className={columnClassName(column, row)}
                             data-label={typeof column.header === 'string' ? column.header : undefined}
                           >
                             {column.render(row)}
@@ -624,6 +726,11 @@ export function DataTable({
                 })
               )}
             </tbody>
+            {!loading && sortedRows.length > 0 && footerRow ? (
+              <tfoot>
+                {footerRow({ columns, rows: sortedRows, pageRows })}
+              </tfoot>
+            ) : null}
           </table>
         ) : (
           hasError ? null : (
@@ -635,7 +742,7 @@ export function DataTable({
             />
           )
         )}
-        {renderPagination()}
+        {showPagination ? renderPagination() : null}
       </section>
     );
   }
@@ -658,6 +765,7 @@ export function DataTable({
                 placeholder={searchPlaceholder}
                 onChange={(event) => setSearch(event.target.value)}
                 aria-label={searchPlaceholder}
+                className="mobile:min-h-[44px]"
               />
             </label>
           ) : null}

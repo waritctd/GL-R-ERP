@@ -1,18 +1,19 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
 import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
 import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
-import { DesktopOnlyNotice } from '../../components/common/DesktopOnlyNotice.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { InfoTip } from '../../components/common/InfoTip.jsx';
 import { FilterBar, FormGrid, PageStack, Panel } from '../../components/common/Layout.jsx';
+import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { useIsMobile } from '../../hooks/useIsMobile.js';
+import { useDialogFocus } from '../../hooks/useDialogFocus.js';
+import { useIsMobile, useMediaQuery } from '../../hooks/useIsMobile.js';
 import { cn } from '../../utils/cn.js';
 import { formatMoney, formatShortDate, formatThaiMonthYearFromMonthInputValue, payrollStatusLabel as statusInfo } from '../../utils/format.js';
 
@@ -22,64 +23,232 @@ import { formatMoney, formatShortDate, formatThaiMonthYearFromMonthInputValue, p
 // than wrapping a <section> inside an <aside> or changing the shared primitive.
 const PANEL_CLASS = 'bg-surface border border-border rounded-md shadow-sm p-5';
 
-// The three statutory files HR can generate for a processed period. `value` is the backend export
-// slug (/api/payroll/{id}/export/{value}); `filePrefix` names the downloaded blob.
+// The payroll export files HR can generate for a processed period. `value` is the backend export
+// slug (/api/payroll/{id}/export/{value}); `filePrefix` names the downloaded blob; `extension`
+// matches PayrollExportKind's own file extension (the three statutory kinds are CP874 .txt,
+// payroll-detail is a real xlsx workbook -- see PayrollController#export's javadoc).
 const EXPORT_KINDS = [
-  { value: 'kbank', label: 'KBank Payroll', filePrefix: 'PCT' },
-  { value: 'pnd1', label: 'ภ.ง.ด.1', filePrefix: 'Pnd1' },
-  { value: 'sso', label: 'ประกันสังคม (สปส.1-10)', filePrefix: 'SPS1-10' },
+  { value: 'kbank', label: 'KBank Payroll', filePrefix: 'PCT', extension: 'txt' },
+  { value: 'pnd1', label: 'ภ.ง.ด.1', filePrefix: 'Pnd1', extension: 'txt' },
+  { value: 'sso', label: 'ประกันสังคม (สปส.1-10)', filePrefix: 'SPS1-10', extension: 'txt' },
+  { value: 'payroll-detail', label: 'รายละเอียดเงินเดือนรายเดือน (Excel)', filePrefix: 'PayrollDetail', extension: 'xlsx' },
+];
+const MOBILE_PROCESS_CONFIRM_PHRASE = 'ประมวลผล';
+const mobileOptionalMoneySummaries = [
+  { key: 'specialPayTotal', label: 'เงินพิเศษ', amount: (line) => Number(line.specialPayTotal || 0) },
+  { key: 'otCommission', label: 'ล่วงเวลา/คอมมิชชัน', amount: (line) => Number(line.overtimePay || 0) + Number(line.commissionPay || 0) },
 ];
 
-const payrollColumns = [
-  {
+function MoneyCode({ value }) {
+  return <code className="payroll-money">{formatMoney(value)}</code>;
+}
+
+function PayrollMobileZeroDisclosure({ line }) {
+  const zeroItems = mobileOptionalMoneySummaries.filter((item) => item.amount(line) === 0);
+  if (zeroItems.length === 0) return null;
+  return (
+    <details className="col-span-2 mt-2 rounded-sm border border-border-subtle bg-surface-muted px-2">
+      <summary className="flex min-h-[44px] cursor-pointer items-center text-xs font-extrabold text-text-muted">
+        รายการศูนย์ {zeroItems.length} รายการ
+      </summary>
+      <dl className="m-0 grid gap-1 border-t border-border-subtle py-2 text-xs">
+        {zeroItems.map((item) => (
+          <div key={item.key} className="flex items-center justify-between gap-3">
+            <dt className="text-text-muted">{item.label}</dt>
+            <dd className="m-0 font-mono font-extrabold text-text">{formatMoney(0)}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  );
+}
+
+function createEmployeeColumn(selectedEmployeeId) {
+  return {
     key: 'employee',
     header: 'พนักงาน',
+    className: 'mobile:[&::before]:hidden',
     sortable: true,
     sortAccessor: (line) => line.employeeName,
     searchAccessor: (line) => line.employeeName,
-    render: (line) => (
-      <span>
-        <strong>{line.employeeName}</strong>
-        <small>{line.employeeCode} · {line.departmentName || '-'}</small>
-      </span>
-    ),
-  },
+    render: (line) => {
+      const selected = Number(line.employeeId) === Number(selectedEmployeeId);
+      // B4 fix (Opus review, 2026-07-31): moved from `.payroll-employee-cell`/`.payroll-selected-cue`
+      // styles.css rules to Tailwind utilities at the call site (CLAUDE.md Tailwind-first) -- plain
+      // flex/badge layout with no dynamic/cross-component coupling, so nothing here needed a
+      // stylesheet rule in the first place.
+      //
+      // Defect 1 fix (Opus review, 2026-07-31): `min-w-0` on the inner span only lets the flex item
+      // SHRINK -- it does nothing to the text inside once shrunk, so a name too long for the
+      // available space just painted past its own right edge and under the `.payroll-selected-cue`
+      // badge (a later sibling, so it paints on top). The legacy `.data-row > td > span/strong/small`
+      // rule in styles.css used to backstop this with block+ellipsis, but that rule lives in
+      // `@layer legacy` and Tailwind utilities always win over it (see styles-css-loses-to-tailwind-
+      // utilities gotcha), so it can no longer be relied on here now that the cell is Tailwind-first.
+      // `<strong>`/`<small>` are inline by default and render as two separate lines only because nothing
+      // upstream declares `display: block` for them anymore -- each needs its own `block truncate` so
+      // it clips with an ellipsis at ITS OWN width instead of overflowing into the badge.
+      const warning = line.payType === 'D' && !(Number(line.daysWorked) > 0)
+        ? '⚠ ยังไม่ได้ระบุจำนวนวันทำงาน'
+        : null;
+      return (
+        <>
+          <span className="flex items-center justify-between gap-2.5 min-w-0 mobile:hidden">
+            <span className="min-w-0 overflow-hidden">
+              <strong className="block truncate">{line.employeeName}</strong>
+              <small className="block truncate">{line.employeeCode} · {line.departmentName || '-'}</small>
+              {/* Finding 1 fix (Opus review, 2026-07-30): list-level warning so a daily-rate employee
+                  with no/zero days-worked is visible WITHOUT having to open their detail panel first --
+                  the gap the ฿0-payslip bug actually lived in (hasPayrollInput below never submits a row
+                  with nothing entered, so HR could Process a whole month without ever noticing). Purely
+                  a nudge; PayrollService#requireEveryDailyRateEmployeeHasDaysWorked is the real
+                  enforcement. */}
+              {warning && (
+                <small className="block truncate text-warning">{warning}</small>
+              )}
+            </span>
+            {selected ? (
+              <span className="inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-sm border border-info-border bg-info-bg px-1.5 py-0.5 text-2xs font-black text-info">
+                <Icon name="check" size={13} />
+                เลือกอยู่
+              </span>
+            ) : null}
+          </span>
+          <span className="hidden min-w-0 mobile:grid mobile:grid-cols-[minmax(0,1fr)_auto] mobile:items-start mobile:gap-x-3 mobile:gap-y-1">
+            <span className="min-w-0">
+              <strong className="block truncate text-sm">{line.employeeName}</strong>
+              <small className="block truncate text-xs">{line.employeeCode} · {line.departmentName || '-'}</small>
+              {warning && (
+                <small className="block truncate text-warning">{warning}</small>
+              )}
+            </span>
+            <span className="text-right">
+              <small className="block text-2xs font-black text-text-muted">สุทธิ</small>
+              <MoneyCode value={line.netPay} />
+            </span>
+            {selected ? (
+              <span className="col-span-2 inline-flex w-fit items-center gap-1 whitespace-nowrap rounded-sm border border-info-border bg-info-bg px-1.5 py-0.5 text-2xs font-black text-info">
+                <Icon name="check" size={13} />
+                เลือกอยู่
+              </span>
+            ) : null}
+            <PayrollMobileZeroDisclosure line={line} />
+          </span>
+        </>
+      );
+    },
+  };
+}
+
+function payrollMoneyCellClassName(column, line, options = {}) {
+  const mobileHiddenWhenZero = line && column.hideWhenZero && Number(column.totalAccessor?.(line) || 0) === 0;
+  const mobileHidden = mobileHiddenWhenZero || (line && options.hideOnMobile);
+  return cn(
+    'payroll-money-cell mobile:grid mobile:grid-cols-[minmax(0,1fr)_auto] mobile:items-center mobile:gap-3 mobile:[&::before]:m-0 mobile:[&::before]:normal-case',
+    mobileHidden && 'mobile:hidden',
+  );
+}
+
+const payrollMoneyColumns = [
   {
     key: 'grossEarnings',
     header: 'รายได้',
+    heroLabel: 'รายได้รวม',
+    heroAccessor: (period) => period?.totalGross,
     sortable: true,
+    align: 'right',
+    className: (line) => payrollMoneyCellClassName(payrollMoneyColumns[0], line),
+    isMoney: true,
+    totalAccessor: (line) => Number(line.grossEarnings || 0),
     sortAccessor: (line) => Number(line.grossEarnings || 0),
-    render: (line) => <code>{formatMoney(line.grossEarnings)}</code>,
+    render: (line) => <MoneyCode value={line.grossEarnings} />,
   },
   {
     key: 'specialPayTotal',
     header: 'เงินพิเศษ',
     sortable: true,
+    align: 'right',
+    className: (line) => payrollMoneyCellClassName(payrollMoneyColumns[1], line),
+    isMoney: true,
+    hideWhenZero: true,
+    totalAccessor: (line) => Number(line.specialPayTotal || 0),
     sortAccessor: (line) => Number(line.specialPayTotal || 0),
-    render: (line) => <code>{formatMoney(line.specialPayTotal)}</code>,
+    render: (line) => <MoneyCode value={line.specialPayTotal} />,
   },
   {
     key: 'otCommission',
-    header: 'OT / Commission',
+    header: 'ล่วงเวลา/คอมมิชชัน',
     sortable: true,
+    align: 'right',
+    className: (line) => payrollMoneyCellClassName(payrollMoneyColumns[2], line),
+    isMoney: true,
+    hideWhenZero: true,
+    totalAccessor: (line) => Number(line.overtimePay || 0) + Number(line.commissionPay || 0),
     sortAccessor: (line) => Number(line.overtimePay || 0) + Number(line.commissionPay || 0),
-    render: (line) => <code>{formatMoney(Number(line.overtimePay || 0) + Number(line.commissionPay || 0))}</code>,
+    render: (line) => <MoneyCode value={Number(line.overtimePay || 0) + Number(line.commissionPay || 0)} />,
   },
   {
     key: 'totalDeductions',
     header: 'เงินหัก',
+    heroLabel: 'เงินหักรวม',
+    heroAccessor: (period) => period?.totalDeductions,
     sortable: true,
+    align: 'right',
+    className: (line) => payrollMoneyCellClassName(payrollMoneyColumns[3], line),
+    isMoney: true,
+    totalAccessor: (line) => Number(line.totalDeductions || 0),
     sortAccessor: (line) => Number(line.totalDeductions || 0),
-    render: (line) => <code>{formatMoney(line.totalDeductions)}</code>,
+    render: (line) => <MoneyCode value={line.totalDeductions} />,
   },
   {
     key: 'netPay',
     header: 'สุทธิ',
+    heroLabel: 'ยอดโอนสุทธิ',
+    heroAccessor: (period) => period?.totalNet,
     sortable: true,
+    align: 'right',
+    className: (line) => payrollMoneyCellClassName(payrollMoneyColumns[4], line, { hideOnMobile: true }),
+    isMoney: true,
+    totalAccessor: (line) => Number(line.netPay || 0),
     sortAccessor: (line) => Number(line.netPay || 0),
-    render: (line) => <code>{formatMoney(line.netPay)}</code>,
+    render: (line) => <MoneyCode value={line.netPay} />,
   },
 ];
+
+function hasNonZeroMoney(rows, column) {
+  if (!column.hideWhenZero) return true;
+  return rows.some((line) => Number(column.totalAccessor?.(line) || 0) !== 0);
+}
+
+function toSatang(value) {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount)) return 0;
+  return Math.round(amount * 100);
+}
+
+function formatSatang(value) {
+  return formatMoney(value / 100);
+}
+
+function sumPayrollSatang(rows, valueFor) {
+  return rows.reduce((sum, row) => sum + toSatang(valueFor(row)), 0);
+}
+
+function buildPayrollReconciliation(rows, period) {
+  const byColumn = Object.fromEntries(payrollMoneyColumns.map((column) => {
+    const sumSatang = sumPayrollSatang(rows, column.totalAccessor);
+    const heroSatang = column.heroAccessor ? toSatang(column.heroAccessor(period)) : null;
+    return [column.key, {
+      column,
+      sumSatang,
+      heroSatang,
+      matchesHero: heroSatang == null || sumSatang === heroSatang,
+      differenceSatang: heroSatang == null ? 0 : sumSatang - heroSatang,
+    }];
+  }));
+  const mismatches = Object.values(byColumn).filter((item) => item.heroSatang != null && !item.matchesHero);
+  return { byColumn, mismatches, rowCount: rows.length };
+}
 
 const thisMonth = new Date().toISOString().slice(0, 7);
 const specialPayFields = [
@@ -151,8 +320,15 @@ const deductionInputKeys = [
   'customerReturnDeduction',
   'otherPretaxDeduction',
 ];
+// Daily-rate support (2026-07-30): days worked this period. Only meaningful for a pay_type = 'D'
+// employee (hr.employee.current_salary is that employee's PER-DAY rate, not a monthly figure) --
+// PayrollComponent.SALARY for such an employee is rate * daysWorked. One-off like bonusPay/
+// otherOneOffPay above, re-entered fresh every run rather than carried forward, since a day count
+// is specific to the month worked.
+const dailyRateInputKeys = ['daysWorked'];
 const payrollInputKeys = [
   ...specialPayKeys, ...namedAllowanceKeys, ...oneOffPayKeys, ...incomeInputKeys, ...deductionInputKeys,
+  ...dailyRateInputKeys,
 ];
 
 // P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix screen (spec sections 1
@@ -222,13 +398,47 @@ function suggestedFallback(suggestion, key) {
   return amount > 0 ? String(amount) : null;
 }
 
+// Payroll input draft (2026-07-30): a saved-but-not-yet-processed value HR typed earlier this
+// session (or a prior one) beats a mere carried-forward guess -- it is HR's own actual work, not a
+// suggestion.
+//
+// DELIBERATELY NOT the same collapsing rule as suggestedFallback above. A suggestion is only ever
+// consulted to fill in a genuinely blank/zero field, so collapsing "suggested 0" to "no
+// suggestion" is harmless -- a suggested zero and no suggestion produce the identical outcome
+// either way. A DRAFT is different: it is saved as a COMPLETE snapshot of the whole form for that
+// employee (saveDraft() submits every field via normalizedAdjustment, not just the ones HR
+// touched), so once ANY draft row exists for an employee, every field in it -- including one HR
+// deliberately cleared down to zero -- is exactly what they saw on screen when they hit บันทึกร่าง,
+// and must win over the suggestion. Collapsing that zero to null here would let a stale
+// carry-forward suggestion silently resurrect over a value HR explicitly zeroed out (e.g. clearing
+// a carried เบี้ยขยันประจำ that should not repeat this month) -- the bug this comment replaces.
+//
+// So: return '' (not null) for "draft row exists, field is 0" -- a real, non-nullish value the
+// `??` chain at every call site will NOT fall through past, while still rendering as blank (not a
+// literal "0"), preserving the "0 and blank read the same" DISPLAY convention every other field on
+// this form already follows (see draftValue). Return null ONLY when there is no draft row at all
+// for this employee (they have never saved one this session) -- that is the one case where falling
+// through to the suggestion is correct.
+//
+// No field-level "was this key actually present" tracking is needed (the alternative the review
+// suggested): a draft row is written wholesale, all fields at once, so presence is naturally an
+// EMPLOYEE-level fact (does a row exist for employee+month), not a per-field one -- there is no
+// saved-draft state where some fields are "there" and others are structurally missing.
+function draftFallback(draft, key) {
+  if (!draft) return null;
+  const amount = Number(draft[key] || 0);
+  return amount > 0 ? String(amount) : '';
+}
+
 // Withholding-tax override (V88) is NULLABLE/meaningful, so it cannot ride the generic
 // draftValue/parsePayrollNumber machinery (which collapses ''<->0). A stored/carried 0 is a real
 // override (withhold nothing) and must round-trip as "0"; only null/'' means "no override".
-// Priority: the line's own persisted per-run value > last month's carried per-run value > blank.
-// The standing employee override is deliberately NOT surfaced here — it re-applies server-side.
-function overrideDraft(lineValue, suggestion) {
+// Priority: the line's own persisted per-run value > a saved draft (2026-07-30) > last month's
+// carried per-run value > blank. The standing employee override is deliberately NOT surfaced here
+// — it re-applies server-side.
+function overrideDraft(lineValue, suggestion, draft) {
   if (lineValue != null) return String(lineValue);
+  if (draft && draft.withholdingTaxOverride != null) return String(draft.withholdingTaxOverride);
   if (suggestion && suggestion.withholdingTaxOverride != null) return String(suggestion.withholdingTaxOverride);
   return '';
 }
@@ -260,6 +470,9 @@ function blankAdjustment(employeeId, { applyDefaults = false } = {}) {
     perDiemExempt: '',
     perDiemTaxable: '',
     perDiemBasis: '',
+    // Daily-rate support (2026-07-30): one-off like bonusPay/otherOneOffPay above -- never carried
+    // forward, re-entered fresh every run.
+    daysWorked: '',
     // P1 fix (Opus review, 2026-07-30): เงินโบนัส/เงินก้อนอื่นๆ — plain numeric fields like the
     // special-pay slots above.
     bonusPay: '',
@@ -275,27 +488,36 @@ function blankAdjustment(employeeId, { applyDefaults = false } = {}) {
   };
 }
 
-function adjustmentFromLine(line, { applyDefaults = false, suggestion = null } = {}) {
+function adjustmentFromLine(line, { applyDefaults = false, suggestion = null, draft = null } = {}) {
   const adjustment = blankAdjustment(line.employeeId, { applyDefaults });
   (line.specialPays || []).forEach((item, index) => {
     const key = `specialPay${index + 1}`;
-    // Priority: the line's own real value (already-submitted/persisted) > a carried figure from
-    // last month > the hardcoded UAT demo default. A suggestion only ever fills in for a genuinely
-    // blank/zero field on a fresh run.
-    const fallback = suggestedFallback(suggestion, key) ?? defaultSpecialPayValue(key, applyDefaults);
+    // Priority: the line's own real value (already-submitted/persisted) > a saved draft
+    // (2026-07-30, HR's own not-yet-processed work) > a carried figure from last month > the
+    // hardcoded UAT demo default. A draft/suggestion only ever fills in for a genuinely blank/zero
+    // field on a fresh run.
+    const fallback = draftFallback(draft, key) ?? suggestedFallback(suggestion, key) ?? defaultSpecialPayValue(key, applyDefaults);
     adjustment[key] = draftValue(item.amount, fallback);
   });
-  adjustment.nonTaxableIncome = draftValue(line.nonTaxableIncome, suggestedFallback(suggestion, 'nonTaxableIncome') ?? '');
+  adjustment.nonTaxableIncome = draftValue(
+    line.nonTaxableIncome,
+    draftFallback(draft, 'nonTaxableIncome') ?? suggestedFallback(suggestion, 'nonTaxableIncome') ?? '');
   // Leave -> payroll unpaid-day deduction (2026-07-23): unpaidLeaveDays is event-driven (this
   // month's approved-beyond-quota leave, from GET /api/payroll/suggested-inputs), unlike the other
   // carried fields above which are prior-month recurring amounts -- but it pre-fills the same way:
-  // a real line value (already-submitted/persisted) wins, otherwise fall back to the suggestion.
-  // HR can still edit/clear it before Preview/Process, same as every other field here.
-  adjustment.unpaidLeaveDays = draftValue(line.unpaidLeaveDays, suggestedFallback(suggestion, 'unpaidLeaveDays') ?? '');
-  adjustment.studentLoanDeduction = draftValue(line.studentLoanDeduction, suggestedFallback(suggestion, 'studentLoanDeduction') ?? '');
-  adjustment.legalExecutionDeduction = draftValue(line.legalExecutionDeduction, suggestedFallback(suggestion, 'legalExecutionDeduction') ?? '');
-  adjustment.otherPostTaxDeductions = draftValue(line.otherPostTaxDeductions);
-  adjustment.warningLetterDeduction = draftValue(line.warningLetterDeduction);
+  // a real line value (already-submitted/persisted) wins, otherwise a saved draft, otherwise the
+  // suggestion. HR can still edit/clear it before Preview/Process, same as every other field here.
+  adjustment.unpaidLeaveDays = draftValue(
+    line.unpaidLeaveDays,
+    draftFallback(draft, 'unpaidLeaveDays') ?? suggestedFallback(suggestion, 'unpaidLeaveDays') ?? '');
+  adjustment.studentLoanDeduction = draftValue(
+    line.studentLoanDeduction,
+    draftFallback(draft, 'studentLoanDeduction') ?? suggestedFallback(suggestion, 'studentLoanDeduction') ?? '');
+  adjustment.legalExecutionDeduction = draftValue(
+    line.legalExecutionDeduction,
+    draftFallback(draft, 'legalExecutionDeduction') ?? suggestedFallback(suggestion, 'legalExecutionDeduction') ?? '');
+  adjustment.otherPostTaxDeductions = draftValue(line.otherPostTaxDeductions, draftFallback(draft, 'otherPostTaxDeductions') ?? '');
+  adjustment.warningLetterDeduction = draftValue(line.warningLetterDeduction, draftFallback(draft, 'warningLetterDeduction') ?? '');
   // D1 fix (fourth reachability audit, 2026-07-30): hydrate from customerReturnRequested, NOT
   // customerReturnDeduction. The latter is the POST-TAX bookkeeping figure the backend persists --
   // it is 0 whenever customerReturnAlreadyEarned is false (the unearned amount is instead netted
@@ -303,23 +525,31 @@ function adjustmentFromLine(line, { applyDefaults = false, suggestion = null } =
   // checkbox below (which gates on this value being > 0) on every reload, and a reprocess of the
   // same month silently stopped re-applying the netting. customerReturnRequested always echoes what
   // was actually typed, regardless of the earned flag.
-  adjustment.customerReturnDeduction = draftValue(line.customerReturnRequested);
-  adjustment.otherPretaxDeduction = draftValue(line.otherPretaxDeduction);
+  adjustment.customerReturnDeduction = draftValue(line.customerReturnRequested, draftFallback(draft, 'customerReturnDeduction') ?? '');
+  adjustment.otherPretaxDeduction = draftValue(line.otherPretaxDeduction, draftFallback(draft, 'otherPretaxDeduction') ?? '');
   // ค่าอาหาร carries forward like the other recurring fields above; the two เบี้ยเลี้ยง amounts and
   // the basis do not (V98's carry-forward flags only cover mealAllowance for this group -- see the
   // task-3 handoff fix 5) -- a per-diem is trip-driven, not a standing monthly figure, so re-entering
-  // it (and its basis) fresh each run is correct, not a gap.
-  adjustment.mealAllowance = draftValue(line.mealAllowance, suggestedFallback(suggestion, 'mealAllowance') ?? '');
-  adjustment.perDiemExempt = draftValue(line.perDiemExempt);
-  adjustment.perDiemTaxable = draftValue(line.perDiemTaxable);
-  adjustment.perDiemBasis = line.perDiemBasis || '';
+  // it (and its basis) fresh each run is correct, not a gap. A saved draft still fills in for all
+  // three, same as it does for every other field here.
+  adjustment.mealAllowance = draftValue(
+    line.mealAllowance,
+    draftFallback(draft, 'mealAllowance') ?? suggestedFallback(suggestion, 'mealAllowance') ?? '');
+  adjustment.perDiemExempt = draftValue(line.perDiemExempt, draftFallback(draft, 'perDiemExempt') ?? '');
+  adjustment.perDiemTaxable = draftValue(line.perDiemTaxable, draftFallback(draft, 'perDiemTaxable') ?? '');
+  adjustment.perDiemBasis = line.perDiemBasis || draft?.perDiemBasis || '';
   // P1 fix (Opus review, 2026-07-30): bonusPay/otherOneOffPay do not carry forward (they are one-off
-  // by definition, same reasoning as perDiemExempt/perDiemTaxable above) -- re-entered fresh each run.
-  adjustment.bonusPay = draftValue(line.bonusPay);
-  adjustment.otherOneOffPay = draftValue(line.otherOneOffPay);
-  adjustment.garnishmentType = line.garnishmentType || '';
-  adjustment.customerReturnAlreadyEarned = Boolean(line.customerReturnAlreadyEarned);
-  adjustment.withholdingTaxOverride = overrideDraft(line.withholdingTaxOverride, suggestion);
+  // by definition, same reasoning as perDiemExempt/perDiemTaxable above) -- re-entered fresh each
+  // run, though a saved draft still fills in.
+  adjustment.bonusPay = draftValue(line.bonusPay, draftFallback(draft, 'bonusPay') ?? '');
+  adjustment.otherOneOffPay = draftValue(line.otherOneOffPay, draftFallback(draft, 'otherOneOffPay') ?? '');
+  // Daily-rate support (2026-07-30): survives a reload -- hydrate from the persisted line's own
+  // daysWorked first, else a saved draft (2026-07-30). No carry-forward suggestion (a day count is
+  // specific to the month worked, not a recurring figure).
+  adjustment.daysWorked = draftValue(line.daysWorked, draftFallback(draft, 'daysWorked') ?? '');
+  adjustment.garnishmentType = line.garnishmentType || draft?.garnishmentType || '';
+  adjustment.customerReturnAlreadyEarned = Boolean(line.customerReturnAlreadyEarned) || Boolean(draft?.customerReturnAlreadyEarned);
+  adjustment.withholdingTaxOverride = overrideDraft(line.withholdingTaxOverride, suggestion, draft);
   return adjustment;
 }
 
@@ -368,6 +598,91 @@ function hasPayrollInput(input) {
   return payrollInputKeys.some((key) => parsePayrollNumber(input[key]) > 0);
 }
 
+function ReconciliationNote({ item }) {
+  if (!item?.column?.heroLabel) return null;
+  if (item.matchesHero) {
+    return <small className="payroll-reconcile-note is-ok">ตรงกับ{item.column.heroLabel}</small>;
+  }
+  return (
+    <small className="payroll-reconcile-note is-mismatch">
+      ไม่ตรงกับ{item.column.heroLabel}: {formatSatang(item.heroSatang)}
+    </small>
+  );
+}
+
+function PayrollTotalsRow({ columns, reconciliation }) {
+  return (
+    <tr className="payroll-table payroll-total-row">
+      {columns.map((column) => {
+        if (column.key === 'employee') {
+          return (
+            <th key={column.key} scope="row">
+              <span>รวมทั้งงวด</span>
+              <small>{reconciliation.rowCount} คน</small>
+            </th>
+          );
+        }
+        const item = reconciliation.byColumn[column.key];
+        return (
+          <td key={column.key} className="text-right payroll-money-cell" data-label={column.header}>
+            <code className="payroll-money text-xs">{formatSatang(item.sumSatang)}</code>
+            <ReconciliationNote item={item} />
+          </td>
+        );
+      })}
+    </tr>
+  );
+}
+
+function PayrollMobileSummaryRow({ reconciliation, columnCount }) {
+  const gross = reconciliation.byColumn.grossEarnings;
+  const deductions = reconciliation.byColumn.totalDeductions;
+  const net = reconciliation.byColumn.netPay;
+  const hasMismatch = reconciliation.mismatches.length > 0;
+  return (
+    <tr className="payroll-mobile-summary-row">
+      <td colSpan={columnCount}>
+        <div className={`payroll-mobile-summary-bar${hasMismatch ? ' is-mismatch' : ''}`}>
+          <span>
+            <small>รายได้</small>
+            <b>{formatSatang(gross.sumSatang)}</b>
+          </span>
+          <span>
+            <small>หัก</small>
+            <b>{formatSatang(deductions.sumSatang)}</b>
+          </span>
+          <span>
+            <small>สุทธิ</small>
+            <b>{formatSatang(net.sumSatang)}</b>
+          </span>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function PayrollTotalsFooter({ columns, reconciliation }) {
+  return (
+    <>
+      <PayrollTotalsRow columns={columns} reconciliation={reconciliation} />
+      <PayrollMobileSummaryRow reconciliation={reconciliation} columnCount={columns.length} />
+    </>
+  );
+}
+
+function PayrollReconciliationAlert({ mismatches }) {
+  if (mismatches.length === 0) return null;
+  return (
+    <div className="payroll-reconciliation-alert" role="alert">
+      <Icon name="triangleAlert" size={16} />
+      <span>
+        ยอดรวมไม่ตรงกับสรุปด้านบน:
+        {' '}
+        {mismatches.map((item) => `${item.column.header} ${formatSatang(item.sumSatang)} ≠ ${formatSatang(item.heroSatang)}`).join(' · ')}
+      </span>
+    </div>
+  );
+}
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -384,6 +699,19 @@ export function PayrollPage({ showToast }) {
   const [period, setPeriod] = useState(null);
   const [adjustments, setAdjustments] = useState({});
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  // B1 fix (Opus review, 2026-07-31): the detail panel has exactly two presentations, not three.
+  // >=1366px is a persistent side panel next to the table; below that it is the fixed slide-over
+  // overlay tablet already used. The query is the JS-side mirror of the CSS `payroll-wide:` custom
+  // variant (`min-width: 1366px`, see index.css's `@custom-variant`) so the two can never disagree
+  // about which mode is active.
+  //
+  // Phase A (2026-07-31): the command-surface pass shrinks the side panel floor to 310px, which lets
+  // the table's measured 714px minimum and the 16px gap fit side-by-side at 1366px without hidden
+  // money columns. 1280px still stays overlay; the content width there cannot pay for the panel.
+  const isDesktopPanel = useMediaQuery('(min-width: 1366px)');
+  const isOverlayPanel = !isDesktopPanel;
+  const detailPanelRef = useRef(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [confirmProcess, setConfirmProcess] = useState(false);
@@ -392,8 +720,13 @@ export function PayrollPage({ showToast }) {
   // unpaidLeaveDays field. Never re-applied to `adjustments` after the initial pre-fill in
   // applyPeriod -- HR's edits always win.
   const [suggestionsByEmployee, setSuggestionsByEmployee] = useState({});
-  const [exportKind, setExportKind] = useState('kbank');
   const [payDate, setPayDate] = useState(`${thisMonth}-26`);
+  const [draftDirty, setDraftDirty] = useState(false);
+  const [draftSaving, setDraftSaving] = useState(false);
+  const [draftSaveStatus, setDraftSaveStatus] = useState('saved');
+  const adjustmentsRef = useRef({});
+  const draftDirtyRef = useRef(false);
+  const draftVersionRef = useRef(0);
 
   const selectedLine = useMemo(
     () => (period?.lines || []).find((line) => Number(line.employeeId) === Number(selectedEmployeeId)) || period?.lines?.[0] || null,
@@ -424,21 +757,46 @@ export function PayrollPage({ showToast }) {
   // "enables Process Payroll for a fresh (never-processed) period ... id === null" test, which pins
   // this down as the regression guard against "simplifying" it back to `!period?.id`.
   const emptyPeriod = !period || !(period.lineCount > 0);
-  const processBlockedReason = isMobile
-    ? 'ปิดใช้งานบนหน้าจอมือถือ — การประมวลผลเงินเดือนย้อนกลับไม่ได้ กรุณาใช้เดสก์ท็อป'
-    : emptyPeriod
-      ? 'ยังไม่มีพนักงานในรอบเงินเดือนนี้ — กดคำนวณตัวอย่างหรือเลือกรอบเดือนที่มีข้อมูลก่อนประมวลผล'
-      : null;
+  // Payroll input draft (2026-07-30): a draft is only ever consulted on load() for a brand-new,
+  // never-touched run (same condition as the suggested-inputs/draft fetch in load() above) -- once
+  // a period is PROCESSED, or VOID with real pre-loaded lines (like July's), the line's own value
+  // is already the source of truth and always wins regardless, so saving a draft here would do
+  // nothing useful. Hidden rather than shown-but-inert, so HR is not misled into thinking a save
+  // did something for an already-touched period.
+  const canSaveDraft = period?.status === 'PREVIEW' && !period?.id;
+  const processBlockedReason = emptyPeriod
+    ? 'ยังไม่มีพนักงานในรอบเงินเดือนนี้ — กดคำนวณตัวอย่างหรือเลือกรอบเดือนที่มีข้อมูลก่อนประมวลผล'
+    : null;
+  const requiresMobileProcessPhrase = isMobile && !emptyPeriod;
+
+  function selectPayrollLine(line) {
+    setSelectedEmployeeId(line.employeeId);
+    setDetailOpen(true);
+  }
+
+  function closeDetailPanel() {
+    setDetailOpen(false);
+  }
+
+  // B2 fix (Opus review, 2026-07-31): focus trap + Escape-to-close + focus-restoration, shared with
+  // Modal.jsx via useDialogFocus (see that hook's own comment). `active` is false whenever the panel
+  // is the >=1366px persistent side panel rather than the <1366px overlay -- a side panel must not
+  // steal Tab or respond to Escape, since the rest of the page beside it is not actually hidden.
+  useDialogFocus({ active: isOverlayPanel && detailOpen, containerRef: detailPanelRef, onClose: closeDetailPanel });
 
   async function load() {
     setLoading(true);
     try {
       const response = await api.payroll.current({ payrollMonth: month });
       const nextPeriod = response.period;
-      // Special-pay carry-forward: only fetch suggestions when starting a fresh run for this month
-      // (PREVIEW with no processed period yet) — a PROCESSED period already reflects real, submitted
-      // values and must never be overwritten by a stale suggestion.
+      // Special-pay carry-forward, and payroll input draft (2026-07-30): only fetch/apply either
+      // when starting a fresh run for this month (PREVIEW with no processed/void period yet) — an
+      // already-touched period (PROCESSED, or VOID like July's pre-loaded real inputs) already
+      // reflects real, submitted values in the line itself and must never be overwritten by a
+      // stale suggestion OR a stale draft. See adjustmentFromLine's precedence: the line's own
+      // value always wins first regardless.
       let suggestionsByEmployee = {};
+      let draftByEmployee = {};
       if (nextPeriod?.status === 'PREVIEW' && !nextPeriod?.id) {
         try {
           // Optional chaining keeps this resilient if a caller's api.payroll mock predates this
@@ -449,9 +807,22 @@ export function PayrollPage({ showToast }) {
         } catch {
           suggestionsByEmployee = {};
         }
+        try {
+          // Same resilience as suggestedInputs above -- a draft is a convenience restore only and
+          // must never block payroll from loading.
+          const draftResponse = await api.payroll.getInputDraft?.({ payrollMonth: month });
+          draftByEmployee = indexSuggestionsByEmployee(draftResponse?.drafts);
+        } catch {
+          draftByEmployee = {};
+        }
       }
       setSuggestionsByEmployee(suggestionsByEmployee);
-      applyPeriod(nextPeriod, { applyUatDefaults: true, suggestionsByEmployee });
+      draftDirtyRef.current = false;
+      setDraftDirty(false);
+      setDraftSaving(false);
+      setDraftSaveStatus('saved');
+      draftVersionRef.current = 0;
+      applyPeriod(nextPeriod, { applyUatDefaults: true, suggestionsByEmployee, draftByEmployee });
     } catch (error) {
       showToast('error', error.message || 'โหลดเงินเดือนไม่สำเร็จ');
     } finally {
@@ -459,7 +830,7 @@ export function PayrollPage({ showToast }) {
     }
   }
 
-  function applyPeriod(nextPeriod, { applyUatDefaults = false, suggestionsByEmployee = {} } = {}) {
+  function applyPeriod(nextPeriod, { applyUatDefaults = false, suggestionsByEmployee = {}, draftByEmployee = {} } = {}) {
     setPeriod(nextPeriod);
     const nextAdjustments = {};
     const applyDefaults = applyUatDefaults && nextPeriod?.status === 'PREVIEW';
@@ -467,14 +838,17 @@ export function PayrollPage({ showToast }) {
       nextAdjustments[line.employeeId] = adjustmentFromLine(line, {
         applyDefaults,
         suggestion: suggestionsByEmployee[line.employeeId],
+        draft: draftByEmployee[line.employeeId],
       });
     });
+    adjustmentsRef.current = nextAdjustments;
     setAdjustments(nextAdjustments);
     setSelectedEmployeeId((current) => current || nextPeriod?.lines?.[0]?.employeeId || null);
   }
 
   useEffect(() => {
     setSelectedEmployeeId(null);
+    setDetailOpen(false);
     setPayDate(`${month}-26`); // default salary pay date is the 26th of the selected month
     load();
   }, [month]);
@@ -486,6 +860,17 @@ export function PayrollPage({ showToast }) {
     };
   }
 
+  function draftPayload() {
+    return {
+      payrollMonth: `${month}-01`,
+      inputs: Object.values(adjustmentsRef.current).map(normalizedAdjustment),
+    };
+  }
+
+  // Phase A command-surface cleanup: Preview is the only read-only recompute command. It keeps the
+  // old Refresh semantics too: commission, overtime, leave refund, director remuneration, tax/SSO
+  // are recomputed from current upstream data and shown WITHOUT committing. load()/current can still
+  // return a saved processed snapshot; this command is the safe "show me the latest run" path.
   async function preview() {
     setSaving(true);
     try {
@@ -499,23 +884,45 @@ export function PayrollPage({ showToast }) {
     }
   }
 
-  // Live refresh (2026-07-24): recompute every system-derived figure — commission, overtime,
-  // leave refund, director remuneration, tax/SSO — from current data and show it WITHOUT
-  // committing. This differs from load()/api.payroll.current, which for an already-PROCESSED month
-  // returns the saved snapshot (e.g. commission frozen from when it was processed) and so never
-  // reflects data that changed afterwards. HR's on-screen inputs are preserved (payload() carries
-  // them through); nothing is locked until "Process Payroll".
-  async function refresh() {
-    setSaving(true);
+  // Payroll input draft (2026-07-30; Phase A autosave UI): persist exactly what HR has typed so a
+  // browser reload does not lose it. Unfiltered by hasPayrollInput -- unlike payload() above, a
+  // draft must also capture an employee HR has started but not finished (e.g. only a garnishment type
+  // picked with no amount yet), not just what already qualifies for submission.
+  async function saveDraft({ quiet = false } = {}) {
+    if (!canSaveDraft) return;
+    const versionAtStart = draftVersionRef.current;
+    setDraftSaving(true);
+    setDraftSaveStatus('saving');
     try {
-      const response = await api.payroll.preview(payload());
-      applyPeriod(response.period);
-      showToast('success', 'อัปเดตข้อมูลล่าสุดแล้ว (ยังไม่ได้ประมวลผล)');
+      await api.payroll.saveInputDraft(draftPayload());
+      if (draftVersionRef.current === versionAtStart) {
+        draftDirtyRef.current = false;
+        setDraftDirty(false);
+        setDraftSaveStatus('saved');
+      } else {
+        setDraftSaveStatus('dirty');
+      }
+      if (!quiet) showToast('success', 'บันทึกร่างข้อมูลเงินเดือนแล้ว');
     } catch (error) {
-      showToast('error', error.message || 'รีเฟรชข้อมูลไม่สำเร็จ');
+      setDraftSaveStatus('error');
+      if (!quiet) showToast('error', error.message || 'บันทึกร่างไม่สำเร็จ');
     } finally {
-      setSaving(false);
+      setDraftSaving(false);
+      if (draftDirtyRef.current && draftVersionRef.current !== versionAtStart && canSaveDraft) {
+        void saveDraft({ quiet: true });
+      }
     }
+  }
+
+  function autosaveDraft() {
+    if (!canSaveDraft || !draftDirtyRef.current || draftSaving) return;
+    saveDraft({ quiet: true });
+  }
+
+  function handleAdjustmentBlur(event) {
+    if (typeof event.target?.matches !== 'function') return;
+    if (!event.target.matches('input, select, textarea')) return;
+    autosaveDraft();
   }
 
   function process() {
@@ -527,6 +934,11 @@ export function PayrollPage({ showToast }) {
     try {
       const response = await api.payroll.process(payload());
       applyPeriod(response.period);
+      // The backend clears hr.payroll_input_draft for this month once processed (see
+      // PayrollService#process) -- there is nothing left to save a draft over now.
+      draftDirtyRef.current = false;
+      setDraftDirty(false);
+      setDraftSaveStatus('saved');
       showToast('success', 'ประมวลผลเงินเดือนเรียบร้อย');
       setConfirmProcess(false);
     } catch (error) {
@@ -536,15 +948,28 @@ export function PayrollPage({ showToast }) {
     }
   }
 
-  async function generateExportFile() {
-    if (!period?.id) return;
-    const kind = EXPORT_KINDS.find((item) => item.value === exportKind) || EXPORT_KINDS[0];
+  async function generateExportFile(kindValue) {
+    const kind = EXPORT_KINDS.find((item) => item.value === kindValue) || EXPORT_KINDS[0];
+    const isDetailKind = kind.value === 'payroll-detail';
+    // KBank/PND1/SSO genuinely need a processed, paid period -- unchanged. payroll-detail must
+    // also work for a month that has never been processed (owner requirement, 2026-07-30: "July
+    // 2026 is live and still unprocessed... HR's whole reason to want this file is to review the
+    // month BEFORE committing it"), so it only requires SOME period to be loaded (lineCount > 0),
+    // not a persisted id.
+    if (isDetailKind ? !(period?.lineCount > 0) : !period?.id) return;
     setSaving(true);
     try {
-      // The backend returns raw CP874 bytes; exportFile fetches them as a binary blob so the Thai
-      // encoding survives the download intact. payDate is the salary pay/transfer date.
-      const blob = await api.payroll.exportFile(period.id, kind.value, payDate || undefined);
-      downloadBlob(blob, `${kind.filePrefix}-${month}.txt`);
+      // The three statutory kinds return raw CP874 bytes; payroll-detail returns a real xlsx
+      // workbook. Either way the result is fetched as a binary blob so the bytes survive the
+      // download intact. payDate is the salary pay/transfer date (payroll-detail just stamps it
+      // into the filename).
+      const blob = period?.id
+        ? await api.payroll.exportFile(period.id, kind.value, payDate || undefined)
+        // No persisted period (a fresh, unprocessed month) -- POST the same payrollMonth/inputs
+        // payload the Preview/Process buttons already send, so the workbook's figures are
+        // guaranteed to equal whatever the on-screen preview shows for the same inputs.
+        : await api.payroll.exportPreviewFile(payload(), kind.value, payDate || undefined);
+      downloadBlob(blob, `${kind.filePrefix}-${month}.${kind.extension}`);
       showToast('success', `ดาวน์โหลดไฟล์ ${kind.label} แล้ว`);
     } catch (error) {
       showToast('error', error.message || 'ดาวน์โหลดไฟล์ไม่สำเร็จ');
@@ -553,24 +978,43 @@ export function PayrollPage({ showToast }) {
     }
   }
 
-  const columns = [
-    ...payrollColumns,
-    {
-      key: 'actions',
-      header: 'เอกสาร',
-      render: (line) => (
-        <span className="row-actions">
-          <Button type="button" variant="text" onClick={() => setSelectedEmployeeId(line.employeeId)}>
-            รายละเอียด
-          </Button>
-          <Button type="button" variant="secondary" onClick={() => downloadPayslip(line)} disabled={!period?.id || !line.id || saving}>
-            <Icon name="fileText" />
-            Download payslip
-          </Button>
-        </span>
-      ),
-    },
-  ];
+  async function downloadPayslipsZip() {
+    if (!period?.id || period?.status !== 'PROCESSED') return;
+    setSaving(true);
+    try {
+      const blob = await api.payroll.downloadPayslipsZip(period.id);
+      downloadBlob(blob, `glr-payslips-${month}.zip`);
+      showToast('success', 'ดาวน์โหลดสลิปเงินเดือนทั้งหมดแล้ว');
+    } catch (error) {
+      showToast('error', error.message || 'ดาวน์โหลดสลิปเงินเดือนทั้งหมดไม่สำเร็จ');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const periodLines = useMemo(() => period?.lines || [], [period?.lines]);
+  const payrollReconciliation = useMemo(
+    () => buildPayrollReconciliation(periodLines, period),
+    [periodLines, period],
+  );
+  const employeeColumn = useMemo(() => createEmployeeColumn(selectedLine?.employeeId), [selectedLine?.employeeId]);
+  const visiblePayrollColumns = useMemo(
+    () => [
+      employeeColumn,
+      ...payrollMoneyColumns.filter((column) => hasNonZeroMoney(periodLines, column)),
+    ],
+    [employeeColumn, periodLines],
+  );
+  const visibleMoneyColumnCount = visiblePayrollColumns.filter((column) => column.isMoney).length;
+  const payrollGridColumns = useMemo(
+    () => [
+      'minmax(150px, 1.1fr)',
+      ...Array.from({ length: visibleMoneyColumnCount }, () => 'minmax(7.5rem, 0.86fr)'),
+    ].join(' '),
+    [visibleMoneyColumnCount],
+  );
+
+  const columns = visiblePayrollColumns;
 
   async function downloadPayslip(line) {
     if (!period?.id || !line?.id) return;
@@ -601,139 +1045,205 @@ export function PayrollPage({ showToast }) {
 
   function updateAdjustment(field, value) {
     if (!selectedLine) return;
-    setAdjustments((current) => ({
-      ...current,
+    draftVersionRef.current += 1;
+    const nextAdjustments = {
+      ...adjustmentsRef.current,
       [selectedLine.employeeId]: {
-        ...(current[selectedLine.employeeId] || blankAdjustment(selectedLine.employeeId)),
+        ...(adjustmentsRef.current[selectedLine.employeeId] || blankAdjustment(selectedLine.employeeId)),
         [field]: value,
       },
-    }));
+    };
+    adjustmentsRef.current = nextAdjustments;
+    setAdjustments(nextAdjustments);
+    // Payroll input draft (2026-07-30): any typed change is not yet saved anywhere durable until
+    // the blur autosave succeeds (or Process, which persists it for real).
+    draftDirtyRef.current = true;
+    setDraftDirty(true);
+    setDraftSaveStatus('dirty');
   }
 
+  const hasLoadedLines = period?.lineCount > 0;
+  const hasSavedPeriod = Boolean(period?.id);
+  const hasProcessedPeriod = hasSavedPeriod && period?.status === 'PROCESSED';
+  const disabledBecauseBusy = saving ? 'กำลังทำรายการอื่นอยู่' : null;
+  const needsSavedPeriod = 'ต้องมีรอบเงินเดือนที่บันทึกแล้วก่อน';
+  const needsProcessedPeriod = 'ต้องประมวลผลเงินเดือนก่อนสร้างเอกสารนี้';
+  const needsLines = 'กดคำนวณตัวอย่างเพื่อสร้างรายการเงินเดือนก่อน';
+  const payrollDocumentItems = [
+    ...EXPORT_KINDS.map((kind) => {
+      const isDetailKind = kind.value === 'payroll-detail';
+      const disabledReason = disabledBecauseBusy
+        || (isDetailKind
+          ? (!hasLoadedLines ? needsLines : null)
+          : (!hasSavedPeriod ? needsSavedPeriod : null));
+      return {
+        key: `export-${kind.value}`,
+        label: `ดาวน์โหลด ${kind.label}`,
+        icon: 'fileText',
+        onSelect: () => generateExportFile(kind.value),
+        disabled: Boolean(disabledReason),
+        disabledReason,
+      };
+    }),
+    {
+      key: 'payslips-zip',
+      label: 'ดาวน์โหลดสลิปเงินเดือนทั้งหมด',
+      icon: 'fileText',
+      onSelect: downloadPayslipsZip,
+      disabled: Boolean(disabledBecauseBusy || !hasProcessedPeriod),
+      disabledReason: disabledBecauseBusy || (!hasSavedPeriod ? needsSavedPeriod : period?.status !== 'PROCESSED' ? needsProcessedPeriod : null),
+    },
+    {
+      key: 'email-payslips',
+      label: 'ส่งอีเมลสลิปเงินเดือน',
+      icon: 'mail',
+      onSelect: distributePayslips,
+      disabled: Boolean(disabledBecauseBusy || !hasSavedPeriod),
+      disabledReason: disabledBecauseBusy || (!hasSavedPeriod ? needsSavedPeriod : null),
+    },
+  ];
+  const draftStatusLabel = draftSaveStatus === 'error'
+    ? 'บันทึกอัตโนมัติไม่สำเร็จ'
+    : draftSaving
+      ? 'กำลังบันทึก...'
+      : draftDirty
+        ? 'รอบันทึกอัตโนมัติ'
+        : 'บันทึกแล้ว';
+  const taxAndSsoTotal = Number(period?.totalWithholdingTax || 0) + Number(period?.totalSocialSecurity || 0);
+  const payrollSummaryItems = [
+    { key: 'status', label: 'สถานะรอบ', value: status.label, helper: period?.status === 'PREVIEW' ? 'ยังไม่ปิดรอบ' : 'Payroll status' },
+    { key: 'gross', label: 'รายได้รวม', value: formatMoney(period?.totalGross), helper: 'Gross earnings' },
+    { key: 'deductions', label: 'เงินหักรวม', value: formatMoney(period?.totalDeductions), helper: `ภาษี/ปกส. ${formatMoney(taxAndSsoTotal)}` },
+    { key: 'net', label: 'ยอดโอนสุทธิ', value: formatMoney(period?.totalNet), helper: 'Net transfer' },
+  ];
+
   return (
-    <PageStack>
-      {isMobile && <DesktopOnlyNotice />}
+    <PageStack className="mobile:gap-3">
       <PageHeader
         title="ประมวลผลเงินเดือน"
         subtitle="Payroll Processing"
         actions={(
-          <div className="toolbar-actions">
+          <div className="toolbar-actions mobile:w-full mobile:items-stretch mobile:gap-2">
             <label>
               รอบเดือน
-              <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
+              <input
+                type="month"
+                value={month}
+                onChange={(event) => setMonth(event.target.value)}
+                className="mobile:min-h-[44px]"
+              />
               {/* The native <input type="month"> always renders Gregorian and cannot show Buddhist
                   era; this is a read-only display of the same value, not a second control. */}
               <small className="font-normal text-text-muted">({formatThaiMonthYearFromMonthInputValue(month)})</small>
             </label>
-            <Button type="button" variant="secondary" onClick={refresh} disabled={loading || saving} title="ดึงข้อมูลล่าสุด (คอมมิชชัน, OT, วันลา, ค่าตอบแทนกรรมการ) เข้ามาคำนวณใหม่ โดยยังไม่ประมวลผล">
-              <Icon name="refresh" />
-              รีเฟรช
-            </Button>
+            {canSaveDraft && (
+              <span
+                role="status"
+                className={cn(
+                  'inline-flex items-center rounded-sm border px-2 py-1 text-xs font-extrabold',
+                  draftSaveStatus === 'error'
+                    ? 'border-danger-border bg-danger-bg text-danger'
+                    : draftDirty || draftSaving
+                      ? 'border-warning-border bg-warning-bg-soft text-warning'
+                      : 'border-success-bg bg-success-bg text-success',
+                )}
+              >
+                {draftStatusLabel}
+              </span>
+            )}
           </div>
         )}
       />
 
       <CompactStatRow
-        items={[
-          { key: 'gross', label: 'รายได้รวม', value: formatMoney(period?.totalGross), helper: 'Gross earnings' },
-          { key: 'deductions', label: 'เงินหักรวม', value: formatMoney(period?.totalDeductions), helper: 'Deductions' },
-          { key: 'net', label: 'ยอดโอนสุทธิ', value: formatMoney(period?.totalNet), helper: 'Net transfer' },
-          { key: 'tax', label: 'ภาษี/ปกส.', value: formatMoney(Number(period?.totalWithholdingTax || 0) + Number(period?.totalSocialSecurity || 0)), helper: 'Tax + SSO' },
-        ]}
+        items={payrollSummaryItems}
       />
 
-      {/* F2: `.payroll-actions`'s own `flex-direction: column; align-items: stretch; gap: 14px;` rule
-          was dead — Tailwind utilities in `layer(utilities)` always beat `styles.css` in
-          `layer(legacy)` (see index.css), and FilterBar hardcodes `flex flex-wrap gap-[10px]
-          items-center`. Only `flex-direction: column` had no competing utility and actually applied;
-          `align-items`/`gap` silently lost, so the status row and action groups shrank to content
-          width and centred 10px apart instead of spanning full-width at 14px. Fixed at the call site
-          (Tailwind-first per CLAUDE.md) — `cn` is `twMerge`, so these override FilterBar's base
-          classes cleanly instead of fighting them. The dead rule was deleted from styles.css. */}
-      <FilterBar className="payroll-actions flex-col items-stretch gap-[14px]">
-        <div className="payroll-actions-status">
-          <div>
-            <strong>พนักงาน {period?.lineCount || 0} คน</strong>
-            <span>สถานะรอบเงินเดือน</span>
-          </div>
-          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-        </div>
-
-        <div className="payroll-actions-groups">
+      {/* Phase A command surface: routine commands are Preview + one labelled document menu. Process
+          stays in its own Tailwind-styled region so the irreversible action remains visually apart
+          without keeping dead `.payroll-actions-*` legacy rules in styles.css. */}
+      <FilterBar className="flex-col items-stretch gap-[14px]">
+        <div className="flex flex-wrap items-center gap-3">
           {/* Review — safe, read-only recompute. */}
-          <div className="payroll-actions-group">
-            <Button type="button" variant="secondary" onClick={preview} disabled={loading || saving}>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              onClick={preview}
+              disabled={loading || saving}
+              title="คำนวณตัวอย่างจากข้อมูลล่าสุด โดยยังไม่ประมวลผลเงินเดือน"
+            >
               <Icon name="search" />
               คำนวณตัวอย่าง
             </Button>
-          </div>
 
-          {/* Run — the irreversible action. Kept visually apart (its own bordered group) and blocked
-              outright below the 720px mobile breakpoint rather than merely advised against, since a
-              mis-tap here commits payroll. Also blocked when the loaded period has no lines (F1) —
-              see the `emptyPeriod` comment above for why. */}
-          <div className="payroll-actions-group payroll-actions-group-run">
-            <Button
-              type="button"
-              onClick={process}
-              disabled={loading || saving || isMobile || emptyPeriod}
-              aria-describedby={processBlockedReason ? 'payroll-process-block-reason' : undefined}
-              title={processBlockedReason || undefined}
-            >
-              <Icon name="check" />
-              ประมวลผลเงินเดือน
-            </Button>
-            {/* Informational state, not an error: this explains why the button is
-                unavailable right now, so it reads in muted body colour rather than
-                danger red. Utilities at the call site, not a styles.css rule —
-                styles.css sits in @layer legacy and loses to any text utility a
-                future caller adds here. */}
-            {processBlockedReason && (
-              <span
-                id="payroll-process-block-reason"
-                role="note"
-                className="max-w-[34ch] text-xs font-semibold text-text-muted"
-              >
-                {processBlockedReason}
-              </span>
-            )}
-          </div>
-
-          {/* Export — statutory file generation. */}
-          <div className="payroll-actions-group">
-            <select
-              value={exportKind}
-              onChange={(event) => setExportKind(event.target.value)}
-              disabled={!period?.id || saving}
-              aria-label="ประเภทไฟล์ที่จะสร้าง"
-            >
-              {EXPORT_KINDS.map((kind) => (
-                <option key={kind.value} value={kind.value}>{kind.label}</option>
-              ))}
-            </select>
-            <label className="inline-flex items-center gap-2 m-0 text-sm font-extrabold">
-              วันที่จ่าย
+            {/* Phase A: the export format selector became four document menu actions, but the
+                effective date is still an explicit field because PayrollService uses it for KBank,
+                PND1, SSO, and payroll-detail filenames. Hiding it behind only the KBank action would
+                make the UI contradict the backend contract. */}
+            <label className="m-0 inline-flex items-center gap-2 text-sm font-extrabold">
+              วันที่เอกสาร
               <input
                 type="date"
                 value={payDate}
                 onChange={(event) => setPayDate(event.target.value)}
-                disabled={!period?.id || saving}
+                disabled={saving || !(period?.lineCount > 0)}
+                className="w-[9.5rem] mobile:min-h-[44px]"
               />
               <small className="font-normal text-text-muted">({formatShortDate(payDate)})</small>
             </label>
-            <Button type="button" variant="secondary" onClick={generateExportFile} disabled={!period?.id || saving}>
-              <Icon name="fileText" />
-              ดาวน์โหลดไฟล์
-            </Button>
+
+            <OverflowMenu
+              label="เอกสาร"
+              triggerLabel="เอกสาร"
+              triggerIcon="fileText"
+              items={payrollDocumentItems}
+            />
           </div>
 
-          {/* Send — notify employees. */}
-          <div className="payroll-actions-group">
-            <Button type="button" variant="secondary" onClick={distributePayslips} disabled={!period?.id || saving}>
-              <Icon name="mail" />
-              ส่งอีเมลสลิปเงินเดือน
-            </Button>
-          </div>
+          {/* Run — the irreversible action. Kept in its own region with the period state and pushed
+              after routine preview/export/send work. Phone stays editable; the extra mobile-only
+              typed phrase lives in the confirm dialog instead of disabling this button outright. */}
+          <section
+            className="payroll-process-region ml-auto flex flex-wrap items-center gap-x-3.5 gap-y-2.5 rounded-md border border-danger-border bg-surface-muted px-3 py-2.5 nav-drawer:ml-0 nav-drawer:w-full nav-drawer:justify-between mobile:items-stretch"
+            aria-labelledby="payroll-process-title"
+          >
+            <div className="grid min-w-0 gap-1">
+              <span id="payroll-process-title" className="text-sm font-black text-text">ปิดรอบเงินเดือน</span>
+              <small className="flex flex-wrap items-center gap-1.5 text-xs font-extrabold text-text-muted">
+                <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                <span>{period?.lineCount || 0} คน</span>
+              </small>
+            </div>
+            <div className="grid min-w-0 gap-1 mobile:w-full">
+              <Button
+                type="button"
+                variant="danger"
+                size="sm"
+                className="mobile:w-full"
+                onClick={process}
+                disabled={loading || saving || emptyPeriod}
+                aria-describedby={processBlockedReason ? 'payroll-process-block-reason' : undefined}
+                title={processBlockedReason || undefined}
+              >
+                <Icon name="check" size={15} />
+                ประมวลผลเงินเดือน
+              </Button>
+              {/* Informational state, not an error: this explains why the button is
+                  unavailable right now, so it reads in muted body colour rather than
+                  danger red. Utilities at the call site, not a styles.css rule —
+                  styles.css sits in @layer legacy and loses to any text utility a
+                  future caller adds here. */}
+              {processBlockedReason && (
+                <span
+                  id="payroll-process-block-reason"
+                  role="note"
+                  className="max-w-[34ch] text-xs font-semibold text-text-muted"
+                >
+                  {processBlockedReason}
+                </span>
+              )}
+            </div>
+          </section>
         </div>
       </FilterBar>
 
@@ -745,45 +1255,239 @@ export function PayrollPage({ showToast }) {
           fifteen-column table" mobile decision (section 9c). */}
       <TaxTreatmentMatrixSection payrollMonth={month} showToast={showToast} />
 
-      <section className="payroll-workspace">
-        <DataTable
-          columns={columns}
-          rows={period?.lines || []}
-          getRowKey={(line) => line.employeeId}
-          gridClassName="payroll-table"
-          pageSize={25}
-          searchable
-          searchPlaceholder="ค้นหาพนักงาน"
-          rowClassName={(line) => `payroll-row${Number(line.employeeId) === Number(selectedLine?.employeeId) ? ' active' : ''}`}
-          loading={loading}
-          emptyState={{
-            icon: 'badgeDollar',
-            title: 'ยังไม่มีข้อมูลเงินเดือน',
-            description: 'เลือกรอบเดือนหรือกดรีเฟรชเพื่อคำนวณตัวอย่าง',
-          }}
+      {/* B1/B4 fix (Opus review, 2026-07-31): layout moved to Tailwind utilities at the call site
+          (CLAUDE.md Tailwind-first) instead of a `.payroll-workspace` styles.css rule -- two states,
+          not three: below the `payroll-wide:` custom variant (the panel's overlay floor, see the
+          isDesktopPanel comment above) the table is the only in-flow column; at >=1366px a second
+          `minmax(310px, 0.3fr)` column holds the sticky side panel. `minmax(0, ...)` on both tracks
+          deliberately, never a bare `1fr`/`0.35fr` -- a bare fr track floors at min-content and was
+          the root cause of the panel-pushed-off-canvas regression this fix replaces.
+
+          Phase A (2026-07-31): shrinking the panel floor to 310px lets 1366px keep the persistent
+          side panel while still paying for the table's 714px floor and the 16px gap. 1280px remains
+          overlay, where the content width still cannot afford both. */}
+      <section className="grid grid-cols-[minmax(0,1fr)] payroll-wide:grid-cols-[minmax(0,1fr)_minmax(310px,0.3fr)] gap-4 items-start">
+        {/* B2 fix (Opus review, 2026-07-31): while the detail panel is a genuine overlay dialog
+            (<1366px, open), the rest of the page behind the dim backdrop must be unreachable, not
+            just visually dimmed -- otherwise Tab still walks a screen-reader/keyboard user out of
+            the panel into content that is only hidden by a z-index. `inert` (not just aria-hidden)
+            removes this region from both the accessibility tree and the tab order in one attribute.
+            `'' : undefined`, not a boolean -- React 18 only renders the bare `inert` attribute for a
+            truthy STRING value; `inert={true}` is silently dropped (verified in this repo's jsdom). */}
+        <div
+          className="payroll-table-region"
+          style={{ '--payroll-table-columns': payrollGridColumns }}
+          inert={isOverlayPanel && detailOpen ? '' : undefined}
+        >
+          <PayrollReconciliationAlert mismatches={payrollReconciliation.mismatches} />
+          <DataTable
+            columns={columns}
+            rows={periodLines}
+            getRowKey={(line) => line.employeeId}
+            gridClassName="payroll-table"
+            pageSize={Math.max(periodLines.length, 25)}
+            searchable
+            searchPlaceholder="ค้นหาพนักงาน"
+            // B4 fix (Opus review, 2026-07-31): `cursor-pointer` is a Tailwind utility at the call
+            // site (CLAUDE.md Tailwind-first) instead of a `.payroll-row { cursor: pointer }`
+            // styles.css rule -- `.payroll-row.active`'s background/shadow stay in styles.css (theme
+            // tokens, see the comment on that rule) since this is the one line that was genuinely a
+            // one-property override.
+            rowClassName={(line) => cn(
+              // `.payroll-row.active` uses box-shadow for the selection inset, so focus has to
+              // re-apply the shared ring token from the Tailwind utilities layer where it wins.
+              'payroll-row cursor-pointer focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] mobile:gap-y-2 mobile:p-3.5',
+              Number(line.employeeId) === Number(selectedLine?.employeeId) && 'active',
+            )}
+            loading={loading}
+            stickyHeader
+            showPagination={false}
+            caption="รายการเงินเดือนพนักงานในรอบที่เลือก"
+            onRowSelect={selectPayrollLine}
+            isRowSelected={(line) => Number(line.employeeId) === Number(selectedLine?.employeeId)}
+            focusRowOnSelectClick={isOverlayPanel}
+            footerRow={({ columns: renderedColumns }) => (
+              <PayrollTotalsFooter columns={renderedColumns} reconciliation={payrollReconciliation} />
+            )}
+            emptyState={{
+              icon: 'badgeDollar',
+              title: 'ยังไม่มีข้อมูลเงินเดือน',
+              description: 'เลือกรอบเดือนหรือกดคำนวณตัวอย่าง',
+            }}
+          />
+        </div>
+
+        {/* B2 fix (Opus review, 2026-07-31): a <button aria-hidden="true"> was the previous backdrop
+            -- an interactive element deliberately hidden from the accessibility tree is exactly the
+            anti-pattern Modal.jsx's own backdrop avoids. `role="presentation"` on a plain <div> (the
+            established pattern, see Modal.jsx) stops this element being announced as anything at
+            all, while a click still closes the panel via onClick same as before. */}
+        <div
+          className={cn('payroll-detail-backdrop', detailOpen && 'is-open')}
+          role="presentation"
+          onClick={closeDetailPanel}
         />
 
-        <aside className={cn(PANEL_CLASS, 'payroll-detail-panel')}>
+        <aside
+          ref={detailPanelRef}
+          // tabIndex={-1}: lets the panel itself take focus programmatically (useDialogFocus falls
+          // back to it when the panel has no focusable children) without ever joining the Tab order.
+          tabIndex={-1}
+          // Defect 2 fix (Opus review, 2026-07-31): `@container` (Tailwind v4 has this built in, no
+          // plugin) turns the panel itself into a container-query context so the two money-field
+          // grids below can respond to the PANEL's own available width instead of the viewport's --
+          // the panel is a sticky side column at >=1366px and a fixed-width overlay below that, so
+          // its width is not a function of viewport width alone (a `sm:`/`md:` viewport breakpoint
+          // would be lying about what's actually being measured). See the `@sm:grid-cols-2` classes
+          // on payroll-detail-grid/payroll-special-grid below.
+          className={cn(
+            PANEL_CLASS,
+            'payroll-detail-panel',
+            '@container',
+            'mobile:inset-0 mobile:max-h-[100dvh] mobile:w-full mobile:rounded-none mobile:border-0 mobile:p-4 mobile:pt-0 mobile:[&_input:not([type=checkbox])]:min-h-[44px] mobile:[&_select]:min-h-[44px]',
+            detailOpen && 'is-open',
+          )}
+          onBlurCapture={handleAdjustmentBlur}
+          // B2 fix (Opus review, 2026-07-31): dialog semantics apply ONLY in overlay mode (<1366px) --
+          // at >=1366px this is a persistent side panel beside the table, not a dialog stealing focus,
+          // so role/aria-modal/aria-labelledby must not be present there (an always-on role="dialog"
+          // on a panel that never traps focus or blocks the rest of the page would be actively wrong).
+          role={isOverlayPanel && detailOpen ? 'dialog' : undefined}
+          aria-modal={isOverlayPanel && detailOpen ? 'true' : undefined}
+          aria-labelledby={isOverlayPanel && detailOpen ? 'payroll-detail-title' : undefined}
+        >
           {selectedLine && selectedAdjustment ? (
             <>
-              <Panel.Header>
-                <h2 className="m-0 text-lg">{selectedLine.employeeName}</h2>
-                <StatusBadge tone="info">{selectedLine.employeeCode}</StatusBadge>
+              <Panel.Header className="payroll-detail-panel-header mobile:sticky mobile:top-0 mobile:z-10 mobile:-mx-4 mobile:mb-4 mobile:border-b mobile:border-border mobile:bg-surface mobile:px-4 mobile:py-3">
+                <div>
+                  <h2 id="payroll-detail-title" className="m-0 text-lg">{selectedLine.employeeName}</h2>
+                  <small>{selectedLine.employeeCode} · {selectedLine.departmentName || '-'}</small>
+                </div>
+                <div className="payroll-detail-header-actions">
+                  <StatusBadge tone="info">{selectedLine.employeeCode}</StatusBadge>
+                  {/* Rendered only in the <1366px overlay presentation. At >=1366px the panel is a
+                      persistent side column whose visibility is NOT gated by `detailOpen` at all
+                      (only the overlay's CSS transform states are), so a dismiss control there is
+                      inert -- it would set `detailOpen=false` and nothing would visibly happen.
+
+                      This is a conditional RENDER rather than a `display` toggle on purpose. The
+                      previous attempt lived in styles.css (`.payroll-detail-close { display: none }`
+                      plus an `inline-flex` override under `max-width: 1365px`) and was completely
+                      dead: `buttonVariants`' own `inline-flex` sits in `layer(utilities)`, and
+                      index.css declares `@layer theme, legacy, utilities`, so a Tailwind utility
+                      always beats a styles.css rule for the same property on the same element (the
+                      "styles.css loses to Tailwind utilities" gotcha this repo keeps re-learning).
+                      Not rendering it also keeps it out of the tab order, which a `display: none`
+                      would do but a stale CSS rule never did. */}
+                  {isOverlayPanel && (
+                  <Button
+                    type="button"
+                    variant="icon"
+                    size="sm"
+                    // Item 4b fix (2026-07-31): `variant="icon" size="sm"` resolves to a 36x36
+                    // compound-variant box (Button.jsx) -- too small for the primary dismiss control
+                    // on a full-height overlay a touch user must reach reliably. Fixed at THIS call
+                    // site only (`w-11 min-h-[44px]` after `cn`'s twMerge wins the width/min-height
+                    // conflict against the compound variant's `w-9 min-h-[36px]`, same as
+                    // `buttonVariants`' own `className` override contract everywhere else) rather than
+                    // in the shared `icon`+`sm` compound variant itself -- that variant is also used by
+                    // DataTable's pagination arrows and TicketListPage's filter-panel close button,
+                    // neither of which is a full-height overlay's primary dismiss control, so widening
+                    // it there would be an unrequested, unreviewed change to two unrelated screens.
+                    className="payroll-detail-close w-11 min-h-[44px]"
+                    onClick={closeDetailPanel}
+                    title="ปิดรายละเอียด"
+                  >
+                    <Icon name="close" size={16} />
+                  </Button>
+                  )}
+                </div>
               </Panel.Header>
 
-              <div className="payroll-detail-grid">
+              {/* Defect 2 fix (Opus review, 2026-07-31): `grid-cols-1 @sm:grid-cols-2` at the call
+                  site (Tailwind-first, replaces the old unconditional `repeat(2, ...)` in
+                  styles.css) -- 1 column while the panel container is narrower than Tailwind's
+                  `@sm` (24rem/384px) content-box floor, 2 once there's genuinely room. This is a
+                  container query keyed off `@container` on the `<aside>` above, not a viewport
+                  breakpoint -- see that comment for why viewport width is the wrong signal here. */}
+              <div className="payroll-detail-grid grid grid-cols-1 gap-2.5 @sm:grid-cols-2">
                 <MiniMetric label="ฐานเงินเดือน" value={formatMoney(selectedLine.baseSalary)} />
                 <MiniMetric label="รายได้คิดภาษี" value={formatMoney(selectedLine.grossTaxableIncome)} />
                 <MiniMetric label="ภาษีงวดนี้" value={formatMoney(selectedLine.withholdingTax)} />
                 <MiniMetric label="เงินโอนสุทธิ" value={formatMoney(selectedLine.netPay)} />
               </div>
 
+              {period?.id && selectedLine.id ? (
+                <div className="payroll-detail-actions">
+                  <Button type="button" variant="secondary" onClick={() => downloadPayslip(selectedLine)} disabled={saving}>
+                    <Icon name="fileText" />
+                    ดาวน์โหลดสลิป
+                  </Button>
+                </div>
+              ) : null}
+
+              {/* Daily-rate support (2026-07-30): shown only for a pay_type = 'D' employee --
+                  hr.employee.current_salary is that employee's PER-DAY rate (not a monthly figure),
+                  so "ฐานเงินเดือน" above is really rate * daysWorked and HR must type the day count
+                  each run. Reachable from selectedLine.payType, echoed onto PayrollLineDto by the
+                  backend precisely so this page can gate the field to the employees it applies to. */}
+              {selectedLine.payType === 'D' && (
+                <CollapsibleSection title="ค่าจ้างรายวัน" defaultOpen>
+                  <FormGrid>
+                    <label htmlFor="payroll-days-worked">
+                      จำนวนวันทำงานในงวดนี้
+                      <InfoTip
+                        label="จำนวนวันทำงานในงวดนี้"
+                        text={`พนักงานรายวัน — ค่าแรงงวดนี้ = อัตรารายวัน (${formatMoney(selectedLine.dailyRate)} บาท/วัน) x จำนวนวันทำงานที่กรอกด้านล่าง`}
+                      />
+                      <input
+                        id="payroll-days-worked"
+                        type="number"
+                        min="0"
+                        // Finding 4 fix (Opus review, 2026-07-30): frontend bound matching the
+                        // backend's @Max(31)/chk_payroll_line_days_worked_range -- no real month has
+                        // more than 31 days. Decimals stay legitimate (e.g. 21.5), so only the upper
+                        // bound is added here, step is unchanged.
+                        max="31"
+                        step="0.5"
+                        placeholder="0"
+                        value={selectedAdjustment.daysWorked}
+                        onChange={(event) => updateAdjustment('daysWorked', event.target.value)}
+                      />
+                    </label>
+                    <small className="block">
+                      อัตรารายวัน {formatMoney(selectedLine.dailyRate)} บาท/วัน
+                      {parsePayrollNumber(selectedAdjustment.daysWorked) > 0 && (
+                        <> — ค่าแรงงวดนี้โดยประมาณ {formatMoney(parsePayrollNumber(selectedAdjustment.daysWorked) * Number(selectedLine.dailyRate || 0))} บาท</>
+                      )}
+                    </small>
+                    {/* Finding 1 fix (Opus review, 2026-07-30): cheap client-side warning mirroring the
+                        server-side guard in PayrollService#requireEveryDailyRateEmployeeHasDaysWorked
+                        -- the UI warning is not the enforcement (it can always be bypassed / this panel
+                        may not even be opened), just an early nudge before HR hits Process, which then
+                        refuses the run server-side regardless. */}
+                    {!(parsePayrollNumber(selectedAdjustment.daysWorked) > 0) && (
+                      <small className="block text-warning">
+                        ⚠ ยังไม่ได้ระบุจำนวนวันทำงาน — พนักงานรายวันจะได้รับเงินเดือน ฿0 หากประมวลผลโดยไม่กรอกช่องนี้
+                      </small>
+                    )}
+                  </FormGrid>
+                </CollapsibleSection>
+              )}
+
               <CollapsibleSection
                 title="เงินพิเศษบริษัท"
                 defaultOpen
                 headerRight={<span className="collapsible-total">{formatMoney(specialPayKeys.reduce((sum, key) => sum + parsePayrollNumber(selectedAdjustment[key]), 0))}</span>}
               >
-                <div className="payroll-special-grid">
+                {/* Defect 2 fix (Opus review, 2026-07-31): same `grid-cols-1 @sm:grid-cols-2` swap
+                    as payroll-detail-grid above -- this is the grid the review measured at 107px
+                    money inputs and 3-line labels with the panel pinned to 2 columns at every
+                    width. At 1 column each label/input gets the panel's full content width, which
+                    is what keeps every money input >=140px and every Thai label to <=2 lines at
+                    the panel's current 310px floor (see the `<section>` grid-cols comment above)
+                    without having to keep growing the panel indefinitely as more fields land here. */}
+                <div className="payroll-special-grid grid grid-cols-1 gap-2.5 @sm:grid-cols-2">
                   {specialPayFields.map((field) => {
                     const inputId = `payroll-${field.key}`;
                     return (
@@ -1025,7 +1729,11 @@ export function PayrollPage({ showToast }) {
         message={(
           <div>
             <p className="confirm-dialog-message">
-              ยืนยันประมวลผลเงินเดือนรอบ {formatThaiMonthYearFromMonthInputValue(month)}? การดำเนินการนี้ไม่สามารถย้อนกลับได้
+              ยืนยันประมวลผลเงินเดือนรอบ {formatThaiMonthYearFromMonthInputValue(month)} สำหรับพนักงาน {period?.lineCount || 0} คน?
+              การดำเนินการนี้ไม่สามารถย้อนกลับได้
+            </p>
+            <p className="confirm-dialog-message">
+              หลังยืนยัน การอนุมัติ OT ของเดือนนี้จะปิดทันที และไม่มีทางยกเลิกการประมวลผล
             </p>
             <p className="confirm-dialog-message">
               รายได้รวม {formatMoney(period?.totalGross)} · เงินหักรวม {formatMoney(period?.totalDeductions)} · ยอดโอนสุทธิ {formatMoney(period?.totalNet)}
@@ -1035,6 +1743,11 @@ export function PayrollPage({ showToast }) {
         confirmLabel="ยืนยันประมวลผล"
         tone="danger"
         busy={saving}
+        requireReason={requiresMobileProcessPhrase}
+        reasonLabel="ยืนยันบนมือถือ"
+        reasonPlaceholder={`พิมพ์คำว่า ${MOBILE_PROCESS_CONFIRM_PHRASE}`}
+        validateReason={(value) => value === MOBILE_PROCESS_CONFIRM_PHRASE}
+        reasonInvalidMessage={`พิมพ์คำว่า ${MOBILE_PROCESS_CONFIRM_PHRASE} เพื่อยืนยันบนมือถือ`}
         onConfirm={confirmProcessPayroll}
         onCancel={() => setConfirmProcess(false)}
       />
@@ -1177,7 +1890,7 @@ function TaxTreatmentMatrixSection({ payrollMonth, showToast }) {
                   </span>
                 )}
               >
-                <FormGrid>
+                <FormGrid className="mobile:[&_select]:min-h-[44px]">
                   {TAX_TREATMENT_COMPONENTS.map((field) => {
                     const inputId = `tax-treatment-${item.employeeId}-${field.key}`;
                     const value = valueFor(item, field.key);

@@ -9,7 +9,9 @@ import { Modal } from './Modal.jsx';
  * When `requireReason` is true, a textarea is rendered and `onConfirm` is
  * called with the trimmed reason string instead of no arguments. Pass
  * `optionalReason` to allow an empty reason (e.g. "หมายเหตุการยกเลิก (ถ้ามี)"),
- * otherwise Confirm stays disabled until the reason is non-empty.
+ * otherwise Confirm stays disabled until the reason is non-empty. `validateReason`
+ * is an optional second gate for consequential flows that require a deliberate
+ * typed phrase rather than any non-empty note.
  */
 export function ConfirmDialog({
   open,
@@ -23,6 +25,8 @@ export function ConfirmDialog({
   optionalReason = false,
   reasonLabel = 'เหตุผล',
   reasonPlaceholder = '',
+  validateReason,
+  reasonInvalidMessage,
   onConfirm,
   onCancel,
 }) {
@@ -45,7 +49,12 @@ export function ConfirmDialog({
   if (!open) return null;
 
   const reasonRequiredAndEmpty = requireReason && !optionalReason && reason.trim().length === 0;
-  const confirmDisabled = busy || reasonRequiredAndEmpty;
+  const reasonTrimmed = reason.trim();
+  const reasonInvalid = requireReason
+    && reasonTrimmed.length > 0
+    && typeof validateReason === 'function'
+    && !validateReason(reasonTrimmed);
+  const confirmDisabled = busy || reasonRequiredAndEmpty || reasonInvalid;
 
   function handleConfirm() {
     if (confirmDisabled) return;
@@ -91,6 +100,9 @@ export function ConfirmDialog({
             placeholder={reasonPlaceholder}
             disabled={busy}
           />
+          {reasonInvalid && reasonInvalidMessage ? (
+            <small className="block text-danger">{reasonInvalidMessage}</small>
+          ) : null}
         </label>
       ) : null}
     </Modal>

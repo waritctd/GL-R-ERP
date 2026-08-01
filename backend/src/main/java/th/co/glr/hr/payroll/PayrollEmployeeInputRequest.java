@@ -1,5 +1,6 @@
 package th.co.glr.hr.payroll;
 
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
 import java.math.BigDecimal;
@@ -82,8 +83,92 @@ public record PayrollEmployeeInputRequest(
     // Parent allowance per qualifying head, this run's in-run correction (handoff section 4).
     // Nullable: null falls back to the stored standing declaration, same per-field-override pattern
     // as every other allowance field (see PayrollService#mergeAllowances).
-    @jakarta.validation.constraints.Min(0) @jakarta.validation.constraints.Max(4) Integer parentCareCount
+    @jakarta.validation.constraints.Min(0) @jakarta.validation.constraints.Max(4) Integer parentCareCount,
+    // Daily-rate support (2026-07-30): days worked THIS period, HR-typed, only meaningful for a
+    // pay_type = 'D' employee (hr.employee.current_salary is that employee's PER-DAY rate, not a
+    // monthly figure -- see PayrollEmployeeSnapshot#payType). One-off like bonusPay/otherOneOffPay
+    // above -- re-entered fresh every run, never carried forward, since a day count is specific to
+    // the month worked. Nullable/omittable: absent or zero means "no gross computed" for a daily-rate
+    // employee this run (same "0 unless entered" convention every other one-off field already
+    // follows) and is a complete no-op for a monthly employee, who never reads this field at all.
+    //
+    // Finding 4 fix (Opus review, 2026-07-30): @PositiveOrZero alone had no upper bound, so a
+    // calendar-impossible day count (e.g. 45 in a 31-day month) was accepted and paid in full, and a
+    // genuine typo (a 5-digit value) would overflow days_worked's NUMERIC(6,2) column with a raw
+    // Postgres error. @Max(31) is this DTO-layer bound -- the file's own convention (see
+    // parentCareCount above); PayrollService#calculateLine additionally refuses > 31 with a clean
+    // Thai message before any INSERT, since this annotation is only enforced through @Valid
+    // (the /process and /preview controller endpoints), not a direct service call.
+    @PositiveOrZero @Max(31) BigDecimal daysWorked
 ) {
+    /**
+     * Legacy 44-arg constructor: the full signature as it stood right before {@code daysWorked}
+     * (daily-rate support, 2026-07-30) existed -- i.e. through {@code parentCareCount}. Keeps every
+     * 44-arg positional call site compiling unchanged (a large share of this package's test suite
+     * constructs this record at exactly this arity); {@code daysWorked} defaults to {@code null},
+     * a no-op for a monthly employee and "no gross computed this run" for a daily-rate one, same as
+     * any other call site that simply omits the field.
+     */
+    public PayrollEmployeeInputRequest(
+        Long employeeId,
+        BigDecimal specialPay1,
+        BigDecimal specialPay2,
+        BigDecimal specialPay3,
+        BigDecimal specialPay4,
+        BigDecimal specialPay5,
+        BigDecimal specialPay6,
+        BigDecimal specialPay7,
+        BigDecimal specialPay8,
+        BigDecimal specialPay9,
+        BigDecimal nonTaxableIncome,
+        BigDecimal unpaidLeaveDays,
+        BigDecimal studentLoanDeduction,
+        BigDecimal legalExecutionDeduction,
+        BigDecimal otherPostTaxDeductions,
+        BigDecimal spouseAllowance,
+        BigDecimal childAllowance,
+        BigDecimal parentCareAllowance,
+        BigDecimal disabledCareAllowance,
+        BigDecimal maternityAllowance,
+        BigDecimal lifeInsuranceAllowance,
+        BigDecimal healthInsuranceAllowance,
+        BigDecimal parentHealthInsuranceAllowance,
+        BigDecimal rmfAllowance,
+        BigDecimal ssfAllowance,
+        BigDecimal pensionInsuranceAllowance,
+        BigDecimal thaiEsgAllowance,
+        BigDecimal homeLoanInterestAllowance,
+        BigDecimal educationDonation,
+        BigDecimal generalDonation,
+        BigDecimal politicalDonation,
+        BigDecimal warningLetterDeduction,
+        BigDecimal customerReturnDeduction,
+        BigDecimal otherPretaxDeduction,
+        BigDecimal withholdingTaxOverride,
+        BigDecimal mealAllowance,
+        BigDecimal perDiemExempt,
+        BigDecimal perDiemTaxable,
+        PerDiemBasis perDiemBasis,
+        BigDecimal bonusPay,
+        BigDecimal otherOneOffPay,
+        Boolean customerReturnAlreadyEarned,
+        PayrollGarnishmentType garnishmentType,
+        Integer parentCareCount
+    ) {
+        this(
+            employeeId, specialPay1, specialPay2, specialPay3, specialPay4, specialPay5, specialPay6,
+            specialPay7, specialPay8, specialPay9, nonTaxableIncome, unpaidLeaveDays, studentLoanDeduction,
+            legalExecutionDeduction, otherPostTaxDeductions, spouseAllowance, childAllowance,
+            parentCareAllowance, disabledCareAllowance, maternityAllowance, lifeInsuranceAllowance,
+            healthInsuranceAllowance, parentHealthInsuranceAllowance, rmfAllowance, ssfAllowance,
+            pensionInsuranceAllowance, thaiEsgAllowance, homeLoanInterestAllowance, educationDonation,
+            generalDonation, politicalDonation, warningLetterDeduction, customerReturnDeduction,
+            otherPretaxDeduction, withholdingTaxOverride, mealAllowance, perDiemExempt, perDiemTaxable,
+            perDiemBasis, bonusPay, otherOneOffPay, customerReturnAlreadyEarned, garnishmentType,
+            parentCareCount, null
+        );
+    }
+
     /**
      * Legacy constructor: the signature before EITHER พิเศษ 9 (V95) or the dedicated one-off pay
      * fields (V94/task 2) existed -- branch 117's oldest call sites. specialPay9 defaults to zero
@@ -115,7 +200,7 @@ public record PayrollEmployeeInputRequest(
             generalDonation, politicalDonation, warningLetterDeduction, customerReturnDeduction,
             otherPretaxDeduction, withholdingTaxOverride,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null,
-            BigDecimal.ZERO, BigDecimal.ZERO, false, null, null
+            BigDecimal.ZERO, BigDecimal.ZERO, false, null, null, null
         );
     }
 
@@ -173,9 +258,11 @@ public record PayrollEmployeeInputRequest(
             generalDonation, politicalDonation, warningLetterDeduction, customerReturnDeduction,
             otherPretaxDeduction, withholdingTaxOverride,
             // mealAllowance, perDiemAllowance (V97), then bonusPay, otherOneOffPay -- all default to
-            // zero at this legacy arity, which is a no-op on every downstream figure.
+            // zero at this legacy arity, which is a no-op on every downstream figure. daysWorked
+            // defaults to null ("not typed this run" -- a no-op for a monthly employee and "no gross
+            // computed this run" for a daily-rate one, same as an omitted field on any current call).
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null,
-            BigDecimal.ZERO, BigDecimal.ZERO, false, null, null
+            BigDecimal.ZERO, BigDecimal.ZERO, false, null, null, null
         );
     }
 
