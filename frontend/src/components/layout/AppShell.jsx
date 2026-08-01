@@ -113,7 +113,9 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // the topbar UserMenu, and the two pages are merged into /profile. /requests
     // stays here because an HR review queue is work, not personal admin.
     { path: '/requests', label: 'คำขอแก้ไขข้อมูล', helper: 'Profile requests', icon: 'clipboard', group: 'hr', show: hasPermission(user.role, 'canReviewProfileRequests'), badge: pendingRequestCount },
-    { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canManagePayroll') },
+    // Split (issue #390): nav visibility follows read access (hr+ceo); CEO lands on a read-only
+    // view of the same page (PayrollPage.jsx gates writes on canManagePayroll internally).
+    { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canViewPayroll') },
     { path: '/attendance', label: 'เวลาทำงาน', helper: 'Attendance', icon: 'calendar', group: 'self', show: true },
     // Combined OT + welfare/special-money page (RequestsPage.jsx, tabs carried
     // in ?tab=). `match` keeps this item highlighted on both /employee-requests and
