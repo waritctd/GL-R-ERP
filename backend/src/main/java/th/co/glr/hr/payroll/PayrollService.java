@@ -204,6 +204,23 @@ public class PayrollService {
         // saveProcessedPeriod's own delete-then-insert already gives hr.payroll_line. Deliberately
         // NEVER called from #preview, which must stay side-effect-free.
         deductionObligationService.recordRemittances(month, periodId, preview.lines());
+        // Deduction shortfall tracking (issue #376, generalising #373's requested/actual/shortfall
+        // triple): the ONLY currently-supported deduction that can come out lower than what was
+        // requested is LEGAL_EXECUTION_GARNISHMENT, via the ALREADY-enforced ป.วิ.พ. ม.302 cap (see
+        // DeductionObligationService#recordGarnishmentShortfalls's own javadoc for why every other
+        // deduction never has anything to record). Pure record-keeping -- changes no persisted
+        // amount, reads figures that are already computed above.
+        //
+        // D-376-1 fix (Opus review): "requested" comes from preview.lines() itself
+        // (PayrollLineDto#legalExecutionRequested), NEVER by calling #resolveMonthlyAmount again here.
+        // A second call after #recordRemittances (above) has already possibly flipped an obligation's
+        // ACTIVE/COMPLETED status is unsafe -- #findDrivingObligation's ORDER BY (status='ACTIVE') DESC
+        // can then resolve a DIFFERENT obligation than the one #calculateLine actually used, fabricating
+        // a "requested" figure the court order never asked for (reviewer's probe: two LEGAL_EXECUTION
+        // obligations, one completing this very run, produced a ฿4,900 phantom shortfall against a
+        // ฿100 court order that was satisfied in full). Reading it off the line instead makes that
+        // re-derivation impossible by construction.
+        deductionObligationService.recordGarnishmentShortfalls(month, periodId, preview.lines());
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Payroll period was not saved"));
         // Payroll input draft (2026-07-30): this month's real values are now committed to
@@ -1183,7 +1200,11 @@ public class PayrollService {
             // the frontend can gate the days-worked input to daily-rate employees and the value
             // survives a reload.
             enteredDaysWorked,
-            employee.payType()
+            employee.payType(),
+            // Issue #376, D-376-1 fix: the EXACT figure this run resolved and fed to
+            // PayrollCalculator as garnishmentRequested -- see PayrollLineDto#legalExecutionRequested's
+            // own javadoc for why this must be carried out here rather than re-derived later.
+            resolvedLegalExecutionRequested
         );
     }
 

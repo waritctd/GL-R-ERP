@@ -52,7 +52,9 @@ class DeductionObligationPayrollEngineIntegrationTest extends AbstractPostgresIn
     void wireRealCollaborators() {
         payrollRepository = new PayrollRepository(jdbc);
         obligationRepository = new DeductionObligationRepository(jdbc);
-        obligationService = new DeductionObligationService(obligationRepository, mock(EmployeeRepository.class), mock(AuditService.class));
+        obligationService = new DeductionObligationService(
+            obligationRepository, mock(EmployeeRepository.class), mock(AuditService.class),
+            new PayrollDeductionShortfallRepository(jdbc));
         CommissionService commissionService = new CommissionService(
             new CommissionRepository(jdbc),
             mock(CommissionAttachmentRepository.class),
