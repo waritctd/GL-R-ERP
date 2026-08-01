@@ -97,6 +97,16 @@ async function openDocumentsMenu() {
 // `payload()` submits `` `${month}-01` ``. Used below to pin down that exact "-01" suffix (a
 // mutation-testing survivor: changing it to "-02" left the suite green).
 const thisMonth = new Date().toISOString().slice(0, 7);
+const originalMatchMedia = window.matchMedia;
+
+function mockPayrollViewport({ mobile = false, desktopPanel = false } = {}) {
+  window.matchMedia = vi.fn((query) => ({
+    matches: query === '(max-width: 720px)' ? mobile : query === '(min-width: 1366px)' ? desktopPanel : false,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+}
 
 describe('PayrollPage adjustment inputs', () => {
   beforeEach(() => {
@@ -113,6 +123,14 @@ describe('PayrollPage adjustment inputs', () => {
     api.payroll.saveInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
     api.payroll.getComponentTaxTreatments.mockResolvedValue({ taxYear: 2026, items: [] });
     api.payroll.saveComponentTaxTreatments.mockResolvedValue({ taxYear: 2026, items: [] });
+  });
+
+  afterEach(() => {
+    if (originalMatchMedia) {
+      window.matchMedia = originalMatchMedia;
+    } else {
+      delete window.matchMedia;
+    }
   });
 
   it('uses Excel-based UAT defaults and shows a Baht prefix on money fields', async () => {
@@ -230,19 +248,19 @@ describe('PayrollPage adjustment inputs', () => {
 
     const { container } = renderPayrollPage();
 
-    expect(await screen.findByText('พนักงาน 26')).toBeTruthy();
+    expect((await screen.findAllByText('พนักงาน 26')).length).toBeGreaterThan(0);
     expect(container.querySelector('caption').textContent).toBe('รายการเงินเดือนพนักงานในรอบที่เลือก');
     expect(screen.queryByRole('button', { name: /Download payslip/i })).toBeNull();
     expect(screen.queryByText(/หน้า 1 \//)).toBeNull();
     expect(screen.queryByRole('columnheader', { name: /เงินพิเศษ/i })).toBeNull();
-    expect(screen.queryByRole('columnheader', { name: /OT \/ Commission/i })).toBeNull();
+    expect(screen.queryByRole('columnheader', { name: /ล่วงเวลา\/คอมมิชชัน/i })).toBeNull();
 
     const firstGrossCell = container.querySelector('tbody td[data-label="รายได้"]');
     expect(firstGrossCell.className).toContain('text-right');
     expect(firstGrossCell.className).toContain('payroll-money-cell');
     expect(firstGrossCell.textContent).toBe('฿30,000.00');
     expect(container.querySelector('tbody td[data-label="เงินพิเศษ"]')).toBeNull();
-    expect(container.querySelector('tbody td[data-label="OT / Commission"]')).toBeNull();
+    expect(container.querySelector('tbody td[data-label="ล่วงเวลา/คอมมิชชัน"]')).toBeNull();
 
     const grossHeader = container.querySelector('thead th.payroll-money-cell');
     expect(grossHeader.className).toContain('text-right');
@@ -253,6 +271,27 @@ describe('PayrollPage adjustment inputs', () => {
     expect(totalRow.textContent).toContain('26 คน');
     expect(totalRow.textContent).toContain('฿780,000.00');
     expect(totalRow.textContent).toContain('฿760,500.00');
+  });
+
+  it('makes phone payroll rows read as name and net-pay cards while folding zero optional rows', async () => {
+    mockPayrollViewport({ mobile: true });
+
+    const { container } = renderPayrollPage();
+
+    await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
+    const firstRow = container.querySelector('tr.data-row');
+    const employeeCell = firstRow.querySelector('td[data-label="พนักงาน"]');
+
+    expect(employeeCell.className).toContain('mobile:[&::before]:hidden');
+    expect(employeeCell.textContent).toContain('สุทธิ');
+    expect(employeeCell.textContent).toContain('฿29,250.00');
+
+    const zeroDisclosure = employeeCell.querySelector('details');
+    expect(zeroDisclosure).toBeTruthy();
+    expect(zeroDisclosure.textContent).toContain('รายการศูนย์ 2 รายการ');
+    expect(zeroDisclosure.textContent).toContain('เงินพิเศษ');
+    expect(zeroDisclosure.textContent).toContain('ล่วงเวลา/คอมมิชชัน');
+    expect(container.querySelector('tbody td[data-label="สุทธิ"]').className).toContain('mobile:hidden');
   });
 
   it('marks preview status in the stat strip and folds ภาษี/ปกส. into the deductions readout', async () => {
@@ -285,7 +324,8 @@ describe('PayrollPage adjustment inputs', () => {
 
     const { container } = renderPayrollPage();
 
-    const secondRow = (await screen.findByText('พนักงาน ข')).closest('tr');
+    await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
+    const [, secondRow] = container.querySelectorAll('tr.data-row');
     expect(secondRow.getAttribute('role')).toBe('row');
     expect(secondRow.getAttribute('tabindex')).toBe('-1');
     // Item 4d fix (Opus review, 2026-07-31): `aria-current`, not `aria-selected` -- see
@@ -299,7 +339,7 @@ describe('PayrollPage adjustment inputs', () => {
     expect(secondRow.getAttribute('aria-current')).toBe('true');
     expect(secondRow.getAttribute('tabindex')).toBe('0');
     expect(secondRow.className).toContain('active');
-    expect(within(secondRow).getByText('เลือกอยู่')).toBeTruthy();
+    expect(within(secondRow).getAllByText('เลือกอยู่').length).toBeGreaterThan(0);
     expect(container.querySelector('.payroll-detail-panel').className).toContain('is-open');
     expect(container.querySelector('.payroll-detail-panel h2').textContent).toBe('พนักงาน ข');
   });
@@ -337,16 +377,18 @@ describe('PayrollPage adjustment inputs', () => {
     await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
     const [firstRow, secondRow] = container.querySelectorAll('tr.data-row');
     fireEvent.click(firstRow);
-    expect(within(firstRow).getByText('เลือกอยู่')).toBeTruthy();
+    expect(within(firstRow).getAllByText('เลือกอยู่').length).toBeGreaterThan(0);
 
-    const selectedNameBlock = within(firstRow).getByText(lines[0].employeeName);
+    const selectedNameBlock = firstRow.querySelector('td[data-label="พนักงาน"] strong');
     expect(selectedNameBlock.tagName).toBe('STRONG');
+    expect(selectedNameBlock.textContent).toBe(lines[0].employeeName);
     expect(selectedNameBlock.className.split(' ')).toEqual(expect.arrayContaining(['block', 'truncate']));
     const selectedCodeBlock = firstRow.querySelector('small');
     expect(selectedCodeBlock.className.split(' ')).toEqual(expect.arrayContaining(['block', 'truncate']));
 
     // Unselected row: same classes must be present unconditionally, not just when the badge shows up.
-    const unselectedNameBlock = within(secondRow).getByText(lines[1].employeeName);
+    const unselectedNameBlock = secondRow.querySelector('td[data-label="พนักงาน"] strong');
+    expect(unselectedNameBlock.textContent).toBe(lines[1].employeeName);
     expect(unselectedNameBlock.className.split(' ')).toEqual(expect.arrayContaining(['block', 'truncate']));
 
     expect(container.querySelectorAll('.data-row')).toHaveLength(2);
@@ -367,12 +409,7 @@ describe('PayrollPage adjustment inputs', () => {
     });
 
     function mockPanelViewport(isDesktopWidth) {
-      window.matchMedia = vi.fn((query) => ({
-        matches: query === '(min-width: 1366px)' ? isDesktopWidth : false,
-        media: query,
-        addEventListener: () => {},
-        removeEventListener: () => {},
-      }));
+      mockPayrollViewport({ desktopPanel: isDesktopWidth });
     }
 
     // Not `findByText(payrollLine.employeeName)`: with a single line, that name is ALSO the
@@ -518,7 +555,7 @@ describe('PayrollPage adjustment inputs', () => {
 
     const { container } = renderPayrollPage();
 
-    expect(await screen.findByText('พนักงาน ข')).toBeTruthy();
+    expect((await screen.findAllByText('พนักงาน ข')).length).toBeGreaterThan(0);
     expect(screen.queryByRole('alert')).toBeNull();
 
     const totalRow = container.querySelector('tfoot .payroll-total-row');
@@ -1038,6 +1075,34 @@ describe('PayrollPage adjustment inputs', () => {
       expect(dialog.textContent).toContain('พนักงาน 1 คน');
       expect(dialog.textContent).toContain('การอนุมัติ OT ของเดือนนี้จะปิดทันที');
       expect(dialog.textContent).toContain('ไม่มีทางยกเลิกการประมวลผล');
+    });
+
+    it('allows Process on phone only after the mobile-only typed confirmation phrase', async () => {
+      mockPayrollViewport({ mobile: true });
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: null, lineCount: 1 }) });
+
+      renderPayrollPage();
+
+      const processButton = await screen.findByRole('button', { name: /ประมวลผลเงินเดือน/i });
+      await waitFor(() => expect(processButton.disabled).toBe(false));
+      expect(screen.queryByText(/ปิดใช้งานบนหน้าจอมือถือ/)).toBeNull();
+
+      fireEvent.click(processButton);
+
+      const dialog = await screen.findByRole('dialog', { name: /ประมวลผลเงินเดือน/i });
+      const confirmButton = within(dialog).getByRole('button', { name: /ยืนยันประมวลผล/i });
+      const phrase = within(dialog).getByLabelText('ยืนยันบนมือถือ');
+      expect(confirmButton.disabled).toBe(true);
+
+      fireEvent.change(phrase, { target: { value: 'ยืนยัน' } });
+      expect(confirmButton.disabled).toBe(true);
+      expect(within(dialog).getByText(/พิมพ์คำว่า ประมวลผล/)).toBeTruthy();
+
+      fireEvent.change(phrase, { target: { value: 'ประมวลผล' } });
+      expect(confirmButton.disabled).toBe(false);
+
+      fireEvent.click(confirmButton);
+      await waitFor(() => expect(api.payroll.process).toHaveBeenCalledTimes(1));
     });
   });
 
