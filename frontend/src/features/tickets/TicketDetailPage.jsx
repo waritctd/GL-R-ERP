@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
@@ -214,6 +214,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       pending.run();
     }
   }, [activeTab]);
+
+  // The ticket workspace's persistent chrome (state header + detail tabs) is
+  // content-dependent: primary actions, project names, and role-specific tabs
+  // all change its height. Measure the rendered sticky region once and let
+  // scroll-padding + the desktop context rail read the same value.
+  const ticketStickyChromeRef = useRef(null);
+  const [ticketChromeCondensed, setTicketChromeCondensed] = useState(false);
 
   // Imperative handle onto DealStagePanel (see its own doc comment): the
   // header overflow menu / bottom danger zone trigger its modals from here,
@@ -559,6 +566,52 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketAttachments(ticketId) });
   }
+
+  useLayoutEffect(() => {
+    if (loading) return undefined;
+    const chrome = ticketStickyChromeRef.current;
+    if (!chrome || typeof window === 'undefined') return undefined;
+    const scroller = chrome.closest('.content-scroll');
+    if (!scroller) return undefined;
+    const mobileQuery = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(max-width: 720px)')
+      : null;
+    const updateCondensed = () => {
+      setTicketChromeCondensed(scroller.scrollTop > 8 && !mobileQuery?.matches);
+    };
+
+    updateCondensed();
+    scroller.addEventListener('scroll', updateCondensed, { passive: true });
+    mobileQuery?.addEventListener?.('change', updateCondensed);
+    return () => {
+      scroller.removeEventListener('scroll', updateCondensed);
+      mobileQuery?.removeEventListener?.('change', updateCondensed);
+    };
+  }, [loading, ticketId]);
+
+  useLayoutEffect(() => {
+    if (loading) return undefined;
+    const chrome = ticketStickyChromeRef.current;
+    if (!chrome || typeof document === 'undefined') return undefined;
+    const writeHeight = () => {
+      const height = Math.ceil(chrome.getBoundingClientRect().height);
+      if (height > 0) {
+        document.documentElement.style.setProperty('--deal-header-h', `${height}px`);
+      }
+    };
+
+    writeHeight();
+    if (typeof ResizeObserver === 'undefined') {
+      return () => document.documentElement.style.removeProperty('--deal-header-h');
+    }
+
+    const observer = new ResizeObserver(writeHeight);
+    observer.observe(chrome);
+    return () => {
+      observer.disconnect();
+      document.documentElement.style.removeProperty('--deal-header-h');
+    };
+  }, [loading, ticketId]);
 
   if (loading) {
     return (
@@ -1171,7 +1224,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // DealFulfilmentPanel (Phase 3 Slice S4).
 
   return (
-    <div className="page-stack">
+    <div className={`page-stack ${bannerText || stickyPrimaryAction || overflowItems.length > 0 ? 'mobile:pb-28' : ''}`}>
       {/* F-14 (ticket-detail IA rebuild Phase 1): the breadcrumb is the single
           up-nav — a full-width "กลับ" bar underneath it just repeated the same
           affordance as page chrome. Verified safe to drop: every e2e "กลับ"
@@ -1186,14 +1239,32 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           payment × fulfilment at a glance, the ONE work-state banner line,
           the sticky primary CTA, and the "⋯" overflow. Subsumes the old bare
           header (title/code/status/refresh). */}
-      <DealStateHeader
-        summary={summary}
-        pricingRequests={pricingRequests}
-        primaryAction={stickyPrimaryAction}
-        bannerText={bannerText}
-        overflowItems={overflowItems}
-        onRefresh={refreshTicket}
-      />
+      <div
+        ref={ticketStickyChromeRef}
+        data-testid="ticket-detail-sticky-chrome"
+        className="sticky top-[calc(var(--deal-scroll-pad-y)*-1)] z-10 bg-surface pt-[var(--deal-scroll-pad-y)] mobile:static mobile:bg-transparent mobile:pt-0"
+      >
+        <div className="overflow-hidden rounded-lg border border-border bg-surface shadow-sm mobile:overflow-visible mobile:border-0 mobile:bg-transparent mobile:shadow-none">
+          <DealStateHeader
+            summary={summary}
+            pricingRequests={pricingRequests}
+            primaryAction={stickyPrimaryAction}
+            bannerText={bannerText}
+            overflowItems={overflowItems}
+            onRefresh={refreshTicket}
+            condensed={ticketChromeCondensed}
+          />
+          <div className="border-t border-border bg-surface px-4 sm:px-5">
+            <Tabs
+              items={visibleTabItems}
+              value={visibleActiveTab}
+              onChange={setActiveTab}
+              ariaLabel="รายละเอียดดีล"
+              idPrefix="ticket-detail"
+            />
+          </div>
+        </div>
+      </div>
 
       <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-start">
 
@@ -1267,16 +1338,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           `?tab=documents` deep link (account, or an import rep who isn't
           this ticket's assignee) falls back to ภาพรวม instead of
           highlighting a tab with no button and rendering nothing. */}
-      <div className="min-w-0 xl:col-start-1">
-        <Tabs
-          items={visibleTabItems}
-          value={visibleActiveTab}
-          onChange={setActiveTab}
-          ariaLabel="รายละเอียดดีล"
-          idPrefix="ticket-detail"
-        />
-      </div>
-
       <div className="min-w-0 xl:col-start-1">
       <TabPanel id="overview" idPrefix="ticket-detail" active={visibleActiveTab === 'overview'}>
           <section className="panel">
@@ -2058,7 +2119,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       </TabPanel>
       </div>
 
-      <div className="min-w-0 xl:sticky xl:top-[18rem] xl:col-start-2 xl:row-start-1 xl:row-span-4 xl:max-h-[calc(100vh-19rem)] xl:overflow-y-auto">
+      <div
+        data-testid="ticket-context-rail"
+        className="min-w-0 xl:sticky xl:top-[calc(var(--app-topbar-h)+var(--deal-header-h,18rem)+var(--space-4))] xl:col-start-2 xl:row-start-1 xl:row-span-4 xl:max-h-[calc(100vh-var(--app-topbar-h)-var(--deal-header-h,18rem)-var(--space-8)-var(--space-4))] xl:overflow-y-auto"
+      >
         <TicketContextPanel
           summary={summary}
           pricingRequests={pricingRequests}

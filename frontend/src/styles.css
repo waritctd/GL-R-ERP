@@ -539,7 +539,7 @@ textarea:focus {
 }
 
 .topbar {
-  height: 66px;
+  height: var(--app-topbar-h);
   max-width: 100%;
   flex: 0 0 auto;
   display: flex;
@@ -591,11 +591,16 @@ textarea:focus {
 }
 
 .content-scroll {
+  --deal-scroll-pad-y: 28px;
+  --deal-scroll-pad-x: max(32px, env(safe-area-inset-right));
+  --deal-scroll-pad-left: max(32px, env(safe-area-inset-left));
   min-width: 0;
   max-width: 100%;
   flex: 1;
   overflow: auto;
-  padding: 28px max(32px, env(safe-area-inset-right)) 42px max(32px, env(safe-area-inset-left));
+  padding: var(--deal-scroll-pad-y) var(--deal-scroll-pad-x) 42px var(--deal-scroll-pad-left);
+  scroll-padding-top: calc(var(--deal-header-h, 18rem) + var(--space-4));
+  scroll-padding-bottom: var(--space-8);
   scrollbar-gutter: stable;
 }
 
@@ -2807,7 +2812,12 @@ a.status-badge {
   }
 
   .content-scroll {
-    padding: 16px max(16px, env(safe-area-inset-right)) 32px max(16px, env(safe-area-inset-left));
+    --deal-scroll-pad-y: 16px;
+    --deal-scroll-pad-x: max(16px, env(safe-area-inset-right));
+    --deal-scroll-pad-left: max(16px, env(safe-area-inset-left));
+    padding: var(--deal-scroll-pad-y) var(--deal-scroll-pad-x) 32px var(--deal-scroll-pad-left);
+    scroll-padding-top: var(--space-4);
+    scroll-padding-bottom: calc(112px + env(safe-area-inset-bottom));
   }
 
   .ticket-list-page {

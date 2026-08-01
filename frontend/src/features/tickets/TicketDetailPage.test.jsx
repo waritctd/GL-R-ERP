@@ -303,6 +303,21 @@ describe('TicketDetailPage', () => {
     expect(screen.getAllByText('฿50,000.00').length).toBeGreaterThan(0);
   });
 
+  it('keeps the ticket header and tabs in one measured sticky chrome for focus-safe offsets', async () => {
+    renderTicketDetailPage();
+
+    const stickyChrome = await screen.findByTestId('ticket-detail-sticky-chrome');
+    expect(stickyChrome.className).toContain('sticky');
+    expect(stickyChrome.className).toContain('top-[calc(var(--deal-scroll-pad-y)*-1)]');
+    expect(within(stickyChrome).getByRole('tablist', { name: 'รายละเอียดดีล' })).not.toBeNull();
+
+    const rail = await screen.findByTestId('ticket-context-rail');
+    expect(rail.className).toContain('xl:top-[calc(var(--app-topbar-h)+var(--deal-header-h,18rem)+var(--space-4))]');
+    expect(rail.className).toContain('xl:max-h-[calc(100vh-var(--app-topbar-h)-var(--deal-header-h,18rem)-var(--space-8)-var(--space-4))]');
+    expect(rail.className).not.toContain('xl:top-[18rem]');
+    expect(rail.className).not.toContain('xl:max-h-[calc(100vh-19rem)]');
+  });
+
   it('renders a dash for มูลค่าดีล until a price exists', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({ summary: { status: 'approved', amountPayable: 0 } }),

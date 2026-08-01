@@ -17,9 +17,9 @@ import { activePricingRequestsSummary } from '../pricingRequests/pricingRequestM
  * `<dl>` grid spacing is what keeps the five values distinct, not per-item
  * chrome.
  */
-function StatChip({ label, value, tone }) {
+function StatChip({ label, value, tone, className = '' }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1">
+    <div className={`flex min-w-0 flex-col gap-1 ${className}`}>
       <dt className="text-2xs font-bold uppercase tracking-wide text-text-muted">{label}</dt>
       <dd className="m-0 min-w-0">
         {tone ? (
@@ -63,7 +63,7 @@ function StatChip({ label, value, tone }) {
  * viewer may do — empty/undefined renders no trigger at all.
  */
 export function DealStateHeader({
-  summary, pricingRequests = [], primaryAction, bannerText, overflowItems, onRefresh,
+  summary, pricingRequests = [], primaryAction, bannerText, overflowItems, onRefresh, condensed = false,
 }) {
   const lifecycle = dealLifecycleLabel(summary.lifecycle ?? 'ACTIVE');
   const status = ticketStatusLabel(summary.status);
@@ -78,11 +78,45 @@ export function DealStateHeader({
   const pricingSummary = activePricingRequestsSummary(pricingRequests);
   const latestPr = pricingSummary ? pricingSummary.requests[pricingSummary.requests.length - 1] : null;
   const pricingStatus = latestPr ? pricingRequestStatusLabel(latestPr.status) : null;
+  const hasActionBar = Boolean(bannerText || primaryAction || (overflowItems && overflowItems.length > 0));
+  const actionControls = (
+    <div className="flex shrink-0 items-center gap-2">
+      {primaryAction ? <div className="shrink-0">{primaryAction}</div> : null}
+      <OverflowMenu items={overflowItems} />
+    </div>
+  );
+
+  if (condensed) {
+    return (
+      <section data-testid="deal-state-header" data-condensed="true" className="bg-surface px-4 py-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
+          <code className="rounded bg-surface-subtle px-2 py-0.5 text-xs text-text-muted">{summary.code}</code>
+          <h1 className="m-0 min-w-[12rem] flex-1 truncate text-base font-extrabold text-text">
+            {summary.customerName || summary.title}
+          </h1>
+          <StatusBadge tone={stage.tone}>{stage.label}</StatusBadge>
+          {bannerText ? (
+            <span className="hidden min-w-0 max-w-[22rem] truncate text-xs font-bold text-info xl:block">{bannerText}</span>
+          ) : null}
+          {onRefresh ? (
+            <button type="button" className="icon-button" onClick={onRefresh} title="รีเฟรช" aria-label="รีเฟรช">
+              <Icon name="refresh" />
+            </button>
+          ) : null}
+          {hasActionBar ? (
+            <div data-testid="ticket-action-bar" className="ml-auto flex shrink-0 items-center gap-2">
+              {actionControls}
+            </div>
+          ) : null}
+        </div>
+      </section>
+    );
+  }
 
   return (
-    <section className="sticky top-0 z-10 flex flex-col gap-4 rounded-xl border border-border bg-surface p-4 shadow-sm sm:p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
+    <section data-testid="deal-state-header" data-condensed="false" className="flex flex-col gap-4 bg-surface p-4 sm:p-5 mobile:gap-3 mobile:rounded-lg mobile:border mobile:border-border mobile:p-3 mobile:shadow-sm">
+      <div className="relative flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 mobile:pr-12">
           <div className="flex flex-wrap items-center gap-2">
             <code className="rounded bg-surface-subtle px-2 py-0.5 text-xs text-text-muted">{summary.code}</code>
             <StatusBadge tone={lifecycle.tone}>{lifecycle.label}</StatusBadge>
@@ -93,7 +127,7 @@ export function DealStateHeader({
           {summary.projectName ? (
             <p className="mt-0.5 truncate text-sm text-text-muted">{summary.projectName}</p>
           ) : null}
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-text-muted sm:gap-4">
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-text-muted sm:gap-4 mobile:hidden">
             <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
             {summary.hasEdits ? <StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge> : null}
             <span>สร้างโดย <strong className="text-text-secondary">{summary.createdByName || '-'}</strong> · {formatThaiDate(summary.createdAt)}</span>
@@ -103,7 +137,7 @@ export function DealStateHeader({
           </div>
         </div>
         {onRefresh ? (
-          <button type="button" className="icon-button" onClick={onRefresh} title="รีเฟรช" aria-label="รีเฟรช">
+          <button type="button" className="icon-button mobile:absolute mobile:right-0 mobile:top-0" onClick={onRefresh} title="รีเฟรช" aria-label="รีเฟรช">
             <Icon name="refresh" />
           </button>
         ) : null}
@@ -135,7 +169,7 @@ export function DealStateHeader({
           chip stranded; 2 or 4 would. See this branch's handoff for the
           measured label widths and the 390/834/1024/1440 column-width
           proof. */}
-      <dl className="m-0 grid grid-cols-1 gap-x-3 gap-y-3 sm:grid-cols-3 lg:grid-cols-5 [&_.status-badge]:whitespace-normal">
+      <dl className="m-0 grid grid-cols-2 gap-x-3 gap-y-3 tablet:grid-cols-3 lg:grid-cols-5 mobile:gap-y-2 [&_.status-badge]:whitespace-normal">
         <StatChip label="ขั้นตอนดีล" value={stage.label} tone={stage.tone} />
         <StatChip
           label="คำขอราคา"
@@ -148,15 +182,18 @@ export function DealStateHeader({
           value={fulfilment ? fulfilment.label : 'ยังไม่เริ่ม'}
           tone={fulfilment ? fulfilment.tone : 'neutral'}
         />
-        <StatChip label="มูลค่าดีล" value={hasDealValue ? formatMoney(summary.amountPayable ?? 0) : '—'} />
+        <StatChip className="col-span-2 tablet:col-span-1 lg:col-span-1" label="มูลค่าดีล" value={hasDealValue ? formatMoney(summary.amountPayable ?? 0) : '—'} />
       </dl>
 
       {/* The sticky action bar (IA "Action bar (sticky)"): ONE work-state
           line + the one primary CTA this viewer may act on + the "⋯"
           overflow. Hidden entirely when there is nothing to say and nothing
           to do — never an empty chrome bar. */}
-      {bannerText || primaryAction || (overflowItems && overflowItems.length > 0) ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info-border bg-info-bg px-4 py-3">
+      {hasActionBar ? (
+        <div
+          data-testid="ticket-action-bar"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info-border bg-info-bg px-4 py-3 mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:z-20 mobile:rounded-none mobile:border-x-0 mobile:border-b-0 mobile:px-4 mobile:py-3 mobile:shadow-lg mobile:[padding-bottom:max(18px,env(safe-area-inset-bottom))]"
+        >
           <div className="flex min-w-0 items-start gap-2">
             {bannerText ? (
               <>
@@ -165,10 +202,7 @@ export function DealStateHeader({
               </>
             ) : null}
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            {primaryAction ? <div className="shrink-0">{primaryAction}</div> : null}
-            <OverflowMenu items={overflowItems} />
-          </div>
+          {actionControls}
         </div>
       ) : null}
     </section>
