@@ -243,6 +243,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
       {createOpen ? (
         <PricingRequestCreateModal
           ticketItems={ticketItems}
+          deal={deal}
           onClose={() => setCreateOpen(false)}
           onCreated={() => { setCreateOpen(false); invalidate(); }}
           createFn={(payload) => api.pricingRequests.create(ticketId, payload)}

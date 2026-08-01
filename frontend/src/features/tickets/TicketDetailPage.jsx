@@ -1380,7 +1380,18 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                         <label key={key} style={{ margin: 0 }}>
                           <span style={{ fontSize: 12 }}>{label}</span>
                           <input value={item[key] || ''} placeholder={placeholder}
-                            onChange={(e) => setEditDraft((d) => d.map((r, i) => i === index ? { ...r, [key]: e.target.value } : r))} />
+                            onChange={(e) => setEditDraft((d) => d.map((r, i) => {
+                              if (i !== index) return r;
+                              const next = { ...r, [key]: e.target.value };
+                              // A hand-edit to a descriptive field invalidates a catalog link
+                              // picked at deal-creation time — what's typed no longer
+                              // necessarily matches what the link points at. Mirrors
+                              // TicketCreateModal.jsx's updateItem/PricingRequestCreateModal's
+                              // updateItem, same rule.
+                              next.catalogPriceId = null;
+                              next.catalogProductCode = '';
+                              return next;
+                            }))} />
                         </label>
                       ))}
                       {/* Unit basis toggle */}
@@ -1532,6 +1543,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           qtySqm: item.qtySqm != null && item.qtySqm !== '' ? Number(item.qtySqm) : null,
                           proposedPrice: item.proposedPrice != null && item.proposedPrice !== '' ? Number(item.proposedPrice) : null,
                           currency: item.currency ?? 'THB',
+                          // Round-trips the deal-creation catalog link (V110) — editDraft rows
+                          // are seeded straight from the fetched `items` (which already carry
+                          // it), and the row inputs above clear it on any descriptive hand-edit.
+                          catalogPriceId: item.catalogPriceId ?? null,
+                          catalogProductCode: item.catalogProductCode?.trim() || null,
                         })),
                         note: editNote.trim() || null,
                       }), 'บันทึกการแก้ไขแล้ว');

@@ -3528,6 +3528,11 @@ export const api = {
           qty: item.qty, qtySqm: item.qtySqm ?? null,
           proposedPrice: null, approvedPrice: null,
           currency: item.currency || 'THB', sortOrder: i,
+          // Fix for "สร้างคำขอราคาไม่ควรต้องกรอกหาจาก catalog ซ้ำ" (V110): the catalog product
+          // picked in TicketCreateModal's catalog picker, so PricingRequestCreateModal.
+          // emptyItemFromTicketItem can seed productId/catalogProductCode without re-searching.
+          catalogPriceId: item.catalogPriceId ?? null,
+          catalogProductCode: item.catalogProductCode ?? null,
         })),
         events: [{ id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: now }],
         quotation: null,
@@ -3574,6 +3579,13 @@ export const api = {
         proposedPrice: ticket.items[i]?.proposedPrice ?? null,
         id: ticket.items[i]?.id ?? ticket.id * 100 + i,
         ticketId: ticket.id, sortOrder: i,
+        // Fix for "สร้างคำขอราคาไม่ควรต้องกรอกหาจาก catalog ซ้ำ" (V110): request wins (same as
+        // brand/model above), falling back to the prior row only when the request omits the
+        // field entirely — TicketCreateModal.jsx/TicketDetailPage.jsx always send it (either the
+        // preserved link or null after a descriptive hand-edit clears it), so this fallback only
+        // protects a payload from an older/partial client, not a deliberate round-trip path.
+        catalogPriceId: item.catalogPriceId !== undefined ? item.catalogPriceId : (ticket.items[i]?.catalogPriceId ?? null),
+        catalogProductCode: item.catalogProductCode !== undefined ? item.catalogProductCode : (ticket.items[i]?.catalogProductCode ?? null),
       }));
       ticket.hasEdits = true;
       ticket.updatedAt = new Date().toISOString().slice(0, 10);

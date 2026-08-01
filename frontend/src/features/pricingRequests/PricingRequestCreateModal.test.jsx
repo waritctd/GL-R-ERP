@@ -2,6 +2,7 @@ import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
+import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
@@ -371,5 +372,241 @@ describe('PricingRequestCreateModal revision mode (COMMIT 5, P1 finding 3)', () 
     expect(screen.queryByRole('button', { name: 'บันทึกร่าง' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกการแก้ไข' })).toBeNull();
     expect(screen.getByRole('button', { name: /สร้างรอบแก้ไข/ })).not.toBeNull();
+  });
+});
+
+// V110 fix ("ทุกอย่างควร autofill ตามข้อมูลขั้นตอนนั้น" / "สร้างคำขอราคาไม่ควรต้องกรอกหาจาก
+// catalog ซ้ำ"): this modal now seeds its catalog link, ผู้รับ label, note, and each row's
+// delivery location from the deal it was opened from — CREATE MODE ONLY. Placed at the end of
+// this file (not interleaved with the suites above) since these tests drive the real (mocked)
+// api.catalog.prices call the fuzzy-fallback effect fires on every create-mode render, and there
+// is no global beforeEach/afterEach resetting that shared vi.fn() between tests in this file —
+// appending here means any queued mockResolvedValueOnce below can only ever affect tests that
+// run after it, never the (already-passed) suites above.
+describe('PricingRequestCreateModal deal-derived autofill (V110)', () => {
+  function dealFixture(overrides = {}) {
+    return {
+      designerName: 'สมชาย ผู้ออกแบบ',
+      ownerName: 'บริษัท เจ้าของ จำกัด',
+      buyerName: 'ผู้ซื้อ ข.',
+      contactName: 'ผู้ติดต่อ ค.',
+      customerName: 'ลูกค้า ง.',
+      note: 'โน้ตจากขั้นตอนสร้างดีล',
+      projectName: 'โครงการทดสอบ A',
+      ...overrides,
+    };
+  }
+
+  it('prefills the catalog link and code from the ticket item — no re-search needed', () => {
+    renderModal({ ticketItems: [ticketItem({ catalogPriceId: 777, catalogProductCode: 'PC-777' })] });
+
+    expect(screen.getByText('Catalog #777')).not.toBeNull();
+    expect(screen.getByPlaceholderText('รหัสสินค้า / Collection / โรงงาน').value).toBe('PC-777');
+  });
+
+  it("autofills ผู้รับ's label per recipient type, from the deal", () => {
+    renderModal({ deal: dealFixture() });
+    // Default recipientType is DESIGNER.
+    expect(screen.getByDisplayValue('สมชาย ผู้ออกแบบ')).not.toBeNull();
+  });
+
+  it("re-fills ผู้รับ's label when the chip switches, but never after the user has typed over it", () => {
+    renderModal({ deal: dealFixture() });
+
+    fireEvent.click(screen.getByRole('radio', { name: /เจ้าของโครงการ/ }));
+    expect(screen.getByDisplayValue('บริษัท เจ้าของ จำกัด')).not.toBeNull();
+
+    const recipientInput = screen.getByDisplayValue('บริษัท เจ้าของ จำกัด');
+    fireEvent.change(recipientInput, { target: { value: 'ชื่อที่พิมพ์เอง' } });
+
+    // Switching the chip again must NOT clobber what the user typed.
+    fireEvent.click(screen.getByRole('radio', { name: /ผู้ซื้อ/ }));
+    expect(screen.getByDisplayValue('ชื่อที่พิมพ์เอง')).not.toBeNull();
+    expect(screen.queryByDisplayValue('ผู้ซื้อ ข.')).toBeNull();
+  });
+
+  it('falls back to contactName then customerName when the deal has no per-type recipient name', () => {
+    renderModal({ deal: dealFixture({ designerName: null, ownerName: null, buyerName: null }) });
+    expect(screen.getByDisplayValue('ผู้ติดต่อ ค.')).not.toBeNull();
+  });
+
+  it("seeds note from deal.note and each row's deliveryLocation from deal.projectName, including a row added afterward", () => {
+    renderModal({ deal: dealFixture() });
+
+    expect(screen.getByLabelText(/หมายเหตุถึงฝ่ายนำเข้า/).value).toBe('โน้ตจากขั้นตอนสร้างดีล');
+    const deliveryInputs = screen.getAllByLabelText('สถานที่ส่งมอบ');
+    expect(deliveryInputs).toHaveLength(1);
+    expect(deliveryInputs[0].value).toBe('โครงการทดสอบ A');
+
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการ/ }));
+    const afterAdd = screen.getAllByLabelText('สถานที่ส่งมอบ');
+    expect(afterAdd).toHaveLength(2);
+    expect(afterAdd[1].value).toBe('โครงการทดสอบ A');
+  });
+
+  it('does NOT autofill requiredDate from the deal (not requested)', () => {
+    renderModal({ deal: dealFixture() });
+    expect(screen.getByLabelText('วันที่ต้องการราคา').value).toBe('');
+  });
+
+  it('edit mode ignores a passed `deal` entirely — every field still seeds from the persisted request', () => {
+    const updateFn = vi.fn().mockResolvedValue({});
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialValue={{
+          summary: {
+            id: 77, recipientType: 'OWNER', recipientLabel: 'เจ้าของโครงการ ข.',
+            requiredDate: null, customerTargetPrice: null, targetCurrency: 'THB',
+            note: 'โน้ตเดิม',
+          },
+          items: [{
+            id: 5, sourceTicketItemId: null, productId: null, brand: 'SCG', model: 'A1',
+            color: 'ขาว', productDescription: '', texture: 'ด้าน', size: '60x60', factory: null,
+            requestedQty: 20, requestedUnit: 'แผ่น', quantityType: 'CONFIRMED',
+            targetDeliveryDate: null, deliveryLocation: 'ที่ส่งมอบเดิม', specialRequirement: null,
+          }],
+        }}
+        deal={dealFixture()}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        updateFn={updateFn}
+      />,
+    );
+
+    expect(screen.getByDisplayValue('เจ้าของโครงการ ข.')).not.toBeNull();
+    expect(screen.getByDisplayValue('โน้ตเดิม')).not.toBeNull();
+    expect(screen.getByDisplayValue('ที่ส่งมอบเดิม')).not.toBeNull();
+    // None of the deal's own values leaked in anywhere.
+    expect(screen.queryByDisplayValue('บริษัท เจ้าของ จำกัด')).toBeNull();
+    expect(screen.queryByDisplayValue('โน้ตจากขั้นตอนสร้างดีล')).toBeNull();
+    expect(screen.queryByDisplayValue('โครงการทดสอบ A')).toBeNull();
+  });
+
+  it('revision mode ignores a passed `deal` entirely — every field still seeds from the current request', () => {
+    const createRevisionFn = vi.fn().mockResolvedValue({ pricingRequest: { summary: { id: 999 } } });
+    render(
+      <PricingRequestCreateModal
+        mode="revision"
+        initialValue={{
+          summary: {
+            id: 88, recipientType: 'OWNER', recipientLabel: 'เจ้าของโครงการ ข.',
+            requiredDate: null, customerTargetPrice: null, targetCurrency: 'THB',
+            note: 'โน้ตเดิม',
+          },
+          items: [{
+            id: 9, sourceTicketItemId: null, productId: null, brand: 'SCG', model: 'A1',
+            color: 'ขาว', productDescription: '', texture: 'ด้าน', size: '60x60', factory: null,
+            requestedQty: 20, requestedUnit: 'แผ่น', requestedUnitBasis: 'PER_PIECE',
+            quantityType: 'CONFIRMED', targetDeliveryDate: null, deliveryLocation: 'ที่ส่งมอบเดิม',
+            specialRequirement: null,
+          }],
+        }}
+        deal={dealFixture()}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        createRevisionFn={createRevisionFn}
+        createFn={vi.fn()}
+        submitFn={vi.fn()}
+        updateFn={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByDisplayValue('เจ้าของโครงการ ข.')).not.toBeNull();
+    expect(screen.getByDisplayValue('โน้ตเดิม')).not.toBeNull();
+    expect(screen.getByDisplayValue('ที่ส่งมอบเดิม')).not.toBeNull();
+    expect(screen.queryByDisplayValue('บริษัท เจ้าของ จำกัด')).toBeNull();
+  });
+});
+
+describe('PricingRequestCreateModal fuzzy catalog fallback (V110 follow-up)', () => {
+  it('auto-applies when the search returns exactly one normalized match, and badges the row as unconfirmed', async () => {
+    api.catalog.prices.mockResolvedValueOnce({
+      items: [{
+        priceId: 901, productCode: 'PC-901', factoryName: 'SCG Ceramics',
+        grade: 'SCG', collection: 'A1', sizeRaw: '60x60', color: 'ขาว', surface: 'ด้าน',
+        price: 120, currency: 'THB', priceUnit: 'per_piece',
+      }],
+    });
+    // Legacy line: no catalogPriceId (pre-V110 deal), so productId seeds null and the fallback
+    // effect gets a chance to run — model/size deliberately match the mocked candidate above.
+    renderModal({ ticketItems: [ticketItem({ model: 'A1', size: '60x60' })] });
+
+    await screen.findByText(/จับคู่สินค้าจาก Catalog/);
+    expect(screen.getByText(/Catalog #901/)).not.toBeNull();
+  });
+
+  it('does NOT auto-apply when the search returns more than one normalized match — leaves the row blank for manual search', async () => {
+    api.catalog.prices.mockResolvedValueOnce({
+      items: [
+        { priceId: 901, productCode: 'PC-901', collection: 'A1', sizeRaw: '60x60' },
+        { priceId: 902, productCode: 'PC-902', collection: 'A1', sizeRaw: '60x60' },
+      ],
+    });
+    renderModal({ ticketItems: [ticketItem({ model: 'A1', size: '60x60' })] });
+
+    await waitFor(() => expect(api.catalog.prices).toHaveBeenCalled());
+    // Give the (already-resolved) ambiguous response a tick to flow through the effect and
+    // confirm it deliberately does nothing, rather than asserting absence before it had a
+    // chance to (wrongly) apply.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(screen.queryByText(/จับคู่สินค้าจาก Catalog/)).toBeNull();
+    expect(screen.queryByText('Catalog #901')).toBeNull();
+    expect(screen.queryByText('Catalog #902')).toBeNull();
+  });
+
+  it('does NOT auto-apply when the row already has a productId (never overwrites a real link)', () => {
+    api.catalog.prices.mockClear();
+    renderModal({ ticketItems: [ticketItem({ catalogPriceId: 777, catalogProductCode: 'PC-777', model: 'A1', size: '60x60' })] });
+
+    // The row already has a link — the fallback must skip it entirely, never even searching.
+    expect(api.catalog.prices).not.toHaveBeenCalled();
+  });
+
+  // Regression guard: these searches run SEQUENTIALLY, so the in-flight window across a
+  // many-line deal is seconds long. Deleting a row during it re-indexes every row after the
+  // deleted one. An apply keyed on array index would land row 2's match on row 3 — silently
+  // overwriting a DIFFERENT product's fields and badging the wrong row as auto-matched, which
+  // is exactly the wrong-product-into-costing outcome the badge exists to prevent. The apply is
+  // therefore keyed on sourceTicketItemId.
+  it('applies a match to the row it searched for, even when an earlier row is deleted mid-flight', async () => {
+    api.catalog.prices.mockClear();
+    // Row 1 (id 601, model B2) resolves only after we delete row 0, so by apply time every
+    // surviving row has shifted down one index.
+    let releaseSecondSearch;
+    const secondSearch = new Promise((resolve) => { releaseSecondSearch = resolve; });
+    api.catalog.prices
+      .mockResolvedValueOnce({ items: [] })          // row 0 (id 600) — no match, moves on
+      .mockImplementationOnce(() => secondSearch);   // row 1 (id 601) — held open
+
+    renderModal({
+      ticketItems: [
+        ticketItem({ id: 600, model: 'A1', size: '60x60' }),
+        ticketItem({ id: 601, model: 'B2', size: '30x30' }),
+        ticketItem({ id: 602, model: 'C3', size: '80x80' }),
+      ],
+    });
+
+    await waitFor(() => expect(api.catalog.prices).toHaveBeenCalledTimes(2));
+
+    // Delete row 0 while row 1's search is still open — row 601 is now at index 0, 602 at 1.
+    fireEvent.click(screen.getByRole('button', { name: 'ลบรายการที่ 1' }));
+
+    releaseSecondSearch({
+      items: [{
+        priceId: 902, productCode: 'PC-902', factoryName: 'SCG Ceramics',
+        grade: 'SCG', collection: 'B2', sizeRaw: '30x30', color: 'ดำ', surface: 'มัน',
+        price: 250, currency: 'THB', priceUnit: 'per_piece',
+      }],
+    });
+
+    await screen.findByText(/Catalog #902/);
+
+    // Exactly one row auto-matched, and it is the B2 row the search was actually for — not the
+    // C3 row that shifted into B2's old index.
+    expect(screen.getAllByText(/จับคู่สินค้าจาก Catalog/)).toHaveLength(1);
+    expect(screen.getByDisplayValue('B2')).not.toBeNull();
+    expect(screen.getByDisplayValue('C3')).not.toBeNull();
   });
 });

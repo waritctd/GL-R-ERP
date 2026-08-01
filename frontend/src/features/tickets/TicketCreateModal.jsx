@@ -15,6 +15,11 @@ const emptyItem = () => ({
   // exist so the items view can badge a line "จากแคตตาล็อก" vs "custom" and
   // show a read-only reference price, per the Phase 2 mockup.
   source: 'custom', catalogPrice: null, catalogCurrency: null,
+  // catalogPriceId/catalogProductCode ARE sent (see submit()'s items map below) — the catalog
+  // identity picked here, persisted on ticket_item (V110) so PricingRequestCreateModal can seed
+  // its own catalog link without a re-search. Cleared by updateItem() below whenever the user
+  // hand-edits a descriptive field the link no longer accurately describes.
+  catalogPriceId: null, catalogProductCode: '',
 });
 
 let _catalogTimer = null;
@@ -457,18 +462,48 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         if (value === 'SQM' && item.qty) updated.qtySqm = (Number(item.qty) * item.sqmPerPiece).toFixed(3);
         if (value === 'PIECE' && item.qtySqm) updated.qty = Math.ceil(Number(item.qtySqm) / item.sqmPerPiece);
       }
+      // A hand-edit to any field that describes WHICH product this row is invalidates a
+      // previously-picked catalog link — what's typed no longer necessarily matches what the
+      // link points at. Mirrors PricingRequestCreateModal.updateItem's identical rule.
+      if (['brand', 'model', 'color', 'texture', 'size', 'factory'].includes(field)) {
+        updated.source = 'custom';
+        updated.catalogPriceId = null;
+        updated.catalogProductCode = '';
+        updated.catalogPrice = null;
+        updated.catalogCurrency = null;
+      }
       return updated;
     }));
   }
 
-  function applyCatalogItem(index, cat) {
+  // `pickedFrom` is which autocomplete the user chose from ('brand' | 'model'), which decides
+  // whether the current ยี่ห้อ text is a deliberate brand entry or merely the search query —
+  // see the brand rule below.
+  function applyCatalogItem(index, cat, pickedFrom) {
     setItems((cur) => cur.map((item, i) => {
       if (i !== index) return item;
       const newQtySqm = item.qty && cat.sqmPerPiece ? (Number(item.qty) * cat.sqmPerPiece).toFixed(3) : '';
+      // Brand bug fix: this used to write the FACTORY name into ยี่ห้อ
+      // (cat.factoryName || cat.brand), which is wrong — factory and brand are
+      // different concepts (factory has its own field below). The catalog's
+      // grade is the right source: ProductPriceDto has no separate "brand" of
+      // its own, and grade is the closest analogue (the same
+      // COALESCE(pri.brand, pp.grade) rule
+      // PricingRequestRepository.snapshotCatalogSelections uses server-side).
+      //
+      // Unlike PricingRequestCreateModal — which has a DEDICATED catalog search
+      // box, so a non-blank brand there is always a deliberate entry that must
+      // win — ยี่ห้อ IS the search box on this form. Text sitting in it after a
+      // pick from the ยี่ห้อ dropdown is the QUERY ("sc"), not a brand, so
+      // keeping it would leave junk in the field and fail this fix's own intent
+      // just as the factory name did. A pick from the รุ่น dropdown is the
+      // other case: ยี่ห้อ was filled independently there, so it wins.
+      const brandTypedIndependently = pickedFrom !== 'brand' && item.brand?.trim();
+      const brand = brandTypedIndependently ? item.brand : (cat.grade || cat.brand || '');
       // support both old catalog (brand/size) and new price catalog (factoryName/sizeRaw)
       return {
         ...item,
-        brand:       cat.factoryName  || cat.brand    || '',
+        brand,
         model:       cat.collection   || cat.productName || cat.productCode || '',
         color:       cat.color        || '',
         texture:     cat.surface      || '',
@@ -480,6 +515,11 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         source: 'catalog',
         catalogPrice: cat.price ?? null,
         catalogCurrency: cat.currency ?? null,
+        // Persisted (V110) — see emptyItem()'s comment. cat.priceId is
+        // ProductPriceDto.priceId, the same price_catalog.product_prices.price_id that
+        // sales.pricing_request_item.product_id already points at (V68).
+        catalogPriceId: cat.priceId ?? null,
+        catalogProductCode: cat.productCode ?? '',
       };
     }));
     // Catalog pick fills brand/model/color/texture/size in one shot — clear
@@ -621,6 +661,10 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           unitBasis: item.unitBasis || 'PIECE',
           qty: Number(item.qty) || 0,
           qtySqm: item.qtySqm !== '' && item.qtySqm != null ? Number(item.qtySqm) : null,
+          // Persisted (V110) so PricingRequestCreateModal can seed its own catalog link
+          // without a re-search — see emptyItem()'s comment.
+          catalogPriceId: item.catalogPriceId ?? null,
+          catalogProductCode: item.catalogProductCode?.trim() || null,
         })),
       });
       // Server accepted the deal — the client-only draft has served its
@@ -1008,7 +1052,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 60, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.12)', maxHeight: 200, overflowY: 'auto' }}>
                 {catalogResults.map((cat) => (
                   // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- autocomplete option row; onMouseDown (not click) preserves input focus for typeahead
-                  <div key={cat.priceId ?? cat.id} onMouseDown={() => applyCatalogItem(index, cat)}
+                  <div key={cat.priceId ?? cat.id} onMouseDown={() => applyCatalogItem(index, cat, 'brand')}
                     style={{ padding: '7px 10px', fontSize: 12, cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}
                     onMouseEnter={(e) => e.currentTarget.style.background = '#f0f9ff'}
                     onMouseLeave={(e) => e.currentTarget.style.background = ''}
@@ -1052,7 +1096,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 60, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.12)', maxHeight: 200, overflowY: 'auto' }}>
                 {catalogResults.map((cat) => (
                   // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- autocomplete option row; onMouseDown (not click) preserves input focus for typeahead
-                  <div key={cat.priceId ?? cat.id} onMouseDown={() => applyCatalogItem(index, cat)}
+                  <div key={cat.priceId ?? cat.id} onMouseDown={() => applyCatalogItem(index, cat, 'model')}
                     style={{ padding: '7px 10px', fontSize: 12, cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}
                     onMouseEnter={(e) => e.currentTarget.style.background = '#f0f9ff'}
                     onMouseLeave={(e) => e.currentTarget.style.background = ''}

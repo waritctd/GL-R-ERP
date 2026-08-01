@@ -1560,7 +1560,15 @@ public class TicketService {
                 prior != null ? prior.calcConfigVersion() : null,
                 unitBasis,
                 prior != null ? prior.manualPrice() : null,
-                prior != null ? prior.manualOverrideReason() : null
+                prior != null ? prior.manualOverrideReason() : null,
+                // Pricing fields above are guarded (request can never overwrite them — see this
+                // method's own comment above). The catalog link is a descriptive field, not a
+                // pricing one, so — same as brand/model/etc. — the request wins outright: the
+                // frontend already carries the prior link forward (or clears it when the user
+                // hand-edits a descriptive field, see TicketCreateModal.jsx's updateItem), so
+                // this stays a pure passthrough with no merge logic of its own.
+                BigDecimal.ZERO, BigDecimal.ZERO, null,
+                r.catalogPriceId(), r.catalogProductCode()
             ));
         }
         return merged;
