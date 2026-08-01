@@ -38,7 +38,7 @@ public class PriceCalcService {
     @Transactional
     public TicketDto calculateForTicket(long ticketId) {
         TicketDto ticket = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
 
         List<TicketItemDto> items = ticket.items();
         for (TicketItemDto item : items) {
@@ -124,7 +124,7 @@ public class PriceCalcService {
 
     public List<PriceBreakdownItemDto> calculateBreakdown(long ticketId) {
         TicketDto ticket = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
 
         List<PriceBreakdownItemDto> result = new ArrayList<>();
         for (TicketItemDto item : ticket.items()) {

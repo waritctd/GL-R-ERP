@@ -28,11 +28,11 @@ test.describe('Batch 1 safety foundations', () => {
 
       await spaGoto(page, '/payroll');
 
-      await expect.poll(() => new URL(page.url()).pathname).toBe('/');
-      await expect(page.getByText('ยังเปิดหน้านี้ไม่ได้')).toBeVisible();
-      await expect(page.getByText('ระบบพากลับมาหน้าหลักแล้ว เนื้อหานี้จะเปิดได้เฉพาะบทบาทที่ได้รับสิทธิ์')).toBeVisible();
+      await expect.poll(() => new URL(page.url()).pathname).toBe('/payroll');
+      await expect(page.getByRole('heading', { name: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' })).toBeVisible();
+      await expect(page.getByText('/payroll')).toBeVisible();
       await expect(page.getByText('เงินเดือนพนักงาน')).toHaveCount(0);
-      await expect(page.getByRole('button', { name: 'รับทราบ' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'ไปที่แดชบอร์ด' })).toBeVisible();
       await expectNoHorizontalPageOverflow(page);
     });
 

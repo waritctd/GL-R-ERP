@@ -54,12 +54,20 @@ async function ensureAppLoaded(page) {
 
 // Password-less quick-login (LoginPage's DEMO buttons, VITE_USE_MOCKS=true
 // only). Waits for the authenticated AppShell to replace LoginPage.
+//
+// Issue #396 fix: the sidebar footer's own name/avatar/logout block was
+// removed (it duplicated the topbar UserMenu identity, and doubled the
+// logout control on screen at once) -- the topbar account-menu trigger
+// (avatar button, "เมนูผู้ใช้") is now the ONE login-success/logout
+// affordance, and unlike the old sidebar control it is never hidden behind
+// the off-canvas nav drawer at narrow widths (see AppShell's topbar, always
+// rendered regardless of viewport).
 export async function loginAs(page, role) {
   await ensureAppLoaded(page);
   const quickButton = page.getByTestId(`login-role-${role}`);
   await expect(quickButton).toBeVisible();
   await quickButton.click();
-  await expect(page.getByRole('button', { name: 'ออกจากระบบ' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'เมนูผู้ใช้' })).toBeVisible();
 }
 
 // Credential login path (password `demo1234` for every seeded user —
@@ -69,11 +77,12 @@ export async function loginWithCredentials(page, email, password) {
   await page.getByTestId('login-email').fill(email);
   await page.getByTestId('login-password').fill(password);
   await page.getByTestId('login-submit').click();
-  await expect(page.getByRole('button', { name: 'ออกจากระบบ' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'เมนูผู้ใช้' })).toBeVisible();
 }
 
 export async function logout(page) {
-  await page.getByRole('button', { name: 'ออกจากระบบ' }).click();
+  await page.getByRole('button', { name: 'เมนูผู้ใช้' }).click();
+  await page.getByRole('menuitem', { name: 'ออกจากระบบ' }).click();
   await expect(page.getByTestId('login-submit')).toBeVisible();
 }
 

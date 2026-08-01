@@ -2,8 +2,8 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
-  dealLifecycleLabel, dealStageLabel, formatMoney, fulfilmentStatusLabel, paymentStageLabel,
-  pricingRequestStatusLabel,
+  dealLifecycleLabel, dealStageLabel, formatMoney, formatThaiDate, fulfilmentStatusLabel,
+  paymentStageLabel, pricingRequestStatusLabel, ticketStatusLabel,
 } from '../../utils/format.js';
 import { activePricingRequestsSummary } from '../pricingRequests/pricingRequestMeta.js';
 
@@ -66,9 +66,11 @@ export function DealStateHeader({
   summary, pricingRequests = [], primaryAction, bannerText, overflowItems, onRefresh,
 }) {
   const lifecycle = dealLifecycleLabel(summary.lifecycle ?? 'ACTIVE');
+  const status = ticketStatusLabel(summary.status);
   const stage = dealStageLabel(summary.salesStage);
   const payment = paymentStageLabel(summary.paymentStage);
   const fulfilment = summary.fulfillmentStatus ? fulfilmentStatusLabel(summary.fulfillmentStatus) : null;
+  const hasDealValue = Number(summary.amountPayable ?? 0) > 0;
 
   // Most-recently-created non-cancelled pricing request stands in for "PCR
   // status" at a glance — activePricingRequestsSummary already sorts oldest
@@ -91,6 +93,14 @@ export function DealStateHeader({
           {summary.projectName ? (
             <p className="mt-0.5 truncate text-sm text-text-muted">{summary.projectName}</p>
           ) : null}
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-text-muted sm:gap-4">
+            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+            {summary.hasEdits ? <StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge> : null}
+            <span>สร้างโดย <strong className="text-text-secondary">{summary.createdByName || '-'}</strong> · {formatThaiDate(summary.createdAt)}</span>
+            {summary.assignedToName ? (
+              <span>เจ้าหน้าที่นำเข้าที่ดูแล <strong className="text-text-secondary">{summary.assignedToName}</strong></span>
+            ) : null}
+          </div>
         </div>
         {onRefresh ? (
           <button type="button" className="icon-button" onClick={onRefresh} title="รีเฟรช" aria-label="รีเฟรช">
@@ -138,7 +148,7 @@ export function DealStateHeader({
           value={fulfilment ? fulfilment.label : 'ยังไม่เริ่ม'}
           tone={fulfilment ? fulfilment.tone : 'neutral'}
         />
-        <StatChip label="มูลค่าดีล" value={formatMoney(summary.amountPayable ?? 0)} />
+        <StatChip label="มูลค่าดีล" value={hasDealValue ? formatMoney(summary.amountPayable ?? 0) : '—'} />
       </dl>
 
       {/* The sticky action bar (IA "Action bar (sticky)"): ONE work-state

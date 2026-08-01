@@ -60,7 +60,13 @@ class PayrollReprocessAndAttendanceDataFlowIntegrationTest extends AbstractPostg
             new th.co.glr.hr.payroll.export.KBankPctExporter(),
             new th.co.glr.hr.payroll.export.Pnd1Exporter(),
             new th.co.glr.hr.payroll.export.SsoExporter(),
-            new th.co.glr.hr.config.AppProperties());
+            new th.co.glr.hr.payroll.export.PayrollDetailExporter(),
+            new th.co.glr.hr.config.AppProperties(),
+            new th.co.glr.hr.payroll.obligation.DeductionObligationService(
+                new th.co.glr.hr.payroll.obligation.DeductionObligationRepository(jdbc),
+                mock(th.co.glr.hr.employee.EmployeeRepository.class),
+                mock(AuditService.class),
+                new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
     // ---- P9: re-processing a month replaces lines, it does not duplicate the period -------------
@@ -184,6 +190,7 @@ class PayrollReprocessAndAttendanceDataFlowIntegrationTest extends AbstractPostg
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, // specialPay2-4
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, // specialPay5-7
             BigDecimal.ZERO, // specialPay8
+            BigDecimal.ZERO, // specialPay9
             BigDecimal.ZERO, // nonTaxableIncome
             BigDecimal.ZERO, // unpaidLeaveDays
             BigDecimal.ZERO, // studentLoanDeduction
@@ -230,7 +237,7 @@ class PayrollReprocessAndAttendanceDataFlowIntegrationTest extends AbstractPostg
     }
 
     private long seedEmployee(String code, String firstNameTh, String lastNameTh, BigDecimal salary) {
-        return jdbc.queryForObject(
+        long employeeId = jdbc.queryForObject(
             """
             INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active)
             VALUES (:code, :first, :last, :salary, TRUE)
@@ -238,5 +245,18 @@ class PayrollReprocessAndAttendanceDataFlowIntegrationTest extends AbstractPostg
             """,
             Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "salary", salary),
             Long.class);
+        // Task 2 (2026-07-29): this file is about reprocessing/attendance-data flow, not
+        // classification -- classify every non-salary component REGULAR_REPROJECT (matching the
+        // pre-task-2 blended engine exactly) and seed the real production SSO-inclusion defaults, so
+        // whichever special-pay slot a given test fills in never trips the new unclassified-component
+        // blocker.
+        seedRegularTaxTreatment(employeeId, 2026,
+            PayrollComponent.SPECIAL_PAY_1, PayrollComponent.SPECIAL_PAY_2, PayrollComponent.SPECIAL_PAY_3,
+            PayrollComponent.SPECIAL_PAY_4, PayrollComponent.SPECIAL_PAY_5, PayrollComponent.SPECIAL_PAY_6,
+            PayrollComponent.SPECIAL_PAY_7, PayrollComponent.SPECIAL_PAY_8, PayrollComponent.SPECIAL_PAY_9,
+            PayrollComponent.OVERTIME_PAY, PayrollComponent.COMMISSION_PAY, PayrollComponent.BONUS_PAY,
+            PayrollComponent.OTHER_ONE_OFF_PAY, PayrollComponent.DIRECTOR_REMUNERATION);
+        new PayrollRepository(jdbc).seedSsoInclusionDefaults(employeeId, 2026, employeeId);
+        return employeeId;
     }
 }

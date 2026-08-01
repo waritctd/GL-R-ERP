@@ -28,6 +28,7 @@ import Pencil from 'lucide-react/dist/esm/icons/pencil.mjs';
 import Phone from 'lucide-react/dist/esm/icons/phone.mjs';
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs';
 import RefreshCcw from 'lucide-react/dist/esm/icons/refresh-ccw.mjs';
+import Save from 'lucide-react/dist/esm/icons/save.mjs';
 import Search from 'lucide-react/dist/esm/icons/search.mjs';
 import ShieldCheck from 'lucide-react/dist/esm/icons/shield-check.mjs';
 import SlidersHorizontal from 'lucide-react/dist/esm/icons/sliders-horizontal.mjs';
@@ -69,6 +70,7 @@ const icons = {
   phone: Phone,
   plus: Plus,
   refresh: RefreshCcw,
+  save: Save,
   search: Search,
   setting: SlidersHorizontal,
   shield: ShieldCheck,

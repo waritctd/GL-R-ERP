@@ -188,7 +188,7 @@ public class OrderConfirmationService {
         TicketDto ticketDto = currentTicketState.paymentStatus() == null
             ? ticketService.confirmCustomer(locked.ticketId(), actor)
             : tickets.findById(locked.ticketId())
-                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
 
         pricingRequests.addEvent(pricingRequestId, locked.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.ORDER_CONFIRMED, locked.status(), locked.status(),
@@ -201,7 +201,7 @@ public class OrderConfirmationService {
 
     private OrderConfirmationResultDto currentResult(long pricingRequestId, long ticketId, UserPrincipal actor) {
         TicketDto ticketDto = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
         return new OrderConfirmationResultDto(ticketDto, requirePricingRequest(pricingRequestId));
     }
 
@@ -397,7 +397,7 @@ public class OrderConfirmationService {
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
         if (!allowed.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
@@ -405,18 +405,18 @@ public class OrderConfirmationService {
      * merely the pricing request's own requested_by (which may differ). */
     private void requireOwner(PricingRequestSummaryDto summary, UserPrincipal actor) {
         if ("sales".equals(actor.role()) && summary.ticketCreatedById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
     private PricingRequestSummaryDto requirePricingRequest(long pricingRequestId) {
         return pricingRequests.findSummary(pricingRequestId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Pricing request not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอราคานี้"));
     }
 
     private TicketSummaryDto requireTicketSummary(long ticketId) {
         return tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"))
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
             .summary();
     }
 
@@ -427,7 +427,7 @@ public class OrderConfirmationService {
         try {
             return UUID.fromString(clientRequestId.trim()).toString();
         } catch (IllegalArgumentException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId must be a valid UUID");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId ต้องเป็น UUID ที่ถูกต้อง");
         }
     }
 }

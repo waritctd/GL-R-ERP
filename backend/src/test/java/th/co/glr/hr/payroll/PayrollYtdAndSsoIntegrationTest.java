@@ -60,7 +60,13 @@ class PayrollYtdAndSsoIntegrationTest extends AbstractPostgresIntegrationTest {
             new th.co.glr.hr.payroll.export.KBankPctExporter(),
             new th.co.glr.hr.payroll.export.Pnd1Exporter(),
             new th.co.glr.hr.payroll.export.SsoExporter(),
-            new th.co.glr.hr.config.AppProperties());
+            new th.co.glr.hr.payroll.export.PayrollDetailExporter(),
+            new th.co.glr.hr.config.AppProperties(),
+            new th.co.glr.hr.payroll.obligation.DeductionObligationService(
+                new th.co.glr.hr.payroll.obligation.DeductionObligationRepository(jdbc),
+                mock(th.co.glr.hr.employee.EmployeeRepository.class),
+                mock(AuditService.class),
+                new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
     // ---- P6: YTD merge drives withholding, and an empty YTD under-withholds -------------------
@@ -184,7 +190,7 @@ class PayrollYtdAndSsoIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     private long seedEmployee(String code, String firstNameTh, String lastNameTh, BigDecimal salary) {
-        return jdbc.queryForObject(
+        long employeeId = jdbc.queryForObject(
             """
             INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active)
             VALUES (:code, :first, :last, :salary, TRUE)
@@ -192,6 +198,11 @@ class PayrollYtdAndSsoIntegrationTest extends AbstractPostgresIntegrationTest {
             """,
             Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "salary", salary),
             Long.class);
+        // Task 2 (2026-07-29): SSO inclusion has no calculator-layer default -- seed the real
+        // production defaults so this file's SSO-cap assertions still exercise a non-zero base.
+        // SALARY needs no tax-treatment seed (locked to REGULAR_REPROJECT regardless).
+        new PayrollRepository(jdbc).seedSsoInclusionDefaults(employeeId, 2026, employeeId);
+        return employeeId;
     }
 
     /**
@@ -243,6 +254,7 @@ class PayrollYtdAndSsoIntegrationTest extends AbstractPostgresIntegrationTest {
             new PayrollSpecialPayDto("specialPay5", "พิเศษ 5", BigDecimal.ZERO),
             new PayrollSpecialPayDto("specialPay6", "พิเศษ 6", BigDecimal.ZERO),
             new PayrollSpecialPayDto("specialPay7", "พิเศษ 7", BigDecimal.ZERO),
-            new PayrollSpecialPayDto("specialPay8", "พิเศษ 8", BigDecimal.ZERO));
+            new PayrollSpecialPayDto("specialPay8", "พิเศษ 8", BigDecimal.ZERO),
+            new PayrollSpecialPayDto("specialPay9", "พิเศษ 9", BigDecimal.ZERO));
     }
 }

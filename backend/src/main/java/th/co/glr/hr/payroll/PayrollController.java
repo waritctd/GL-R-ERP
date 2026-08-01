@@ -24,6 +24,9 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.payroll.export.PayrollExportFile;
 import th.co.glr.hr.payroll.export.PayrollExportKind;
+import java.util.List;
+import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentTaxTreatmentUpsertRequest;
+import th.co.glr.hr.payroll.PayrollClassificationDtos.TaxTreatmentListResponse;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.TaxAllowanceBulkUpsertRequest;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.TaxAllowanceListResponse;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedBulkUpsertRequest;
@@ -77,11 +80,33 @@ public class PayrollController {
     }
 
     /**
-     * Download one of the three statutory payroll files for a processed period:
-     * {@code kind} ∈ {@code kbank} | {@code pnd1} | {@code sso}. Optional {@code effectiveDate}
-     * (YYYY-MM-DD) is the KBank transfer / PND1 / SSO pay date; omitted falls back to the configured
-     * default day (the 26th) of the payroll month. Returned as raw CP874 bytes (octet-stream) so the
-     * legacy Thai encoding survives the download intact.
+     * Payroll input draft (2026-07-30): HR's in-progress, not-yet-processed payroll inputs,
+     * persisted so a browser reload restores exactly what was typed. Same view/edit split as
+     * every other payroll sub-resource below (GET is HR+CEO, PUT is HR-only). Never feeds
+     * preview/process -- see PayrollService#getInputDraft/#saveInputDraft.
+     */
+    @GetMapping("/input-draft")
+    @PreAuthorize("hasAnyRole('HR','CEO')")
+    public PayrollInputDraftDtos.PayrollInputDraftResponse getInputDraft(@RequestParam String payrollMonth, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return payrollService.getInputDraft(parseMonth(payrollMonth), user);
+    }
+
+    @PutMapping("/input-draft")
+    @PreAuthorize("hasRole('HR')")
+    public PayrollInputDraftDtos.PayrollInputDraftResponse putInputDraft(@Valid @RequestBody ProcessPayrollRequest request, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return payrollService.saveInputDraft(normalizedRequest(request), user);
+    }
+
+    /**
+     * Download one of HR's payroll export files for a processed period:
+     * {@code kind} ∈ {@code kbank} | {@code pnd1} | {@code sso} | {@code payroll-detail}. Optional
+     * {@code effectiveDate} (YYYY-MM-DD) is the KBank transfer / PND1 / SSO pay date (or, for
+     * {@code payroll-detail}, just the date stamped into the filename); omitted falls back to the
+     * configured default day (the 26th) of the payroll month. The three statutory kinds return raw
+     * CP874 bytes (octet-stream) so the legacy Thai encoding survives the download intact;
+     * {@code payroll-detail} returns a real xlsx workbook — see {@link PayrollExportKind#contentType()}.
      */
     @GetMapping("/{periodId}/export/{kind}")
     @PreAuthorize("hasAnyRole('HR','CEO')")
@@ -100,8 +125,60 @@ public class PayrollController {
                 .filename(file.fileName())
                 .build()
                 .toString())
-            .contentType(MediaType.APPLICATION_OCTET_STREAM)
+            .contentType(MediaType.parseMediaType(file.kind().contentType()))
             .body(file.content());
+    }
+
+    /**
+     * Preview-time detail xlsx export (owner requirement, 2026-07-30): lets HR review a month's full
+     * payroll detail BEFORE processing it, e.g. a live-but-unprocessed month like July 2026. Takes
+     * the same body {@code POST /preview} does; only {@code payroll-detail} is supported here --
+     * KBank/PND1/SSO require a genuinely processed, paid period and keep using the GET route above
+     * unchanged. See {@link PayrollService#exportDetailPreview}.
+     */
+    @PostMapping("/preview/export/{kind}")
+    @PreAuthorize("hasAnyRole('HR','CEO')")
+    public ResponseEntity<byte[]> exportPreview(
+        @PathVariable String kind,
+        @Valid @RequestBody ProcessPayrollRequest request,
+        @RequestParam(required = false) String effectiveDate,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        PayrollExportKind exportKind = parseKind(kind);
+        if (exportKind != PayrollExportKind.PAYROLL_DETAIL) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ดูตัวอย่างไฟล์ส่งออกได้เฉพาะรายงานแบบ payroll-detail เท่านั้น");
+        }
+        LocalDate effective = parseEffectiveDate(effectiveDate);
+        PayrollExportFile file = payrollService.exportDetailPreview(normalizedRequest(request), effective, user);
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                .filename(file.fileName())
+                .build()
+                .toString())
+            .contentType(MediaType.parseMediaType(file.kind().contentType()))
+            .body(file.content());
+    }
+
+    /**
+     * Bulk payslip ZIP (owner requirement, 2026-07-30): every payslip for a PROCESSED period in one
+     * archive, so HR can review the whole batch before {@link #distributePayslips} emails it to
+     * everyone. HR/CEO only, same gate as {@link #payslipPdf}; see {@link
+     * PayrollService#bulkPayslipZip} for why this requires PROCESSED and reuses the exact PDF
+     * rendering path.
+     */
+    @GetMapping("/{periodId}/payslips.zip")
+    @PreAuthorize("hasAnyRole('HR','CEO')")
+    public ResponseEntity<byte[]> bulkPayslipZip(@PathVariable long periodId, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        byte[] zip = payrollService.bulkPayslipZip(periodId, user);
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                .filename("glr-payslips-" + periodId + ".zip")
+                .build()
+                .toString())
+            .contentType(MediaType.valueOf("application/zip"))
+            .body(zip);
     }
 
     @GetMapping("/{periodId}/lines/{lineId}/payslip.pdf")
@@ -177,11 +254,41 @@ public class PayrollController {
         return payrollService.upsertYtdSeed(year, request, user);
     }
 
+    // ---- P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix's HTTP surface.
+    // Before this, PayrollRepository#upsertComponentTaxTreatment had no controller mapping at all --
+    // hr.payroll_component_tax_treatment could never be populated on a real deployment, so
+    // PayrollCalculator#calculateClassified's classification gate 409d every payroll run for any
+    // employee with a non-zero, non-SALARY component. Same view/edit split as tax-allowances/ytd-seed
+    // above, placed beside them per PayrollClassificationReachabilityIntegrationTest's own docs
+    // (asserted against this class for exactly that reason). The PUT body is a raw
+    // List<ComponentTaxTreatmentUpsertRequest> (not a wrapping "items" record like the other two
+    // bulk-upsert endpoints) so a null/empty submission is unambiguous and so the reachability test's
+    // reflection-based check (which looks for a parameter whose generic type literally names
+    // ComponentTaxTreatmentUpsertRequest) matches this mapping without needing a same-named wrapper.
+
+    @GetMapping("/component-tax-treatments")
+    @PreAuthorize("hasAnyRole('HR','CEO')")
+    public TaxTreatmentListResponse getComponentTaxTreatments(@RequestParam int year, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return payrollService.getComponentTaxTreatments(year, user);
+    }
+
+    @PutMapping("/component-tax-treatments")
+    @PreAuthorize("hasRole('HR')")
+    public TaxTreatmentListResponse putComponentTaxTreatments(
+        @RequestParam int year,
+        @Valid @RequestBody List<ComponentTaxTreatmentUpsertRequest> items,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return payrollService.upsertComponentTaxTreatments(year, items, user);
+    }
+
     private PayrollExportKind parseKind(String kind) {
         try {
             return PayrollExportKind.fromSlug(kind);
         } catch (IllegalArgumentException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown export kind: " + kind);
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับประเภทไฟล์ส่งออก: " + kind);
         }
     }
 
@@ -192,7 +299,7 @@ public class PayrollController {
         try {
             return LocalDate.parse(value.trim());
         } catch (DateTimeParseException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid effectiveDate (expected YYYY-MM-DD)");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่มีผลไม่ถูกต้อง (รูปแบบที่ถูกต้องคือ YYYY-MM-DD)");
         }
     }
 
@@ -202,7 +309,7 @@ public class PayrollController {
 
     private LocalDate parseMonth(String value) {
         if (value == null || value.isBlank()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "payrollMonth is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุงวดเงินเดือน");
         }
         String trimmed = value.trim();
         try {
@@ -211,7 +318,7 @@ public class PayrollController {
             }
             return LocalDate.parse(trimmed).withDayOfMonth(1);
         } catch (DateTimeParseException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid payroll month");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "งวดเงินเดือนไม่ถูกต้อง");
         }
     }
 }

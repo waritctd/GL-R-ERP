@@ -1,6 +1,6 @@
 import React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { PayrollPage } from './PayrollPage.jsx';
 import { api } from '../../api/index.js';
 
@@ -13,9 +13,17 @@ vi.mock('../../api/index.js', () => ({
       preview: vi.fn(),
       process: vi.fn(),
       exportFile: vi.fn(),
+      exportPreviewFile: vi.fn(),
       downloadPayslip: vi.fn(),
+      downloadPayslipsZip: vi.fn(),
       distributePayslips: vi.fn(),
       suggestedInputs: vi.fn(),
+      getInputDraft: vi.fn(),
+      saveInputDraft: vi.fn(),
+      // P0 fix (Opus review, 2026-07-30): the tax-treatment matrix section PayrollPage now renders
+      // calls this on mount.
+      getComponentTaxTreatments: vi.fn(),
+      saveComponentTaxTreatments: vi.fn(),
     },
   },
 }));
@@ -50,6 +58,13 @@ const payrollLine = {
   studentLoanDeduction: 0,
   legalExecutionDeduction: 0,
   otherPostTaxDeductions: 0,
+  // P1 fix (Opus review, 2026-07-30): bonusPay/otherOneOffPay/garnishmentType/
+  // customerReturnAlreadyEarned had backend columns and no frontend field at all.
+  bonusPay: 0,
+  otherOneOffPay: 0,
+  customerReturnDeduction: 0,
+  garnishmentType: null,
+  customerReturnAlreadyEarned: false,
 };
 
 function previewPeriod(overrides = {}) {
@@ -68,8 +83,19 @@ function previewPeriod(overrides = {}) {
   };
 }
 
+// hasPermission(user?.role, 'canManagePayroll') reads false for an absent user (issue #390 review
+// fix -- canManage is now an allowlist off ROLE_PERMISSIONS, not a `role !== 'ceo'` denylist), so
+// every render below must pass a real user explicitly or these tests would exercise the read-only
+// (CEO-shaped) page instead of the full HR management view they intend to cover.
+const hrUser = { role: 'hr', employeeId: 10 };
+
 function renderPayrollPage() {
-  return render(<PayrollPage showToast={vi.fn()} />);
+  return render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+}
+
+async function openDocumentsMenu() {
+  fireEvent.click(await screen.findByRole('button', { name: 'เอกสาร' }));
+  return screen.findByRole('menu', { name: 'เอกสาร' });
 }
 
 // Computed the same way PayrollPage.jsx's own module-level `thisMonth` const is (`new
@@ -77,6 +103,16 @@ function renderPayrollPage() {
 // `payload()` submits `` `${month}-01` ``. Used below to pin down that exact "-01" suffix (a
 // mutation-testing survivor: changing it to "-02" left the suite green).
 const thisMonth = new Date().toISOString().slice(0, 7);
+const originalMatchMedia = window.matchMedia;
+
+function mockPayrollViewport({ mobile = false, desktopPanel = false } = {}) {
+  window.matchMedia = vi.fn((query) => ({
+    matches: query === '(max-width: 720px)' ? mobile : query === '(min-width: 1366px)' ? desktopPanel : false,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+}
 
 describe('PayrollPage adjustment inputs', () => {
   beforeEach(() => {
@@ -89,14 +125,26 @@ describe('PayrollPage adjustment inputs', () => {
     api.payroll.exportFile.mockResolvedValue(new Blob(['HPCT'], { type: 'application/octet-stream' }));
     api.payroll.distributePayslips.mockResolvedValue({ periodId: 7, totalLines: 1, alreadySent: 0, queued: 1 });
     api.payroll.suggestedInputs.mockResolvedValue({ payrollMonth: '2026-07-01', suggestions: [] });
+    api.payroll.getInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
+    api.payroll.saveInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
+    api.payroll.getComponentTaxTreatments.mockResolvedValue({ taxYear: 2026, items: [] });
+    api.payroll.saveComponentTaxTreatments.mockResolvedValue({ taxYear: 2026, items: [] });
+  });
+
+  afterEach(() => {
+    if (originalMatchMedia) {
+      window.matchMedia = originalMatchMedia;
+    } else {
+      delete window.matchMedia;
+    }
   });
 
   it('uses Excel-based UAT defaults and shows a Baht prefix on money fields', async () => {
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
-    const gprs = screen.getByLabelText(/พิเศษ 5 \(ค่า GPRS\)/);
-    const allowance = screen.getByLabelText(/พิเศษ 2 \(เบี้ยเลี้ยงประจำ\)/);
+    const gprs = screen.getByLabelText(/พิเศษ 6 \(ค่า GPRS\)/);
+    const allowance = screen.getByLabelText(/พิเศษ 3 \(เบี้ยเลี้ยงประจำ\)/);
 
     expect(costOfLiving.value).toBe('500');
     expect(gprs.value).toBe('500');
@@ -105,10 +153,10 @@ describe('PayrollPage adjustment inputs', () => {
   });
 
   it('allows clearing zero/default amounts and sends them as zeroes', async () => {
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
-    const gprs = screen.getByLabelText(/พิเศษ 5 \(ค่า GPRS\)/);
+    const gprs = screen.getByLabelText(/พิเศษ 6 \(ค่า GPRS\)/);
 
     fireEvent.change(costOfLiving, { target: { value: '' } });
     fireEvent.change(gprs, { target: { value: '' } });
@@ -127,6 +175,23 @@ describe('PayrollPage adjustment inputs', () => {
     expect(screen.getByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/).value).toBe('');
   });
 
+  it('autosaves draft payroll inputs on blur and shows a saved-state indicator instead of a save button', async () => {
+    renderPayrollPage();
+
+    const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
+    expect(screen.queryByRole('button', { name: /บันทึกร่าง/i })).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('บันทึกแล้ว');
+
+    fireEvent.change(costOfLiving, { target: { value: '1234' } });
+    expect(screen.getByRole('status').textContent).toContain('รอบันทึกอัตโนมัติ');
+
+    fireEvent.blur(costOfLiving);
+
+    await waitFor(() => expect(api.payroll.saveInputDraft).toHaveBeenCalledTimes(1));
+    expect(api.payroll.saveInputDraft.mock.calls[0][0].inputs.find((input) => input.employeeId === 1).specialPay1).toBe(1234);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('บันทึกแล้ว'));
+  });
+
   it('includes an input value of exactly 1 -- the boundary of hasPayrollInput\'s `> 0` check', async () => {
     // Mutation-testing survivor: `parsePayrollNumber(input[key]) > 0` could be weakened to `> 1`
     // without failing anything, because no existing test isolated a value of exactly 1 -- it would
@@ -137,8 +202,8 @@ describe('PayrollPage adjustment inputs', () => {
     renderPayrollPage();
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
-    const gprs = screen.getByLabelText(/พิเศษ 5 \(ค่า GPRS\)/);
-    const allowance = screen.getByLabelText(/พิเศษ 2 \(เบี้ยเลี้ยงประจำ\)/);
+    const gprs = screen.getByLabelText(/พิเศษ 6 \(ค่า GPRS\)/);
+    const allowance = screen.getByLabelText(/พิเศษ 3 \(เบี้ยเลี้ยงประจำ\)/);
     fireEvent.change(costOfLiving, { target: { value: '' } });
     fireEvent.change(gprs, { target: { value: '' } });
     fireEvent.change(allowance, { target: { value: '1' } });
@@ -147,7 +212,8 @@ describe('PayrollPage adjustment inputs', () => {
     await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
     const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
     expect(submitted).toBeDefined();
-    expect(submitted.specialPay2).toBe(1);
+    // เบี้ยเลี้ยงประจำ is slot 3 after the realignment to the accountant's numbering.
+    expect(submitted.specialPay3).toBe(1);
   });
 
   it('downloads a saved payslip for the selected payroll line', async () => {
@@ -156,9 +222,415 @@ describe('PayrollPage adjustment inputs', () => {
 
     renderPayrollPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: /Download payslip/i }));
+    expect(screen.queryByRole('columnheader', { name: /เอกสาร/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Download payslip/i })).toBeNull();
+
+    // Exact match, not just anchored-start: upstream's bulk "ดาวน์โหลดสลิปเงินเดือนทั้งหมด" button
+    // (feat/payroll-detail-xlsx-export) also starts with "ดาวน์โหลดสลิป", so a merely-anchored regex
+    // matches both this single-payslip button and the bulk one, ambiguously.
+    fireEvent.click(await screen.findByRole('button', { name: /^ดาวน์โหลดสลิป$/i }));
 
     await waitFor(() => expect(api.payroll.downloadPayslip).toHaveBeenCalledWith(7, 55));
+  });
+
+  it('right-aligns money, shows satang consistently, and reconciles all visible lines without stranding employee 26', async () => {
+    const lines = Array.from({ length: 26 }, (_, index) => ({
+      ...payrollLine,
+      id: 100 + index,
+      employeeId: index + 1,
+      employeeCode: `GLR-${String(index + 1).padStart(3, '0')}`,
+      employeeName: `พนักงาน ${index + 1}`,
+    }));
+    api.payroll.current.mockResolvedValue({
+      period: previewPeriod({
+        lineCount: 26,
+        totalGross: 780000,
+        totalDeductions: 19500,
+        totalNet: 760500,
+        totalSocialSecurity: 19500,
+        lines,
+      }),
+    });
+
+    const { container } = renderPayrollPage();
+
+    expect((await screen.findAllByText('พนักงาน 26')).length).toBeGreaterThan(0);
+    expect(container.querySelector('caption').textContent).toBe('รายการเงินเดือนพนักงานในรอบที่เลือก');
+    expect(screen.queryByRole('button', { name: /Download payslip/i })).toBeNull();
+    expect(screen.queryByText(/หน้า 1 \//)).toBeNull();
+    expect(screen.queryByRole('columnheader', { name: /เงินพิเศษ/i })).toBeNull();
+    expect(screen.queryByRole('columnheader', { name: /ล่วงเวลา\/คอมมิชชัน/i })).toBeNull();
+
+    const firstGrossCell = container.querySelector('tbody td[data-label="รายได้"]');
+    expect(firstGrossCell.className).toContain('text-right');
+    expect(firstGrossCell.className).toContain('payroll-money-cell');
+    expect(firstGrossCell.textContent).toBe('฿30,000.00');
+    expect(container.querySelector('tbody td[data-label="เงินพิเศษ"]')).toBeNull();
+    expect(container.querySelector('tbody td[data-label="ล่วงเวลา/คอมมิชชัน"]')).toBeNull();
+
+    const grossHeader = container.querySelector('thead th.payroll-money-cell');
+    expect(grossHeader.className).toContain('text-right');
+
+    const totalRow = container.querySelector('tfoot .payroll-total-row');
+    expect(totalRow).toBeTruthy();
+    expect(totalRow.textContent).toContain('รวมทั้งงวด');
+    expect(totalRow.textContent).toContain('26 คน');
+    expect(totalRow.textContent).toContain('฿780,000.00');
+    expect(totalRow.textContent).toContain('฿760,500.00');
+  });
+
+  it('makes phone payroll rows read as name and net-pay cards while folding zero optional rows', async () => {
+    mockPayrollViewport({ mobile: true });
+
+    const { container } = renderPayrollPage();
+
+    await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
+    const firstRow = container.querySelector('tr.data-row');
+    const employeeCell = firstRow.querySelector('td[data-label="พนักงาน"]');
+
+    expect(employeeCell.className).toContain('mobile:[&::before]:hidden');
+    expect(employeeCell.textContent).toContain('สุทธิ');
+    expect(employeeCell.textContent).toContain('฿29,250.00');
+
+    const zeroDisclosure = employeeCell.querySelector('details');
+    expect(zeroDisclosure).toBeTruthy();
+    expect(zeroDisclosure.textContent).toContain('รายการศูนย์ 2 รายการ');
+    expect(zeroDisclosure.textContent).toContain('เงินพิเศษ');
+    expect(zeroDisclosure.textContent).toContain('ล่วงเวลา/คอมมิชชัน');
+    expect(container.querySelector('tbody td[data-label="สุทธิ"]').className).toContain('mobile:hidden');
+  });
+
+  it('marks preview status in the stat strip and folds ภาษี/ปกส. into the deductions readout', async () => {
+    renderPayrollPage();
+
+    // Issue #394 fix: PayrollPage now wires its own `loading` state into
+    // CompactStatRow, so the strip briefly renders as a loading skeleton
+    // (same testid, `aria-busy="true"`, no <dt>s) before the real period
+    // data lands -- wait past that instead of grabbing whichever renders
+    // first.
+    await waitFor(() => {
+      expect(screen.getByTestId('compact-stat-row').getAttribute('aria-busy')).not.toBe('true');
+    });
+    const statStrip = screen.getByTestId('compact-stat-row');
+    const labels = Array.from(statStrip.querySelectorAll('dt')).map((node) => node.textContent);
+
+    expect(labels.some((label) => label.startsWith('สถานะรอบ'))).toBe(true);
+    expect(statStrip.textContent).toContain('ตัวอย่าง');
+    expect(labels.some((label) => label.startsWith('ภาษี/ปกส.'))).toBe(false);
+    expect(statStrip.textContent).toContain('ภาษี/ปกส. ฿750.00');
+  });
+
+  // Issue #394 fix: the real mockApi.js's `payroll.current()` always resolves
+  // `{ period: null }` (payroll preview/process is intentionally unsupported
+  // in mock mode) -- this used to leave all four KPI tiles rendering a bare
+  // "-" with no explanation. Once loading settles with no period at all, a
+  // real empty state should explain what would populate the strip instead.
+  it('shows an explanatory empty state instead of four bare dashes when no period ever loads', async () => {
+    api.payroll.current.mockResolvedValue({ period: null });
+
+    renderPayrollPage();
+
+    await screen.findByText('ยังไม่มีข้อมูลสรุปเงินเดือน');
+    expect(screen.getByText(/เลือกรอบเดือนที่มีข้อมูลพนักงาน/)).toBeTruthy();
+    expect(screen.queryByTestId('compact-stat-row')).toBeNull();
+  });
+
+  it('selects a payroll line from the whole row and opens the detail drawer contract', async () => {
+    const lines = [
+      { ...payrollLine, employeeId: 1, employeeName: 'พนักงาน ก' },
+      { ...payrollLine, id: 56, employeeId: 2, employeeCode: 'GLR-002', employeeName: 'พนักงาน ข' },
+    ];
+    api.payroll.current.mockResolvedValue({
+      period: previewPeriod({
+        lineCount: 2,
+        totalGross: 60000,
+        totalDeductions: 1500,
+        totalNet: 58500,
+        totalSocialSecurity: 1500,
+        lines,
+      }),
+    });
+
+    const { container } = renderPayrollPage();
+
+    await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
+    const [, secondRow] = container.querySelectorAll('tr.data-row');
+    expect(secondRow.getAttribute('role')).toBe('row');
+    expect(secondRow.getAttribute('tabindex')).toBe('-1');
+    // Item 4d fix (Opus review, 2026-07-31): `aria-current`, not `aria-selected` -- see
+    // DataTable.jsx's own comment on the render for why (`aria-selected` is only valid ARIA inside a
+    // `grid`/`treegrid`, and this is a plain table). The visible "เลือกอยู่" badge checked below is
+    // unaffected and remains the primary cue.
+    expect(secondRow.getAttribute('aria-current')).toBe('false');
+
+    fireEvent.click(secondRow);
+
+    expect(secondRow.getAttribute('aria-current')).toBe('true');
+    expect(secondRow.getAttribute('tabindex')).toBe('0');
+    expect(secondRow.className).toContain('active');
+    expect(within(secondRow).getAllByText('เลือกอยู่').length).toBeGreaterThan(0);
+    expect(container.querySelector('.payroll-detail-panel').className).toContain('is-open');
+    expect(container.querySelector('.payroll-detail-panel h2').textContent).toBe('พนักงาน ข');
+  });
+
+  // Defect 1 regression guard (Opus review, 2026-07-31): the selected row's `เลือกอยู่` badge used to
+  // paint on top of the employee name because `min-w-0` on the name block only allows the flex item
+  // to SHRINK -- it does nothing to the text once shrunk, so an overlong name simply overflowed its
+  // own box and rendered underneath the badge (a later sibling, so it paints on top). jsdom has no
+  // layout engine, so this can't assert the actual pixel overlap is gone -- it pins down the classes
+  // that prevent it: `<strong>`/`<small>` must each be `block truncate` so they clip with an ellipsis
+  // at their own width, on BOTH the selected row (where the badge is competing for space) and an
+  // unselected one (so the fix isn't accidentally conditioned on `selected`).
+  it('truncates the employee name/code independently instead of letting them overflow under the เลือกอยู่ badge', async () => {
+    const lines = [
+      { ...payrollLine, employeeId: 1, employeeName: 'พนักงานที่มีชื่อยาวมากเกินกว่าจะแสดงในคอลัมน์นี้ได้ทั้งหมด' },
+      { ...payrollLine, id: 56, employeeId: 2, employeeCode: 'GLR-002', employeeName: 'พนักงาน ข' },
+    ];
+    api.payroll.current.mockResolvedValue({
+      period: previewPeriod({
+        lineCount: 2,
+        totalGross: 60000,
+        totalDeductions: 1500,
+        totalNet: 58500,
+        totalSocialSecurity: 1500,
+        lines,
+      }),
+    });
+
+    const { container } = renderPayrollPage();
+
+    // Not `screen.findByText(lines[0].employeeName)`: the first line is auto-selected on first
+    // render, so its name is ALSO already showing in the always-mounted detail panel's own
+    // heading -- an ambiguous match. Grab the rows directly by their DataTable `.data-row` class
+    // (see the `openDetailPanel` helper above for the same reasoning) instead.
+    await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
+    const [firstRow, secondRow] = container.querySelectorAll('tr.data-row');
+    fireEvent.click(firstRow);
+    expect(within(firstRow).getAllByText('เลือกอยู่').length).toBeGreaterThan(0);
+
+    const selectedNameBlock = firstRow.querySelector('td[data-label="พนักงาน"] strong');
+    expect(selectedNameBlock.tagName).toBe('STRONG');
+    expect(selectedNameBlock.textContent).toBe(lines[0].employeeName);
+    expect(selectedNameBlock.className.split(' ')).toEqual(expect.arrayContaining(['block', 'truncate']));
+    const selectedCodeBlock = firstRow.querySelector('small');
+    expect(selectedCodeBlock.className.split(' ')).toEqual(expect.arrayContaining(['block', 'truncate']));
+
+    // Unselected row: same classes must be present unconditionally, not just when the badge shows up.
+    const unselectedNameBlock = secondRow.querySelector('td[data-label="พนักงาน"] strong');
+    expect(unselectedNameBlock.textContent).toBe(lines[1].employeeName);
+    expect(unselectedNameBlock.className.split(' ')).toEqual(expect.arrayContaining(['block', 'truncate']));
+
+    expect(container.querySelectorAll('.data-row')).toHaveLength(2);
+  });
+
+  // B1/B2 fix (Opus review, 2026-07-31): the detail panel has exactly two presentations --
+  // >=1366px is a persistent side panel (no dialog semantics, since the rest of the page beside it
+  // is not hidden), <1366px is a true overlay dialog (focus trap, Escape, role="dialog"). These
+  // tests mock `window.matchMedia` for the `(min-width: 1366px)` query PayrollPage.jsx's
+  // `useMediaQuery` reads (see useIsMobile.js) to pin down each mode independently.
+  //
+  // Item 1 fix (2026-07-31): raised from 1280px -- real-browser measurement showed the side-by-side
+  // track didn't actually fit (money columns hidden behind a scrollbar) until ~1400px; see
+  // index.css's `payroll-wide` custom-variant comment for the full measurement.
+  describe('detail panel: side panel vs. overlay dialog', () => {
+    afterEach(() => {
+      delete window.matchMedia;
+    });
+
+    function mockPanelViewport(isDesktopWidth) {
+      mockPayrollViewport({ desktopPanel: isDesktopWidth });
+    }
+
+    // Not `findByText(payrollLine.employeeName)`: with a single line, that name is ALSO the
+    // default `selectedLine` shown in the (always-mounted, just CSS-hidden until opened) detail
+    // panel's own heading from the very first render -- an ambiguous match before any click even
+    // happens, and the employee code has the same problem. Wait on the always-unique Preview
+    // button instead (proof the period finished loading), then grab the row via `.data-row` --
+    // DataTable's own class for a genuine data row (see DataTable.jsx) -- and click it directly.
+    async function openDetailPanel(container) {
+      await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
+      const row = container.querySelector('tr.data-row');
+      fireEvent.click(row);
+    }
+
+    it('is a persistent side panel with no dialog semantics at >=1366px', async () => {
+      mockPanelViewport(true);
+      const { container } = renderPayrollPage();
+      await openDetailPanel(container);
+
+      const panel = container.querySelector('.payroll-detail-panel');
+      expect(panel.className).toContain('is-open');
+      expect(panel.getAttribute('role')).toBeNull();
+      expect(panel.getAttribute('aria-modal')).toBeNull();
+      expect(panel.getAttribute('aria-labelledby')).toBeNull();
+    });
+
+    it('is a labelled dialog overlay below 1366px', async () => {
+      mockPanelViewport(false);
+      const { container } = renderPayrollPage();
+      await openDetailPanel(container);
+
+      const panel = container.querySelector('.payroll-detail-panel');
+      expect(panel.getAttribute('role')).toBe('dialog');
+      expect(panel.getAttribute('aria-modal')).toBe('true');
+      const labelledBy = panel.getAttribute('aria-labelledby');
+      expect(labelledBy).toBeTruthy();
+      expect(document.getElementById(labelledBy).textContent).toBe(payrollLine.employeeName);
+    });
+
+    // Regression guard: the dismiss control used to be hidden by a `.payroll-detail-close`
+    // `display` toggle in styles.css, which never applied -- Button.jsx's own `inline-flex`
+    // utility sits in `layer(utilities)` and always beats `layer(legacy)`. So the button rendered
+    // at every width, including the >=1366px side panel where clicking it is inert (that panel's
+    // visibility is not gated by `detailOpen`). Asserting on presence/absence in the DOM, not on
+    // computed `display`: jsdom applies no stylesheets, so a CSS-only fix would pass this test
+    // while still being dead in the browser.
+    it('renders the close button only in the overlay presentation', async () => {
+      mockPanelViewport(false);
+      const overlay = renderPayrollPage();
+      await openDetailPanel(overlay.container);
+      expect(overlay.container.querySelector('.payroll-detail-close')).not.toBeNull();
+      overlay.unmount();
+
+      mockPanelViewport(true);
+      const sidePanel = renderPayrollPage();
+      await openDetailPanel(sidePanel.container);
+      expect(sidePanel.container.querySelector('.payroll-detail-panel')).not.toBeNull();
+      expect(sidePanel.container.querySelector('.payroll-detail-close')).toBeNull();
+    });
+
+    it('closes the overlay on Escape', async () => {
+      mockPanelViewport(false);
+      const { container } = renderPayrollPage();
+      await openDetailPanel(container);
+      expect(container.querySelector('.payroll-detail-panel').getAttribute('role')).toBe('dialog');
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      const panel = container.querySelector('.payroll-detail-panel');
+      expect(panel.className).not.toContain('is-open');
+      // Closed also means "no longer a dialog" -- role/aria-modal are gated on detailOpen too.
+      expect(panel.getAttribute('role')).toBeNull();
+    });
+
+    it('traps Tab inside the overlay panel, wrapping last back to first', async () => {
+      mockPanelViewport(false);
+      const { container } = renderPayrollPage();
+      await openDetailPanel(container);
+
+      const panel = container.querySelector('.payroll-detail-panel');
+      const focusable = panel.querySelectorAll(
+        'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])',
+      );
+      expect(focusable.length).toBeGreaterThan(1);
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      // Opening the overlay moves focus into it immediately (useDialogFocus's initial-focus step).
+      expect(document.activeElement).toBe(first);
+
+      last.focus();
+      fireEvent.keyDown(document, { key: 'Tab' });
+      expect(document.activeElement).toBe(first);
+    });
+
+    it('does not trap focus or steal it for the >=1366px persistent side panel', async () => {
+      mockPanelViewport(true);
+      const { container } = renderPayrollPage();
+      const previewButton = await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
+      previewButton.focus();
+      expect(document.activeElement).toBe(previewButton);
+
+      fireEvent.click(container.querySelector('tr.data-row'));
+
+      // A side panel beside the table must never steal focus from what the user was doing --
+      // unlike the overlay case above, where opening moves focus into the panel immediately.
+      expect(document.activeElement).toBe(previewButton);
+    });
+  });
+
+  it('ties footer sums to the hero totals exactly, including satang', async () => {
+    const lines = [
+      {
+        ...payrollLine,
+        id: 101,
+        employeeId: 1,
+        employeeName: 'พนักงาน ก',
+        grossEarnings: 100.10,
+        totalDeductions: 0.05,
+        netPay: 100.05,
+      },
+      {
+        ...payrollLine,
+        id: 102,
+        employeeId: 2,
+        employeeCode: 'GLR-002',
+        employeeName: 'พนักงาน ข',
+        grossEarnings: 200.20,
+        totalDeductions: 0.10,
+        netPay: 200.10,
+      },
+    ];
+    api.payroll.current.mockResolvedValue({
+      period: previewPeriod({
+        lineCount: 2,
+        totalGross: 300.30,
+        totalDeductions: 0.15,
+        totalNet: 300.15,
+        totalSocialSecurity: 0.15,
+        lines,
+      }),
+    });
+
+    const { container } = renderPayrollPage();
+
+    expect((await screen.findAllByText('พนักงาน ข')).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    const totalRow = container.querySelector('tfoot .payroll-total-row');
+    expect(totalRow.textContent).toContain('฿300.30');
+    expect(totalRow.textContent).toContain('฿0.15');
+    expect(totalRow.textContent).toContain('฿300.15');
+    expect(totalRow.textContent).toContain('ตรงกับรายได้รวม');
+    expect(totalRow.textContent).toContain('ตรงกับเงินหักรวม');
+    expect(totalRow.textContent).toContain('ตรงกับยอดโอนสุทธิ');
+
+    const mobileSummary = container.querySelector('.payroll-mobile-summary-row');
+    expect(mobileSummary.textContent).toContain('รายได้');
+    expect(mobileSummary.textContent).toContain('หัก');
+    expect(mobileSummary.textContent).toContain('สุทธิ');
+    expect(mobileSummary.textContent).toContain('฿300.30');
+  });
+
+  it('raises a visible reconciliation alert when a line sum does not match the hero total', async () => {
+    const lines = [
+      {
+        ...payrollLine,
+        grossEarnings: 300.30,
+        totalDeductions: 0.15,
+        netPay: 300.15,
+      },
+    ];
+    api.payroll.current.mockResolvedValue({
+      period: previewPeriod({
+        totalGross: 300.31,
+        totalDeductions: 0.15,
+        totalNet: 300.15,
+        totalSocialSecurity: 0.15,
+        lines,
+      }),
+    });
+
+    const { container } = renderPayrollPage();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('ยอดรวมไม่ตรงกับสรุปด้านบน');
+    expect(alert.textContent).toContain('รายได้');
+    expect(alert.textContent).toContain('฿300.30');
+    expect(alert.textContent).toContain('฿300.31');
+
+    const totalRow = container.querySelector('tfoot .payroll-total-row');
+    expect(totalRow.textContent).toContain('ไม่ตรงกับรายได้รวม: ฿300.31');
   });
 
   it('starts payslip email distribution for a processed payroll period', async () => {
@@ -166,23 +638,25 @@ describe('PayrollPage adjustment inputs', () => {
 
     renderPayrollPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: /ส่งอีเมลสลิปเงินเดือน/i }));
+    await openDocumentsMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: /ส่งอีเมลสลิปเงินเดือน/i }));
 
     await waitFor(() => expect(api.payroll.distributePayslips).toHaveBeenCalledWith(7));
   });
 
-  it('Refresh recomputes a processed month live (Preview), never committing', async () => {
+  it('Preview recomputes a processed month live, never committing', async () => {
     // A month that was already Processed loads from its saved snapshot (api.payroll.current) — which
-    // freezes commission/OT/etc. from when it ran. Clicking รีเฟรช must pull the latest via a live
+    // freezes commission/OT/etc. from when it ran. Clicking Preview must pull the latest via a live
     // recompute (api.payroll.preview) and must NOT process/commit the month.
     api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
 
     renderPayrollPage();
 
-    const refreshButton = await screen.findByRole('button', { name: /รีเฟรช/ });
+    const previewButton = await screen.findByRole('button', { name: /คำนวณตัวอย่าง/ });
     expect(api.payroll.preview).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /รีเฟรช/ })).toBeNull();
 
-    fireEvent.click(refreshButton);
+    fireEvent.click(previewButton);
 
     await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
     expect(api.payroll.process).not.toHaveBeenCalled();
@@ -360,19 +834,204 @@ describe('PayrollPage adjustment inputs', () => {
     });
   });
 
+  // F2 (Opus review, 2026-07-30): HR could type a per-diem amount with no basis selector at all --
+  // Preview always succeeded (it never writes a row), then Process 500'd on V97's
+  // chk_payroll_line_per_diem_basis_present CHECK. Fixed by adding the missing amount inputs AND the
+  // basis selector (shown only once an amount is entered), plus a server-side 400 as a second line of
+  // defence (PayrollService#calculateLine).
+  describe('per-diem basis selector (V97 / F2)', () => {
+    async function openPerDiemSection() {
+      fireEvent.click(await screen.findByRole('button', { name: /ค่าอาหาร \/ เบี้ยเลี้ยง/ }));
+      return screen.findByLabelText(/เบี้ยเลี้ยง — ส่วนเกิน \(เสียภาษี\)/, { selector: 'input' });
+    }
+
+    it('hides the basis selector until a per-diem amount is entered', async () => {
+      renderPayrollPage();
+      await openPerDiemSection();
+
+      expect(screen.queryByLabelText(/ฐานเบี้ยเลี้ยง \(มาตรา 42\)/)).toBeNull();
+    });
+
+    it('shows the basis selector once a taxable per-diem amount is entered, and hides it again when cleared', async () => {
+      renderPayrollPage();
+      const taxable = await openPerDiemSection();
+
+      fireEvent.change(taxable, { target: { value: '300' } });
+      const basis = await screen.findByLabelText(/ฐานเบี้ยเลี้ยง \(มาตรา 42\)/, { selector: 'select' });
+      expect(basis).toBeTruthy();
+
+      fireEvent.change(taxable, { target: { value: '' } });
+      await waitFor(() => expect(screen.queryByLabelText(/ฐานเบี้ยเลี้ยง \(มาตรา 42\)/)).toBeNull());
+    });
+
+    it('shows the basis selector for the exempt amount too, not only the taxable one', async () => {
+      renderPayrollPage();
+      fireEvent.click(await screen.findByRole('button', { name: /ค่าอาหาร \/ เบี้ยเลี้ยง/ }));
+      const exempt = await screen.findByLabelText(/เบี้ยเลี้ยง — ส่วนที่ยกเว้นภาษี \(ม\.42\)/, { selector: 'input' });
+
+      fireEvent.change(exempt, { target: { value: '700' } });
+      expect(await screen.findByLabelText(/ฐานเบี้ยเลี้ยง \(มาตรา 42\)/, { selector: 'select' })).toBeTruthy();
+    });
+
+    it('submits the chosen per-diem basis verbatim, matching the backend PerDiemBasis enum', async () => {
+      renderPayrollPage();
+      const taxable = await openPerDiemSection();
+      fireEvent.change(taxable, { target: { value: '300' } });
+      const basis = await screen.findByLabelText(/ฐานเบี้ยเลี้ยง \(มาตรา 42\)/, { selector: 'select' });
+      fireEvent.change(basis, { target: { value: 'REIMBURSED_S42_1' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted.perDiemTaxable).toBe(300);
+      expect(submitted.perDiemBasis).toBe('REIMBURSED_S42_1');
+    });
+
+    it('sends perDiemBasis as null, never a blank string, when no per-diem amount is entered', async () => {
+      renderPayrollPage();
+      await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted).toBeDefined();
+      expect(submitted.perDiemBasis).toBeNull();
+    });
+
+    // The backend now rejects this before the INSERT (see PayrollService#calculateLine's F2 fix) with
+    // a 400 naming the employee and the missing basis, instead of the DB CHECK constraint turning it
+    // into a bare 500. This proves the page surfaces that rejection cleanly rather than swallowing it.
+    it('surfaces the backend rejection cleanly when Process is attempted without a chosen basis', async () => {
+      const showToast = vi.fn();
+      api.payroll.process.mockRejectedValue(new Error(
+        'พนักงาน GLR-001 พนักงาน ทดสอบ มีการจ่ายเบี้ยเลี้ยง (เบี้ยเลี้ยง ตจว/ตปท) แต่ไม่ได้ระบุฐานตามมาตรา 42'
+        + ' (เหมาจ่ายตามอัตราราชการ มาตรา 42(2) หรือจ่ายจริงตามหน้าที่ มาตรา 42(1)) กรุณาเลือกฐานก่อนประมวลผลเงินเดือน',
+      ));
+      render(<PayrollPage user={hrUser} showToast={showToast} />);
+      const taxable = await openPerDiemSection();
+      fireEvent.change(taxable, { target: { value: '300' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /ประมวลผลเงินเดือน/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /ยืนยันประมวลผล/i }));
+
+      await waitFor(() => expect(api.payroll.process).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('กรุณาเลือกฐานก่อนประมวลผลเงินเดือน')));
+    });
+  });
+
   it('generates the selected statutory export file with the chosen pay date', async () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
 
     renderPayrollPage();
 
-    // Pick PND1 from the dropdown, then download.
-    const kindSelect = await screen.findByLabelText('ประเภทไฟล์ที่จะสร้าง');
-    fireEvent.change(kindSelect, { target: { value: 'pnd1' } });
-    fireEvent.click(screen.getByRole('button', { name: /ดาวน์โหลดไฟล์/ }));
+    await openDocumentsMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: /ดาวน์โหลด ภ\.ง\.ด\.1/ }));
 
     // Pay date defaults to the 26th of the current payroll month (kept month-agnostic here).
     await waitFor(() => expect(api.payroll.exportFile)
       .toHaveBeenCalledWith(7, 'pnd1', expect.stringMatching(/^\d{4}-\d{2}-26$/)));
+  });
+
+  // The detailed payroll xlsx export -- reachable from the same document menu as the three
+  // statutory kinds, per PayrollController#export's slug ∈ {kbank,pnd1,sso,payroll-detail}.
+  it('reaches the detailed payroll xlsx export from the same document menu and downloads it as .xlsx', async () => {
+    api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
+    api.payroll.exportFile.mockResolvedValue(new Blob(['PK'], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }));
+    const showToast = vi.fn();
+
+    render(<PayrollPage user={hrUser} showToast={showToast} />);
+
+    await openDocumentsMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: /รายละเอียดเงินเดือนรายเดือน/ }));
+
+    await waitFor(() => expect(api.payroll.exportFile)
+      .toHaveBeenCalledWith(7, 'payroll-detail', expect.stringMatching(/^\d{4}-\d{2}-26$/)));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('รายละเอียดเงินเดือนรายเดือน')));
+  });
+
+  // Owner requirement (2026-07-30): "July 2026 is live and still unprocessed... HR's whole reason
+  // to want this file is to review the month BEFORE committing it." Unlike KBank/PND1/SSO, the
+  // detail export button must work with NO persisted period (id === null) -- it POSTs the same
+  // payrollMonth/inputs payload Preview/Process already send, so the workbook always matches
+  // whatever the on-screen preview shows for those inputs.
+  it('downloads the detail xlsx for an unprocessed preview (period.id === null) via the preview-export endpoint', async () => {
+    api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: null, status: 'PREVIEW', lineCount: 1 }) });
+    api.payroll.exportPreviewFile.mockResolvedValue(new Blob(['PK'], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }));
+    const showToast = vi.fn();
+
+    render(<PayrollPage user={hrUser} showToast={showToast} />);
+
+    await openDocumentsMenu();
+    const detailItem = screen.getByRole('menuitem', { name: /รายละเอียดเงินเดือนรายเดือน/ });
+    expect(detailItem.getAttribute('aria-disabled')).toBeNull(); // reachable even though period.id is null
+    fireEvent.click(detailItem);
+
+    await waitFor(() => expect(api.payroll.exportPreviewFile).toHaveBeenCalledTimes(1));
+    const [payloadArg, kindArg] = api.payroll.exportPreviewFile.mock.calls[0];
+    expect(kindArg).toBe('payroll-detail');
+    expect(payloadArg.payrollMonth).toBe(`${thisMonth}-01`);
+    expect(api.payroll.exportFile).not.toHaveBeenCalled();
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('รายละเอียดเงินเดือนรายเดือน')));
+  });
+
+  it('keeps the three statutory export kinds gated on a real period id even though payroll-detail is not', async () => {
+    api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: null, status: 'PREVIEW', lineCount: 1 }) });
+
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+
+    await openDocumentsMenu();
+    const kbankItem = screen.getByRole('menuitem', { name: /KBank Payroll/ });
+    expect(kbankItem.getAttribute('aria-disabled')).toBe('true');
+    expect(kbankItem.textContent).toContain('ต้องมีรอบเงินเดือนที่บันทึกแล้วก่อน');
+  });
+
+  // Bulk payslip ZIP (owner requirement, 2026-07-30): "hr should be able to bulk download payslip
+  // before emailing to all employee for recheck". It now lives in the เอกสาร menu with the email
+  // action, and -- unlike the detail xlsx export -- only works for a
+  // genuinely PROCESSED period.
+  describe('Bulk payslip ZIP download', () => {
+    it('renders next to the email button and hits the payslips.zip endpoint for a processed period', async () => {
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
+      api.payroll.downloadPayslipsZip.mockResolvedValue(new Blob(['PK'], { type: 'application/zip' }));
+      const showToast = vi.fn();
+
+      render(<PayrollPage user={hrUser} showToast={showToast} />);
+
+      await openDocumentsMenu();
+      const zipItem = screen.getByRole('menuitem', { name: /ดาวน์โหลดสลิปเงินเดือนทั้งหมด/ });
+      expect(zipItem.getAttribute('aria-disabled')).toBeNull();
+      fireEvent.click(zipItem);
+
+      await waitFor(() => expect(api.payroll.downloadPayslipsZip).toHaveBeenCalledWith(7));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('ดาวน์โหลดสลิปเงินเดือนทั้งหมด')));
+    });
+
+    it('is disabled for an unprocessed period (no periodId yet)', async () => {
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: null, status: 'PREVIEW' }) });
+
+      render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+
+      await openDocumentsMenu();
+      const zipItem = screen.getByRole('menuitem', { name: /ดาวน์โหลดสลิปเงินเดือนทั้งหมด/ });
+      expect(zipItem.getAttribute('aria-disabled')).toBe('true');
+      expect(zipItem.textContent).toContain('ต้องมีรอบเงินเดือนที่บันทึกแล้วก่อน');
+    });
+
+    it('is disabled for a VOID period even though it has a real periodId', async () => {
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 1, status: 'VOID' }) });
+
+      render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+
+      await openDocumentsMenu();
+      const zipItem = screen.getByRole('menuitem', { name: /ดาวน์โหลดสลิปเงินเดือนทั้งหมด/ });
+      expect(zipItem.getAttribute('aria-disabled')).toBe('true');
+      expect(zipItem.textContent).toContain('ต้องประมวลผลเงินเดือนก่อนสร้างเอกสารนี้');
+    });
   });
 
   // F1: PayrollService#process (backend) doesn't need a period id -- it recomputes from
@@ -412,5 +1071,425 @@ describe('PayrollPage adjustment inputs', () => {
       const processButton = screen.getByRole('button', { name: /ประมวลผลเงินเดือน/i });
       expect(processButton.getAttribute('aria-describedby')).toBe(reason.id);
     });
+
+    // Issue #394 fix: the process region's border used to be danger-red
+    // unconditionally, so an unmet precondition (no data loaded yet) looked
+    // like a failure rather than a disabled control waiting on data.
+    it('borders the process region neutral, not danger, while blocked on an empty period', async () => {
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ lineCount: 0, lines: [] }) });
+      renderPayrollPage();
+
+      const blockedButton = await screen.findByRole('button', { name: /ประมวลผลเงินเดือน/i });
+      await waitFor(() => expect(blockedButton.disabled).toBe(true));
+      const blockedRegion = blockedButton.closest('.payroll-process-region');
+      expect(blockedRegion.className).toContain('border-border');
+      expect(blockedRegion.className).not.toContain('border-danger-border');
+    });
+
+    it('borders the process region danger once a real period is loaded and armed', async () => {
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ lineCount: 1 }) });
+      renderPayrollPage();
+
+      const armedButton = await screen.findByRole('button', { name: /ประมวลผลเงินเดือน/i });
+      await waitFor(() => expect(armedButton.disabled).toBe(false));
+      const armedRegion = armedButton.closest('.payroll-process-region');
+      expect(armedRegion.className).toContain('border-danger-border');
+    });
+
+    it('keeps Preview visually primary and demotes Process into its own status region', async () => {
+      renderPayrollPage();
+
+      const previewButton = await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
+      const documentsButton = screen.getByRole('button', { name: 'เอกสาร' });
+      const processButton = screen.getByRole('button', { name: /ประมวลผลเงินเดือน/i });
+      const processRegion = processButton.closest('.payroll-process-region');
+
+      expect(previewButton.className).toContain('bg-primary');
+      expect(documentsButton.textContent).toContain('เอกสาร');
+      expect(screen.queryByRole('button', { name: /รีเฟรช/i })).toBeNull();
+      expect(screen.queryByLabelText('ประเภทไฟล์ที่จะสร้าง')).toBeNull();
+      expect(screen.queryByRole('button', { name: /ดาวน์โหลดไฟล์/i })).toBeNull();
+      expect(processButton.className).toContain('text-danger');
+      expect(processButton.className).not.toContain('bg-primary');
+      expect(processRegion).toBeTruthy();
+      expect(processRegion.textContent).toContain('ปิดรอบเงินเดือน');
+      expect(processRegion.textContent).toContain('ตัวอย่าง');
+      expect(processRegion.textContent).toContain('1 คน');
+    });
+
+    it('names employee count and the OT/no-unprocess consequence in the Process confirmation', async () => {
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ lineCount: 1 }) });
+
+      renderPayrollPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /ประมวลผลเงินเดือน/i }));
+
+      const dialog = await screen.findByRole('dialog', { name: /ประมวลผลเงินเดือน/i });
+      expect(dialog.textContent).toContain('พนักงาน 1 คน');
+      expect(dialog.textContent).toContain('การอนุมัติ OT ของเดือนนี้จะปิดทันที');
+      expect(dialog.textContent).toContain('ไม่มีทางยกเลิกการประมวลผล');
+    });
+
+    it('allows Process on phone only after the mobile-only typed confirmation phrase', async () => {
+      mockPayrollViewport({ mobile: true });
+      api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: null, lineCount: 1 }) });
+
+      renderPayrollPage();
+
+      const processButton = await screen.findByRole('button', { name: /ประมวลผลเงินเดือน/i });
+      await waitFor(() => expect(processButton.disabled).toBe(false));
+      expect(screen.queryByText(/ปิดใช้งานบนหน้าจอมือถือ/)).toBeNull();
+
+      fireEvent.click(processButton);
+
+      const dialog = await screen.findByRole('dialog', { name: /ประมวลผลเงินเดือน/i });
+      const confirmButton = within(dialog).getByRole('button', { name: /ยืนยันประมวลผล/i });
+      const phrase = within(dialog).getByLabelText('ยืนยันบนมือถือ');
+      expect(confirmButton.disabled).toBe(true);
+
+      fireEvent.change(phrase, { target: { value: 'ยืนยัน' } });
+      expect(confirmButton.disabled).toBe(true);
+      expect(within(dialog).getByText(/พิมพ์คำว่า ประมวลผล/)).toBeTruthy();
+
+      fireEvent.change(phrase, { target: { value: 'ประมวลผล' } });
+      expect(confirmButton.disabled).toBe(false);
+
+      fireEvent.click(confirmButton);
+      await waitFor(() => expect(api.payroll.process).toHaveBeenCalledTimes(1));
+    });
+  });
+
+  // P1 fix (Opus review, 2026-07-30): bonusPay/otherOneOffPay/garnishmentType/
+  // customerReturnAlreadyEarned existed end-to-end on the backend with no input anywhere on this page.
+  describe('one-off pay, garnishment type, and customer-return-earned flag (P1)', () => {
+    it('submits bonusPay and otherOneOffPay from the "เงินก้อนพิเศษ" section', async () => {
+      renderPayrollPage();
+      fireEvent.click(await screen.findByRole('button', { name: /เงินก้อนพิเศษ \(จ่ายครั้งเดียว\)/ }));
+      const bonus = await screen.findByLabelText(/เงินโบนัส/, { selector: 'input' });
+      const oneOff = await screen.findByLabelText(/เงินก้อนอื่นๆ \(ครั้งเดียว\)/, { selector: 'input' });
+
+      fireEvent.change(bonus, { target: { value: '20000' } });
+      fireEvent.change(oneOff, { target: { value: '1500' } });
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted.bonusPay).toBe(20000);
+      expect(submitted.otherOneOffPay).toBe(1500);
+    });
+
+    async function openIndividualDeductionsSection() {
+      fireEvent.click(await screen.findByRole('button', { name: /รายการหักรายบุคคล/ }));
+      return screen.findByLabelText(/หักอายัดกรมบังคับคดี/, { selector: 'input' });
+    }
+
+    it('hides the garnishment-type selector until an amount is entered under หักอายัดกรมบังคับคดี', async () => {
+      renderPayrollPage();
+      await openIndividualDeductionsSection();
+
+      expect(screen.queryByLabelText(/ประเภทเงินที่ถูกอายัด/)).toBeNull();
+    });
+
+    it('shows the garnishment-type selector once an amount is entered, and submits it verbatim', async () => {
+      renderPayrollPage();
+      const legalExecution = await openIndividualDeductionsSection();
+
+      fireEvent.change(legalExecution, { target: { value: '5000' } });
+      const garnishmentType = await screen.findByLabelText(/ประเภทเงินที่ถูกอายัด/, { selector: 'select' });
+      fireEvent.change(garnishmentType, { target: { value: 'OVERTIME_OR_DILIGENCE' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted.legalExecutionDeduction).toBe(5000);
+      expect(submitted.garnishmentType).toBe('OVERTIME_OR_DILIGENCE');
+    });
+
+    it('sends garnishmentType as null, never a blank string, when no garnishment amount is entered', async () => {
+      renderPayrollPage();
+      await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted).toBeDefined();
+      expect(submitted.garnishmentType).toBeNull();
+    });
+
+    it('hides the customer-return-earned checkbox until a return amount is entered, defaults to false', async () => {
+      renderPayrollPage();
+      fireEvent.click(await screen.findByRole('button', { name: /รายการหักก่อนภาษี/, expanded: false }));
+      const customerReturn = await screen.findByLabelText(/หักลูกค้าคืนสินค้า/, { selector: 'input' });
+
+      expect(screen.queryByLabelText(/คอมมิชชันนี้รับไปแล้ว/)).toBeNull();
+
+      fireEvent.change(customerReturn, { target: { value: '3000' } });
+      const alreadyEarned = await screen.findByLabelText(/คอมมิชชันนี้รับไปแล้ว/, { selector: 'input' });
+      expect(alreadyEarned.checked).toBe(false);
+
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted.customerReturnDeduction).toBe(3000);
+      expect(submitted.customerReturnAlreadyEarned).toBe(false);
+    });
+
+    it('submits customerReturnAlreadyEarned = true once HR ticks the box', async () => {
+      renderPayrollPage();
+      fireEvent.click(await screen.findByRole('button', { name: /รายการหักก่อนภาษี/, expanded: false }));
+      const customerReturn = await screen.findByLabelText(/หักลูกค้าคืนสินค้า/, { selector: 'input' });
+      fireEvent.change(customerReturn, { target: { value: '3000' } });
+      const alreadyEarned = await screen.findByLabelText(/คอมมิชชันนี้รับไปแล้ว/, { selector: 'input' });
+
+      fireEvent.click(alreadyEarned);
+      fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+
+      await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
+      const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
+      expect(submitted.customerReturnAlreadyEarned).toBe(true);
+    });
+
+    // D1 fix (fourth reachability audit, 2026-07-30): a processed line's customerReturnDeduction is
+    // the POST-TAX bookkeeping figure -- 0 in the unearned path, where the amount was instead netted
+    // pre-tax out of commission. Hydrating the form from THAT field (the pre-fix bug) silently wiped
+    // both the amount and the checkbox (which only renders once the field is > 0) on every reload.
+    // customerReturnRequested always carries what HR actually typed, regardless of the earned flag.
+    it('hydrates the entered amount (and keeps the checkbox visible) from customerReturnRequested on reload, not the zeroed post-tax figure', async () => {
+      api.payroll.current.mockResolvedValue({
+        period: previewPeriod({
+          id: 7,
+          status: 'PROCESSED',
+          lines: [{
+            ...payrollLine,
+            customerReturnDeduction: 0, // the unearned path's post-tax bookkeeping figure -- always 0
+            customerReturnRequested: 3000, // what HR actually typed
+            customerReturnAlreadyEarned: false,
+          }],
+        }),
+      });
+
+      renderPayrollPage();
+      fireEvent.click(await screen.findByRole('button', { name: /รายการหักก่อนภาษี/, expanded: false }));
+      const customerReturn = await screen.findByLabelText(/หักลูกค้าคืนสินค้า/, { selector: 'input' });
+
+      expect(customerReturn.value).toBe('3000');
+      // The checkbox's render gate is `> 0` on this same field -- if hydration had read the zeroed
+      // customerReturnDeduction instead, findByLabelText below would reject (no such element) rather
+      // than resolve.
+      const alreadyEarned = await screen.findByLabelText(/คอมมิชชันนี้รับไปแล้ว/, { selector: 'input' });
+      expect(alreadyEarned.checked).toBe(false);
+    });
+  });
+
+  // P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix screen. Without a
+  // real screen, HR had no way to satisfy PayrollCalculator#calculateClassified's classification
+  // gate for any component beyond the V100 backfill defaults.
+  describe('withholding-tax classification matrix (P0)', () => {
+    it('loads the matrix on mount and shows an unclassified count per employee', async () => {
+      api.payroll.getComponentTaxTreatments.mockResolvedValue({
+        taxYear: 2026,
+        items: [{ employeeId: 1, employeeCode: 'GLR-001', employeeName: 'พนักงาน ทดสอบ', byComponent: {} }],
+      });
+      renderPayrollPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /การจัดประเภทภาษีหัก ณ ที่จ่าย/ }));
+      await waitFor(() => expect(api.payroll.getComponentTaxTreatments).toHaveBeenCalledWith(2026));
+      expect(await screen.findByRole('button', { name: /พนักงาน ทดสอบ \(GLR-001\)/ })).toBeTruthy();
+    });
+
+    it('saves an edited classification and reflects the server response', async () => {
+      api.payroll.getComponentTaxTreatments.mockResolvedValue({
+        taxYear: 2026,
+        items: [{ employeeId: 1, employeeCode: 'GLR-001', employeeName: 'พนักงาน ทดสอบ', byComponent: {} }],
+      });
+      api.payroll.saveComponentTaxTreatments.mockResolvedValue({
+        taxYear: 2026,
+        items: [{
+          employeeId: 1, employeeCode: 'GLR-001', employeeName: 'พนักงาน ทดสอบ',
+          byComponent: { SPECIAL_PAY_1: 'REGULAR_REPROJECT' },
+        }],
+      });
+      renderPayrollPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /การจัดประเภทภาษีหัก ณ ที่จ่าย/ }));
+      fireEvent.click(await screen.findByRole('button', { name: /พนักงาน ทดสอบ \(GLR-001\)/ }));
+      const specialPay1 = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/, { selector: 'select' });
+
+      fireEvent.change(specialPay1, { target: { value: 'REGULAR_REPROJECT' } });
+      fireEvent.click(screen.getByRole('button', { name: /บันทึกการจัดประเภท/ }));
+
+      await waitFor(() => expect(api.payroll.saveComponentTaxTreatments).toHaveBeenCalledWith(2026, [
+        { employeeId: 1, component: 'SPECIAL_PAY_1', taxTreatment: 'REGULAR_REPROJECT' },
+      ]));
+    });
+
+    // Sixth Opus review, 2026-07-30: `byComponent` now carries the EFFECTIVE classification
+    // (server-synthesized defaults merged in), so every cell renders non-blank and the section badge
+    // reads "จัดประเภทครบแล้ว" even when nobody has chosen anything. The per-cell
+    // "ค่าเริ่มต้นของระบบ" hint, keyed off `explicitlyClassifiedComponents`, is the ONLY thing left
+    // that tells HR "the system is defaulting this" from "someone chose this" — the branch's own
+    // stated back-loading-risk mitigation. It shipped with no test; this is it, written wrong-way-round
+    // (the explicitly-classified cell must NOT carry the hint).
+    it('flags a synthesized default but not a cell HR actually classified', async () => {
+      api.payroll.getComponentTaxTreatments.mockResolvedValue({
+        taxYear: 2026,
+        items: [{
+          employeeId: 1,
+          employeeCode: 'GLR-001',
+          employeeName: 'พนักงาน ทดสอบ',
+          byComponent: {
+            SPECIAL_PAY_1: 'EXTRA_CUMULATIVE_ACTUAL',
+            SPECIAL_PAY_2: 'REGULAR_REPROJECT',
+          },
+          explicitlyClassifiedComponents: ['SPECIAL_PAY_2'],
+        }],
+      });
+      renderPayrollPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: /การจัดประเภทภาษีหัก ณ ที่จ่าย/ }));
+      fireEvent.click(await screen.findByRole('button', { name: /พนักงาน ทดสอบ \(GLR-001\)/ }));
+
+      const defaulted = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/, { selector: 'select' });
+      const chosenByHr = await screen.findByLabelText(/พิเศษ 2 \(ค่าเช่าบ้าน\)/, { selector: 'select' });
+
+      expect(defaulted.value).toBe('EXTRA_CUMULATIVE_ACTUAL');
+      expect(chosenByHr.value).toBe('REGULAR_REPROJECT');
+      expect(defaulted.closest('label').textContent).toContain('ค่าเริ่มต้นของระบบ');
+      expect(chosenByHr.closest('label').textContent).not.toContain('ค่าเริ่มต้นของระบบ');
+    });
+  });
+});
+
+// Split (issue #390): PayrollController grants CEO the same read access as HR (every GET, plus
+// the non-persisting POST /preview and /preview/export/{kind}, is
+// @PreAuthorize("hasAnyRole('HR','CEO')")) but keeps every write hasRole('HR') only (process, PUT
+// input-draft, PUT component-tax-treatments, POST distribute). `PayrollPage` now takes a `user`
+// prop and derives `canManage = hasPermission(user?.role, 'canManagePayroll')` from it -- an
+// ALLOWLIST read off ROLE_PERMISSIONS, not a `role !== 'ceo'` denylist, so an absent/unknown user
+// reads as NO management access (hasPermission(undefined, ...) is false). These tests pin down
+// the negative case (CEO cannot reach or see the mutating controls), which is the one that
+// actually matters; the positive "HR still has them" case is the pre-existing suite above, which
+// now passes the module-level `hrUser` explicitly through `renderPayrollPage()`.
+describe('PayrollPage read-only CEO view (issue #390)', () => {
+  const ceoUser = { role: 'ceo', employeeId: 99 };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    URL.createObjectURL = vi.fn(() => 'blob:payslip');
+    URL.revokeObjectURL = vi.fn();
+    api.payroll.current.mockResolvedValue({ period: previewPeriod() });
+    api.payroll.preview.mockResolvedValue({ period: previewPeriod() });
+    api.payroll.downloadPayslip.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }));
+    api.payroll.exportFile.mockResolvedValue(new Blob(['HPCT'], { type: 'application/octet-stream' }));
+    api.payroll.distributePayslips.mockResolvedValue({ periodId: 7, totalLines: 1, alreadySent: 0, queued: 1 });
+    api.payroll.suggestedInputs.mockResolvedValue({ payrollMonth: '2026-07-01', suggestions: [] });
+    api.payroll.getInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
+    api.payroll.saveInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
+    api.payroll.getComponentTaxTreatments.mockResolvedValue({ taxYear: 2026, items: [] });
+    api.payroll.saveComponentTaxTreatments.mockResolvedValue({ taxYear: 2026, items: [] });
+  });
+
+  afterEach(() => {
+    if (originalMatchMedia) {
+      window.matchMedia = originalMatchMedia;
+    } else {
+      delete window.matchMedia;
+    }
+  });
+
+  it('shows the read-only oversight badge for CEO and hides it for HR', async () => {
+    const { unmount } = render(<PayrollPage user={ceoUser} showToast={vi.fn()} />);
+    await screen.findByText('มุมมองสำหรับผู้บริหาร — อ่านอย่างเดียว');
+    unmount();
+
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+    await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
+    expect(screen.queryByText('มุมมองสำหรับผู้บริหาร — อ่านอย่างเดียว')).toBeNull();
+  });
+
+  // The test that matters: CEO cannot reach ประมวลผลเงินเดือน (POST /process, hasRole('HR')
+  // only) at all -- not present in the DOM, not merely disabled. HR keeps it, same as every
+  // pre-existing test in this file that never passes a `user` prop.
+  it('never renders the ประมวลผลเงินเดือน (process) button for CEO, while HR still has it', async () => {
+    const { unmount } = render(<PayrollPage user={ceoUser} showToast={vi.fn()} />);
+    await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
+    expect(screen.queryByRole('button', { name: /ประมวลผลเงินเดือน/i })).toBeNull();
+    // The read-only replacement still surfaces the period status/headcount as plain text, scoped
+    // to its own labelled region (the table's footer row also renders "N คน", so an unscoped text
+    // query would ambiguously match both).
+    const statusRegion = screen.getByRole('region', { name: 'สถานะรอบเงินเดือน' });
+    expect(within(statusRegion).getByText(`${previewPeriod().lineCount} คน`)).toBeTruthy();
+    unmount();
+
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+    expect(await screen.findByRole('button', { name: /ประมวลผลเงินเดือน/i })).toBeTruthy();
+  });
+
+  it('drops the ส่งอีเมลสลิปเงินเดือน (HR-only distribute) menu item for CEO but keeps the document exports and bulk payslip zip', async () => {
+    api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
+    render(<PayrollPage user={ceoUser} showToast={vi.fn()} />);
+
+    const menu = await openDocumentsMenu();
+    expect(within(menu).queryByRole('menuitem', { name: /ส่งอีเมลสลิปเงินเดือน/i })).toBeNull();
+    expect(within(menu).getByRole('menuitem', { name: /ดาวน์โหลด ภ\.ง\.ด\.1/ })).toBeTruthy();
+    expect(within(menu).getByRole('menuitem', { name: /ดาวน์โหลดสลิปเงินเดือนทั้งหมด/ })).toBeTruthy();
+  });
+
+  it('lets CEO still download a saved payslip -- exports and payslip reads stay hasAnyRole(HR,CEO)', async () => {
+    api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
+    render(<PayrollPage user={ceoUser} showToast={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^ดาวน์โหลดสลิป$/i }));
+    await waitFor(() => expect(api.payroll.downloadPayslip).toHaveBeenCalledWith(7, 55));
+  });
+
+  it('disables every special-pay input for CEO in the detail panel instead of hiding the read (input-draft GET is hasAnyRole(HR,CEO))', async () => {
+    render(<PayrollPage user={ceoUser} showToast={vi.fn()} />);
+
+    const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
+    const gprs = screen.getByLabelText(/พิเศษ 6 \(ค่า GPRS\)/);
+    // The value is still visible (a granted read) -- only editing is blocked.
+    expect(costOfLiving.value).toBe('500');
+    expect(costOfLiving.disabled).toBe(true);
+    expect(gprs.disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: /รายการหักรายบุคคล/ }));
+    const unpaidLeaveDays = screen.getByLabelText(/วันลาไม่รับค่าจ้าง/, { selector: 'input' });
+    const withholdingOverride = screen.getByLabelText(/ภาษีหัก ณ ที่จ่าย \(กำหนดเอง\)/, { selector: 'input' });
+    expect(unpaidLeaveDays.disabled).toBe(true);
+    expect(withholdingOverride.disabled).toBe(true);
+  });
+
+  // canSaveDraft now requires canManage -- PUT /input-draft is hasRole('HR') only, so the
+  // autosave status badge (and the autosave itself, since the inputs it would fire from are
+  // disabled above) must not appear for a CEO session at all.
+  it('never shows the draft-autosave status badge for CEO', async () => {
+    render(<PayrollPage user={ceoUser} showToast={vi.fn()} />);
+    await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('disables the tax-treatment classification selects for CEO and hides the บันทึกการจัดประเภท save button', async () => {
+    api.payroll.getComponentTaxTreatments.mockResolvedValue({
+      taxYear: 2026,
+      items: [{
+        employeeId: 1,
+        employeeName: 'พนักงาน ทดสอบ',
+        employeeCode: 'GLR-001',
+        byComponent: { SPECIAL_PAY_1: 'REGULAR_REPROJECT' },
+        explicitlyClassifiedComponents: ['SPECIAL_PAY_1'],
+      }],
+    });
+    render(<PayrollPage user={ceoUser} showToast={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /การจัดประเภทภาษีหัก ณ ที่จ่าย/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /พนักงาน ทดสอบ \(GLR-001\)/ }));
+
+    const treatmentSelect = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/, { selector: 'select' });
+    expect(treatmentSelect.disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: /บันทึกการจัดประเภท/ })).toBeNull();
+    // รีเฟรช (GET only) stays available -- reads are still hasAnyRole(HR,CEO).
+    expect(screen.getByRole('button', { name: /รีเฟรช/ })).toBeTruthy();
   });
 });

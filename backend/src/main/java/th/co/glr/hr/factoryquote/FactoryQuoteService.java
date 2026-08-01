@@ -99,7 +99,7 @@ public class FactoryQuoteService {
         PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId);
         if (!DRAFT_STATUSES.contains(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "Pricing request must be under Import review before factory quote drafts can be generated");
+                "ใบขอราคาต้องอยู่ระหว่างการตรวจสอบของฝ่ายนำเข้าก่อนจึงจะสร้างร่างอีเมลราคาโรงงานได้");
         }
         requireActiveDeal(summary.ticketId());
         List<PricingRequestItemDto> items = pricingRequests.findItems(pricingRequestId);
@@ -147,7 +147,7 @@ public class FactoryQuoteService {
         requireMutablePricingRequest(summary, DRAFT_STATUSES);
         requireActiveDeal(summary.ticketId());
         if (!quotes.updateDraft(quoteId, request.emailTo(), request.emailSubject(), request.emailBody(), request.note())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Only draft factory quote emails can be edited");
+            throw new ApiException(HttpStatus.CONFLICT, "แก้ไขได้เฉพาะอีเมลราคาโรงงานที่ยังเป็นฉบับร่างเท่านั้น");
         }
         return requireQuote(quoteId);
     }
@@ -175,7 +175,7 @@ public class FactoryQuoteService {
         String subject = firstText(request.emailSubject(), quote.emailSubject());
         String body = firstText(request.emailBody(), quote.emailBody());
         if (emailTo == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Factory email recipient is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุผู้รับอีเมลโรงงาน");
         }
         String clientRequestId = validateClientRequestId(request.clientRequestId());
         dispatchForSend(quoteId, clientRequestId, emailTo, subject, body, actor);
@@ -212,7 +212,7 @@ public class FactoryQuoteService {
      */
     public void attemptSend(long dispatchId) {
         FactoryQuoteEmailDispatchDto dispatch = quotes.findDispatch(dispatchId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Factory quote dispatch not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการส่งอีเมลราคาโรงงานนี้"));
         if (dispatch.providerMessageId() != null) {
             return;
         }
@@ -268,7 +268,7 @@ public class FactoryQuoteService {
     @Transactional
     public FactoryQuoteDto finalizeDispatch(long dispatchId) {
         FactoryQuoteEmailDispatchDto dispatch = quotes.findDispatch(dispatchId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Factory quote dispatch not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการส่งอีเมลราคาโรงงานนี้"));
         FactoryQuoteDto quote = requireQuote(dispatch.factoryQuoteId());
         if (dispatch.finalizedAt() != null) {
             return quote;
@@ -279,7 +279,7 @@ public class FactoryQuoteService {
         FactoryQuoteDto requestedQuote = requireQuote(quote.id());
         if (!FactoryQuoteStatus.REQUESTED.equals(requestedQuote.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "Factory quote " + quote.id() + " cannot be finalized from status " + requestedQuote.status());
+                "ใบเสนอราคาโรงงาน " + quote.id() + " ไม่สามารถปิดจบได้จากสถานะ " + requestedQuote.status());
         }
 
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
@@ -288,7 +288,7 @@ public class FactoryQuoteService {
             int transitioned = pricingRequests.transition(summary.id(), summary.status(),
                 PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
             if (transitioned == 0) {
-                throw new ApiException(HttpStatus.CONFLICT, "Pricing request was changed by another user");
+                throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
             }
         }
         PricingRequestSummaryDto currentSummary = requirePricingRequest(quote.pricingRequestId());
@@ -360,7 +360,7 @@ public class FactoryQuoteService {
     public FactoryQuoteAttachmentDto getAttachment(long attachmentId, UserPrincipal actor) {
         requireRole(actor, RAW_QUOTE_ROLES);
         FactoryQuoteAttachmentDto attachment = quotes.findAttachment(attachmentId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Factory quote attachment not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบราคาโรงงานนี้"));
         requireQuote(attachment.factoryQuoteId());
         return attachment;
     }
@@ -369,7 +369,7 @@ public class FactoryQuoteService {
         getAttachment(attachmentId, actor);
         String path = quotes.findAttachmentFilePath(attachmentId);
         if (path == null) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "Factory quote attachment file not found");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบราคาโรงงานนี้");
         }
         return path;
     }
@@ -400,24 +400,24 @@ public class FactoryQuoteService {
     public void deleteAttachment(long attachmentId, String reason, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
         FactoryQuoteAttachmentDto attachment = quotes.findAttachment(attachmentId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Factory quote attachment not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบราคาโรงงานนี้"));
         if (attachment.deletedAt() != null) {
-            throw new ApiException(HttpStatus.CONFLICT, "Factory quote attachment was already deleted");
+            throw new ApiException(HttpStatus.CONFLICT, "ไฟล์แนบนี้ถูกลบไปแล้ว");
         }
         FactoryQuoteDto quote = requireQuote(attachment.factoryQuoteId());
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
         requireMutablePricingRequest(summary, ATTACHMENT_DELETE_STATUSES);
         if (FactoryQuoteStatus.READY_FOR_COSTING.equals(quote.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "Factory quote attachment cannot be deleted once the quote is ready for costing");
+                "ไม่สามารถลบไฟล์แนบได้ เนื่องจากใบเสนอราคาโรงงานพร้อมสำหรับการคำนวณต้นทุนแล้ว");
         }
         if (quotes.existsSubmittedCostingReferencingQuote(quote.id())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "Factory quote attachment cannot be deleted: referenced by a submitted costing");
+                "ไม่สามารถลบไฟล์แนบนี้ได้ เนื่องจากถูกอ้างอิงโดยการคำนวณต้นทุนที่ส่งไปแล้ว");
         }
         int rows = quotes.tombstoneAttachment(attachmentId, actor.id(), reason);
         if (rows == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "Factory quote attachment could not be deleted");
+            throw new ApiException(HttpStatus.CONFLICT, "ไม่สามารถลบไฟล์แนบนี้ได้");
         }
     }
 
@@ -428,7 +428,7 @@ public class FactoryQuoteService {
         if (existingForClient != null) {
             if (existingForClient.factoryQuoteId() != quoteId) {
                 throw new ApiException(HttpStatus.CONFLICT,
-                    "clientRequestId has already been used for another factory quote");
+                    "clientRequestId นี้ถูกใช้ไปแล้วกับใบเสนอราคาโรงงานอื่น");
             }
             return existingForClient;
         }
@@ -462,12 +462,12 @@ public class FactoryQuoteService {
             // wrong factory's quote (which would discard this call's response with a 200).
             if (chainId(receiptQuote) != chainId(current)) {
                 throw new ApiException(HttpStatus.CONFLICT,
-                    "clientRequestId has already been used for another factory quote");
+                    "clientRequestId นี้ถูกใช้ไปแล้วกับใบเสนอราคาโรงงานอื่น");
             }
             return receiptQuote;
         }
         if (!current.current()) {
-            throw new ApiException(HttpStatus.CONFLICT, "Only the current factory quote revision can receive a response");
+            throw new ApiException(HttpStatus.CONFLICT, "รับคำตอบได้เฉพาะ revision ล่าสุดของใบเสนอราคาโรงงานเท่านั้น");
         }
         PricingRequestSummaryDto summary = requirePricingRequest(current.pricingRequestId());
         requireMutablePricingRequest(summary, RESPONSE_STATUSES);
@@ -492,7 +492,7 @@ public class FactoryQuoteService {
                         return racedQuote;
                     }
                 }
-                throw new ApiException(HttpStatus.CONFLICT, "Factory quote was changed by another user");
+                throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาโรงงานถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
             }
             quotes.replaceResponseItems(quoteId, normalizedItems);
             String toStatus = summary.status();
@@ -506,7 +506,7 @@ public class FactoryQuoteService {
                 int transitioned = pricingRequests.transition(summary.id(), summary.status(),
                     PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
                 if (transitioned == 0) {
-                    throw new ApiException(HttpStatus.CONFLICT, "Pricing request was changed by another user");
+                    throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
                 }
                 toStatus = PricingRequestStatus.AWAITING_FACTORY_RESPONSE;
             }
@@ -544,7 +544,7 @@ public class FactoryQuoteService {
             notifyCeo(summary, PricingRequestEventKind.FACTORY_RESPONSE_REVISED,
                 "ใบขอราคา " + summary.requestCode() + " มีราคาฉบับปรับปรุงจาก " + current.factoryName());
         } else {
-            throw new ApiException(HttpStatus.CONFLICT, "Factory quote cannot receive a response in status " + current.status());
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาโรงงานนี้ไม่สามารถรับคำตอบได้ในสถานะ " + current.status());
         }
         // ON CONFLICT DO NOTHING never aborts the transaction (unlike letting the unique index
         // throw and catching it): a duplicate key here means a concurrent racer already recorded
@@ -555,7 +555,7 @@ public class FactoryQuoteService {
             FactoryQuoteRepository.FactoryQuoteResponseReceiptDto raced =
                 quotes.findResponseReceipt(actor.id(), clientRequestId)
                     .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT,
-                        "clientRequestId conflict could not be resolved"));
+                        "ไม่สามารถแก้ไขข้อขัดแย้งของ clientRequestId ได้"));
             return requireQuote(raced.factoryQuoteId());
         }
         return saved;
@@ -575,7 +575,7 @@ public class FactoryQuoteService {
         requireActiveDeal(summary.ticketId());
         int rows = quotes.startNegotiation(quoteId, request.note());
         if (rows == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "Only a current received response can enter negotiation");
+            throw new ApiException(HttpStatus.CONFLICT, "เข้าสู่ขั้นตอนต่อรองได้เฉพาะคำตอบล่าสุดที่ได้รับเท่านั้น");
         }
         addEvent(summary, actor, PricingRequestEventKind.FACTORY_NEGOTIATION_STARTED, summary.status(), summary.status(),
             request.note());
@@ -593,7 +593,7 @@ public class FactoryQuoteService {
         requireActiveDeal(summary.ticketId());
         int rows = quotes.markReady(quoteId);
         if (rows == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "Current response must have raw prices before it can be marked ready");
+            throw new ApiException(HttpStatus.CONFLICT, "คำตอบล่าสุดต้องมีราคาต้นทางก่อนจึงจะทำเครื่องหมายว่าพร้อมได้");
         }
         addEvent(summary, actor, PricingRequestEventKind.FACTORY_RESPONSE_READY_FOR_COSTING, summary.status(), summary.status(),
             "Factory response ready for costing: " + quote.factoryName());
@@ -611,7 +611,7 @@ public class FactoryQuoteService {
         requireActiveDeal(summary.ticketId());
         int rows = quotes.markNotAvailable(quoteId, request.reason(), actor.id());
         if (rows == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "Factory quote cannot be marked unavailable in its current status");
+            throw new ApiException(HttpStatus.CONFLICT, "ไม่สามารถทำเครื่องหมายว่าโรงงานนี้ไม่พร้อมเสนอราคาได้ในสถานะปัจจุบัน");
         }
         addEvent(summary, actor, PricingRequestEventKind.FACTORY_NOT_AVAILABLE, summary.status(), summary.status(),
             request.reason());
@@ -626,7 +626,7 @@ public class FactoryQuoteService {
             String factoryName = firstText(item.resolvedFactoryName(), item.factory());
             if (factoryName == null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    "Pricing request item " + item.id() + " has no resolved factory");
+                    "รายการที่ " + item.id() + " ในใบขอราคายังไม่ได้ระบุโรงงาน");
             }
             byFactory.computeIfAbsent(factoryName, ignored -> new ArrayList<>()).add(item);
         }
@@ -649,31 +649,31 @@ public class FactoryQuoteService {
             .map(ReceiveFactoryQuoteItemRequest::pricingRequestItemId)
             .collect(java.util.stream.Collectors.toSet());
         if (!received.equals(expected)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Factory response must include exactly the quote's request items");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "การตอบกลับของโรงงานต้องครบตามรายการที่ขอไปทุกรายการเท่านั้น");
         }
         List<ReceiveFactoryQuoteItemRequest> normalized = new ArrayList<>();
         for (ReceiveFactoryQuoteItemRequest responseItem : responseItems) {
             PricingRequestItemDto requestItem = requestItemsById.get(responseItem.pricingRequestItemId());
             if (requestItem == null) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "Factory response item does not belong to this pricing request");
+                throw new ApiException(HttpStatus.BAD_REQUEST, "รายการตอบกลับนี้ไม่ได้เป็นของใบขอราคานี้");
             }
             String itemFactory = firstText(requestItem.resolvedFactoryName(), requestItem.factory());
             if (!quote.factoryName().equals(itemFactory)) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "Factory response item belongs to a different factory");
+                throw new ApiException(HttpStatus.BAD_REQUEST, "รายการตอบกลับนี้เป็นของโรงงานอื่น");
             }
             String unitBasis = UnitBasis.canonicalize(responseItem.unitBasis(), "Factory quote unit");
             String quotedUnit = UnitBasis.canonicalize(responseItem.quotedUnit(), "Factory quote unit");
             if (UnitBasis.PER_BOX.equals(unitBasis) && responseItem.piecesPerBox() == null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    "PER_BOX factory response items require piecesPerBox");
+                    "รายการตอบกลับแบบ PER_BOX ต้องระบุ piecesPerBox");
             }
             if (UnitBasis.PER_SQM.equals(unitBasis) && responseItem.sqmPerUnit() == null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    "PER_SQM factory response items require sqmPerUnit");
+                    "รายการตอบกลับแบบ PER_SQM ต้องระบุ sqmPerUnit");
             }
             if (UnitBasis.PER_LINEAR_M.equals(unitBasis) && responseItem.linearMPerUnit() == null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    "PER_LINEAR_M factory response items require linearMPerUnit");
+                    "รายการตอบกลับแบบ PER_LINEAR_M ต้องระบุ linearMPerUnit");
             }
             normalized.add(new ReceiveFactoryQuoteItemRequest(
                 responseItem.pricingRequestItemId(),
@@ -698,33 +698,33 @@ public class FactoryQuoteService {
 
     private PricingRequestSummaryDto requirePricingRequest(long pricingRequestId) {
         return pricingRequests.findSummary(pricingRequestId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Pricing request not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอราคานี้"));
     }
 
     private FactoryQuoteDto requireQuote(long quoteId) {
         return quotes.find(quoteId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Factory quote not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบเสนอราคาโรงงานนี้"));
     }
 
     private void requireActiveDeal(long ticketId) {
         TicketSummaryDto ticket = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"))
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
             .summary();
         if (!DealLifecycle.ACTIVE.equals(ticket.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Parent deal must be ACTIVE");
+            throw new ApiException(HttpStatus.CONFLICT, "ดีลต้นทางต้องอยู่ในสถานะ ACTIVE");
         }
     }
 
     private void requireMutablePricingRequest(PricingRequestSummaryDto summary, Set<String> allowedStatuses) {
         if (!allowedStatuses.contains(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "Pricing request status '" + summary.status() + "' cannot be modified by factory quote actions");
+                "ใบขอราคาที่อยู่ในสถานะ '" + summary.status() + "' ไม่สามารถแก้ไขผ่านขั้นตอนราคาโรงงานได้");
         }
     }
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
         if (!allowed.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
@@ -789,12 +789,12 @@ public class FactoryQuoteService {
 
     private String validateClientRequestId(String clientRequestId) {
         if (clientRequestId == null || clientRequestId.isBlank()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId must be a UUID");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId ต้องเป็น UUID");
         }
         try {
             return UUID.fromString(clientRequestId.trim()).toString();
         } catch (IllegalArgumentException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId must be a UUID");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId ต้องเป็น UUID");
         }
     }
 }

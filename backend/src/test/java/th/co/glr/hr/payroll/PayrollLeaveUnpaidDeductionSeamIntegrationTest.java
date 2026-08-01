@@ -82,7 +82,13 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
             new th.co.glr.hr.payroll.export.KBankPctExporter(),
             new th.co.glr.hr.payroll.export.Pnd1Exporter(),
             new th.co.glr.hr.payroll.export.SsoExporter(),
-            new th.co.glr.hr.config.AppProperties());
+            new th.co.glr.hr.payroll.export.PayrollDetailExporter(),
+            new th.co.glr.hr.config.AppProperties(),
+            new th.co.glr.hr.payroll.obligation.DeductionObligationService(
+                new th.co.glr.hr.payroll.obligation.DeductionObligationRepository(jdbc),
+                mock(th.co.glr.hr.employee.EmployeeRepository.class),
+                mock(AuditService.class),
+                new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
     @Test
@@ -234,6 +240,7 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
             employeeId,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, // specialPay1-4
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, // specialPay5-8
+            BigDecimal.ZERO, // specialPay9
             BigDecimal.ZERO, // nonTaxableIncome
             unpaidLeaveDays,
             BigDecimal.ZERO, // studentLoanDeduction

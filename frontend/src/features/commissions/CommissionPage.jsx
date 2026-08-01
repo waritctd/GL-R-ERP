@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import imageCompression from 'browser-image-compression';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
@@ -266,6 +267,7 @@ function CommissionCard({ record, canReview, isCeoReview, saving, expanded, onTo
 
 export function CommissionPage({ user, showToast }) {
   const [searchParams] = useSearchParams();
+  const queryClient = useQueryClient();
   const [month, setMonth] = useState(thisMonth);
   const [records, setRecords] = useState([]);
   const [summary, setSummary] = useState(null);
@@ -707,6 +709,21 @@ export function CommissionPage({ user, showToast }) {
         invoiceAttachment,
       });
       setRecentlyCreated((current) => [response.commission, ...current]);
+      // createFromDeal is not commission-only: it dual-writes the tax invoice as an
+      // AttachType.INVOICE attachment on the ticket, which flips that ticket's
+      // invoiceOnFile and so unlocks CONFIRM_CLOSE. Without this the ticket's cached
+      // detail/actions stay stale for staleTime (30s, api/queryClient.js), so account
+      // returns to the deal — usually straight from this page — and still sees
+      // "บันทึกใบกำกับ + ออกค่าคอม" instead of "ยืนยันพร้อมปิดงาน".
+      //
+      // Invalidated by the ['tickets'] PREFIX rather than the exact
+      // queryKeys.ticketDetail(id)/ticketActions(id)/ticketAttachments(id) triple, on
+      // purpose: TicketDetailPage builds those keys from useParams().id, a STRING,
+      // while loadedTicket.id here is a NUMBER — and TanStack compares keys
+      // structurally, so ['tickets','detail',16] would not match
+      // ['tickets','detail','16'] and the invalidation would silently no-op. The
+      // prefix also correctly refreshes the ticket lists, whose stage/scope changed.
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
       setCreateForm(emptyCreateForm);
       setFileInputKey((key) => key + 1);
       setLoadedTicket(null);

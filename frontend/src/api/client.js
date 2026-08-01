@@ -38,7 +38,7 @@ export async function apiRequest(path, options = {}) {
 
   if (!response.ok) {
     const message = typeof payload === 'string' ? payload : payload?.message;
-    throw new ApiError(message || 'Request failed', response.status, payload);
+    throw new ApiError(message || 'คำขอไม่สำเร็จ', response.status, payload);
   }
 
   return payload;

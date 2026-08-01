@@ -69,7 +69,34 @@ export function formatAddress(address) {
 
 export function formatMoney(value) {
   if (value === null || value === undefined || value === '') return '-';
-  return `฿${Number(value).toLocaleString('en-US')}`;
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return '-';
+  return `฿${amount.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+// Thai honorifics a stored name may already carry — either the employee
+// master's `nameTh` (title_id-derived, e.g. "นายสมชาย ใจดี") or a free-text
+// `user.name` seeded with one baked in (e.g. "คุณสมหมาย ขายดี"). Order doesn't
+// affect matching (`startsWith` is checked per-entry), but 'นางสาว' is listed
+// so it reads clearly alongside its own prefix 'นาง'.
+const THAI_HONORIFICS = ['นางสาว', 'นาง', 'นาย', 'ดร.', 'คุณ'];
+
+// Prepends the "คุณ" salutation used by dashboard greetings, but only when
+// `name` doesn't already start with a Thai honorific. Every greeting used to
+// prepend "คุณ" unconditionally, which doubled up whenever the resolved name
+// already carried one — see issue #395 ("สวัสดี คุณคุณสมหมาย ขายดี"). The
+// doubling traces to inconsistent name data (some `user.name` rows are
+// seeded with "คุณ" already in them; `employee.nameTh` separately bakes in a
+// นาย/นาง/นางสาว title), not to this helper's own logic — detecting an
+// existing honorific here is the fix, not stripping/rewriting the stored
+// name (that's a data concern, out of scope for this helper).
+export function greetingName(name) {
+  const trimmed = (name ?? '').trim();
+  if (!trimmed) return '';
+  return THAI_HONORIFICS.some((title) => trimmed.startsWith(title)) ? trimmed : `คุณ${trimmed}`;
 }
 
 export function initialsFromName(name = '') {

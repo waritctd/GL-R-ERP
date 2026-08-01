@@ -1,0 +1,64 @@
+// Status-badge + "current declaration" selection for the ล.ย.01 workflow (issue #387). Mirrors
+// TaxAllowanceDeclarationStatus (backend/.../declaration/TaxAllowanceDeclarationStatus.java)
+// exactly: PENDING / APPROVED / REJECTED / SUPERSEDED / EXPIRED / WITHDRAWN. `appliedAt` is a FLAG
+// on an APPROVED row, not a status of its own — see that enum's javadoc — so "applied" here is
+// derived the same way the backend documents it (`appliedAt != null`), not a 7th status string.
+//
+// Same idiom as `requestStatus`/`leaveStatusLabel`/`overtimeStatusLabel` in utils/format.js
+// ("Canonical source; do not re-add a page-local map elsewhere") — kept in this feature folder
+// rather than format.js because the label additionally depends on `appliedAt`/`appliedEffectiveMonth`/
+// `reviewerNote`, not just the bare status string those helpers key off.
+
+// SUPERSEDED/WITHDRAWN are terminal, non-current rows (a newer declaration replaced them, or the
+// employee pulled the submission back) — they never surface as "the" status, only PENDING/
+// APPROVED/REJECTED/EXPIRED do. Mirrors how ProfilePage/EmployeeSelfService never show a
+// cancelled/rejected request as if it were still live.
+const NON_CURRENT_STATUSES = new Set(['SUPERSEDED', 'WITHDRAWN']);
+
+/**
+ * Picks the one declaration that represents "the employee's current standing" for a tax year, out
+ * of every row `getMyTaxAllowanceDeclarations`/`getTaxAllowanceDeclarations` returns (which include
+ * full history — old REJECTED rows, WITHDRAWN drafts, SUPERSEDED approvals). The most recently
+ * submitted non-terminal row wins; `items` is expected pre-sorted newest-first (both hrApi and
+ * mockApi return it that way), but this re-sorts defensively rather than trusting that ordering.
+ */
+export function selectCurrentDeclaration(items = []) {
+  const candidates = items.filter((item) => !NON_CURRENT_STATUSES.has(item.status));
+  if (candidates.length === 0) return null;
+  return [...candidates].sort((a, b) => String(b.submittedAt || '').localeCompare(String(a.submittedAt || '')))[0];
+}
+
+/** Six distinct states per issue #387 screen 1, each with its own Thai copy and StatusBadge tone. */
+export function taxAllowanceStatusInfo(declaration) {
+  if (!declaration) {
+    return { label: 'ยังไม่ได้ยื่น', tone: 'neutral', key: 'NONE' };
+  }
+  const { status, appliedAt, appliedEffectiveMonth, reviewerNote } = declaration;
+  if (status === 'PENDING') {
+    return { label: 'รอ HR ตรวจสอบ', tone: 'warning', key: 'PENDING' };
+  }
+  if (status === 'REJECTED') {
+    return { label: 'ปฏิเสธ', tone: 'danger', key: 'REJECTED', note: reviewerNote || null };
+  }
+  if (status === 'EXPIRED') {
+    return { label: 'หมดอายุ — ต้องยืนยันใหม่', tone: 'danger', key: 'EXPIRED' };
+  }
+  if (status === 'APPROVED') {
+    if (appliedAt) {
+      return {
+        label: `ใช้กับเงินเดือนแล้ว ตั้งแต่เดือน ${appliedEffectiveMonth ?? '-'}`,
+        // Deliberately NOT the same tone as "approved, not yet applied" — issue #387: "the
+        // approved-but-unapplied state must not read as done". `success` here is genuinely
+        // terminal-good; the unapplied state below stays `info` so it never reads the same.
+        tone: 'success',
+        key: 'APPLIED',
+      };
+    }
+    return {
+      label: 'อนุมัติแล้ว — ยังไม่ใช้กับเงินเดือน',
+      tone: 'info',
+      key: 'APPROVED_UNAPPLIED',
+    };
+  }
+  return { label: status || 'ไม่ทราบสถานะ', tone: 'neutral', key: status || 'UNKNOWN' };
+}

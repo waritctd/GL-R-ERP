@@ -65,7 +65,13 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
             new th.co.glr.hr.payroll.export.KBankPctExporter(),
             new th.co.glr.hr.payroll.export.Pnd1Exporter(),
             new th.co.glr.hr.payroll.export.SsoExporter(),
-            new th.co.glr.hr.config.AppProperties());
+            new th.co.glr.hr.payroll.export.PayrollDetailExporter(),
+            new th.co.glr.hr.config.AppProperties(),
+            new th.co.glr.hr.payroll.obligation.DeductionObligationService(
+                new th.co.glr.hr.payroll.obligation.DeductionObligationRepository(jdbc),
+                mock(th.co.glr.hr.employee.EmployeeRepository.class),
+                mock(AuditService.class),
+                new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
     /**
@@ -255,6 +261,7 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
             employeeId,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, // specialPay1-4
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, // specialPay5-8
+            BigDecimal.ZERO, // specialPay9
             BigDecimal.ZERO, // nonTaxableIncome
             BigDecimal.ZERO, // unpaidLeaveDays
             BigDecimal.ZERO, // studentLoanDeduction
@@ -287,7 +294,7 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
     }
 
     private long seedEmployee(String code, String firstNameTh, String lastNameTh, BigDecimal salary) {
-        return jdbc.queryForObject(
+        long employeeId = jdbc.queryForObject(
             """
             INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active)
             VALUES (:code, :first, :last, :salary, TRUE)
@@ -295,5 +302,10 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
             """,
             Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "salary", salary),
             Long.class);
+        // Task 2 (2026-07-29): this file is about the withholding-tax override, not classification --
+        // seed the real production SSO-inclusion defaults so socialSecurity comes out non-zero as
+        // pinned. SALARY needs no tax-treatment seed (locked to REGULAR_REPROJECT regardless).
+        new PayrollRepository(jdbc).seedSsoInclusionDefaults(employeeId, 2026, employeeId);
+        return employeeId;
     }
 }

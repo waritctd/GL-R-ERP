@@ -20,7 +20,6 @@ import {
   paymentStageLabel,
   quotationRecipientLabel,
   quotationStatusLabel,
-  ticketStatusLabel,
 } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx';
@@ -33,6 +32,7 @@ import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
+import { TicketContextPanel } from './TicketContextPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
 import { allowedTargetStages, canMarkLost, canSetStage, nextStage } from './stageMeta.js';
 import {
@@ -315,6 +315,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   // Comment
   const [commentText, setCommentText] = useState('');
+  const [contextCommentText, setContextCommentText] = useState('');
 
   // Confirmation dialogs (state-driven, replaces native browser confirm)
   const [confirm, setConfirm] = useState(null); // { kind: 'deleteAttachment', id, name } | { kind: 'cancelTicket' } | { kind: 'finalPayment' } | null
@@ -332,25 +333,29 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     enabled: !!ticketId,
   });
   const ticket = ticketQuery.data ?? null;
-  // FIX 2 (Opus review): AttachmentController.requireTicketAccess is a
-  // genuinely different, WIDER, identity-based model than every other tab's
-  // role gate — it grants the ticket's participants (createdById/
-  // assignedToId) OR role in {hr, sales_manager, ceo}, not a role-only
-  // check. Computed here (rather than after the loading/no-ticket early
-  // return below, where `isOwner` already lives) so the attachments query
-  // itself never fires for a viewer the backend would 403 — same reasoning
-  // as `activitiesQuery`'s own `enabled` gate for FIX 1. `hr` omitted below:
-  // it never reaches this page at all (route-gated), so the literal,
-  // owner-approved rule is exactly role===ceo||sales_manager||isOwner||
-  // assignee — this is a presentation projection of the existing backend
-  // gate (attachments_* in TicketIaAuthzMatrixIntegrationTest), not a new
-  // authorization rule, and touches neither the backend nor salesViewScope.js.
+  // FIX 2 (Opus review), rewritten for issue #389. Still an identity-aware gate rather than a
+  // role-only one — the deal's participants (createdById/assignedToId) reach its documents
+  // regardless of role — but the ROLE half is no longer this page's private invention: it mirrors
+  // TicketAccessPolicy.canViewDocuments, which is `sales`- AND `import`-scoped to participation.
+  //
+  // What changed: `account` used to be filtered out here, faithfully mirroring a backend gate
+  // that 403'd it — but that 403 was the bug. account is the role asked to confirm deposit and
+  // final-payment receipts against exactly these files, so hiding the tab would have left #389's
+  // fix invisible. A non-assignee `import` stays filtered out, unchanged: AttachType spans
+  // SIGNED_QUOTATION/INVOICE, which carry the approved customer price that salesViewScope already
+  // hides from import (quotation/dealQuotation/payment/depositNotice all false) and that the
+  // backend refuses it on three other endpoints. `hr` needs no mention — route-gated off this
+  // page entirely, and now refused by the backend too.
+  //
+  // Computed here (rather than after the loading/no-ticket early return below, where `isOwner`
+  // already lives) so the attachments query never fires for a viewer the backend would 403 —
+  // same reasoning as `activitiesQuery`'s own `enabled` gate for FIX 1. Presentation projection
+  // of the backend gate, not a new authorization rule.
   const documentsTicketSummary = ticket?.summary ?? null;
   const canViewDocumentsTab = Boolean(documentsTicketSummary) && (
-    role === 'ceo'
-    || role === 'sales_manager'
-    || user.id === documentsTicketSummary.createdById
+    user.id === documentsTicketSummary.createdById
     || user.id === documentsTicketSummary.assignedToId
+    || ROLE_PERMISSIONS.canViewTicketDocuments.includes(role)
   );
   const actionsQuery = useQuery({
     queryKey: queryKeys.ticketActions(ticketId),
@@ -466,6 +471,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     setPaymentModal(false);
     setBillingModal(false);
     setCommentText('');
+    setContextCommentText('');
   }
 
   // Generic action mutation — a drop-in replacement for the old doAction(fn,
@@ -603,6 +609,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const { summary, items, events, quotations } = ticket;
   const st = summary.status;
   const isOwner = user.id === summary.createdById;
+  // Issue #389: reading a deal's documents is now the same question as reading the deal (so
+  // account/import reach the เอกสาร panel and hr no longer does), but WRITING one stays narrow —
+  // TicketAccessPolicy.canManageDocuments is participant OR sales_manager/ceo. Mirrored here so
+  // the panel does not offer account/import an upload the backend answers with a 403.
+  const canManageDocuments = isOwner
+    || (summary.assignedToId != null && user.id === summary.assignedToId)
+    || ROLE_PERMISSIONS.canManageTicketDocuments.includes(role);
 
   const showProposed = ROLE_PERMISSIONS.canProposePrices.includes(role) || ROLE_PERMISSIONS.canApproveReject.includes(role);
   // ข้อ 10.1: Import sees only rawPrice + proposedPrice — NOT approvedPrice or CEO-set prices
@@ -702,8 +715,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // the remaining actions apply.
   const hasActions = can.editItems || can.revokeCloseConfirm
     || (st === 'draft' && isOwner && items.length === 0);
-
-  const status = ticketStatusLabel(st);
 
   // Next-action summary for the current viewer only — derived strictly from the
   // `can` flags above (which already encode real status+role permission checks).
@@ -1018,13 +1029,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     can.revise && { key: 'revise', label: 'ขอแก้ไข (Revise)', icon: 'pencil', onSelect: handleOpenRevise },
   ].filter(Boolean);
 
-  async function handleUploadAttachment(e, explicitType = null) {
+  async function handleUploadAttachment(e) {
     const file = e.target.files?.[0];
     if (!file) return;
-    // INVOICE gates the close, so it is never inferred from the filename — ฝ่ายบัญชี
-    // picks it deliberately via the dedicated upload control.
-    const attachType = explicitType
-      ?? (file.name.toLowerCase().includes('po') ? 'PO' : 'OTHER');
+    // INVOICE is never produced here — not inferred from the filename, and no
+    // longer settable via an explicit type either. It gates the close and must
+    // come from CommissionService.createFromDeal, which writes it alongside the
+    // commission (see the "ไฟล์แนบ" panel comment below).
+    const attachType = file.name.toLowerCase().includes('po') ? 'PO' : 'OTHER';
     try {
       await uploadAttachmentMutation.mutateAsync({ file, attachType });
     } catch { /* onError above already toasted */ } finally {
@@ -1086,6 +1098,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   async function handleComment() {
     if (!commentText.trim()) return;
     await doAction(() => api.tickets.comment(ticketId, { message: commentText.trim() }), 'เพิ่มความคิดเห็นแล้ว');
+  }
+
+  async function handleContextComment() {
+    if (!contextCommentText.trim()) return;
+    await doAction(() => api.tickets.comment(ticketId, { message: contextCommentText.trim() }), 'เพิ่มความคิดเห็นแล้ว');
   }
 
   async function handleRecordPayment() {
@@ -1177,19 +1194,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         overflowItems={overflowItems}
         onRefresh={refreshTicket}
       />
-      <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted sm:gap-4">
-        <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-        {summary.hasEdits && <StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge>}
-        <span>สร้างโดย <strong className="text-text-secondary">{summary.createdByName || '-'}</strong> · {formatThaiDate(summary.createdAt)}</span>
-        {summary.assignedToName && (
-          <span>เจ้าหน้าที่นำเข้าที่ดูแล <strong className="text-text-secondary">{summary.assignedToName}</strong></span>
-        )}
-      </div>
+
+      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-start">
 
       {/* Deal pipeline (V50): the 14-stage journey with stage-gated doc actions.
           Generation buttons reuse the exact handlers/permissions of the action
           row; once a document exists (quotation / ใบแจ้งยอดมัดจำ) it stays
           reachable from here through the later stages too. */}
+      <div className="min-w-0 xl:col-start-1">
       <DealStagePanel
         ref={dealStagePanelRef}
         user={user}
@@ -1237,6 +1249,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           </>
         ) : null}
       />
+      </div>
 
       {/* Ticket-detail IA rebuild Phase 2 (see
           docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md
@@ -1254,14 +1267,17 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           `?tab=documents` deep link (account, or an import rep who isn't
           this ticket's assignee) falls back to ภาพรวม instead of
           highlighting a tab with no button and rendering nothing. */}
-      <Tabs
-        items={visibleTabItems}
-        value={visibleActiveTab}
-        onChange={setActiveTab}
-        ariaLabel="รายละเอียดดีล"
-        idPrefix="ticket-detail"
-      />
+      <div className="min-w-0 xl:col-start-1">
+        <Tabs
+          items={visibleTabItems}
+          value={visibleActiveTab}
+          onChange={setActiveTab}
+          ariaLabel="รายละเอียดดีล"
+          idPrefix="ticket-detail"
+        />
+      </div>
 
+      <div className="min-w-0 xl:col-start-1">
       <TabPanel id="overview" idPrefix="ticket-detail" active={visibleActiveTab === 'overview'}>
           <section className="panel">
             <div className="panel-header">
@@ -1887,28 +1903,37 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           {/* R5: Attachments */}
           <section className="panel">
             <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2>ไฟล์แนบ (PO / ใบเซ็น / ใบกำกับภาษี)</h2>
-              {/* ใบกำกับภาษี is issued by an external system and uploaded here; its
-                  presence is a prerequisite for ฝ่ายบัญชี to confirm the close. */}
-              {!TERMINAL.includes(st) && isAccount && (
-                <label className="cursor-pointer max-[720px]:w-full" htmlFor="ticket-invoice-file">
-                  <input
-                    id="ticket-invoice-file"
-                    type="file"
-                    className="sr-only h-px min-h-0 w-px border-0 p-0"
-                    onChange={(e) => handleUploadAttachment(e, 'INVOICE')}
-                    accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
-                  />
-                  <span
-                    className="secondary-button max-[720px]:min-h-11 max-[720px]:w-full"
-                    style={{ fontSize: 12, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                  >
-                    <Icon name="upload" size={13} />
-                    {uploadingFile ? 'กำลังอัปโหลด...' : 'แนบใบกำกับภาษี'}
-                  </span>
-                </label>
-              )}
-              {!TERMINAL.includes(st) && (
+              <h2>ไฟล์แนบ (PO / ใบเซ็น)</h2>
+              {/* No แนบใบกำกับภาษี control here, deliberately (2026-07-30 owner
+                  decision). The closing tax invoice is ฝ่ายบัญชี's to record, and
+                  the ONLY supported path is CommissionService.createFromDeal
+                  (POST /api/commissions/from-deal, CREATE_FROM_DEAL_ROLES =
+                  account-only), reached from this page's own sticky CTA
+                  "บันทึกใบกำกับ + ออกค่าคอม" -> /commissions?ticketId=NN
+                  (accountActions.js). That one upload dual-writes the file as an
+                  AttachType.INVOICE ticket attachment, so it satisfies the close
+                  gate's invoiceOnFile check AND creates the deal owner's
+                  commission in the same transaction.
+
+                  A second invoice path here would satisfy the close gate WITHOUT
+                  creating the commission — the sales rep would silently lose it.
+                  That is why this is not simply re-gated to a role the backend
+                  permits: the control that used to live here was gated isAccount
+                  and 403'd for real, and only ever looked functional because
+                  mockApi.js had no authz on attachments at all.
+
+                  Issue #389 fixed the OTHER half of that gate — account can now
+                  READ every deal document (it is asked to confirm money against
+                  them) and hr can no longer read any — but the WRITE side was
+                  left deliberately narrow for exactly the reason above:
+                  TicketAccessPolicy.canManageDocuments is participant OR
+                  sales_manager/ceo, never account. Pinned by
+                  AttachmentTicketAccessIntegrationTest
+                  .accountCannotUploadADocument_theTaxInvoiceKeepsExactlyOneEntryPoint.
+                  Do not reintroduce it — the frontend regression guard is
+                  TicketDetailPage.test.jsx, "offers NO ใบกำกับภาษี upload
+                  control in เอกสาร". */}
+              {!TERMINAL.includes(st) && canManageDocuments && (
                 <label className="cursor-pointer max-[720px]:w-full" htmlFor="ticket-attachment-file">
                   <input
                     id="ticket-attachment-file"
@@ -1961,7 +1986,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                       style={{ fontSize: 12, color: 'var(--color-link)', textDecoration: 'none', whiteSpace: 'nowrap' }}>
                       ดูไฟล์
                     </a>
-                    {!TERMINAL.includes(st) && (
+                    {!TERMINAL.includes(st) && (canManageDocuments || att.uploadedBy === user.id) && (
                       <button type="button" className="icon-button"
                         style={{ color: 'var(--color-danger)', flexShrink: 0 }}
                         onClick={() => handleDeleteAttachment(att.id, att.fileName)}>
@@ -2031,6 +2056,24 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             addingActivity={addActivityMutation.isPending}
           />
       </TabPanel>
+      </div>
+
+      <div className="min-w-0 xl:sticky xl:top-[18rem] xl:col-start-2 xl:row-start-1 xl:row-span-4 xl:max-h-[calc(100vh-19rem)] xl:overflow-y-auto">
+        <TicketContextPanel
+          summary={summary}
+          pricingRequests={pricingRequests}
+          latestQuotation={latestQuotation}
+          events={events}
+          bannerText={bannerText}
+          canComment={can.comment}
+          commentText={contextCommentText}
+          onCommentTextChange={setContextCommentText}
+          onSubmitComment={handleContextComment}
+          commentSubmitting={actionLoading}
+          showCommentForm={visibleActiveTab !== 'activity'}
+          canViewPricingRequests={canViewPricingRequests}
+        />
+      </div>
 
       {/* "จัดการดีล" danger zone (ticket-detail IA rebuild Phase 1): เสียงาน /
           ยกเลิก moved off the working surface into a clearly-labelled,
@@ -2040,7 +2083,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           modals), only demoted from sitting inline among the day-to-day
           pipeline controls. */}
       {(canLostDeal || can.cancel) ? (
-        <section className="rounded-xl border border-danger-border bg-danger-bg p-4 sm:p-5" aria-labelledby="deal-danger-zone-heading">
+        <section className="rounded-xl border border-danger-border bg-danger-bg p-4 sm:p-5 xl:col-start-1" aria-labelledby="deal-danger-zone-heading">
           <h2 id="deal-danger-zone-heading" className="m-0 text-sm font-extrabold text-danger-dark">จัดการดีล</h2>
           <p className="mt-1 text-xs text-danger-dark">การดำเนินการเหล่านี้ส่งผลต่อทั้งดีล และบางรายการย้อนกลับไม่ได้ — ใช้เมื่อจำเป็นเท่านั้น</p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -2069,6 +2112,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           </div>
         </section>
       ) : null}
+      </div>
 
       {paymentModal && (
         <Modal

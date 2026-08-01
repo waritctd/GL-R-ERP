@@ -101,7 +101,7 @@ class NotificationServiceTest {
 
         assertThatThrownBy(() -> service.markRead(42L, actor))
             .isInstanceOf(ApiException.class)
-            .hasMessage("Notification not found");
+            .hasMessage("ไม่พบการแจ้งเตือนนี้");
     }
 
     @Test

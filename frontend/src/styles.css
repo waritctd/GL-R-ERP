@@ -39,7 +39,11 @@
   --shadow-md: 0 18px 44px rgba(2, 6, 23, 0.28);
   --shadow-lg: 0 24px 70px rgba(2, 6, 23, 0.24);
   --shadow-lg-heavy: 0 24px 70px rgba(2, 6, 23, 0.28);
-  --shadow-focus-ring: 0 0 0 3px rgba(99, 102, 241, 0.13);
+  /* Item 4a fix (WCAG 1.4.11/2.4.11, 2026-07-31): must change in lockstep with index.css's copy of
+     this same token -- both exist (see the comment on the color tokens a few lines down for why this
+     file still duplicates non-color tokens), and whichever one the cascade picks must not be the old
+     low-contrast value. See index.css's copy of this comment for the full contrast measurement. */
+  --shadow-focus-ring: 0 0 0 3px var(--color-indigo-ring);
   --shadow-inset-active: inset 3px 0 0 #2563eb;
 
   /* Color custom properties used to be re-declared here, duplicating
@@ -108,11 +112,17 @@ code {
   background: var(--color-bg-alt);
 }
 
+/* Issue #396 fix: the login screen used to be a 940px two-column split with
+   the sign-in form on the right and nothing but the logo in the left column
+   — at 1440px that left half read as an unfinished layout, not a deliberate
+   design. Dropped the split entirely rather than inventing filler copy for
+   it: a single centred card, brand mark stacked above the form, same
+   treatment this panel already fell back to below 720px (see the old
+   `@media (max-width: 720px)` overrides this replaces). */
 .login-panel {
-  width: min(940px, 100%);
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0;
+  width: min(440px, 100%);
+  display: flex;
+  flex-direction: column;
   background: var(--color-surface);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
@@ -122,14 +132,11 @@ code {
 
 .login-brand {
   background: var(--color-surface-muted);
-}
-
-.login-brand {
-  padding: 34px;
+  padding: 28px 34px 24px;
   display: flex;
   gap: 12px;
   align-items: flex-start;
-  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .login-brand strong,
@@ -149,10 +156,10 @@ code {
    `.login-brand small` (a LIGHT surface) and inherited --color-text-muted,
    which measures only 3.93:1 on --color-sidebar-bg (#0b1220), a straight
    AA failure. Split out so `.brand small` matches the sidebar's existing,
-   already-verified-safe convention (`.nav-item small`, `.sidebar-account
-   small`, `.nav-group-header` below all use --color-text-faint on this
-   surface, 7.30:1) instead of introducing a new sidebar-scoped token for
-   a value the app already has under another name. */
+   already-verified-safe convention (`.nav-item small`, `.nav-group-header`
+   below both use --color-text-faint on this surface, 7.30:1) instead of
+   introducing a new sidebar-scoped token for a value the app already has
+   under another name. */
 .brand small {
   color: var(--color-text-faint);
   font-size: var(--text-xs);
@@ -181,8 +188,7 @@ code {
 }
 
 .login-form {
-  grid-row: span 2;
-  padding: 42px;
+  padding: 28px 34px 34px;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -334,12 +340,11 @@ textarea:focus {
   font-size: var(--text-sm);
 }
 
-/* .nav-item small / .sidebar-account small render on the dark sidebar rail
-   (Sidebar Navy #0b1220) where Ink Faint clears ~7.3:1 contrast — verified,
-   not a Muted Floor violation. The rest of this group renders on white
-   surfaces where Faint only clears ~2.6:1, so it is split out below. */
-.nav-item small,
-.sidebar-account small {
+/* .nav-item small renders on the dark sidebar rail (Sidebar Navy #0b1220)
+   where Ink Faint clears ~7.3:1 contrast — verified, not a Muted Floor
+   violation. The rest of this group renders on white surfaces where Faint
+   only clears ~2.6:1, so it is split out below. */
+.nav-item small {
   display: block;
   color: var(--color-text-faint);
   font-size: var(--text-xs);
@@ -515,16 +520,6 @@ textarea:focus {
   .nav-group-chevron {
     transition: none;
   }
-}
-
-.sidebar-account {
-  margin-top: auto;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  padding-top: 14px;
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 10px;
-  align-items: center;
 }
 
 .app-main {
@@ -935,7 +930,8 @@ textarea:focus {
 }
 
 .data-table-table thead,
-.data-table-table tbody {
+.data-table-table tbody,
+.data-table-table tfoot {
   display: block;
 }
 
@@ -1369,11 +1365,13 @@ textarea:focus {
 }
 
 .payroll-table {
-  grid-template-columns: minmax(0,1.5fr) minmax(0,0.85fr) minmax(0,0.75fr) minmax(0,0.95fr) minmax(0,0.85fr) minmax(0,0.85fr) minmax(150px,0.9fr);
+  grid-template-columns: var(
+    --payroll-table-columns,
+    minmax(150px, 1.1fr) repeat(5, minmax(7.5rem, 0.86fr)) minmax(6.75rem, 0.56fr)
+  );
 }
 
-.toolbar-actions,
-.payroll-actions {
+.toolbar-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
@@ -1393,66 +1391,21 @@ textarea:focus {
   width: 150px;
 }
 
-/* Status readout — employee count + run status. Its own row, never crowded by the action groups
-   below it. */
-.payroll-actions-status {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-}
+/* Phase A command surface: payroll action grouping and Process-region presentation now live as
+   Tailwind utilities at the PayrollPage.jsx call site. Keeping the old `.payroll-actions-*` rules
+   here would be dead CSS because utilities win over this legacy layer. */
 
-.payroll-actions-status > div:first-child {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
+/* B1/B4 fix (Opus review, 2026-07-31): `.payroll-workspace`'s grid layout (side-by-side panel
+   >=1366px -- adjusted by the Phase A command-surface fix, same date, see the `payroll-wide` comment
+   further down -- single column below it) moved to Tailwind utilities at the PayrollPage.jsx call site
+   (CLAUDE.md Tailwind-first); nothing else in this file targets that class, so the rule is gone
+   rather than left behind empty. See the two `@media` blocks below for what genuinely could not
+   move -- the detail panel's own position/transform states. */
 
-.payroll-actions-status > div:first-child span {
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  font-weight: 700;
-}
-
-/* review / run / export / send — four visually separated clusters so the irreversible "run" action
-   never reads as just another button in an undifferentiated row. */
-.payroll-actions-groups {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 16px;
-}
-
-.payroll-actions-group {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding-left: 16px;
-  border-left: 1px solid var(--color-border);
-}
-
-.payroll-actions-group:first-child {
-  padding-left: 0;
-  border-left: none;
-}
-
-/* The irreversible action's group stacks its accessible block reason (mobile, or F1's empty-period
-   guard) under the button instead of beside it, so the explanation never fights the button for
-   horizontal space. */
-.payroll-actions-group-run {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-}
-
-.payroll-workspace {
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.65fr);
-  gap: 16px;
-  align-items: start;
-}
-
+/* B4 fix (Opus review, 2026-07-31): cursor now lives on the PayrollPage.jsx call site as a Tailwind
+   `cursor-pointer` utility (rows became clickable in this same change). `.payroll-row` itself is
+   left at the shared default rather than deleted -- a future non-clickable consumer of this class
+   should not silently inherit a pointer cursor from here. */
 .payroll-row {
   cursor: default;
 }
@@ -1462,25 +1415,281 @@ textarea:focus {
   box-shadow: var(--shadow-inset-active);
 }
 
+/* B4 fix (Opus review, 2026-07-31): `.payroll-money-cell` itself is plain `tabular-nums` and could
+   move to a Tailwind utility on its own -- but it stays because it is also the selector hook for
+   the table-head/data-row/payroll-total-row truncation-defeat overrides a few lines down (each of
+   DataTable's three row-shape variants needs its own compound selector), and duplicating the
+   property in two places would be more confusing than one rule serving both purposes. */
+.payroll-money-cell {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.payroll-table .payroll-money {
+  display: block;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+}
+
+.payroll-table.table-head > .payroll-money-cell,
+.payroll-table.data-row > .payroll-money-cell,
+.payroll-table.payroll-total-row > .payroll-money-cell {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+}
+
+.payroll-table .text-right .sort-header {
+  margin-left: auto;
+}
+
+.payroll-table-region {
+  min-width: 0;
+}
+
+.payroll-table-region .table-panel {
+  max-height: min(68vh, 760px);
+  overflow: auto;
+}
+
+.payroll-table-region .data-table-table tfoot {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+}
+
+.payroll-reconciliation-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-danger-border, var(--color-danger));
+  border-radius: var(--radius-md);
+  background: var(--color-danger-bg, var(--color-surface));
+  color: var(--color-danger);
+  font-size: var(--text-sm);
+  font-weight: 800;
+}
+
+.payroll-total-row {
+  display: grid;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 18px;
+  border-top: 2px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-muted);
+  box-shadow: 0 -8px 18px rgb(15 23 42 / 8%);
+  color: var(--color-text-secondary);
+}
+
+.payroll-total-row > * {
+  min-width: 0;
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+}
+
+/* Item 2 fix (2026-07-31): measured live at 1280px, the grand-total money cell (e.g.
+   "฿1,021,720.56") is ~127px wide in this app's monospace tabular-nums font, but the grid column
+   it sits in floors at 120px (`minmax(7.5rem, ...)`, see `.payroll-table` above) -- same column
+   width the header/data rows use. `overflow: visible` above is deliberate and stays (money must
+   never ellipsis-truncate, see `.payroll-table .payroll-money`'s own comment), but leaving the CELL's
+   own box pinned at 120px meant its `scrollWidth` (127) exceeded its `clientWidth` (120), painting
+   the excess into the 12px inter-column gap. `justify-self: end` (money cells are already
+   right-aligned; this just makes the GRID ITEM's own placement, not only its text, right-anchored)
+   plus `width: max-content` lets the cell's own box grow to fit whatever the total actually is --
+   still anchored to the same right edge as before (so the header/data columns above/below it do not
+   visually shift), but now genuinely containing its content instead of relying on an unmeasured
+   bleed. Scoped to the total row only (`.payroll-total-row`, not `.data-row`/`.table-head`) --
+   individual line amounts are always <= the grand total and were not observed overflowing; widening
+   every row's cells the same way would be a wider, unrequested change (Item 2 is about the footer).
+   Verified: 0 adjacent-cell collisions at 1280/1366/1440/768 with this app's current totals (see
+   payrollResponsiveCss.test.js) -- growth beyond that eats into the 12px gap first, not a neighbour's
+   own box, before it could ever collide. */
+.payroll-total-row.payroll-table > .payroll-money-cell {
+  justify-self: end;
+  width: max-content;
+  min-width: 100%;
+}
+
+.payroll-total-row th,
+.payroll-total-row td {
+  display: block;
+  border: 0;
+  padding: 0;
+}
+
+.payroll-total-row th {
+  color: var(--color-text);
+  text-align: left;
+}
+
+.payroll-total-row th > span,
+.payroll-total-row th > small {
+  display: block;
+  min-width: 0;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.payroll-total-row th > span {
+  font-weight: 800;
+}
+
+.payroll-total-row th > small {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.payroll-reconcile-note {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  white-space: normal;
+}
+
+.payroll-reconcile-note.is-ok {
+  color: var(--color-success);
+}
+
+.payroll-reconcile-note.is-mismatch {
+  color: var(--color-danger);
+}
+
+.payroll-mobile-summary-row {
+  display: none;
+}
+
+.payroll-mobile-summary-row > td {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+}
+
+.payroll-mobile-summary-bar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 2px solid var(--color-border);
+  background: var(--color-surface);
+  box-shadow: 0 -10px 24px rgb(15 23 42 / 14%);
+}
+
+.payroll-mobile-summary-bar.is-mismatch {
+  border-top-color: var(--color-danger);
+}
+
+.payroll-mobile-summary-bar span {
+  min-width: 0;
+}
+
+.payroll-mobile-summary-bar small,
+.payroll-mobile-summary-bar b {
+  display: block;
+  overflow: visible;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  white-space: normal;
+}
+
+.payroll-mobile-summary-bar small {
+  color: var(--color-text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 800;
+}
+
+.payroll-mobile-summary-bar b {
+  color: var(--color-text);
+  font-size: var(--text-sm);
+}
+
 .payroll-detail-panel {
   position: sticky;
   top: 18px;
 }
 
-.payroll-detail-grid,
-.payroll-special-grid,
+.payroll-detail-backdrop {
+  display: none;
+}
+
+.payroll-detail-panel-header {
+  align-items: flex-start;
+}
+
+.payroll-detail-panel-header small {
+  display: block;
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.payroll-detail-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* `.payroll-detail-close`'s `display` toggle used to live here (none by default, `inline-flex`
+   under `max-width: 1365px`). It never applied: Button.jsx's `buttonVariants` base carries the
+   Tailwind `inline-flex` utility, and index.css's `@layer theme, legacy, utilities` means a
+   utility always beats a rule in this file for the same property. The button is now rendered
+   conditionally on `isOverlayPanel` in PayrollPage.jsx instead -- see the comment there. */
+
+.payroll-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 16px;
+}
+
+/* B1 fix (Opus review, 2026-07-30 branch, fixed 2026-07-31): the previous `max-width: 1500px`
+   breakpoint here forced a THIRD panel state -- stacked below the table with `position: static` --
+   on top of the real two (sticky side-by-side, and the <1366px fixed overlay below). At the stated
+   primary desktop target (1366-1440px) that pushed the panel ~88px below the fold with no
+   scroll-into-view, the worst of both states. Deleted outright; the panel now has exactly two
+   states, both handled below: sticky beside the table when the `payroll-wide:` grid track applies
+   (>=1366px, see PayrollPage.jsx and index.css's `@custom-variant payroll-wide`), and the fixed
+   slide-over overlay in the `max-width: 1365px` block further down for everything under that.
+
+   B3 fix (same review): a second breakpoint used to live here too, `(min-width: 721px) and
+   (max-width: 1040px)`, reflowing `.payroll-table` into 2-column cards in the 721-1040px tablet
+   band. Measured proof it was unnecessary: the table's natural grid (`--payroll-table-columns` on
+   `.payroll-table` above) is only ~630px wide (150px employee + 4 visible money columns x 120px),
+   comfortably inside the ~700-990px of content width available across that whole band -- so it
+   already rendered as a real, un-truncated table with room to spare, and the reflow (plus the
+   `min-width: 0 !important` it needed to fight the ≤1040px `min-width: 900px` scroll-trap rule
+   below) was pure over-correction. Removed outright; `.payroll-table` was also removed from that
+   ≤1040px rule's selector list so it stops being forced wider than its own content needs. The
+   ≤720px phone card reflow a few hundred lines down is unrelated and unchanged -- that band's
+   content width genuinely cannot fit this table. */
+
 .payroll-breakdown {
   display: grid;
   gap: 10px;
 }
 
-.payroll-detail-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.payroll-special-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
+/* Defect 2 fix (Opus review, 2026-07-31): `.payroll-detail-grid`/`.payroll-special-grid` no longer
+   set their own `display`/`gap`/`grid-template-columns` here -- both moved to Tailwind utilities
+   (`grid grid-cols-1 gap-2.5 @sm:grid-cols-2`) at the two PayrollPage.jsx call sites so the column
+   count can respond to the panel's own container-query width instead of being pinned to 2 columns
+   at every width (that pin was the regression: 107px money inputs, 3-line labels, at the panel's
+   300px/340px floor). Left as bare selectors here would be dead weight -- this stylesheet is
+   `@layer legacy` and always loses to a Tailwind utility on the same element (see the
+   styles-css-loses-to-tailwind-utilities gotcha) -- so the rule is deleted rather than kept as an
+   unreachable fallback. */
 
 .mini-metric {
   display: grid;
@@ -1643,12 +1852,6 @@ textarea:focus {
 .data-row strong,
 .topbar-user strong {
   color: var(--color-text);
-}
-
-/* The account row sits on the dark sidebar, not a white surface — the ink
-   colour above would render it near-invisible (~1.1:1) against the navy. */
-.sidebar-account strong {
-  color: var(--color-surface);
 }
 
 .old-value {
@@ -2130,6 +2333,12 @@ a.status-badge {
 }
 
 .info-tip-trigger {
+  /* Item 4c fix (2026-07-31): the VISIBLE badge stays a small 16px circle deliberately -- there are
+     ~11 of these in the payroll detail panel alone, and a 44px glyph on every field label would be
+     visual noise the "?" hint doesn't warrant. `position: relative` anchors the invisible `::before`
+     hit-slop below, which is what actually grows the touch/click target to >=44x44 without changing
+     what's drawn. */
+  position: relative;
   width: 16px;
   height: 16px;
   padding: 0;
@@ -2143,6 +2352,18 @@ a.status-badge {
   font-size: var(--text-2xs);
   font-weight: 700;
   line-height: 1;
+}
+
+/* Item 4c fix (2026-07-31): an invisible hit-slop, not a bigger visible circle (see the comment
+   above). `content: ''` with no background/border paints nothing; `inset: -14px` on all sides grows
+   the CLICKABLE region from the visible 16x16 badge to the WCAG 2.5.5/2.5.8 floor of 44x44
+   (16 + 14 + 14 = 44) without moving or resizing the glyph itself. A pseudo-element's rendered area
+   is not a separate event target -- a click anywhere inside it is dispatched to `.info-tip-trigger`
+   (the actual `<button>`), so no extra JS/handler wiring is needed for this to work. */
+.info-tip-trigger::before {
+  content: '';
+  position: absolute;
+  inset: -14px;
 }
 
 .info-tip-trigger:hover {
@@ -2287,12 +2508,16 @@ a.status-badge {
   /* `.ticket-worklist-table`, not `.ticket-table`: the shared 4-column class is
      also used by TicketDashboard and AccountFinancePage, both of which render
      inside `overflow: hidden` panels with no scroller, so a forced 900px
-     minimum would clip their last column instead of scrolling it. */
+     minimum would clip their last column instead of scrolling it.
+     `.payroll-table` is deliberately NOT in this list (B3 fix, 2026-07-31): its
+     own natural grid is only ~630px, so forcing a 900px floor here would
+     manufacture a horizontal-scroll trap this table never needed -- see the
+     comment where its old 721-1040px card-reflow rules used to live, a few
+     hundred lines up. */
   .request-table,
   .ticket-worklist-table,
   .commission-table,
   .commission-payroll-table,
-  .payroll-table,
   .reflow-cards {
     min-width: 900px;
   }
@@ -2303,14 +2528,6 @@ a.status-badge {
 
   .ticket-filter-search {
     flex-basis: 100%;
-  }
-
-  .payroll-workspace {
-    grid-template-columns: 1fr;
-  }
-
-  .payroll-detail-panel {
-    position: static;
   }
 
   .table-panel {
@@ -2328,22 +2545,98 @@ a.status-badge {
   }
 }
 
+/* B1 fix (Opus review, 2026-07-31), floor lowered by the Phase A command-surface fix (2026-07-31):
+   the payroll detail panel's overlay presentation now switches at 1366px, not 1040px. It once tried
+   Tailwind's built-in `xl:` (1280px), but measured live in a real browser at :5211 that width left
+   the table's 714px minimum hidden beside the panel. The later 1440px floor was safe but kept the
+   side panel out of the common 1366px desktop band. Phase A reduces the side-panel floor to 310px so
+   1366px can afford the measured 714px table, the
+   16px gap, and the panel. `payroll-wide:` (see index.css's `@custom-variant`) is the single source
+   of truth both PayrollPage.jsx's grid-track utility and its `useMediaQuery('(min-width: 1366px)')`
+   JS check key off, so CSS, Tailwind, and JS state can never disagree about which mode is active.
+   `max-width: 1365px` here is the exact complement of that `min-width: 1366px`. */
+@media (max-width: 1365px) {
+  .payroll-detail-panel {
+    position: fixed;
+    inset: 66px 0 0 auto;
+    z-index: 45;
+    width: min(440px, calc(100vw - 32px));
+    max-width: 100%;
+    max-height: calc(100dvh - 66px);
+    overflow-y: auto;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    box-shadow: var(--shadow-lg-heavy);
+    transform: translateX(100%);
+    visibility: hidden;
+    transition:
+      transform 180ms ease,
+      visibility 0s linear 180ms;
+  }
+
+  .payroll-detail-panel.is-open {
+    transform: translateX(0);
+    visibility: visible;
+    transition: transform 180ms ease;
+  }
+
+  .payroll-detail-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 44;
+    display: block;
+    width: 100%;
+    min-height: 100dvh;
+    padding: 0;
+    border: 0;
+    background: var(--color-overlay-drawer);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 160ms ease;
+  }
+
+  .payroll-detail-backdrop.is-open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+}
+
 @media (max-width: 720px) {
-  .login-panel,
-  .form-grid,
-  .payroll-detail-grid,
-  .payroll-special-grid {
+  /* Defect 2 fix (Opus review, 2026-07-31): `.payroll-detail-grid`/`.payroll-special-grid` dropped
+     from this selector list -- they no longer set `grid-template-columns` in this stylesheet at
+     all (see the comment above `.payroll-breakdown`), so a viewport-width override for them here
+     would be unreachable dead code. Their 1-vs-2-column behaviour is now entirely driven by the
+     `@container` query on `.payroll-detail-panel` in PayrollPage.jsx, which already collapses to 1
+     column well above 720px (the panel is far narrower than the `@sm` container threshold at any
+     viewport), so nothing is lost. */
+  .form-grid {
     grid-template-columns: 1fr;
   }
 
-  /* F3: this must match `useIsMobile`'s 720px breakpoint, not an earlier 1040px cutoff. Below 720px
-     the run action is actually disabled (isMobile blocks it, see PayrollPage.jsx), so dropping the
-     divider that separates it from Preview is safe there. At 721–1040px (iPad Air/Pro portrait, a
-     half-screen laptop) Process Payroll is still enabled — removing the divider at that width left
-     the irreversible action reading as just another button in an undifferentiated row. */
-  .payroll-actions-group {
-    padding-left: 0;
-    border-left: none;
+  .payroll-detail-panel {
+    inset: auto 0 0 0;
+    width: 100%;
+    max-height: min(82dvh, 680px);
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    transform: translateY(100%);
+  }
+
+  .payroll-detail-panel.is-open {
+    transform: translateY(0);
+  }
+
+  .payroll-detail-panel-header {
+    position: sticky;
+    top: -20px;
+    z-index: 1;
+    margin: -20px -20px 16px;
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface);
   }
 
   /* Stat/metric cards: a single stacked column of full-width cards forces
@@ -2409,12 +2702,11 @@ a.status-badge {
   }
 
   .login-form {
-    grid-row: auto;
-    padding: 28px;
+    padding: 20px 24px 28px;
   }
 
   .login-brand {
-    border-right: 0;
+    padding: 24px 24px 20px;
   }
 
   .span-2 {
@@ -2712,7 +3004,6 @@ a.status-badge {
      (.commission-table / .commission-payroll-table) are
      intentionally excluded — they keep scrolling horizontally. */
   .request-table,
-  .payroll-table,
   .reflow-cards {
     /* Override the 1040px min-width:900px scroll trap for these classes.
        !important is required: styles.css now loads into @layer legacy,
@@ -2720,6 +3011,11 @@ a.status-badge {
        `min-w-[900px]` utility on the same element would otherwise win by
        layer order regardless of this rule's higher selector specificity. */
     min-width: 0 !important;
+  }
+
+  .payroll-table,
+  .payroll-table.payroll-total-row {
+    min-width: 0;
   }
 
   /* Each cell now carries its own label, so hide the shared header row. */
@@ -2731,7 +3027,6 @@ a.status-badge {
 
   /* Turn every data row into a full-width card. */
   .request-table.data-row,
-  .payroll-table.data-row,
   .reflow-cards.data-row {
     display: grid;
     /* !important: overrides a Tailwind `grid-cols-[...]` arbitrary utility
@@ -2741,6 +3036,19 @@ a.status-badge {
     gap: 8px;
     width: 100%;
     min-width: 0 !important;
+    padding: 14px 16px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md, 12px);
+    background: var(--color-surface);
+  }
+
+  .payroll-table.data-row,
+  .payroll-table.payroll-total-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
     padding: 14px 16px;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md, 12px);
@@ -2758,6 +3066,8 @@ a.status-badge {
   .request-table.data-row > td,
   .payroll-table.data-row > span,
   .payroll-table.data-row > td,
+  .payroll-table.payroll-total-row > th,
+  .payroll-table.payroll-total-row > td,
   .reflow-cards.data-row > span,
   .reflow-cards.data-row > td {
     display: block;
@@ -2771,6 +3081,7 @@ a.status-badge {
   .request-table.data-row > td[data-label]:not([data-label=""])::before,
   .payroll-table.data-row > span[data-label]:not([data-label=""])::before,
   .payroll-table.data-row > td[data-label]:not([data-label=""])::before,
+  .payroll-table.payroll-total-row > td[data-label]:not([data-label=""])::before,
   .reflow-cards.data-row > span[data-label]:not([data-label=""])::before,
   .reflow-cards.data-row > td[data-label]:not([data-label=""])::before {
     content: attr(data-label);
@@ -2783,16 +3094,26 @@ a.status-badge {
     color: var(--color-text-secondary);
   }
 
-  /* Keep the action cell's buttons laid out in a row within its card line. */
+  /* Keep the action cell's buttons laid out in a row within its card line.
+     `.payroll-table` is NOT in this list (B3/B4 cleanup, 2026-07-31): the payroll table no longer
+     has a per-row actions column -- the single-payslip download moved into the detail panel and
+     "รายละเอียด" was replaced by making the whole row clickable -- so `.payroll-table`'s
+     `> .row-actions` never matches anything and the branch was dead. */
   .request-table.data-row > .row-actions,
   .request-table.data-row > td > .row-actions,
-  .payroll-table.data-row > .row-actions,
-  .payroll-table.data-row > td > .row-actions,
   .reflow-cards.data-row > .row-actions,
   .reflow-cards.data-row > td > .row-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+  }
+
+  .payroll-table.payroll-total-row {
+    display: none;
+  }
+
+  .payroll-mobile-summary-row {
+    display: block;
   }
 
   /* --- Ticket items table (Step 12 backlog item C) ---

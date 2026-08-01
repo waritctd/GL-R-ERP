@@ -66,7 +66,13 @@ class PayrollPersistedPayslipIntegrationTest extends AbstractPostgresIntegration
             new th.co.glr.hr.payroll.export.KBankPctExporter(),
             new th.co.glr.hr.payroll.export.Pnd1Exporter(),
             new th.co.glr.hr.payroll.export.SsoExporter(),
-            new th.co.glr.hr.config.AppProperties());
+            new th.co.glr.hr.payroll.export.PayrollDetailExporter(),
+            new th.co.glr.hr.config.AppProperties(),
+            new th.co.glr.hr.payroll.obligation.DeductionObligationService(
+                new th.co.glr.hr.payroll.obligation.DeductionObligationRepository(jdbc),
+                mock(th.co.glr.hr.employee.EmployeeRepository.class),
+                mock(AuditService.class),
+                new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
     /**
@@ -150,7 +156,7 @@ class PayrollPersistedPayslipIntegrationTest extends AbstractPostgresIntegration
     }
 
     private long seedEmployee(String code, String firstNameTh, String lastNameTh, BigDecimal salary) {
-        return jdbc.queryForObject(
+        long employeeId = jdbc.queryForObject(
             """
             INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active)
             VALUES (:code, :first, :last, :salary, TRUE)
@@ -158,5 +164,9 @@ class PayrollPersistedPayslipIntegrationTest extends AbstractPostgresIntegration
             """,
             Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "salary", salary),
             Long.class);
+        // Task 2 (2026-07-29): SSO inclusion has no calculator-layer default -- seed it so
+        // socialSecurity comes out non-zero, matching this file's pinned 875.00 expectation.
+        seedSsoIncluded(employeeId, 2026, PayrollComponent.SALARY);
+        return employeeId;
     }
 }

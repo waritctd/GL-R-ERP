@@ -113,7 +113,13 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
             new th.co.glr.hr.payroll.export.KBankPctExporter(),
             new th.co.glr.hr.payroll.export.Pnd1Exporter(),
             new th.co.glr.hr.payroll.export.SsoExporter(),
-            new th.co.glr.hr.config.AppProperties());
+            new th.co.glr.hr.payroll.export.PayrollDetailExporter(),
+            new th.co.glr.hr.config.AppProperties(),
+            new th.co.glr.hr.payroll.obligation.DeductionObligationService(
+                new th.co.glr.hr.payroll.obligation.DeductionObligationRepository(jdbc),
+                mock(th.co.glr.hr.employee.EmployeeRepository.class),
+                mock(AuditService.class),
+                new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
 
         managerEmployeeId = createEmployee("ผู้จัดการฝ่ายขาย ทดสอบเพย์โรล", "sm-payroll-calcrefine@glr.co.th", "SA", "แผนกขาย");
         managerActor = new UserPrincipal(managerEmployeeId, managerEmployeeId + "@glr.co.th", "Sales Manager",
@@ -280,9 +286,20 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
     }
 
     private long createEmployee(String nameTh, String email, String divisionSourceCode, String divisionNameTh) {
-        return employees.create(new UpsertEmployeeRequest(
+        long employeeId = employees.create(new UpsertEmployeeRequest(
             null, null, nameTh, null, null, null, null, null, null, null,
             email, null, divisionSourceCode, divisionNameTh, divisionNameTh,
             null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
+        // Task 2 (2026-07-29): this test drives real PayrollService#preview, which now rejects a
+        // non-zero COMMISSION_PAY component with no stored classification (handoff section 1). This
+        // helper creates managers/CEO too, who never carry commission, so seeding it here is harmless
+        // for them and required for the sales rep. REGULAR_REPROJECT is not the point under test
+        // (commission weighting is) -- any treatment would do since only one component/month is ever
+        // non-zero per employee in this scenario, so REGULAR_REPROJECT (matching the default the SSO
+        // inclusion default table treats commission the same as salary for) keeps this file focused on
+        // its actual subject.
+        seedRegularTaxTreatment(employeeId, PAYROLL_MONTH.getYear(), PayrollComponent.COMMISSION_PAY);
+        seedSsoIncluded(employeeId, PAYROLL_MONTH.getYear(), PayrollComponent.SALARY, PayrollComponent.COMMISSION_PAY);
+        return employeeId;
     }
 }

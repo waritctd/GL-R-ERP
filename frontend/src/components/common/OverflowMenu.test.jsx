@@ -36,6 +36,13 @@ describe('OverflowMenu', () => {
     expect(screen.getAllByRole('menuitem')).toHaveLength(3);
   });
 
+  it('can render a visible trigger label while keeping the menu label as the accessible name', () => {
+    render(<OverflowMenu items={items()} label="เอกสาร" triggerLabel="เอกสาร" triggerIcon="fileText" />);
+
+    const trigger = screen.getByRole('button', { name: 'เอกสาร' });
+    expect(trigger.textContent).toContain('เอกสาร');
+  });
+
   it('invokes the item\'s onSelect and closes the menu on click', () => {
     const list = items();
     render(<OverflowMenu items={list} />);

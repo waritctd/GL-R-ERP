@@ -28,6 +28,7 @@ import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollCalculator;
+import th.co.glr.hr.payroll.PayrollComponent;
 import th.co.glr.hr.payroll.PayrollLineDto;
 import th.co.glr.hr.payroll.PayrollPeriodDto;
 import th.co.glr.hr.payroll.PayrollRepository;
@@ -92,7 +93,13 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             new th.co.glr.hr.payroll.export.KBankPctExporter(),
             new th.co.glr.hr.payroll.export.Pnd1Exporter(),
             new th.co.glr.hr.payroll.export.SsoExporter(),
-            new AppProperties());
+            new th.co.glr.hr.payroll.export.PayrollDetailExporter(),
+            new AppProperties(),
+            new th.co.glr.hr.payroll.obligation.DeductionObligationService(
+                new th.co.glr.hr.payroll.obligation.DeductionObligationRepository(jdbc),
+                mock(th.co.glr.hr.employee.EmployeeRepository.class),
+                mock(AuditService.class),
+                new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
 
         division = insertDivision("SLS", "ฝ่ายขาย");
         manager = insertEmployee("M001", null);
@@ -151,6 +158,12 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
     void backdatedOvertimeRaisesGrossAndNetOnThePayrollLine() {
         LocalDate workDate = backdatedWorkDateInCurrentMonth();
         LocalDate payrollMonth = workDate.withDayOfMonth(1);
+
+        // Task 2 (2026-07-29): a non-zero component with no withholding-tax classification rejects
+        // the run. This test's whole point is that backdated OT reaches the payroll line, so the OT
+        // it files IS non-zero and must be classified first -- exactly as HR would have to. Without
+        // this the run 409s on the second preview and the assertion below never runs.
+        seedRegularTaxTreatment(staff, payrollMonth.getYear(), PayrollComponent.OVERTIME_PAY);
 
         PayrollLineDto before = previewLineFor(payrollMonth, staff);
         fileAndFullyApprove(workDate);
@@ -285,14 +298,34 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
     }
 
     /**
-     * A past date guaranteed to sit in the current month, so the payroll month under test is the
-     * one the payroll lock leaves open. On the 1st there is no earlier day in the month, so this
-     * falls back to today — still exercising the same path.
+     * A work date that is GENUINELY BACKDATED — strictly before today — whatever day the suite runs
+     * on. Every test in this class derives its payroll month from {@code workDate.withDayOfMonth(1)},
+     * so the date may land in the previous month without disturbing any of them; what they all need
+     * is that it is in the past.
+     *
+     * <p>The previous version returned {@code today} itself on the 1st, on the assumption that this
+     * "still exercis[ed] the same path". It does not — it exercises the opposite branch.
+     * {@code OvertimeService#validateRetroactiveWindow} opens with
+     * {@code if (!request.workDate().isBefore(today)) return;}, so a same-day date short-circuits
+     * out before reaching {@code requirePayrollMonthOpen}. On the 1st of any month that silently
+     * turned {@code overtimeCannotBeFiledIntoAnAlreadyProcessedPayrollMonth} into a test of nothing:
+     * no exception was thrown because the guard under test was never reached, and the suite went red
+     * on a real assertion about behaviour that had not actually been invoked. Confirmed on
+     * 2026-08-01 against a clean checkout of origin/main.
+     *
+     * <p>Stepping back one day is the smallest change that makes the date unconditionally
+     * retroactive: it is always within {@code app.overtime.retroactive-window-days} (60), and it
+     * keeps every assertion in this class keyed off the same {@code workDate}.
+     *
+     * <p>This is a TEST-side fix. {@code OvertimeService} is deliberately untouched: the submit-time
+     * skip for same-day dates is bounded by design (the method bounds a <em>retroactive</em>
+     * request), and {@code requirePayrollMonthOpen} still runs unconditionally on the approve and
+     * update paths, which is where a closed month would otherwise let money move.
      */
     private LocalDate backdatedWorkDateInCurrentMonth() {
         // Bangkok zone to match OvertimeService.BUSINESS_ZONE; the JVM default zone flakes in UTC CI.
         LocalDate today = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok"));
-        return today.getDayOfMonth() > 1 ? today.withDayOfMonth(1) : today;
+        return today.getDayOfMonth() > 1 ? today.withDayOfMonth(1) : today.minusDays(1);
     }
 
     private SubmitOvertimeRequest backdated(LocalDate workDate) {

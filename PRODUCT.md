@@ -52,7 +52,8 @@ The design must reduce, never amplify, these:
 
 ## Typical device contexts
 
-- **Desktop / office laptop (1366–1440+)** — the primary design target for dense admin work: payroll, reconciliation, deal lists, pricing queues. Payroll is desktop-only by design.
+- **Desktop / office laptop (1366–1440+)** — the primary design target for dense admin work: payroll, reconciliation, deal lists, pricing queues. Payroll's densest surfaces (the 30 × 15 ประกันสังคม and ภาษีหัก ณ ที่จ่าย matrices) are designed here first.
+- **Payroll on phone (≤720) — added 2026-07-29, owner decision.** Payroll is no longer desktop-only. It reflows rather than shrinking: the matrices become one employee per screen with a vertical toggle list, because fifteen columns of 44px checkboxes on a phone is how a tax setting gets mis-tapped. Phone is fully editable, so the mis-tap risk below applies to payroll too — real touch targets and deliberate confirmation on anything consequential.
 - **Tablet / half-width laptop (721–1040)** — managers on an iPad or a split window. Currently the weakest surface (the shell breaks here); a first-class band to design for.
 - **Phone (≤720)** — the surface the most people touch most often: employee self-service, sales on the move, approvals for mobile-heavy CEO/managers. Designed as reflowed flows, not shrunk desktop.
 - **Factory-floor / shared device** — warehouse and QC recording inbound/inspection: big targets, few fields, unambiguous status.

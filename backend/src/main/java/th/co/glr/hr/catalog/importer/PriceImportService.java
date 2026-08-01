@@ -54,7 +54,7 @@ public class PriceImportService {
             result = engine.parse(fileStream, prof, factoryId);
         } catch (Exception e) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "parse failed: " + e.getMessage());
+                "อ่านไฟล์ไม่สำเร็จ: " + e.getMessage());
         }
 
         long versionId = createDraftVersion(factoryId, label, originalFilename,
@@ -91,7 +91,7 @@ public class PriceImportService {
             return objectMapper.readValue(json, ImportProfile.class);
         } catch (JsonProcessingException e) {
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR,
-                "parse profile JSON failed: " + e.getMessage());
+                "อ่าน JSON ของโปรไฟล์นำเข้าไม่สำเร็จ: " + e.getMessage());
         }
     }
 
@@ -529,7 +529,7 @@ public class PriceImportService {
         // validate it can be parsed before saving
         try { objectMapper.readValue(configJson, ImportProfile.class); }
         catch (JsonProcessingException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid profile JSON: " + e.getMessage());
+            throw new ApiException(HttpStatus.BAD_REQUEST, "JSON ของโปรไฟล์นำเข้าไม่ถูกต้อง: " + e.getMessage());
         }
         int updated = jdbc.update(
             "UPDATE price_catalog.import_profiles SET config = :cfg::jsonb, updated_at = now() WHERE factory_id = :fid",
@@ -600,7 +600,7 @@ public class PriceImportService {
         try {
             result = engine.parse(fileStream, prof, factoryId);
         } catch (Exception e) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "parse failed: " + e.getMessage());
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "อ่านไฟล์ไม่สำเร็จ: " + e.getMessage());
         }
 
         long versionId = createDraftVersion(factoryId, label, originalFilename,

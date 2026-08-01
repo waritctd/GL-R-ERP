@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 import { SEEDED_ROLES, loginAs, seededUser, spaGoto } from './helpers/auth.js';
 // The exact function App.jsx's <RequireAccess> uses to decide render-vs-
@@ -25,7 +22,6 @@ import { canAccessPath } from '../src/app/permissions.js';
 // exists for either yet (owner decision, see docs/agent-handoffs).
 // ─────────────────────────────────────────────────────────────────────────
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Guarded routes, pulled from App.jsx's <Route element={<RequireAccess
 // user={user} />}> block. SALES_ENABLED defaults true under
@@ -37,8 +33,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 //
 // /catalog IS now asserted: its <Route> was moved INSIDE the RequireAccess
 // wrapper (fix/catalog-route-guard) so the canViewCatalog guard is actually
-// enforced — this spec now guards against it regressing back outside. (NOTE:
-// GET /api/catalog still has no backend role check — a separate follow-up.)
+// enforced — this spec now guards against it regressing back outside. What that
+// guard controls is who sees the SCREEN: GET /api/catalog and /api/catalog/prices
+// are open to any authenticated user by product decision (#205; owner ruling
+// 2026-08-01 closing #388), so this is a UX assertion, not a security one.
 // /overtime and /my-requests remain excluded: both are RequireAccess-guarded
 // Navigate ALIASES (to /employee-requests?tab=ot and /profile respectively)
 // with guards identical to their canonical targets, so testing them adds
@@ -86,57 +84,25 @@ test.describe('rbac gating (frontend-gating only, not a backend authz proof)', (
         const expected = canAccessPath(routePath, user);
         await spaGoto(page, routePath);
 
+        // Both branches now land on `routePath` — issue #391 stopped denied routes
+        // redirecting to '/' so a shared deep link keeps its URL and the refusal
+        // survives a reload. The URL alone therefore no longer distinguishes allow
+        // from deny; the access-denied view's presence is what does.
+        await expect
+          .poll(() => new URL(page.url()).pathname, {
+            message: `${role} @ ${routePath}: URL must be preserved either way (#391)`,
+          })
+          .toBe(routePath);
+
+        const denial = page.getByRole('heading', { name: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' });
         if (expected) {
-          await expect
-            .poll(() => new URL(page.url()).pathname, {
-              message: `${role} @ ${routePath}: expected ALLOW (render), canAccessPath said true`,
-            })
-            .toBe(routePath);
+          await expect(denial, `${role} @ ${routePath}: expected ALLOW (render), canAccessPath said true`)
+            .toBeHidden();
         } else {
-          await expect
-            .poll(() => new URL(page.url()).pathname, {
-              message: `${role} @ ${routePath}: expected REDIRECT to /, canAccessPath said false`,
-            })
-            .toBe('/');
+          await expect(denial, `${role} @ ${routePath}: expected DENY in place, canAccessPath said false`)
+            .toBeVisible();
         }
       }
     });
   }
-});
-
-test('rbac oracle vs docs/ux-ui-audit/data/shoot-manifest.json — drift is logged, not asserted', async () => {
-  // The manifest is a UX-audit-era regression baseline, not this spec's
-  // source of truth (that's canAccessPath itself, above). It predates
-  // /finance, /pricing-requests, /procurement, and the canViewDealPipeline
-  // split (role-scoped-views program) — so drift here is EXPECTED, not a
-  // failure. This just makes that drift visible instead of silent.
-  const manifestPath = path.join(__dirname, '..', '..', 'docs', 'ux-ui-audit', 'data', 'shoot-manifest.json');
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-
-  const seen = new Set();
-  const drifts = [];
-  for (const entry of manifest) {
-    const key = `${entry.role}|${entry.path}`;
-    if (seen.has(key)) continue; // dedupe across viewports (desktop/mobile shoot the same path twice)
-    seen.add(key);
-
-    if (!SEEDED_ROLES.includes(entry.role)) continue;
-
-    const liveOracleAllow = canAccessPath(entry.path, seededUser(entry.role));
-    const manifestAllow = !entry.redirected;
-
-    if (liveOracleAllow !== manifestAllow) {
-      drifts.push({ role: entry.role, path: entry.path, manifestAllow, liveOracleAllow });
-    }
-  }
-
-  // eslint-disable-next-line no-console
-  console.log(
-    drifts.length
-      ? `[rbac drift vs shoot-manifest] ${drifts.length} path(s) differ from the stale manifest baseline:\n${JSON.stringify(drifts, null, 2)}`
-      : '[rbac drift vs shoot-manifest] no drift found',
-  );
-
-  // Informational only — never fail the suite on manifest staleness.
-  expect(Array.isArray(drifts)).toBe(true);
 });

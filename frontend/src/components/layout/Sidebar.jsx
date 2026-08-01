@@ -1,9 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { PRODUCT_MARK, PRODUCT_NAME, PRODUCT_PORTAL_LABEL } from '../../app/product.js';
-import { roleLabel } from '../../utils/format.js';
-import { Avatar } from '../common/Avatar.jsx';
-import { Button } from '../common/Button.jsx';
 import { Icon } from '../common/Icon.jsx';
 
 const NAV_GROUPS = [
@@ -51,7 +48,7 @@ function NavItemLink({ item, pathname }) {
   );
 }
 
-export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, user, employee, onLogout }) {
+export function Sidebar({ id, drawerRef, isDrawerOpen = false, items }) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   // Collapsed groups are the exception (default = expanded), so absence from
@@ -151,24 +148,6 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, user, empl
           );
         })}
       </nav>
-
-      <div className="sidebar-account">
-        <Avatar employee={employee} name={user.name} size="sm" />
-        <span>
-          <strong>{employee?.nameTh || user.name}</strong>
-          <small>{roleLabel(user.role)}</small>
-        </span>
-        <Button
-          variant="icon"
-          className="bg-transparent text-text-faint border-transparent"
-          type="button"
-          onClick={onLogout}
-          title="ออกจากระบบ"
-          aria-label="ออกจากระบบ"
-        >
-          <Icon name="logout" />
-        </Button>
-      </div>
     </aside>
   );
 }

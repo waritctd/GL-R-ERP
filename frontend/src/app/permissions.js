@@ -43,7 +43,9 @@ export function allowedRoute(route, user) {
   if (route === 'ticket-detail' && !hasPermission(user.role, 'canViewTickets')) return fallback;
   if (route === 'finance' && !hasPermission(user.role, 'canConfirmPayments')) return fallback;
   if (route === 'commissions' && !hasPermission(user.role, 'canViewCommissions')) return fallback;
-  if (route === 'payroll' && !hasPermission(user.role, 'canManagePayroll')) return fallback;
+  // Split (issue #390): the route itself only needs read access (canViewPayroll, hr+ceo) --
+  // mutating controls inside PayrollPage.jsx gate individually on canManagePayroll (hr-only).
+  if (route === 'payroll' && !hasPermission(user.role, 'canViewPayroll')) return fallback;
   if (route === 'overtime' && !user.employeeId && !hasPermission(user.role, 'canViewAllOvertime')) return fallback;
   if (route === 'leave' && !user.employeeId && !hasPermission(user.role, 'canViewAllLeave')) return fallback;
   if (route === 'profile' && !user.employeeId) return fallback;
@@ -82,7 +84,19 @@ const PATH_GUARDS = [
   // confirmDepositPaid/confirmFinalPayment/confirmCloseReady actions this
   // page's rows drive.
   { test: (p) => p === '/finance', can: (u) => hasPermission(u.role, 'canConfirmPayments') },
-  { test: (p) => p === '/payroll', can: (u) => hasPermission(u.role, 'canManagePayroll') },
+  // Split (issue #390): mirrors PayrollController exactly -- every GET plus the non-persisting
+  // POST /preview and /preview/export/{kind} are hasAnyRole('HR','CEO'); every write stays
+  // hr-only and is gated inside PayrollPage.jsx (canManagePayroll), not at the route level.
+  { test: (p) => p === '/payroll', can: (u) => hasPermission(u.role, 'canViewPayroll') },
+  // ล.ย.01 tax-allowance declaration (issue #387). `/tax-allowance` is the
+  // employee's own declaration form — same "must have an employeeId" shape as
+  // `/profile` above, and just as important to guard explicitly: unknown paths
+  // fail OPEN in canAccessPath (the `if (!guard) return true` below), so omitting
+  // this entry would let any logged-in user without an employeeId reach it.
+  { test: (p) => p === '/tax-allowance', can: (u) => !!u.employeeId },
+  // `/tax-allowance-review` is HR/CEO's register — mirrors
+  // TaxAllowanceDeclarationService's GET /declarations gate (hasAnyRole('HR','CEO')).
+  { test: (p) => p === '/tax-allowance-review', can: (u) => hasPermission(u.role, 'canViewTaxAllowanceRegister') },
   // /employee-requests hosts both the overtime and welfare/special-money tabs
   // (RequestsPage.jsx), so it is visible to anyone either sub-page would be
   // visible to. /overtime stays guarded identically since it's a same-page

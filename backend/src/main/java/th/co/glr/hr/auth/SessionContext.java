@@ -15,13 +15,13 @@ public class SessionContext {
         if (value instanceof UserPrincipal user) {
             return user;
         }
-        throw new ApiException(HttpStatus.UNAUTHORIZED, "Not authenticated");
+        throw new ApiException(HttpStatus.UNAUTHORIZED, "กรุณาเข้าสู่ระบบก่อนใช้งาน");
     }
 
     public void requireAnyRole(UserPrincipal user, String... roles) {
         boolean allowed = Arrays.stream(roles).anyMatch(role -> role.equals(user.role()));
         if (!allowed) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 }

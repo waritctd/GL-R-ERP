@@ -74,7 +74,7 @@ class PayrollControllerTest {
         // parseMonth's blank guard rejects it with the "required" message.
         mvc.perform(get("/api/payroll?payrollMonth=").session(sessionFor("hr")))
             .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.message").value("payrollMonth is required"));
+            .andExpect(jsonPath("$.message").value("ต้องระบุงวดเงินเดือน"));
 
         verifyNoInteractions(payrollService);
     }
@@ -83,7 +83,7 @@ class PayrollControllerTest {
     void invalidPayrollMonthIsRejectedWith400() throws Exception {
         mvc.perform(get("/api/payroll?payrollMonth=2026-13").session(sessionFor("hr")))
             .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.message").value("Invalid payroll month"));
+            .andExpect(jsonPath("$.message").value("งวดเงินเดือนไม่ถูกต้อง"));
 
         verifyNoInteractions(payrollService);
     }
@@ -92,7 +92,7 @@ class PayrollControllerTest {
     void currentOrPreviewRequiresASession() throws Exception {
         mvc.perform(get("/api/payroll?payrollMonth=2026-07"))
             .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.message").value("Not authenticated"));
+            .andExpect(jsonPath("$.message").value("กรุณาเข้าสู่ระบบก่อนใช้งาน"));
 
         verifyNoInteractions(payrollService);
     }
@@ -167,6 +167,28 @@ class PayrollControllerTest {
             org.mockito.ArgumentMatchers.eq(7L),
             org.mockito.ArgumentMatchers.eq(LocalDate.of(2026, 7, 26)),
             any(UserPrincipal.class));
+    }
+
+    @Test
+    void exportPayrollDetailSetsAttachmentDispositionAndSpreadsheetContentType() throws Exception {
+        byte[] body = "PK...xlsx-bytes...".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        when(payrollService.export(
+                org.mockito.ArgumentMatchers.eq(th.co.glr.hr.payroll.export.PayrollExportKind.PAYROLL_DETAIL),
+                org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq(LocalDate.of(2026, 7, 26)),
+                any(UserPrincipal.class)))
+            .thenReturn(new th.co.glr.hr.payroll.export.PayrollExportFile(
+                th.co.glr.hr.payroll.export.PayrollExportKind.PAYROLL_DETAIL, "PayrollDetail260726.xlsx", body));
+
+        mvc.perform(get("/api/payroll/7/export/payroll-detail?effectiveDate=2026-07-26").session(sessionFor("hr")))
+            .andExpect(status().isOk())
+            .andExpect(content().contentTypeCompatibleWith(
+                MediaType.valueOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")))
+            .andExpect(header().string("Content-Disposition",
+                org.hamcrest.Matchers.allOf(
+                    org.hamcrest.Matchers.containsString("attachment"),
+                    org.hamcrest.Matchers.containsString("PayrollDetail260726.xlsx"))))
+            .andExpect(content().bytes(body));
     }
 
     @Test

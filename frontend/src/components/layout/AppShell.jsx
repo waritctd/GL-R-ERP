@@ -9,7 +9,6 @@ import { ErrorBoundary } from '../common/ErrorBoundary.jsx';
 import { RouteFallback } from '../common/RouteFallback.jsx';
 import { Icon } from '../common/Icon.jsx';
 import { NotificationBell } from '../common/NotificationBell.jsx';
-import { StatePanel } from '../common/StatePanel.jsx';
 import { Sidebar } from './Sidebar.jsx';
 import { UserMenu } from './UserMenu.jsx';
 
@@ -17,14 +16,22 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const drawerRef = useRef(null);
   const menuButtonRef = useRef(null);
+  const mainRef = useRef(null);
   const location = useLocation();
   const navigate = useNavigate();
   const drawerId = 'mobile-navigation-drawer';
+  const mainContentId = 'main-content';
+
+  // WCAG 2.2 §2.4.1 Bypass Blocks: a bare `href="#main-content"` moves the
+  // viewport but focus-follows-fragment behaviour is inconsistent across
+  // browsers, so this focuses the target explicitly rather than relying on
+  // it. `tabIndex={-1}` on <main> (below) makes it programmatically
+  // focusable without adding it to the normal tab sequence.
+  const handleSkipLinkClick = useCallback((event) => {
+    event.preventDefault();
+    mainRef.current?.focus();
+  }, []);
   const isTeamManager = isDivisionManager(user);
-  const accessDenied = Boolean(location.state?.accessDenied);
-  const clearAccessDenied = () => {
-    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
-  };
   const navItems = [
     { path: '/', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
     // Division-manager (non-sales) "ทีมของฉัน" group — reuses the same
@@ -107,7 +114,13 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // the topbar UserMenu, and the two pages are merged into /profile. /requests
     // stays here because an HR review queue is work, not personal admin.
     { path: '/requests', label: 'คำขอแก้ไขข้อมูล', helper: 'Profile requests', icon: 'clipboard', group: 'hr', show: hasPermission(user.role, 'canReviewProfileRequests'), badge: pendingRequestCount },
-    { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canManagePayroll') },
+    // Tax-allowance (ล.ย.01) HR register (issue #387) — mirrors the route's own guard
+    // (canViewTaxAllowanceRegister: hr+ceo) so CEO's read-only visibility into the register
+    // still gets a nav entry, even though only hr can act on a row (canReviewTaxAllowances).
+    { path: '/tax-allowance-review', label: 'ตรวจสอบค่าลดหย่อนภาษี', helper: 'Tax allowance review (ล.ย.01)', icon: 'badgeCheck', group: 'hr', show: hasPermission(user.role, 'canViewTaxAllowanceRegister') },
+    // Split (issue #390): nav visibility follows read access (hr+ceo); CEO lands on a read-only
+    // view of the same page (PayrollPage.jsx gates writes on canManagePayroll internally).
+    { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canViewPayroll') },
     { path: '/attendance', label: 'เวลาทำงาน', helper: 'Attendance', icon: 'calendar', group: 'self', show: true },
     // Combined OT + welfare/special-money page (RequestsPage.jsx, tabs carried
     // in ?tab=). `match` keeps this item highlighted on both /employee-requests and
@@ -122,6 +135,9 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       match: ['/employee-requests', '/overtime'],
     },
     { path: '/leave', label: 'วันลา', helper: 'Leave', icon: 'clipboard', group: 'self', show: !!user.employeeId || hasPermission(user.role, 'canViewAllLeave') },
+    // Tax-allowance (ล.ย.01) self-service declaration (issue #387) — mirrors the route's own
+    // guard in permissions.js's PATH_GUARDS (`!!u.employeeId`, same shape as /profile).
+    { path: '/tax-allowance', label: 'ค่าลดหย่อนภาษี', helper: 'Tax allowance (ล.ย.01)', icon: 'calculator', group: 'self', show: !!user.employeeId },
   ].filter((item) => item.show);
 
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);
@@ -192,14 +208,23 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
 
   return (
     <div className="app-shell">
+      {/* WCAG 2.2 §2.4.1 Bypass Blocks: the first focusable element in the
+          shell, ahead of the sidebar's ~10 nav items + group headers, so
+          keyboard/screen-reader users don't re-traverse the nav on every
+          route. sr-only until focused; `focus:not-sr-only` brings it on
+          screen only while focused. */}
+      <a
+        href={`#${mainContentId}`}
+        onClick={handleSkipLinkClick}
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[200] focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-surface focus:shadow-lg"
+      >
+        ข้ามไปยังเนื้อหาหลัก
+      </a>
       <Sidebar
         id={drawerId}
         drawerRef={drawerRef}
         isDrawerOpen={isDrawerOpen}
         items={navItems}
-        user={user}
-        employee={employee}
-        onLogout={onLogout}
       />
       <button
         type="button"
@@ -208,7 +233,18 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
         onClick={closeDrawer}
         tabIndex={-1}
       />
-      <main className="app-main">
+      {/* tabIndex={-1}: focusable via the skip link's .focus() call, but not
+          part of the normal Tab sequence. The global `:focus-visible`
+          outline rule in styles.css excludes `[tabindex="-1"]`, and an
+          outset outline would clip against `.app-shell`'s `overflow:
+          hidden`, so an inset ring (reusing the same focus-ring token) is
+          used here to confirm the landing without changing layout. */}
+      <main
+        id={mainContentId}
+        ref={mainRef}
+        tabIndex={-1}
+        className="app-main outline-none focus-visible:shadow-[inset_0_0_0_3px_var(--color-indigo-ring)]"
+      >
         <header className="topbar">
           <Button
             ref={menuButtonRef}
@@ -241,27 +277,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
             />
           </div>
         </header>
-        <div className="content-scroll">
-          {accessDenied ? (
-            <StatePanel
-              state="denied"
-              compact
-              className="mb-4"
-              title="ยังเปิดหน้านี้ไม่ได้"
-              description="ระบบพากลับมาหน้าหลักแล้ว เนื้อหานี้จะเปิดได้เฉพาะบทบาทที่ได้รับสิทธิ์"
-              action={(
-                <button type="button" className="secondary-button" onClick={clearAccessDenied}>
-                  รับทราบ
-                </button>
-              )}
-            />
-          ) : null}
-          <ErrorBoundary key={location.pathname}>
-            <Suspense fallback={<RouteFallback />}>
-              <Outlet />
-            </Suspense>
-          </ErrorBoundary>
-        </div>
+        <div className="content-scroll"><ErrorBoundary key={location.pathname}><Suspense fallback={<RouteFallback />}><Outlet /></Suspense></ErrorBoundary></div>
       </main>
     </div>
   );
