@@ -42,7 +42,9 @@ class DeductionObligationScopeIntegrationTest extends AbstractPostgresIntegratio
     @BeforeEach
     void wireRealCollaborators() {
         repository = new DeductionObligationRepository(jdbc);
-        service = new DeductionObligationService(repository, mock(EmployeeRepository.class), mock(AuditService.class));
+        service = new DeductionObligationService(
+            repository, mock(EmployeeRepository.class), mock(AuditService.class),
+            new PayrollDeductionShortfallRepository(jdbc));
 
         employeeA = seedEmployee("OBL-A");
         employeeB = seedEmployee("OBL-B");

@@ -130,8 +130,112 @@ public record PayrollLineDto(
     // gate the "days worked" input to daily-rate employees and so the value survives a reload -- see
     // PayrollPage.jsx.
     BigDecimal daysWorked,
-    String payType
+    String payType,
+    // Issue #376, D-376-1 fix: the ป.วิ.พ. ม.302 "requested" figure -- the monthly amount actually
+    // fed into PayrollCalculator as garnishmentRequested THIS run (DeductionObligationService
+    // #resolveMonthlyAmount's return, obligation-clamp already applied if one exists). Carried out
+    // of PayrollService#calculateLine rather than re-derived later, specifically so {@code
+    // DeductionObligationService#recordGarnishmentShortfalls} never calls #resolveMonthlyAmount a
+    // SECOND time. A second call is unsafe: #recordRemittances (called earlier in the same
+    // #process()) may have already flipped an obligation's status (ACTIVE -> COMPLETED or back), and
+    // #findDrivingObligation's ORDER BY (status='ACTIVE') DESC means a second resolve can pick a
+    // DIFFERENT obligation than the one #calculateLine actually used -- fabricating a shortfall
+    // "requested" figure the court order never asked for. This field is the fix: it is the exact
+    // number #calculateLine saw, with no re-derivation possible. Intentionally NOT persisted to
+    // hr.payroll_line (no column, no INSERT/SELECT reference) -- it is consumed once, in the same
+    // #process() transaction, from the same in-memory PayrollLineDto list #preview() already built.
+    BigDecimal legalExecutionRequested
 ) {
+    /**
+     * Legacy 61-arg constructor: the full signature as it stood right before {@code
+     * legalExecutionRequested} (issue #376, D-376-1 fix) existed -- i.e. through {@code payType}.
+     * Keeps every 61-arg positional call site compiling unchanged; {@code legalExecutionRequested}
+     * defaults to {@code null} (no shortfall can be computed for a line built this way -- true for
+     * every existing call site, none of which ever fed this value to
+     * {@code recordGarnishmentShortfalls} in the first place).
+     */
+    public PayrollLineDto(
+        Long id,
+        long employeeId,
+        String employeeCode,
+        String employeeName,
+        String departmentName,
+        String bankName,
+        String bankAccount,
+        BigDecimal baseSalary,
+        BigDecimal dailyRate,
+        BigDecimal hourlyRate,
+        List<PayrollSpecialPayDto> specialPays,
+        BigDecimal specialPayTotal,
+        BigDecimal overtimePay,
+        BigDecimal commissionPay,
+        BigDecimal grossEarnings,
+        BigDecimal nonTaxableIncome,
+        BigDecimal unpaidLeaveDays,
+        BigDecimal unpaidLeaveDeduction,
+        BigDecimal grossTaxableIncome,
+        BigDecimal ssoWageBase,
+        BigDecimal socialSecurity,
+        BigDecimal projectedAnnualIncome,
+        BigDecimal taxExpenseDeduction,
+        BigDecimal taxAllowanceTotal,
+        BigDecimal taxableAnnualIncome,
+        BigDecimal annualTax,
+        BigDecimal withholdingTax,
+        BigDecimal studentLoanDeduction,
+        BigDecimal legalExecutionDeduction,
+        BigDecimal otherPostTaxDeductions,
+        BigDecimal totalDeductions,
+        BigDecimal netPay,
+        String calculationNote,
+        BigDecimal directorRemuneration,
+        BigDecimal warningLetterDeduction,
+        BigDecimal customerReturnDeduction,
+        BigDecimal otherPretaxDeduction,
+        BigDecimal leaveRefundDays,
+        BigDecimal leaveDeductionRefund,
+        BigDecimal withholdingTaxOverride,
+        BigDecimal regularTaxableIncome,
+        BigDecimal variableTaxableIncome,
+        BigDecimal regularWithholdingTax,
+        BigDecimal variableWithholdingTax,
+        BigDecimal bonusPay,
+        BigDecimal otherOneOffPay,
+        BigDecimal excessWithheldToDate,
+        BigDecimal taxableIncomeRegularLimb,
+        BigDecimal taxableIncomeKnownLimb,
+        BigDecimal taxableIncomeCumulativeLimb,
+        BigDecimal withholdingTaxRegularLimb,
+        BigDecimal withholdingTaxCumulativeLimb,
+        boolean customerReturnAlreadyEarned,
+        String garnishmentType,
+        BigDecimal mealAllowance,
+        BigDecimal perDiemExempt,
+        BigDecimal perDiemTaxable,
+        String perDiemBasis,
+        BigDecimal customerReturnRequested,
+        BigDecimal daysWorked,
+        String payType
+    ) {
+        this(
+            id, employeeId, employeeCode, employeeName, departmentName, bankName, bankAccount,
+            baseSalary, dailyRate, hourlyRate, specialPays, specialPayTotal, overtimePay, commissionPay,
+            grossEarnings, nonTaxableIncome, unpaidLeaveDays, unpaidLeaveDeduction, grossTaxableIncome,
+            ssoWageBase, socialSecurity, projectedAnnualIncome, taxExpenseDeduction, taxAllowanceTotal,
+            taxableAnnualIncome, annualTax, withholdingTax, studentLoanDeduction, legalExecutionDeduction,
+            otherPostTaxDeductions, totalDeductions, netPay, calculationNote,
+            directorRemuneration, warningLetterDeduction, customerReturnDeduction, otherPretaxDeduction,
+            leaveRefundDays, leaveDeductionRefund, withholdingTaxOverride,
+            regularTaxableIncome, variableTaxableIncome, regularWithholdingTax, variableWithholdingTax,
+            bonusPay, otherOneOffPay, excessWithheldToDate,
+            taxableIncomeRegularLimb, taxableIncomeKnownLimb, taxableIncomeCumulativeLimb,
+            withholdingTaxRegularLimb, withholdingTaxCumulativeLimb,
+            customerReturnAlreadyEarned, garnishmentType,
+            mealAllowance, perDiemExempt, perDiemTaxable, perDiemBasis,
+            customerReturnRequested, daysWorked, payType, null
+        );
+    }
+
     /**
      * Legacy 59-arg constructor: the full signature as it stood right before {@code daysWorked}/
      * {@code payType} (daily-rate support, 2026-07-30) existed -- i.e. through {@code

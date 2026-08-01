@@ -39,8 +39,9 @@ class DeductionObligationServiceTest {
     private final DeductionObligationRepository repository = mock(DeductionObligationRepository.class);
     private final EmployeeRepository employeeRepository = mock(EmployeeRepository.class);
     private final AuditService auditService = mock(AuditService.class);
+    private final PayrollDeductionShortfallRepository shortfallRepository = mock(PayrollDeductionShortfallRepository.class);
     private final DeductionObligationService service =
-        new DeductionObligationService(repository, employeeRepository, auditService);
+        new DeductionObligationService(repository, employeeRepository, auditService, shortfallRepository);
 
     private static final LocalDate MONTH = LocalDate.of(2026, 8, 1);
 

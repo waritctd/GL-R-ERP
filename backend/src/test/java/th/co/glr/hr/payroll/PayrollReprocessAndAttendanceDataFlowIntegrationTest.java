@@ -65,7 +65,8 @@ class PayrollReprocessAndAttendanceDataFlowIntegrationTest extends AbstractPostg
             new th.co.glr.hr.payroll.obligation.DeductionObligationService(
                 new th.co.glr.hr.payroll.obligation.DeductionObligationRepository(jdbc),
                 mock(th.co.glr.hr.employee.EmployeeRepository.class),
-                mock(AuditService.class)));
+                mock(AuditService.class),
+                new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
     // ---- P9: re-processing a month replaces lines, it does not duplicate the period -------------

@@ -5,6 +5,7 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.springframework.dao.DuplicateKeyException;
@@ -15,6 +16,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
+import th.co.glr.hr.payroll.PayrollDeductionKind;
 import th.co.glr.hr.payroll.PayrollLineDto;
 import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligationCreateRequest;
 import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligationDto;
@@ -53,15 +55,18 @@ public class DeductionObligationService {
     private final DeductionObligationRepository repository;
     private final EmployeeRepository employeeRepository;
     private final AuditService auditService;
+    private final PayrollDeductionShortfallRepository shortfallRepository;
 
     public DeductionObligationService(
         DeductionObligationRepository repository,
         EmployeeRepository employeeRepository,
-        AuditService auditService
+        AuditService auditService,
+        PayrollDeductionShortfallRepository shortfallRepository
     ) {
         this.repository = repository;
         this.employeeRepository = employeeRepository;
         this.auditService = auditService;
+        this.shortfallRepository = shortfallRepository;
     }
 
     // ==================================================================================
@@ -123,6 +128,68 @@ public class DeductionObligationService {
         for (PayrollLineDto line : lines) {
             recordOne(line.employeeId(), DeductionObligationKind.STUDENT_LOAN, payrollMonth, payrollPeriodId, line.studentLoanDeduction());
             recordOne(line.employeeId(), DeductionObligationKind.LEGAL_EXECUTION, payrollMonth, payrollPeriodId, line.legalExecutionDeduction());
+        }
+    }
+
+    /**
+     * Issue #376's shortfall tracking, generalising #373's requested/actual/shortfall triple: records
+     * a row in {@code hr.payroll_deduction_shortfall} for every employee whose LEGAL_EXECUTION
+     * deduction came out lower than what was actually asked for this period -- pure record-keeping,
+     * changes NO deducted amount (every figure here is read back from what {@code
+     * PayrollCalculator}/{@code PayrollService#calculateLine} already computed and {@code
+     * hr.payroll_line} already persisted).
+     *
+     * <p><b>D-376-1 fix (Opus review):</b> {@code requested} is read from {@link
+     * PayrollLineDto#legalExecutionRequested()} -- the EXACT value {@code calculateLine} resolved and
+     * fed to {@code PayrollCalculator} as {@code garnishmentRequested} for THIS line -- never
+     * recomputed by calling {@link #resolveMonthlyAmount} again here. A second call is unsafe: this
+     * method runs AFTER {@link #recordRemittances} in {@code PayrollService#process}, which may have
+     * just flipped an obligation's ACTIVE/COMPLETED status; {@link
+     * DeductionObligationRepository#findDrivingObligation}'s {@code ORDER BY (status='ACTIVE') DESC}
+     * means a second resolve, for an employee with more than one LEGAL_EXECUTION obligation on file,
+     * can pick a DIFFERENT obligation than the one {@code calculateLine} actually used earlier in the
+     * same run -- fabricating a "requested" figure the court order never asked for. Reviewer's probe:
+     * a completing obligation (monthly ฿5,000, override set) and a separate ACTIVE ฿100/฿100 total
+     * obligation together produced a phantom ฿4,900 shortfall against a ฿100 court order that was
+     * satisfied in full. Reading the value off the line instead of re-deriving it removes the bug
+     * class entirely, in both directions (the same flip could also silently SUPPRESS a real
+     * shortfall by resolving to a smaller or zero figure the second time).
+     *
+     * <p>Any difference between {@code legalExecutionRequested} and the persisted {@code
+     * line.legalExecutionDeduction()} can therefore only be the ALREADY-enforced ป.วิ.พ. ม.302 cap
+     * that ran inside the calculator (issue #376's explicit instruction: reuse that machinery, never
+     * duplicate it) -- this method does not reimplement any part of that cap, it only reads its
+     * output.
+     *
+     * <p>{@code STUDENT_LOAN} is deliberately excluded: no cap is enforced against it (see {@link
+     * DeductionObligationKind#STUDENT_LOAN}'s own javadoc -- item (1) territory, {@code
+     * DeductionCapGroup.NONE}), so requested always equals actual and there is nothing to record. A
+     * period where the obligation's OWN remaining-balance clamp reduces the monthly figure (the final
+     * instalment, or auto-stop at the instructed total) is NOT a shortfall either -- it is the
+     * obligation being correctly satisfied, already fully visible via {@code
+     * hr.deduction_obligation.status} and #373's remittance ledger.
+     *
+     * <p>Idempotent per (employee, payrollMonth, LEGAL_EXECUTION_GARNISHMENT) via {@link
+     * PayrollDeductionShortfallRepository#upsert}/{@link PayrollDeductionShortfallRepository#delete}
+     * -- a reprocess self-corrects instead of duplicating or stranding a stale row, matching {@link
+     * #recordRemittances}'s own guarantee.
+     */
+    public void recordGarnishmentShortfalls(LocalDate payrollMonth, long payrollPeriodId, List<PayrollLineDto> lines) {
+        for (PayrollLineDto line : lines) {
+            BigDecimal requested = money(line.legalExecutionRequested());
+            BigDecimal actual = money(line.legalExecutionDeduction());
+            BigDecimal shortfall = money(requested.subtract(actual)).max(ZERO);
+            if (shortfall.signum() == 0) {
+                shortfallRepository.delete(line.employeeId(), payrollMonth, PayrollDeductionKind.LEGAL_EXECUTION_GARNISHMENT);
+            } else {
+                String reason = "ป.วิ.พ. ม.302 -- เพดานการอายัดเงินเดือนตามประเภท " + line.garnishmentType()
+                    + " (PayrollGarnishmentType): ขอหักงวดนี้ ฿" + requested.toPlainString()
+                    + " แต่กฎหมายอนุญาตให้หักได้จริงเพียง ฿" + actual.toPlainString()
+                    + " ส่วนต่าง ฿" + shortfall.toPlainString()
+                    + " ยังไม่ได้ส่งให้เจ้าหนี้ตามหมายบังคับคดี ต้องพิจารณาในงวดถัดไปหรือแจ้งเจ้าพนักงานบังคับคดี";
+                shortfallRepository.upsert(line.employeeId(), payrollMonth,
+                    PayrollDeductionKind.LEGAL_EXECUTION_GARNISHMENT, requested, actual, shortfall, reason, payrollPeriodId);
+            }
         }
     }
 

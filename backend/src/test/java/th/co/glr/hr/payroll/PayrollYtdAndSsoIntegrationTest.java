@@ -65,7 +65,8 @@ class PayrollYtdAndSsoIntegrationTest extends AbstractPostgresIntegrationTest {
             new th.co.glr.hr.payroll.obligation.DeductionObligationService(
                 new th.co.glr.hr.payroll.obligation.DeductionObligationRepository(jdbc),
                 mock(th.co.glr.hr.employee.EmployeeRepository.class),
-                mock(AuditService.class)));
+                mock(AuditService.class),
+                new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
     // ---- P6: YTD merge drives withholding, and an empty YTD under-withholds -------------------

@@ -118,7 +118,8 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
             new th.co.glr.hr.payroll.obligation.DeductionObligationService(
                 new th.co.glr.hr.payroll.obligation.DeductionObligationRepository(jdbc),
                 mock(th.co.glr.hr.employee.EmployeeRepository.class),
-                mock(AuditService.class)));
+                mock(AuditService.class),
+                new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
 
         managerEmployeeId = createEmployee("ผู้จัดการฝ่ายขาย ทดสอบเพย์โรล", "sm-payroll-calcrefine@glr.co.th", "SA", "แผนกขาย");
         managerActor = new UserPrincipal(managerEmployeeId, managerEmployeeId + "@glr.co.th", "Sales Manager",

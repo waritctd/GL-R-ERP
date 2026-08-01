@@ -88,7 +88,8 @@ class PayrollClassificationReachabilityIntegrationTest extends AbstractPostgresI
             new th.co.glr.hr.payroll.obligation.DeductionObligationService(
                 new th.co.glr.hr.payroll.obligation.DeductionObligationRepository(jdbc),
                 mock(th.co.glr.hr.employee.EmployeeRepository.class),
-                mock(AuditService.class)));
+                mock(AuditService.class),
+                new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
     /**
