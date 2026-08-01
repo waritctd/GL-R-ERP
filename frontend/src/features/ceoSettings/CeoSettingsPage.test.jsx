@@ -71,7 +71,7 @@ describe('CeoSettingsPage', () => {
     await screen.findByText('USD');
     expect(api.fxRates.list).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Override' }));
+    fireEvent.click(screen.getByRole('button', { name: 'แก้ไขเอง' }));
     const input = screen.getByDisplayValue('36.5');
     fireEvent.change(input, { target: { value: '37' } });
     fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
@@ -88,7 +88,7 @@ describe('CeoSettingsPage', () => {
     renderCeoSettingsPage();
 
     await screen.findByText('USD');
-    fireEvent.click(screen.getByRole('button', { name: 'Override' }));
+    fireEvent.click(screen.getByRole('button', { name: 'แก้ไขเอง' }));
 
     const input = screen.getByDisplayValue('36.5');
     fireEvent.change(input, { target: { value: '0' } });
@@ -112,7 +112,7 @@ describe('CeoSettingsPage', () => {
 
     const dialog = await screen.findByRole('dialog');
     expect(dialog.getAttribute('aria-modal')).toBe('true');
-    expect(screen.getByText('แก้ไข config — CN')).not.toBeNull();
+    expect(screen.getByText('แก้ไขสูตรราคา — CN')).not.toBeNull();
 
     fireEvent.keyDown(document, { key: 'Escape' });
 

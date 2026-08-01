@@ -18,9 +18,9 @@ import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 const EVENT_LABEL = {
   PRICING_REQUEST_CREATED: 'สร้างคำขอราคา (ร่าง)',
   PRICING_REQUEST_UPDATED: 'แก้ไขคำขอราคา',
-  PRICING_REQUEST_SUBMITTED: 'ส่งให้ Import แล้ว',
-  PRICING_REQUEST_PICKED_UP: 'Import รับเรื่องแล้ว',
-  MORE_INFO_REQUESTED: 'Import ขอข้อมูลเพิ่มเติม',
+  PRICING_REQUEST_SUBMITTED: 'ส่งให้ฝ่ายนำเข้าแล้ว',
+  PRICING_REQUEST_PICKED_UP: 'ฝ่ายนำเข้ารับเรื่องแล้ว',
+  MORE_INFO_REQUESTED: 'ฝ่ายนำเข้าขอข้อมูลเพิ่มเติม',
   MORE_INFO_RESPONDED: 'ตอบข้อมูลเพิ่มเติมแล้ว',
   PRICING_REQUEST_CANCELLED: 'ยกเลิกคำขอราคา',
 };
@@ -111,7 +111,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
   return (
     <section className="table-panel">
       <div className="panel-header">
-        <h2>ใบขอราคา (Pricing Request)</h2>
+        <h2>ใบขอราคา</h2>
       </div>
 
       {requests.length === 0 ? (
@@ -148,7 +148,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                     <span className="text-xs text-text-muted">ต้องการภายใน {formatThaiDate(pr.requiredDate)}</span>
                   ) : null}
                   <span className="ml-auto text-xs text-text-muted">
-                    {pr.assignedImportName ? `Import: ${pr.assignedImportName}` : 'ยังไม่มีผู้รับเรื่อง'}
+                    {pr.assignedImportName ? `ฝ่ายนำเข้า: ${pr.assignedImportName}` : 'ยังไม่มีผู้รับเรื่อง'}
                   </span>
                 </button>
 
@@ -166,7 +166,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                         disabled={submitMutation.isPending}
                         onClick={() => submitMutation.mutate(pr.id)}
                       >
-                        ส่งให้ Import
+                        ส่งให้ฝ่ายนำเข้า
                       </button>
                     ) : null}
                     {canRequestInformation(user, pr) ? (
@@ -195,7 +195,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                 {expanded ? (
                   <div className="border-t border-border px-3 py-3">
                     {detailQuery.isLoading ? (
-                      <p className="text-xs text-text-muted">กำลังโหลด...</p>
+                      <p className="text-xs text-text-muted">กำลังโหลดรายละเอียดใบขอราคา…</p>
                     ) : (
                       <>
                         <div className="flex flex-col gap-1.5">
@@ -265,7 +265,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
           />
         ) : (
           <Modal title="แก้ไขร่างใบขอราคา" onClose={() => setEditingId(null)}>
-            <p className="text-xs text-text-muted">กำลังโหลด...</p>
+            <p className="text-xs text-text-muted">กำลังโหลดร่างใบขอราคา…</p>
           </Modal>
         )
       ) : null}

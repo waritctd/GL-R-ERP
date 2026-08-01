@@ -203,7 +203,7 @@ function SearchSelect({ id, label, value, onSelect, placeholder, options, onSear
           />
           {open && (
             <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.1)', maxHeight: 220, overflowY: 'auto' }}>
-              {loading && <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--color-text-muted)' }}>กำลังโหลด...</div>}
+              {loading && <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--color-text-muted)' }}>กำลังโหลด{label}…</div>}
               {!loading && options.length === 0 && <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--color-text-muted)' }}>ไม่พบข้อมูล</div>}
               {options.map((opt) => (
                 // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- dropdown option row; onMouseDown (not click) preserves input focus for typeahead
@@ -706,7 +706,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
         <div className="flex items-start gap-2 rounded-lg border border-info-border bg-info-bg px-3 py-2.5 text-xs text-info-dark">
           <Icon name="info" size={15} className="mt-0.5 shrink-0" />
-          <span>เพิ่มรายการสินค้าอย่างน้อย 1 รายการ ก่อนจึงจะสร้างใบขอราคา (PCR) ได้</span>
+          <span>เพิ่มรายการสินค้าอย่างน้อย 1 รายการ ก่อนจึงจะสร้างใบขอราคาได้</span>
         </div>
 
         {error ? <div className="form-error" role="alert">{error}</div> : null}
@@ -723,7 +723,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           label="บริษัท / ลูกค้า *"
           value={selectedCustomer}
           onSelect={(c) => { setSelectedCustomer(c); if (c) { setShowNewCustomer(false); clearFieldError('customer'); } }}
-          placeholder="พิมพ์ค้นหาชื่อบริษัท..."
+          placeholder="พิมพ์ค้นหาชื่อบริษัท…"
           options={customerOptions}
           onSearch={searchCustomers}
           searchValue={customerSearch}
@@ -748,7 +748,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               <label style={{ margin: 0, gridColumn: '1 / -1' }}>
                 <span style={{ fontSize: 11 }}>ชื่อบริษัท *</span>
-                <input value={newCustomer.name} onChange={(e) => setNewCustomer((p) => ({ ...p, name: e.target.value }))} placeholder="บริษัท ... จำกัด" />
+                <input value={newCustomer.name} onChange={(e) => setNewCustomer((p) => ({ ...p, name: e.target.value }))} placeholder="บริษัท … จำกัด" />
               </label>
               <label style={{ margin: 0 }}>
                 <span style={{ fontSize: 11 }}>เลขประจำตัวผู้เสียภาษี</span>
@@ -769,7 +769,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
               <button type="button" className="primary-button" disabled={!newCustomer.name.trim() || customerSaving} onClick={handleCreateCustomer} style={{ fontSize: 12 }}>
-                {customerSaving ? 'กำลังบันทึก...' : 'บันทึกบริษัทใหม่'}
+                {customerSaving ? 'กำลังบันทึก…' : 'บันทึกบริษัทใหม่'}
               </button>
               <button type="button" className="secondary-button" onClick={() => { setShowNewCustomer(false); setNewCustomer({ name: '', taxId: '', branch: 'สำนักงานใหญ่', address: '', phone: '' }); }} style={{ fontSize: 12 }}>
                 ยกเลิก
@@ -828,7 +828,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                     <input value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)}
                       placeholder="ชื่อโครงการ" style={{ flex: 1 }} />
                     <button type="button" className="primary-button" onClick={handleCreateProject} disabled={creatingProject} style={{ padding: '4px 12px', fontSize: 12 }}>
-                      {creatingProject ? 'กำลังเพิ่ม...' : 'เพิ่ม'}
+                      {creatingProject ? 'กำลังเพิ่ม…' : 'เพิ่ม'}
                     </button>
                   </div>
                 )}
@@ -952,7 +952,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                       <input value={newContact.email} onChange={(e) => setNewContact((p) => ({ ...p, email: e.target.value }))} placeholder="email@company.com" />
                     </label>
                     <button type="button" className="primary-button" onClick={handleCreateContact} disabled={creatingContact} style={{ gridColumn: '1 / -1', fontSize: 12 }}>
-                      {creatingContact ? 'กำลังเพิ่ม...' : 'เพิ่มผู้ติดต่อ'}
+                      {creatingContact ? 'กำลังเพิ่ม…' : 'เพิ่มผู้ติดต่อ'}
                     </button>
                   </div>
                 )}
@@ -1039,7 +1039,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               onChange={(e) => onModelInput(index, e.target.value)}
               onFocus={() => { setCatalogFocus({ index, field: 'model' }); if (item.model) onModelInput(index, item.model); }}
               onBlur={() => setTimeout(() => setCatalogFocus(null), 180)}
-              placeholder="เช่น Stone, Elegance, L-Trim..."
+              placeholder="เช่น Stone, Elegance, L-Trim…"
               required
               aria-required="true"
               aria-invalid={fieldErrors[`items.${index}.model`] ? true : undefined}
@@ -1207,7 +1207,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   --color-icon-muted (#475569, 7.24:1+ on this row's surfaces) so it reads a step
                   darker than the caveat's --color-text-muted (#5c6b80, 5.19:1) — both clear AA. */}
               <span style={{ fontSize: 11, color: 'var(--color-icon-muted)', fontWeight: 700 }}>
-                ราคาอ้างอิง (แคตตาล็อก) <span style={{ fontWeight: 500, color: 'var(--color-text-muted)' }}>— ราคาขายจริงมาจากขั้น PCR</span>
+                ราคาอ้างอิง (แคตตาล็อก) <span style={{ fontWeight: 500, color: 'var(--color-text-muted)' }}>— ราคาขายจริงมาจากขั้นใบขอราคา</span>
               </span>
               <span style={{ fontWeight: 800, fontSize: 14 }}>
                 {Number(item.catalogPrice).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {item.catalogCurrency}
@@ -1429,7 +1429,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
         <div className="flex items-start gap-2 rounded-lg border border-info-border bg-info-bg px-3 py-2.5 text-xs text-info-dark">
           <Icon name="info" size={15} className="mt-0.5 shrink-0" />
-          <span>สร้างดีลแล้วยังไม่มีราคา — ขั้นต่อไปคือ “สร้างใบขอราคา (PCR)” จากหน้าดีล</span>
+          <span>สร้างดีลแล้วยังไม่มีราคา — ขั้นต่อไปคือ “สร้างใบขอราคา” จากหน้าดีล</span>
         </div>
 
         {error ? <div className="form-error" role="alert">{error}</div> : null}
@@ -1445,7 +1445,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           <button type="button" className="secondary-button" onClick={handleSaveDraft} disabled={loading}>บันทึกร่าง</button>
           <button type="submit" form="ticket-create-form" className="primary-button" disabled={loading || !canCreateNow} data-testid="ticket-create-submit">
             <Icon name="fileText" />
-            {loading ? 'กำลังสร้าง...' : 'สร้างดีล'}
+            {loading ? 'กำลังสร้าง…' : 'สร้างดีล'}
           </button>
         </>
       );

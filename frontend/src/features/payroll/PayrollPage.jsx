@@ -1123,13 +1123,13 @@ export function PayrollPage({ user, showToast }) {
   const draftStatusLabel = draftSaveStatus === 'error'
     ? 'บันทึกอัตโนมัติไม่สำเร็จ'
     : draftSaving
-      ? 'กำลังบันทึก...'
+      ? 'กำลังบันทึก…'
       : draftDirty
         ? 'รอบันทึกอัตโนมัติ'
         : 'บันทึกแล้ว';
   const taxAndSsoTotal = Number(period?.totalWithholdingTax || 0) + Number(period?.totalSocialSecurity || 0);
   const payrollSummaryItems = [
-    { key: 'status', label: 'สถานะรอบ', value: status.label, helper: period?.status === 'PREVIEW' ? 'ยังไม่ปิดรอบ' : 'Payroll status' },
+    { key: 'status', label: 'สถานะรอบ', value: status.label, helper: period?.status === 'PREVIEW' ? 'ยังไม่ปิดรอบ' : 'สถานะเงินเดือน' },
     { key: 'gross', label: 'รายได้รวม', value: formatMoney(period?.totalGross), helper: 'Gross earnings' },
     { key: 'deductions', label: 'เงินหักรวม', value: formatMoney(period?.totalDeductions), helper: `ภาษี/ปกส. ${formatMoney(taxAndSsoTotal)}` },
     { key: 'net', label: 'ยอดโอนสุทธิ', value: formatMoney(period?.totalNet), helper: 'Net transfer' },

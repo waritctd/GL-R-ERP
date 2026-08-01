@@ -255,7 +255,7 @@ describe('DealStagePanel pricing-request summary strip', () => {
       pricingRequests: [{ id: 1, status: 'SUBMITTED', recipientType: 'DESIGNER' }],
     });
     expect(screen.getByText('การขอราคา:')).not.toBeNull();
-    expect(screen.getByText('รอ Import รับเรื่อง')).not.toBeNull();
+    expect(screen.getByText('รอฝ่ายนำเข้ารับเรื่อง')).not.toBeNull();
   });
 
   // Inverts the old "keys off the highest-id (most recent) pricing request"
@@ -272,13 +272,13 @@ describe('DealStagePanel pricing-request summary strip', () => {
     expect(screen.getByText('การขอราคา:')).not.toBeNull();
     // Financial-integrity review remediation (COMMIT 3, af1aef4) deliberately
     // split IMPORT_REVIEWING's label from the pre-Step-2 "Import กำลังเสนอราคา"
-    // ("Import is currently quoting") to "Import ตรวจคำขอราคา" ("Import is
+    // ("Import is currently quoting") to "ฝ่ายนำเข้าตรวจคำขอราคา" ("Import is
     // reviewing the request") once AWAITING_FACTORY_RESPONSE ("รอราคาโรงงาน")
     // became its own distinct status for the factory-quoting phase — see
     // utils/format.js's pricingRequestStatusLabel. This test predates that
     // relabel and was never updated; asserting the old text was asserting
     // stale copy, not a regression.
-    expect(screen.getByText('Import ตรวจคำขอราคา')).not.toBeNull();
+    expect(screen.getByText('ฝ่ายนำเข้าตรวจคำขอราคา')).not.toBeNull();
     expect(screen.getByText('แบบร่าง')).not.toBeNull();
   });
 
@@ -295,9 +295,9 @@ describe('DealStagePanel pricing-request summary strip', () => {
       ],
     });
     expect(screen.getByText('การขอราคา:')).not.toBeNull();
-    // See the label-relabel note above — 'Import ตรวจคำขอราคา' is the current,
+    // See the label-relabel note above — 'ฝ่ายนำเข้าตรวจคำขอราคา' is the current,
     // deliberately narrowed IMPORT_REVIEWING copy, not 'Import กำลังเสนอราคา'.
-    expect(screen.getByText('Import ตรวจคำขอราคา')).not.toBeNull();
+    expect(screen.getByText('ฝ่ายนำเข้าตรวจคำขอราคา')).not.toBeNull();
   });
 
   it('renders a roll-up count alongside the per-request lines', () => {

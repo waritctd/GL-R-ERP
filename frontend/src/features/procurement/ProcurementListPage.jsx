@@ -143,7 +143,7 @@ export function ProcurementListPage({ showToast }) {
     <div className="page-stack">
       <PageHeader
         title="ใบสั่งซื้อโรงงาน"
-        subtitle="Factory Purchase Orders — ต้นทาง สินค้า/ราคา จาก pricing_costing_item ที่ได้รับอนุมัติแล้วเท่านั้น"
+        subtitle="ใบสั่งซื้อแยกตามโรงงาน ใช้ข้อมูลสินค้าและราคาต้นทุนที่ได้รับอนุมัติแล้วเท่านั้น"
         actions={(
           <Button type="button" variant="icon" onClick={invalidate} title="รีเฟรช">
             <Icon name="refresh" />

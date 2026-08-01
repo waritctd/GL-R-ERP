@@ -70,7 +70,7 @@ describe('PricingRequestCreateModal', () => {
     const unitInput = screen.getByDisplayValue('แผ่น');
     fireEvent.change(unitInput, { target: { value: '' } });
 
-    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
     expect((await screen.findByRole('alert')).textContent).toContain('กรุณากรอกหน่วยของทุกรายการ');
     expect(createFn).not.toHaveBeenCalled();
@@ -82,7 +82,7 @@ describe('PricingRequestCreateModal', () => {
     fireEvent.change(qtyInput, { target: { value: '0' } });
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
 
-    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
     expect((await screen.findByRole('alert')).textContent).toContain('กรุณากรอกจำนวนของทุกรายการให้ถูกต้อง');
     expect(createFn).not.toHaveBeenCalled();
@@ -96,7 +96,7 @@ describe('PricingRequestCreateModal', () => {
     const { createFn } = renderModal({ ticketItems: [] }); // no deal items to seed from -> one blank row
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
 
-    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
     const rowError = await screen.findByRole('alert');
     expect(rowError.textContent).toContain('ต้องระบุสินค้าที่ต้องการเสนอราคา');
@@ -108,7 +108,7 @@ describe('PricingRequestCreateModal', () => {
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
     fireEvent.change(screen.getByLabelText('ข้อกำหนดพิเศษ'), { target: { value: 'ส่งด่วน' } });
 
-    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
     const rowError = await screen.findByRole('alert');
     expect(rowError.textContent).toContain('ต้องระบุสินค้าที่ต้องการเสนอราคา');
@@ -118,11 +118,11 @@ describe('PricingRequestCreateModal', () => {
   it('clears the row error once productDescription is filled in, and allows submission', async () => {
     const { createFn } = renderModal({ ticketItems: [] });
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
-    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
     await screen.findByRole('alert');
 
     fireEvent.change(screen.getByLabelText('รายละเอียดสินค้า'), { target: { value: 'กระเบื้องพอร์ซเลน 60x60 สีขาว' } });
-    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
     await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
     expect(createFn).toHaveBeenCalledWith(expect.objectContaining({
@@ -158,13 +158,13 @@ describe('PricingRequestCreateModal', () => {
     renderModal({ createFn, submitFn, updateFn });
 
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
-    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
     await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
     await screen.findByRole('alert'); // submitFn's rejection surfaces as the error banner
 
     // Retry: must NOT call createFn again (that would orphan a 2nd DRAFT).
-    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
     await waitFor(() => expect(submitFn).toHaveBeenCalledTimes(2));
     expect(createFn).toHaveBeenCalledTimes(1);
@@ -179,10 +179,10 @@ describe('PricingRequestCreateModal', () => {
     renderModal({ createFn, submitFn, updateFn });
 
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
-    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
     await screen.findByRole('alert');
 
-    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ Import/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
     expect(await screen.findByRole('status')).not.toBeNull();
   });
@@ -239,7 +239,7 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
     expect(onCreated).toHaveBeenCalledTimes(1);
   });
 
-  it('has no "ส่งให้ Import"/"บันทึกร่าง" buttons — editing a draft never submits or re-creates it', () => {
+  it('has no "ส่งให้ฝ่ายนำเข้า"/"บันทึกร่าง" buttons — editing a draft never submits or re-creates it', () => {
     render(
       <PricingRequestCreateModal
         mode="edit"
@@ -249,7 +249,7 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
         updateFn={vi.fn()}
       />,
     );
-    expect(screen.queryByRole('button', { name: /ส่งให้ Import/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ })).toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกร่าง' })).toBeNull();
   });
 });
@@ -314,7 +314,7 @@ describe('PricingRequestCreateModal revision mode (COMMIT 5, P1 finding 3)', () 
 
   it('requires a revision reason — the create button stays disabled until one is entered', async () => {
     const { createRevisionFn } = renderRevisionModal();
-    const submit = screen.getByRole('button', { name: /สร้าง revision/ });
+    const submit = screen.getByRole('button', { name: /สร้างรอบแก้ไข/ });
     expect(submit.disabled).toBe(true);
 
     fireEvent.click(submit); // disabled: must be a no-op, not a silent success
@@ -336,7 +336,7 @@ describe('PricingRequestCreateModal revision mode (COMMIT 5, P1 finding 3)', () 
     fireEvent.change(screen.getByDisplayValue('20'), { target: { value: '35' } });
     fireEvent.change(screen.getByDisplayValue('กระเบื้องพื้น SCG A1'), { target: { value: 'กระเบื้องพื้น SCG A1 รุ่นใหม่' } });
 
-    fireEvent.click(screen.getByRole('button', { name: /สร้าง revision/ }));
+    fireEvent.click(screen.getByRole('button', { name: /สร้างรอบแก้ไข/ }));
 
     await waitFor(() => expect(createRevisionFn).toHaveBeenCalledTimes(1));
     expect(createRevisionFn).toHaveBeenCalledWith(88, expect.objectContaining({
@@ -355,7 +355,7 @@ describe('PricingRequestCreateModal revision mode (COMMIT 5, P1 finding 3)', () 
     fireEvent.change(screen.getByPlaceholderText('เช่น ลูกค้าเปลี่ยนสินค้า/จำนวน/ขนาด'), {
       target: { value: 'ลูกค้าเปลี่ยนใจ' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /สร้าง revision/ }));
+    fireEvent.click(screen.getByRole('button', { name: /สร้างรอบแก้ไข/ }));
 
     await waitFor(() => expect(createRevisionFn).toHaveBeenCalledTimes(1));
     expect(createRevisionFn).toHaveBeenCalledWith(88, expect.any(Object));
@@ -365,11 +365,11 @@ describe('PricingRequestCreateModal revision mode (COMMIT 5, P1 finding 3)', () 
     expect(onCreated).toHaveBeenCalledWith({ pricingRequest: { summary: { id: 999 } } });
   });
 
-  it('has no "ส่งให้ Import"/"บันทึกร่าง"/"บันทึกการแก้ไข" buttons — only "สร้าง revision"', () => {
+  it('has no "ส่งให้ฝ่ายนำเข้า"/"บันทึกร่าง"/"บันทึกการแก้ไข" buttons — only "สร้างรอบแก้ไข"', () => {
     renderRevisionModal();
-    expect(screen.queryByRole('button', { name: /ส่งให้ Import/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ })).toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกร่าง' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกการแก้ไข' })).toBeNull();
-    expect(screen.getByRole('button', { name: /สร้าง revision/ })).not.toBeNull();
+    expect(screen.getByRole('button', { name: /สร้างรอบแก้ไข/ })).not.toBeNull();
   });
 });

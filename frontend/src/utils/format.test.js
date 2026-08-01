@@ -1,5 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { attendanceSourceLabel, formatAddress, formatMoney, formatShortDate, formatThaiMonthYearFromMonthInputValue, greetingName } from './format.js';
+import {
+  attendanceSourceLabel,
+  factoryQuoteStatusLabel,
+  formatAddress,
+  formatMoney,
+  formatShortDate,
+  formatThaiMonthYearFromMonthInputValue,
+  greetingName,
+  pricingCostingStatusLabel,
+  pricingDecisionStatusLabel,
+  quotationStatusLabel,
+} from './format.js';
 
 describe('formatAddress', () => {
   it('joins all four parts, not just line1', () => {
@@ -76,6 +87,19 @@ describe('attendanceSourceLabel', () => {
 
   it('falls through to the raw code for an unknown site', () => {
     expect(attendanceSourceLabel({ site_code: 'FACTORY' })).toBe('FACTORY');
+  });
+});
+
+describe('pricing workflow status labels', () => {
+  it('maps backend pricing workflow codes to user-facing Thai labels', () => {
+    expect(factoryQuoteStatusLabel('READY_FOR_COSTING')).toMatchObject({ label: 'พร้อมคำนวณต้นทุน', tone: 'success' });
+    expect(pricingDecisionStatusLabel('RETURNED')).toMatchObject({ label: 'ตีกลับให้แก้ไข', tone: 'danger' });
+    expect(quotationStatusLabel('REVISION_REQUESTED')).toMatchObject({ label: 'ลูกค้าขอแก้ไข', tone: 'warning' });
+  });
+
+  it('keeps stale costing visible without exposing the raw backend code', () => {
+    expect(pricingCostingStatusLabel('CALCULATED', { stale: true }))
+      .toMatchObject({ label: 'คำนวณแล้ว · ต้องคำนวณใหม่', tone: 'warning' });
   });
 });
 

@@ -487,7 +487,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>
             ใบแจ้งยอดเงินรับมัดจำ
             {doc?.version > 1 && (
-              <span style={{ marginLeft: 8, fontSize: 13, fontWeight: 400, color: 'var(--color-text-muted)' }}>Rev {doc.version}</span>
+              <span style={{ marginLeft: 8, fontSize: 13, fontWeight: 400, color: 'var(--color-text-muted)' }}>ครั้งที่ {doc.version}</span>
             )}
           </h1>
           {doc && (
@@ -539,10 +539,10 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
         {doc && isIssued && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button type="button" className="secondary-button" onClick={handleDownloadXlsx} disabled={downloading === 'xlsx'}>
-              <Icon name="fileText" size={14} /> {downloading === 'xlsx' ? 'กำลังดาวน์โหลด...' : 'ดาวน์โหลด Excel'}
+              <Icon name="fileText" size={14} /> {downloading === 'xlsx' ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด Excel'}
             </button>
             <button type="button" className="secondary-button" onClick={handleDownloadPdf} disabled={downloading === 'pdf'}>
-              <Icon name="fileText" size={14} /> {downloading === 'pdf' ? 'กำลังดาวน์โหลด...' : 'ดาวน์โหลด PDF'}
+              <Icon name="fileText" size={14} /> {downloading === 'pdf' ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด PDF'}
             </button>
           </div>
         )}
@@ -567,7 +567,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           <div style={{ padding: '0 18px 18px', display: 'flex', justifyContent: 'center' }}>
             <button type="button" className="primary-button" onClick={handleCreateDraft} disabled={creatingDraft}>
               <Icon name="plus" size={14} />
-              {creatingDraft ? 'กำลังสร้าง...' : 'สร้างเอกสารฉบับร่าง'}
+              {creatingDraft ? 'กำลังสร้าง…' : 'สร้างเอกสารฉบับร่าง'}
             </button>
           </div>
         </section>
@@ -595,7 +595,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                   id="doc-customer-search"
                   value={customerSearch}
                   onChange={(e) => setCsSearch(e.target.value)}
-                  placeholder="ชื่อบริษัท หรือ เลขภาษี..."
+                  placeholder="ชื่อบริษัท หรือ เลขภาษี…"
                 />
                 {customerSearch && customers.length > 0 && (
                   <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'var(--color-surface)', border: '1px solid var(--color-border-subtle)', borderRadius: 6, zIndex: 50, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', maxHeight: 180, overflowY: 'auto' }}>
@@ -616,7 +616,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                   id="doc-customer-name"
                   ref={(el) => { fieldRefs.current.customerName = el; }}
                   value={form.customerName} disabled={isIssued}
-                  onChange={(e) => setField('customerName', e.target.value)} placeholder="บริษัท..."
+                  onChange={(e) => setField('customerName', e.target.value)} placeholder="บริษัท…"
                   aria-required="true"
                   aria-invalid={fieldErrors.customerName ? true : undefined}
                   aria-describedby={fieldErrors.customerName ? fieldErrorId('doc-customer-name') : undefined}
@@ -635,13 +635,13 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               <label style={{ fontSize: 12 }}>
                 ที่อยู่
                 <textarea rows={2} value={form.customerAddress} disabled={isIssued}
-                  onChange={(e) => setField('customerAddress', e.target.value)} placeholder="ที่อยู่..." style={{ resize: 'vertical' }} />
+                  onChange={(e) => setField('customerAddress', e.target.value)} placeholder="ที่อยู่…" style={{ resize: 'vertical' }} />
               </label>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <label style={{ fontSize: 12 }}>
                   ชื่อโครงการ
                   <input value={form.projectName} disabled={isIssued}
-                    onChange={(e) => setField('projectName', e.target.value)} placeholder="โครงการ..." />
+                    onChange={(e) => setField('projectName', e.target.value)} placeholder="โครงการ…" />
                 </label>
                 <label style={{ fontSize: 12 }}>
                   อ้างอิง PO / ใบเสนอราคา

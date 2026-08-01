@@ -10,7 +10,15 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { formatMoney, formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
+import {
+  factoryQuoteStatusLabel,
+  formatMoney,
+  formatThaiDate,
+  pricingCostingStatusLabel,
+  pricingDecisionStatusLabel,
+  pricingRequestStatusLabel,
+  quotationStatusLabel,
+} from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import { toUserErrorDescription, toUserErrorMessage } from '../../utils/userMessages.js';
 import {
@@ -46,26 +54,11 @@ function canSeeRaw(user) {
 }
 
 const UNIT_OPTIONS = [
-  { code: 'PER_SQM', label: 'per sqm' },
-  { code: 'PER_PIECE', label: 'per piece' },
-  { code: 'PER_BOX', label: 'per box' },
-  { code: 'PER_LINEAR_M', label: 'per linear m' },
+  { code: 'PER_SQM', label: 'ตร.ม.' },
+  { code: 'PER_PIECE', label: 'แผ่น' },
+  { code: 'PER_BOX', label: 'กล่อง' },
+  { code: 'PER_LINEAR_M', label: 'เมตร' },
 ];
-
-// Step 5: customer-quotation doc_status -> StatusBadge tone. Covers every value the full V52+V74
-// lifecycle declares (ISSUED, SENT, SUPERSEDED, CANCELLED, EXPIRED, ACCEPTED, REJECTED,
-// REVISION_REQUESTED) plus the pre-Step-5 DRAFT/READY_TO_ISSUE; anything unmapped falls back to
-// 'warning' below, same as before this map existed.
-const QUOTATION_STATUS_TONE = {
-  ISSUED: 'success',
-  SENT: 'success',
-  ACCEPTED: 'success',
-  CANCELLED: 'danger',
-  REJECTED: 'danger',
-  EXPIRED: 'danger',
-  SUPERSEDED: 'neutral',
-  REVISION_REQUESTED: 'warning',
-};
 
 const DISPATCH_STATUS_LABEL = {
   PENDING: 'รอส่ง',
@@ -373,7 +366,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   });
   const returnDecisionToImport = useActionMutation(
     ({ decision, reason }) => api.pricingRequests.returnPricingDecisionToImport(decision.id, { returnReason: reason }),
-    'ตีกลับให้ Import แก้ไขต้นทุนแล้ว',
+    'ตีกลับให้ฝ่ายนำเข้าแก้ไขต้นทุนแล้ว',
   );
   // Step 4: Customer Quotation Generation and Issuance.
   const createQuotation = useMutation({
@@ -426,7 +419,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       setRevisionClientRequestId(generateClientRequestId());
       setQuotationItemDrafts({});
       setQuotationHeaderDraft({});
-      showToast?.('success', 'สร้าง revision ใหม่แล้ว');
+      showToast?.('success', 'สร้างรอบแก้ไขใหม่แล้ว');
       invalidate();
     },
     onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
@@ -632,7 +625,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           <div className="text-sm"><strong>ดีล</strong> <Link to={`/tickets/${summary.ticketId}`} className="text-info underline">{summary.ticketCode}</Link></div>
           <div className="text-sm"><strong>ผู้รับ</strong> {pricingRequestRecipientLabel(summary.recipientType)}{summary.recipientLabel ? ` · ${summary.recipientLabel}` : ''}</div>
           <div className="text-sm"><strong>ต้องการภายใน</strong> {formatThaiDate(summary.requiredDate)}</div>
-          <div className="text-sm"><strong>Import</strong> ฝ่าย Import</div>
+          <div className="text-sm"><strong>ฝ่ายนำเข้า</strong> ผู้รับเรื่องและประสานราคาโรงงาน</div>
         </div>
       </section>
 
@@ -732,10 +725,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
       {canCreateCustomerRevision ? (
         <section className="table-panel">
-          <div className="panel-header"><h2>Customer Change Revision</h2></div>
+          <div className="panel-header"><h2>รอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า</h2></div>
           <div className="flex flex-wrap gap-2 p-3">
             <button type="button" className="secondary-button" onClick={() => setRevisionModalOpen(true)}>
-              สร้าง revision
+              สร้างรอบแก้ไข
             </button>
           </div>
         </section>
@@ -744,7 +737,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       {canSeeRaw(user) ? (
         <section className="table-panel">
           <div className="panel-header">
-            <h2>Factory Quotes</h2>
+            <h2>ราคาโรงงาน</h2>
             {isImport(user) ? (
               <button type="button" className="primary-button" disabled={generateDrafts.isPending} onClick={() => generateDrafts.mutate()} data-testid="pcr-generate-drafts">
                 สร้างร่างอีเมล
@@ -753,6 +746,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           </div>
           <div className="flex flex-col gap-3 p-3">
             {factoryQuotes.map((quote) => {
+              const quoteStatus = factoryQuoteStatusLabel(quote.status);
               const emailDraft = emailDrafts[quote.id] ?? {
                 emailTo: quote.emailTo ?? '',
                 emailSubject: quote.emailSubject ?? '',
@@ -772,8 +766,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 <div key={quote.id} className="rounded-md border border-border bg-surface p-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <strong>{quote.factoryName}</strong>
-                    <StatusBadge tone="neutral">Rev {quote.revisionNo}</StatusBadge>
-                    <StatusBadge tone={quote.current ? 'success' : 'neutral'}>{quote.status}</StatusBadge>
+                    <StatusBadge tone="neutral">ครั้งที่ {quote.revisionNo}</StatusBadge>
+                    <StatusBadge tone={quote.current ? quoteStatus.tone : 'neutral'}>{quoteStatus.label}</StatusBadge>
                     {dispatchStatusBadge(quote)}
                     {isImport(user) && quote.status === 'DRAFT' && quote.dispatchStatus !== 'PENDING' && quote.dispatchStatus !== 'SENDING' ? (
                       <button type="button" className="secondary-button" onClick={() => {
@@ -790,7 +784,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         {quote.dispatchStatus === 'FAILED' ? 'ส่งอีกครั้ง' : 'ส่ง'}
                       </button>
                     ) : null}
-                    {isImport(user) && ['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) && quote.current ? <button type="button" className="secondary-button" onClick={() => readyQuote.mutate(quote)} data-testid="pcr-quote-ready">พร้อม costing</button> : null}
+                    {isImport(user) && ['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) && quote.current ? <button type="button" className="secondary-button" onClick={() => readyQuote.mutate(quote)} data-testid="pcr-quote-ready">พร้อมคำนวณต้นทุน</button> : null}
                     {isImport(user) && quote.status === 'RESPONSE_RECEIVED' && quote.current ? <button type="button" className="secondary-button" onClick={() => negotiateQuote.mutate(quote)}>เจรจา</button> : null}
                   </div>
                   <div className="mt-2 text-xs text-text-muted">{quote.emailTo ?? '-'} · {quote.supplierQuoteRef ?? '-'}</div>
@@ -799,9 +793,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   ) : null}
                   {isImport(user) && quote.status === 'DRAFT' ? (
                     <div className="mt-3 grid gap-2 border-t border-border-subtle pt-3">
-                      <input className="form-input" value={emailDraft.emailTo} onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailTo: e.target.value } })} placeholder="Factory email recipient" />
-                      <input className="form-input" value={emailDraft.emailSubject} onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailSubject: e.target.value } })} placeholder="Subject" />
-                      <textarea className="form-input min-h-24" value={emailDraft.emailBody} onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailBody: e.target.value } })} placeholder="Email body" />
+                      <input className="form-input" value={emailDraft.emailTo} onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailTo: e.target.value } })} placeholder="อีเมลโรงงาน" />
+                      <input className="form-input" value={emailDraft.emailSubject} onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailSubject: e.target.value } })} placeholder="หัวข้ออีเมล" />
+                      <textarea className="form-input min-h-24" value={emailDraft.emailBody} onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailBody: e.target.value } })} placeholder="เนื้อหาอีเมล" />
                       <button type="button" className="secondary-button" disabled={updateQuote.isPending} onClick={() => updateQuote.mutate({ quote, draft: emailDraft })}>
                         บันทึกร่างอีเมล
                       </button>
@@ -811,7 +805,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     <div className="mt-3 flex flex-col gap-1 border-t border-border-subtle pt-3 text-xs text-text-muted">
                       {quote.items.map((line, index) => (
                         <span key={line.id ?? `${line.pricingRequestItemId ?? 'item'}-${index}`}>
-                          Item #{line.pricingRequestItemId} · raw {formatCurrency(line.rawUnitPrice, line.currency)} · {line.unitBasis ?? '-'} · {line.sqmPerUnit ? `${line.sqmPerUnit} sqm/unit` : '-'}
+                          รายการ #{line.pricingRequestItemId} · ราคาโรงงาน {formatCurrency(line.rawUnitPrice, line.currency)} · {line.unitBasis ?? '-'} · {line.sqmPerUnit ? `${line.sqmPerUnit} ตร.ม./หน่วย` : '-'}
                         </span>
                       ))}
                     </div>
@@ -819,7 +813,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   {(quote.attachments ?? []).length || isImport(user) ? (
                     <div className="mt-3 border-t border-border-subtle pt-3">
                       <div className="mb-2 flex flex-wrap items-center gap-2">
-                        <span className="text-xs font-semibold uppercase text-text-muted">Attachments</span>
+                        <span className="text-xs font-semibold text-text-muted">ไฟล์แนบ</span>
                         {isImport(user) ? (
                           <label className="secondary-button cursor-pointer">
                             <input type="file" className="hidden" onChange={(event) => {
@@ -845,10 +839,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   {isImport(user) && quote.current && ['DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(quote.status) ? (
                     <div className="mt-3 flex flex-col gap-2 border-t border-border-subtle pt-3">
                       <div className="grid gap-2 md:grid-cols-4">
-                        <input className="form-input" value={draft.supplierQuoteRef} onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, supplierQuoteRef: e.target.value } })} placeholder="Ref" />
-                        <input className="form-input" value={draft.defaultCurrency} onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, defaultCurrency: e.target.value } })} placeholder="Currency" />
-                        <input className="form-input" value={draft.paymentTerms} onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, paymentTerms: e.target.value } })} placeholder="Payment terms" />
-                        <input className="form-input" value={draft.leadTimeText} onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, leadTimeText: e.target.value } })} placeholder="Lead time" />
+                        <input className="form-input" value={draft.supplierQuoteRef} onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, supplierQuoteRef: e.target.value } })} placeholder="เลขอ้างอิงใบเสนอราคา" />
+                        <input className="form-input" value={draft.defaultCurrency} onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, defaultCurrency: e.target.value } })} placeholder="สกุลเงิน" />
+                        <input className="form-input" value={draft.paymentTerms} onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, paymentTerms: e.target.value } })} placeholder="เงื่อนไขการชำระเงิน" />
+                        <input className="form-input" value={draft.leadTimeText} onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, leadTimeText: e.target.value } })} placeholder="ระยะเวลาผลิต/ส่งมอบ" />
                       </div>
                       {draft.items.map((line, index) => (
                         <div key={line.pricingRequestItemId} className="grid gap-2 md:grid-cols-4">
@@ -856,12 +850,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             const items = [...draft.items];
                             items[index] = { ...line, rawUnitPrice: e.target.value };
                             setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
-                          }} placeholder="Raw price" />
+                          }} placeholder="ราคาโรงงาน" />
                           <input className="form-input" value={line.currency} onChange={(e) => {
                             const items = [...draft.items];
                             items[index] = { ...line, currency: e.target.value };
                             setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
-                          }} placeholder="Currency" />
+                          }} placeholder="สกุลเงิน" />
                           <select className="form-input" value={line.unitBasis} onChange={(e) => {
                             const items = [...draft.items];
                             items[index] = { ...line, quotedUnit: e.target.value, unitBasis: e.target.value };
@@ -873,7 +867,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             const items = [...draft.items];
                             items[index] = { ...line, sqmPerUnit: e.target.value };
                             setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
-                          }} placeholder="sqm/unit" />
+                          }} placeholder="ตร.ม./หน่วย" />
                         </div>
                       ))}
                       <button type="button" className="secondary-button" disabled={receiveQuote.isPending} data-testid="pcr-quote-save-response" onClick={() => {
@@ -881,14 +875,14 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         setReceiveClientRequestIds((cur) => ({ ...cur, [quote.id]: clientRequestId }));
                         receiveQuote.mutate({ quote, draft, clientRequestId });
                       }}>
-                        บันทึก response/revision
+                        บันทึกคำตอบ/รอบแก้ไข
                       </button>
                     </div>
                   ) : null}
                 </div>
               );
             })}
-            {factoryQuotes.length === 0 ? <p className="text-sm text-text-muted">ยังไม่มี factory quote</p> : null}
+            {factoryQuotes.length === 0 ? <p className="text-sm text-text-muted">ยังไม่มีราคาโรงงาน</p> : null}
           </div>
         </section>
       ) : null}
@@ -896,35 +890,38 @@ export function PricingRequestDetailPage({ user, showToast }) {
       {canSeeRaw(user) ? (
         <section className="table-panel">
           <div className="panel-header">
-            <h2>Costing</h2>
-            {isImport(user) ? <button type="button" className="primary-button" onClick={() => createCosting.mutate()} data-testid="pcr-costing-create">สร้าง draft</button> : null}
+            <h2>ต้นทุนนำเข้า</h2>
+            {isImport(user) ? <button type="button" className="primary-button" onClick={() => createCosting.mutate()} data-testid="pcr-costing-create">สร้างร่างต้นทุน</button> : null}
           </div>
           <div className="flex flex-col gap-3 p-3">
-            {isImport(user) ? <input className="form-input" value={costingNote} onChange={(e) => setCostingNote(e.target.value)} placeholder="Costing note" /> : null}
+            {isImport(user) ? <input className="form-input" value={costingNote} onChange={(e) => setCostingNote(e.target.value)} placeholder="หมายเหตุต้นทุน" /> : null}
             {costings.map((costing) => (
               <div key={costing.id} className="rounded-md border border-border bg-surface p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <strong>{costing.costingCode}</strong>
-                  <StatusBadge tone="neutral">Version {costing.versionNo}</StatusBadge>
-                  <StatusBadge tone={costing.status === 'SUBMITTED' ? 'success' : 'warning'}>{costing.status}{costing.stale ? ' · stale' : ''}</StatusBadge>
+                  <StatusBadge tone="neutral">เวอร์ชัน {costing.versionNo}</StatusBadge>
+                  {(() => {
+                    const status = pricingCostingStatusLabel(costing.status, { stale: costing.stale });
+                    return <StatusBadge tone={status.tone}>{status.label}</StatusBadge>;
+                  })()}
                   <span className="text-xs text-text-muted">{costing.totalLandedCostThb != null ? formatCurrency(costing.totalLandedCostThb, 'THB') : '-'}</span>
                   {isImport(user) && costing.id === latestOpenCosting?.id ? (
                     <Fragment key={`costing-actions-${costing.id}`}>
                       <button type="button" className="secondary-button" onClick={() => recalculateCosting.mutate(costing)} data-testid="pcr-costing-recalculate">คำนวณใหม่</button>
-                      <button type="button" className="secondary-button" disabled={costing.status !== 'CALCULATED' || costing.stale} onClick={() => setConfirmAction({ type: 'submitCosting', costing })} data-testid="pcr-costing-submit">Submit to CEO</button>
+                      <button type="button" className="secondary-button" disabled={costing.status !== 'CALCULATED' || costing.stale} onClick={() => setConfirmAction({ type: 'submitCosting', costing })} data-testid="pcr-costing-submit">ส่งให้ CEO ตรวจ</button>
                     </Fragment>
                   ) : null}
                 </div>
                 {canSeeRaw(user) && costing.items?.length ? (
                   <div className="mt-2 flex flex-col gap-1 text-xs text-text-muted">
                     {costing.items.map((item, index) => (
-                      <span key={item.id ?? `${item.factoryName ?? 'factory'}-${item.factoryQuoteRevisionNo ?? 'rev'}-${index}`}>{item.factoryName} · Rev {item.factoryQuoteRevisionNo} · raw {formatCurrency(item.rawUnitPrice, item.rawCurrency)} · landed {formatCurrency(item.landedCostPerUnitThb, 'THB')}</span>
+                      <span key={item.id ?? `${item.factoryName ?? 'factory'}-${item.factoryQuoteRevisionNo ?? 'rev'}-${index}`}>{item.factoryName} · ครั้งที่ {item.factoryQuoteRevisionNo} · ราคาโรงงาน {formatCurrency(item.rawUnitPrice, item.rawCurrency)} · ต้นทุนนำเข้า {formatCurrency(item.landedCostPerUnitThb, 'THB')}</span>
                     ))}
                   </div>
                 ) : null}
               </div>
             ))}
-            {costings.length === 0 ? <p className="text-sm text-text-muted">ยังไม่มี costing</p> : null}
+            {costings.length === 0 ? <p className="text-sm text-text-muted">ยังไม่มีต้นทุนนำเข้า</p> : null}
           </div>
         </section>
       ) : null}
@@ -932,13 +929,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
       {canSeeRawPricingDecision(user) ? (
         <section className="table-panel">
           <div className="panel-header">
-            <h2>CEO Selling Price Decision</h2>
+            <h2>การพิจารณาราคาขายของ CEO</h2>
           </div>
           <div className="flex flex-col gap-3 p-3">
             {!currentDecision && canStartCeoReview(user, summary) ? (
               <div className="flex flex-wrap items-center gap-2">
                 <label className="text-xs text-text-muted">
-                  Default margin
+                  อัตรากำไรเริ่มต้น
                   <input
                     className="form-input ml-2 w-24"
                     value={decisionDefaultMargin}
@@ -956,6 +953,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
             ) : null}
             {currentDecision ? (() => {
               const decision = currentDecision;
+              const decisionStatus = pricingDecisionStatusLabel(decision.status);
               const isDraft = decision.status === 'DRAFT';
               const editable = isDraft && canActOnPricingDecision(user, summary);
               const missingBeforeApprove = decision.items.filter((item) => {
@@ -968,12 +966,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 <div key={decision.id} className="rounded-md border border-border bg-surface p-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <strong>{decision.decisionCode}</strong>
-                    <StatusBadge tone="neutral">Version {decision.decisionVersionNo}</StatusBadge>
-                    <StatusBadge tone={decision.status === 'APPROVED' ? 'success' : decision.status === 'RETURNED' ? 'danger' : 'warning'}>
-                      {decision.status}
-                    </StatusBadge>
+                    <StatusBadge tone="neutral">เวอร์ชัน {decision.decisionVersionNo}</StatusBadge>
+                    <StatusBadge tone={decisionStatus.tone}>{decisionStatus.label}</StatusBadge>
                     <span className="text-xs text-text-muted">
-                      {decision.currency} · FX {decision.fxRateUsed} ({decision.fxSource}, {decision.fxEffectiveDate})
+                      {decision.currency} · อัตราแลกเปลี่ยน {decision.fxRateUsed} ({decision.fxSource}, {decision.fxEffectiveDate})
                     </span>
                   </div>
                   <div className="mt-3 flex flex-col gap-2">
@@ -999,7 +995,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                 className="form-input"
                                 value={effectiveMargin}
                                 onChange={(e) => setDecisionItemDrafts((cur) => ({ ...cur, [item.id]: { ...draft, marginPct: e.target.value } }))}
-                                placeholder="Margin (0.20 = 20%)"
+                                placeholder="อัตรากำไร เช่น 0.20 = 20%"
                               />
                               <input
                                 className="form-input"
@@ -1011,7 +1007,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                 className="form-input"
                                 value={effectiveCeiling}
                                 onChange={(e) => setDecisionItemDrafts((cur) => ({ ...cur, [item.id]: { ...draft, discountCeilingPct: e.target.value } }))}
-                                placeholder="Discount ceiling (0.10 = 10%)"
+                                placeholder="ส่วนลดสูงสุด เช่น 0.10 = 10%"
                               />
                               <span className="self-center text-xs text-text-muted">
                                 ราคาขายเสนอ: {formatCurrency(item.proposedSellingPricePerRequestedUnit, decision.currency)}
@@ -1019,7 +1015,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             </div>
                           ) : (
                             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
-                              <span>Margin: {item.approvedMarginPct ?? item.proposedMarginPct ?? '-'}</span>
+                              <span>อัตรากำไร: {item.approvedMarginPct ?? item.proposedMarginPct ?? '-'}</span>
                               <span>ราคาขาย: {formatCurrency(item.approvedSellingPricePerRequestedUnit ?? item.proposedSellingPricePerRequestedUnit, decision.currency)}</span>
                               <span>ราคาขั้นต่ำ: {item.minimumSellingPricePerRequestedUnit != null ? formatCurrency(item.minimumSellingPricePerRequestedUnit, decision.currency) : '-'}</span>
                             </div>
@@ -1054,10 +1050,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         disabled={returnDecisionToImport.isPending}
                         onClick={() => setConfirmAction({ type: 'returnDecision', decision })}
                       >
-                        ตีกลับให้ Import แก้ไข
+                        ตีกลับให้ฝ่ายนำเข้าแก้ไข
                       </button>
                       {missingBeforeApprove.length > 0 ? (
-                        <span className="self-center text-xs text-danger">ทุกรายการต้องมี margin และราคาขั้นต่ำก่อนอนุมัติ</span>
+                        <span className="self-center text-xs text-danger">ทุกรายการต้องมีอัตรากำไรและราคาขั้นต่ำก่อนอนุมัติ</span>
                       ) : null}
                     </div>
                   ) : null}
@@ -1066,7 +1062,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
             })() : null}
             {pricingDecisions.length > 1 ? (
               <div className="text-xs text-text-muted">
-                ประวัติ: {pricingDecisions.map((d) => `v${d.decisionVersionNo} (${d.status})`).join(' · ')}
+                ประวัติ: {pricingDecisions.map((d) => {
+                  const status = pricingDecisionStatusLabel(d.status);
+                  return `เวอร์ชัน ${d.decisionVersionNo} (${status.label})`;
+                }).join(' · ')}
               </div>
             ) : null}
           </div>
@@ -1096,9 +1095,14 @@ export function PricingRequestDetailPage({ user, showToast }) {
           <div className="panel-header">
             <h2>ใบเสนอราคาลูกค้า</h2>
             {currentCustomerQuotation ? (
-              <StatusBadge tone={QUOTATION_STATUS_TONE[currentCustomerQuotation.docStatus] ?? 'warning'}>
-                {currentCustomerQuotation.docStatus} · rev {currentCustomerQuotation.quotationRevisionNo}
-              </StatusBadge>
+              (() => {
+                const status = quotationStatusLabel(currentCustomerQuotation.docStatus);
+                return (
+                  <StatusBadge tone={status.tone}>
+                    {status.label} · ครั้งที่ {currentCustomerQuotation.quotationRevisionNo}
+                  </StatusBadge>
+                );
+              })()
             ) : null}
           </div>
           <div className="flex flex-col gap-3 p-3">
@@ -1115,6 +1119,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
             {currentCustomerQuotation ? (() => {
               const quotation = currentCustomerQuotation;
+              const quotationStatus = quotationStatusLabel(quotation.docStatus);
               const editable = isCustomerQuotationEditable(quotation) && canManageCustomerQuotation(user, summary);
               return (
                 <div key={quotation.id} className="flex flex-col gap-3">
@@ -1218,11 +1223,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <div className="flex flex-wrap gap-2">
                     <button type="button" className="secondary-button" disabled={downloadingQuotationFormat === 'pdf'}
                       onClick={() => handleDownloadCustomerQuotation(quotation, 'pdf')}>
-                      Preview PDF
+                      ดูตัวอย่าง PDF
                     </button>
                     <button type="button" className="secondary-button" disabled={downloadingQuotationFormat === 'xlsx'}
                       onClick={() => handleDownloadCustomerQuotation(quotation, 'xlsx')}>
-                      Preview XLSX
+                      ดูตัวอย่าง XLSX
                     </button>
                     {editable ? (
                       <Fragment key={`quotation-actions-${quotation.id}`}>
@@ -1244,12 +1249,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     {canCreateCommercialOnlyRevision(user, summary, quotation) ? (
                       <button type="button" className="secondary-button" disabled={createQuotationRevision.isPending}
                         onClick={() => createQuotationRevision.mutate(quotation)}>
-                        {quotation.docStatus === 'REVISION_REQUESTED' ? 'แก้ไขเชิงพาณิชย์เท่านั้น (ราคา/เงื่อนไข)' : 'สร้าง Revision ใหม่'}
+                        {quotation.docStatus === 'REVISION_REQUESTED' ? 'สร้างรอบแก้ไขราคา/เงื่อนไข' : 'สร้างรอบแก้ไขใหม่'}
                       </button>
                     ) : null}
                     {quotation.docStatus === 'REVISION_REQUESTED' && canManageCustomerQuotation(user, summary) ? (
                       <button type="button" className="secondary-button" onClick={() => setRevisionModalOpen(true)}>
-                        มีการเปลี่ยนแปลงสินค้า/จำนวน/โรงงาน (Customer Change Revision)
+                        สร้างรอบแก้ไขสินค้า/จำนวน/โรงงาน
                       </button>
                     ) : null}
                   </div>
@@ -1286,7 +1291,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       ISSUED for any other reason. */}
                   {['ACCEPTED', 'REJECTED', 'REVISION_REQUESTED', 'EXPIRED', 'SUPERSEDED'].includes(quotation.docStatus) ? (
                     <p className="text-sm text-text-muted">
-                      ผลใบเสนอราคา: <strong>{quotation.docStatus}</strong>
+                      ผลใบเสนอราคา: <strong>{quotationStatus.label}</strong>
                       {quotation.outcomeNote ? ` — ${quotation.outcomeNote}` : ''}
                       {quotation.docStatus === 'SUPERSEDED' ? ' (ถูกแทนที่ด้วยเวอร์ชันใหม่แล้ว)' : ''}
                     </p>
@@ -1294,8 +1299,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
                   {customerQuotations.length > 1 ? (
                     <div className="mt-2 text-xs text-text-muted">
-                      <strong>ประวัติ revision:</strong>{' '}
-                      {customerQuotations.map((q) => `rev ${q.quotationRevisionNo} (${q.docStatus})`).join(' · ')}
+                      <strong>ประวัติรอบแก้ไข:</strong>{' '}
+                      {customerQuotations.map((q) => {
+                        const status = quotationStatusLabel(q.docStatus);
+                        return `ครั้งที่ ${q.quotationRevisionNo} (${status.label})`;
+                      }).join(' · ')}
                     </div>
                   ) : null}
                 </div>
@@ -1353,21 +1361,21 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
       <ConfirmDialog
         open={Boolean(confirmAction)}
-        title={confirmAction?.type === 'submitCosting' ? 'Submit costing to CEO'
+        title={confirmAction?.type === 'submitCosting' ? 'ส่งต้นทุนให้ CEO ตรวจ'
           : confirmAction?.type === 'approveDecision' ? 'อนุมัติราคาขาย'
-          : confirmAction?.type === 'returnDecision' ? 'ตีกลับให้ Import แก้ไขต้นทุน'
+          : confirmAction?.type === 'returnDecision' ? 'ตีกลับให้ฝ่ายนำเข้าแก้ไขต้นทุน'
           : confirmAction?.type === 'issueQuotation' ? 'ออกใบเสนอราคาลูกค้า'
           : 'ส่งอีเมลถึงโรงงาน'}
         message={confirmAction?.type === 'submitCosting'
-          ? 'เมื่อ submit แล้ว costing version นี้จะแก้ไขไม่ได้'
+          ? 'เมื่อส่งแล้ว เวอร์ชันต้นทุนนี้จะแก้ไขไม่ได้'
           : confirmAction?.type === 'approveDecision'
             ? 'เมื่ออนุมัติแล้ว ราคาขายจะถูกส่งให้ฝ่ายขายและไม่สามารถแก้ไขราคานี้ได้อีก'
             : confirmAction?.type === 'returnDecision'
-              ? 'ระบุเหตุผลที่ตีกลับให้ Import คำนวณต้นทุนใหม่'
+              ? 'ระบุเหตุผลที่ตีกลับให้ฝ่ายนำเข้าคำนวณต้นทุนใหม่'
               : confirmAction?.type === 'issueQuotation'
-                ? 'เมื่อออกใบเสนอราคาแล้ว จะแก้ไขไม่ได้ — การแก้ไขภายหลังต้องสร้าง revision ใหม่'
+                ? 'เมื่อออกใบเสนอราคาแล้ว จะแก้ไขไม่ได้ — การแก้ไขภายหลังต้องสร้างรอบแก้ไขใหม่'
                 : 'ยืนยันการส่งคำขอราคาให้โรงงานด้วยรายละเอียดอีเมลนี้'}
-        confirmLabel={confirmAction?.type === 'submitCosting' ? 'Submit to CEO'
+        confirmLabel={confirmAction?.type === 'submitCosting' ? 'ส่งให้ CEO ตรวจ'
           : confirmAction?.type === 'approveDecision' ? 'อนุมัติ'
           : confirmAction?.type === 'returnDecision' ? 'ตีกลับ'
           : confirmAction?.type === 'issueQuotation' ? 'ออกใบเสนอราคา'

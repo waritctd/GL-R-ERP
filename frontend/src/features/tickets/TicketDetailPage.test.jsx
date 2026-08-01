@@ -348,7 +348,7 @@ describe('TicketDetailPage', () => {
     expect(within(panel).getByText('20 ก.ค. 2569')).not.toBeNull();
     expect(within(panel).getByText('31 ก.ค. 2569')).not.toBeNull();
     expect(within(panel).getByText('สมชาย ใจดี')).not.toBeNull();
-    expect(within(panel).getByText('ยังไม่มี PCR')).not.toBeNull();
+    expect(within(panel).getByText('ยังไม่มีใบขอราคา')).not.toBeNull();
     expect(within(panel).getByText('คุณอรุณ ติดต่อ')).not.toBeNull();
     expect(within(panel).getByText('บันทึกสำหรับบริบทดีล')).not.toBeNull();
   });
@@ -358,7 +358,7 @@ describe('TicketDetailPage', () => {
 
     const panel = await screen.findByRole('complementary', { name: 'บริบทดีล' });
     fireEvent.click(within(panel).getByRole('button', { name: /บริบทดีล/ }));
-    fireEvent.change(within(panel).getByPlaceholderText('เพิ่มความคิดเห็น...'), { target: { value: 'จดไว้จากแผงบริบท' } });
+    fireEvent.change(within(panel).getByPlaceholderText('เพิ่มความคิดเห็น…'), { target: { value: 'จดไว้จากแผงบริบท' } });
     fireEvent.click(within(panel).getByRole('button', { name: 'ส่งความคิดเห็น' }));
 
     await waitFor(() => expect(api.tickets.comment).toHaveBeenCalledWith(701, { message: 'จดไว้จากแผงบริบท' }));
@@ -368,12 +368,12 @@ describe('TicketDetailPage', () => {
     renderTicketDetailPage(salesOwnerUser);
 
     await openTab(/กิจกรรม/);
-    expect(screen.getByPlaceholderText('เพิ่มความคิดเห็น...')).not.toBeNull();
+    expect(screen.getByPlaceholderText('เพิ่มความคิดเห็น…')).not.toBeNull();
 
     const panel = await screen.findByRole('complementary', { name: 'บริบทดีล' });
     fireEvent.click(within(panel).getByRole('button', { name: /บริบทดีล/ }));
 
-    expect(within(panel).queryByPlaceholderText('เพิ่มความคิดเห็น...')).toBeNull();
+    expect(within(panel).queryByPlaceholderText('เพิ่มความคิดเห็น…')).toBeNull();
     expect(screen.getAllByRole('button', { name: 'ส่งความคิดเห็น' })).toHaveLength(1);
   });
 
@@ -548,7 +548,7 @@ describe('TicketDetailPage', () => {
     expect(await screen.findByText('DEPOSIT')).not.toBeNull();
     expect(screen.getAllByText('฿400.00').length).toBeGreaterThan(0);
     expect(api.pricingRequests.listForTicket).not.toHaveBeenCalled();
-    expect(screen.queryByRole('heading', { name: 'ใบขอราคา (Pricing Request)' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'ใบขอราคา' })).toBeNull();
   });
 
   it('UX-34: Final Payment opens a confirm dialog with the real outstanding amount instead of firing the mutation on click', async () => {
@@ -671,7 +671,7 @@ describe('TicketDetailPage', () => {
     // The comment box now lives in DealHistoryPanel, in the "กิจกรรม" tab.
     await openTab(/กิจกรรม/);
 
-    const textarea = screen.getByPlaceholderText('เพิ่มความคิดเห็น...');
+    const textarea = screen.getByPlaceholderText('เพิ่มความคิดเห็น…');
     fireEvent.change(textarea, { target: { value: 'ทดสอบความคิดเห็น' } });
     fireEvent.click(screen.getByRole('button', { name: 'ส่งความคิดเห็น' }));
 
@@ -843,10 +843,10 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage(salesOwnerUser);
 
-    // ขอแก้ไข (Revise) collapsed into the header's "⋯" overflow menu
+    // ขอแก้ไข collapsed into the header's "⋯" overflow menu
     // (ticket-detail IA rebuild Phase 1) — open the menu, then its item.
     fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: /ขอแก้ไข \(Revise\)/ }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /ขอแก้ไข/ }));
     const confirmButton = await screen.findByRole('button', { name: 'ยืนยันขอแก้ไข' });
 
     // The button's disabled={actionLoading || !reviseReason.trim()} guard
@@ -1614,7 +1614,7 @@ describe('TicketDetailPage', () => {
       });
       api.tickets.actions.mockResolvedValueOnce({
         currentState: { lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued' },
-        availableActions: [{ action: 'ISSUE_IMPORT_REQUEST', kind: 'fulfillment', label: 'ออก IR' }],
+        availableActions: [{ action: 'ISSUE_IMPORT_REQUEST', kind: 'fulfillment', label: 'ออกคำขอนำเข้า' }],
       });
       api.tickets.issueImportRequest.mockResolvedValue({
         ticket: buildTicket({ summary: { status: 'quotation_issued', fulfillmentStatus: 'IR_ISSUED' } }),
@@ -1622,7 +1622,7 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(importUser);
       const section = await fulfilmentSection();
-      fireEvent.click(await section.findByRole('button', { name: 'ออก Import Request (IR)' }));
+      fireEvent.click(await section.findByRole('button', { name: 'ออกคำขอนำเข้า (IR)' }));
 
       await waitFor(() => expect(api.tickets.issueImportRequest).toHaveBeenCalledWith(701));
     });
@@ -1636,7 +1636,7 @@ describe('TicketDetailPage', () => {
         // A deliberately unrealistic payload (mirrors the "retired verbs" test
         // above) proving the role gate, not just the absence of the action.
         availableActions: [
-          { action: 'ISSUE_IMPORT_REQUEST', kind: 'fulfillment', label: 'ออก IR' },
+          { action: 'ISSUE_IMPORT_REQUEST', kind: 'fulfillment', label: 'ออกคำขอนำเข้า' },
           { action: 'SHIPPING', kind: 'fulfillment', label: 'สินค้าเดินทาง' },
           { action: 'RESERVE_STOCK', kind: 'fulfillment', label: 'จองสต็อก' },
           { action: 'RECORD_PARTIAL_DELIVERY', kind: 'fulfillment', label: 'บันทึกส่งมอบ' },
@@ -1647,11 +1647,11 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage(accountUser);
       const section = await fulfilmentSection();
 
-      expect(section.queryByRole('button', { name: 'สินค้าออกเดินทาง (Shipping)' })).toBeNull();
+      expect(section.queryByRole('button', { name: 'สินค้าออกเดินทาง' })).toBeNull();
       expect(section.queryByRole('button', { name: 'จองสินค้าจากสต็อก' })).toBeNull();
       expect(section.queryByRole('button', { name: 'บันทึกการส่งสินค้า' })).toBeNull();
       expect(section.queryByRole('button', { name: 'ส่งมอบครบ' })).toBeNull();
-      expect(section.queryByText('ใบสั่งซื้อโรงงาน (Factory PO)')).toBeNull();
+      expect(section.queryByText('ใบสั่งซื้อโรงงาน')).toBeNull();
       expect(api.procurement.listForPricingRequest).not.toHaveBeenCalled();
     });
 
@@ -1663,7 +1663,7 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage(importUser);
       const section = await fulfilmentSection();
 
-      expect(await section.findByText('ใบสั่งซื้อโรงงาน (Factory PO)')).not.toBeNull();
+      expect(await section.findByText('ใบสั่งซื้อโรงงาน')).not.toBeNull();
       expect(await section.findByText('ยังไม่มีใบสั่งซื้อโรงงาน')).not.toBeNull();
       await waitFor(() => expect(api.procurement.listForPricingRequest).toHaveBeenCalledWith(601));
     });

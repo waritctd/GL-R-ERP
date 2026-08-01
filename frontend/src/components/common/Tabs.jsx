@@ -11,7 +11,7 @@ import { useRef } from 'react';
  * so arrow-to-activate never costs the user a request or loses input.
  *
  * `items`: `[{ id, label, helper, badge }]`
- *   - `helper` — the English sub-label the product pairs with every Thai label.
+ *   - `helper` — an optional short sub-label for context.
  *   - `badge`  — a count (or short string) shown when the tab holds real data.
  *
  * Every tab a caller passes in is fully functional and in the normal tab
@@ -90,7 +90,7 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix }) {
             <span className="flex flex-col items-start leading-tight">
               <span>{item.label}</span>
               {item.helper ? (
-                <span className="text-2xs font-normal text-text-muted">{item.helper}</span>
+                <span className="text-2xs font-normal text-text-muted" aria-hidden="true">{item.helper}</span>
               ) : null}
             </span>
             {item.badge != null ? (

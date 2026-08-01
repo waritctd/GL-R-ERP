@@ -497,7 +497,7 @@ describe('TicketListPage', () => {
 
     expect(await screen.findByText('บริษัท ดีลใหม่ จำกัด')).not.toBeNull();
     expect(screen.queryByText('แบบร่าง')).toBeNull();
-    expect(screen.getByText('รอรับเรื่องจากฝ่าย Import')).not.toBeNull();
+    expect(screen.getByText('รอฝ่ายนำเข้ารับเรื่อง')).not.toBeNull();
   });
 
   it('filters by lifecycle, overdue, and partial delivery chips (after expanding "ตัวกรองเพิ่มเติม")', async () => {

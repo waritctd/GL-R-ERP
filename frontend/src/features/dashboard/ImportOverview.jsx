@@ -50,7 +50,7 @@ const IN_TRANSIT_STATUSES = ['IR_SENT', 'SHIPPING', 'CUSTOMS_CLEARANCE'];
 // conveyor's left-to-right order and the worklist's tie-break sort.
 const STAGE_BUCKETS = [
   { key: 'pricing', label: 'ตั้งราคา', tone: 'amber' },
-  { key: 'procurement', label: 'จัดซื้อ/IR', tone: 'blue' },
+  { key: 'procurement', label: 'จัดซื้อ/นำเข้า', tone: 'blue' },
   { key: 'shipping', label: 'ขนส่ง', tone: 'blue' },
   { key: 'goodsReceived', label: 'รับเข้าคลัง', tone: 'teal' },
   { key: 'delivery', label: 'ส่งมอบ', tone: 'indigo' },
@@ -241,7 +241,7 @@ export function ImportOverview({ user, employee }) {
         className="!p-0 overflow-hidden"
       >
         {loading ? (
-          <p className="px-4 py-6 text-sm text-text-muted">กำลังโหลด...</p>
+          <p className="px-4 py-6 text-sm text-text-muted">กำลังโหลดงานของฝ่ายนำเข้า…</p>
         ) : filteredRows.length === 0 ? (
           <EmptyState
             icon="check"

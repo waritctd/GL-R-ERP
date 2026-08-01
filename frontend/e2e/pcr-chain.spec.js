@@ -116,9 +116,9 @@ test('sales -> import -> ceo -> sales walks a PCR from draft to quotation-accept
   await pcrModal.getByLabel('ค้นหา Catalog').fill('Corner');
   await pcrModal.getByRole('button', { name: /REFIN/ }).click();
   await expect(pcrModal.getByText('Catalog #5')).toBeVisible();
-  await pcrModal.getByRole('button', { name: 'ส่งให้ Import' }).click();
+  await pcrModal.getByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' }).click();
   await expect(pcrModal).toHaveCount(0);
-  await expect(page.getByText('รอ Import รับเรื่อง').first()).toBeVisible();
+  await expect(page.getByText('รอฝ่ายนำเข้ารับเรื่อง').first()).toBeVisible();
 
   // ── import: pickup -> factory quote -> costing ──────────────────────
   await switchRole(page, 'import');
@@ -133,10 +133,10 @@ test('sales -> import -> ceo -> sales walks a PCR from draft to quotation-accept
   await expect(page.getByTestId('pcr-queue-pickup')).toHaveCount(0);
   await spaGoto(page, pcrHref);
 
-  await expect(page.getByText('Import ตรวจคำขอราคา').first()).toBeVisible();
+  await expect(page.getByText('ฝ่ายนำเข้าตรวจคำขอราคา').first()).toBeVisible();
   await page.getByTestId('pcr-generate-drafts').click();
   await expect(page.getByText('REFIN').first()).toBeVisible();
-  await page.getByPlaceholder('Raw price').fill('100');
+  await page.getByPlaceholder('ราคาโรงงาน').fill('100');
   await page.getByTestId('pcr-quote-save-response').click();
   await expect(page.getByTestId('pcr-quote-ready')).toBeVisible();
   await page.getByTestId('pcr-quote-ready').click();
@@ -146,8 +146,8 @@ test('sales -> import -> ceo -> sales walks a PCR from draft to quotation-accept
   await page.getByTestId('pcr-costing-recalculate').click();
   await expect(page.getByTestId('pcr-costing-submit')).toBeEnabled();
   await page.getByTestId('pcr-costing-submit').click();
-  await page.getByRole('dialog', { name: 'Submit costing to CEO' })
-    .getByRole('button', { name: 'Submit to CEO' }).click();
+  await page.getByRole('dialog', { name: 'ส่งต้นทุนให้ CEO ตรวจ' })
+    .getByRole('button', { name: 'ส่งให้ CEO ตรวจ' }).click();
   await expect(page.getByText('ส่งให้ CEO ตรวจแล้ว').first()).toBeVisible();
 
   // ── ceo: start review -> set minimum selling price -> approve ───────

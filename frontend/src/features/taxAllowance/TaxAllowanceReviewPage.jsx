@@ -46,7 +46,7 @@ function ApplyDialog({ row, onClose, onConfirm, busy }) {
         <>
           <button type="button" className="secondary-button" onClick={onClose} disabled={busy}>ยกเลิก</button>
           <button type="button" className="primary-button" onClick={() => onConfirm(month)} disabled={busy}>
-            {busy ? 'กำลังดำเนินการ...' : 'ยืนยัน'}
+            {busy ? 'กำลังดำเนินการ…' : 'ยืนยัน'}
           </button>
         </>
       )}
@@ -332,7 +332,7 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
         getRowKey={(row) => row.employeeId}
         gridClassName={REGISTER_GRID}
         searchable
-        searchPlaceholder="ค้นหาพนักงาน..."
+        searchPlaceholder="ค้นหาพนักงาน…"
         searchValue={search}
         onSearchChange={(value) => {
           setSearch(value);

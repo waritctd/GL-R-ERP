@@ -193,7 +193,7 @@ describe('PricingRequestPanel', () => {
     });
     renderPanel();
 
-    const submitButton = await screen.findByRole('button', { name: 'ส่งให้ Import' });
+    const submitButton = await screen.findByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' });
     fireEvent.click(submitButton);
 
     await waitFor(() => expect(api.pricingRequests.submit).toHaveBeenCalledWith(1));
@@ -232,7 +232,7 @@ describe('PricingRequestPanel', () => {
   });
 
   // canUpdatePricingRequest is DRAFT-only (mirrors PricingRequestService.updateDraft)
-  // — once submitted, editing must disappear the same way "ส่งให้ Import" does.
+  // — once submitted, editing must disappear the same way "ส่งให้ฝ่ายนำเข้า" does.
   it('does not offer "แก้ไขร่าง" once a request is past DRAFT', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'SUBMITTED' })] });
     renderPanel();
@@ -241,14 +241,14 @@ describe('PricingRequestPanel', () => {
     expect(screen.queryByRole('button', { name: 'แก้ไขร่าง' })).toBeNull();
   });
 
-  it('never offers "ส่งให้ Import" once a request is past DRAFT, even for the CEO (cancel is still allowed)', async () => {
+  it('never offers "ส่งให้ฝ่ายนำเข้า" once a request is past DRAFT, even for the CEO (cancel is still allowed)', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'SUBMITTED' })] });
     renderPanel({ user: { id: 9, name: 'CEO', role: 'ceo' } });
 
     await screen.findByText('PCR-2026-0001');
     // Submit is DRAFT-only and owner-sales-only (PricingRequestService.submit) —
     // the CEO never gets it, regardless of status.
-    expect(screen.queryByRole('button', { name: 'ส่งให้ Import' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' })).toBeNull();
     // Cancel is the one action the CEO gets on ANY cancellable status, as an
     // explicit override (PricingRequestService.cancel).
     expect(screen.getByRole('button', { name: 'ยกเลิก' })).not.toBeNull();

@@ -190,7 +190,7 @@ export function SalesOverview({ user, employee }) {
       <div className="grid grid-cols-[1.15fr_0.85fr] items-start gap-[18px] max-[1040px]:grid-cols-1">
         <Panel title="สิ่งที่ต้องทำ">
           {loading ? (
-            <p className="m-0 text-sm text-text-muted">กำลังโหลด...</p>
+            <p className="m-0 text-sm text-text-muted">กำลังโหลดงานที่ต้องทำ…</p>
           ) : worklist.length === 0 ? (
             <div className="empty-state">ไม่มีสิ่งที่ต้องดำเนินการตอนนี้</div>
           ) : (

@@ -14,8 +14,8 @@
 
 export const IMPORT_ACTION_LABELS = {
   pickupPricingRequest: 'รับงาน · ขอราคา',
-  issueImportRequest: 'ออก IR',
-  markIrSent: 'ส่ง IR',
+  issueImportRequest: 'ออกคำขอนำเข้า',
+  markIrSent: 'ส่งคำขอนำเข้าแล้ว',
   markShipping: 'บันทึกออกเดินทาง',
   markGoodsReceived: 'ยืนยันรับเข้าคลัง',
   recordDelivery: 'บันทึกส่งมอบ',

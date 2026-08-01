@@ -3192,8 +3192,8 @@ export const api = {
           add('RECORD_PAYMENT', 'payment', 'บันทึกรับชำระเงิน', { requiredFields: ['kind', 'amount'] });
         }
         if (['account', 'ceo'].includes(user.role)) add('SET_BILLING', 'payment', 'ตั้งค่าการวางบิล', { requiredFields: ['dueDate'] });
-        if (['import', 'ceo'].includes(user.role) && canIssueIr) add('ISSUE_IMPORT_REQUEST', 'fulfillment', 'ออก IR');
-        if (['import', 'ceo'].includes(user.role) && ticket.fulfillmentStatus === 'IR_ISSUED') add('IR_SENT', 'fulfillment', 'ส่ง IR');
+        if (['import', 'ceo'].includes(user.role) && canIssueIr) add('ISSUE_IMPORT_REQUEST', 'fulfillment', 'ออกคำขอนำเข้า');
+        if (['import', 'ceo'].includes(user.role) && ticket.fulfillmentStatus === 'IR_ISSUED') add('IR_SENT', 'fulfillment', 'ส่งคำขอนำเข้าแล้ว');
         if (['import', 'ceo'].includes(user.role) && ticket.fulfillmentStatus === 'IR_SENT') add('SHIPPING', 'fulfillment', 'สินค้าเดินทาง');
         if (['import', 'ceo'].includes(user.role) && ticket.fulfillmentStatus === 'SHIPPING') add('GOODS_RECEIVED', 'fulfillment', 'รับสินค้า');
         if (['import', 'ceo'].includes(user.role) && (ticket.items ?? []).length > 0 && hasRemainingDelivery(ticket)
@@ -3546,7 +3546,7 @@ export const api = {
       const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
-      if (ticket.fulfillmentStatus !== 'IR_ISSUED') fail('ต้องออกใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าส่ง IR แล้วได้', 409);
+      if (ticket.fulfillmentStatus !== 'IR_ISSUED') fail('ต้องออกใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าส่งคำขอนำเข้าแล้วได้', 409);
       ticket.fulfillmentStatus = 'IR_SENT';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'IR_SENT', ticket.status, ticket.status, null);
@@ -7410,7 +7410,7 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === parent.ticketId);
       if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (['DRAFT', 'CANCELLED', 'SUPERSEDED'].includes(parent.status)) {
-        fail('สร้าง revision จากการเปลี่ยนแปลงของลูกค้าได้เฉพาะจากใบขอราคาที่ยื่นและยังดำเนินการอยู่เท่านั้น', 409);
+        fail('สร้างรอบแก้ไขจากการเปลี่ยนแปลงของลูกค้าได้เฉพาะจากใบขอราคาที่ยื่นและยังดำเนินการอยู่เท่านั้น', 409);
       }
       if (!payload.revisionReason?.trim()) fail('revisionReason ต้องไม่เว้นว่าง', 400);
       if (!payload.clientRequestId) fail('clientRequestId ต้องเป็น UUID', 400);

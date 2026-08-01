@@ -16,7 +16,7 @@ export function TaxAllowanceEstimateCard({ loading, error, result }) {
         ประมาณการผลต่อภาษี
       </div>
       {loading ? (
-        <p className="m-0 text-sm text-text-muted">กำลังคำนวณ...</p>
+        <p className="m-0 text-sm text-text-muted">กำลังคำนวณ…</p>
       ) : error ? (
         <p className="m-0 text-sm font-bold text-danger">{error}</p>
       ) : !result ? (

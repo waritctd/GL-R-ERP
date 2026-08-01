@@ -114,7 +114,7 @@ export function TaxAllowanceEvidencePanel({ declarationId, canEdit, showToast })
         />
       ) : null}
       {uploadMutation.isPending && pendingFile ? (
-        <p className="m-0 mt-2 text-xs text-text-muted">กำลังอัปโหลด {pendingFile.name}...</p>
+        <p className="m-0 mt-2 text-xs text-text-muted">กำลังอัปโหลด {pendingFile.name}…</p>
       ) : null}
       <ul className="m-0 mt-3 flex list-none flex-col gap-2 p-0">
         {attachments.length === 0 ? (

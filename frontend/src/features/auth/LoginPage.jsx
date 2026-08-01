@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
+import { PRODUCT_MARK, PRODUCT_PORTAL_LABEL } from '../../app/product.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 
 const quickAccounts = [
-  { role: 'hr', label: 'HR', helper: 'พนักงานทั้งหมด · อนุมัติคำขอ', icon: 'badgeCheck' },
-  { role: 'employee', label: 'Employee', helper: 'โปรไฟล์ของฉัน · ส่งคำขอแก้ไข', icon: 'user' },
-  { role: 'sales', label: 'Sales', helper: 'สร้างใบขอราคา · ออกใบเสนอราคา', icon: 'briefcase' },
-  { role: 'sales_manager', label: 'Sales Manager', helper: 'อนุมัติค่าคอม · แก้ไขค่าหัก', icon: 'badgeDollar' },
-  { role: 'import', label: 'Import', helper: 'รับเรื่อง · เสนอราคาสินค้า', icon: 'clipboard' },
-  { role: 'account', label: 'Account', helper: 'ยืนยันรับมัดจำ · รับชำระเงิน', icon: 'badgeDollar' },
+  { role: 'hr', label: 'ฝ่ายบุคคล', helper: 'พนักงานทั้งหมด · อนุมัติคำขอ', icon: 'badgeCheck' },
+  { role: 'employee', label: 'พนักงาน', helper: 'โปรไฟล์ของฉัน · ส่งคำขอแก้ไข', icon: 'user' },
+  { role: 'sales', label: 'ฝ่ายขาย', helper: 'สร้างใบขอราคา · ออกใบเสนอราคา', icon: 'briefcase' },
+  { role: 'sales_manager', label: 'ผู้จัดการฝ่ายขาย', helper: 'อนุมัติค่าคอม · แก้ไขค่าหัก', icon: 'badgeDollar' },
+  { role: 'import', label: 'ฝ่ายนำเข้า', helper: 'รับเรื่อง · เสนอราคาสินค้า', icon: 'clipboard' },
+  { role: 'account', label: 'ฝ่ายบัญชี', helper: 'ยืนยันรับมัดจำ · รับชำระเงิน', icon: 'badgeDollar' },
   { role: 'ceo', label: 'CEO', helper: 'อนุมัติใบขอราคา · ภาพรวมทั้งหมด', icon: 'shield' },
 ];
 
@@ -36,15 +37,15 @@ export function LoginPage({ onLogin, loading, error }) {
             <i />
           </span>
           <span>
-            <strong>GL&R</strong>
-            <small>Human Resources</small>
+            <strong>{PRODUCT_MARK}</strong>
+            <small>{PRODUCT_PORTAL_LABEL}</small>
           </span>
         </div>
 
         <form className="login-form" onSubmit={submit}>
           <div>
             <h1>เข้าสู่ระบบ</h1>
-            <p>Sign in with your GL&R account</p>
+            <p>เข้าสู่ระบบด้วยบัญชี GL&R</p>
           </div>
 
           <label>
@@ -87,7 +88,7 @@ export function LoginPage({ onLogin, loading, error }) {
 
           {isMock && (
             <div className="border-t border-border pt-[14px]">
-              <p className="!m-0 !mb-[10px] text-xs !text-text-muted font-semibold">DEMO — เข้าสู่ระบบด่วน</p>
+              <p className="!m-0 !mb-[10px] text-xs !text-text-muted font-semibold">เดโม — เข้าสู่ระบบด่วน</p>
               <div className="grid gap-[6px]">
                 {quickAccounts.map((account) => (
                   <Button

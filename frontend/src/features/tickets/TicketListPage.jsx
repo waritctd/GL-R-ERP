@@ -100,7 +100,7 @@ function worklistReason(role, deal) {
   }
   if (role === 'import') {
     const meta = stageMeta(deal.salesStage);
-    if (meta?.phase === 2 || meta?.phase === 3) return 'รอเสนอราคา (Pricing Request)';
+    if (meta?.phase === 2 || meta?.phase === 3) return 'รอใบขอราคา';
     if (deal.salesStage === 'PROCUREMENT') return 'ดำเนินการนำเข้า (IR / จัดส่ง)';
     if (['DELIVERY_SCHEDULING', 'DELIVERED'].includes(deal.salesStage)) return 'ส่งมอบ / จองสต็อก';
     return null;

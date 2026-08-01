@@ -411,7 +411,7 @@ export function PricingRequestCreateModal({
 
   // Fix 1 (review-remediation plan): both create-mode actions below share the
   // same duplicate-draft guard. If createFn already succeeded once (createdId
-  // is set) — either because a prior "ส่งให้ Import" attempt created the
+  // is set) — either because a prior submit-to-import attempt created the
   // draft and then failed at the submit step, or the user clicked "บันทึกร่าง"
   // again after that — neither handler calls createFn a second time. Instead
   // they push the CURRENT form state onto the existing draft via updateFn
@@ -448,7 +448,7 @@ export function PricingRequestCreateModal({
     if (validationError) { setError(validationError); return; }
     if (!validateItemIdentities()) return;
     setError('');
-    setInfo(createdId != null ? 'ร่างถูกสร้างแล้ว กำลังส่งให้ Import' : '');
+    setInfo(createdId != null ? 'ร่างถูกสร้างแล้ว กำลังส่งให้ฝ่ายนำเข้า' : '');
     setSaving(true);
     try {
       let id = createdId;
@@ -505,7 +505,7 @@ export function PricingRequestCreateModal({
       if (newId != null) setCreatedId(newId);
       onCreated(created);
     } catch (err) {
-      setError(err.message || 'สร้าง revision ไม่สำเร็จ');
+      setError(err.message || 'สร้างรอบแก้ไขไม่สำเร็จ');
     } finally {
       setSaving(false);
     }
@@ -513,9 +513,9 @@ export function PricingRequestCreateModal({
 
   return (
     <Modal
-      title={isEdit ? 'แก้ไขร่างใบขอราคา' : isRevision ? 'สร้าง Customer Change Revision' : 'สร้างใบขอราคา'}
+      title={isEdit ? 'แก้ไขร่างใบขอราคา' : isRevision ? 'สร้างรอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า' : 'สร้างใบขอราคา'}
       subtitle={isEdit
-        ? 'แก้ไขรายละเอียดใบขอราคานี้ก่อนส่งให้ Import — บันทึกแล้วยังคงเป็นร่างจนกว่าจะกดส่ง'
+        ? 'แก้ไขรายละเอียดใบขอราคานี้ก่อนส่งให้ฝ่ายนำเข้า — บันทึกแล้วยังคงเป็นร่างจนกว่าจะกดส่ง'
         : isRevision
           ? 'แก้ไขสินค้า/จำนวน/ผู้รับ/วันที่ตามที่ลูกค้าต้องการ — ใบขอราคาเดิมจะถูกเก็บไว้ไม่เปลี่ยนแปลง และรายการนี้จะเริ่มเป็นร่างใหม่'
           : 'ส่งรายการสินค้าให้ฝ่ายนำเข้าเสนอราคา — แนบไฟล์ประกอบได้หลังบันทึกร่าง'}
@@ -525,7 +525,7 @@ export function PricingRequestCreateModal({
           <button type="button" className="secondary-button" onClick={onClose} disabled={saving}>ยกเลิก</button>
           <button type="button" className="primary-button" disabled={saving} onClick={handleUpdate}>
             <Icon name="check" size={14} />
-            {saving ? 'กำลังบันทึก...' : 'บันทึกการแก้ไข'}
+            {saving ? 'กำลังบันทึก…' : 'บันทึกการแก้ไข'}
           </button>
         </>
       ) : isRevision ? (
@@ -533,18 +533,18 @@ export function PricingRequestCreateModal({
           <button type="button" className="secondary-button" onClick={onClose} disabled={saving}>ยกเลิก</button>
           <button type="button" className="primary-button" disabled={saving || !revisionReason.trim()} onClick={handleCreateRevision}>
             <Icon name="check" size={14} />
-            {saving ? 'กำลังสร้าง...' : 'สร้าง revision'}
+            {saving ? 'กำลังสร้าง…' : 'สร้างรอบแก้ไข'}
           </button>
         </>
       ) : (
         <>
           <button type="button" className="secondary-button" onClick={onClose} disabled={saving}>ยกเลิก</button>
           <button type="button" className="secondary-button" disabled={saving} onClick={handleSaveDraft}>
-            {saving ? 'กำลังบันทึก...' : 'บันทึกร่าง'}
+            {saving ? 'กำลังบันทึก…' : 'บันทึกร่าง'}
           </button>
           <button type="button" className="primary-button" disabled={saving} onClick={handleSubmitToImport}>
             <Icon name="check" size={14} />
-            {saving ? 'กำลังส่ง...' : 'ส่งให้ Import'}
+            {saving ? 'กำลังส่ง…' : 'ส่งให้ฝ่ายนำเข้า'}
           </button>
         </>
       )}
@@ -607,7 +607,7 @@ export function PricingRequestCreateModal({
         </div>
 
         <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-          หมายเหตุถึง Import
+          หมายเหตุถึงฝ่ายนำเข้า
           <textarea className="min-h-16" value={note} onChange={(e) => setNote(e.target.value)} placeholder="ข้อมูลเพิ่มเติมสำหรับฝ่ายนำเข้า (ถ้ามี)" />
         </label>
 
@@ -759,7 +759,7 @@ export function PricingRequestCreateModal({
                   disabled={uploadingAttachment}
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  <Icon name="plus" size={13} /> {uploadingAttachment ? 'กำลังแนบไฟล์...' : 'แนบไฟล์'}
+                  <Icon name="plus" size={13} /> {uploadingAttachment ? 'กำลังแนบไฟล์…' : 'แนบไฟล์'}
                 </button>
               </>
             ) : null}

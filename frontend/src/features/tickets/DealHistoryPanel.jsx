@@ -48,9 +48,9 @@ export const EVENT_KIND_LABEL = {
   CUSTOMER_CONFIRMED:     'ลูกค้ายืนยันคำสั่งซื้อ',
   DEPOSIT_NOTICE_ISSUED:  'ออกใบแจ้งมัดจำ',
   DEPOSIT_PAID:           'รับมัดจำแล้ว',
-  IR_ISSUED:              'ออก Import Request (IR)',
-  IR_SENT:                'ส่ง IR แล้ว',
-  SHIPPING:               'สินค้าออกเดินทาง (Shipping)',
+  IR_ISSUED:              'ออกคำขอนำเข้า (IR)',
+  IR_SENT:                'ส่งคำขอนำเข้าแล้ว',
+  SHIPPING:               'สินค้าออกเดินทาง',
   GOODS_RECEIVED:         'รับสินค้าแล้ว',
   STOCK_RESERVED:         'จองสินค้าจากสต็อก',
   DELIVERY_RECORDED:      'บันทึกการส่งสินค้า',
@@ -297,7 +297,7 @@ export function DealHistoryPanel({
             rows={2}
             value={commentText}
             onChange={(e) => onCommentTextChange?.(e.target.value)}
-            placeholder="เพิ่มความคิดเห็น..."
+            placeholder="เพิ่มความคิดเห็น…"
             style={{ resize: 'vertical' }}
           />
           <button

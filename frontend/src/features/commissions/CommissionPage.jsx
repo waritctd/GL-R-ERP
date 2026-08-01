@@ -1115,7 +1115,7 @@ function AccountCreateFromDeal({
               />
               <button type="button" className="secondary-button" disabled={ticketLookupLoading || !ticketIdInput} onClick={onLookup}>
                 <Icon name="search" size={14} />
-                {ticketLookupLoading ? 'กำลังโหลด...' : 'โหลดข้อมูลดีล'}
+                {ticketLookupLoading ? 'กำลังโหลดข้อมูลดีล…' : 'โหลดข้อมูลดีล'}
               </button>
             </div>
             {eligibleTickets.length > 0 ? (

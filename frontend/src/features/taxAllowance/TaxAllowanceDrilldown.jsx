@@ -32,7 +32,7 @@ export function TaxAllowanceDrilldown({ employeeId, employeeCode, taxYear }) {
   const statusInfo = taxAllowanceStatusInfo(declaration);
 
   if (registerQuery.isLoading) {
-    return <p className="m-0 text-sm text-text-muted">กำลังโหลด...</p>;
+    return <p className="m-0 text-sm text-text-muted">กำลังโหลดข้อมูลลดหย่อนภาษี…</p>;
   }
 
   return (

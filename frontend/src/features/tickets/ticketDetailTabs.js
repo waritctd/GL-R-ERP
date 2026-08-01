@@ -60,7 +60,7 @@ export const TICKET_DETAIL_TABS = [
   {
     id: 'overview',
     label: 'ภาพรวม',
-    helper: 'Overview',
+    helper: 'ข้อมูลดีล',
     // Backed by TicketService.get()/requireViewAccess — every role that can
     // reach this page at all (the ticket query itself already 403'd hr/
     // employee/non-owner-sales upstream, so this component never renders for
@@ -73,7 +73,7 @@ export const TICKET_DETAIL_TABS = [
   {
     id: 'pricing',
     label: 'ราคา',
-    helper: 'Pricing',
+    helper: 'คำขอราคา',
     // pricing_accountCannotReadAPricingRequest / pricing_hrCannotReadAPricingRequest /
     // pricing_employeeCannotReadAPricingRequest /
     // pricing_salesImportCeoSalesManagerCanAllReadIt
@@ -82,7 +82,7 @@ export const TICKET_DETAIL_TABS = [
   {
     id: 'quotations',
     label: 'ใบเสนอราคา',
-    helper: 'Quotations',
+    helper: 'เอกสารลูกค้า',
     // quotation_accountCannotListCustomerQuotations / quotation_hrCannotListCustomerQuotations /
     // quotation_employeeCannotListCustomerQuotations /
     // quotation_nonOwnerSalesRepCannotListAnotherRepsCustomerQuotations /
@@ -98,7 +98,7 @@ export const TICKET_DETAIL_TABS = [
   {
     id: 'money',
     label: 'การเงิน',
-    helper: 'Money',
+    helper: 'ยอดชำระ',
     // ledger_importCannotReadThePaymentLedger / ledger_hrCannotReadThePaymentLedger /
     // ledger_employeeCannotReadThePaymentLedger / ledger_ownerCeoAccountSalesManagerCanAllReadIt
     // depositNotice_importCannotListDepositNoticesEitherDespiteBeingInTheViewerRolesConstant /
@@ -114,7 +114,7 @@ export const TICKET_DETAIL_TABS = [
   {
     id: 'fulfilment',
     label: 'จัดซื้อ-ส่งมอบ',
-    helper: 'Fulfilment',
+    helper: 'นำเข้าและจัดส่ง',
     // deliveries_hrCannotReadDeliveries / deliveries_employeeCannotReadDeliveries /
     // deliveries_everyOtherViewerRoleCanReadThem (sales-owner/import/ceo/account/
     // sales_manager all pass — matches salesViewScope.js's `delivery`, true
@@ -129,7 +129,7 @@ export const TICKET_DETAIL_TABS = [
   {
     id: 'documents',
     label: 'เอกสาร',
-    helper: 'Documents',
+    helper: 'ไฟล์แนบ',
     // Maps onto today's attachments section as-is (per this branch's brief:
     // "map onto what exists" — SALES_VIEW_SECTION_IDS has no `attachments`
     // id). This role-level predicate is deliberately coarse (same `() =>
@@ -157,7 +157,7 @@ export const TICKET_DETAIL_TABS = [
   {
     id: 'activity',
     label: 'กิจกรรม',
-    helper: 'Activity',
+    helper: 'ประวัติ',
     // FIX 1 (Opus review, owner decision): previously gated on
     // `sections.dealTracking`, which took down the WHOLE tab — including the
     // plain audit trail (`ticket.events`, IA region 18) and the comment box —

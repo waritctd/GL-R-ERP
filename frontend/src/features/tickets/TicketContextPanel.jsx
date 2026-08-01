@@ -64,7 +64,7 @@ export function TicketContextPanel({
   const assignedImport = canViewPricingRequests
     ? latestPr
       ? latestPr.assignedImportName || 'ยังไม่มีผู้รับเรื่อง'
-      : 'ยังไม่มี PCR'
+      : 'ยังไม่มีใบขอราคา'
     : 'ไม่แสดงในมุมมองนี้';
 
   const recentComments = [...events]
@@ -95,7 +95,7 @@ export function TicketContextPanel({
                 rows={3}
                 value={commentText}
                 onChange={(event) => onCommentTextChange?.(event.target.value)}
-                placeholder="เพิ่มความคิดเห็น..."
+                placeholder="เพิ่มความคิดเห็น…"
                 className="min-h-20 resize-y text-base"
               />
               <button
@@ -135,10 +135,10 @@ export function TicketContextPanel({
         </dl>
       </ContextSection>
 
-      <ContextSection title="ผู้เกี่ยวข้อง" helper="People" icon="users">
+      <ContextSection title="ผู้เกี่ยวข้อง" helper="ทีมที่เกี่ยวข้อง" icon="users">
         <dl className="m-0">
           <FieldRow label="เจ้าของดีล" value={summary.createdByName} />
-          <FieldRow label="Import บน PCR" value={assignedImport} />
+          <FieldRow label="ผู้รับเรื่องใบขอราคา" value={assignedImport} />
           <FieldRow label="บัญชี" value={summary.closeConfirmedByName || 'ยังไม่ระบุ'} />
           <FieldRow label="ผู้ติดต่อ" value={summary.contactName} />
         </dl>

@@ -311,7 +311,7 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
               icon="badgeDollar"
               label="อนุมัติราคา"
               value={priceApprovalRows.length}
-              helper="Pricing requests"
+              helper="ใบขอราคา"
               tone="rose"
               onClick={priceApprovalRows.length > 0 ? () => navigate('/pricing-requests') : undefined}
             />

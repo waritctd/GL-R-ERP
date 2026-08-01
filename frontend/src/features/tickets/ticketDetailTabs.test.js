@@ -57,6 +57,20 @@ describe('visibleTicketDetailTabIds', () => {
   });
 });
 
+describe('TICKET_DETAIL_TABS display copy', () => {
+  it('uses concise Thai helper labels for compact tabs', () => {
+    expect(TICKET_DETAIL_TABS.map(({ helper }) => helper)).toEqual([
+      'ข้อมูลดีล',
+      'คำขอราคา',
+      'เอกสารลูกค้า',
+      'ยอดชำระ',
+      'นำเข้าและจัดส่ง',
+      'ไฟล์แนบ',
+      'ประวัติ',
+    ]);
+  });
+});
+
 describe('resolveTicketDetailTab', () => {
   it('keeps a tab id the role may see', () => {
     expect(resolveTicketDetailTab('pricing', 'sales')).toBe('pricing');

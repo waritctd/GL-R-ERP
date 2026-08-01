@@ -1026,7 +1026,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     },
     canHoldDeal && { key: 'hold', label: 'พักดีลไว้', disabled: actionLoading, onSelect: handleOpenHold },
     canDormantDeal && { key: 'dormant', label: 'พัก dormant', disabled: actionLoading, onSelect: handleOpenDormant },
-    can.revise && { key: 'revise', label: 'ขอแก้ไข (Revise)', icon: 'pencil', onSelect: handleOpenRevise },
+    can.revise && { key: 'revise', label: 'ขอแก้ไข', icon: 'pencil', onSelect: handleOpenRevise },
   ].filter(Boolean);
 
   async function handleUploadAttachment(e) {
@@ -1236,14 +1236,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 onClick={() => handleDownloadQuotation(latestQuotation.id, latestQuotation.number, 'pdf')}>
                 <Icon name="fileText" size={14} />
                 {downloadingQuotationKey === `${latestQuotation.id}-pdf`
-                  ? 'กำลังดาวน์โหลด...'
+                  ? 'กำลังดาวน์โหลด…'
                   : `ใบเสนอราคา ${latestQuotation.number} (PDF)`}
               </button>
             )}
             {can.downloadRemainingInvoice && (
               <button type="button" className="secondary-button" disabled={downloadingInvoice}
                 onClick={handleDownloadRemainingInvoice}>
-                {downloadingInvoice ? 'กำลังดาวน์โหลด...' : 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ'}
+                {downloadingInvoice ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ'}
               </button>
             )}
           </>
@@ -1554,7 +1554,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           {item.rawPrice != null
                             ? <><strong>{Number(item.rawPrice).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</strong><small style={{ color: 'var(--color-text-muted)' }}> {item.rawCurrency}/{item.rawUnit === 'sqm' ? 'ตร.ม.' : 'แผ่น'}</small></>
                             : <span style={{ color: 'var(--color-text-muted)' }}>-</span>}
-                          {item.calcConfigVersion && <small style={{ display: 'block', color: 'var(--color-text-muted)', fontSize: 10 }}>config v{item.calcConfigVersion}</small>}
+                          {item.calcConfigVersion && <small style={{ display: 'block', color: 'var(--color-text-muted)', fontSize: 10 }}>สูตรราคาเวอร์ชัน {item.calcConfigVersion}</small>}
                         </span>
                         <code data-label="ต้นทุน (THB/ชิ้น)" style={{ color: 'var(--color-info)' }}>{item.calcedCost != null ? formatMoney(item.calcedCost) : '—'}</code>
                         <span data-label="ราคาขาย (THB/ชิ้น)">
@@ -1622,14 +1622,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           {can.revise && showReviseForm && (
             <section id="revise-form" tabIndex={-1} className="panel scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none" style={{ background: 'var(--color-surface-muted)' }}>
               <div className="panel-header">
-                <h2>ขอแก้ไข (Revise)</h2>
+                <h2>ขอแก้ไข</h2>
               </div>
               <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, paddingTop: 12 }}>ประเภทการแก้ไข</div>
                   {[
-                    { value: 'QTY_OR_NOTE',  label: 'แก้จำนวน / หมายเหตุ / % มัดจำ', sub: 'ไม่ต้องอนุมัติใหม่ — ออกเอกสาร Rev ใหม่ได้เลย' },
+                    { value: 'QTY_OR_NOTE',  label: 'แก้จำนวน / หมายเหตุ / % มัดจำ', sub: 'ไม่ต้องอนุมัติใหม่ — ออกเอกสารรอบแก้ไขใหม่ได้เลย' },
                     { value: 'PRICE_CHANGE', label: 'แก้ราคา / ส่วนลดต่อหน่วย',       sub: 'CEO ต้องอนุมัติใหม่' },
-                    { value: 'NEW_ITEM',     label: 'เพิ่มสินค้าใหม่',                sub: 'Import ตั้งราคา → CEO อนุมัติ' },
+                    { value: 'NEW_ITEM',     label: 'เพิ่มสินค้าใหม่',                sub: 'ฝ่ายนำเข้าตั้งราคา → CEO อนุมัติ' },
                   ].map((opt) => (
                     // eslint-disable-next-line jsx-a11y/label-has-associated-control -- label nests the radio control; its text is the dynamic opt.label
                     <label key={opt.value} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer', fontSize: 13 }}>
@@ -1650,7 +1650,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                       ref={(el) => { fieldRefs.current['revise.reason'] = el; }}
                       value={reviseReason}
                       onChange={(e) => { setReviseReason(e.target.value); clearFieldError('revise.reason'); }}
-                      placeholder="ระบุเหตุผล..." style={{ marginTop: 4 }}
+                      placeholder="ระบุเหตุผล…" style={{ marginTop: 4 }}
                       aria-invalid={fieldErrors['revise.reason'] ? true : undefined}
                       aria-describedby={fieldErrors['revise.reason'] ? fieldErrorId('revise-reason') : undefined}
                     />
@@ -1740,7 +1740,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           <span style={{
                             fontSize: 11, fontWeight: 700, borderRadius: 4, padding: '2px 7px',
                             ...docStatusColors(q.docStatus),
-                          }}>Rev {q.quotationVersion}</span>
+                          }}>ครั้งที่ {q.quotationVersion}</span>
                         </div>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1756,7 +1756,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           </div>
                           {(q.paymentTerms || q.leadTime || q.deliveryTerms) && (
                             <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 4 }}>
-                              {[q.paymentTerms && `ชำระเงิน: ${q.paymentTerms}`, q.leadTime && `Lead time: ${q.leadTime}`, q.deliveryTerms && `ส่งมอบ: ${q.deliveryTerms}`].filter(Boolean).join(' · ')}
+                              {[q.paymentTerms && `ชำระเงิน: ${q.paymentTerms}`, q.leadTime && `ระยะเวลาส่งมอบ: ${q.leadTime}`, q.deliveryTerms && `ส่งมอบ: ${q.deliveryTerms}`].filter(Boolean).join(' · ')}
                             </div>
                           )}
                         </div>
@@ -1764,12 +1764,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
                             disabled={downloadingQuotationKey === `${q.id}-xlsx`}
                             onClick={() => handleDownloadQuotation(q.id, q.number, 'xlsx')}>
-                            <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-xlsx` ? 'กำลังดาวน์โหลด...' : 'Excel'}
+                            <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-xlsx` ? 'กำลังดาวน์โหลด…' : 'Excel'}
                           </button>
                           <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
                             disabled={downloadingQuotationKey === `${q.id}-pdf`}
                             onClick={() => handleDownloadQuotation(q.id, q.number, 'pdf')}>
-                            <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-pdf` ? 'กำลังดาวน์โหลด...' : 'PDF'}
+                            <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-pdf` ? 'กำลังดาวน์โหลด…' : 'PDF'}
                           </button>
                         </div>
                       </div>
@@ -1950,7 +1950,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                     style={{ fontSize: 12, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
                   >
                     <Icon name="upload" size={13} />
-                    {uploadingFile ? 'กำลังอัปโหลด...' : 'แนบไฟล์ (PDF/JPG/PNG/Excel)'}
+                    {uploadingFile ? 'กำลังอัปโหลด…' : 'แนบไฟล์ (PDF/JPG/PNG/Excel)'}
                   </span>
                 </label>
               )}

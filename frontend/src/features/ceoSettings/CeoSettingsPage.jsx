@@ -41,7 +41,7 @@ const CONFIG_FIELDS = [
   { key: 'inlandFactoryToPortPerSqm', label: 'ขนส่ง โรงงาน→ท่าเรือ (THB/ตร.ม.)', suffix: 'บาท/ตร.ม.' },
   { key: 'inlandPortToWarehousePerSqm', label: 'ขนส่ง ท่าเรือ→โกดัง (THB/ตร.ม.)', suffix: 'บาท/ตร.ม.' },
   { key: 'importDutyPct', label: 'อัตราภาษีนำเข้า (%)', suffix: '%' },
-  { key: 'marginPct', label: 'Margin (%)', suffix: '%' },
+  { key: 'marginPct', label: 'อัตรากำไร (%)', suffix: '%' },
 ];
 
 // UX-08: real dialog (role="dialog", aria-modal, focus trap, Escape,
@@ -87,14 +87,14 @@ function ConfigEditModal({ config, saving, onClose, onSubmit }) {
 
   return (
     <Modal
-      title={`แก้ไข config — ${config.country}`}
+      title={`แก้ไขสูตรราคา — ${config.country}`}
       subtitle="(จะบันทึกเป็นเวอร์ชันใหม่)"
       onClose={onClose}
       footer={
         <>
           <button type="button" className="secondary-button" onClick={onClose}>ยกเลิก</button>
           <button type="submit" form="config-edit-form" className="primary-button" disabled={saving}>
-            {saving ? 'กำลังบันทึก...' : 'บันทึกเวอร์ชันใหม่'}
+            {saving ? 'กำลังบันทึก…' : 'บันทึกเวอร์ชันใหม่'}
           </button>
         </>
       }
@@ -174,7 +174,7 @@ export function CeoSettingsPage({ showToast }) {
 
   // A single shared mutation acts on whichever currency row is being saved —
   // this reads the in-flight variables back out to know which row's button
-  // should show a "..." busy state (there's no per-row mutation instance).
+  // should show a busy state (there's no per-row mutation instance).
   function isSavingFx(currency) {
     return saveFxRateMutation.isPending && saveFxRateMutation.variables?.currency === currency;
   }
@@ -208,19 +208,19 @@ export function CeoSettingsPage({ showToast }) {
     mutationFn: (payload) => api.priceCalcConfigs.update(payload),
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.priceCalcConfigs() });
-      showToast('success', `บันทึก config ประเทศ ${variables.country} (เวอร์ชันใหม่) แล้ว`);
+      showToast('success', `บันทึกสูตรราคาประเทศ ${variables.country} เป็นเวอร์ชันใหม่แล้ว`);
       setEditingConfig(null);
     },
     onError: (e) => showToast('error', e.message || 'บันทึกไม่สำเร็จ'),
   });
 
-  if (loading) return <div style={{ padding: 40, color: 'var(--color-text-muted)' }}>กำลังโหลด...</div>;
+  if (loading) return <div style={{ padding: 40, color: 'var(--color-text-muted)' }}>กำลังโหลดการตั้งค่าการคำนวณราคา…</div>;
 
   return (
     <div className="page-stack">
       <header>
         <h1 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 800 }}>ตั้งค่าการคำนวณราคา</h1>
-        <p style={{ margin: 0, color: 'var(--color-text-muted)', fontSize: 13 }}>CEO สามารถปรับค่าได้ตลอดเวลา — ระบบเก็บประวัติทุก version</p>
+        <p style={{ margin: 0, color: 'var(--color-text-muted)', fontSize: 13 }}>CEO สามารถปรับค่าได้ตลอดเวลา — ระบบเก็บประวัติทุกเวอร์ชัน</p>
       </header>
 
       {/* FX Rates */}
@@ -229,14 +229,14 @@ export function CeoSettingsPage({ showToast }) {
           <h2>อัตราแลกเปลี่ยน (1 หน่วย = ? บาท)</h2>
         </div>
         <div style={{ padding: '8px 18px', fontSize: 11, color: 'var(--color-text-muted)', borderBottom: '1px solid var(--color-surface-subtle)', display: 'flex', gap: 12 }}>
-          <span>ดึงอัตโนมัติจาก BOT API ทุกวัน 18:00 (เวลาไทย)</span>
-          <span style={{ color: 'var(--color-text-muted)' }}>• ตั้งค่า BOT_API_TOKEN เพื่อเปิดใช้งาน</span>
+          <span>ดึงอัตโนมัติจากธนาคารแห่งประเทศไทยทุกวัน 18:00 (เวลาไทย)</span>
+          <span style={{ color: 'var(--color-text-muted)' }}>• ติดต่อผู้ดูแลระบบหากยังไม่เปิดใช้งานการดึงอัตราอัตโนมัติ</span>
         </div>
         <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ background: 'var(--color-surface-muted)' }}>
-              {['สกุลเงิน', 'อัตรา (THB)', 'วันที่มีผล', 'แหล่งข้อมูล', 'แก้ไข (Manual)'].map((h) => (
+              {['สกุลเงิน', 'อัตรา (THB)', 'วันที่มีผล', 'แหล่งข้อมูล', 'แก้ไขเอง'].map((h) => (
                 <th key={h} style={{ padding: '8px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--color-icon-muted)', borderBottom: '1px solid var(--color-border)' }}>{h}</th>
               ))}
             </tr>
@@ -273,7 +273,7 @@ export function CeoSettingsPage({ showToast }) {
                             style={{ fontSize: 12, padding: '4px 10px' }}
                             disabled={isSavingFx(fx.currency)}
                             onClick={() => saveFxRate(fx.currency)}>
-                            {isSavingFx(fx.currency) ? '...' : 'บันทึก'}
+                            {isSavingFx(fx.currency) ? '…' : 'บันทึก'}
                           </button>
                           <button type="button" className="secondary-button"
                             style={{ fontSize: 12, padding: '4px 10px' }}
@@ -297,7 +297,7 @@ export function CeoSettingsPage({ showToast }) {
                   <td style={{ padding: '8px 16px', color: 'var(--color-text-muted)', fontSize: 12 }}>{fx.effectiveDate}</td>
                   <td style={{ padding: '8px 16px' }}>
                     {isBot
-                      ? <span style={{ background: 'var(--color-info-bg)', color: 'var(--color-info)', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600 }}>BOT อัตโนมัติ</span>
+                      ? <span style={{ background: 'var(--color-info-bg)', color: 'var(--color-info)', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600 }}>ธปท. อัตโนมัติ</span>
                       : <span style={{ background: 'var(--color-surface-subtle)', color: 'var(--color-text-muted)', padding: '2px 8px', borderRadius: 10, fontSize: 11 }}>กรอกเอง</span>
                     }
                   </td>
@@ -306,7 +306,7 @@ export function CeoSettingsPage({ showToast }) {
                       <button type="button" className="secondary-button"
                         style={{ fontSize: 11, padding: '3px 8px' }}
                         onClick={() => setEditFx((p) => ({ ...p, [fx.currency]: String(fx.rateToThb) }))}>
-                        Override
+                        แก้ไขเอง
                       </button>
                     )}
                   </td>
@@ -327,7 +327,7 @@ export function CeoSettingsPage({ showToast }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ background: 'var(--color-surface-muted)' }}>
-                {['ประเทศ', 'Ver', 'ค่าเรือ/ตร.ม.', 'ประกัน/ตร.ม.', 'โรงงาน→ท่าเรือ', 'ท่าเรือ→โกดัง', 'ภาษีนำเข้า', 'Margin', ''].map((h) => (
+                {['ประเทศ', 'เวอร์ชัน', 'ค่าเรือ/ตร.ม.', 'ประกัน/ตร.ม.', 'โรงงาน→ท่าเรือ', 'ท่าเรือ→โกดัง', 'ภาษีนำเข้า', 'อัตรากำไร', ''].map((h) => (
                   <th key={h} style={{ padding: '8px 14px', textAlign: 'left', fontWeight: 600, color: 'var(--color-icon-muted)', borderBottom: '1px solid var(--color-border)', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr>
@@ -336,7 +336,7 @@ export function CeoSettingsPage({ showToast }) {
               {configs.map((cfg) => (
                 <tr key={cfg.configId} style={{ borderBottom: '1px solid var(--color-surface-subtle)' }}>
                   <td style={{ padding: '8px 14px', fontWeight: 700 }}>{cfg.country}</td>
-                  <td style={{ padding: '8px 14px', color: 'var(--color-text-muted)' }}>v{cfg.version}</td>
+                  <td style={{ padding: '8px 14px', color: 'var(--color-text-muted)' }}>เวอร์ชัน {cfg.version}</td>
                   <td style={{ padding: '8px 14px' }}>{moneyDisplay(cfg.freightPerSqm)}</td>
                   <td style={{ padding: '8px 14px' }}>{moneyDisplay(cfg.insurancePerSqm)}</td>
                   <td style={{ padding: '8px 14px' }}>{moneyDisplay(cfg.inlandFactoryToPortPerSqm)}</td>
@@ -356,7 +356,7 @@ export function CeoSettingsPage({ showToast }) {
           </table>
         </div>
         <div style={{ padding: '10px 16px', borderTop: '1px solid var(--color-surface-subtle)', fontSize: 11, color: 'var(--color-text-muted)' }}>
-          สูตร: CIF = ค่าสินค้า(THB/ตร.ม.) + ค่าเรือ + ประกัน → ต้นทุน = CIF + ภาษี + ขนส่งภายใน → ราคาขาย = ต้นทุน × (1 + Margin)
+          สูตร: CIF = ค่าสินค้า(THB/ตร.ม.) + ค่าเรือ + ประกัน → ต้นทุน = CIF + ภาษี + ขนส่งภายใน → ราคาขาย = ต้นทุน × (1 + อัตรากำไร)
         </div>
       </section>
 

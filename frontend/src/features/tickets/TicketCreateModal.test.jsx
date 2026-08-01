@@ -67,7 +67,7 @@ function goToSection(name) {
 // nested under a customer via api.customers.projects(customerId).
 async function selectCustomerAndProject() {
   goToSection('ลูกค้า');
-  const searchInput = screen.getByPlaceholderText('พิมพ์ค้นหาชื่อบริษัท...');
+  const searchInput = screen.getByPlaceholderText('พิมพ์ค้นหาชื่อบริษัท…');
   fireEvent.change(searchInput, { target: { value: 'บริษัท' } });
   const option = await screen.findByText(mockCustomer.name);
   fireEvent.mouseDown(option);
@@ -103,7 +103,7 @@ describe('TicketCreateModal validation', () => {
 
     submitForm();
 
-    const customerInput = await screen.findByPlaceholderText('พิมพ์ค้นหาชื่อบริษัท...');
+    const customerInput = await screen.findByPlaceholderText('พิมพ์ค้นหาชื่อบริษัท…');
     await waitFor(() => expect(customerInput.getAttribute('aria-invalid')).toBe('true'));
     expect(customerInput.getAttribute('aria-describedby')).toBe('customer-select-error');
     expect(screen.getByText('กรุณาเลือกบริษัท/ลูกค้า')).toBeTruthy();
