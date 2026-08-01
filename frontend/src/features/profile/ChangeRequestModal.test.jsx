@@ -23,6 +23,15 @@ function renderModal({ onClose = vi.fn(), onSubmit = vi.fn() } = {}) {
 }
 
 describe('ChangeRequestModal form validation', () => {
+  it('separates the current value from the requested value field', () => {
+    renderModal();
+
+    expect(screen.getByText('ข้อมูลปัจจุบัน')).not.toBeNull();
+    expect(screen.getByText('081-234-5678')).not.toBeNull();
+    expect(screen.getByLabelText(/ค่าใหม่ของเบอร์โทรศัพท์/)).not.toBeNull();
+    expect(screen.queryByLabelText(/เหตุผล/)).toBeNull();
+  });
+
   it('blocks submit when the new value is empty', async () => {
     const { onSubmit } = renderModal();
 
@@ -36,7 +45,7 @@ describe('ChangeRequestModal form validation', () => {
   it('sends the existing change-request payload shape for a valid submit', async () => {
     const { onSubmit } = renderModal();
 
-    fireEvent.change(screen.getByLabelText(/ค่าใหม่/), { target: { value: '089-999-9999' } });
+    fireEvent.change(screen.getByLabelText(/ค่าใหม่ของเบอร์โทรศัพท์/), { target: { value: '089-999-9999' } });
     fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -47,5 +56,6 @@ describe('ChangeRequestModal form validation', () => {
       icon: 'phone',
       newValue: '089-999-9999',
     });
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty('reason');
   });
 });
