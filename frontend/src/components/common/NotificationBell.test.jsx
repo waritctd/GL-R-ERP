@@ -36,7 +36,7 @@ describe('NotificationBell', () => {
     vi.clearAllMocks();
     api.notifications.list.mockResolvedValue({
       notifications: [
-        { id: 1, message: 'ใบขอราคาถูกอนุมัติ', read: false, createdAt: new Date().toISOString(), link: '/tickets/1' },
+        { id: 1, message: 'คำขอราคาถูกอนุมัติ', read: false, createdAt: new Date().toISOString(), link: '/tickets/1' },
         { id: 2, message: 'ออกใบแจ้งยอดมัดจำแล้ว', read: true, createdAt: new Date().toISOString(), link: null },
       ],
     });
@@ -48,7 +48,7 @@ describe('NotificationBell', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /การแจ้งเตือน/ }));
 
-    expect(await screen.findByText('ใบขอราคาถูกอนุมัติ')).not.toBeNull();
+    expect(await screen.findByText('คำขอราคาถูกอนุมัติ')).not.toBeNull();
     expect(screen.getByText('ออกใบแจ้งยอดมัดจำแล้ว')).not.toBeNull();
     // Unread badge shows the count of unread items (1).
     expect(screen.getByText('1')).not.toBeNull();
@@ -58,7 +58,7 @@ describe('NotificationBell', () => {
     renderBell();
 
     fireEvent.click(await screen.findByRole('button', { name: /การแจ้งเตือน/ }));
-    const item = await screen.findByText('ใบขอราคาถูกอนุมัติ');
+    const item = await screen.findByText('คำขอราคาถูกอนุมัติ');
     fireEvent.click(item);
 
     await waitFor(() => expect(api.notifications.markRead).toHaveBeenCalledWith(1));

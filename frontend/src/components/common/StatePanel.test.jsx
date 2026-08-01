@@ -10,14 +10,14 @@ describe('StatePanel', () => {
     render(
       <StatePanel
         state="loading"
-        title="กำลังโหลดใบขอราคา"
+        title="กำลังโหลดคำขอราคา"
         description="กำลังดึงรายละเอียดล่าสุด"
       />,
     );
 
     const panel = screen.getByRole('status');
     expect(panel.getAttribute('aria-busy')).toBe('true');
-    expect(screen.getByText('กำลังโหลดใบขอราคา')).toBeTruthy();
+    expect(screen.getByText('กำลังโหลดคำขอราคา')).toBeTruthy();
     expect(screen.getByText('กำลังดึงรายละเอียดล่าสุด')).toBeTruthy();
   });
 

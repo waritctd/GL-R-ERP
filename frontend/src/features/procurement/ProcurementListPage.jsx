@@ -89,7 +89,7 @@ export function ProcurementListPage({ showToast }) {
     },
     {
       key: 'deal',
-      header: 'ดีล / ใบขอราคา',
+      header: 'ดีล / คำขอราคา',
       render: (po) => (
         <span className="flex min-w-0 flex-col gap-0.5">
           <span className="block truncate">{po.pricingRequestCode}</span>
@@ -180,7 +180,7 @@ export function ProcurementListPage({ showToast }) {
         searchable
         searchValue={searchText}
         onSearchChange={setSearchText}
-        searchPlaceholder="ค้นหาเลขที่ / โรงงาน / ใบขอราคา / ดีล"
+        searchPlaceholder="ค้นหาเลขที่ / โรงงาน / คำขอราคา / ดีล"
         initialSort={{ key: 'updatedAt', dir: 'desc' }}
         loading={poQuery.isLoading}
         error={poQuery.error}

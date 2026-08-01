@@ -65,7 +65,7 @@ function PricingRequestSummaryStrip({ summary }) {
   const rollupParts = PRICING_REQUEST_STATUSES
     .filter((status) => status !== 'CANCELLED' && summary.counts[status])
     .map((status) => `${pricingRequestStatusLabel(status).label} ${summary.counts[status]}`);
-  const rollupText = [`ใบขอราคา ${summary.total} รายการ`, ...rollupParts].join(' · ');
+  const rollupText = [`คำขอราคา ${summary.total} รายการ`, ...rollupParts].join(' · ');
   return (
     <div className="flex flex-col gap-1">
       <div className="flex flex-wrap items-center gap-1.5">

@@ -308,6 +308,6 @@ describe('DealStagePanel pricing-request summary strip', () => {
         { id: 3, status: 'IMPORT_REVIEWING', recipientType: 'BUYER' },
       ],
     });
-    expect(screen.getByText(/ใบขอราคา 3 รายการ/)).not.toBeNull();
+    expect(screen.getByText(/คำขอราคา 3 รายการ/)).not.toBeNull();
   });
 });

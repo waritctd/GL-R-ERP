@@ -660,7 +660,7 @@ function nextPricingRequestCode() {
 
 function findPricingRequestRaw(id) {
   const pr = mockPricingRequests.find((p) => p.id === Number(id));
-  if (!pr) fail('ไม่พบใบขอราคานี้', 404);
+  if (!pr) fail('ไม่พบคำขอราคานี้', 404);
   return pr;
 }
 
@@ -715,7 +715,7 @@ function scheduleMockFactoryQuoteDispatch(quote, actor) {
 // the top of every factory-quote mutation this branch touches.
 function mockRequireNotCeoReviewing(pr) {
   if (pr.status === 'CEO_REVIEWING') {
-    fail('ใบขอราคานี้อยู่ระหว่างการพิจารณาของ CEO — ไม่สามารถแก้ไขราคาโรงงานได้ในขณะนี้', 409);
+    fail('คำขอราคานี้อยู่ระหว่างการพิจารณาของ CEO — ไม่สามารถแก้ไขราคาโรงงานได้ในขณะนี้', 409);
   }
 }
 
@@ -773,7 +773,7 @@ function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
         // constraints (V54) that back the real reconcileItemQty call — a downward reconciliation
         // that would drop qty below an already-recorded delivered/reserved amount is refused, not
         // silently applied.
-        fail(`ไม่สามารถปรับจำนวนสินค้า (item ${item.sourceTicketItemId}) ให้ตรงกับใบขอราคาที่ยืนยันคำสั่งซื้อได้ `
+        fail(`ไม่สามารถปรับจำนวนสินค้า (item ${item.sourceTicketItemId}) ให้ตรงกับคำขอราคาที่ยืนยันคำสั่งซื้อได้ `
           + 'เนื่องจากมีการส่งมอบหรือจองสต็อกไปแล้วเกินจำนวนใหม่', 409);
       }
       if (Number(ticketItem.qty) !== newQty) {
@@ -787,7 +787,7 @@ function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
       const nextId = Math.max(0, ...ticket.items.map((ti) => ti.id)) + 1;
       ticket.items.push({
         id: nextId, ticketId: ticket.id,
-        brand: item.brand || item.model || item.productDescription || 'รายการใหม่จากใบขอราคา',
+        brand: item.brand || item.model || item.productDescription || 'รายการใหม่จากคำขอราคา',
         model: item.model ?? null, color: item.color ?? null, texture: item.texture ?? null,
         size: item.size ?? null, factory: item.factory ?? null,
         qty: newQty, qtySqm: item.requestedQtySqm ?? null,
@@ -839,7 +839,7 @@ function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
   }
   if (anyChange) {
     pushPricingRequestEvent(pr, user, 'TICKET_ITEMS_RECONCILED', null, null,
-      'ปรับจำนวนสินค้าในรายการดีลให้ตรงกับใบขอราคาที่ยืนยันคำสั่งซื้อแล้ว');
+      'ปรับจำนวนสินค้าในรายการดีลให้ตรงกับคำขอราคาที่ยืนยันคำสั่งซื้อแล้ว');
   }
 }
 
@@ -1037,7 +1037,7 @@ function requirePricingRequestViewable(id, user) {
   const ticket = db.tickets.find((t) => t.id === pr.ticketId);
   const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
   if (pr.status === 'DRAFT' && !draftOversight && ticket?.createdById !== user.id) {
-    fail('ไม่พบใบขอราคานี้', 404);
+    fail('ไม่พบคำขอราคานี้', 404);
   }
   if (user.role === 'sales' && ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return pr;
@@ -1149,7 +1149,7 @@ function submitPricingRequestCatalogGate(pr) {
 function mockRequireConversionFactor(value, pricingRequestItemId, factorName) {
   const numeric = Number(value);
   if (value == null || !(numeric > 0)) {
-    fail(`รายการที่ ${pricingRequestItemId} ในใบขอราคายังไม่มีค่าแปลงหน่วย ${factorName} ที่จำเป็นสำหรับคำนวณราคา/จำนวน`, 422);
+    fail(`รายการที่ ${pricingRequestItemId} ในคำขอราคายังไม่มีค่าแปลงหน่วย ${factorName} ที่จำเป็นสำหรับคำนวณราคา/จำนวน`, 422);
   }
   return numeric;
 }
@@ -6239,7 +6239,7 @@ export const api = {
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (pr.status !== 'DRAFT') fail(`ต้องเป็นใบขอราคาที่อยู่ในสถานะ 'DRAFT' เท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
+      if (pr.status !== 'DRAFT') fail(`ต้องเป็นคำขอราคาที่อยู่ในสถานะ 'DRAFT' เท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
       if (!payload.recipientType?.trim()) fail('recipientType ต้องไม่เว้นว่าง', 400);
       if (!PRICING_REQUEST_RECIPIENT_VALUES.includes(payload.recipientType)) {
         fail(`ไม่รองรับประเภทผู้รับ '${payload.recipientType}'`, 400);
@@ -6321,11 +6321,11 @@ export const api = {
       const user = hasRole('import');
       const pr = findPricingRequestRaw(id);
       if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS'].includes(pr.status)) {
-        fail('ใบขอราคาต้องอยู่ระหว่างการตรวจสอบของฝ่ายนำเข้าก่อนจึงจะสร้างร่างอีเมลราคาโรงงานได้', 409);
+        fail('คำขอราคาต้องอยู่ระหว่างการตรวจสอบของฝ่ายนำเข้าก่อนจึงจะสร้างร่างอีเมลราคาโรงงานได้', 409);
       }
       const byFactory = new Map();
       for (const item of pr.items) {
-        if (!item.factory) fail(`รายการที่ ${item.id} ในใบขอราคายังไม่ได้ระบุโรงงาน`, 422);
+        if (!item.factory) fail(`รายการที่ ${item.id} ในคำขอราคายังไม่ได้ระบุโรงงาน`, 422);
         byFactory.set(item.factory, [...(byFactory.get(item.factory) ?? []), item]);
       }
       for (const [factoryName, items] of byFactory) {
@@ -6618,7 +6618,7 @@ export const api = {
       // READY_FOR_CEO_REVIEW/CEO_REVIEWING are deliberately excluded — a submitted costing is
       // frozen until the CEO explicitly returns the request (-> COSTING_REVISION_REQUIRED).
       if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS', 'COSTING_REVISION_REQUIRED'].includes(pr.status)) {
-        fail('ใบขอราคานี้ยังไม่พร้อมสำหรับการคำนวณต้นทุน', 409);
+        fail('คำขอราคานี้ยังไม่พร้อมสำหรับการคำนวณต้นทุน', 409);
       }
       const readyFactories = new Set(mockFactoryQuotes.filter((q) => q.pricingRequestId === pr.id && q.current && q.status === 'READY_FOR_COSTING').map((q) => q.factoryName));
       for (const item of pr.items) if (!readyFactories.has(item.factory)) fail(`ใบเสนอราคาของโรงงาน ${item.factory} ยังไม่พร้อมสำหรับการคำนวณต้นทุน`, 422);
@@ -6721,12 +6721,12 @@ export const api = {
     async startPricingDecision(id, payload = {}) {
       const user = hasRole('ceo');
       const pr = findPricingRequestRaw(id);
-      if (pr.status !== 'READY_FOR_CEO_REVIEW') fail('ใบขอราคานี้ยังไม่พร้อมส่งให้ CEO พิจารณา', 409);
+      if (pr.status !== 'READY_FOR_CEO_REVIEW') fail('คำขอราคานี้ยังไม่พร้อมส่งให้ CEO พิจารณา', 409);
       const openDraft = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'DRAFT');
       if (openDraft) return delay({ decision: openDraft });
       const submittedCostings = mockPricingCostings.filter((c) => c.pricingRequestId === pr.id && c.status === 'SUBMITTED');
       const costing = submittedCostings[submittedCostings.length - 1];
-      if (!costing) fail('ใบขอราคานี้ยังไม่มีการคำนวณต้นทุนที่ส่งเข้ามา', 409);
+      if (!costing) fail('คำขอราคานี้ยังไม่มีการคำนวณต้นทุนที่ส่งเข้ามา', 409);
       const currency = (payload.currency || pr.targetCurrency || 'THB').toUpperCase();
       const defaultMarginPct = payload.defaultMarginPct ?? null;
       const decisionVersionNo = mockPricingDecisions.filter((d) => d.pricingRequestId === pr.id).length + 1;
@@ -6896,7 +6896,7 @@ export const api = {
       }
       if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่รออนุมัติ', 409);
       const pr = findPricingRequestRaw(decision.pricingRequestId);
-      if (pr.status !== 'CEO_REVIEWING') fail('ใบขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
+      if (pr.status !== 'CEO_REVIEWING') fail('คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
       const missingMargin = decision.items.filter((i) => i.proposedMarginPct == null).map((i) => i.id);
       const missingMinimum = decision.items.filter((i) => i.minimumSellingPricePerRequestedUnit == null).map((i) => i.id);
       if (missingMargin.length || missingMinimum.length) {
@@ -6919,7 +6919,7 @@ export const api = {
       pushPricingRequestEvent(pr, user, 'PRICING_DECISION_APPROVED', 'CEO_REVIEWING', 'APPROVED_FOR_QUOTATION');
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       addNotification(pr.requestedById, pr.ticketId, ticket?.code, 'PRICING_DECISION_APPROVED',
-        `ใบขอราคา ${pr.requestCode} ได้รับอนุมัติราคาขายแล้ว`);
+        `คำขอราคา ${pr.requestCode} ได้รับอนุมัติราคาขายแล้ว`);
       return delay({ decision });
     },
 
@@ -6930,7 +6930,7 @@ export const api = {
       if (!decision) fail('ไม่พบมติราคานี้', 404);
       if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่แก้ไขได้', 409);
       const pr = findPricingRequestRaw(decision.pricingRequestId);
-      if (pr.status !== 'CEO_REVIEWING') fail('ใบขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
+      if (pr.status !== 'CEO_REVIEWING') fail('คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
       decision.status = 'RETURNED';
       decision.returnReason = payload.returnReason;
       decision.returnedAt = new Date().toISOString();
@@ -6940,7 +6940,7 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       if (pr.assignedImportId != null) {
         addNotification(pr.assignedImportId, pr.ticketId, ticket?.code, 'PRICING_DECISION_RETURNED',
-          `ใบขอราคา ${pr.requestCode} ถูก CEO ตีกลับให้แก้ไขต้นทุน`);
+          `คำขอราคา ${pr.requestCode} ถูก CEO ตีกลับให้แก้ไขต้นทุน`);
       }
       return delay({ decision });
     },
@@ -6963,10 +6963,10 @@ export const api = {
         if (replay) return delay({ quotation: replay });
       }
       if (pr.status !== 'APPROVED_FOR_QUOTATION') {
-        fail(`ใบขอราคาต้องอยู่ในสถานะ 'อนุมัติราคาขายแล้ว' ก่อนจึงจะออกใบเสนอราคาลูกค้าได้ (ปัจจุบัน: ${pr.status})`, 409);
+        fail(`คำขอราคาต้องอยู่ในสถานะ 'อนุมัติราคาขายแล้ว' ก่อนจึงจะออกใบเสนอราคาลูกค้าได้ (ปัจจุบัน: ${pr.status})`, 409);
       }
       const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
-      if (!decision) fail('ยังไม่มีราคาขายที่ CEO อนุมัติสำหรับใบขอราคานี้', 409);
+      if (!decision) fail('ยังไม่มีราคาขายที่ CEO อนุมัติสำหรับคำขอราคานี้', 409);
       const quotation = buildMockCustomerQuotationDraft(pr, decision, ticket, user, payload, null, 1, {});
       mockCustomerQuotations.push(quotation);
       pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_CREATED', pr.status, pr.status, 'สร้างร่างใบเสนอราคาลูกค้า');
@@ -7195,7 +7195,7 @@ export const api = {
         fail('คำสั่งซื้อนี้ได้รับการยืนยันไปแล้ว', 409);
       }
       if (pr.status !== 'QUOTATION_ACCEPTED') {
-        fail(`ยืนยันคำสั่งซื้อได้เฉพาะใบขอราคาที่ลูกค้ายอมรับใบเสนอราคาแล้วเท่านั้น (ปัจจุบัน: ${pr.status})`, 409);
+        fail(`ยืนยันคำสั่งซื้อได้เฉพาะคำขอราคาที่ลูกค้ายอมรับใบเสนอราคาแล้วเท่านั้น (ปัจจุบัน: ${pr.status})`, 409);
       }
 
       const now = new Date().toISOString();
@@ -7210,7 +7210,7 @@ export const api = {
         ticket.status = 'quotation_issued';
         ticket.updatedAt = now;
         pushEvent(ticket, user, 'ORDER_CONFIRMED_FROM_QUOTATION', fromStatus, 'quotation_issued',
-          `ยืนยันคำสั่งซื้อจากใบเสนอราคาลูกค้าที่ยอมรับแล้ว (ใบขอราคา ${pr.requestCode})`);
+          `ยืนยันคำสั่งซื้อจากใบเสนอราคาลูกค้าที่ยอมรับแล้ว (คำขอราคา ${pr.requestCode})`);
       }
 
       // Step 8: reconcile ticket_item.qty to what THIS pricing request actually settled on,
@@ -7235,7 +7235,7 @@ export const api = {
       pushPricingRequestEvent(pr, user, 'ORDER_CONFIRMED', pr.status, pr.status, 'ยืนยันคำสั่งซื้อแล้ว');
       const ceoUsers = db.users.filter((u) => u.role === 'ceo');
       ceoUsers.forEach((ceo) => addNotification(ceo.id, pr.ticketId, ticket?.code, 'ORDER_CONFIRMED',
-        `ใบขอราคา ${pr.requestCode} ยืนยันคำสั่งซื้อแล้ว`));
+        `คำขอราคา ${pr.requestCode} ยืนยันคำสั่งซื้อแล้ว`));
 
       return delay({ result: { ticket: buildTicketDetail(ticket), pricingRequest: buildPricingRequestSummary(pr) } });
     },
@@ -7248,7 +7248,7 @@ export const api = {
 
       const accepted = mockCustomerQuotations.find(
         (q) => q.pricingRequestId === pr.id && q.docStatus === 'ACCEPTED');
-      if (!accepted) fail('ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับใบขอราคานี้', 409);
+      if (!accepted) fail('ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้', 409);
 
       // Mirrors OrderConfirmationService.createDepositNoticeFromQuotation: items/amounts trace
       // to the quotation, never to any sales.ticket_item row.
@@ -7307,7 +7307,7 @@ export const api = {
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (pr.status !== 'DRAFT') fail(`ต้องเป็นใบขอราคาที่อยู่ในสถานะ 'DRAFT' เท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
+      if (pr.status !== 'DRAFT') fail(`ต้องเป็นคำขอราคาที่อยู่ในสถานะ 'DRAFT' เท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
       requirePricingRequestDealActive(ticket);
       if (pr.items.length === 0) fail('ต้องมีรายการสินค้าอย่างน้อย 1 รายการก่อนส่งคำขอราคา', 400);
       if (pr.recipientContactId == null && !pr.recipientLabel?.trim()) fail('ต้องระบุผู้รับคำขอราคา', 400);
@@ -7340,7 +7340,7 @@ export const api = {
       // equivalent (no per-role broadcast helper here) — hardcoded to the demo
       // import user (id 7), same convention as the existing ceo hardcode
       // (id 8) elsewhere in this file for PRICE_PROPOSED.
-      addNotification(7, pr.ticketId, ticket?.code, 'PRICING_REQUEST_SUBMITTED', `ใบขอราคา ${pr.requestCode} รอการรับเรื่อง`);
+      addNotification(7, pr.ticketId, ticket?.code, 'PRICING_REQUEST_SUBMITTED', `คำขอราคา ${pr.requestCode} รอการรับเรื่อง`);
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });
     },
 
@@ -7350,7 +7350,7 @@ export const api = {
       // pricing requests on the same deal may go to two different Import users).
       const user = hasRole('import');
       const pr = findPricingRequestRaw(id);
-      if (pr.status !== 'SUBMITTED') fail('รับเรื่องได้เฉพาะใบขอราคาที่ถูกยื่นแล้วเท่านั้น', 409);
+      if (pr.status !== 'SUBMITTED') fail('รับเรื่องได้เฉพาะคำขอราคาที่ถูกยื่นแล้วเท่านั้น', 409);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       requirePricingRequestDealActive(ticket);
       const now = new Date().toISOString();
@@ -7360,7 +7360,7 @@ export const api = {
       pr.pickedUpAt = now;
       pr.updatedAt = now;
       pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_PICKED_UP', 'SUBMITTED', 'IMPORT_REVIEWING');
-      addNotification(pr.requestedById, pr.ticketId, ticket?.code, 'PRICING_REQUEST_PICKED_UP', `ใบขอราคา ${pr.requestCode} ถูกรับเรื่องแล้ว`);
+      addNotification(pr.requestedById, pr.ticketId, ticket?.code, 'PRICING_REQUEST_PICKED_UP', `คำขอราคา ${pr.requestCode} ถูกรับเรื่องแล้ว`);
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });
     },
 
@@ -7370,7 +7370,7 @@ export const api = {
       const user = hasRole('import');
       const pr = findPricingRequestRaw(id);
       if (pr.assignedImportId == null || pr.assignedImportId !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (pr.status !== 'IMPORT_REVIEWING') fail(`ต้องเป็นใบขอราคาที่อยู่ในสถานะ 'IMPORT_REVIEWING' เท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
+      if (pr.status !== 'IMPORT_REVIEWING') fail(`ต้องเป็นคำขอราคาที่อยู่ในสถานะ 'IMPORT_REVIEWING' เท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
       // Mirrors RequestMoreInformationRequest's @NotBlank message.
       if (!payload.message?.trim()) fail('ต้องระบุข้อความ', 400);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
@@ -7381,7 +7381,7 @@ export const api = {
         pr, user, 'MORE_INFO_REQUESTED', 'IMPORT_REVIEWING', 'MORE_INFO_REQUIRED',
         payload.message, payload.dueDate ? JSON.stringify({ dueDate: payload.dueDate }) : null,
       );
-      addNotification(pr.requestedById, pr.ticketId, ticket?.code, 'MORE_INFO_REQUIRED', `ใบขอราคา ${pr.requestCode} ต้องการข้อมูลเพิ่มเติม`);
+      addNotification(pr.requestedById, pr.ticketId, ticket?.code, 'MORE_INFO_REQUIRED', `คำขอราคา ${pr.requestCode} ต้องการข้อมูลเพิ่มเติม`);
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });
     },
 
@@ -7393,13 +7393,13 @@ export const api = {
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (pr.status !== 'MORE_INFO_REQUIRED') fail(`ต้องเป็นใบขอราคาที่อยู่ในสถานะ 'MORE_INFO_REQUIRED' เท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
+      if (pr.status !== 'MORE_INFO_REQUIRED') fail(`ต้องเป็นคำขอราคาที่อยู่ในสถานะ 'MORE_INFO_REQUIRED' เท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
       const now = new Date().toISOString();
       pr.status = 'IMPORT_REVIEWING';
       pr.updatedAt = now;
       pushPricingRequestEvent(pr, user, 'MORE_INFO_RESPONDED', 'MORE_INFO_REQUIRED', 'IMPORT_REVIEWING', payload.response);
       if (pr.assignedImportId != null) {
-        addNotification(pr.assignedImportId, pr.ticketId, ticket?.code, 'MORE_INFO_RESPONDED', `ใบขอราคา ${pr.requestCode} ได้รับข้อมูลเพิ่มเติมแล้ว`);
+        addNotification(pr.assignedImportId, pr.ticketId, ticket?.code, 'MORE_INFO_RESPONDED', `คำขอราคา ${pr.requestCode} ได้รับข้อมูลเพิ่มเติมแล้ว`);
       }
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });
     },
@@ -7410,7 +7410,7 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === parent.ticketId);
       if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (['DRAFT', 'CANCELLED', 'SUPERSEDED'].includes(parent.status)) {
-        fail('สร้างรอบแก้ไขจากการเปลี่ยนแปลงของลูกค้าได้เฉพาะจากใบขอราคาที่ยื่นและยังดำเนินการอยู่เท่านั้น', 409);
+        fail('สร้างรอบแก้ไขจากการเปลี่ยนแปลงของลูกค้าได้เฉพาะจากคำขอราคาที่ยื่นและยังดำเนินการอยู่เท่านั้น', 409);
       }
       if (!payload.revisionReason?.trim()) fail('revisionReason ต้องไม่เว้นว่าง', 400);
       if (!payload.clientRequestId) fail('clientRequestId ต้องเป็น UUID', 400);
@@ -7478,7 +7478,7 @@ export const api = {
       const isOwnerOrCeo = user.role === 'ceo' || ticket?.createdById === user.id;
       if (!isOwnerOrCeo) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!pricingRequestCanTransition(pr.status, 'CANCELLED')) {
-        fail(`ไม่สามารถยกเลิกใบขอราคาที่อยู่ในสถานะ '${pr.status}' ได้`, 409);
+        fail(`ไม่สามารถยกเลิกคำขอราคาที่อยู่ในสถานะ '${pr.status}' ได้`, 409);
       }
       const now = new Date().toISOString();
       const fromStatus = pr.status;
@@ -7504,7 +7504,7 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!['DRAFT', 'MORE_INFO_REQUIRED'].includes(pr.status)) {
-        fail('แนบไฟล์ได้เฉพาะเมื่อใบขอราคาอยู่ในสถานะ DRAFT หรือ MORE_INFO_REQUIRED เท่านั้น', 409);
+        fail('แนบไฟล์ได้เฉพาะเมื่อคำขอราคาอยู่ในสถานะ DRAFT หรือ MORE_INFO_REQUIRED เท่านั้น', 409);
       }
       requirePricingRequestDealActive(ticket);
       const attachment = {
@@ -7537,11 +7537,11 @@ export const api = {
       // DRAFT/MORE_INFO_REQUIRED only.
       const user = hasRole('sales');
       const owningPr = mockPricingRequests.find((p) => (p.attachments ?? []).some((a) => a.id === Number(id)));
-      if (!owningPr) fail('ไม่พบไฟล์แนบของใบขอราคานี้', 404);
+      if (!owningPr) fail('ไม่พบไฟล์แนบของคำขอราคานี้', 404);
       const ticket = db.tickets.find((t) => t.id === owningPr.ticketId);
       if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!['DRAFT', 'MORE_INFO_REQUIRED'].includes(owningPr.status)) {
-        fail('ลบไฟล์แนบได้เฉพาะเมื่อใบขอราคาอยู่ในสถานะ DRAFT หรือ MORE_INFO_REQUIRED เท่านั้น', 409);
+        fail('ลบไฟล์แนบได้เฉพาะเมื่อคำขอราคาอยู่ในสถานะ DRAFT หรือ MORE_INFO_REQUIRED เท่านั้น', 409);
       }
       owningPr.attachments = (owningPr.attachments ?? []).filter((a) => a.id !== Number(id));
       return delay({ ok: true });
@@ -7554,7 +7554,7 @@ export const api = {
       // request.
       const user = hasRole('import');
       const owningPr = mockPricingRequests.find((p) => (p.attachments ?? []).some((a) => a.id === Number(id)));
-      if (!owningPr) fail('ไม่พบไฟล์แนบของใบขอราคานี้', 404);
+      if (!owningPr) fail('ไม่พบไฟล์แนบของคำขอราคานี้', 404);
       requirePricingRequestViewable(owningPr.id, user);
       const attachment = owningPr.attachments.find((a) => a.id === Number(id));
       attachment.includeInFactoryEmail = Boolean(includeInFactoryEmail);
@@ -7586,14 +7586,14 @@ export const api = {
       }
 
       if (pr.status !== 'QUOTATION_ACCEPTED') {
-        fail(`สร้างใบสั่งซื้อโรงงานได้เฉพาะใบขอราคาที่ลูกค้ายอมรับใบเสนอราคาแล้วเท่านั้น (ปัจจุบัน: ${pr.status})`, 409);
+        fail(`สร้างใบสั่งซื้อโรงงานได้เฉพาะคำขอราคาที่ลูกค้ายอมรับใบเสนอราคาแล้วเท่านั้น (ปัจจุบัน: ${pr.status})`, 409);
       }
       if (ticket?.salesStage !== 'PROCUREMENT') {
         fail(`สร้างใบสั่งซื้อโรงงานได้หลังจากออกคำขอนำเข้า (Import Request) แล้วเท่านั้น (สถานะดีลปัจจุบัน: ${ticket?.salesStage})`, 409);
       }
 
       const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
-      if (!decision) fail('ไม่พบราคาต้นทุนที่ได้รับอนุมัติสำหรับใบขอราคานี้', 409);
+      if (!decision) fail('ไม่พบราคาต้นทุนที่ได้รับอนุมัติสำหรับคำขอราคานี้', 409);
       const costing = mockPricingCostings.find((c) => c.id === decision.pricingCostingId);
       if (!costing || costing.items.length === 0) fail('ไม่พบรายการต้นทุนสำหรับสร้างใบสั่งซื้อโรงงาน', 409);
 
@@ -7645,7 +7645,7 @@ export const api = {
       }
       const ceoUsers = db.users.filter((u) => u.role === 'ceo');
       ceoUsers.forEach((ceo) => addNotification(ceo.id, pr.ticketId, ticket?.code, 'FACTORY_PO_CREATED',
-        `สร้างใบสั่งซื้อโรงงาน ${created.length} ฉบับสำหรับใบขอราคา ${pr.requestCode}`));
+        `สร้างใบสั่งซื้อโรงงาน ${created.length} ฉบับสำหรับคำขอราคา ${pr.requestCode}`));
       return delay({ factoryPurchaseOrders: created.map(buildFactoryPurchaseOrderView) });
     },
 

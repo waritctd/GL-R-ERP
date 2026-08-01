@@ -20,7 +20,7 @@ const STATUS_FILTERS = ['', 'SUBMITTED', 'IMPORT_REVIEWING', 'MORE_INFO_REQUIRED
 const COLUMNS = [
   {
     key: 'requestCode',
-    header: 'เลขที่ใบขอราคา',
+    header: 'เลขที่คำขอราคา',
     sortable: true,
     searchAccessor: (row) => row.requestCode,
     // A Link (not the whole-row `onRowClick` DataTable optionally offers) so
@@ -169,7 +169,7 @@ export function PricingRequestQueuePage({ user, showToast }) {
       <SalesTabs role={user.role} />
       <PageHeader
         title="คิวขอราคา"
-        subtitle="ใบขอราคาที่รอฝ่ายนำเข้าดำเนินการ"
+        subtitle="คำขอราคาที่รอฝ่ายนำเข้าดำเนินการ"
         actions={(
           <button
             type="button"
@@ -219,7 +219,7 @@ export function PricingRequestQueuePage({ user, showToast }) {
         )}
         searchable
         loading={queueQuery.isLoading}
-        emptyState={{ icon: 'fileText', title: 'ไม่มีใบขอราคาในเงื่อนไขนี้' }}
+        emptyState={{ icon: 'fileText', title: 'ไม่มีคำขอราคาในเงื่อนไขนี้' }}
       />
     </div>
   );

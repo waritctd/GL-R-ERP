@@ -468,8 +468,8 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     <div className="page-stack">
       <Breadcrumbs
         items={[
-          { label: 'ใบขอราคา', onClick: onNavigateTickets },
-          { label: form.customerName || 'รายละเอียดใบขอราคา', onClick: onBack },
+          { label: 'คำขอราคา', onClick: onNavigateTickets },
+          { label: form.customerName || 'รายละเอียดคำขอราคา', onClick: onBack },
           { label: 'ใบแจ้งยอดเงินรับมัดจำ' },
         ]}
       />
@@ -562,7 +562,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           <EmptyState
             icon="fileText"
             title="ยังไม่มีใบแจ้งยอดเงินรับมัดจำ"
-            description="สร้างเอกสารฉบับร่างเพื่อเริ่มกรอกรายละเอียดใบแจ้งยอดมัดจำสำหรับใบขอราคานี้"
+            description="สร้างเอกสารฉบับร่างเพื่อเริ่มกรอกรายละเอียดใบแจ้งยอดมัดจำสำหรับคำขอราคานี้"
           />
           <div style={{ padding: '0 18px 18px', display: 'flex', justifyContent: 'center' }}>
             <button type="button" className="primary-button" onClick={handleCreateDraft} disabled={creatingDraft}>
@@ -823,7 +823,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                   `isIssued`), and moves the parent ticket to `document_issued`. */}
               {!isIssued && (
                 <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
-                  กด &quot;ออกเอกสาร&quot; เพื่อออกเลขที่เอกสารอย่างเป็นทางการ — หลังจากนี้จะแก้ไขข้อมูลในเอกสารนี้ไม่ได้อีก และใบขอราคาจะเปลี่ยนสถานะเป็น &quot;ออกใบแจ้งยอดมัดจำแล้ว&quot;
+                  กด &quot;ออกเอกสาร&quot; เพื่อออกเลขที่เอกสารอย่างเป็นทางการ — หลังจากนี้จะแก้ไขข้อมูลในเอกสารนี้ไม่ได้อีก และคำขอราคาจะเปลี่ยนสถานะเป็น &quot;ออกใบแจ้งยอดมัดจำแล้ว&quot;
                 </p>
               )}
             </div>
