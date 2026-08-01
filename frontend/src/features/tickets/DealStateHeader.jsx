@@ -41,10 +41,9 @@ function StatChip({ label, value, tone }) {
  * customer + lifecycle badge, a compact stat strip (sales stage × PCR status
  * × payment status × fulfilment status × deal value), ONE work-state banner
  * line ("whose move, what's blocking" — region 4/6/7 of the IA), and the
- * sticky action bar's primary CTA + "⋯" overflow trigger. `sticky top-0`:
- * this is the one thing that should never scroll out of view on a page this
- * long (see the Phase-1 handoff's measured "4,324px / 12 panels / 15
- * buttons" finding).
+ * sticky action bar's primary CTA + "⋯" overflow trigger. Desktop/tablet keep
+ * the workspace header sticky at the top; phone pins the action strip itself
+ * to the viewport bottom, matching IA region 8's mobile affordance.
  *
  * Every value here is read straight off the ticket summary / the already-
  * fetched pricingRequests list, or derived by the parent (workState.js's
@@ -80,7 +79,10 @@ export function DealStateHeader({
   const pricingStatus = latestPr ? pricingRequestStatusLabel(latestPr.status) : null;
 
   return (
-    <section className="sticky top-0 z-10 flex flex-col gap-4 rounded-xl border border-border bg-surface p-4 shadow-sm sm:p-5">
+    <section
+      data-testid="deal-state-header"
+      className="sticky top-0 z-10 flex flex-col gap-4 rounded-xl border border-border bg-surface p-4 shadow-sm mobile:static mobile:z-auto sm:p-5"
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -100,6 +102,7 @@ export function DealStateHeader({
             {summary.assignedToName ? (
               <span>เจ้าหน้าที่นำเข้าที่ดูแล <strong className="text-text-secondary">{summary.assignedToName}</strong></span>
             ) : null}
+            <span>อัปเดตล่าสุด <strong className="text-text-secondary">{formatThaiDate(summary.updatedAt)}</strong></span>
           </div>
         </div>
         {onRefresh ? (
@@ -156,7 +159,10 @@ export function DealStateHeader({
           overflow. Hidden entirely when there is nothing to say and nothing
           to do — never an empty chrome bar. */}
       {bannerText || primaryAction || (overflowItems && overflowItems.length > 0) ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info-border bg-info-bg px-4 py-3">
+        <div
+          data-testid="ticket-action-bar"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info-border bg-info-bg px-4 py-3 mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:z-20 mobile:flex-nowrap mobile:rounded-none mobile:border-x-0 mobile:border-b-0 mobile:pb-[max(12px,env(safe-area-inset-bottom))] mobile:shadow-lg"
+        >
           <div className="flex min-w-0 items-start gap-2">
             {bannerText ? (
               <>
@@ -167,7 +173,7 @@ export function DealStateHeader({
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {primaryAction ? <div className="shrink-0">{primaryAction}</div> : null}
-            <OverflowMenu items={overflowItems} />
+            <OverflowMenu items={overflowItems} mobilePlacement="up" />
           </div>
         </div>
       ) : null}

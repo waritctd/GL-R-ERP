@@ -303,6 +303,38 @@ describe('TicketDetailPage', () => {
     expect(screen.getAllByText('฿50,000.00').length).toBeGreaterThan(0);
   });
 
+  it('keeps Overview free of the redundant ข้อมูลทั่วไป panel while preserving อัปเดตล่าสุด in the header meta', async () => {
+    renderTicketDetailPage();
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' })).not.toBeNull();
+    expect(screen.queryByRole('heading', { level: 2, name: 'ข้อมูลทั่วไป' })).toBeNull();
+    expect(screen.getByText((_, element) => (
+      element?.tagName.toLowerCase() === 'span'
+      && element.textContent.includes('อัปเดตล่าสุด')
+      && element.textContent.includes('2 ก.ค. 2569')
+    ))).not.toBeNull();
+  });
+
+  it('pins the ticket action bar to the viewport bottom on mobile', async () => {
+    api.tickets.get.mockResolvedValue({
+      ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'LEAD_APPROACH', createdById: 1 } }),
+    });
+    api.tickets.actions.mockResolvedValue({
+      currentState: { lifecycle: 'ACTIVE', salesStage: 'LEAD_APPROACH', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
+      availableActions: [],
+    });
+    api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
+
+    const { container } = renderTicketDetailPage(salesOwnerUser);
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' })).not.toBeNull();
+    expect(screen.getByTestId('deal-state-header').className).toContain('mobile:static');
+    expect(screen.getByTestId('ticket-action-bar').className).toContain('mobile:fixed');
+    expect(screen.getByTestId('ticket-action-bar').className).toContain('mobile:bottom-0');
+    expect(screen.getByTestId('ticket-action-bar').className).not.toContain('mobile:top-0');
+    expect(container.querySelector('.page-stack').className).toContain('mobile:pb-28');
+  });
+
   it('renders a dash for มูลค่าดีล until a price exists', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({ summary: { status: 'approved', amountPayable: 0 } }),
@@ -1810,7 +1842,8 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(pricingTab.getAttribute('aria-selected')).toBe('true'));
       // Overview-only content is absent — proves the panel actually swapped,
       // not just that the tab button LOOKS selected.
-      expect(screen.queryByRole('heading', { level: 2, name: 'ข้อมูลทั่วไป' })).toBeNull();
+      expect(screen.queryByRole('heading', { level: 2, name: /รายการสินค้า/ })).toBeNull();
+      expect(await screen.findByRole('heading', { level: 2, name: 'ใบขอราคา (Pricing Request)' })).not.toBeNull();
     });
 
     it('falls back to ภาพรวม when ?tab= names a tab this role cannot see', async () => {
@@ -1823,7 +1856,7 @@ describe('TicketDetailPage', () => {
 
       const overviewTab = await screen.findByRole('tab', { name: /^ภาพรวม/ });
       await waitFor(() => expect(overviewTab.getAttribute('aria-selected')).toBe('true'));
-      expect(await screen.findByRole('heading', { level: 2, name: 'ข้อมูลทั่วไป' })).not.toBeNull();
+      expect(await screen.findByRole('heading', { level: 2, name: /รายการสินค้า/ })).not.toBeNull();
     });
 
     // FIX 2 (Opus review): ticketDetailTabs.js's own role-level predicate for
@@ -1835,7 +1868,7 @@ describe('TicketDetailPage', () => {
 
       const overviewTab = await screen.findByRole('tab', { name: /^ภาพรวม/ });
       await waitFor(() => expect(overviewTab.getAttribute('aria-selected')).toBe('true'));
-      expect(await screen.findByRole('heading', { level: 2, name: 'ข้อมูลทั่วไป' })).not.toBeNull();
+      expect(await screen.findByRole('heading', { level: 2, name: /รายการสินค้า/ })).not.toBeNull();
       expect(screen.queryByRole('tab', { name: /เอกสาร/ })).toBeNull();
     });
 

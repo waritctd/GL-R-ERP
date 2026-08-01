@@ -24,11 +24,14 @@ import { Icon } from './Icon.jsx';
  * an unavailable action must say why, never just vanish. `aria-disabled`
  * (not the native `disabled` attribute) is used so the item stays in the
  * roving-focus set below instead of being skipped by keyboard navigation.
+ * `mobilePlacement="up"` is for bottom-fixed bars, so the menu opens back
+ * into the viewport instead of below the screen edge.
  */
 export function OverflowMenu({
   items,
   label = 'การดำเนินการเพิ่มเติม',
   align = 'end',
+  mobilePlacement = 'down',
   triggerLabel,
   triggerIcon = 'moreHorizontal',
   triggerClassName,
@@ -115,9 +118,11 @@ export function OverflowMenu({
           ref={menuRef}
           role="menu"
           aria-label={label}
-          className={`absolute top-full z-20 mt-1 min-w-[12rem] rounded-lg border border-border bg-surface py-1 shadow-lg ${
-            align === 'end' ? 'right-0' : 'left-0'
-          }`}
+          className={cn(
+            'absolute top-full z-20 mt-1 min-w-[12rem] rounded-lg border border-border bg-surface py-1 shadow-lg',
+            align === 'end' ? 'right-0' : 'left-0',
+            mobilePlacement === 'up' && 'mobile:bottom-full mobile:top-auto mobile:mb-1 mobile:mt-0',
+          )}
         >
           {items.map((item) => (
             <button

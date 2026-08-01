@@ -21,6 +21,7 @@ import {
   quotationRecipientLabel,
   quotationStatusLabel,
 } from '../../utils/format.js';
+import { cn } from '../../utils/cn.js';
 import { downloadBlob } from '../../utils/download.js';
 import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx';
 import { CancelDealModal } from './CancelDealModal.jsx';
@@ -122,15 +123,6 @@ function docStatusColors(docStatus) {
     return { background: 'var(--color-success-bg)', color: 'var(--color-success-dark)' };
   }
   return { background: 'var(--color-info-bg)', color: 'var(--color-info)' };
-}
-
-function InfoRow({ label, value }) {
-  return (
-    <div style={{ display: 'flex', gap: 8, padding: '6px 0', borderBottom: '1px solid var(--color-surface-subtle)', fontSize: 13 }}>
-      <span style={{ color: 'var(--color-text-muted)', minWidth: 120 }}>{label}</span>
-      <span style={{ fontWeight: 600, color: 'var(--color-text)' }}>{value || '-'}</span>
-    </div>
-  );
 }
 
 export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
@@ -1017,6 +1009,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     canDormantDeal && { key: 'dormant', label: 'พัก dormant', disabled: actionLoading, onSelect: handleOpenDormant },
     can.revise && { key: 'revise', label: 'ขอแก้ไข (Revise)', icon: 'pencil', onSelect: handleOpenRevise },
   ].filter(Boolean);
+  const hasActionBar = Boolean(bannerText || stickyPrimaryAction || overflowItems.length > 0);
 
   async function handleUploadAttachment(e) {
     const file = e.target.files?.[0];
@@ -1160,7 +1153,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // DealFulfilmentPanel (Phase 3 Slice S4).
 
   return (
-    <div className="page-stack">
+    <div className={cn('page-stack', hasActionBar && 'mobile:pb-28')}>
       {/* F-14 (ticket-detail IA rebuild Phase 1): the breadcrumb is the single
           up-nav — a full-width "กลับ" bar underneath it just repeated the same
           affordance as page chrome. Verified safe to drop: every e2e "กลับ"
@@ -1268,21 +1261,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
       <div className="min-w-0 xl:col-start-1">
       <TabPanel id="overview" idPrefix="ticket-detail" active={visibleActiveTab === 'overview'}>
-          <section className="panel">
-            <div className="panel-header">
-              <h2>ข้อมูลทั่วไป</h2>
-            </div>
-            <InfoRow label="ลูกค้า" value={summary.customerName} />
-            {summary.projectName && <InfoRow label="โครงการ" value={summary.projectName} />}
-            {summary.contactName && (
-              <InfoRow label="ผู้ติดต่อ" value={summary.contactName} />
-            )}
-            <InfoRow label="สร้างโดย" value={summary.createdByName} />
-            <InfoRow label="วันที่สร้าง" value={formatThaiDate(summary.createdAt)} />
-            <InfoRow label="เจ้าหน้าที่นำเข้า" value={summary.assignedToName} />
-            <InfoRow label="อัปเดตล่าสุด" value={formatThaiDate(summary.updatedAt)} />
-          </section>
-
           <section className="table-panel">
             <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h2>รายการสินค้า ({editMode ? editDraft.length : items.length} รายการ)</h2>
