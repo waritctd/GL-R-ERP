@@ -202,7 +202,7 @@ public class TicketService {
     @Deprecated
     public TicketDto submit(long ticketId, UserPrincipal actor) {
         throw new ApiException(HttpStatus.CONFLICT,
-            "การส่งขอราคาย้ายไปอยู่ที่ใบขอราคา (PCR) แล้ว — กรุณาสร้างใบขอราคาจากหน้าดีลแทน");
+            "การส่งขอราคาย้ายไปอยู่ที่คำขอราคา (PCR) แล้ว — กรุณาสร้างคำขอราคาจากหน้าดีลแทน");
     }
 
     /**

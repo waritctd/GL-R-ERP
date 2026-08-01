@@ -116,10 +116,10 @@ public class CustomerQuotationService {
         // APPROVED pricing_decision.
         if (!PricingRequestStatus.APPROVED_FOR_QUOTATION.equals(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ใบขอราคาต้องอยู่ในสถานะ 'อนุมัติราคาขายแล้ว' ก่อนจึงจะออกใบเสนอราคาลูกค้าได้ (ปัจจุบัน: " + summary.status() + ")");
+                "คำขอราคาต้องอยู่ในสถานะ 'อนุมัติราคาขายแล้ว' ก่อนจึงจะออกใบเสนอราคาลูกค้าได้ (ปัจจุบัน: " + summary.status() + ")");
         }
         PricingDecisionSalesViewDto salesView = decisions.findApprovedSalesView(pricingRequestId)
-            .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "ยังไม่มีราคาขายที่ CEO อนุมัติสำหรับใบขอราคานี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "ยังไม่มีราคาขายที่ CEO อนุมัติสำหรับคำขอราคานี้"));
 
         List<NewItem> items = new ArrayList<>();
         for (PricingDecisionSalesItemDto item : salesView.items()) {
@@ -296,7 +296,7 @@ public class CustomerQuotationService {
             int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.APPROVED_FOR_QUOTATION,
                 PricingRequestStatus.QUOTATION_ISSUED, null, null);
             if (transitioned == 0) {
-                throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคาถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
+                throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
             }
         }
 
@@ -475,7 +475,7 @@ public class CustomerQuotationService {
             int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.QUOTATION_ISSUED,
                 PricingRequestStatus.QUOTATION_ACCEPTED, null, null);
             if (transitioned == 0) {
-                throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคาถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
+                throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
             }
         }
         return requireQuotation(quotationId);
@@ -679,7 +679,7 @@ public class CustomerQuotationService {
 
     private PricingRequestSummaryDto requirePricingRequest(long pricingRequestId) {
         return pricingRequests.findSummary(pricingRequestId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอราคานี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
     }
 
     private void addPricingRequestEvent(PricingRequestSummaryDto summary, UserPrincipal actor, String kind, String message) {

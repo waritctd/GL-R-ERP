@@ -122,7 +122,7 @@ public class ProcurementService {
         PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId);
         if (!PricingRequestStatus.QUOTATION_ACCEPTED.equals(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "สร้างใบสั่งซื้อโรงงานได้เฉพาะใบขอราคาที่ลูกค้ายอมรับใบเสนอราคาแล้วเท่านั้น (ปัจจุบัน: " + summary.status() + ")");
+                "สร้างใบสั่งซื้อโรงงานได้เฉพาะคำขอราคาที่ลูกค้ายอมรับใบเสนอราคาแล้วเท่านั้น (ปัจจุบัน: " + summary.status() + ")");
         }
         TicketSummaryDto ticket = requireTicketSummary(summary.ticketId());
         if (!DealStage.PROCUREMENT.equals(ticket.salesStage())) {
@@ -132,7 +132,7 @@ public class ProcurementService {
 
         long pricingCostingId = purchaseOrders.findApprovedPricingCostingId(pricingRequestId)
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT,
-                "ไม่พบราคาต้นทุนที่ได้รับอนุมัติสำหรับใบขอราคานี้"));
+                "ไม่พบราคาต้นทุนที่ได้รับอนุมัติสำหรับคำขอราคานี้"));
         List<CostingItemForPo> items = purchaseOrders.findCostingItemsForPo(pricingCostingId);
         if (items.isEmpty()) {
             throw new ApiException(HttpStatus.CONFLICT, "ไม่พบรายการต้นทุนสำหรับสร้างใบสั่งซื้อโรงงาน");
@@ -175,7 +175,7 @@ public class ProcurementService {
             purchaseOrders.findById(poId).ifPresent(result::add);
         }
         notifications.notifyByRoleForPricingRequest("ceo", pricingRequestId, PricingRequestEventKind.FACTORY_PO_CREATED,
-            "สร้างใบสั่งซื้อโรงงาน " + result.size() + " ฉบับสำหรับใบขอราคา " + summary.requestCode());
+            "สร้างใบสั่งซื้อโรงงาน " + result.size() + " ฉบับสำหรับคำขอราคา " + summary.requestCode());
         return result;
     }
 
@@ -323,7 +323,7 @@ public class ProcurementService {
 
     private PricingRequestSummaryDto requirePricingRequest(long pricingRequestId) {
         return pricingRequests.findSummary(pricingRequestId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอราคานี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
     }
 
     private TicketSummaryDto requireTicketSummary(long ticketId) {

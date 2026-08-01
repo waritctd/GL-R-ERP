@@ -130,7 +130,7 @@ public class OrderConfirmationService {
         PricingRequestSummaryDto locked = requirePricingRequest(pricingRequestId);
         if (!PricingRequestStatus.QUOTATION_ACCEPTED.equals(locked.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ยืนยันคำสั่งซื้อได้เฉพาะใบขอราคาที่ลูกค้ายอมรับใบเสนอราคาแล้วเท่านั้น (ปัจจุบัน: " + locked.status() + ")");
+                "ยืนยันคำสั่งซื้อได้เฉพาะคำขอราคาที่ลูกค้ายอมรับใบเสนอราคาแล้วเท่านั้น (ปัจจุบัน: " + locked.status() + ")");
         }
 
         int confirmedRows = pricingRequests.markOrderConfirmed(pricingRequestId, actor.id(), clientRequestId);
@@ -148,7 +148,7 @@ public class OrderConfirmationService {
         if (ticketRows == 1) {
             tickets.addEvent(locked.ticketId(), actor.id(), actor.name(),
                 TicketEventKind.ORDER_CONFIRMED_FROM_QUOTATION, TicketStatus.DRAFT, TicketStatus.QUOTATION_ISSUED,
-                "ยืนยันคำสั่งซื้อจากใบเสนอราคาลูกค้าที่ยอมรับแล้ว (ใบขอราคา " + locked.requestCode() + ")");
+                "ยืนยันคำสั่งซื้อจากใบเสนอราคาลูกค้าที่ยอมรับแล้ว (คำขอราคา " + locked.requestCode() + ")");
         } else {
             // Defensive-only: markOrderConfirmed's own compare-and-set already makes this
             // unreachable through the real API (a genuine replay short-circuits above, before
@@ -194,7 +194,7 @@ public class OrderConfirmationService {
             PricingRequestEventKind.ORDER_CONFIRMED, locked.status(), locked.status(),
             "ยืนยันคำสั่งซื้อแล้ว", null);
         notifications.notifyByRoleForPricingRequest("ceo", pricingRequestId, PricingRequestEventKind.ORDER_CONFIRMED,
-            "ใบขอราคา " + locked.requestCode() + " ยืนยันคำสั่งซื้อแล้ว");
+            "คำขอราคา " + locked.requestCode() + " ยืนยันคำสั่งซื้อแล้ว");
 
         return new OrderConfirmationResultDto(ticketDto, requirePricingRequest(pricingRequestId));
     }
@@ -282,7 +282,7 @@ public class OrderConfirmationService {
                 } catch (DataIntegrityViolationException e) {
                     throw new ApiException(HttpStatus.CONFLICT,
                         "ไม่สามารถปรับจำนวนสินค้า (item " + item.sourceTicketItemId()
-                            + ") ให้ตรงกับใบขอราคาที่ยืนยันคำสั่งซื้อได้ เนื่องจากมีการส่งมอบหรือจองสต็อกไปแล้วเกินจำนวนใหม่");
+                            + ") ให้ตรงกับคำขอราคาที่ยืนยันคำสั่งซื้อได้ เนื่องจากมีการส่งมอบหรือจองสต็อกไปแล้วเกินจำนวนใหม่");
                 }
                 anyChange = anyChange || changed;
             } else {
@@ -305,7 +305,7 @@ public class OrderConfirmationService {
         if (anyChange) {
             pricingRequests.addEvent(pricingRequestId, ticketId, actor.id(), actor.name(),
                 PricingRequestEventKind.TICKET_ITEMS_RECONCILED, null, null,
-                "ปรับจำนวนสินค้าในรายการดีลให้ตรงกับใบขอราคาที่ยืนยันคำสั่งซื้อแล้ว", null);
+                "ปรับจำนวนสินค้าในรายการดีลให้ตรงกับคำขอราคาที่ยืนยันคำสั่งซื้อแล้ว", null);
         }
     }
 
@@ -317,7 +317,7 @@ public class OrderConfirmationService {
         if (item.brand() != null && !item.brand().isBlank()) return item.brand();
         if (item.model() != null && !item.model().isBlank()) return item.model();
         if (item.productDescription() != null && !item.productDescription().isBlank()) return item.productDescription();
-        return "รายการใหม่จากใบขอราคา";
+        return "รายการใหม่จากคำขอราคา";
     }
 
     /** ticket_item.unit_basis's own CHECK constraint (V37) only allows PIECE/SQM — a narrower set
@@ -355,7 +355,7 @@ public class OrderConfirmationService {
             .filter(q -> QuotationStatus.ACCEPTED.equals(q.docStatus()))
             .findFirst()
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT,
-                "ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับใบขอราคานี้"));
+                "ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้"));
 
         List<DepositNoticeItemRequest> items = new ArrayList<>();
         for (CustomerQuotationItemDto item : accepted.items()) {
@@ -411,7 +411,7 @@ public class OrderConfirmationService {
 
     private PricingRequestSummaryDto requirePricingRequest(long pricingRequestId) {
         return pricingRequests.findSummary(pricingRequestId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอราคานี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
     }
 
     private TicketSummaryDto requireTicketSummary(long ticketId) {
