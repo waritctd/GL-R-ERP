@@ -65,3 +65,10 @@ frontend/playwright/.cache/
 
 # Untracked design-review tooling output (impeccable skill) — not source
 .impeccable/
+
+# Generated UI captures and the retired design-audit corpus.
+# This repository is PUBLIC: role-based captures cover payroll, employees,
+# commissions and profile screens and must never be committed.
+frontend/screenshots/
+frontend/GL&R Design Audit/
+frontend/UX Agents.md
