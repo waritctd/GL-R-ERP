@@ -204,15 +204,18 @@ describe('App route guard for /pricing-requests (commit 6)', () => {
     expect(await screen.findByRole('heading', { name: 'คิวขอราคา' })).toBeTruthy();
   });
 
-  it('redirects a role without canViewPricingRequestQueue (sales) to the dashboard instead', async () => {
+  it('shows an in-place access-denied view for a role without canViewPricingRequestQueue (sales), instead of redirecting to the dashboard (#391)', async () => {
     renderAppAt('/pricing-requests', salesUser);
 
-    // RequireAccess denies the path and <Navigate to="/" replace /> lands on
-    // SalesOverview (role-scoped views, Sales branch — a sales user's own
-    // '/' landing since this branch, replacing the generic EmployeeDashboard
-    // it used to land on), whose PageHeader greets the logged-in user by name.
-    expect(await screen.findByRole('heading', { name: `สวัสดี คุณ${salesUser.name}` })).toBeTruthy();
+    // RequireAccess now renders AccessDeniedPage in place of the guarded
+    // route instead of <Navigate to="/" replace/> — the user must NOT land
+    // on SalesOverview (the '/' landing the old redirect used to produce),
+    // and the refused path must be named in the copy, proving the guard
+    // rendered in place rather than navigating away from /pricing-requests.
+    expect(await screen.findByRole('heading', { name: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' })).toBeTruthy();
+    expect(screen.getByText('/pricing-requests')).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'คิวขอราคา' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: `สวัสดี คุณ${salesUser.name}` })).toBeNull();
   });
 });
 
