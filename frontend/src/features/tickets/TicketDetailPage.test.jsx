@@ -380,7 +380,16 @@ describe('TicketDetailPage', () => {
     const panel = await screen.findByRole('complementary', { name: 'บริบทดีล' });
     expect(within(panel).queryByText('Key dates')).toBeNull();
     fireEvent.click(within(panel).getByRole('button', { name: /บริบทดีล/ }));
-    expect(screen.getAllByText('ถึงคิวคุณ: สร้างคำขอราคา').length).toBe(2);
+    // The old assertion checked the "ถึงคิวคุณ: สร้างคำขอราคา" banner text
+    // rendered twice (header + context rail); the header banner is gone now
+    // that a primary CTA exists (the button carries the message on its own
+    // label instead) — assert the sticky primary CTA itself is offering
+    // create_pcr, AND that the context rail's own "ขั้นตอนถัดไป" section still
+    // names that step rather than falling back to its "no next step" empty
+    // text, which is what it did when it was fed the header's now-null banner.
+    expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('create_pcr');
+    expect(within(panel).getByText('สร้างคำขอราคา')).not.toBeNull();
+    expect(within(panel).queryByText('ไม่มีขั้นตอนถัดไปในสถานะนี้')).toBeNull();
     expect(within(panel).getByText('20 ก.ค. 2569')).not.toBeNull();
     expect(within(panel).getByText('31 ก.ค. 2569')).not.toBeNull();
     expect(within(panel).getByText('สมชาย ใจดี')).not.toBeNull();
@@ -923,10 +932,21 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(salesOwnerUser);
 
-      expect((await screen.findAllByText('ถึงคิวคุณ: สร้างคำขอราคา')).length).toBeGreaterThan(0);
       const stickyButtons = await screen.findAllByRole('button', { name: /สร้างคำขอราคา/ });
       expect(stickyButtons).toHaveLength(1);
       expect(screen.queryByRole('dialog')).toBeNull();
+      // No leftover "ถึงคิวคุณ" banner text anywhere — the CTA button above
+      // stands alone now (see TicketDetailPage.jsx's bannerText comment).
+      expect(screen.queryByText(/ถึงคิวคุณ/)).toBeNull();
+      // …and the bannerless bar keeps its MOBILE chrome. It is
+      // `mobile:fixed inset-x-0 bottom-0` over scrolling content, so losing
+      // the background/border there would leave an unreadable transparent bar
+      // — the one failure mode of shedding the desktop chrome, and invisible
+      // to every other assertion in this file.
+      const [actionBar] = screen.getAllByTestId('ticket-action-bar');
+      expect(actionBar.className).toContain('mobile:bg-surface');
+      expect(actionBar.className).toContain('mobile:border-t');
+      expect(actionBar.className).not.toContain('bg-info-bg');
 
       fireEvent.click(stickyButtons[0]);
 
@@ -935,6 +955,36 @@ describe('TicketDetailPage', () => {
       // the modal's own title text uses the same string, so this scopes to
       // buttons only (not headings) to keep proving "no duplicate button".
       expect(screen.getAllByRole('button', { name: /สร้างคำขอราคา/ })).toHaveLength(1);
+    });
+  });
+
+  // The counterpart to the rule above, and the reason bannerText is not simply
+  // nulled whenever a CTA exists: the four `can.*`-gated primaries carry a
+  // DESCRIPTIVE sentence (NEXT_ACTION_STEPS) that their terse button label does
+  // not repeat. Dropping those lines would delete the precondition and the
+  // consequence from the page — and the context rail cannot stand in for them,
+  // since it is collapsed by default below 1280px (TicketContextPanel's own
+  // useMediaQuery gate), which is most of the viewports this is read on.
+  describe('sticky header primary CTA — the can.* primaries KEEP their descriptive line (prefix-free)', () => {
+    it('shows "ฝ่ายบัญชียืนยันแล้ว — ตรวจสอบและปิดงานได้เลย" next to the CEO\'s terse "ตรวจสอบและปิดงาน" button, with no ถึงคิวคุณ prefix', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({
+          summary: {
+            lifecycle: 'ACTIVE', salesStage: 'DELIVERED', status: 'quotation_issued',
+            closeConfirmedAt: '2026-07-20T09:00:00.000Z',
+          },
+        }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'DELIVERED', paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'FULLY_DELIVERED', status: 'quotation_issued' },
+        availableActions: [{ action: 'VERIFY_CLOSE' }],
+      });
+
+      renderTicketDetailPage(ceoUser);
+
+      expect(await screen.findByTestId('ticket-detail-verify-close')).not.toBeNull();
+      expect(screen.getAllByText('ฝ่ายบัญชียืนยันแล้ว — ตรวจสอบและปิดงานได้เลย').length).toBeGreaterThan(0);
+      expect(screen.queryByText(/ถึงคิวคุณ/)).toBeNull();
     });
   });
 
@@ -970,7 +1020,6 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(salesOwnerUser);
 
-      expect((await screen.findAllByText('ถึงคิวคุณ: ออกใบเสนอราคา')).length).toBeGreaterThan(0);
       const stickyButtons = await screen.findAllByRole('button', { name: /ออกใบเสนอราคา/ });
       expect(stickyButtons).toHaveLength(1);
 
@@ -1010,7 +1059,6 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(salesOwnerUser);
 
-      expect((await screen.findAllByText('ถึงคิวคุณ: ยืนยันคำสั่งซื้อ')).length).toBeGreaterThan(0);
       const stickyButtons = await screen.findAllByRole('button', { name: /ยืนยันคำสั่งซื้อ/ });
       expect(stickyButtons).toHaveLength(1);
 
@@ -1064,9 +1112,10 @@ describe('TicketDetailPage', () => {
 
       // Wait for the resolver to settle on ISSUE_QUOTATION (it renders
       // CREATE_PCR first, before api.pricingRequests.listForTicket resolves).
-      await screen.findAllByText('ถึงคิวคุณ: ออกใบเสนอราคา');
+      await waitFor(() => {
+        expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('issue_quotation');
+      });
       const stickyButton = screen.getByTestId('ticket-primary-action');
-      expect(stickyButton.getAttribute('data-action')).toBe('issue_quotation');
       // DealQuotationPanel now lives inside the "ใบเสนอราคา" tab — open it
       // (mounting the panel, starting its own quotationsQuery) BEFORE
       // clicking the sticky button, so the click's own runOnTab (a no-op,
@@ -1133,7 +1182,9 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(salesOwnerUser, showToast);
 
-      await screen.findAllByText('ถึงคิวคุณ: ออกใบเสนอราคา');
+      await waitFor(() => {
+        expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('issue_quotation');
+      });
       const stickyButton = screen.getByTestId('ticket-primary-action');
       // Open the "ใบเสนอราคา" tab, then wait for the quotations query to
       // settle so the click below exercises the "current exists but isn't
@@ -1182,13 +1233,14 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(salesOwnerUser, showToast);
 
-      await screen.findAllByText('ถึงคิวคุณ: ออกใบเสนอราคา');
+      await waitFor(() => {
+        expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('issue_quotation');
+      });
       // Deliberately NOT calling openTab(/ใบเสนอราคา/) here — the sticky
       // button is clicked while still on the default ภาพรวม tab, which is
       // the exact precondition the review's repro names ("on the default
       // ภาพรวม tab, first visit of a session").
       const stickyButton = screen.getByTestId('ticket-primary-action');
-      expect(stickyButton.getAttribute('data-action')).toBe('issue_quotation');
 
       fireEvent.click(stickyButton);
 

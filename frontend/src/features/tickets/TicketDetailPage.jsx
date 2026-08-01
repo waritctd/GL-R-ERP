@@ -767,8 +767,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // Never invents an owner or action the data can't support. 'revise' is
   // deliberately NOT in this cascade any more (Phase-1 audit finding #1): it
   // describes an OPTIONAL action, not something blocking the deal's progress,
-  // so it no longer competes for the one "ถึงคิวคุณ" banner slot — it is still
-  // fully reachable, from the header overflow menu.
+  // so it no longer competes for the one sticky primary CTA slot — it is
+  // still fully reachable, from the header overflow menu.
   const NEXT_ACTION_STEPS = [
     // Dual-track steps: re-issuing/working the customer quotation lives in
     // DealQuotationPanel, the deposit-notice/deposit-payment steps live in
@@ -785,17 +785,17 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   // The blocker line (region 7 of the IA — "unmet precondition"): why the
   // deal isn't moving even though it might not be this viewer's turn to act.
-  // Paired with the "รอ<role>" waiting banner below, never with an actionable
-  // "ถึงคิวคุณ" line (a live primary action is never "blocked" by the same
-  // thing the banner would name — pairing the two would read as a
-  // contradiction). Kept to the fact only (design law: brief — who/what, not
+  // Paired with the "รอ<role>" waiting banner below, never alongside a live
+  // primary CTA (a live primary action is never "blocked" by the same thing
+  // the banner would name — pairing the two would read as a contradiction).
+  // Kept to the fact only (design law: brief — who/what, not
   // what-to-do-about-it-by-when).
   const closeConfirmedAt = summary?.closeConfirmedAt ?? null;
   // !isAccount on the two payment-wait lines (P3, review round 2): account
   // is the role that CLEARS these two waits (confirmDeposit/
   // confirmFinalPayment — see nextAccountAction in accountActions.js) — for
   // account specifically, this line would otherwise read "รอชำระมัดจำ" right
-  // next to their own resolver-derived "ถึงคิวคุณ: ยืนยันรับมัดจำ" primary,
+  // next to their own resolver-derived "ยืนยันรับมัดจำ" primary CTA button,
   // stating the same fact twice (once as a call to action, once as a
   // blocker) instead of pairing the blocker with a role that ISN'T the one
   // who can act on it — exactly the contradiction this line's own doc
@@ -938,15 +938,39 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     }
   }
 
-  // The ONE work-state banner line (IA region 4/6/7 — replaces the old
-  // duplicated "ถึงคิวคุณ" text that used to appear once in DealStateHeader
-  // and again, unprefixed, in DealStagePanel's own guidance line — Phase-1
-  // audit findings #1/#2).
-  const bannerText = stickyPrimaryLabel
-    ? `ถึงคิวคุณ: ${stickyPrimaryLabel}`
-    : workState.waitingRoleLabel
-      ? `รอ${workState.waitingRoleLabel}${blocker ? ` — ${blocker}` : ''}`
-      : blocker;
+  // The work-state banner line (IA region 4/6/7). The "ถึงคิวคุณ: <label>"
+  // prefix is gone everywhere — it duplicated the CTA sitting right next to
+  // it and read as distracting rather than informative. What replaces it
+  // splits by WHERE the label came from:
+  //
+  //  - Resolver-derived CTAs (workStateAction, the branches above) render
+  //    `workStateAction.label` verbatim on the button, so the line was that
+  //    same string twice. Nulled — the button carries it alone.
+  //  - The four `can.*` CTAs are different: `nextAction` is a descriptive
+  //    SENTENCE ("ส่งมอบและรับเงินครบแล้ว — ยืนยันเพื่อส่งให้ CEO ตรวจสอบปิดงาน")
+  //    naming the precondition and the consequence, while the button is a
+  //    terse verb ("ยืนยันพร้อมปิดงาน"). Nulling those threw away real
+  //    information — and the context rail can't stand in for it, since it is
+  //    collapsed by default below 1280px. They keep their line, prefix-free.
+  //
+  // `primaryAction` (not stickyPrimaryLabel) is the discriminator: it is set
+  // only by that four-branch cascade, and it always wins over the resolver.
+  const bannerText = primaryAction
+    ? nextAction
+    : stickyPrimaryLabel
+      ? null
+      : workState.waitingRoleLabel
+        ? `รอ${workState.waitingRoleLabel}${blocker ? ` — ${blocker}` : ''}`
+        : blocker;
+
+  // TicketContextPanel's own "ขั้นตอนถัดไป" section is a DIFFERENT surface from
+  // the sticky bar: it lives in the context rail, nowhere near the CTA button,
+  // so naming the action there is information rather than the duplication
+  // removed above. It therefore keeps the label the banner dropped, falling
+  // back to the same waiting/blocker line. Without this it would render its own
+  // "ไม่มีขั้นตอนถัดไปในสถานะนี้" empty fallback exactly when there IS something
+  // to do — the opposite of the truth.
+  const contextNextStepText = stickyPrimaryLabel ?? bannerText;
 
   // Overflow-menu / danger-zone availability — mirrors DealStagePanel's own
   // canEditStage/canLost/canHold/canDormant gates byte-for-byte (same
@@ -2120,7 +2144,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           pricingRequests={pricingRequests}
           latestQuotation={latestQuotation}
           events={events}
-          bannerText={bannerText}
+          nextStepText={contextNextStepText}
           canComment={can.comment}
           commentText={contextCommentText}
           onCommentTextChange={setContextCommentText}

@@ -54,13 +54,16 @@ function StatChip({ label, value, tone, className = '' }) {
  * only surfaces what TicketDetailPage already computed, once, at the top.
  *
  * `bannerText`: the ONE work-state line (already composed by the parent —
- * "ถึงคิวคุณ: ..." / "รอฝ่ายนำเข้า — รอชำระมัดจำ" / etc.), or null when there is
- * nothing to say (e.g. the deal is on hold/dormant/lost — DealStagePanel
- * already renders a dedicated banner for those states). `primaryAction`: the
- * one CTA node this viewer may act on right now, or null — never a second
- * copy of a button rendered elsewhere on the page. `overflowItems`: the
- * "⋯" menu's items (see OverflowMenu.jsx), already filtered to what this
- * viewer may do — empty/undefined renders no trigger at all.
+ * "รอฝ่ายนำเข้า — รอชำระมัดจำ" / a bare blocker / etc.), or null when there is
+ * nothing to say — either because the deal is on hold/dormant/lost
+ * (DealStagePanel already renders a dedicated banner for those states), or
+ * because `primaryAction` already exists and carries the same message on its
+ * own label, so the bar renders the button alone rather than a redundant
+ * line next to it. `primaryAction`: the one CTA node this viewer may act on
+ * right now, or null — never a second copy of a button rendered elsewhere on
+ * the page. `overflowItems`: the "⋯" menu's items (see OverflowMenu.jsx),
+ * already filtered to what this viewer may do — empty/undefined renders no
+ * trigger at all.
  */
 export function DealStateHeader({
   summary, pricingRequests = [], primaryAction, bannerText, overflowItems, onRefresh, condensed = false,
@@ -193,16 +196,25 @@ export function DealStateHeader({
       {hasActionBar ? (
         <div
           data-testid="ticket-action-bar"
-          className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info-border bg-info-bg px-4 py-3 mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:z-20 mobile:rounded-none mobile:border-x-0 mobile:border-b-0 mobile:px-4 mobile:py-3 mobile:shadow-lg mobile:[padding-bottom:max(18px,env(safe-area-inset-bottom))]"
+          // No `bannerText`: the primary CTA IS the message (its own label
+          // says the same thing "ถึงคิวคุณ: <label>" used to say), so on
+          // desktop this sheds its info-tinted chrome entirely — no border,
+          // no tinted background, no padding — and right-aligns, letting the
+          // lone button read as the emphasis instead of competing with a
+          // redundant line next to it. On mobile it must still read as a
+          // solid bar (it's `fixed` over scrolling content — a transparent
+          // fixed bar would be unreadable), so it keeps its own bg/border/
+          // padding/shadow/safe-area there regardless of bannerText.
+          className={bannerText
+            ? 'flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info-border bg-info-bg px-4 py-3 mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:z-20 mobile:rounded-none mobile:border-x-0 mobile:border-b-0 mobile:px-4 mobile:py-3 mobile:shadow-lg mobile:[padding-bottom:max(18px,env(safe-area-inset-bottom))]'
+            : 'flex flex-wrap items-center justify-end gap-3 mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:z-20 mobile:bg-surface mobile:border-t mobile:border-border mobile:px-4 mobile:py-3 mobile:shadow-lg mobile:[padding-bottom:max(18px,env(safe-area-inset-bottom))]'}
         >
-          <div className="flex min-w-0 items-start gap-2">
-            {bannerText ? (
-              <>
-                <Icon name="chevronRight" size={14} className="mt-0.5 shrink-0 text-info" />
-                <span className="text-sm font-bold text-info">{bannerText}</span>
-              </>
-            ) : null}
-          </div>
+          {bannerText ? (
+            <div className="flex min-w-0 items-start gap-2">
+              <Icon name="chevronRight" size={14} className="mt-0.5 shrink-0 text-info" />
+              <span className="text-sm font-bold text-info">{bannerText}</span>
+            </div>
+          ) : null}
           {actionControls}
         </div>
       ) : null}
