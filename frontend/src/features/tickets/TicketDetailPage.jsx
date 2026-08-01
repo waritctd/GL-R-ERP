@@ -223,7 +223,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // Imperative handle onto PricingRequestPanel (FIX 1, ticket-detail IA
   // rebuild Phase 1 clutter follow-up): the sticky header's CREATE_PCR
   // primary CTA opens this panel's own create modal directly instead of
-  // duplicating a second "สร้างใบขอราคา" button — same convention as
+  // duplicating a second "สร้างคำขอราคา" button — same convention as
   // dealStagePanelRef above.
   const pricingRequestPanelRef = useRef(null);
   // Imperative handle onto DealQuotationPanel (clutter follow-up round 2,

@@ -246,7 +246,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
       createAndIssueQuotation.mutate();
     } else {
       pendingIssueIntentRef.current = false;
-      showToast?.('error', 'ยังออกใบเสนอราคาไม่ได้ — ตรวจสอบสถานะใบขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
+      showToast?.('error', 'ยังออกใบเสนอราคาไม่ได้ — ตรวจสอบสถานะคำขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
     }
   }
 
@@ -272,7 +272,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
       if (pr && canConfirmOrder(user, pr)) {
         confirmOrder.mutate();
       } else {
-        showToast?.('error', 'ยังยืนยันคำสั่งซื้อไม่ได้ — ตรวจสอบสถานะใบขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
+        showToast?.('error', 'ยังยืนยันคำสั่งซื้อไม่ได้ — ตรวจสอบสถานะคำขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
       }
     },
   }));
@@ -331,7 +331,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
               </button>
             </div>
           ) : (
-            <p className="text-sm text-text-muted">ยังไม่มีใบเสนอราคาลูกค้าสำหรับใบขอราคานี้</p>
+            <p className="text-sm text-text-muted">ยังไม่มีใบเสนอราคาลูกค้าสำหรับคำขอราคานี้</p>
           )
         ) : (
           <div className="flex flex-col gap-3 rounded-md border border-border bg-surface p-3">

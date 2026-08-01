@@ -414,15 +414,15 @@ describe('PricingRequestDetailPage unavailable states', () => {
       routeId: 501,
     });
 
-    expect((await screen.findByRole('status')).textContent).toContain('กำลังโหลดใบขอราคา');
+    expect((await screen.findByRole('status')).textContent).toContain('กำลังโหลดคำขอราคา');
     expect(screen.getByText('กำลังดึงรายละเอียดสินค้า ผู้รับ และสถานะล่าสุด')).toBeTruthy();
   });
 
   it('renders a recoverable error state and retries the existing query', async () => {
-    const error = new Error('โหลดใบขอราคาไม่สำเร็จ');
+    const error = new Error('โหลดคำขอราคาไม่สำเร็จ');
     renderDetailPage({ detailError: error, routeId: 501 });
 
-    expect((await screen.findByRole('alert')).textContent).toContain('โหลดใบขอราคาไม่สำเร็จ');
+    expect((await screen.findByRole('alert')).textContent).toContain('โหลดคำขอราคาไม่สำเร็จ');
 
     api.pricingRequests.get.mockResolvedValueOnce({ pricingRequest: buildRequest() });
     fireEvent.click(screen.getByRole('button', { name: /ลองใหม่/ }));
@@ -432,12 +432,12 @@ describe('PricingRequestDetailPage unavailable states', () => {
   });
 
   it('renders a not-found state for an existing 404 outcome without offering retry', async () => {
-    const error = Object.assign(new Error('ไม่พบใบขอราคานี้'), { status: 404 });
+    const error = Object.assign(new Error('ไม่พบคำขอราคานี้'), { status: 404 });
     renderDetailPage({ detailError: error, routeId: 9999 });
 
-    expect(await screen.findByText('ไม่พบใบขอราคานี้')).toBeTruthy();
+    expect(await screen.findByText('ไม่พบคำขอราคานี้')).toBeTruthy();
     expect(screen.getByText('ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'กลับไปที่คิวใบขอราคา' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'กลับไปที่คิวคำขอราคา' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /ลองใหม่/ })).toBeNull();
   });
 
@@ -445,9 +445,9 @@ describe('PricingRequestDetailPage unavailable states', () => {
     const error = Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 });
     renderDetailPage({ detailError: error, routeId: 501 });
 
-    expect(await screen.findByText('ยังเปิดใบขอราคานี้ไม่ได้')).toBeTruthy();
-    expect(screen.getByText('ระบบไม่เปิดเผยรายละเอียดของใบขอราคาที่คุณไม่มีสิทธิ์เข้าถึง')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'กลับไปที่คิวใบขอราคา' })).toBeTruthy();
+    expect(await screen.findByText('ยังเปิดคำขอราคานี้ไม่ได้')).toBeTruthy();
+    expect(screen.getByText('ระบบไม่เปิดเผยรายละเอียดของคำขอราคาที่คุณไม่มีสิทธิ์เข้าถึง')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'กลับไปที่คิวคำขอราคา' })).toBeTruthy();
     expect(screen.queryByText('ไม่มีสิทธิ์เข้าถึงรายการนี้')).toBeNull();
     expect(screen.queryByRole('button', { name: /ลองใหม่/ })).toBeNull();
   });
@@ -459,10 +459,10 @@ describe('PricingRequestDetailPage unavailable states', () => {
       routeId: 501,
     });
 
-    expect(await screen.findByText('ไม่พบใบขอราคานี้')).toBeTruthy();
+    expect(await screen.findByText('ไม่พบคำขอราคานี้')).toBeTruthy();
     expect(screen.getByText('ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'กลับ' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'กลับไปที่คิวใบขอราคา' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'กลับไปที่คิวคำขอราคา' })).toBeNull();
   });
 });
 

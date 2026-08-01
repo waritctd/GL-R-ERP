@@ -344,11 +344,11 @@ describe('TicketDetailPage', () => {
     const panel = await screen.findByRole('complementary', { name: 'บริบทดีล' });
     expect(within(panel).queryByText('Key dates')).toBeNull();
     fireEvent.click(within(panel).getByRole('button', { name: /บริบทดีล/ }));
-    expect(screen.getAllByText('ถึงคิวคุณ: สร้างใบขอราคา').length).toBe(2);
+    expect(screen.getAllByText('ถึงคิวคุณ: สร้างคำขอราคา').length).toBe(2);
     expect(within(panel).getByText('20 ก.ค. 2569')).not.toBeNull();
     expect(within(panel).getByText('31 ก.ค. 2569')).not.toBeNull();
     expect(within(panel).getByText('สมชาย ใจดี')).not.toBeNull();
-    expect(within(panel).getByText('ยังไม่มีใบขอราคา')).not.toBeNull();
+    expect(within(panel).getByText('ยังไม่มีคำขอราคา')).not.toBeNull();
     expect(within(panel).getByText('คุณอรุณ ติดต่อ')).not.toBeNull();
     expect(within(panel).getByText('บันทึกสำหรับบริบทดีล')).not.toBeNull();
   });
@@ -548,7 +548,7 @@ describe('TicketDetailPage', () => {
     expect(await screen.findByText('DEPOSIT')).not.toBeNull();
     expect(screen.getAllByText('฿400.00').length).toBeGreaterThan(0);
     expect(api.pricingRequests.listForTicket).not.toHaveBeenCalled();
-    expect(screen.queryByRole('heading', { name: 'ใบขอราคา' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'คำขอราคา' })).toBeNull();
   });
 
   it('UX-34: Final Payment opens a confirm dialog with the real outstanding amount instead of firing the mutation on click', async () => {
@@ -870,12 +870,12 @@ describe('TicketDetailPage', () => {
 
   // Ticket-detail IA rebuild Phase 1 clutter follow-up (FIX 1): CREATE_PCR
   // used to render as a "scroll to PricingRequestPanel" sticky button while
-  // that panel ALSO rendered its own "สร้างใบขอราคา" button — the same label,
+  // that panel ALSO rendered its own "สร้างคำขอราคา" button — the same label,
   // visible twice at once (the sticky bar never scrolls out of view). The
   // sticky bar now opens PricingRequestPanel's create modal directly via its
   // forwardRef, and the panel renders no button of its own.
-  describe('sticky header primary CTA — CREATE_PCR owns "สร้างใบขอราคา" alone', () => {
-    it('renders exactly one "สร้างใบขอราคา" control (the sticky primary), and clicking it opens the PCR panel\'s own create modal', async () => {
+  describe('sticky header primary CTA — CREATE_PCR owns "สร้างคำขอราคา" alone', () => {
+    it('renders exactly one "สร้างคำขอราคา" control (the sticky primary), and clicking it opens the PCR panel\'s own create modal', async () => {
       api.tickets.get.mockResolvedValue({
         ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'LEAD_APPROACH', createdById: 1 } }),
       });
@@ -887,23 +887,23 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(salesOwnerUser);
 
-      expect((await screen.findAllByText('ถึงคิวคุณ: สร้างใบขอราคา')).length).toBeGreaterThan(0);
-      const stickyButtons = await screen.findAllByRole('button', { name: /สร้างใบขอราคา/ });
+      expect((await screen.findAllByText('ถึงคิวคุณ: สร้างคำขอราคา')).length).toBeGreaterThan(0);
+      const stickyButtons = await screen.findAllByRole('button', { name: /สร้างคำขอราคา/ });
       expect(stickyButtons).toHaveLength(1);
       expect(screen.queryByRole('dialog')).toBeNull();
 
       fireEvent.click(stickyButtons[0]);
 
       expect(await screen.findByRole('dialog')).not.toBeNull();
-      // Still exactly one "สร้างใบขอราคา" trigger even with the modal open —
+      // Still exactly one "สร้างคำขอราคา" trigger even with the modal open —
       // the modal's own title text uses the same string, so this scopes to
       // buttons only (not headings) to keep proving "no duplicate button".
-      expect(screen.getAllByRole('button', { name: /สร้างใบขอราคา/ })).toHaveLength(1);
+      expect(screen.getAllByRole('button', { name: /สร้างคำขอราคา/ })).toHaveLength(1);
     });
   });
 
   // Ticket-detail IA rebuild Phase 1 clutter follow-up round 2 (FIX 2): the
-  // previous pass only de-duplicated "สร้างใบขอราคา" — an independent review
+  // previous pass only de-duplicated "สร้างคำขอราคา" — an independent review
   // caught that "ออกใบเสนอราคา" (DealQuotationPanel.jsx, salesActions.js's
   // ISSUE_QUOTATION label) and "ยืนยันคำสั่งซื้อ" (CONFIRM_ORDER) were STILL
   // rendering twice: once as the sticky bar's own scroll-to-DealQuotationPanel
@@ -1112,7 +1112,7 @@ describe('TicketDetailPage', () => {
       fireEvent.click(stickyButton);
 
       await waitFor(() => expect(showToast).toHaveBeenCalledWith(
-        'error', 'ยังออกใบเสนอราคาไม่ได้ — ตรวจสอบสถานะใบขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง',
+        'error', 'ยังออกใบเสนอราคาไม่ได้ — ตรวจสอบสถานะคำขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง',
       ));
       expect(api.pricingRequests.createCustomerQuotation).not.toHaveBeenCalled();
       expect(api.pricingRequests.issueCustomerQuotation).not.toHaveBeenCalled();

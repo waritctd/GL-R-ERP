@@ -56,7 +56,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     { path: '/leave', label: 'การอนุมัติวันลา', helper: 'Approve team leave', icon: 'clipboard', group: 'team', show: isTeamManager },
     { path: '/attendance', label: 'ทีมในฝ่าย', helper: 'Team roster & attendance', icon: 'users', group: 'team', show: isTeamManager },
     // งานขาย is one workspace: the deal pipeline (/tickets — one ticket = one deal,
-    // ใบขอราคา and โครงการ merged into one page) plus the ภาพรวม dashboard as a tab
+    // คำขอราคา and โครงการ merged into one page) plus the ภาพรวม dashboard as a tab
     // (SalesTabs). `match` keeps this item highlighted across both and detail pages.
     // Distinct from the "งานขาย" (Sales) group header it sits under below —
     // repeating the group name on its first item read as a stutter.
@@ -82,7 +82,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     { path: '/price-import', label: 'นำเข้าราคา', helper: 'Price import', icon: 'upload', group: 'sales', show: hasPermission(user.role, 'canManagePriceImport') && SALES_ENABLED },
     // Import's cross-deal PricingRequest queue — see permissions.js's PATH_GUARDS
     // comment for why this is a narrower audience than a single request's detail page.
-    { path: '/pricing-requests', label: 'คิวใบขอราคา', helper: 'Pricing request queue', icon: 'clipboard', group: 'sales', show: hasPermission(user.role, 'canViewPricingRequestQueue') && SALES_ENABLED },
+    { path: '/pricing-requests', label: 'คิวคำขอราคา', helper: 'Pricing request queue', icon: 'clipboard', group: 'sales', show: hasPermission(user.role, 'canViewPricingRequestQueue') && SALES_ENABLED },
     // Role-scoped views (Import build): the raw factory-PO list and Import's
     // deal-level fulfilment worklist are combined into one nav item —
     // Import/CEO only, mirrors ProcurementService.RAW_PO_ROLES. Sales never

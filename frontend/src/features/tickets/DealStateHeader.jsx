@@ -138,7 +138,7 @@ export function DealStateHeader({
       <dl className="m-0 grid grid-cols-1 gap-x-3 gap-y-3 sm:grid-cols-3 lg:grid-cols-5 [&_.status-badge]:whitespace-normal">
         <StatChip label="ขั้นตอนดีล" value={stage.label} tone={stage.tone} />
         <StatChip
-          label="ใบขอราคา"
+          label="คำขอราคา"
           value={pricingStatus ? pricingStatus.label : 'ยังไม่มี'}
           tone={pricingStatus ? pricingStatus.tone : 'neutral'}
         />

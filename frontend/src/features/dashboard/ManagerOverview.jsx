@@ -52,7 +52,7 @@ function dealAmount(ticket) {
  * into CommissionPage's existing approve flow — never duplicates the
  * approval mutation itself) + a "ดีลทีมที่ต้องดูแล" worklist + a right rail
  * (leaderboard, close-rate). See docs/role-scoped-views.md. Manager keeps
- * every existing nav item (รายการดีล / คิวใบขอราคา / ค่าคอมมิชชัน / แคตตาล็อก)
+ * every existing nav item (รายการดีล / คิวคำขอราคา / ค่าคอมมิชชัน / แคตตาล็อก)
  * — this is only a new landing, nothing here removes a route or a permission.
  *
  * KNOWN DATA GAP (documented, not silently worked around — same convention

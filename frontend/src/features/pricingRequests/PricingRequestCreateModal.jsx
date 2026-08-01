@@ -437,7 +437,7 @@ export function PricingRequestCreateModal({
       }
       onCreated();
     } catch (err) {
-      setError(err.message || 'สร้างใบขอราคาไม่สำเร็จ');
+      setError(err.message || 'สร้างคำขอราคาไม่สำเร็จ');
     } finally {
       setSaving(false);
     }
@@ -462,7 +462,7 @@ export function PricingRequestCreateModal({
       if (id != null) await submitFn(id);
       onCreated();
     } catch (err) {
-      setError(err.message || 'ส่งใบขอราคาไม่สำเร็จ');
+      setError(err.message || 'ส่งคำขอราคาไม่สำเร็จ');
     } finally {
       setSaving(false);
     }
@@ -513,11 +513,11 @@ export function PricingRequestCreateModal({
 
   return (
     <Modal
-      title={isEdit ? 'แก้ไขร่างใบขอราคา' : isRevision ? 'สร้างรอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า' : 'สร้างใบขอราคา'}
+      title={isEdit ? 'แก้ไขร่างคำขอราคา' : isRevision ? 'สร้างรอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า' : 'สร้างคำขอราคา'}
       subtitle={isEdit
-        ? 'แก้ไขรายละเอียดใบขอราคานี้ก่อนส่งให้ฝ่ายนำเข้า — บันทึกแล้วยังคงเป็นร่างจนกว่าจะกดส่ง'
+        ? 'แก้ไขรายละเอียดคำขอราคานี้ก่อนส่งให้ฝ่ายนำเข้า — บันทึกแล้วยังคงเป็นร่างจนกว่าจะกดส่ง'
         : isRevision
-          ? 'แก้ไขสินค้า/จำนวน/ผู้รับ/วันที่ตามที่ลูกค้าต้องการ — ใบขอราคาเดิมจะถูกเก็บไว้ไม่เปลี่ยนแปลง และรายการนี้จะเริ่มเป็นร่างใหม่'
+          ? 'แก้ไขสินค้า/จำนวน/ผู้รับ/วันที่ตามที่ลูกค้าต้องการ — คำขอราคาเดิมจะถูกเก็บไว้ไม่เปลี่ยนแปลง และรายการนี้จะเริ่มเป็นร่างใหม่'
           : 'ส่งรายการสินค้าให้ฝ่ายนำเข้าเสนอราคา — แนบไฟล์ประกอบได้หลังบันทึกร่าง'}
       onClose={onClose}
       footer={isEdit ? (

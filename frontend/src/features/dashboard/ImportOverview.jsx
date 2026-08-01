@@ -267,7 +267,7 @@ export function ImportOverview({ user, employee }) {
             >
               <span className="flex items-center gap-2 text-sm font-bold text-text">
                 <Icon name="clipboard" size={16} className="text-text-muted" />
-                คิวใบขอราคา
+                คิวคำขอราคา
               </span>
               <span className="flex items-center gap-2">
                 <StatusBadge tone={pricingQueueCount > 0 ? 'warning' : 'neutral'}>{pricingQueueCount}</StatusBadge>

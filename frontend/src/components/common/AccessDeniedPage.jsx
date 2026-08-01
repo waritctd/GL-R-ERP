@@ -34,7 +34,7 @@ const PATH_LABELS = {
   '/finance': 'งานการเงิน',
   '/payroll': 'เงินเดือน',
   '/price-import': 'นำเข้าราคา',
-  '/pricing-requests': 'คิวใบขอราคา',
+  '/pricing-requests': 'คิวคำขอราคา',
   '/ceo-settings': 'ตั้งค่าราคา',
   '/factory-purchase-orders': 'ใบสั่งซื้อโรงงาน',
   '/procurement': 'จัดซื้อ & นำเข้า',

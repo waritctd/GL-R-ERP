@@ -396,7 +396,7 @@ export function DealFulfilmentPanel({
 
             {pr == null ? (
               <p className="text-xs text-text-muted">
-                ยังไม่มีใบขอราคาที่ลูกค้ายืนยันคำสั่งซื้อสำหรับดีลนี้ — ยังสร้างใบสั่งซื้อโรงงานไม่ได้
+                ยังไม่มีคำขอราคาที่ลูกค้ายืนยันคำสั่งซื้อสำหรับดีลนี้ — ยังสร้างใบสั่งซื้อโรงงานไม่ได้
               </p>
             ) : procurementQuery.isLoading ? (
               <p className="text-xs text-text-muted">กำลังโหลดใบสั่งซื้อโรงงาน…</p>
@@ -404,7 +404,7 @@ export function DealFulfilmentPanel({
               <EmptyState
                 icon="fileText"
                 title="ยังไม่มีใบสั่งซื้อโรงงาน"
-                description="ใบสั่งซื้อแยกตามโรงงานจะปรากฏที่นี่เมื่อถูกสร้างขึ้นสำหรับใบขอราคานี้"
+                description="ใบสั่งซื้อแยกตามโรงงานจะปรากฏที่นี่เมื่อถูกสร้างขึ้นสำหรับคำขอราคานี้"
               />
             ) : (
               <div className="flex flex-col gap-1.5">

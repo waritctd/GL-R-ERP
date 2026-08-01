@@ -85,7 +85,7 @@ function dashboardCards(mode, summary, pendingCount, { navigate, access }) {
       { icon: 'clock', label: 'มาสายวันนี้', value: numberValue(attendance.lateToday), helper: 'Late today', tone: numberValue(attendance.lateToday) > 0 ? 'amber' : 'indigo', onClick: go('/attendance', access.attendance()) },
       { icon: 'bell', label: 'แจ้งเตือนยังไม่อ่าน', value: numberValue(notifications.unread), helper: 'Unread', tone: 'indigo' },
       ...(tickets.total > 0 ? [
-        { icon: 'fileText', label: 'ใบขอราคาเปิดอยู่', value: numberValue(tickets.totalOpen), helper: 'Tickets', tone: 'blue', onClick: go('/tickets', access.tickets()) },
+        { icon: 'fileText', label: 'คำขอราคาเปิดอยู่', value: numberValue(tickets.totalOpen), helper: 'Tickets', tone: 'blue', onClick: go('/tickets', access.tickets()) },
       ] : []),
     ];
   }
@@ -99,7 +99,7 @@ function dashboardCards(mode, summary, pendingCount, { navigate, access }) {
       { icon: 'clock', label: 'มาสายวันนี้', value: numberValue(attendance.lateToday), helper: 'Late today', tone: numberValue(attendance.lateToday) > 0 ? 'amber' : 'indigo', onClick: go('/attendance', access.attendance()) },
       { icon: 'bell', label: 'แจ้งเตือนยังไม่อ่าน', value: numberValue(notifications.unread), helper: 'Unread', tone: 'indigo' },
       ...(tickets.total > 0 ? [
-        { icon: 'fileText', label: 'ใบขอราคาเปิดอยู่', value: numberValue(tickets.totalOpen), helper: 'Tickets', tone: 'blue', onClick: go('/tickets', access.tickets()) },
+        { icon: 'fileText', label: 'คำขอราคาเปิดอยู่', value: numberValue(tickets.totalOpen), helper: 'Tickets', tone: 'blue', onClick: go('/tickets', access.tickets()) },
       ] : []),
     ];
   }

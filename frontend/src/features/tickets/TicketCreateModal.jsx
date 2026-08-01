@@ -308,7 +308,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   const [editingItemIndex, setEditingItemIndex] = useState(null);
 
   const [loading, setLoading] = useState(false);
-  // Form-level: submit/API failures (สร้างใบขอราคาไม่สำเร็จ, สร้างโครงการไม่สำเร็จ,
+  // Form-level: submit/API failures (สร้างคำขอราคาไม่สำเร็จ, สร้างโครงการไม่สำเร็จ,
   // เพิ่มผู้ติดต่อไม่สำเร็จ). Kept separate from `fieldErrors` — those are two
   // different kinds of problem and shouldn't share one string.
   const [error, setError] = useState('');
@@ -629,7 +629,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
       clearDraft();
       setDraftSavedAt(null);
     } catch (err) {
-      setError(err.message || 'สร้างใบขอราคาไม่สำเร็จ');
+      setError(err.message || 'สร้างคำขอราคาไม่สำเร็จ');
       setLoading(false);
     }
   }
@@ -706,7 +706,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
         <div className="flex items-start gap-2 rounded-lg border border-info-border bg-info-bg px-3 py-2.5 text-xs text-info-dark">
           <Icon name="info" size={15} className="mt-0.5 shrink-0" />
-          <span>เพิ่มรายการสินค้าอย่างน้อย 1 รายการ ก่อนจึงจะสร้างใบขอราคาได้</span>
+          <span>เพิ่มรายการสินค้าอย่างน้อย 1 รายการ ก่อนจึงจะสร้างคำขอราคาได้</span>
         </div>
 
         {error ? <div className="form-error" role="alert">{error}</div> : null}
@@ -1207,7 +1207,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   --color-icon-muted (#475569, 7.24:1+ on this row's surfaces) so it reads a step
                   darker than the caveat's --color-text-muted (#5c6b80, 5.19:1) — both clear AA. */}
               <span style={{ fontSize: 11, color: 'var(--color-icon-muted)', fontWeight: 700 }}>
-                ราคาอ้างอิง (แคตตาล็อก) <span style={{ fontWeight: 500, color: 'var(--color-text-muted)' }}>— ราคาขายจริงมาจากขั้นใบขอราคา</span>
+                ราคาอ้างอิง (แคตตาล็อก) <span style={{ fontWeight: 500, color: 'var(--color-text-muted)' }}>— ราคาขายจริงมาจากขั้นคำขอราคา</span>
               </span>
               <span style={{ fontWeight: 800, fontSize: 14 }}>
                 {Number(item.catalogPrice).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {item.catalogCurrency}
@@ -1227,7 +1227,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
       <div className="flex flex-col gap-3">
         <BackLink onClick={() => setView('hub')} />
         <p className="text-xs text-text-muted">
-          รายการที่เพิ่มตรงนี้เป็นข้อมูลเบื้องต้นของดีลเท่านั้น — ฝ่ายนำเข้าจะเห็นก็ต่อเมื่อสร้างใบขอราคาจากหน้าดีลแล้วส่งให้ฝ่ายนำเข้าเท่านั้น (ไม่บังคับตอนนี้)
+          รายการที่เพิ่มตรงนี้เป็นข้อมูลเบื้องต้นของดีลเท่านั้น — ฝ่ายนำเข้าจะเห็นก็ต่อเมื่อสร้างคำขอราคาจากหน้าดีลแล้วส่งให้ฝ่ายนำเข้าเท่านั้น (ไม่บังคับตอนนี้)
         </p>
         {items.length === 0 ? (
           <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border-strong bg-surface px-5 py-8 text-center">
@@ -1429,7 +1429,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
         <div className="flex items-start gap-2 rounded-lg border border-info-border bg-info-bg px-3 py-2.5 text-xs text-info-dark">
           <Icon name="info" size={15} className="mt-0.5 shrink-0" />
-          <span>สร้างดีลแล้วยังไม่มีราคา — ขั้นต่อไปคือ “สร้างใบขอราคา” จากหน้าดีล</span>
+          <span>สร้างดีลแล้วยังไม่มีราคา — ขั้นต่อไปคือ “สร้างคำขอราคา” จากหน้าดีล</span>
         </div>
 
         {error ? <div className="form-error" role="alert">{error}</div> : null}

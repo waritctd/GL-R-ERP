@@ -14,10 +14,10 @@ import { hasPermission } from '../../app/permissions.js';
 import { ActionQueue } from './ActionQueue.jsx';
 
 function GreetingSubtitle({ role }) {
-  if (role === 'sales') return 'ภาพรวมใบขอราคาของคุณ';
-  if (role === 'import') return 'ภาพรวมใบขอราคาทั้งหมด — ฝ่ายนำเข้า';
-  if (role === 'ceo') return 'ภาพรวมใบขอราคาทั้งหมด — ผู้บริหาร';
-  return 'ภาพรวมใบขอราคา';
+  if (role === 'sales') return 'ภาพรวมคำขอราคาของคุณ';
+  if (role === 'import') return 'ภาพรวมคำขอราคาทั้งหมด — ฝ่ายนำเข้า';
+  if (role === 'ceo') return 'ภาพรวมคำขอราคาทั้งหมด — ผู้บริหาร';
+  return 'ภาพรวมคำขอราคา';
 }
 
 const SHOW_SALES_ROLES = ['import', 'ceo'];
@@ -188,7 +188,7 @@ export function TicketDashboard({ user, employee, showToast }) {
             {/* Same reason as the ActionQueue entry above: summary.submitted is
                 permanently 0 for new deals since ticket creation stopped
                 auto-submitting, so this tile counts the PricingRequest queue. */}
-            <StatCard icon="clock"     label="รอรับเรื่อง"         value={submittedPricingRequestCount} helper="ใบขอราคา" tone="amber"  onClick={canViewPricingQueue ? () => navigate('/pricing-requests') : undefined} />
+            <StatCard icon="clock"     label="รอรับเรื่อง"         value={submittedPricingRequestCount} helper="คำขอราคา" tone="amber"  onClick={canViewPricingQueue ? () => navigate('/pricing-requests') : undefined} />
             {/* Was summary.inReview (legacy ticket status) — new deals never reach
                 'in_review' any more, so this tile was permanently 0 for them. Now
                 counts pricing requests Import has picked up or sent back for more
@@ -218,7 +218,7 @@ export function TicketDashboard({ user, employee, showToast }) {
           {recent.length > 0 && (
             <section className="panel" style={{ padding: 0, overflow: 'hidden' }}>
               <div className="panel-header" style={{ padding: '14px 18px' }}>
-                <h2>ใบขอราคาล่าสุด</h2>
+                <h2>คำขอราคาล่าสุด</h2>
               </div>
               {isMobile ? (
                 <div className="flex flex-col gap-2.5 p-3">

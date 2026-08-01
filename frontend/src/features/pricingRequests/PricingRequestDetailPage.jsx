@@ -520,7 +520,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       <div className="page-stack">
         <StatePanel
           state="loading"
-          title="กำลังโหลดใบขอราคา"
+          title="กำลังโหลดคำขอราคา"
           description="กำลังดึงรายละเอียดสินค้า ผู้รับ และสถานะล่าสุด"
         >
           <PricingRequestDetailSkeleton />
@@ -535,11 +535,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <div className="page-stack">
           <StatePanel
             state="notFound"
-            title="ไม่พบใบขอราคานี้"
+            title="ไม่พบคำขอราคานี้"
             description="ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้"
             action={(
               <button type="button" className="primary-button" onClick={returnToSafeList}>
-                {canReturnToPricingQueue ? 'กลับไปที่คิวใบขอราคา' : 'กลับ'}
+                {canReturnToPricingQueue ? 'กลับไปที่คิวคำขอราคา' : 'กลับ'}
               </button>
             )}
           />
@@ -552,11 +552,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <div className="page-stack">
           <StatePanel
             state="denied"
-            title="ยังเปิดใบขอราคานี้ไม่ได้"
-            description="ระบบไม่เปิดเผยรายละเอียดของใบขอราคาที่คุณไม่มีสิทธิ์เข้าถึง"
+            title="ยังเปิดคำขอราคานี้ไม่ได้"
+            description="ระบบไม่เปิดเผยรายละเอียดของคำขอราคาที่คุณไม่มีสิทธิ์เข้าถึง"
             action={(
               <button type="button" className="primary-button" onClick={returnToSafeList}>
-                {canReturnToPricingQueue ? 'กลับไปที่คิวใบขอราคา' : 'กลับ'}
+                {canReturnToPricingQueue ? 'กลับไปที่คิวคำขอราคา' : 'กลับ'}
               </button>
             )}
           />
@@ -568,7 +568,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       <div className="page-stack">
         <StatePanel
           state="error"
-          title={toUserErrorMessage(detailQuery.error, 'โหลดใบขอราคาไม่สำเร็จ')}
+          title={toUserErrorMessage(detailQuery.error, 'โหลดคำขอราคาไม่สำเร็จ')}
           description={toUserErrorDescription(detailQuery.error, 'ลองใหม่อีกครั้ง หรือกลับไปที่รายการคำขอ')}
           action={(
             <button type="button" className="secondary-button" onClick={() => detailQuery.refetch()}>
@@ -578,7 +578,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           )}
           secondaryAction={(
             <button type="button" className="primary-button" onClick={returnToSafeList}>
-              {canReturnToPricingQueue ? 'กลับไปที่คิวใบขอราคา' : 'กลับ'}
+              {canReturnToPricingQueue ? 'กลับไปที่คิวคำขอราคา' : 'กลับ'}
             </button>
           )}
         />
@@ -591,11 +591,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
       <div className="page-stack">
         <StatePanel
           state="notFound"
-          title="ไม่พบใบขอราคานี้"
+          title="ไม่พบคำขอราคานี้"
           description="ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้"
           action={(
             <button type="button" className="primary-button" onClick={returnToSafeList}>
-              {canReturnToPricingQueue ? 'กลับไปที่คิวใบขอราคา' : 'กลับ'}
+              {canReturnToPricingQueue ? 'กลับไปที่คิวคำขอราคา' : 'กลับ'}
             </button>
           )}
         />

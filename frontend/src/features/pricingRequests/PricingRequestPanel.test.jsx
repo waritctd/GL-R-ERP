@@ -77,7 +77,7 @@ describe('PricingRequestPanel', () => {
   });
 
   // Ticket-detail IA rebuild Phase 1 clutter follow-up (FIX 1): this panel no
-  // longer renders its own "สร้างใบขอราคา" button — TicketDetailPage's sticky
+  // longer renders its own "สร้างคำขอราคา" button — TicketDetailPage's sticky
   // header CTA owns that action now (opening this panel's create modal via
   // its forwardRef, see the "imperative handle" describe block below), so
   // the same label no longer appears twice on one page. The empty state
@@ -86,18 +86,18 @@ describe('PricingRequestPanel', () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
     renderPanel();
 
-    expect(await screen.findByText('ยังไม่มีใบขอราคา')).not.toBeNull();
+    expect(await screen.findByText('ยังไม่มีคำขอราคา')).not.toBeNull();
     expect(screen.getByText(/สร้างได้จากปุ่ม/)).not.toBeNull();
-    expect(screen.queryByRole('button', { name: /สร้างใบขอราคา/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /สร้างคำขอราคา/ })).toBeNull();
   });
 
   it('shows a plainer empty-state description for a non-owner (also no create button)', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
     renderPanel({ user: { id: 2, name: 'อื่น', role: 'sales' } });
 
-    await screen.findByText('ยังไม่มีใบขอราคา');
-    expect(screen.getByText('ยังไม่มีใบขอราคาสำหรับดีลนี้')).not.toBeNull();
-    expect(screen.queryByRole('button', { name: /สร้างใบขอราคา/ })).toBeNull();
+    await screen.findByText('ยังไม่มีคำขอราคา');
+    expect(screen.getByText('ยังไม่มีคำขอราคาสำหรับดีลนี้')).not.toBeNull();
+    expect(screen.queryByRole('button', { name: /สร้างคำขอราคา/ })).toBeNull();
   });
 
   describe('imperative handle (sticky header CTA trigger)', () => {
@@ -115,7 +115,7 @@ describe('PricingRequestPanel', () => {
           />
         </QueryClientProvider>,
       );
-      await screen.findByText('ยังไม่มีใบขอราคา');
+      await screen.findByText('ยังไม่มีคำขอราคา');
 
       act(() => ref.current.openCreate());
 
@@ -130,7 +130,7 @@ describe('PricingRequestPanel', () => {
           <PricingRequestPanel ref={ref} ticketId={701} deal={deal} ticketItems={[]} user={salesOwner} />
         </QueryClientProvider>,
       );
-      await screen.findByText('ยังไม่มีใบขอราคา');
+      await screen.findByText('ยังไม่มีคำขอราคา');
 
       act(() => ref.current.openCreate());
 

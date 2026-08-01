@@ -111,7 +111,7 @@ export function ProcurementDetailPage({ showToast }) {
       <div className="rounded-lg border border-border bg-surface p-4">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div>
-            <span className="block text-2xs font-bold uppercase text-text-muted">ใบขอราคา</span>
+            <span className="block text-2xs font-bold uppercase text-text-muted">คำขอราคา</span>
             <Link to={`/pricing-requests/${po.pricingRequestId}`} className="text-sm text-primary">{po.pricingRequestCode}</Link>
           </div>
           <div>

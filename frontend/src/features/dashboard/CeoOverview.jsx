@@ -17,7 +17,7 @@ import { formatMoney, formatThaiDate, bangkokMonthStartIso, greetingName } from 
  * "6. CEO"). CEO keeps every existing sales surface + nav item unchanged —
  * this component only adds a role-shaped `/` landing that pulls the
  * cross-domain decisions only the CEO can make into one worklist, instead of
- * making the CEO hunt across ใบขอราคา / รายการดีล / ค่าคอมมิชชัน / คำขอ / ลา.
+ * making the CEO hunt across คำขอราคา / รายการดีล / ค่าคอมมิชชัน / คำขอ / ลา.
  *
  * Every row here deep-links to the real page that owns the mutation — this
  * component never calls an approve/verify/decide endpoint itself (see
@@ -311,7 +311,7 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
               icon="badgeDollar"
               label="อนุมัติราคา"
               value={priceApprovalRows.length}
-              helper="ใบขอราคา"
+              helper="คำขอราคา"
               tone="rose"
               onClick={priceApprovalRows.length > 0 ? () => navigate('/pricing-requests') : undefined}
             />

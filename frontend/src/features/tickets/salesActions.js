@@ -13,7 +13,7 @@
 //
 // The 5 CTA buckets below are a priority cascade, evaluated in pipeline
 // order (earliest-unblocked-step wins): a deal with no live pricing request
-// always needs "สร้างใบขอราคา" first, even if it also happens to be overdue
+// always needs "สร้างคำขอราคา" first, even if it also happens to be overdue
 // on follow-up — there is nothing to follow up ABOUT yet. Once a deal has a
 // live pricing request past that point, later buckets take over.
 
@@ -28,7 +28,7 @@ export const SALES_ACTION = {
 };
 
 const ACTION_LABEL = {
-  [SALES_ACTION.CREATE_PCR]: 'สร้างใบขอราคา',
+  [SALES_ACTION.CREATE_PCR]: 'สร้างคำขอราคา',
   [SALES_ACTION.ISSUE_QUOTATION]: 'ออกใบเสนอราคา',
   [SALES_ACTION.CONFIRM_ORDER]: 'ยืนยันคำสั่งซื้อ',
   [SALES_ACTION.FOLLOW_UP]: 'ติดตามลูกค้า',
