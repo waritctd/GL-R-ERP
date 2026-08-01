@@ -113,7 +113,7 @@ describe('SalesOverview', () => {
       const pipelineValue = screen.getByText('มูลค่า pipeline').parentElement.querySelector('.stat-value');
       // Sum of amountPayable across ACTIVE deals only (excludes deal H,
       // CLOSED_LOST, despite its huge amountPayable).
-      expect(pipelineValue.textContent).toBe('฿610,000');
+      expect(pipelineValue.textContent).toBe('฿610,000.00');
     });
 
     // Overdue follow-up: only deal D (604, follow-up date before today).
@@ -174,10 +174,10 @@ describe('SalesOverview', () => {
   it('renders the read-only commission KPI mirrored from commissionCalc.js', async () => {
     renderOverview();
 
-    // actualReceived 107000 / 1.07 = 100000 exactly -> tier 1 (0.25%) = ฿250.
+    // actualReceived 107000 / 1.07 = 100000 exactly -> tier 1 (0.25%) = ฿250.00.
     // findByText (not getByText) because the commissions query resolves async.
-    expect(await screen.findByText('฿250')).not.toBeNull();
-    expect(screen.getByText('฿100,000')).not.toBeNull();
+    expect(await screen.findByText('฿250.00')).not.toBeNull();
+    expect(screen.getByText('฿100,000.00')).not.toBeNull();
     expect(api.commissions.list).toHaveBeenCalledWith({ payrollMonth: THIS_MONTH });
   });
 

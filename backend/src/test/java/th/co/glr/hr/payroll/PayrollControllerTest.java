@@ -170,6 +170,28 @@ class PayrollControllerTest {
     }
 
     @Test
+    void exportPayrollDetailSetsAttachmentDispositionAndSpreadsheetContentType() throws Exception {
+        byte[] body = "PK...xlsx-bytes...".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        when(payrollService.export(
+                org.mockito.ArgumentMatchers.eq(th.co.glr.hr.payroll.export.PayrollExportKind.PAYROLL_DETAIL),
+                org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq(LocalDate.of(2026, 7, 26)),
+                any(UserPrincipal.class)))
+            .thenReturn(new th.co.glr.hr.payroll.export.PayrollExportFile(
+                th.co.glr.hr.payroll.export.PayrollExportKind.PAYROLL_DETAIL, "PayrollDetail260726.xlsx", body));
+
+        mvc.perform(get("/api/payroll/7/export/payroll-detail?effectiveDate=2026-07-26").session(sessionFor("hr")))
+            .andExpect(status().isOk())
+            .andExpect(content().contentTypeCompatibleWith(
+                MediaType.valueOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")))
+            .andExpect(header().string("Content-Disposition",
+                org.hamcrest.Matchers.allOf(
+                    org.hamcrest.Matchers.containsString("attachment"),
+                    org.hamcrest.Matchers.containsString("PayrollDetail260726.xlsx"))))
+            .andExpect(content().bytes(body));
+    }
+
+    @Test
     void exportRejectsUnknownKindWith400() throws Exception {
         mvc.perform(get("/api/payroll/7/export/bogus").session(sessionFor("hr")))
             .andExpect(status().isBadRequest());

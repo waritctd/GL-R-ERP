@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { attendanceSourceLabel, formatAddress, formatShortDate, formatThaiMonthYearFromMonthInputValue } from './format.js';
+import { attendanceSourceLabel, formatAddress, formatMoney, formatShortDate, formatThaiMonthYearFromMonthInputValue } from './format.js';
 
 describe('formatAddress', () => {
   it('joins all four parts, not just line1', () => {
@@ -46,6 +46,26 @@ describe('attendanceSourceLabel', () => {
 
   it('falls through to the raw code for an unknown site', () => {
     expect(attendanceSourceLabel({ site_code: 'FACTORY' })).toBe('FACTORY');
+  });
+});
+
+describe('formatMoney', () => {
+  it('always renders Thai baht with exactly two fraction digits', () => {
+    expect(formatMoney(180000)).toBe('฿180,000.00');
+    expect(formatMoney(786.5)).toBe('฿786.50');
+    expect(formatMoney(73002.08)).toBe('฿73,002.08');
+  });
+
+  it('rounds display to satang instead of leaking arbitrary precision', () => {
+    expect(formatMoney(17624.9994)).toBe('฿17,625.00');
+  });
+
+  it('falls back to a dash for empty or non-finite input', () => {
+    expect(formatMoney(null)).toBe('-');
+    expect(formatMoney(undefined)).toBe('-');
+    expect(formatMoney('')).toBe('-');
+    expect(formatMoney('not money')).toBe('-');
+    expect(formatMoney(Number.NaN)).toBe('-');
   });
 });
 

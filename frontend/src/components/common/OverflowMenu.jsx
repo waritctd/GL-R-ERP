@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { cn } from '../../utils/cn.js';
 import { Icon } from './Icon.jsx';
 
 /**
@@ -24,7 +25,14 @@ import { Icon } from './Icon.jsx';
  * (not the native `disabled` attribute) is used so the item stays in the
  * roving-focus set below instead of being skipped by keyboard navigation.
  */
-export function OverflowMenu({ items, label = 'การดำเนินการเพิ่มเติม', align = 'end' }) {
+export function OverflowMenu({
+  items,
+  label = 'การดำเนินการเพิ่มเติม',
+  align = 'end',
+  triggerLabel,
+  triggerIcon = 'moreHorizontal',
+  triggerClassName,
+}) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef(null);
   const menuRef = useRef(null);
@@ -87,14 +95,20 @@ export function OverflowMenu({ items, label = 'การดำเนินกา
       <button
         type="button"
         ref={triggerRef}
-        className="icon-button"
+        className={cn(
+          triggerLabel
+            ? 'inline-flex min-h-[38px] items-center justify-center gap-[7px] rounded-md border-[1.5px] border-solid border-border-input bg-surface px-[13px] py-0 font-bold text-icon-muted mobile:min-h-[44px]'
+            : 'icon-button',
+          triggerClassName,
+        )}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={label}
         title={label}
         onClick={() => setOpen((v) => !v)}
       >
-        <Icon name="moreHorizontal" size={18} />
+        <Icon name={triggerIcon} size={18} />
+        {triggerLabel ? <span>{triggerLabel}</span> : null}
       </button>
       {open ? (
         <div

@@ -49,6 +49,14 @@ ERP Documentation/00_ALL_DOCS_BUNDLE.md
 # UX audit evidence — kept local only (large binaries; enable LFS before committing)
 docs/ux-ui-audit/screenshots/
 
+# Database snapshots taken before a destructive prod/UAT operation (row dumps kept
+# locally as a rollback record). These contain real production rows — including
+# employee and customer data — so they must never enter git history, where a delete
+# does not remove them. The whole directory is ignored, not one filename: the next
+# snapshot will be dated differently and would otherwise be exposed again.
+# Keep such dumps outside the repo entirely where you can.
+docs/agent-handoffs/backups/
+
 # Playwright e2e (Stage K2) run artifacts
 frontend/playwright-report/
 frontend/test-results/

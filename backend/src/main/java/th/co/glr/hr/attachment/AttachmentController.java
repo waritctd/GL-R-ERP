@@ -105,6 +105,20 @@ public class AttachmentController {
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์"));
         requireAttachmentAccess(dto, user);
         String filePath = attachments.findFilePathById(id);
+        // F5 fix (2026-07-30): CommissionService#createFromDeal registers this SAME physical file
+        // a second time, independently, as ข้อ 15 evidence (hr.file_attachment, referenced by
+        // sales.invoice_details.invoice_attachment_id) — and the ticket's own creator is always
+        // the deal's sales rep, i.e. the person the commission pays. Without this check, that rep
+        // could reach this endpoint (requireAttachmentAccess admits ticket participants) and
+        // delete both the row AND the file out from under an approved commission — invoice_
+        // attachment_id would stay non-null (V102's CHECK sees no reason to object) while the
+        // file it points at silently stops existing. Refuse outright rather than just skipping
+        // the disk delete, so the ticket's own attachment list also stays truthful about what
+        // evidence still exists.
+        if (attachments.backsLiveCommission(filePath)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ไม่สามารถลบไฟล์นี้ได้ เนื่องจากเป็นหลักฐานของค่าคอมมิชชั่นที่ยังไม่ถูกยกเลิก");
+        }
         attachments.delete(id);
         auditService.record(user, "DELETE_ATTACHMENT", "attachment", id, dto, null);
         if (filePath != null) {

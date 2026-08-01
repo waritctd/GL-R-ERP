@@ -1,10 +1,14 @@
 package th.co.glr.hr.payroll;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -12,6 +16,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -24,6 +30,8 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.payroll.export.KBankPctExporter;
+import th.co.glr.hr.payroll.export.PayrollDetailExporter;
+import th.co.glr.hr.payroll.export.PayrollDetailIdentityDto;
 import th.co.glr.hr.payroll.export.PayrollExportFile;
 import th.co.glr.hr.payroll.export.PayrollExportKind;
 import th.co.glr.hr.payroll.export.PayrollExportRow;
@@ -45,6 +53,10 @@ public class PayrollService {
     private static final Set<String> PAYROLL_VIEW_ROLES = Set.of("hr", "ceo");
     private static final Set<String> PAYROLL_EDIT_ROLES = Set.of("hr");
     private static final Logger AUDIT = LoggerFactory.getLogger("th.co.glr.hr.audit");
+    // Finding 4 fix (Opus review, 2026-07-30): calendar-plausible ceiling for a daily-rate employee's
+    // HR-typed days-worked figure -- see #calculateLine's own comment on where this is enforced and
+    // why, and V103's chk_payroll_line_days_worked_range for the matching DB-level backstop.
+    private static final BigDecimal MAX_DAYS_WORKED = new BigDecimal("31");
 
     private final PayrollRepository payrollRepository;
     private final PayrollCalculator payrollCalculator;
@@ -60,6 +72,7 @@ public class PayrollService {
     private final KBankPctExporter kbankExporter;
     private final Pnd1Exporter pnd1Exporter;
     private final SsoExporter ssoExporter;
+    private final PayrollDetailExporter payrollDetailExporter;
     private final AppProperties appProperties;
 
     public PayrollService(
@@ -72,6 +85,7 @@ public class PayrollService {
         KBankPctExporter kbankExporter,
         Pnd1Exporter pnd1Exporter,
         SsoExporter ssoExporter,
+        PayrollDetailExporter payrollDetailExporter,
         AppProperties appProperties
     ) {
         this.payrollRepository = payrollRepository;
@@ -83,6 +97,7 @@ public class PayrollService {
         this.kbankExporter = kbankExporter;
         this.pnd1Exporter = pnd1Exporter;
         this.ssoExporter = ssoExporter;
+        this.payrollDetailExporter = payrollDetailExporter;
         this.appProperties = appProperties;
     }
 
@@ -165,6 +180,7 @@ public class PayrollService {
         requireRole(actor, PAYROLL_EDIT_ROLES);
         LocalDate month = normalizeMonth(request.payrollMonth());
         PayrollPeriodDto preview = preview(month, safeInputs(request.inputs()), actor);
+        requireEveryDailyRateEmployeeHasDaysWorked(preview.lines());
         long periodId = payrollRepository.saveProcessedPeriod(month, actor.employeeId(), preview.lines());
         // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): the lines just saved already have
         // the refund baked in (computed by #preview above, in this same transaction). Now mark the
@@ -174,6 +190,11 @@ public class PayrollService {
         leaveRepository.resolvePendingCorrections(periodId);
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Payroll period was not saved"));
+        // Payroll input draft (2026-07-30): this month's real values are now committed to
+        // hr.payroll_line, so any leftover hr.payroll_input_draft rows for it are superseded --
+        // clear them in the same transaction so a stale draft can never resurrect over the
+        // processed values on a later reload (see #getInputDraft's precedence rule).
+        payrollRepository.deleteInputDrafts(month);
         auditPayrollAccess("PROCESS_PAYROLL", actor, period,
             "base_salary,gross_earnings,deductions,net_pay");
         auditService.record(actor, "PROCESS_PAYROLL", "payroll_period", periodId, null, period);
@@ -181,10 +202,89 @@ public class PayrollService {
     }
 
     /**
-     * Generate one of the three statutory payroll text files (KBank PCT, PND1, SSO สปส.1-10) for a
-     * processed period. HR/CEO only; reads PDPA-restricted PII for PND1/SSO, so every call is audited
-     * with the specific fields exposed. {@code effectiveDate} is the HR-picked transfer/pay date;
-     * null falls back to the configured default day (the 26th) of the payroll month.
+     * Payroll input draft (2026-07-30): read back whatever HR last saved for this month via
+     * {@link #saveInputDraft}. Read-only, HR/CEO view like every other payroll GET -- never feeds
+     * {@link #preview}/{@link #process} directly. The frontend applies it ONLY when hydrating a
+     * brand-new run (a month with no processed/void period yet, {@code status == PREVIEW && id ==
+     * null}) so a draft can never shadow real persisted values from an already-touched period --
+     * see PayrollPage.jsx's {@code load()}/{@code applyPeriod} for that precedence rule.
+     */
+    public PayrollInputDraftDtos.PayrollInputDraftResponse getInputDraft(LocalDate payrollMonth, UserPrincipal actor) {
+        requireRole(actor, PAYROLL_VIEW_ROLES);
+        LocalDate month = normalizeMonth(payrollMonth);
+        return new PayrollInputDraftDtos.PayrollInputDraftResponse(month, payrollRepository.findInputDrafts(month));
+    }
+
+    /**
+     * Payroll input draft (2026-07-30): HR-only, same edit gate as {@code process}/tax-allowances/
+     * ytd-seed/component-tax-treatments. Persists the raw typed inputs as-is -- no calculation is
+     * performed here, and this never touches {@code hr.payroll_line} or any payroll math. See
+     * {@link #getInputDraft} for the read side and {@link #process} for how a draft is superseded
+     * once the month is actually processed.
+     */
+    @Transactional
+    public PayrollInputDraftDtos.PayrollInputDraftResponse saveInputDraft(ProcessPayrollRequest request, UserPrincipal actor) {
+        requireRole(actor, PAYROLL_EDIT_ROLES);
+        LocalDate month = normalizeMonth(request.payrollMonth());
+        payrollRepository.saveInputDrafts(month, safeInputs(request.inputs()), actor.employeeId());
+        return new PayrollInputDraftDtos.PayrollInputDraftResponse(month, payrollRepository.findInputDrafts(month));
+    }
+
+    /**
+     * Finding 1 fix (Opus review, 2026-07-30): a daily-rate employee HR never entered a day count
+     * for -- either because no input row was submitted at all for them, or an explicitly typed 0 --
+     * computes {@code SALARY = rate * 0 = ฿0} with no error anywhere: {@link #calculateLine} treats a
+     * null/omitted {@code daysWorked} as "0 unless entered", the exact same convention every other
+     * one-off field (bonusPay, otherOneOffPay, ...) already follows, and {@code
+     * requireEveryNonZeroComponentClassified} never fires because the resulting amount genuinely is
+     * zero. The run SUCCEEDS and produces a ฿0 payslip that nets to zero with nothing distinguishing
+     * it from an intentional zero-pay employee.
+     *
+     * <p>Refused here -- at PROCESS, not at {@link #preview}/{@link #currentOrPreview} -- because a
+     * blank/zero day count is the NORMAL, expected state of an in-progress run the moment HR opens a
+     * new month and has not yet typed anything for anyone: {@code calculateLine} runs identically for
+     * preview and process (both go through the same private method), so gating this inside it would
+     * 409 the mere act of opening the payroll page before HR has entered a single figure. Gating it
+     * here instead lets HR see the ฿0 line in Preview (exactly as before), edit it, and only blocks
+     * the one action that actually commits a payslip.
+     *
+     * <p>Mirrors {@code PayrollCalculator#requireEveryNonZeroComponentClassified}'s existing pattern
+     * (loop every line, throw a CONFLICT naming the employee on the first violation) rather than
+     * inventing a new shape for this refusal.
+     */
+    private void requireEveryDailyRateEmployeeHasDaysWorked(List<PayrollLineDto> lines) {
+        for (PayrollLineDto line : lines) {
+            if ("D".equals(line.payType()) && (line.daysWorked() == null || line.daysWorked().signum() <= 0)) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "พนักงาน " + line.employeeCode() + " " + line.employeeName()
+                        + " เป็นพนักงานรายวันแต่ยังไม่ได้ระบุจำนวนวันทำงานในงวดนี้"
+                        + " กรุณากรอกจำนวนวันทำงานก่อนประมวลผลเงินเดือน มิฉะนั้นพนักงานจะได้รับเงินเดือน ฿0");
+            }
+        }
+    }
+
+    /**
+     * Generate one of HR's payroll export files for a period: the three statutory CP874 text files
+     * (KBank PCT, PND1, SSO สปส.1-10), or the {@link PayrollExportKind#PAYROLL_DETAIL} xlsx
+     * workbook. HR/CEO only; reads PDPA-restricted PII for PND1/SSO (and, for the detail workbook,
+     * bank account + every payroll_line figure), so every call is audited with the specific fields
+     * exposed. {@code effectiveDate} is the HR-picked transfer/pay date (or, for the detail
+     * workbook, just the date stamped into its filename); null falls back to the configured default
+     * day (the 26th) of the payroll month.
+     *
+     * <p>No status gate on {@code period.status()} for {@code KBANK}/{@code PND1}/{@code SSO}: a
+     * {@code VOID}ed period still has a real {@code periodId} and exports whatever remains in
+     * {@code hr.payroll_line} for it, same as those three kinds have always done ({@code
+     * findExportRows} has never special-cased VOID). {@link PayrollExportKind#PAYROLL_DETAIL} is
+     * different (owner requirement, 2026-07-30): for a genuinely {@code PROCESSED} period it reads
+     * the persisted lines verbatim (they ARE the authoritative record of what was actually paid),
+     * but for anything else — most concretely a {@code VOID} period whose {@code hr.payroll_line}
+     * rows hold HR's typed inputs behind stale/zero computed figures (a real, current example: 2026-07,
+     * {@code period_id=1}, {@code status='VOID'}) — this method reconstructs those inputs (see
+     * {@link #reconstructInputRequest}) and re-runs them through the SAME live {@link #preview}
+     * path a fresh preview uses, so the workbook always reflects a real calculation rather than
+     * whatever happens to be sitting in the row. See {@link #exportDetailPreview} for the case with
+     * no persisted period at all.
      */
     public PayrollExportFile export(PayrollExportKind kind, long periodId, LocalDate effectiveDate, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
@@ -192,28 +292,142 @@ public class PayrollService {
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
         LocalDate payrollMonth = period.payrollMonth();
         LocalDate payDate = resolveEffectiveDate(effectiveDate, payrollMonth);
-        List<PayrollExportRow> rows = payrollRepository.findExportRows(periodId);
         AppProperties.Employer employer = appProperties.getPayroll().getEmployer();
 
         byte[] content;
         String auditFields;
         switch (kind) {
             case KBANK -> {
-                content = kbankExporter.export(rows, employer, payDate);
+                content = kbankExporter.export(payrollRepository.findExportRows(periodId), employer, payDate);
                 auditFields = "bank_account,net_pay";
             }
             case PND1 -> {
-                content = pnd1Exporter.export(rows, employer, payrollMonth, payDate);
+                content = pnd1Exporter.export(payrollRepository.findExportRows(periodId), employer, payrollMonth, payDate);
                 auditFields = "national_id,tax_id,gross_taxable_income,withholding_tax";
             }
             case SSO -> {
-                content = ssoExporter.export(rows, employer, payrollMonth, payDate);
+                content = ssoExporter.export(payrollRepository.findExportRows(periodId), employer, payrollMonth, payDate);
                 auditFields = "social_security_no,sso_wage_base,social_security";
+            }
+            case PAYROLL_DETAIL -> {
+                PayrollPeriodDto detailPeriod;
+                if ("PROCESSED".equals(period.status())) {
+                    detailPeriod = period;
+                } else {
+                    List<PayrollEmployeeInputRequest> reconstructed = period.lines().stream()
+                        .map(this::reconstructInputRequest)
+                        .toList();
+                    detailPeriod = preview(payrollMonth, reconstructed, actor);
+                }
+                content = buildDetailContent(detailPeriod);
+                auditFields = DETAIL_EXPORT_AUDIT_FIELDS;
             }
             default -> throw new ApiException(HttpStatus.BAD_REQUEST, "Unsupported export kind");
         }
         auditPayrollAccess("EXPORT_PAYROLL_" + kind.name(), actor, period, auditFields);
         return new PayrollExportFile(kind, kind.fileName(payDate), content);
+    }
+
+    /**
+     * The detailed payroll xlsx for a month that has never been (or is not yet) processed at all --
+     * owner requirement, 2026-07-30: "July 2026 is live and still unprocessed... HR's whole reason
+     * to want this file is to review the month BEFORE committing it." There is no {@code periodId}
+     * to key off in this case ({@link #preview} never persists one), so the caller must submit the
+     * same {@code payrollMonth}/{@code inputs} payload {@code POST /api/payroll/preview} already
+     * takes. Reuses that exact private {@link #preview} computation -- the one the on-screen
+     * "Preview"/"Refresh" buttons call -- so the workbook's figures are, by construction, identical
+     * to whatever the screen shows for the same inputs; there is no second calculation path for the
+     * two to silently disagree over.
+     */
+    public PayrollExportFile exportDetailPreview(ProcessPayrollRequest request, LocalDate effectiveDate, UserPrincipal actor) {
+        requireRole(actor, PAYROLL_VIEW_ROLES);
+        LocalDate month = normalizeMonth(request.payrollMonth());
+        PayrollPeriodDto livePeriod = preview(month, safeInputs(request.inputs()), actor);
+        LocalDate payDate = resolveEffectiveDate(effectiveDate, month);
+        byte[] content = buildDetailContent(livePeriod);
+        auditPayrollAccess("EXPORT_PAYROLL_PAYROLL_DETAIL_PREVIEW", actor, livePeriod, DETAIL_EXPORT_AUDIT_FIELDS);
+        return new PayrollExportFile(PayrollExportKind.PAYROLL_DETAIL,
+            PayrollExportKind.PAYROLL_DETAIL.fileName(payDate), content);
+    }
+
+    private static final String DETAIL_EXPORT_AUDIT_FIELDS =
+        "employee_name,department_name,bank_account,base_salary,special_pays,gross_earnings,deductions,net_pay";
+
+    /**
+     * Builds the detail workbook from a fully-computed {@code period} (its {@code lines()} plus its
+     * own {@code periodStart}/{@code periodEnd}, which {@link PayrollDetailExporter} needs for the
+     * "เงินเดือนใหม่ this month" rule) -- NOT just a bare line list, so every call site (processed,
+     * recomputed-from-VOID, and pure preview) reports the correct period window.
+     */
+    private byte[] buildDetailContent(PayrollPeriodDto period) {
+        List<PayrollLineDto> lines = period.lines();
+        Set<Long> employeeIds = lines.stream().map(PayrollLineDto::employeeId).collect(Collectors.toSet());
+        Map<Long, PayrollDetailIdentityDto> identities = payrollRepository.findDetailIdentity(employeeIds);
+        return payrollDetailExporter.export(lines, identities, period);
+    }
+
+    /**
+     * Reverses a persisted (possibly stale) {@link PayrollLineDto} back into the input shape {@link
+     * #preview}/{@link #process} take, so a VOID period's already-typed HR inputs (special pays,
+     * meal/per-diem, days worked, ...) survive a fresh recompute instead of being discarded. The 16
+     * tax-allowance fields (spouse/child/parent-care/...) and {@code parentCareCount} are NOT
+     * reconstructable from a payroll_line row (only their already-summed {@code
+     * taxAllowanceTotal} is persisted, not the per-type breakdown) -- left {@code null}, which is
+     * "no per-run override", so the recompute falls back to the EMPLOYEE'S CURRENT standing
+     * tax-allowance declaration. That is the more correct answer, not a lesser one: it reflects
+     * whatever HR has on file today rather than replaying a historical override that may since have
+     * been corrected. {@code customerReturnDeduction} is read from {@code
+     * customerReturnRequested} (what HR actually typed) rather than {@code
+     * customerReturnDeduction} (the post-tax bookkeeping figure, which is 0 in the unearned path --
+     * see that field's own javadoc on {@link PayrollLineDto}).
+     */
+    private PayrollEmployeeInputRequest reconstructInputRequest(PayrollLineDto line) {
+        return new PayrollEmployeeInputRequest(
+            line.employeeId(),
+            specialPayAt(line, 0), specialPayAt(line, 1), specialPayAt(line, 2), specialPayAt(line, 3),
+            specialPayAt(line, 4), specialPayAt(line, 5), specialPayAt(line, 6), specialPayAt(line, 7),
+            specialPayAt(line, 8),
+            line.nonTaxableIncome(),
+            line.unpaidLeaveDays(),
+            line.studentLoanDeduction(),
+            line.legalExecutionDeduction(),
+            line.otherPostTaxDeductions(),
+            null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+            line.warningLetterDeduction(),
+            line.customerReturnRequested(),
+            line.otherPretaxDeduction(),
+            line.withholdingTaxOverride(),
+            line.mealAllowance(),
+            line.perDiemExempt(),
+            line.perDiemTaxable(),
+            parseEnum(PerDiemBasis.class, line.perDiemBasis()),
+            line.bonusPay(),
+            line.otherOneOffPay(),
+            line.customerReturnAlreadyEarned(),
+            parseEnum(PayrollGarnishmentType.class, line.garnishmentType()),
+            null,
+            line.daysWorked()
+        );
+    }
+
+    private BigDecimal specialPayAt(PayrollLineDto line, int index) {
+        List<PayrollSpecialPayDto> pays = line.specialPays();
+        if (pays == null || index >= pays.size()) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal amount = pays.get(index).amount();
+        return amount == null ? BigDecimal.ZERO : amount;
+    }
+
+    private <E extends Enum<E>> E parseEnum(Class<E> type, String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return Enum.valueOf(type, value);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     /** HR-picked date, else the configured default transfer day (26th) clamped to the month length. */
@@ -225,6 +439,61 @@ public class PayrollService {
             appProperties.getPayroll().getEmployer().getDefaultTransferDay(),
             payrollMonth.lengthOfMonth());
         return payrollMonth.withDayOfMonth(Math.max(day, 1));
+    }
+
+    /**
+     * Bulk payslip ZIP (owner requirement, 2026-07-30): every payslip for a processed period in one
+     * archive, so HR can review the whole batch BEFORE {@code POST /{periodId}/distribute} emails it
+     * to every employee -- today the only way to check is one-by-one, or after the emails are
+     * already out. Reuses {@link PayslipRenderer#toPdf} per line -- the EXACT same call {@link
+     * #payslipPdf} and the emailed attachment ({@link PayslipDistributionService}) already make --
+     * so every PDF in the archive is byte-identical to what those two paths independently produce.
+     * A second renderer here would let the reviewed artefact and the emailed one silently diverge,
+     * which is the whole failure mode this endpoint exists to close.
+     *
+     * <p>HR/CEO only, the same {@link #PAYROLL_VIEW_ROLES} gate {@link #payslipPdf}/{@link #export}
+     * already use. Requires a genuinely {@code PROCESSED} period -- unlike the detail xlsx export,
+     * a payslip is a document about money actually paid, and generating 30 of them from an
+     * uncommitted preview would let HR circulate paperwork for a run that never happened.
+     */
+    public byte[] bulkPayslipZip(long periodId, UserPrincipal actor) {
+        requireRole(actor, PAYROLL_VIEW_ROLES);
+        PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
+        if (!"PROCESSED".equals(period.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "งวดนี้ยังไม่ได้ประมวลผล ไม่สามารถดาวน์โหลดสลิปเงินเดือนทั้งหมดได้");
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(out)) {
+            Set<String> usedNames = new HashSet<>();
+            for (PayrollLineDto line : period.lines()) {
+                byte[] pdf = payslipRenderer.toPdf(line, period);
+                zip.putNextEntry(new ZipEntry(payslipEntryName(line, usedNames)));
+                zip.write(pdf);
+                zip.closeEntry();
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        auditPayrollAccess("BULK_DOWNLOAD_PAYSLIPS", actor, period,
+            "earnings,sso,tax,deductions,net_pay,bank_account");
+        auditService.record(actor, "BULK_DOWNLOAD_PAYSLIPS", "payroll_period", periodId, null,
+            Map.of("periodId", periodId, "employeeCount", period.lines().size()));
+        return out.toByteArray();
+    }
+
+    /** {@code employeeCode}, never just a first name -- see this method's caller's javadoc. */
+    private String payslipEntryName(PayrollLineDto line, Set<String> usedNames) {
+        String code = (line.employeeCode() == null || line.employeeCode().isBlank())
+            ? "emp" + line.employeeId()
+            : line.employeeCode();
+        String name = "glr-payslip-" + code + ".pdf";
+        int suffix = 2;
+        while (!usedNames.add(name)) {
+            name = "glr-payslip-" + code + "-" + (suffix++) + ".pdf";
+        }
+        return name;
     }
 
     public byte[] payslipPdf(long periodId, long lineId, UserPrincipal actor) {
@@ -588,9 +857,46 @@ public class PayrollService {
             effectiveCommissionPay = effectiveCommissionPay.subtract(customerReturnDeduction).max(BigDecimal.ZERO);
         }
 
+        // Daily-rate support (2026-07-30): hr.employee.pay_type ('M'/'D', existed since V1) was never
+        // read by payroll before this fix -- current_salary went straight into PayrollComponent.SALARY
+        // as if it were always a monthly figure, so a daily-rate employee's DAY RATE was paid as their
+        // MONTHLY salary (verified in production: employee 203, ฿450/day, would be paid ฿450 instead
+        // of ฿11,250 for 25 days). For a 'D' employee, employee.baseSalary() (hr.employee.current_salary)
+        // IS the per-day rate; this period's gross SALARY component is that rate multiplied by
+        // HR-entered daysWorked (a null/omitted daysWorked contributes zero gross, same "0 unless
+        // entered" convention as bonusPay/otherOneOffPay). A monthly employee is entirely unaffected:
+        // daysWorked is never read for them, and grossSalaryComponent is employee.baseSalary() exactly
+        // as before this change.
+        boolean dailyRatePay = employee.dailyRatePay();
+        BigDecimal enteredDaysWorked = input == null ? null : input.daysWorked();
+        // Finding 4 fix (Opus review, 2026-07-30): @Max(31) on the request DTO is only enforced
+        // through @Valid at the controller boundary (PayrollController's /preview and /process),
+        // which every integration test in this package -- including the reviewer's own -- bypasses
+        // by calling PayrollService directly. Re-check here, in the one place BOTH entry points
+        // actually flow through, before daysWorked ever reaches the multiply below or an INSERT: a
+        // calendar-impossible count (e.g. 45 in a 31-day month) must not be accepted and paid, and a
+        // genuine typo (a 5-digit value) must not be left to overflow days_worked's NUMERIC(6,2)
+        // column as a raw Postgres error that 500s the whole run. Mirrors the existing per-diem-basis
+        // guard just above -- a clean Thai 400 instead of a bare DataIntegrityViolationException.
+        if (dailyRatePay && enteredDaysWorked != null && enteredDaysWorked.compareTo(MAX_DAYS_WORKED) > 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "พนักงาน " + employee.employeeCode() + " " + employee.employeeName()
+                    + " ระบุจำนวนวันทำงาน " + enteredDaysWorked.toPlainString()
+                    + " วัน ซึ่งเกินจำนวนวันสูงสุดที่รับได้ในหนึ่งงวด (31 วัน) กรุณาตรวจสอบตัวเลขที่กรอกใหม่อีกครั้ง");
+        }
+        BigDecimal grossSalaryComponent = dailyRatePay
+            ? employee.baseSalary().multiply(enteredDaysWorked == null ? BigDecimal.ZERO : enteredDaysWorked)
+            : employee.baseSalary();
+        // The employee's TRUE per-day rate, passed to the calculator so unpaidLeaveDeduction/
+        // leaveDeductionRefund/hourlyRate are derived from it directly instead of from
+        // grossSalaryComponent/30 (see PayrollClassifiedCalculationDtos#dailyRateOverride's own
+        // javadoc for why that division would be wrong the moment daysWorked != 30). Null for a
+        // monthly employee reproduces the pre-existing baseSalary/30 derivation exactly.
+        BigDecimal dailyRateOverride = dailyRatePay ? employee.baseSalary() : null;
+
         List<BigDecimal> specialPays = input == null ? List.of() : input.specialPays();
         Map<PayrollComponent, BigDecimal> componentAmounts = new EnumMap<>(PayrollComponent.class);
-        componentAmounts.put(PayrollComponent.SALARY, employee.baseSalary());
+        componentAmounts.put(PayrollComponent.SALARY, grossSalaryComponent);
         componentAmounts.put(PayrollComponent.SPECIAL_PAY_1, amountAt(specialPays, 0));
         componentAmounts.put(PayrollComponent.SPECIAL_PAY_2, amountAt(specialPays, 1));
         componentAmounts.put(PayrollComponent.SPECIAL_PAY_3, amountAt(specialPays, 2));
@@ -640,7 +946,8 @@ public class PayrollService {
             // the same way the outer preview()/process() methods already derive it for the tax-
             // treatment/SSO-inclusion lookups above.
             payrollMonth.getYear(),
-            effectiveWithholdingOverride
+            effectiveWithholdingOverride,
+            dailyRateOverride
         ));
         return new PayrollLineDto(
             null,
@@ -729,7 +1036,13 @@ public class PayrollService {
             // above, which is calculateClassified's POST-TAX bookkeeping figure and stays 0 in the
             // unearned path (the amount is instead netted pre-tax out of commissionPay, see this
             // method's own `effectiveCommissionPay` computation above).
-            customerReturnDeduction
+            customerReturnDeduction,
+            // Daily-rate support (2026-07-30): the raw HR-typed days-worked figure (nullable -- see
+            // PayrollLineDto#daysWorked's own javadoc) and the employee's pay_type AS OF THIS RUN, so
+            // the frontend can gate the days-worked input to daily-rate employees and the value
+            // survives a reload.
+            enteredDaysWorked,
+            employee.payType()
         );
     }
 

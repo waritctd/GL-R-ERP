@@ -88,9 +88,9 @@ describe('ManagerOverview', () => {
   it('renders the team pulse derived from the team ticket list', async () => {
     renderOverview();
     await screen.findByText('ยอดทีมเดือนนี้');
-    // ฿300,000 also appears in the leaderboard row for the same rep/deal —
+    // ฿300,000.00 also appears in the leaderboard row for the same rep/deal —
     // both are correct, so assert at least one, not exactly one.
-    expect(screen.getAllByText('฿300,000').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('฿300,000.00').length).toBeGreaterThan(0);
     expect(screen.getByText('pipeline ทีม')).not.toBeNull();
     expect(screen.getByText('ดีลต้องดูแล')).not.toBeNull();
   });
