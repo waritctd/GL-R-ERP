@@ -53,7 +53,8 @@ class PayrollServiceTest {
         new Pnd1Exporter(),
         new SsoExporter(),
         new PayrollDetailExporter(),
-        appProperties
+        appProperties,
+        mock(th.co.glr.hr.payroll.obligation.DeductionObligationService.class)
     );
 
     private static AppProperties employerConfig() {

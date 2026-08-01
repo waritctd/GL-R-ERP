@@ -66,7 +66,11 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
             new th.co.glr.hr.payroll.export.Pnd1Exporter(),
             new th.co.glr.hr.payroll.export.SsoExporter(),
             new th.co.glr.hr.payroll.export.PayrollDetailExporter(),
-            new th.co.glr.hr.config.AppProperties());
+            new th.co.glr.hr.config.AppProperties(),
+            new th.co.glr.hr.payroll.obligation.DeductionObligationService(
+                new th.co.glr.hr.payroll.obligation.DeductionObligationRepository(jdbc),
+                mock(th.co.glr.hr.employee.EmployeeRepository.class),
+                mock(AuditService.class)));
     }
 
     /**

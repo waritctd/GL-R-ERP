@@ -204,6 +204,19 @@ export const API_ROUTES = {
     // Payroll input draft (2026-07-30): HR's in-progress, not-yet-processed inputs, persisted so a
     // browser reload restores exactly what was typed. Mirrors PayrollController's input-draft mapping.
     inputDraft: '/api/payroll/input-draft',
+    // Deduction obligation tracking (issue #373): กยศ / กรมบังคับคดี obligation record + remittance
+    // ledger. Mirrors DeductionObligationController.
+    deductionObligations: {
+      me: '/api/payroll/deduction-obligations/me',
+      list: '/api/payroll/deduction-obligations',
+      create: '/api/payroll/deduction-obligations',
+      update: (id) => `/api/payroll/deduction-obligations/${id}`,
+      progress: (id) => `/api/payroll/deduction-obligations/${id}/progress`,
+      stop: (id) => `/api/payroll/deduction-obligations/${id}/stop`,
+      acknowledgeCompletion: (id) => `/api/payroll/deduction-obligations/${id}/acknowledge-completion`,
+      overrideContinue: (id) => `/api/payroll/deduction-obligations/${id}/override-continue`,
+      clearOverride: (id) => `/api/payroll/deduction-obligations/${id}/clear-override`,
+    },
   },
   priceImport: {
     factories: '/api/price-import/factories',
