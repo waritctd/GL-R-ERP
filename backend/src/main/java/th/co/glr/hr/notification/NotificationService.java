@@ -53,7 +53,7 @@ public class NotificationService {
     public void markRead(long notificationId, UserPrincipal actor) {
         int updated = notifications.markRead(notificationId, actor.id());
         if (updated == 0) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "Notification not found");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบการแจ้งเตือนนี้");
         }
     }
 
@@ -72,16 +72,16 @@ public class NotificationService {
 
     private void validate(long employeeId, String type, String subject, String body) {
         if (employeeId <= 0) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Employee is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุพนักงาน");
         }
         if (isBlank(type)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Notification type is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุประเภทการแจ้งเตือน");
         }
         if (isBlank(subject)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Notification subject is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุหัวข้อการแจ้งเตือน");
         }
         if (isBlank(body)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Notification message is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุข้อความแจ้งเตือน");
         }
     }
 

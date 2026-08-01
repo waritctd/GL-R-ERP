@@ -38,7 +38,7 @@ class EmployeeControllerTest {
     void requiresAuthenticationForEmployeeDetails() throws Exception {
         mvc.perform(get("/api/employees/10"))
             .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.message").value("Not authenticated"));
+            .andExpect(jsonPath("$.message").value("กรุณาเข้าสู่ระบบก่อนใช้งาน"));
 
         verifyNoInteractions(employeeService);
     }
@@ -47,7 +47,7 @@ class EmployeeControllerTest {
     void forbidsEmployeeRoleFromListingAllEmployees() throws Exception {
         mvc.perform(get("/api/employees").session(sessionFor("employee")))
             .andExpect(status().isForbidden())
-            .andExpect(jsonPath("$.message").value("Forbidden"));
+            .andExpect(jsonPath("$.message").value("ไม่มีสิทธิ์เข้าถึงรายการนี้"));
 
         verifyNoInteractions(employeeService);
     }
@@ -93,7 +93,7 @@ class EmployeeControllerTest {
     void forbidsNonHrFromResettingPassword() throws Exception {
         mvc.perform(post("/api/employees/10/reset-password").session(sessionFor("employee")))
             .andExpect(status().isForbidden())
-            .andExpect(jsonPath("$.message").value("Forbidden"));
+            .andExpect(jsonPath("$.message").value("ไม่มีสิทธิ์เข้าถึงรายการนี้"));
 
         verifyNoInteractions(employeeService);
     }
@@ -102,7 +102,7 @@ class EmployeeControllerTest {
     void requiresAuthenticationToResetPassword() throws Exception {
         mvc.perform(post("/api/employees/10/reset-password"))
             .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.message").value("Not authenticated"));
+            .andExpect(jsonPath("$.message").value("กรุณาเข้าสู่ระบบก่อนใช้งาน"));
 
         verifyNoInteractions(employeeService);
     }

@@ -88,7 +88,7 @@ class SpecialMoneyScopeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThatThrownBy(() -> service.approve(requestId, null, salesManager()))
             .isInstanceOf(ApiException.class)
-            .hasMessageContaining("manager");
+            .hasMessageContaining("หัวหน้างาน");
         assertThat(statusOf(requestId)).isEqualTo("SUBMITTED");
         assertThat(approvedAmountOf(requestId)).isNull();
     }
@@ -117,7 +117,7 @@ class SpecialMoneyScopeIntegrationTest extends AbstractPostgresIntegrationTest {
                 funeralRequest(factoryStaffEmployeeId, LocalDate.of(2026, 7, 1)),
                 employee(salesStaffEmployeeId, salesDivision)))
             .isInstanceOf(ApiException.class)
-            .hasMessageContaining("own");
+            .hasMessageContaining("ตนเอง");
 
         assertThat(requestCountFor(factoryStaffEmployeeId)).isEqualTo(countBefore);
     }

@@ -856,10 +856,10 @@ public class PayrollCalculator {
             }
             BigDecimal amount = money(input.amountOf(component));
             if (amount.signum() != 0 && input.treatmentOf(component) == null) {
-                throw new ApiException(HttpStatus.CONFLICT, "Payroll component " + component
-                    + " for employee " + input.employeeLabel() + " (id " + input.employeeId()
-                    + ") has a non-zero amount of " + amount.toPlainString()
-                    + " but no withholding-tax classification. HR must classify this component before payroll can run.");
+                throw new ApiException(HttpStatus.CONFLICT, "องค์ประกอบเงินเดือน " + component
+                    + " ของพนักงาน " + input.employeeLabel() + " (รหัส " + input.employeeId()
+                    + ") มีจำนวนเงิน " + amount.toPlainString()
+                    + " แต่ยังไม่ได้จัดประเภทภาษีหัก ณ ที่จ่าย ฝ่ายบุคคลต้องจัดประเภทองค์ประกอบนี้ก่อนจึงจะประมวลผลเงินเดือนได้");
             }
         }
     }

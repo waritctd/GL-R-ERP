@@ -74,7 +74,7 @@ class PayrollControllerTest {
         // parseMonth's blank guard rejects it with the "required" message.
         mvc.perform(get("/api/payroll?payrollMonth=").session(sessionFor("hr")))
             .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.message").value("payrollMonth is required"));
+            .andExpect(jsonPath("$.message").value("ต้องระบุงวดเงินเดือน"));
 
         verifyNoInteractions(payrollService);
     }
@@ -83,7 +83,7 @@ class PayrollControllerTest {
     void invalidPayrollMonthIsRejectedWith400() throws Exception {
         mvc.perform(get("/api/payroll?payrollMonth=2026-13").session(sessionFor("hr")))
             .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.message").value("Invalid payroll month"));
+            .andExpect(jsonPath("$.message").value("งวดเงินเดือนไม่ถูกต้อง"));
 
         verifyNoInteractions(payrollService);
     }
@@ -92,7 +92,7 @@ class PayrollControllerTest {
     void currentOrPreviewRequiresASession() throws Exception {
         mvc.perform(get("/api/payroll?payrollMonth=2026-07"))
             .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.message").value("Not authenticated"));
+            .andExpect(jsonPath("$.message").value("กรุณาเข้าสู่ระบบก่อนใช้งาน"));
 
         verifyNoInteractions(payrollService);
     }

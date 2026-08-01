@@ -102,7 +102,7 @@ public class TaxAllowanceDeclarationService {
     public TaxAllowanceDeclarationDto submitOwn(TaxAllowanceDeclarationSubmitRequest request, UserPrincipal actor) {
         requireEmployeeActor(actor);
         if (request == null || request.taxYear() == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "taxYear is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุปีภาษี");
         }
         long employeeId = actor.employeeId();
         int taxYear = request.taxYear();
@@ -134,7 +134,7 @@ public class TaxAllowanceDeclarationService {
         requireEmployeeActor(actor);
         TaxAllowanceDeclarationDto existing = repository.findById(declarationId)
             .filter(dto -> dto.employeeId() == actor.employeeId())
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Declaration not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบแบบแจ้งค่าลดหย่อนนี้"));
         if (existing.status() != TaxAllowanceDeclarationStatus.PENDING) {
             throw new ApiException(HttpStatus.CONFLICT, "เฉพาะรายการที่รออนุมัติเท่านั้นที่ยกเลิกได้");
         }
@@ -161,10 +161,10 @@ public class TaxAllowanceDeclarationService {
     public TaxAllowanceDeclarationDto createOnBehalf(TaxAllowanceOnBehalfRequest request, UserPrincipal actor) {
         requireRole(actor, EDIT_ROLES);
         if (request == null || request.employeeId() == null || request.taxYear() == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "employeeId and taxYear are required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุรหัสพนักงานและปีภาษี");
         }
         if (!employeeRepository.exists(request.employeeId())) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "Employee not found");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบข้อมูลพนักงาน");
         }
         long employeeId = request.employeeId();
         int taxYear = request.taxYear();
@@ -202,7 +202,7 @@ public class TaxAllowanceDeclarationService {
     public TaxAllowanceDeclarationDto approve(long declarationId, TaxAllowanceReviewRequest request, UserPrincipal actor) {
         requireRole(actor, EDIT_ROLES);
         TaxAllowanceDeclarationDto existing = repository.findById(declarationId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Declaration not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบแบบแจ้งค่าลดหย่อนนี้"));
         if (existing.status() != TaxAllowanceDeclarationStatus.PENDING) {
             throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ได้รับการพิจารณาไปแล้ว");
         }
@@ -228,7 +228,7 @@ public class TaxAllowanceDeclarationService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเหตุผลในการปฏิเสธ");
         }
         TaxAllowanceDeclarationDto existing = repository.findById(declarationId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Declaration not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบแบบแจ้งค่าลดหย่อนนี้"));
         if (existing.status() != TaxAllowanceDeclarationStatus.PENDING) {
             throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ได้รับการพิจารณาไปแล้ว");
         }
@@ -261,7 +261,7 @@ public class TaxAllowanceDeclarationService {
     public TaxAllowanceDeclarationDto apply(long declarationId, TaxAllowanceApplyRequest request, UserPrincipal actor) {
         requireRole(actor, EDIT_ROLES);
         TaxAllowanceDeclarationDto existing = repository.findById(declarationId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Declaration not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบแบบแจ้งค่าลดหย่อนนี้"));
         if (existing.status() != TaxAllowanceDeclarationStatus.APPROVED) {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องได้รับการอนุมัติก่อนจึงจะนำไปใช้ได้");
         }
@@ -308,7 +308,7 @@ public class TaxAllowanceDeclarationService {
 
     public TaxAllowanceCapsResponse getCaps(int taxYear, UserPrincipal actor) {
         if (actor == null) {
-            throw new ApiException(HttpStatus.UNAUTHORIZED, "Unauthorized");
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "กรุณาเข้าสู่ระบบก่อนใช้งาน");
         }
         return new TaxAllowanceCapsResponse(taxYear, capCatalog.capsFor(taxYear));
     }
@@ -377,7 +377,7 @@ public class TaxAllowanceDeclarationService {
     public TaxAllowanceDeclarationDto reverify(long declarationId, UserPrincipal actor) {
         requireRole(actor, EDIT_ROLES);
         TaxAllowanceDeclarationDto existing = repository.findById(declarationId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Declaration not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบแบบแจ้งค่าลดหย่อนนี้"));
         if (existing.status() != TaxAllowanceDeclarationStatus.EXPIRED) {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องเป็นรายการที่หมดอายุแล้วเท่านั้นจึงจะยืนยันใหม่ได้");
         }
@@ -412,7 +412,7 @@ public class TaxAllowanceDeclarationService {
     public PayrollAllowanceEstimateResult estimateOwn(TaxAllowanceDeclarationSubmitRequest request, UserPrincipal actor) {
         requireEmployeeActor(actor);
         if (request == null || request.taxYear() == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "taxYear is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุปีภาษี");
         }
         int taxYear = request.taxYear();
         int effectiveMonth = normalizeEffectiveMonth(request.effectiveMonth());
@@ -459,14 +459,14 @@ public class TaxAllowanceDeclarationService {
      */
     public TaxAllowanceAttachmentDownload getAttachmentForDownload(long attachmentId, UserPrincipal actor) {
         TaxAllowanceAttachmentDto attachment = repository.findAttachment(attachmentId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Attachment not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบนี้"));
         requireOwnerOrHr(attachment.declarationId(), actor);
         if (attachment.deletedAt() != null) {
             throw new ApiException(HttpStatus.NOT_FOUND, "ไฟล์นี้ถูกลบแล้ว");
         }
         String path = repository.findAttachmentFilePath(attachmentId);
         if (path == null) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "Attachment file not found");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบนี้");
         }
         return new TaxAllowanceAttachmentDownload(attachment, path);
     }
@@ -475,7 +475,7 @@ public class TaxAllowanceDeclarationService {
     @Transactional
     public void deleteAttachment(long attachmentId, String reason, UserPrincipal actor) {
         TaxAllowanceAttachmentDto attachment = repository.findAttachment(attachmentId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Attachment not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบนี้"));
         requireOwnerOrHr(attachment.declarationId(), actor);
         if (attachment.deletedAt() != null) {
             throw new ApiException(HttpStatus.CONFLICT, "ไฟล์นี้ถูกลบไปแล้ว");
@@ -496,11 +496,11 @@ public class TaxAllowanceDeclarationService {
      */
     private TaxAllowanceDeclarationDto requireOwnerOrHr(long declarationId, UserPrincipal actor) {
         TaxAllowanceDeclarationDto declaration = repository.findById(declarationId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Declaration not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบแบบแจ้งค่าลดหย่อนนี้"));
         boolean isOwner = actor != null && actor.employeeId() != null && actor.employeeId() == declaration.employeeId();
         boolean isHr = actor != null && "hr".equals(actor.role());
         if (!isOwner && !isHr) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "Declaration not found");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบแบบแจ้งค่าลดหย่อนนี้");
         }
         return declaration;
     }
@@ -509,13 +509,13 @@ public class TaxAllowanceDeclarationService {
 
     private void requireEmployeeActor(UserPrincipal actor) {
         if (actor == null || actor.employeeId() == null) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
         if (actor == null || !allowed.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
@@ -527,7 +527,7 @@ public class TaxAllowanceDeclarationService {
 
     private void validateMonth(int month) {
         if (month < 1 || month > 12) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "effectiveMonth must be between 1 and 12");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "effectiveMonth ต้องอยู่ระหว่าง 1 ถึง 12");
         }
     }
 

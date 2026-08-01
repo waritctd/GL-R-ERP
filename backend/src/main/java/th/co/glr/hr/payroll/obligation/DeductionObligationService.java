@@ -226,7 +226,7 @@ public class DeductionObligationService {
     public DeductionObligationDto create(DeductionObligationCreateRequest request, UserPrincipal actor) {
         requireRole(actor, EDIT_ROLES);
         if (!employeeRepository.exists(request.employeeId())) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "Employee not found");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบข้อมูลพนักงาน");
         }
         long id;
         try {
@@ -388,18 +388,18 @@ public class DeductionObligationService {
 
     private DeductionObligationDto requireObligation(long obligationId) {
         return repository.findById(obligationId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Obligation not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการภาระผูกพันนี้"));
     }
 
     private void requireEmployeeActor(UserPrincipal actor) {
         if (actor == null || actor.employeeId() == null) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
         if (actor == null || !allowed.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 

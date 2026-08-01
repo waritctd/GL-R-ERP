@@ -54,7 +54,7 @@ public class TaxAllowanceAttachmentController {
         TaxAllowanceAttachmentDownload download = service.getAttachmentForDownload(attachmentId, user);
         Resource resource = new FileSystemResource(download.filePath());
         if (!resource.exists()) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "Attachment file not found");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบนี้");
         }
         String mime = download.attachment().mimeType() != null
             ? download.attachment().mimeType()

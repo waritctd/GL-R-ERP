@@ -147,7 +147,7 @@ public class PayrollController {
         UserPrincipal user = sessions.requireUser(session);
         PayrollExportKind exportKind = parseKind(kind);
         if (exportKind != PayrollExportKind.PAYROLL_DETAIL) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Only payroll-detail supports a preview export");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ดูตัวอย่างไฟล์ส่งออกได้เฉพาะรายงานแบบ payroll-detail เท่านั้น");
         }
         LocalDate effective = parseEffectiveDate(effectiveDate);
         PayrollExportFile file = payrollService.exportDetailPreview(normalizedRequest(request), effective, user);
@@ -288,7 +288,7 @@ public class PayrollController {
         try {
             return PayrollExportKind.fromSlug(kind);
         } catch (IllegalArgumentException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown export kind: " + kind);
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับประเภทไฟล์ส่งออก: " + kind);
         }
     }
 
@@ -299,7 +299,7 @@ public class PayrollController {
         try {
             return LocalDate.parse(value.trim());
         } catch (DateTimeParseException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid effectiveDate (expected YYYY-MM-DD)");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่มีผลไม่ถูกต้อง (รูปแบบที่ถูกต้องคือ YYYY-MM-DD)");
         }
     }
 
@@ -309,7 +309,7 @@ public class PayrollController {
 
     private LocalDate parseMonth(String value) {
         if (value == null || value.isBlank()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "payrollMonth is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุงวดเงินเดือน");
         }
         String trimmed = value.trim();
         try {
@@ -318,7 +318,7 @@ public class PayrollController {
             }
             return LocalDate.parse(trimmed).withDayOfMonth(1);
         } catch (DateTimeParseException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid payroll month");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "งวดเงินเดือนไม่ถูกต้อง");
         }
     }
 }

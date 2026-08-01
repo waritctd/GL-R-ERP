@@ -56,7 +56,7 @@ public class DepositNoticeService {
 
     public DepositNoticeDto getById(long docId, UserPrincipal actor) {
         DepositNoticeDto doc = docs.findById(docId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Deposit notice not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบแจ้งรับมัดจำนี้"));
         requireTicketViewer(doc.ticketId(), actor);
         return doc;
     }
@@ -102,7 +102,7 @@ public class DepositNoticeService {
         try {
             return renderer.toPreviewHtml(doc);
         } catch (Exception e) {
-            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Preview failed: " + e.getMessage());
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "แสดงตัวอย่างเอกสารไม่สำเร็จ: " + e.getMessage());
         }
     }
 
@@ -119,12 +119,12 @@ public class DepositNoticeService {
         // that side effect killed the dual-track UI and let unpaid tickets close
         // (2026-07-16 audit findings #3/#4).
         TicketSummaryDto s = tickets.findById(doc.ticketId())
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"))
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
             .summary();
         if (!TicketStatus.QUOTATION_ISSUED.equals(s.status())
                 || !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "Deposit notice requires quotation_issued + paymentStatus=CUSTOMER_CONFIRMED");
+                "ออกใบแจ้งรับมัดจำได้เฉพาะเมื่อออกใบเสนอราคาแล้วและลูกค้ายืนยันคำสั่งซื้อแล้วเท่านั้น");
         }
         // Issuing advances the payment track — a paused/terminal deal must not move
         // (Phase 1 lifecycle gate; mirrors TicketService.requireActive).
@@ -158,7 +158,7 @@ public class DepositNoticeService {
         try {
             return renderer.toXlsx(doc);
         } catch (Exception e) {
-            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Excel render failed: " + e.getMessage());
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "สร้างไฟล์ Excel ไม่สำเร็จ: " + e.getMessage());
         }
     }
 
@@ -167,7 +167,7 @@ public class DepositNoticeService {
         try {
             return renderer.toPdf(doc);
         } catch (Exception e) {
-            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "PDF render failed: " + e.getMessage());
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "สร้างไฟล์ PDF ไม่สำเร็จ: " + e.getMessage());
         }
     }
 
@@ -177,7 +177,7 @@ public class DepositNoticeService {
         TicketDto ticket = requireTicketViewer(ticketId, actor);
         TicketSummaryDto s = ticket.summary();
         if (!"quotation_issued".equals(s.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Remaining invoice only available for quotation_issued tickets");
+            throw new ApiException(HttpStatus.CONFLICT, "ออกใบกำกับภาษีส่วนที่เหลือได้เฉพาะดีลที่อยู่ในสถานะ quotation_issued เท่านั้น");
         }
 
         // Find issued deposit notice to get deposit amount and reference
@@ -234,7 +234,7 @@ public class DepositNoticeService {
         try {
             return remainingRenderer.toXlsx(doc);
         } catch (Exception e) {
-            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Excel render failed: " + e.getMessage());
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "สร้างไฟล์ Excel ไม่สำเร็จ: " + e.getMessage());
         }
     }
 
@@ -245,16 +245,16 @@ public class DepositNoticeService {
     public TicketDto requestRevision(long ticketId, RevisionRequest req, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketDto ticket = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
         TicketSummaryDto s = ticket.summary();
         String st = s.status();
         requireActiveLifecycle(s);
 
         if (!TicketStatus.APPROVED.equals(st) && !TicketStatus.DOCUMENT_ISSUED.equals(st)) {
-            throw new ApiException(HttpStatus.CONFLICT, "Revision only allowed from approved or document_issued");
+            throw new ApiException(HttpStatus.CONFLICT, "ขอแก้ไข revision ได้เฉพาะจากสถานะ approved หรือ document_issued เท่านั้น");
         }
         if (s.createdById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only ticket owner can request revision");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะเจ้าของดีลเท่านั้นที่สามารถขอแก้ไขใบเสนอราคาได้");
         }
 
         String toStatus = switch (req.scope()) {
@@ -282,11 +282,11 @@ public class DepositNoticeService {
 
     private TicketSummaryDto requireApprovedTicket(long ticketId, UserPrincipal actor) {
         TicketDto t = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
         String st = t.summary().status();
         if (!TicketStatus.APPROVED.equals(st) && !TicketStatus.QUOTATION_ISSUED.equals(st)
                 && !TicketStatus.DOCUMENT_ISSUED.equals(st)) {
-            throw new ApiException(HttpStatus.CONFLICT, "Deposit notice can only be created for approved tickets");
+            throw new ApiException(HttpStatus.CONFLICT, "สร้างใบแจ้งรับมัดจำได้เฉพาะดีลที่อนุมัติแล้วเท่านั้น");
         }
         return t.summary();
     }
@@ -304,9 +304,9 @@ public class DepositNoticeService {
 
     private DepositNoticeDto requireDraft(long docId) {
         DepositNoticeDto doc = docs.findById(docId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Deposit notice not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบแจ้งรับมัดจำนี้"));
         if (!"DRAFT".equals(doc.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Deposit notice is not in DRAFT status");
+            throw new ApiException(HttpStatus.CONFLICT, "ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)");
         }
         return doc;
     }
@@ -325,27 +325,27 @@ public class DepositNoticeService {
     private TicketDto requireTicketViewer(long ticketId, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
         TicketDto t = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
         if ("sales".equals(actor.role()) && t.summary().createdById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (IMPORT_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return t;
     }
 
     private void requireTicketOwner(long ticketId, UserPrincipal actor) {
         TicketDto t = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
         if (t.summary().createdById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
     private void requireRole(UserPrincipal actor, java.util.Set<String> allowed) {
         if (!allowed.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 

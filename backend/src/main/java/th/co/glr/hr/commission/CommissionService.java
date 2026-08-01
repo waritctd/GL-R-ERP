@@ -96,7 +96,7 @@ public class CommissionService {
 
     public List<CommissionRecord> list(LocalDate payrollMonth, UserPrincipal actor) {
         if (!LIST_VIEWER_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         Long salesRepFilter = "sales".equals(actor.role()) ? actor.id() : null;
         return commissions.findRecords(salesRepFilter, payrollMonth);
@@ -110,13 +110,13 @@ public class CommissionService {
     @Transactional
     public CommissionRecord submit(SubmitCommissionRequest request, MultipartFile invoiceAttachment, UserPrincipal actor) {
         if (!SUBMIT_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if ("sales".equals(actor.role()) && hasDeductionOverride(request)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Sales cannot edit deduction fields");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ฝ่ายขายไม่มีสิทธิ์แก้ไขช่องรายการหักเงิน");
         }
         if (invoiceAttachment == null || invoiceAttachment.isEmpty()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Tax invoice file is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องแนบไฟล์ใบกำกับภาษี");
         }
 
         long salesRepId = resolveSalesRep(request.salesRepId(), actor);
@@ -165,7 +165,7 @@ public class CommissionService {
             notifySubmitted(created);
             return created;
         } catch (DuplicateKeyException e) {
-            throw new ApiException(HttpStatus.CONFLICT, "Invoice number already exists");
+            throw new ApiException(HttpStatus.CONFLICT, "เลขที่ใบกำกับภาษีนี้มีอยู่ในระบบแล้ว");
         }
     }
 
@@ -203,16 +203,16 @@ public class CommissionService {
             MultipartFile invoiceAttachment,
             UserPrincipal actor) {
         if (!CREATE_FROM_DEAL_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (invoiceAttachment == null || invoiceAttachment.isEmpty()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Tax invoice file is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องแนบไฟล์ใบกำกับภาษี");
         }
         TicketDto ticket = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
         long salesRepId = ticket.summary().createdById();
         if (commissions.hasActiveCommissionForTicket(ticketId)) {
-            throw new ApiException(HttpStatus.CONFLICT, "A commission already exists for this deal");
+            throw new ApiException(HttpStatus.CONFLICT, "มีรายการค่าคอมมิชชั่นสำหรับดีลนี้อยู่แล้ว");
         }
         BigDecimal effectiveGrossAmount = grossAmount != null ? grossAmount : tickets.payableAmount(ticketId);
 
@@ -288,7 +288,7 @@ public class CommissionService {
             notifySubmitted(created);
             return created;
         } catch (DuplicateKeyException e) {
-            throw new ApiException(HttpStatus.CONFLICT, "Invoice number already exists");
+            throw new ApiException(HttpStatus.CONFLICT, "เลขที่ใบกำกับภาษีนี้มีอยู่ในระบบแล้ว");
         }
     }
 
@@ -306,10 +306,10 @@ public class CommissionService {
             return new DealLinkage(null, false);
         }
         String salesStage = tickets.findSalesStage(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
         if (!DealStage.CLOSED_PAID.equals(salesStage)) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "Deal has not reached final payment (CLOSED_PAID); commission cannot be submitted yet.");
+                "ดีลนี้ยังไม่ถึงขั้นตอนรับชำระเงินครบถ้วน (CLOSED_PAID) จึงยังยื่นค่าคอมมิชชั่นไม่ได้");
         }
         BigDecimal payable = tickets.payableAmount(ticketId);
         boolean mismatch = isMismatch(request.grossAmount(), payable);
@@ -333,14 +333,14 @@ public class CommissionService {
         requireManagerOrCeo(actor);
         CommissionRecord existing = requireRecord(id);
         if (CommissionStatus.VOID.equals(existing.status()) || CommissionStatus.REJECTED.equals(existing.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Cannot edit a void commission record");
+            throw new ApiException(HttpStatus.CONFLICT, "ไม่สามารถแก้ไขรายการค่าคอมมิชชั่นที่ถูกยกเลิกแล้วได้");
         }
         if (MANUAL_KINDS.contains(existing.kind())) {
             // Manual entries (ADJUSTMENT/MANAGER) have no invoice_details row to edit -- existing
             // .invoiceDetails() is null for them (V84). There is nothing here to update; the
             // manual_amount/manual_reason a manual entry was created with is immutable by design
             // (create a fresh entry, or use the clawback-style correction pattern, if it was wrong).
-            throw new ApiException(HttpStatus.CONFLICT, "Manual commission entries have no invoice deductions to edit");
+            throw new ApiException(HttpStatus.CONFLICT, "รายการค่าคอมมิชชั่นแบบกรอกเองไม่มีรายการหักจากใบกำกับภาษีให้แก้ไข");
         }
         BigDecimal grossAmount = valueOrExisting(request.grossAmount(), existing.invoiceDetails().grossAmount());
         BigDecimal bankFees = valueOrExisting(request.bankFees(), existing.invoiceDetails().bankFees());
@@ -393,7 +393,7 @@ public class CommissionService {
         if (CommissionStatus.MANAGER_APPROVED.equals(existing.status())) {
             return ceoApprove(id, actor, existing);
         }
-        throw new ApiException(HttpStatus.CONFLICT, "Commission record has already been reviewed");
+        throw new ApiException(HttpStatus.CONFLICT, "รายการค่าคอมมิชชั่นนี้ได้รับการพิจารณาไปแล้ว");
     }
 
     private CommissionRecord managerApprove(long id, UserPrincipal actor, CommissionRecord existing) {
@@ -423,7 +423,7 @@ public class CommissionService {
         if (CommissionStatus.MANAGER_APPROVED.equals(existing.status())) {
             return ceoReject(id, request, actor, existing);
         }
-        throw new ApiException(HttpStatus.CONFLICT, "Commission record has already been reviewed");
+        throw new ApiException(HttpStatus.CONFLICT, "รายการค่าคอมมิชชั่นนี้ได้รับการพิจารณาไปแล้ว");
     }
 
     private CommissionRecord managerReject(long id, ReviewCommissionRequest request, UserPrincipal actor, CommissionRecord existing) {
@@ -449,10 +449,10 @@ public class CommissionService {
         requireManagerOrCeo(actor);
         CommissionRecord original = requireRecord(id);
         if (!CommissionKind.SALE.equals(original.kind()) || !CommissionStatus.APPROVED.equals(original.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Only approved sale commissions can be clawed back");
+            throw new ApiException(HttpStatus.CONFLICT, "เรียกคืนได้เฉพาะค่าคอมมิชชั่นประเภทการขายที่อนุมัติแล้วเท่านั้น");
         }
         if (commissions.hasActiveClawbackFor(id)) {
-            throw new ApiException(HttpStatus.CONFLICT, "This commission already has an active clawback");
+            throw new ApiException(HttpStatus.CONFLICT, "รายการค่าคอมมิชชั่นนี้มีการเรียกคืนที่ยังดำเนินการอยู่แล้ว");
         }
         long clawbackId = commissions.createClawback(
             original,
@@ -488,26 +488,26 @@ public class CommissionService {
     public CommissionRecord createManualCommission(
             Long salesRepId, String kind, BigDecimal amount, String reason, LocalDate payrollMonth, UserPrincipal actor) {
         if (!MANUAL_CREATE_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only a sales manager or the CEO may create a manual commission entry");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะผู้จัดการฝ่ายขายหรือ CEO เท่านั้นที่สามารถสร้างรายการค่าคอมมิชชั่นแบบกรอกเองได้");
         }
         if (salesRepId == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "salesRepId is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุรหัสพนักงานขาย");
         }
         if (!MANUAL_KINDS.contains(kind)) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
-                "kind must be one of " + String.join(", ", new java.util.TreeSet<>(MANUAL_KINDS)));
+                "kind ต้องเป็นหนึ่งใน " + String.join(", ", new java.util.TreeSet<>(MANUAL_KINDS)));
         }
         if (amount == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "amount is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุจำนวนเงิน");
         }
         if (reason == null || reason.isBlank()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "A reason is required for a manual commission entry");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเหตุผลสำหรับรายการค่าคอมมิชชั่นแบบกรอกเอง");
         }
         // A MANAGER-kind entry represents team/manager commission earned, not a correction --
         // never negative. An ADJUSTMENT may legitimately be negative (a deduction/clawback-style
         // correction), so no sign restriction there.
         if (CommissionKind.MANAGER.equals(kind) && amount.signum() < 0) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "A MANAGER commission entry cannot be negative");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "รายการค่าคอมมิชชั่นประเภท MANAGER ต้องไม่ติดลบ");
         }
         LocalDate month = payrollMonth == null ? currentPayrollMonth() : payrollMonth(payrollMonth);
         boolean ceoCreated = CEO_ROLES.contains(actor.role());
@@ -529,7 +529,7 @@ public class CommissionService {
     public CommissionSimulationDto simulate(CommissionSimulatorRequest request, UserPrincipal actor) {
         long salesRepId = resolveSalesRep(request.salesRepId(), actor);
         if ("sales".equals(actor.role()) && hasDeductionOverride(request)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Sales cannot edit deduction fields");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ฝ่ายขายไม่มีสิทธิ์แก้ไขช่องรายการหักเงิน");
         }
         LocalDate month = request.payrollMonth() == null ? currentPayrollMonth() : payrollMonth(request.payrollMonth());
         InvoiceCalculation invoice = calculator.calculateInvoice(
@@ -568,7 +568,7 @@ public class CommissionService {
 
     public PayrollCommissionSummaryDto payrollReadySummary(LocalDate payrollMonth, UserPrincipal actor) {
         if (!PAYROLL_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         LocalDate month = payrollMonth == null ? currentPayrollMonth() : payrollMonth(payrollMonth);
         List<RepPayrollCommission> reps = computeRepPayrollCommissions(month);
@@ -684,7 +684,7 @@ public class CommissionService {
 
     private CommissionRecord requireRecord(long id) {
         return commissions.findById(id)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Commission record not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการค่าคอมมิชชั่นนี้"));
     }
 
     private List<TierConfig> tiers() {
@@ -719,7 +719,7 @@ public class CommissionService {
     private long resolveSalesRep(Long requestedSalesRepId, UserPrincipal actor) {
         if ("sales".equals(actor.role())) {
             if (requestedSalesRepId != null && requestedSalesRepId != actor.id()) {
-                throw new ApiException(HttpStatus.FORBIDDEN, "Sales can only submit their own commissions");
+                throw new ApiException(HttpStatus.FORBIDDEN, "พนักงานขายสามารถยื่นค่าคอมมิชชั่นของตนเองเท่านั้น");
             }
             return actor.id();
         }
@@ -728,19 +728,19 @@ public class CommissionService {
 
     private void requireManager(UserPrincipal actor) {
         if (!MANAGER_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only a sales manager can review submitted commissions");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะผู้จัดการฝ่ายขายเท่านั้นที่สามารถพิจารณาค่าคอมมิชชั่นที่ยื่นเข้ามาได้");
         }
     }
 
     private void requireCeo(UserPrincipal actor) {
         if (!CEO_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only the CEO can review manager-approved commissions");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะ CEO เท่านั้นที่สามารถพิจารณาค่าคอมมิชชั่นที่ผู้จัดการฝ่ายขายอนุมัติแล้วได้");
         }
     }
 
     private void requireManagerOrCeo(UserPrincipal actor) {
         if (!MANAGER_ROLES.contains(actor.role()) && !CEO_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 

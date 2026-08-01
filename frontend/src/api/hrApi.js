@@ -233,7 +233,7 @@ export const api = {
       const res = await fetch(API_ROUTES.attachments.upload(ticketId), {
         method: 'POST', credentials: 'include', body: formData,
       });
-      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || 'Upload failed'); }
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || 'อัปโหลดไม่สำเร็จ'); }
       return res.json();
     },
     fileUrl: (id) => API_ROUTES.attachments.file(id),
@@ -428,7 +428,7 @@ export const api = {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || 'Upload failed');
+        throw new Error(err.message || 'อัปโหลดไม่สำเร็จ');
       }
       return res.json();
     },
@@ -606,7 +606,7 @@ export const api = {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || 'Upload failed');
+        throw new Error(err.message || 'อัปโหลดไม่สำเร็จ');
       }
       return res.json();
     },
@@ -628,7 +628,7 @@ export const api = {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || 'Upload failed');
+        throw new Error(err.message || 'อัปโหลดไม่สำเร็จ');
       }
       return res.json();
     },
