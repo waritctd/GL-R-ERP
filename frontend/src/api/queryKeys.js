@@ -7,6 +7,13 @@ export const queryKeys = {
   profileRequests: () => ['profileRequests'],
   dashboardSummary: () => ['dashboardSummary'],
   payrollCurrent: (payrollMonth) => ['payroll', 'current', payrollMonth ?? ''],
+  // Tax-allowance declaration workflow (PR A, 2026-08-01). Mirrors
+  // TaxAllowanceDeclarationController's endpoints -- no UI in this PR, but the frontend agent
+  // building the declaration screen (PR B) needs these to already exist.
+  taxAllowanceDeclarationsMe: (year) => ['taxAllowanceDeclarations', 'me', year ?? ''],
+  taxAllowanceDeclarationsRegister: (filters = {}) =>
+    ['taxAllowanceDeclarations', 'register', filters.year ?? '', filters.status ?? ''],
+  taxAllowanceCaps: (year) => ['taxAllowanceCaps', year ?? ''],
   notifications: () => ['notifications'],
   leaveRequests: (filters = {}) => ['leave', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   leaveBalances: (employeeId, year) => ['leave', 'balances', employeeId, year],

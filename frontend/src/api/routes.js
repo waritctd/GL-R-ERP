@@ -171,6 +171,19 @@ export const API_ROUTES = {
     payslipsZip: (periodId) => `/api/payroll/${periodId}/payslips.zip`,
     distribute: (periodId) => `/api/payroll/${periodId}/distribute`,
     taxAllowances: '/api/payroll/tax-allowances',
+    // Tax-allowance DECLARATION workflow (PR A, 2026-08-01): staged separately from the legacy
+    // bulk editor above -- a declaration never touches hr.employee_tax_allowance until HR applies
+    // it. Mirrors TaxAllowanceDeclarationController.
+    taxAllowanceDeclarations: {
+      me: '/api/payroll/tax-allowances/declarations/me',
+      withdraw: (id) => `/api/payroll/tax-allowances/declarations/${id}`,
+      register: '/api/payroll/tax-allowances/declarations',
+      onBehalf: '/api/payroll/tax-allowances/declarations/on-behalf',
+      approve: (id) => `/api/payroll/tax-allowances/declarations/${id}/approve`,
+      reject: (id) => `/api/payroll/tax-allowances/declarations/${id}/reject`,
+      apply: (id) => `/api/payroll/tax-allowances/declarations/${id}/apply`,
+    },
+    taxAllowanceCaps: '/api/payroll/tax-allowances/caps',
     ytdSeed: '/api/payroll/ytd-seed',
     // P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix. Mirrors
     // PayrollController's component-tax-treatments mapping.
