@@ -298,10 +298,167 @@ class SecurityAuthorizationIntegrationTest {
             .andExpect(status().isNotFound());
     }
 
+    // ------------------------------------------------------------------------------------------
+    // Tax-allowance DECLARATION workflow (PR A, 2026-08-01): TaxAllowanceDeclarationController.
+    // Employees gain self-read/self-write for the FIRST time here (GET/POST/DELETE
+    // .../declarations/me) — this is an authorization change, stated per CLAUDE.md. Everything else
+    // (register, approve, reject, apply, on-behalf) is HR-only-to-mutate, CEO-view-only, same split
+    // as the C1/C2 endpoints above. Written wrong-way-round, through the real filter chain + real
+    // service + real repository, and every table asserted unchanged after a rejected call.
+    //
+    // TaxAllowanceDeclarationScopeIntegrationTest (service-layer, AbstractPostgresIntegrationTest)
+    // covers the 404-not-403-on-a-foreign-row nuance and the DISTINCT ON expiry trap; this class
+    // covers the HTTP-layer @PreAuthorize gates and the one thing only an HTTP-level test can prove:
+    // an extra "employeeId" field smuggled into the /me POST body is not bound to anything (the
+    // request record has no such field) and is silently ignored by Jackson's default
+    // fail-on-unknown-properties=false, so the row lands on the CALLER, never the named victim.
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void aPlainEmployeeCannotViewOrMutateTheTaxAllowanceDeclarationRegister() throws Exception {
+        long victimId = seedEmployeeForReconciliationAuthz("EMP-TAD-1");
+        long declarationId = seedPendingDeclaration(victimId, 2026);
+
+        mvc.perform(get("/api/payroll/tax-allowances/declarations?year=2026").session(sessionFor("employee")))
+            .andExpect(status().isForbidden());
+        mvc.perform(post("/api/payroll/tax-allowances/declarations/" + declarationId + "/approve")
+                .session(sessionFor("employee"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+            .andExpect(status().isForbidden());
+        mvc.perform(post("/api/payroll/tax-allowances/declarations/" + declarationId + "/reject")
+                .session(sessionFor("employee"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"reviewerNote\":\"no\"}"))
+            .andExpect(status().isForbidden());
+        mvc.perform(post("/api/payroll/tax-allowances/declarations/" + declarationId + "/apply")
+                .session(sessionFor("employee"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+            .andExpect(status().isForbidden());
+        mvc.perform(post("/api/payroll/tax-allowances/declarations/on-behalf")
+                .session(sessionFor("employee"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(onBehalfBody(victimId)))
+            .andExpect(status().isForbidden());
+
+        assertThat(declarationStatus(declarationId)).isEqualTo("PENDING");
+        assertThat(countTaxAllowanceRows(victimId)).isZero();
+    }
+
+    @Test
+    void ceoCanViewTheTaxAllowanceDeclarationRegisterButCannotApproveRejectApplyOrCreateOnBehalf() throws Exception {
+        long victimId = seedEmployeeForReconciliationAuthz("EMP-TAD-2");
+        long declarationId = seedPendingDeclaration(victimId, 2026);
+
+        mvc.perform(get("/api/payroll/tax-allowances/declarations?year=2026").session(sessionFor("ceo")))
+            .andExpect(status().isOk());
+        mvc.perform(post("/api/payroll/tax-allowances/declarations/" + declarationId + "/approve")
+                .session(sessionFor("ceo"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+            .andExpect(status().isForbidden());
+        mvc.perform(post("/api/payroll/tax-allowances/declarations/" + declarationId + "/apply")
+                .session(sessionFor("ceo"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+            .andExpect(status().isForbidden());
+        mvc.perform(post("/api/payroll/tax-allowances/declarations/on-behalf")
+                .session(sessionFor("ceo"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(onBehalfBody(victimId)))
+            .andExpect(status().isForbidden());
+
+        assertThat(declarationStatus(declarationId)).isEqualTo("PENDING");
+        assertThat(countTaxAllowanceRows(victimId)).isZero();
+    }
+
+    @Test
+    void aSubmittedDeclarationIgnoresAForgedEmployeeIdInTheRequestBodyAndLandsOnTheCaller() throws Exception {
+        // A dedicated session pinned to a REAL, freshly-seeded employee — sessionFor's own
+        // employeeId=1 is not depended on here, since other tests in this class may have already
+        // advanced hr.employee's identity sequence past 1.
+        long callerEmployeeId = seedEmployeeForReconciliationAuthz("EMP-TAD-CALLER");
+        long victimEmployeeId = seedEmployeeForReconciliationAuthz("EMP-TAD-VICTIM");
+
+        // The request DTO (TaxAllowanceDeclarationSubmitRequest) has no employeeId field at all —
+        // this "employeeId" key is unknown to Jackson and, with the default
+        // fail-on-unknown-properties=false, is simply dropped rather than bound anywhere.
+        mvc.perform(post("/api/payroll/tax-allowances/declarations/me")
+                .session(sessionForEmployeeId(callerEmployeeId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"employeeId\":" + victimEmployeeId + ",\"taxYear\":2026,\"spouseAllowance\":60000}"))
+            .andExpect(status().isCreated());
+
+        assertThat(countTaxAllowanceDeclarationRows(callerEmployeeId, 2026))
+            .as("the row must land on the authenticated caller")
+            .isEqualTo(1);
+        assertThat(countTaxAllowanceDeclarationRows(victimEmployeeId, 2026))
+            .as("the named victim must get ZERO rows despite the forged body")
+            .isZero();
+    }
+
+    @Test
+    void approvingAnAlreadyApprovedDeclarationIsRejectedWith409() throws Exception {
+        long employeeId = seedEmployeeForReconciliationAuthz("EMP-TAD-3");
+        long declarationId = seedPendingDeclaration(employeeId, 2026);
+
+        mvc.perform(post("/api/payroll/tax-allowances/declarations/" + declarationId + "/approve")
+                .session(sessionFor("hr"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+            .andExpect(status().isOk());
+        mvc.perform(post("/api/payroll/tax-allowances/declarations/" + declarationId + "/approve")
+                .session(sessionFor("hr"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+            .andExpect(status().isConflict());
+
+        assertThat(declarationStatus(declarationId)).isEqualTo("APPROVED");
+    }
+
     private long seedEmployeeForReconciliationAuthz(String code) {
         return jdbc.queryForObject(
             "INSERT INTO hr.employee (employee_code, is_active) VALUES (:code, TRUE) RETURNING employee_id",
             Map.of("code", code), Long.class);
+    }
+
+    /** Same as {@link #sessionFor}, but pinned to a specific employeeId rather than the hardcoded 1. */
+    private MockHttpSession sessionForEmployeeId(long employeeId) {
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute(SessionContext.SESSION_USER_KEY,
+            new UserPrincipal(employeeId, "employee" + employeeId + "@glr.co.th", "employee", "employee",
+                employeeId, true, LocalDate.now(), false, null, false));
+        return session;
+    }
+
+    private long seedPendingDeclaration(long employeeId, int taxYear) {
+        return jdbc.queryForObject("""
+            INSERT INTO hr.tax_allowance_declaration
+                (employee_id, tax_year, effective_month, spouse_allowance, submitted_by_id)
+            VALUES (:employeeId, :taxYear, 1, 60000, :employeeId)
+            RETURNING declaration_id
+            """,
+            Map.of("employeeId", employeeId, "taxYear", taxYear), Long.class);
+    }
+
+    private String declarationStatus(long declarationId) {
+        return jdbc.queryForObject(
+            "SELECT status FROM hr.tax_allowance_declaration WHERE declaration_id = :id",
+            Map.of("id", declarationId), String.class);
+    }
+
+    private int countTaxAllowanceDeclarationRows(long employeeId, int taxYear) {
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM hr.tax_allowance_declaration WHERE employee_id = :employeeId AND tax_year = :taxYear",
+            Map.of("employeeId", employeeId, "taxYear", taxYear), Integer.class);
+        return count == null ? 0 : count;
+    }
+
+    private String onBehalfBody(long employeeId) {
+        return """
+            {"employeeId":%d,"taxYear":2026,"spouseAllowance":60000}
+            """.formatted(employeeId);
     }
 
     private int countTaxAllowanceRows(long employeeId) {
