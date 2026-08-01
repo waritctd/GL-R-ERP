@@ -186,6 +186,10 @@ db.payrollInputDrafts = db.payrollInputDrafts || new Map();
 // is the exception: it promotes into hr.employee_tax_allowance and changes real withholding, so
 // mock mode surfaces "not supported" for that one call, same as saveTaxAllowances.
 db.taxAllowanceDeclarations = db.taxAllowanceDeclarations || [];
+// Evidence attachments (decision #5, 2026-08-01): genuinely fake-able (file metadata + access
+// scoping, no tax math) -- unlike applyTaxAllowanceDeclaration/estimateMyTaxAllowanceDeclaration,
+// which are NOT.
+db.taxAllowanceAttachments = db.taxAllowanceAttachments || [];
 db.leaveTypes = db.leaveTypes || [
   // PERSONAL quota fix (2026-07-25): seeded at 3, company rule (§5.2) grants 7 paid personal
   // days/year -- see V90__leave_subday_and_contact.sql for the backend-side correction.
@@ -1309,6 +1313,19 @@ function taxAllowanceDeclarationPublic(row) {
     employeeCode: employee?.code ?? null,
     employeeName: employee?.nameTh ?? null,
   };
+}
+
+/**
+ * Evidence access rule (decision #5) -- mirrors TaxAllowanceDeclarationService#requireOwnerOrHr
+ * exactly: owning employee OR hr, re-checked fresh on every call, never the uploader (no
+ * AttachmentController#requireAttachmentAccess-style short-circuit), never ceo (evidence is a
+ * personal medical/insurance/family document; ceo's read of the declaration REGISTER's amounts via
+ * getTaxAllowanceDeclarations is unaffected). 404, never 403, so a foreign id does not leak.
+ */
+function requireTaxAllowanceAttachmentAccess(declaration, user) {
+  const isOwner = user.employeeId != null && user.employeeId === declaration.employeeId;
+  const isHr = user.role === 'hr';
+  if (!isOwner && !isHr) fail('Attachment not found', 404);
 }
 
 function taxAllowanceCapsFor(taxYear) {
@@ -4900,6 +4917,15 @@ export const api = {
       row.status = 'WITHDRAWN';
       return delay(null);
     },
+    // Tax-effect estimate (decision #4, 2026-08-01): REAL Thai tax math, run server-side through
+    // PayrollCalculator twice (baseline vs proposed) -- there is no calculator in this mock file to
+    // run it against, and reimplementing one here would be exactly the "never reimplement Thai tax
+    // math" mistake CLAUDE.md and the tax-allowance plan doc both warn against. Not supported in
+    // mock mode, same reasoning as applyTaxAllowanceDeclaration/saveTaxAllowances above.
+    async estimateMyTaxAllowanceDeclaration() {
+      requireSession();
+      throw new Error('การประมาณการผลของค่าลดหย่อนต่อภาษีไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
     async getTaxAllowanceDeclarations(params = {}) {
       hasRole('hr', 'ceo');
       const taxYear = params.year ? Number(params.year) : null;
@@ -4966,12 +4992,78 @@ export const api = {
       hasRole('hr');
       throw new Error('การนำแบบแจ้งค่าลดหย่อนไปใช้ไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
+    // Yearly expiry (decision #10, 2026-08-01): the mirror of the scheduled expiry sweep.
+    // Re-verifying restores hr.employee_tax_allowance's verification_status for the WHOLE year
+    // (PayrollRepository#markTaxAllowanceVerified) -- real payroll-affecting state, same
+    // "not supported in mock mode" reasoning as applyTaxAllowanceDeclaration above.
+    async reverifyTaxAllowanceDeclaration() {
+      hasRole('hr');
+      throw new Error('การยืนยันแบบแจ้งค่าลดหย่อนที่หมดอายุใหม่ไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
     // Caps metadata, mirroring TaxAllowanceCapCatalog -- approximate for the UI, NOT authoritative;
     // verify every cap figure against the Java service before trusting it (CLAUDE.md).
     async getTaxAllowanceCaps(params = {}) {
       requireSession();
       const taxYear = params.year ? Number(params.year) : new Date().getFullYear();
       return delay({ taxYear, caps: taxAllowanceCapsFor(taxYear) });
+    },
+    // Evidence attachments (decision #5, 2026-08-01): file metadata + access scoping only, no tax
+    // math -- genuinely fake-able. Mirrors TaxAllowanceDeclarationService#requireOwnerOrHr's rule
+    // exactly: owning employee or hr, re-checked on every call, never the uploader, never ceo.
+    async uploadTaxAllowanceAttachment(declarationId, file) {
+      const user = requireSession();
+      const declaration = db.taxAllowanceDeclarations.find((item) => item.declarationId === Number(declarationId));
+      if (!declaration) fail('Declaration not found', 404);
+      requireTaxAllowanceAttachmentAccess(declaration, user);
+      const attachmentId = Math.max(0, ...db.taxAllowanceAttachments.map((row) => row.attachmentId)) + 1;
+      const row = {
+        attachmentId,
+        declarationId: declaration.declarationId,
+        fileName: file?.name ?? 'evidence.pdf',
+        mimeType: file?.type ?? 'application/pdf',
+        fileSize: file?.size ?? 0,
+        uploadedBy: user.employeeId,
+        uploadedAt: new Date().toISOString(),
+        deletedAt: null,
+        deletedBy: null,
+        deleteReason: null,
+      };
+      db.taxAllowanceAttachments.push(row);
+      return delay({ attachment: row });
+    },
+    async listTaxAllowanceAttachments(declarationId) {
+      const user = requireSession();
+      const declaration = db.taxAllowanceDeclarations.find((item) => item.declarationId === Number(declarationId));
+      if (!declaration) fail('Declaration not found', 404);
+      requireTaxAllowanceAttachmentAccess(declaration, user);
+      const items = db.taxAllowanceAttachments.filter((row) => row.declarationId === declaration.declarationId);
+      return delay({ items });
+    },
+    // No real bytes to serve in mock mode (there is no server-side file store here) -- this exists
+    // only so the contract surface matches; a mock caller gets a rejected promise rather than a
+    // fabricated blob. Access is still checked first, so a scoping bug surfaces even here.
+    async downloadTaxAllowanceAttachment(attachmentId) {
+      const user = requireSession();
+      const attachment = db.taxAllowanceAttachments.find((row) => row.attachmentId === Number(attachmentId));
+      if (!attachment) fail('Attachment not found', 404);
+      const declaration = db.taxAllowanceDeclarations.find((item) => item.declarationId === attachment.declarationId);
+      if (!declaration) fail('Attachment not found', 404);
+      requireTaxAllowanceAttachmentAccess(declaration, user);
+      if (attachment.deletedAt) fail('ไฟล์นี้ถูกลบแล้ว', 404);
+      throw new Error('การดาวน์โหลดไฟล์หลักฐานไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async deleteTaxAllowanceAttachment(attachmentId, reason) {
+      const user = requireSession();
+      const attachment = db.taxAllowanceAttachments.find((row) => row.attachmentId === Number(attachmentId));
+      if (!attachment) fail('Attachment not found', 404);
+      const declaration = db.taxAllowanceDeclarations.find((item) => item.declarationId === attachment.declarationId);
+      if (!declaration) fail('Attachment not found', 404);
+      requireTaxAllowanceAttachmentAccess(declaration, user);
+      if (attachment.deletedAt) fail('ไฟล์นี้ถูกลบไปแล้ว', 409);
+      attachment.deletedAt = new Date().toISOString();
+      attachment.deletedBy = user.employeeId;
+      attachment.deleteReason = reason ?? null;
+      return delay({ ok: true });
     },
     async getYtdSeed() {
       hasRole('hr', 'ceo');

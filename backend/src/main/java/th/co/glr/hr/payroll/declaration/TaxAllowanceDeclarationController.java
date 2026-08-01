@@ -2,6 +2,8 @@ package th.co.glr.hr.payroll.declaration;
 
 import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
+import java.util.List;
+import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -13,10 +15,13 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.payroll.PayrollAllowanceEstimateResult;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.MyTaxAllowanceDeclarationsResponse;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceApplyRequest;
+import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceAttachmentDto;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceCapsResponse;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationDto;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationRegisterResponse;
@@ -74,6 +79,47 @@ public class TaxAllowanceDeclarationController {
         return ResponseEntity.noContent().build();
     }
 
+    /**
+     * "What this saves me" (decision #4). NO employeeId anywhere — the body is the exact same
+     * shape {@code POST .../declarations/me} takes, and the employee under estimate is always
+     * {@code actor.employeeId()}. All arithmetic runs through the real {@code PayrollCalculator}
+     * (see {@code PayrollService#estimateAllowanceEffect}) — never reimplemented here.
+     */
+    @PostMapping("/declarations/me/estimate")
+    @PreAuthorize("isAuthenticated()")
+    public PayrollAllowanceEstimateResult estimateOwn(
+        @Valid @RequestBody TaxAllowanceDeclarationSubmitRequest request, HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return service.estimateOwn(request, user);
+    }
+
+    // ---- Evidence attachments (decision #5) -------------------------------------------------
+    //
+    // Nested here (mirrors PricingRequestController's own POST/GET .../{id}/attachments); the
+    // flat download/delete routes live on TaxAllowanceAttachmentController, since a flat
+    // "/tax-allowance-attachments/{id}" resource does not fit under this controller's
+    // "/api/payroll/tax-allowances" class-level prefix. Access for every one of these four
+    // endpoints is enforced inside TaxAllowanceDeclarationService#requireOwnerOrHr — see that
+    // method's own javadoc for why AttachmentController#requireAttachmentAccess's uploader
+    // short-circuit is deliberately NOT copied.
+
+    @PostMapping("/declarations/{id}/attachments")
+    @PreAuthorize("isAuthenticated()")
+    public Map<String, TaxAllowanceAttachmentDto> uploadAttachment(
+        @PathVariable long id, @RequestParam("file") MultipartFile file, HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("attachment", service.uploadAttachment(id, file, user));
+    }
+
+    @GetMapping("/declarations/{id}/attachments")
+    @PreAuthorize("isAuthenticated()")
+    public Map<String, List<TaxAllowanceAttachmentDto>> listAttachments(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("items", service.listAttachments(id, user));
+    }
+
     // ---- HR/CEO register + HR mutations ----------------------------------------------------
 
     @GetMapping("/declarations")
@@ -122,6 +168,14 @@ public class TaxAllowanceDeclarationController {
     ) {
         UserPrincipal user = sessions.requireUser(session);
         return service.apply(id, request, user);
+    }
+
+    /** Yearly expiry (decision #10), the mirror of the scheduled sweep: EXPIRED -> APPROVED, new deadline. */
+    @PostMapping("/declarations/{id}/reverify")
+    @PreAuthorize("hasRole('HR')")
+    public TaxAllowanceDeclarationDto reverify(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return service.reverify(id, user);
     }
 
     // ---- Caps metadata (decision #1: never hardcode caps in the UI) -----------------------

@@ -14,6 +14,9 @@ export const queryKeys = {
   taxAllowanceDeclarationsRegister: (filters = {}) =>
     ['taxAllowanceDeclarations', 'register', filters.year ?? '', filters.status ?? ''],
   taxAllowanceCaps: (year) => ['taxAllowanceCaps', year ?? ''],
+  // Evidence attachments (decision #5, 2026-08-01). Mirrors TaxAllowanceDeclarationController's
+  // nested .../{id}/attachments endpoint.
+  taxAllowanceAttachments: (declarationId) => ['taxAllowanceAttachments', declarationId ?? ''],
   notifications: () => ['notifications'],
   leaveRequests: (filters = {}) => ['leave', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   leaveBalances: (employeeId, year) => ['leave', 'balances', employeeId, year],

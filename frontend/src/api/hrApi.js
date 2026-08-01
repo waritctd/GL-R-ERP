@@ -388,6 +388,12 @@ export const api = {
     getMyTaxAllowanceDeclarations: (year) => apiRequest(withQuery(API_ROUTES.payroll.taxAllowanceDeclarations.me, { year })),
     submitMyTaxAllowanceDeclaration: (declaration) => apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.me, { method: 'POST', body: declaration }),
     withdrawMyTaxAllowanceDeclaration: (id) => apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.withdraw(id), { method: 'DELETE' }),
+    // Tax-effect estimate (decision #4, 2026-08-01): "what this saves me". Same body shape as
+    // submitMyTaxAllowanceDeclaration -- no employeeId, ever; the server resolves the caller from
+    // the session. Real Thai tax math, run server-side through PayrollCalculator -- never
+    // reimplemented here. Mirrors PayrollService#estimateAllowanceEffect.
+    estimateMyTaxAllowanceDeclaration: (declaration) =>
+      apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.estimate, { method: 'POST', body: declaration }),
     // HR/CEO register (view), HR-only mutations (approve/reject/apply/on-behalf).
     getTaxAllowanceDeclarations: (params) => apiRequest(withQuery(API_ROUTES.payroll.taxAllowanceDeclarations.register, params)),
     createTaxAllowanceDeclarationOnBehalf: (declaration) =>
@@ -398,8 +404,43 @@ export const api = {
       apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.reject(id), { method: 'POST', body: { reviewerNote } }),
     applyTaxAllowanceDeclaration: (id, effectiveMonth) =>
       apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.apply(id), { method: 'POST', body: { effectiveMonth } }),
+    // Yearly expiry (decision #10, 2026-08-01): HR-only mirror of the scheduled expiry sweep --
+    // EXPIRED -> APPROVED, a fresh deadline. Mirrors TaxAllowanceDeclarationService#reverify.
+    reverifyTaxAllowanceDeclaration: (id) =>
+      apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.reverify(id), { method: 'POST' }),
     // Caps metadata, sourced from the backend so the UI never hardcodes a ค่าลดหย่อน cap.
     getTaxAllowanceCaps: (year) => apiRequest(withQuery(API_ROUTES.payroll.taxAllowanceCaps, { year })),
+    // Evidence attachments (decision #5, 2026-08-01). Access (owning employee + HR, re-checked on
+    // every call, no uploader short-circuit, CEO excluded) is enforced entirely server-side by
+    // TaxAllowanceDeclarationService#requireOwnerOrHr -- see that method's javadoc.
+    //
+    // csrfHeaders('POST') is applied explicitly here (unlike several older attachment call sites
+    // in this file, which forget it and 403 in production) -- see the tax-allowance plan doc's PR C
+    // section, "two traps that will cost a day if missed".
+    uploadTaxAllowanceAttachment: async (declarationId, file) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(API_ROUTES.payroll.taxAllowanceDeclarations.attachments(declarationId), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { ...csrfHeaders('POST') },
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'Upload failed');
+      }
+      return res.json();
+    },
+    listTaxAllowanceAttachments: (declarationId) =>
+      apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.attachments(declarationId)),
+    downloadTaxAllowanceAttachment: async (attachmentId) => {
+      const res = await fetch(API_ROUTES.payroll.taxAllowanceAttachmentFile(attachmentId), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+    deleteTaxAllowanceAttachment: (attachmentId, reason) =>
+      apiRequest(API_ROUTES.payroll.taxAllowanceAttachment(attachmentId), { method: 'DELETE', body: { reason } }),
     // C2: year-to-date backfill seed for a mid-year go-live. Same view/edit split.
     getYtdSeed: (year) => apiRequest(withQuery(API_ROUTES.payroll.ytdSeed, { year })),
     saveYtdSeed: (year, items) => apiRequest(withQuery(API_ROUTES.payroll.ytdSeed, { year }), { method: 'PUT', body: { items } }),

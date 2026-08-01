@@ -1,17 +1,22 @@
 package th.co.glr.hr.config;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
 import jakarta.servlet.Filter;
+import java.io.UncheckedIOException;
 import java.time.LocalDate;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockMultipartFile;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -53,6 +58,17 @@ class SecurityAuthorizationIntegrationTest {
         registry.add("spring.datasource.url", PostgresTestSupport::jdbcUrl);
         registry.add("spring.datasource.username", PostgresTestSupport::username);
         registry.add("spring.datasource.password", PostgresTestSupport::password);
+        // Tax-allowance evidence upload/download (2026-08-01) is exercised through the real
+        // FileStorageService bean below -- point it at a JVM temp dir rather than the app default
+        // (./uploads relative to wherever this JVM runs), so a test run never leaves real files
+        // behind in the working tree.
+        registry.add("app.uploads-dir", () -> {
+            try {
+                return java.nio.file.Files.createTempDirectory("tax-allowance-evidence-security-test").toString();
+            } catch (java.io.IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        });
     }
 
     private final MockMvc mvc;
@@ -417,6 +433,105 @@ class SecurityAuthorizationIntegrationTest {
         assertThat(declarationStatus(declarationId)).isEqualTo("APPROVED");
     }
 
+    // ------------------------------------------------------------------------------------------
+    // Tax-allowance evidence attachments (2026-08-01): TaxAllowanceDeclarationController's nested
+    // upload/list endpoints and TaxAllowanceAttachmentController's flat download/delete endpoints.
+    // Both are @PreAuthorize("isAuthenticated()") -- the real gate is inside
+    // TaxAllowanceDeclarationService#requireOwnerOrHr -- so this class's job is to prove that gate
+    // is actually reachable and enforced through the REAL multipart upload / filter chain / disk
+    // write, not just at the service layer (TaxAllowanceAttachmentScopeIntegrationTest already
+    // covers the service layer exhaustively; this is the HTTP-level companion for the same
+    // reasoning SecurityAuthorizationIntegrationTest already applies to every other endpoint here).
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void evidenceUploadDownloadAndDeleteAreScopedToTheOwningEmployeeAndHrThroughTheRealFilterChain() throws Exception {
+        long ownerId = seedEmployeeForReconciliationAuthz("EMP-TAA-OWNER");
+        long strangerId = seedEmployeeForReconciliationAuthz("EMP-TAA-STRANGER");
+        // Freshly seeded, guaranteed-distinct HR/CEO ids for THIS test -- deliberately NOT
+        // sessionFor("hr")/sessionFor("ceo")'s shared hardcoded employeeId=1, which could
+        // coincidentally collide with ownerId depending on JUnit's method execution order within
+        // this shared-schema test class (no @BeforeEach reset here, unlike AbstractPostgresIntegrationTest)
+        // and silently turn the CEO-exclusion assertions below into a false pass.
+        long hrId = seedEmployeeForReconciliationAuthz("EMP-TAA-HR");
+        long ceoId = seedEmployeeForReconciliationAuthz("EMP-TAA-CEO");
+        long declarationId = seedPendingDeclaration(ownerId, 2026);
+
+        MockMultipartFile file = new MockMultipartFile("file", "evidence.pdf", "application/pdf", "หลักฐาน".getBytes());
+        String uploadJson = mvc.perform(multipart("/api/payroll/tax-allowances/declarations/" + declarationId + "/attachments")
+                .file(file)
+                .session(sessionForEmployeeId(ownerId)))
+            .andExpect(status().isOk())
+            .andReturn().getResponse().getContentAsString();
+        long attachmentId = extractAttachmentId(uploadJson);
+
+        // Owner downloads: 200.
+        mvc.perform(get("/api/payroll/tax-allowance-attachments/" + attachmentId + "/file")
+                .session(sessionForEmployeeId(ownerId)))
+            .andExpect(status().isOk());
+        // HR downloads: 200.
+        mvc.perform(get("/api/payroll/tax-allowance-attachments/" + attachmentId + "/file")
+                .session(sessionForEmployeeIdAndRole(hrId, "hr")))
+            .andExpect(status().isOk());
+        // A stranger employee: 404, not 403 -- must not leak that the id exists.
+        mvc.perform(get("/api/payroll/tax-allowance-attachments/" + attachmentId + "/file")
+                .session(sessionForEmployeeId(strangerId)))
+            .andExpect(status().isNotFound());
+        // CEO: 404 on the evidence -- deliberate asymmetry -- while the register itself stays 200.
+        mvc.perform(get("/api/payroll/tax-allowance-attachments/" + attachmentId + "/file")
+                .session(sessionForEmployeeIdAndRole(ceoId, "ceo")))
+            .andExpect(status().isNotFound());
+        mvc.perform(get("/api/payroll/tax-allowances/declarations?year=2026")
+                .session(sessionForEmployeeIdAndRole(ceoId, "ceo")))
+            .andExpect(status().isOk());
+        // A stranger cannot even list the attachments.
+        mvc.perform(get("/api/payroll/tax-allowances/declarations/" + declarationId + "/attachments")
+                .session(sessionForEmployeeId(strangerId)))
+            .andExpect(status().isNotFound());
+
+        // Owner tombstones it; the row survives but is no longer downloadable by anyone.
+        mvc.perform(delete("/api/payroll/tax-allowance-attachments/" + attachmentId)
+                .session(sessionForEmployeeId(ownerId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"reason\":\"อัปโหลดผิดไฟล์\"}"))
+            .andExpect(status().isOk());
+        mvc.perform(get("/api/payroll/tax-allowance-attachments/" + attachmentId + "/file")
+                .session(sessionForEmployeeId(ownerId)))
+            .andExpect(status().isNotFound());
+        assertThat(jdbc.queryForObject(
+            "SELECT deleted_at IS NOT NULL FROM hr.file_attachment WHERE attachment_id = :id",
+            Map.of("id", attachmentId), Boolean.class))
+            .as("tombstone, never a hard delete -- the row must still exist")
+            .isTrue();
+    }
+
+    @Test
+    void estimateEndpointIgnoresAForgedEmployeeIdAndUsesOnlyTheCaller() throws Exception {
+        long callerEmployeeId = seedEmployeeForReconciliationAuthz("EMP-TAA-EST-CALLER");
+        long victimEmployeeId = seedEmployeeForReconciliationAuthz("EMP-TAA-EST-VICTIM");
+
+        // TaxAllowanceDeclarationSubmitRequest (reused verbatim as the estimate body) has no
+        // employeeId field -- this key is unknown to Jackson and silently dropped, same reasoning
+        // as aSubmittedDeclarationIgnoresAForgedEmployeeIdInTheRequestBodyAndLandsOnTheCaller.
+        mvc.perform(post("/api/payroll/tax-allowances/declarations/me/estimate")
+                .session(sessionForEmployeeId(callerEmployeeId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"employeeId\":" + victimEmployeeId + ",\"taxYear\":2026,\"effectiveMonth\":6,\"spouseAllowance\":60000}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.estimateAvailable").exists());
+    }
+
+    private long extractAttachmentId(String json) {
+        // Cheap, dependency-free extraction (this file has no Jackson ObjectMapper wired) --
+        // {"attachment":{"attachmentId":123,...}}.
+        java.util.regex.Matcher matcher =
+            java.util.regex.Pattern.compile("\"attachmentId\":(\\d+)").matcher(json);
+        if (!matcher.find()) {
+            throw new AssertionError("no attachmentId in response: " + json);
+        }
+        return Long.parseLong(matcher.group(1));
+    }
+
     private long seedEmployeeForReconciliationAuthz(String code) {
         return jdbc.queryForObject(
             "INSERT INTO hr.employee (employee_code, is_active) VALUES (:code, TRUE) RETURNING employee_id",
@@ -428,6 +543,15 @@ class SecurityAuthorizationIntegrationTest {
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionContext.SESSION_USER_KEY,
             new UserPrincipal(employeeId, "employee" + employeeId + "@glr.co.th", "employee", "employee",
+                employeeId, true, LocalDate.now(), false, null, false));
+        return session;
+    }
+
+    /** Same idea, but for a specific role (hr/ceo/...) pinned to a specific employeeId — see {@link #sessionForEmployeeId}. */
+    private MockHttpSession sessionForEmployeeIdAndRole(long employeeId, String role) {
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute(SessionContext.SESSION_USER_KEY,
+            new UserPrincipal(employeeId, role + employeeId + "@glr.co.th", role, role,
                 employeeId, true, LocalDate.now(), false, null, false));
         return session;
     }
