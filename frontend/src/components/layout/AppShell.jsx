@@ -2,12 +2,14 @@ import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { SALES_ENABLED } from '../../app/features.js';
 import { hasPermission, isDivisionManager } from '../../app/permissions.js';
+import { PRODUCT_NAME } from '../../app/product.js';
 import { roleLabel } from '../../utils/format.js';
 import { Button } from '../common/Button.jsx';
 import { ErrorBoundary } from '../common/ErrorBoundary.jsx';
 import { RouteFallback } from '../common/RouteFallback.jsx';
 import { Icon } from '../common/Icon.jsx';
 import { NotificationBell } from '../common/NotificationBell.jsx';
+import { StatePanel } from '../common/StatePanel.jsx';
 import { Sidebar } from './Sidebar.jsx';
 import { UserMenu } from './UserMenu.jsx';
 
@@ -19,6 +21,10 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const navigate = useNavigate();
   const drawerId = 'mobile-navigation-drawer';
   const isTeamManager = isDivisionManager(user);
+  const accessDenied = Boolean(location.state?.accessDenied);
+  const clearAccessDenied = () => {
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  };
   const navItems = [
     { path: '/', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
     // Division-manager (non-sales) "ทีมของฉัน" group — reuses the same
@@ -217,7 +223,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
             <Icon name="menu" />
           </Button>
           <div className="topbar-title">
-            <span>GL&R HR</span>
+            <span>{PRODUCT_NAME}</span>
             <small>{roleLabel(user.role)}</small>
           </div>
           <div className="topbar-user">
@@ -235,7 +241,27 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
             />
           </div>
         </header>
-        <div className="content-scroll"><ErrorBoundary key={location.pathname}><Suspense fallback={<RouteFallback />}><Outlet /></Suspense></ErrorBoundary></div>
+        <div className="content-scroll">
+          {accessDenied ? (
+            <StatePanel
+              state="denied"
+              compact
+              className="mb-4"
+              title="ยังเปิดหน้านี้ไม่ได้"
+              description="ระบบพากลับมาหน้าหลักแล้ว เนื้อหานี้จะเปิดได้เฉพาะบทบาทที่ได้รับสิทธิ์"
+              action={(
+                <button type="button" className="secondary-button" onClick={clearAccessDenied}>
+                  รับทราบ
+                </button>
+              )}
+            />
+          ) : null}
+          <ErrorBoundary key={location.pathname}>
+            <Suspense fallback={<RouteFallback />}>
+              <Outlet />
+            </Suspense>
+          </ErrorBoundary>
+        </div>
       </main>
     </div>
   );

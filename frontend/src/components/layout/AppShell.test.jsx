@@ -78,7 +78,8 @@ describe('AppShell navigation (drawer content, no persistent tablet rail)', () =
 
     const dealsLink = await screen.findByRole('link', { name: 'รายการดีล (Deal pipeline)' });
     expect(dealsLink.getAttribute('title')).toBe('รายการดีล (Deal pipeline)');
-    expect(screen.getByRole('button', { name: 'GL&R home' }).getAttribute('title')).toBe('GL&R home');
+    expect(screen.getByRole('button', { name: 'GL&R ERP home' }).getAttribute('title')).toBe('GL&R ERP home');
+    expect(screen.getByText('GL&R ERP')).toBeTruthy();
   });
 
   it('preserves the active route highlight', async () => {
@@ -135,6 +136,19 @@ describe('AppShell navigation (drawer content, no persistent tablet rail)', () =
     fireEvent.click(screen.getByRole('button', { name: 'ปิดเมนู' }));
 
     await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it('shows a safe access message after an existing guard redirects to the dashboard', async () => {
+    renderShell(
+      { role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' },
+      [{ pathname: '/', state: { accessDenied: true, deniedPath: '/employees' } }],
+    );
+
+    expect(await screen.findByText('ยังเปิดหน้านี้ไม่ได้')).toBeTruthy();
+    expect(screen.getByText('ระบบพากลับมาหน้าหลักแล้ว เนื้อหานี้จะเปิดได้เฉพาะบทบาทที่ได้รับสิทธิ์')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'รับทราบ' }));
+    await waitFor(() => expect(screen.queryByText('ยังเปิดหน้านี้ไม่ได้')).toBeNull());
   });
 });
 

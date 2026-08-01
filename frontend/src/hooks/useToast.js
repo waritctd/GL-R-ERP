@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { sanitizeToastMessage } from '../utils/userMessages.js';
 
 export function useToast() {
   const [toast, setToast] = useState(null);
@@ -6,7 +7,7 @@ export function useToast() {
 
   function showToast(kind, message) {
     window.clearTimeout(toastTimer.current);
-    setToast({ kind, message });
+    setToast({ kind, message: sanitizeToastMessage(kind, message) });
     toastTimer.current = window.setTimeout(() => setToast(null), 3200);
   }
 

@@ -7,7 +7,16 @@ import { canAccessPath } from './permissions.js';
 export function RequireAccess({ user }) {
   const location = useLocation();
   if (!canAccessPath(location.pathname, user)) {
-    return <Navigate to="/" replace />;
+    return (
+      <Navigate
+        to="/"
+        replace
+        state={{
+          accessDenied: true,
+          deniedPath: location.pathname,
+        }}
+      />
+    );
   }
   return <Outlet />;
 }

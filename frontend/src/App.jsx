@@ -427,7 +427,16 @@ export function App() {
         </Route>
       </Routes>
       <Toast toast={toast} onDismiss={dismissToast} />
-      {loading ? <div className="loading-veil">Loading...</div> : null}
+      {loading ? (
+        <div
+          className="fixed inset-0 z-[90] grid place-items-center bg-[var(--color-veil)] font-extrabold text-text"
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+        >
+          กำลังเข้าสู่ระบบ...
+        </div>
+      ) : null}
     </>
   );
 }

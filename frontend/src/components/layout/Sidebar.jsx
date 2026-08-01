@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { PRODUCT_MARK, PRODUCT_NAME, PRODUCT_PORTAL_LABEL } from '../../app/product.js';
 import { roleLabel } from '../../utils/format.js';
 import { Avatar } from '../common/Avatar.jsx';
 import { Button } from '../common/Button.jsx';
@@ -91,7 +92,7 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, user, empl
       className={`sidebar ${isDrawerOpen ? 'is-mobile-drawer-open' : ''}`}
       tabIndex={-1}
     >
-      <button className="brand" type="button" onClick={() => navigate('/')} aria-label="GL&R home" title="GL&R home">
+      <button className="brand" type="button" onClick={() => navigate('/')} aria-label={`${PRODUCT_NAME} home`} title={`${PRODUCT_NAME} home`}>
         <span className="brand-mark">
           <i />
           <i />
@@ -99,8 +100,8 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items, user, empl
           <i />
         </span>
         <span>
-          <strong>GL&R</strong>
-          <small>HR Portal</small>
+          <strong>{PRODUCT_MARK}</strong>
+          <small>{PRODUCT_PORTAL_LABEL}</small>
         </span>
       </button>
 
