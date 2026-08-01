@@ -414,6 +414,13 @@ export const ROLE_PERMISSIONS = {
   // component-tax-treatments PUT, distribute). See PayrollPage.jsx's `canManage`.
   canViewPayroll: ['hr', 'ceo'],
   canManagePayroll: ['hr'],
+  // Tax-allowance declaration (ล.ย.01) HR review screen (issue #387). Mirrors
+  // TaxAllowanceDeclarationService: the register read (GET /declarations) is
+  // hasAnyRole('HR','CEO'), while every mutation (approve/reject/apply/reverify/
+  // on-behalf) is hasRole('HR') only — CEO gets read-only visibility into who has
+  // declared what, never the reviewer actions.
+  canViewTaxAllowanceRegister: ['hr', 'ceo'],
+  canReviewTaxAllowances: ['hr'],
   canManagePriceImport: ['ceo', 'import'],
   canManageCatalogProducts: ['ceo', 'import'],
   // Import's PricingRequest queue (/pricing-requests). Mirrors

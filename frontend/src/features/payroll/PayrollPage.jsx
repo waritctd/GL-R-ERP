@@ -13,6 +13,7 @@ import { FilterBar, FormGrid, PageStack, Panel } from '../../components/common/L
 import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { TaxAllowanceDrilldown } from '../taxAllowance/TaxAllowanceDrilldown.jsx';
 import { useDialogFocus } from '../../hooks/useDialogFocus.js';
 import { useIsMobile, useMediaQuery } from '../../hooks/useIsMobile.js';
 import { cn } from '../../utils/cn.js';
@@ -1787,6 +1788,18 @@ export function PayrollPage({ user, showToast }) {
                   </span>
                 )}
               </div>
+
+              {/* ล.ย.01 tax-allowance drill-down (issue #387 screen 3) — surgical addition below
+                  the existing ค่าลดหย่อนรวม line above. Composes the year's declaration register
+                  client-side (no employeeId filter exists on GET /declarations) — see
+                  TaxAllowanceDrilldown.jsx. */}
+              <CollapsibleSection title="รายละเอียดค่าลดหย่อน (ล.ย.01)" defaultOpen={false}>
+                <TaxAllowanceDrilldown
+                  employeeId={selectedLine.employeeId}
+                  employeeCode={selectedLine.employeeCode}
+                  taxYear={Number(month.slice(0, 4))}
+                />
+              </CollapsibleSection>
             </>
           ) : (
             <EmptyState icon="badgeDollar" title="เลือกพนักงาน" description="เลือกแถวเงินเดือนเพื่อดูรายละเอียดและปรับเงินพิเศษ" />

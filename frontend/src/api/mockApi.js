@@ -5073,7 +5073,14 @@ export const api = {
       db.taxAllowanceDeclarations.push(row);
       return delay(taxAllowanceDeclarationPublic(row));
     },
-    async approveTaxAllowanceDeclaration(id, body = {}) {
+    // Contract fix (issue #387 live-verification): hrApi.js's wrapper calls this as
+    // `(id, reviewerNote)` — a plain string, matching every other reviewer-note call site in this
+    // file (e.g. leave/overtime approve/reject) — then wraps it into `{ reviewerNote }` itself only
+    // for the real HTTP body. This mock previously destructured the second argument as `body = {}`
+    // and read `body.reviewerNote`, which is `undefined` for a plain string: approve silently
+    // dropped every note (never validated, so it never surfaced), and reject's mandatory-reason
+    // check failed 400 unconditionally, making "ปฏิเสธ" impossible to drive under mocks at all.
+    async approveTaxAllowanceDeclaration(id, reviewerNote) {
       const user = hasRole('hr');
       const row = db.taxAllowanceDeclarations.find((item) => item.declarationId === Number(id));
       if (!row) fail('ไม่พบแบบแจ้งค่าลดหย่อนนี้', 404);
@@ -5082,19 +5089,19 @@ export const api = {
       row.status = 'APPROVED';
       row.reviewedById = user.employeeId;
       row.reviewedAt = new Date().toISOString();
-      row.reviewerNote = body?.reviewerNote ?? null;
+      row.reviewerNote = reviewerNote ?? null;
       return delay(taxAllowanceDeclarationPublic(row));
     },
-    async rejectTaxAllowanceDeclaration(id, body = {}) {
+    async rejectTaxAllowanceDeclaration(id, reviewerNote) {
       const user = hasRole('hr');
-      if (!body?.reviewerNote?.trim()) fail('ต้องระบุเหตุผลในการปฏิเสธ', 400);
+      if (!reviewerNote?.trim()) fail('ต้องระบุเหตุผลในการปฏิเสธ', 400);
       const row = db.taxAllowanceDeclarations.find((item) => item.declarationId === Number(id));
       if (!row) fail('ไม่พบแบบแจ้งค่าลดหย่อนนี้', 404);
       if (row.status !== 'PENDING') fail('รายการนี้ได้รับการพิจารณาไปแล้ว', 409);
       row.status = 'REJECTED';
       row.reviewedById = user.employeeId;
       row.reviewedAt = new Date().toISOString();
-      row.reviewerNote = body.reviewerNote;
+      row.reviewerNote = reviewerNote;
       return delay(taxAllowanceDeclarationPublic(row));
     },
     // Applying promotes into hr.employee_tax_allowance and changes real withholding tax -- not
