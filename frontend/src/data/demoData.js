@@ -602,5 +602,288 @@ export function createDemoDatabase() {
     { id: 105, employeeId: employees[2].id, fieldKey: 'phone', fieldLabel: 'เบอร์โทรศัพท์', oldValue: employees[2].phone, newValue: '081-902-3344', requestedBy: employees[2].nameTh, requestedAt: iso(2026, 6, 2), status: 'approved' },
   ];
 
-  return { employees, users, profileRequests, tickets, notifications };
+  // ════════════════════════════════════════════════════════════════════════════════
+  // HR: Leave Requests (comprehensive coverage of all statuses and leave types)
+  // ════════════════════════════════════════════════════════════════════════════════
+  const leaveRequests = [
+    // SUBMITTED (pending HR review)
+    {
+      id: 1, employeeId: employees[8].id, employeeCode: employees[8].code, employeeName: employees[8].nameTh,
+      leaveTypeCode: 'VACATION', leaveTypeName: 'วันลาพักร้อน',
+      startDate: iso(2026, 8, 10), endDate: iso(2026, 8, 13), totalDays: 4,
+      reason: 'พักผ่อนประจำปี', status: 'SUBMITTED',
+      quotaYear: 2026, quotaRemaining: 8,
+      requestedById: employees[8].id, requestedByName: employees[8].nameTh, requestedAt: iso(2026, 7, 20),
+      reviewedById: null, reviewedByName: null, reviewedAt: null,
+    },
+    // APPROVED
+    {
+      id: 2, employeeId: employees[12].id, employeeCode: employees[12].code, employeeName: employees[12].nameTh,
+      leaveTypeCode: 'SICK', leaveTypeName: 'ลาป่วย',
+      startDate: iso(2026, 7, 22), endDate: iso(2026, 7, 23), totalDays: 2,
+      reason: 'ไข้หวัด', status: 'APPROVED',
+      quotaYear: 2026, quotaRemaining: 9,
+      requestedById: employees[12].id, requestedByName: employees[12].nameTh, requestedAt: iso(2026, 7, 20),
+      reviewedById: users[0].employeeId, reviewedByName: 'คุณบัญชี', reviewedAt: iso(2026, 7, 21),
+    },
+    {
+      id: 3, employeeId: employees[5].id, employeeCode: employees[5].code, employeeName: employees[5].nameTh,
+      leaveTypeCode: 'PERSONAL', leaveTypeName: 'ลาพิเศษด่วน',
+      startDate: iso(2026, 7, 28), endDate: iso(2026, 7, 28), totalDays: 1,
+      reason: 'งานส่วนตัวเร่งด่วน', status: 'APPROVED',
+      quotaYear: 2026, quotaRemaining: 2,
+      requestedById: employees[5].id, requestedByName: employees[5].nameTh, requestedAt: iso(2026, 7, 21),
+      reviewedById: users[0].employeeId, reviewedByName: 'คุณบัญชี', reviewedAt: iso(2026, 7, 21),
+    },
+    // REJECTED
+    {
+      id: 4, employeeId: employees[18].id, employeeCode: employees[18].code, employeeName: employees[18].nameTh,
+      leaveTypeCode: 'VACATION', leaveTypeName: 'วันลาพักร้อน',
+      startDate: iso(2026, 8, 5), endDate: iso(2026, 8, 9), totalDays: 5,
+      reason: 'วันหยุดส่วนตัว', status: 'REJECTED',
+      quotaYear: 2026, quotaRemaining: 6,
+      requestedById: employees[18].id, requestedByName: employees[18].nameTh, requestedAt: iso(2026, 7, 15),
+      reviewedById: users[0].employeeId, reviewedByName: 'คุณบัญชี', reviewedAt: iso(2026, 7, 15),
+      rejectReason: 'มีกิจกรรมสำคัญในช่วงนี้',
+    },
+  ];
+
+  // ════════════════════════════════════════════════════════════════════════════════
+  // HR: Overtime Requests (pending approval, approved, rejected)
+  // ════════════════════════════════════════════════════════════════════════════════
+  const overtimeRequests = [
+    // SUBMITTED (pending manager approval)
+    {
+      id: 1, employeeId: employees[8].id, employeeCode: employees[8].code, employeeName: employees[8].nameTh,
+      workDate: iso(2026, 7, 22), plannedMinutes: 120,
+      reason: 'เร่งปิดงานปลายเดือน', status: 'SUBMITTED',
+      payrollMonth: iso(2026, 7, 1),
+      requestedById: employees[8].id, requestedByName: employees[8].nameTh, requestedAt: iso(2026, 7, 20),
+      reviewedById: null, reviewedByName: null, reviewedAt: null,
+    },
+    // APPROVED (by manager, no CEO approval yet)
+    {
+      id: 2, employeeId: employees[2].id, employeeCode: employees[2].code, employeeName: employees[2].nameTh,
+      workDate: iso(2026, 7, 18), plannedMinutes: 180, actualMinutes: 185,
+      reason: 'ค้นหาไฟฟ้าที่ติดขัด', status: 'APPROVED',
+      payrollMonth: iso(2026, 7, 1),
+      requestedById: employees[2].id, requestedByName: employees[2].nameTh, requestedAt: iso(2026, 7, 16),
+      reviewedById: employees[0].id, reviewedByName: employees[0].nameTh, reviewedAt: iso(2026, 7, 17),
+    },
+    {
+      id: 3, employeeId: employees[15].id, employeeCode: employees[15].code, employeeName: employees[15].nameTh,
+      workDate: iso(2026, 7, 20), plannedMinutes: 90, actualMinutes: 90,
+      reason: 'ช่วยทำประเมินผล', status: 'APPROVED',
+      payrollMonth: iso(2026, 7, 1),
+      requestedById: employees[15].id, requestedByName: employees[15].nameTh, requestedAt: iso(2026, 7, 18),
+      reviewedById: employees[0].id, reviewedByName: employees[0].nameTh, reviewedAt: iso(2026, 7, 18),
+    },
+    // REJECTED
+    {
+      id: 4, employeeId: employees[22].id, employeeCode: employees[22].code, employeeName: employees[22].nameTh,
+      workDate: iso(2026, 7, 19), plannedMinutes: 240,
+      reason: 'ขับรถส่งสินค้า', status: 'REJECTED',
+      payrollMonth: iso(2026, 7, 1),
+      requestedById: employees[22].id, requestedByName: employees[22].nameTh, requestedAt: iso(2026, 7, 17),
+      reviewedById: employees[0].id, reviewedByName: employees[0].nameTh, reviewedAt: iso(2026, 7, 17),
+      rejectReason: 'ไม่มีความจำเป็น',
+    },
+  ];
+
+  // ════════════════════════════════════════════════════════════════════════════════
+  // Attendance: Daily punch records (for multiple employees over several days)
+  // ════════════════════════════════════════════════════════════════════════════════
+  const attendanceRecords = [];
+  const attendanceEmployeeIds = [8, 12, 2, 15, 5];
+  const baseDate = new Date(2026, 6, 28); // July 28, 2026
+  for (let dayOffset = 0; dayOffset < 5; dayOffset++) {
+    const workDate = new Date(baseDate);
+    workDate.setDate(workDate.getDate() + dayOffset);
+    const workDateStr = iso(workDate.getFullYear(), workDate.getMonth() + 1, workDate.getDate());
+
+    for (const empId of attendanceEmployeeIds) {
+      const emp = employees[empId - 1];
+      // Morning punch (in)
+      attendanceRecords.push({
+        id: attendanceRecords.length + 1,
+        employeeId: emp.id, employeeCode: emp.code, employeeName: emp.nameTh,
+        badgeCode: `BC-${20250000 + (emp.id - 1) * 137}`,
+        workDate: workDateStr,
+        punchTime: `${workDateStr}T08:${String(45 + (emp.id % 10)).padStart(2, '0')}:00Z`,
+        punchType: 'IN',
+        location: ['สำนักงานใหญ่', 'คลังสินค้า', 'สาขานนทบุรี'][emp.id % 3],
+      });
+      // Afternoon punch (out)
+      attendanceRecords.push({
+        id: attendanceRecords.length + 1,
+        employeeId: emp.id, employeeCode: emp.code, employeeName: emp.nameTh,
+        badgeCode: `BC-${20250000 + (emp.id - 1) * 137}`,
+        workDate: workDateStr,
+        punchTime: `${workDateStr}T17:${String(45 + (emp.id % 10)).padStart(2, '0')}:00Z`,
+        punchType: 'OUT',
+        location: ['สำนักงานใหญ่', 'คลังสินค้า', 'สาขานนทบุรี'][emp.id % 3],
+      });
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════════
+  // Sales/CRM: Commission Records (various stages)
+  // ════════════════════════════════════════════════════════════════════════════════
+  const commissionRecords = [
+    // SUBMITTED (pending sales manager approval)
+    {
+      id: 1, invoiceNumber: 'INV-2026-07001', invoiceDate: iso(2026, 7, 14),
+      grossAmount: 125000, netAmount: 125000,
+      salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี',
+      ticketId: 1, ticketCode: 'PR-2026-0001',
+      status: 'SUBMITTED',
+      payrollMonth: iso(2026, 7, 1),
+      receivedDate: iso(2026, 7, 18),
+      submittedById: 6, submittedByName: 'คุณสมหมาย ขายดี', submittedAt: iso(2026, 7, 19),
+      approvedById: null, approvedByName: null, approvedAt: null,
+      commissionBase: 125000, commissionAmount: 3750, // 3%
+    },
+    // APPROVED (by sales manager, no CEO processing yet)
+    {
+      id: 2, invoiceNumber: 'INV-2026-07002', invoiceDate: iso(2026, 7, 10),
+      grossAmount: 280000, netAmount: 280000,
+      salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี',
+      ticketId: 14, ticketCode: 'PR-2026-0014',
+      status: 'APPROVED',
+      payrollMonth: iso(2026, 6, 1),
+      receivedDate: iso(2026, 7, 12),
+      submittedById: 6, submittedByName: 'คุณสมหมาย ขายดี', submittedAt: iso(2026, 7, 13),
+      approvedById: 9, approvedByName: 'คุณมณี ผู้จัดการฝ่ายขาย', approvedAt: iso(2026, 7, 15),
+      commissionBase: 280000, commissionAmount: 9100, // 3.25% tier
+    },
+    // PROCESSED (in payroll)
+    {
+      id: 3, invoiceNumber: 'INV-2026-06001', invoiceDate: iso(2026, 6, 25),
+      grossAmount: 95000, netAmount: 95000,
+      salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี',
+      ticketId: 6, ticketCode: 'PR-2026-0006',
+      status: 'PROCESSED',
+      payrollMonth: iso(2026, 6, 1),
+      receivedDate: iso(2026, 6, 28),
+      submittedById: 6, submittedByName: 'คุณสมหมาย ขายดี', submittedAt: iso(2026, 6, 29),
+      approvedById: 9, approvedByName: 'คุณมณี ผู้จัดการฝ่ายขาย', approvedAt: iso(2026, 7, 1),
+      commissionBase: 95000, commissionAmount: 2850, // 3%
+    },
+  ];
+
+  // ════════════════════════════════════════════════════════════════════════════════
+  // Projects (context for deal pipeline)
+  // ════════════════════════════════════════════════════════════════════════════════
+  const projects = [
+    {
+      id: 1, code: 'PRJ-2026-001', name: 'โครงการ Central Ladprao ชั้น B1',
+      customerName: 'บริษัท ก้าวหน้า คอนสตรัคชั่น จำกัด',
+      location: 'ชั้น B1 ห้างสรรพสินค้า Central Ladprao',
+      status: 'ACTIVE', priority: 'HIGH',
+      estimatedValue: 450000, actualValue: null,
+      startDate: iso(2026, 6, 15), endDate: null,
+      description: 'ปูกระเบื้องในห้องน้ำและห้องน้ำสำหรับคนพิการ',
+    },
+    {
+      id: 2, code: 'PRJ-2026-002', name: 'โครงการ The Emporium Co.',
+      customerName: 'The Emporium Co.',
+      location: 'ศูนย์การค้า The Emporium',
+      status: 'ACTIVE', priority: 'NORMAL',
+      estimatedValue: 174000, actualValue: 174000,
+      startDate: iso(2026, 6, 20), endDate: iso(2026, 7, 30),
+      description: 'ปูกระเบื้องห้องโถงและอื่นๆ',
+    },
+    {
+      id: 3, code: 'PRJ-2026-003', name: 'โครงการ Terminal 21 Property',
+      customerName: 'Terminal 21 Property',
+      location: 'Terminal 21 Bangkok',
+      status: 'ACTIVE', priority: 'HIGH',
+      estimatedValue: 130000, actualValue: 130000,
+      startDate: iso(2026, 6, 1), endDate: null,
+      description: 'ปูกระเบื้องพื้นห้องสินค้าและพื้นที่ทั่วไป',
+    },
+  ];
+
+  // ════════════════════════════════════════════════════════════════════════════════
+  // Customers (for sales module)
+  // ════════════════════════════════════════════════════════════════════════════════
+  const customers = [
+    {
+      id: 1, code: 'CUST-001', name: 'ห้างสรรพสินค้า Central',
+      contactPerson: 'นาย สมชาย ใจดี', phone: '02-640-1111', email: 'procurement@central.co.th',
+      address: '1027 ชั้น G-3 ถนนเพชรบุรี ห้างสรรพสินค้า Central World',
+      city: 'กรุงเทพมหานคร', paymentTerms: 'Net 30',
+      status: 'ACTIVE',
+    },
+    {
+      id: 2, code: 'CUST-002', name: 'ABC Corporation',
+      contactPerson: 'นางสาว พิมพ์ พิสัยสุข', phone: '033-555-666', email: 'purchasing@abc.co.th',
+      address: '123/45 ซอย 20 ถนนลาดพร้าว เขตจตุจักร',
+      city: 'กรุงเทพมหานคร', paymentTerms: 'Net 45',
+      status: 'ACTIVE',
+    },
+    {
+      id: 3, code: 'CUST-003', name: 'XYZ Co., Ltd.',
+      contactPerson: 'นาย วิรัช สุนทรชัย', phone: '038-888-999', email: 'import@xyz.co.th',
+      address: '456/7 ชั้น 2 สยามพารากอน ถนนพระรามที่ 1',
+      city: 'กรุงเทพมหานคร', paymentTerms: 'Advance Payment',
+      status: 'ACTIVE',
+    },
+    {
+      id: 4, code: 'CUST-004', name: 'The Emporium Co.',
+      contactPerson: 'นาย สุรเดช ดีไซน์', phone: '02-721-7777', email: 'design@emporium.co.th',
+      address: '622 ถนนสุขุมวิท เขตคลองเตย กรุงเทพมหานคร',
+      city: 'กรุงเทพมหานคร', paymentTerms: 'Net 60',
+      status: 'ACTIVE',
+    },
+    {
+      id: 5, code: 'CUST-005', name: 'Terminal 21 Property',
+      contactPerson: 'นาง สิริชัย ปัญญา', phone: '02-100-7777', email: 'purchasing@terminal21.co.th',
+      address: '88 ชั้น 2 ถนนสุขุมวิท คลองเตย กรุงเทพมหานคร',
+      city: 'กรุงเทพมหานคร', paymentTerms: 'Net 45',
+      status: 'ACTIVE',
+    },
+  ];
+
+  // ════════════════════════════════════════════════════════════════════════════════
+  // Product Catalog (tiles/ceramics with pricing)
+  // ════════════════════════════════════════════════════════════════════════════════
+  const products = [
+    {
+      id: 1, code: 'SCG-GRANITE-WHITE', brand: 'SCG', model: 'Granite White', color: 'ขาว',
+      texture: 'ด้าน', size: '60x60 ซม.', factory: 'SCG Ceramics',
+      costPrice: 95, suggestedPrice: 130, minPrice: 115, maxPrice: 150,
+      stock: 2500, unit: 'แผ่น', description: 'กระเบื้องแกรนิตโต้สีขาว ผิวด้าน',
+    },
+    {
+      id: 2, code: 'SCG-GRANITE-BLACK', brand: 'SCG', model: 'Granite Black', color: 'ดำ',
+      texture: 'หยาบ', size: '60x60 ซม.', factory: 'SCG Ceramics',
+      costPrice: 95, suggestedPrice: 135, minPrice: 120, maxPrice: 155,
+      stock: 1800, unit: 'แผ่น', description: 'กระเบื้องแกรนิตโต้สีดำ ผิวหยาบ',
+    },
+    {
+      id: 3, code: 'COTTO-MARBLE', brand: 'Cotto', model: 'Marble Series', color: 'ขาว',
+      texture: 'มัน', size: '60x120 ซม.', factory: 'Cotto Industry',
+      costPrice: 450, suggestedPrice: 580, minPrice: 520, maxPrice: 650,
+      stock: 800, unit: 'แผ่น', description: 'กระเบื้องลายหินอ่อน ขาวผิวมัน',
+    },
+    {
+      id: 4, code: 'COTTO-LUXURY-GOLD', brand: 'Cotto', model: 'Luxury Gold', color: 'ทอง',
+      texture: 'มัน', size: '60x120 ซม.', factory: 'Cotto Industry',
+      costPrice: 600, suggestedPrice: 780, minPrice: 700, maxPrice: 850,
+      stock: 400, unit: 'แผ่น', description: 'กระเบื้องลายทองคำ ผิวมัน',
+    },
+    {
+      id: 5, code: 'DURAGRES-WOOD', brand: 'Duragres', model: 'Wood Texture', color: 'ขาว',
+      texture: 'ลายไม้', size: '20x100 ซม.', factory: 'Duragres Thailand',
+      costPrice: 200, suggestedPrice: 265, minPrice: 240, maxPrice: 300,
+      stock: 1200, unit: 'แผ่น', description: 'กระเบื้องลายไม้ ขาวผิวลายไม้',
+    },
+  ];
+
+  return {
+    employees, users, profileRequests, tickets, notifications,
+    leaveRequests, overtimeRequests, attendanceRecords,
+    commissionRecords, projects, customers, products
+  };
 }
