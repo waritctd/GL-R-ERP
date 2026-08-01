@@ -528,6 +528,117 @@ public class PayrollService {
         return pdf;
     }
 
+    private static final String ALLOWANCE_ESTIMATE_DISCLAIMER =
+        "ค่าประมาณการนี้คำนวณจากข้อมูลปัจจุบัน (ยอดสะสม โบนัส คอมมิชชั่น ณ วันที่ประมาณการ) "
+            + "ตัวเลขจริงเมื่อประมวลผลเงินเดือนอาจเปลี่ยนแปลงได้";
+
+    /**
+     * Tax-allowance declaration plan, decision #4 ("estimated 'what this saves me'"). Runs the REAL
+     * calculator TWICE for a single employee/month — baseline (the employee's current standing
+     * declaration, exactly what {@link #preview} would resolve via {@code
+     * findTaxAllowancesByEmployee}) vs proposed (the declaration under review, not yet applied) —
+     * and reports the withholding-tax delta. Reuses the EXACT collaborators {@link #preview}
+     * assembles for every other employee ({@code findActiveEmployees} filtered to one, {@code
+     * findYearToDateByEmployee}, {@link #treatmentsFor}, {@link #ssoInclusionFor}, {@code
+     * findApprovedOvertimePayByEmployee}, {@link #commissionPayByEmployee}) so there is no second
+     * calculation path to silently disagree with a real run.
+     *
+     * <p>{@code employeeId} is supplied by the CALLER (the controller/service boundary resolves it
+     * from {@code actor.employeeId()} — see {@code TaxAllowanceDeclarationService#estimateOwn} —
+     * never from an HTTP parameter; there is no employeeId field on the estimate endpoint's request
+     * body at all). This method still requires {@code actor} to be a real authenticated employee, the
+     * same shape of guard {@link #ownPayslipPdf} uses, so it can never be called with no actor.
+     *
+     * <p>{@code input} is deliberately {@code null} for both calculations: an estimate has no
+     * per-run HR-typed corrections to layer on, only the standing declaration (baseline) or the
+     * declaration under review (proposed) — see {@link #mergeAllowances}, which returns its {@code
+     * stored} argument completely unchanged when {@code input == null}. This is exactly what makes
+     * the anti-drift pinning test hold: applying the proposed declaration and then previewing the
+     * same month for real also calls {@code calculateLine} with {@code input == null} for an
+     * employee nobody typed a per-run correction for, so the two paths merge allowances identically.
+     *
+     * <p>leaveRefundDays is fixed at zero here — deliberately narrower than {@link #preview}'s own
+     * {@code leaveRepository.findRefundableUnpaidDaysByEmployee} lookup, which needs an
+     * {@code existingPeriodId} an estimate has no reason to resolve. An estimate is advisory, not a
+     * persisted figure, and a cancel-after-close leave refund is edge-case enough that omitting it
+     * here (never silently reintroducing it wrong) is the safer choice.
+     */
+    public PayrollAllowanceEstimateResult estimateAllowanceEffect(
+        long employeeId, int taxYear, int effectiveMonth,
+        PayrollTaxAllowanceInput proposedAllowances, UserPrincipal actor
+    ) {
+        if (actor == null || actor.employeeId() == null) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+        LocalDate payrollMonth = LocalDate.of(taxYear, effectiveMonth, 1);
+
+        List<PayrollEmployeeSnapshot> employees = payrollRepository.findActiveEmployees();
+        PayrollEmployeeSnapshot employee = employees.stream()
+            .filter(candidate -> candidate.employeeId() == employeeId)
+            .findFirst()
+            .orElse(null);
+        if (employee == null) {
+            return unavailableAllowanceEstimate(taxYear, effectiveMonth,
+                "ไม่พบข้อมูลพนักงานที่พร้อมประมวลผลเงินเดือนสำหรับการประมาณการนี้");
+        }
+        // Failure mode (b): a daily-rate employee has no daysWorked outside a real run, so
+        // grossSalaryComponent would compute to ฿0 (see #calculateLine's dailyRatePay branch) — not
+        // a meaningful estimate. Reported honestly rather than showing a fabricated ฿0 saving.
+        if (employee.dailyRatePay()) {
+            return unavailableAllowanceEstimate(taxYear, effectiveMonth,
+                "พนักงานรายวันยังไม่มีจำนวนวันทำงานของงวดนี้ ระบบจึงไม่สามารถประมาณการผลของค่าลดหย่อนต่อภาษีได้ล่วงหน้า "
+                    + "ตัวเลขจะปรากฏเมื่อฝ่ายบุคคลประมวลผลเงินเดือนจริงและระบุจำนวนวันทำงานแล้ว");
+        }
+
+        Map<Long, BigDecimal> overtimeByEmployee = payrollRepository.findApprovedOvertimePayByEmployee(payrollMonth);
+        Map<Long, BigDecimal> commissionByEmployee = commissionPayByEmployee(payrollMonth);
+        Map<Long, PayrollYearToDate> yearToDateByEmployee = payrollRepository.findYearToDateByEmployee(payrollMonth);
+        Map<Long, PayrollTaxAllowanceInput> storedAllowancesByEmployee =
+            payrollRepository.findTaxAllowancesByEmployee(payrollMonth);
+        Map<Long, Map<PayrollComponent, PayrollTaxTreatment>> treatmentsByEmployee =
+            payrollRepository.findComponentTaxTreatmentsByEmployee(taxYear);
+        Map<Long, Map<PayrollComponent, Boolean>> ssoInclusionByEmployee =
+            payrollRepository.findComponentSsoInclusionByEmployee(taxYear);
+
+        BigDecimal overtimePay = overtimeByEmployee.getOrDefault(employeeId, BigDecimal.ZERO);
+        BigDecimal commissionPay = commissionByEmployee.getOrDefault(employeeId, BigDecimal.ZERO);
+        PayrollYearToDate yearToDate = yearToDateByEmployee.getOrDefault(employeeId, PayrollYearToDate.empty());
+        Map<PayrollComponent, PayrollTaxTreatment> treatments = treatmentsFor(employeeId, treatmentsByEmployee,
+            hasBeenOnboardedForPayroll(employeeId, ssoInclusionByEmployee));
+        Map<PayrollComponent, Boolean> ssoInclusion = ssoInclusionFor(employeeId, ssoInclusionByEmployee);
+        PayrollTaxAllowanceInput baselineAllowances = storedAllowancesByEmployee.get(employeeId);
+
+        try {
+            PayrollLineDto baselineLine = calculateLine(employee, null, overtimePay, commissionPay, yearToDate,
+                baselineAllowances, BigDecimal.ZERO, payrollMonth, treatments, ssoInclusion);
+            PayrollLineDto proposedLine = calculateLine(employee, null, overtimePay, commissionPay, yearToDate,
+                proposedAllowances, BigDecimal.ZERO, payrollMonth, treatments, ssoInclusion);
+            return new PayrollAllowanceEstimateResult(
+                true, null, taxYear, effectiveMonth,
+                baselineLine.withholdingTax(), proposedLine.withholdingTax(),
+                baselineLine.withholdingTax().subtract(proposedLine.withholdingTax()),
+                baselineLine.taxAllowanceTotal(), proposedLine.taxAllowanceTotal(),
+                ALLOWANCE_ESTIMATE_DISCLAIMER);
+        } catch (ApiException e) {
+            // Failure mode (a): calculateClassified 409s (CONFLICT) when a non-zero non-SALARY
+            // component has no stored tax treatment anywhere for this employee/year. Caught here and
+            // reported honestly -- never synthesize a treatment just to force an estimate out. Any
+            // OTHER status (there is none today, but defensively) is a genuine error, not an
+            // unavailability, and must propagate.
+            if (e.getStatus() == HttpStatus.CONFLICT) {
+                return unavailableAllowanceEstimate(taxYear, effectiveMonth,
+                    "มีรายรับบางประเภทที่ยังไม่ได้กำหนดประเภทภาษีสำหรับพนักงานคนนี้ "
+                        + "ฝ่ายบุคคลต้องกำหนดประเภทภาษีให้ครบก่อนจึงจะประมาณการภาษีได้ (" + e.getMessage() + ")");
+            }
+            throw e;
+        }
+    }
+
+    private PayrollAllowanceEstimateResult unavailableAllowanceEstimate(int taxYear, int effectiveMonth, String reason) {
+        return new PayrollAllowanceEstimateResult(
+            false, reason, taxYear, effectiveMonth, null, null, null, null, null, null);
+    }
+
     private PayrollPeriodDto preview(LocalDate payrollMonth, List<PayrollEmployeeInputRequest> inputs, UserPrincipal actor) {
         Map<Long, PayrollEmployeeInputRequest> inputByEmployee = inputs.stream()
             .collect(Collectors.toMap(PayrollEmployeeInputRequest::employeeId, Function.identity(), (left, right) -> right));

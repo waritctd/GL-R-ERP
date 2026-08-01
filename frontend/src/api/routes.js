@@ -176,14 +176,27 @@ export const API_ROUTES = {
     // it. Mirrors TaxAllowanceDeclarationController.
     taxAllowanceDeclarations: {
       me: '/api/payroll/tax-allowances/declarations/me',
+      // Tax-effect estimate (decision #4, 2026-08-01). Reuses the SAME body shape as `me` (POST) --
+      // no employeeId field anywhere, same self-scoping idiom.
+      estimate: '/api/payroll/tax-allowances/declarations/me/estimate',
       withdraw: (id) => `/api/payroll/tax-allowances/declarations/${id}`,
       register: '/api/payroll/tax-allowances/declarations',
       onBehalf: '/api/payroll/tax-allowances/declarations/on-behalf',
       approve: (id) => `/api/payroll/tax-allowances/declarations/${id}/approve`,
       reject: (id) => `/api/payroll/tax-allowances/declarations/${id}/reject`,
       apply: (id) => `/api/payroll/tax-allowances/declarations/${id}/apply`,
+      // Yearly expiry (decision #10, 2026-08-01): the mirror of the scheduled expiry sweep.
+      reverify: (id) => `/api/payroll/tax-allowances/declarations/${id}/reverify`,
+      // Evidence attachments (decision #5, 2026-08-01). Nested POST/GET, mirrors
+      // PricingRequestController's own `.../{id}/attachments` shape.
+      attachments: (id) => `/api/payroll/tax-allowances/declarations/${id}/attachments`,
     },
     taxAllowanceCaps: '/api/payroll/tax-allowances/caps',
+    // Flat evidence-file routes, sibling of taxAllowances above -- mirrors
+    // PricingRequestController's flat `/pricing-request-attachments/{id}/file` + DELETE shape.
+    // TaxAllowanceAttachmentController.
+    taxAllowanceAttachmentFile: (attachmentId) => `/api/payroll/tax-allowance-attachments/${attachmentId}/file`,
+    taxAllowanceAttachment: (attachmentId) => `/api/payroll/tax-allowance-attachments/${attachmentId}`,
     ytdSeed: '/api/payroll/ytd-seed',
     // P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix. Mirrors
     // PayrollController's component-tax-treatments mapping.

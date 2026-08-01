@@ -10,8 +10,10 @@ import java.util.Map;
 import java.util.Optional;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 import th.co.glr.hr.payroll.PayrollTaxAllowanceInput;
+import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceAttachmentDto;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationDto;
 
 /**
@@ -238,18 +240,183 @@ public class TaxAllowanceDeclarationRepository {
      * the {@code applied_at IS NULL} guard in the WHERE clause is what makes a concurrent double-apply
      * 409 on the SECOND caller before it ever reaches the allowance table, with no {@code @Version}
      * needed.
+     *
+     * <p>{@code expiresOn} is also set here (2026-08-01, the yearly-expiry PR) — the SAME value
+     * {@code TaxAllowanceDeclarationService#apply} passes to the parent table's {@code
+     * setTaxAllowanceVerificationDeadline}, so the two never drift apart. This is what {@code
+     * idx_tad_expiry_sweep} (V105) exists for: {@link #findExpirySweepCandidates} reads this column
+     * directly rather than re-deriving a deadline from the parent table.
      */
-    public int markApplied(long declarationId, long appliedById, int appliedEffectiveMonth) {
+    public int markApplied(long declarationId, long appliedById, int appliedEffectiveMonth, LocalDate expiresOn) {
         return jdbc.update("""
             UPDATE hr.tax_allowance_declaration
                SET applied_at = now(), applied_by_id = :appliedById,
-                   applied_effective_month = :appliedEffectiveMonth
+                   applied_effective_month = :appliedEffectiveMonth,
+                   expires_on = :expiresOn
              WHERE declaration_id = :id AND status = 'APPROVED' AND applied_at IS NULL
             """,
             new MapSqlParameterSource()
                 .addValue("id", declarationId)
                 .addValue("appliedById", appliedById)
-                .addValue("appliedEffectiveMonth", appliedEffectiveMonth));
+                .addValue("appliedEffectiveMonth", appliedEffectiveMonth)
+                .addValue("expiresOn", expiresOn));
+    }
+
+    // ---- Yearly expiry (2026-08-01) -----------------------------------------------------------
+    //
+    // See TaxAllowanceDeclarationService#expireOverdueVerifications for the full sweep and
+    // TaxAllowanceExpiryWorker for the @Scheduled trigger. THE trap (plan doc): a dated row on the
+    // PARENT table (hr.employee_tax_allowance) must have EVERY row for the employee/tax-year
+    // expired at once, via PayrollRepository#expireTaxAllowanceVerification -- never just the row
+    // this declaration happens to reference -- or #findTaxAllowancesByEmployee's DISTINCT ON
+    // ... ORDER BY effective_month DESC silently falls back to an older still-VERIFIED row.
+
+    /** One row eligible for the expiry sweep: applied, still APPROVED, past its expires_on date. */
+    public record ExpirySweepCandidate(long declarationId, long employeeId, int taxYear) {}
+
+    public List<ExpirySweepCandidate> findExpirySweepCandidates(LocalDate asOf) {
+        return jdbc.query("""
+            SELECT declaration_id, employee_id, tax_year
+              FROM hr.tax_allowance_declaration
+             WHERE status = 'APPROVED' AND applied_at IS NOT NULL
+               AND expires_on IS NOT NULL AND expires_on < :asOf
+            """,
+            Map.of("asOf", asOf),
+            (rs, rowNum) -> new ExpirySweepCandidate(
+                rs.getLong("declaration_id"), rs.getLong("employee_id"), rs.getInt("tax_year")));
+    }
+
+    /**
+     * Conditional APPROVED -> EXPIRED. Guarded by the same {@code status = 'APPROVED' AND
+     * applied_at IS NOT NULL} shape {@link #findExpirySweepCandidates} selects on, so a second sweep
+     * run over the same row matches zero rows instead of re-stamping {@code expired_at} — the
+     * idempotency the sweep needs with no extra bookkeeping.
+     */
+    public int expireApplied(long declarationId) {
+        return jdbc.update("""
+            UPDATE hr.tax_allowance_declaration
+               SET status = 'EXPIRED', expired_at = now()
+             WHERE declaration_id = :id AND status = 'APPROVED' AND applied_at IS NOT NULL
+            """,
+            Map.of("id", declarationId));
+    }
+
+    /**
+     * Conditional EXPIRED -> APPROVED (the reverify mirror). {@code expired_at} is cleared back to
+     * NULL in the SAME statement -- required by {@code chk_tad_expired_consistent}, which demands
+     * {@code (status = 'EXPIRED') = (expired_at IS NOT NULL)} on every row, including this one the
+     * moment it stops being EXPIRED.
+     */
+    public int reverify(long declarationId, long reverifiedById, LocalDate newExpiresOn) {
+        return jdbc.update("""
+            UPDATE hr.tax_allowance_declaration
+               SET status = 'APPROVED', reverified_at = now(), reverified_by_id = :reverifiedById,
+                   expired_at = NULL, expires_on = :newExpiresOn
+             WHERE declaration_id = :id AND status = 'EXPIRED'
+            """,
+            new MapSqlParameterSource()
+                .addValue("id", declarationId)
+                .addValue("reverifiedById", reverifiedById)
+                .addValue("newExpiresOn", newExpiresOn));
+    }
+
+    // ---- Evidence attachments (hr.file_attachment, domain='tax_allowance_declaration') --------
+    //
+    // The download gate itself lives ENTIRELY in the service
+    // (TaxAllowanceDeclarationService#requireOwnerOrHr, re-resolved from the parent declaration on
+    // every call) -- this repository only ever does the plain CRUD against hr.file_attachment,
+    // exactly like FactoryQuoteRepository's own attachment methods it is modelled on.
+
+    private static final String ATTACHMENT_DOMAIN = "tax_allowance_declaration";
+
+    public TaxAllowanceAttachmentDto saveAttachment(
+        long declarationId, String fileName, String filePath, String mimeType, Long fileSize, long uploadedBy
+    ) {
+        GeneratedKeyHolder key = new GeneratedKeyHolder();
+        jdbc.update("""
+            INSERT INTO hr.file_attachment
+                (domain, owner_id, file_name, file_path, mime_type, file_size, uploaded_by)
+            VALUES
+                (:domain, :declarationId, :fileName, :filePath, :mimeType, :fileSize, :uploadedBy)
+            """,
+            new MapSqlParameterSource()
+                .addValue("domain", ATTACHMENT_DOMAIN)
+                .addValue("declarationId", declarationId)
+                .addValue("fileName", fileName)
+                .addValue("filePath", filePath)
+                .addValue("mimeType", mimeType)
+                .addValue("fileSize", fileSize)
+                .addValue("uploadedBy", uploadedBy),
+            key, new String[]{"attachment_id"});
+        return findAttachment(key.getKey().longValue()).orElseThrow();
+    }
+
+    public Optional<TaxAllowanceAttachmentDto> findAttachment(long attachmentId) {
+        List<TaxAllowanceAttachmentDto> rows = jdbc.query("""
+            SELECT attachment_id, owner_id AS declaration_id, file_name, mime_type, file_size,
+                   uploaded_by, uploaded_at, deleted_at, deleted_by, delete_reason
+              FROM hr.file_attachment
+             WHERE attachment_id = :attachmentId AND domain = :domain
+            """,
+            Map.of("attachmentId", attachmentId, "domain", ATTACHMENT_DOMAIN),
+            this::mapAttachment);
+        return rows.stream().findFirst();
+    }
+
+    /** Every evidence file ever uploaded for a declaration, including tombstoned ones (audit trail). */
+    public List<TaxAllowanceAttachmentDto> findAttachments(long declarationId) {
+        return jdbc.query("""
+            SELECT attachment_id, owner_id AS declaration_id, file_name, mime_type, file_size,
+                   uploaded_by, uploaded_at, deleted_at, deleted_by, delete_reason
+              FROM hr.file_attachment
+             WHERE domain = :domain AND owner_id = :declarationId
+             ORDER BY uploaded_at DESC, attachment_id DESC
+            """,
+            Map.of("domain", ATTACHMENT_DOMAIN, "declarationId", declarationId),
+            this::mapAttachment);
+    }
+
+    public String findAttachmentFilePath(long attachmentId) {
+        try {
+            return jdbc.queryForObject("""
+                SELECT file_path FROM hr.file_attachment WHERE attachment_id = :attachmentId AND domain = :domain
+                """,
+                Map.of("attachmentId", attachmentId, "domain", ATTACHMENT_DOMAIN), String.class);
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Audited tombstone -- keeps the row and the file on disk, only records who deleted it, when,
+     * and why. Guarded by {@code deleted_at IS NULL} so a second call cannot overwrite an existing
+     * tombstone's {@code deleted_by}/{@code delete_reason}.
+     */
+    public int tombstoneAttachment(long attachmentId, long deletedBy, String reason) {
+        return jdbc.update("""
+            UPDATE hr.file_attachment
+               SET deleted_at = now(), deleted_by = :deletedBy, delete_reason = :reason
+             WHERE attachment_id = :attachmentId AND domain = :domain AND deleted_at IS NULL
+            """,
+            new MapSqlParameterSource()
+                .addValue("attachmentId", attachmentId)
+                .addValue("deletedBy", deletedBy)
+                .addValue("reason", reason)
+                .addValue("domain", ATTACHMENT_DOMAIN));
+    }
+
+    private TaxAllowanceAttachmentDto mapAttachment(ResultSet rs, int rowNum) throws SQLException {
+        return new TaxAllowanceAttachmentDto(
+            rs.getLong("attachment_id"),
+            rs.getLong("declaration_id"),
+            rs.getString("file_name"),
+            rs.getString("mime_type"),
+            (Long) rs.getObject("file_size"),
+            nullableLong(rs, "uploaded_by"),
+            rs.getObject("uploaded_at", OffsetDateTime.class),
+            rs.getObject("deleted_at", OffsetDateTime.class),
+            nullableLong(rs, "deleted_by"),
+            rs.getString("delete_reason"));
     }
 
     private BigDecimal money(BigDecimal value) {
