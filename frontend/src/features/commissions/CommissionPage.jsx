@@ -312,6 +312,17 @@ export function CommissionPage({ user, showToast }) {
   // Sales is read-only (Slice A3, AUTHZ CHANGE): commission creation moved entirely to the
   // accountant's createFromDeal trigger. Mirrors ROLE_PERMISSIONS exactly — see api/routes.js
   // for the "why" comments tying each key back to a CommissionController/Service role gate.
+  // Issue #422 B5 fix: every mutation below that changes a payroll-visible figure
+  // (line.commissionPay) must also invalidate the ['payroll'] prefix so an open PayrollPage tab
+  // picks the change up on its own next poll/focus refetch (issue #422 B1), not only on a manual
+  // reload. CommissionPage itself stays imperative (`load()`) -- a full react-query migration
+  // here is out of scope for this fix; invalidation alone is sufficient now that payroll is a
+  // query. payrollCurrent is ['payroll', 'current', month], so ['payroll'] is the correct prefix
+  // and no other queryKeys.js entry starts with 'payroll'.
+  function invalidatePayrollUpstream() {
+    return queryClient.invalidateQueries({ queryKey: ['payroll'] });
+  }
+
   const canReview = ROLE_PERMISSIONS.canApproveCommissions.includes(user.role); // sales_manager, ceo
   const canListRecords = ROLE_PERMISSIONS.canListCommissionRecords.includes(user.role); // sales, sales_manager, ceo
   const canCreateFromDeal = ROLE_PERMISSIONS.canCreateCommissionFromDeal.includes(user.role); // account
@@ -742,6 +753,7 @@ export function CommissionPage({ user, showToast }) {
       // ['tickets','detail','16'] and the invalidation would silently no-op. The
       // prefix also correctly refreshes the ticket lists, whose stage/scope changed.
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      invalidatePayrollUpstream();
       setCreateForm(emptyCreateForm);
       setFileInputKey((key) => key + 1);
       setLoadedTicket(null);
@@ -798,6 +810,7 @@ export function CommissionPage({ user, showToast }) {
       showToast('success', 'เพิ่มค่าคอมด้วยตนเองแล้ว');
       setManualForm(emptyManualForm);
       setShowManualForm(false);
+      invalidatePayrollUpstream();
       await load();
     } catch (error) {
       showToast('error', error.message || 'เพิ่มค่าคอมไม่สำเร็จ');
@@ -851,6 +864,7 @@ export function CommissionPage({ user, showToast }) {
       });
       setEditingId(null);
       showToast('success', 'อัปเดตค่าคอมแล้ว');
+      invalidatePayrollUpstream();
       await load();
     } catch (error) {
       showToast('error', error.message || 'อัปเดตไม่สำเร็จ');
@@ -864,6 +878,7 @@ export function CommissionPage({ user, showToast }) {
     try {
       await api.commissions.approve(approveId);
       showToast('success', 'อนุมัติค่าคอมแล้ว');
+      invalidatePayrollUpstream();
       await load();
     } catch (error) {
       showToast('error', error.message || 'อนุมัติไม่สำเร็จ');
@@ -882,6 +897,7 @@ export function CommissionPage({ user, showToast }) {
     try {
       await api.commissions.reject(rejectId, { reviewerNote });
       showToast('success', 'ปฏิเสธค่าคอมแล้ว');
+      invalidatePayrollUpstream();
       await load();
     } catch (error) {
       showToast('error', error.message || 'ปฏิเสธไม่สำเร็จ');
@@ -900,6 +916,7 @@ export function CommissionPage({ user, showToast }) {
     try {
       await api.commissions.clawback(clawbackId, { reason });
       showToast('success', 'บันทึกรายการหักคืนแล้ว');
+      invalidatePayrollUpstream();
       await load();
     } catch (error) {
       showToast('error', error.message || 'บันทึกหักคืนไม่สำเร็จ');

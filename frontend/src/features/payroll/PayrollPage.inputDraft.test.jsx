@@ -1,8 +1,18 @@
 import React from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PayrollPage } from './PayrollPage.jsx';
 import { api } from '../../api/index.js';
+
+// Issue #422 B1: PayrollPage now reads through react-query, so every render below needs a real
+// QueryClient in context.
+function renderWithClient(ui) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
 
 // Payroll input draft (2026-07-30): a NEW test file (does not edit PayrollPage.test.jsx /
 // PayrollPage.carryForward.test.jsx / PayrollPage.dailyRate.test.jsx) covering the actual bug the
@@ -119,7 +129,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
       return { payrollMonth: payload.payrollMonth, drafts: savedDrafts };
     });
 
-    const { unmount } = render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+    const { unmount } = renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /ค่าอาหาร \/ เบี้ยเลี้ยง/ }));
     const mealAllowance = await screen.findByLabelText(/ค่าอาหาร/, { selector: 'input' });
@@ -134,7 +144,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
     // Simulate an actual browser reload: unmount this instance entirely and mount a brand-new one
     // (fresh React state), exactly as a real page reload would produce.
     unmount();
-    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /ค่าอาหาร \/ เบี้ยเลี้ยง/ }));
     const reloadedMealAllowance = await screen.findByLabelText(/ค่าอาหาร/, { selector: 'input' });
@@ -164,7 +174,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
       return { payrollMonth: payload.payrollMonth, drafts: savedDrafts };
     });
 
-    const { unmount } = render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+    const { unmount } = renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     // Suggestion pre-fills the field to 3000 first.
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
@@ -182,7 +192,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
     // A real reload: fresh component instance, suggestion still resolves to 3000 (nothing about
     // the carry-forward config changed) -- only the saved draft should determine the outcome now.
     unmount();
-    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const reloadedCostOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     await waitFor(() => expect(reloadedCostOfLiving.value).toBe(''));
@@ -193,11 +203,14 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
     api.payroll.getInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
     api.payroll.saveInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
 
-    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     expect(screen.getByRole('status').textContent).toContain('บันทึกแล้ว');
-    expect(screen.queryByRole('button', { name: /บันทึกร่าง/ })).toBeNull();
+    // Issue #422 owner decision (one button, not two): บันทึกร่าง is the renamed preview command
+    // itself, present from the very first render for HR -- not conditional on anything having
+    // been typed yet.
+    expect(screen.getByRole('button', { name: /บันทึกร่าง/ })).toBeTruthy();
 
     fireEvent.change(costOfLiving, { target: { value: '321' } });
     expect(screen.getByRole('status').textContent).toContain('รอบันทึกอัตโนมัติ');
@@ -216,7 +229,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
       return new Promise((resolve) => pendingSaves.push(resolve));
     });
 
-    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     fireEvent.change(costOfLiving, { target: { value: '111' } });
@@ -248,7 +261,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
       drafts: [{ employeeId: 1, specialPay1: 999 }],
     });
 
-    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     await waitFor(() => expect(costOfLiving.value).toBe('5000'));
@@ -265,7 +278,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
       drafts: [{ employeeId: 1, specialPay1: 950 }],
     });
 
-    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     await waitFor(() => expect(costOfLiving.value).toBe('950'));
@@ -275,10 +288,18 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
    * Pins the hydration path the owner flagged as currently-live and must not regress: July's
    * period_id=1 is VOID, not PREVIEW, and already has real hr.payroll_line rows (17 employees'
    * allowances, mealAllowance on two of them, employee 203's pay_type='D'/daysWorked=25). This
-   * must hydrate from the line exactly as before, with no draft fetch at all -- a VOID period
-   * already reflects real submitted values, and a stale draft must never be consulted for it.
+   * must hydrate from the line exactly as before -- the line's own value always wins regardless
+   * of any draft, per adjustmentFromLine's precedence (see draftValue's own comment).
+   *
+   * UPDATED for issue #422 A1: this test used to also pin "and never fetches a draft" / "shows no
+   * บันทึกร่าง button" for a VOID period -- that was the reported bug (§A1: HR could type into
+   * every field on a VOID/PROCESSED period and lose it all silently, no badge, no save). The
+   * draft fetch is now UNCONDITIONAL and the button/badge now show for any loaded period, so this
+   * test instead pins the fix: typing into a VOID period's field DOES autosave a draft.
    */
-  it('a VOID period with real pre-loaded lines hydrates the form when no draft exists, and never fetches a draft', async () => {
+  it('a VOID period with real pre-loaded lines hydrates the form from the line (not a draft), and DOES autosave typed edits (A1 regression guard)', async () => {
+    api.payroll.getInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
+    api.payroll.saveInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
     api.payroll.current.mockResolvedValue({
       period: periodWith(
         freshPayrollLine({
@@ -295,19 +316,79 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
       ),
     });
 
-    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const daysWorked = await screen.findByLabelText(/จำนวนวันทำงานในงวดนี้/, { selector: 'input' });
     await waitFor(() => expect(daysWorked.value).toBe('25'));
     fireEvent.click(screen.getByRole('button', { name: /ค่าอาหาร \/ เบี้ยเลี้ยง/ }));
-    expect(screen.getByLabelText(/ค่าอาหาร/, { selector: 'input' }).value).toBe('3360');
+    const mealAllowance = screen.getByLabelText(/ค่าอาหาร/, { selector: 'input' });
+    expect(mealAllowance.value).toBe('3360');
     const costOfLiving = screen.getByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     expect(costOfLiving.value).toBe('4500');
 
-    expect(api.payroll.getInputDraft).not.toHaveBeenCalled();
+    // A1: the carry-forward SUGGESTION is still gated to a genuinely fresh PREVIEW run (no waste
+    // fetching it for an already-touched period), but the DRAFT fetch is now unconditional.
+    await waitFor(() => expect(api.payroll.getInputDraft).toHaveBeenCalledTimes(1));
     expect(api.payroll.suggestedInputs).not.toHaveBeenCalled();
-    // A VOID/already-touched period offers no autosave draft status either -- there is nothing useful a
-    // draft save would do for it (see canSaveDraft's own comment in PayrollPage.jsx).
-    expect(screen.queryByRole('button', { name: /บันทึกร่าง/ })).toBeNull();
+    // A1/A2: the บันทึกร่าง button and autosave badge now show for ANY loaded period HR can edit,
+    // not only a fresh PREVIEW run -- this is the actual fix, not incidental.
+    expect(screen.getByRole('button', { name: /บันทึกร่าง/ })).toBeTruthy();
+
+    // The regression this test exists to pin: typing into this VOID period's field must actually
+    // autosave, not silently discard (issue #422 §A1 -- "I saved a draft and it was gone").
+    fireEvent.change(mealAllowance, { target: { value: '5000' } });
+    fireEvent.blur(mealAllowance);
+    await waitFor(() => expect(api.payroll.saveInputDraft).toHaveBeenCalledTimes(1));
+    const saved = api.payroll.saveInputDraft.mock.calls[0][0].inputs.find((input) => input.employeeId === 203);
+    expect(saved.mealAllowance).toBe(5000);
+  });
+
+  /**
+   * Fact 2 from the issue #422 plan, pinned wrong-way-round: on an already-touched (non-PREVIEW)
+   * period, a saved draft restores blank/zero fields, but a real COMMITTED non-zero line value
+   * must still win over it -- draftValue()'s own `> 0` precedence is what makes widening the
+   * draft restore to touched periods safe by construction (see canSaveDraft's own comment in
+   * PayrollPage.jsx). Asserted on a PROCESSED period specifically (id set, status PROCESSED),
+   * distinct from the VOID-period test above.
+   */
+  it('a saved draft does not shadow a real committed non-zero value on a PROCESSED period', async () => {
+    api.payroll.current.mockResolvedValue({
+      period: periodWith(
+        freshPayrollLine({
+          specialPays: [{ key: 'specialPay1', amount: 6000 }, ...zeroSpecialPays.slice(1)],
+        }),
+        { id: 42, status: 'PROCESSED' },
+      ),
+    });
+    api.payroll.getInputDraft.mockResolvedValue({
+      payrollMonth: '2026-07-01',
+      drafts: [{ employeeId: 1, specialPay1: 999 }],
+    });
+
+    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+
+    const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
+    // The committed 6000 wins -- the drafted 999 never gets a chance to show.
+    await waitFor(() => expect(costOfLiving.value).toBe('6000'));
+  });
+
+  // A3: a failed autosave (the ONLY caller of saveDraft({ quiet: true })) used to swallow both the
+  // toast AND the badge (before A1, the badge was not even rendered on this period at all) -- a
+  // 400/403/409 was invisible. Now always surfaced, quiet path included.
+  it('toasts an error on a failed QUIET autosave (blur), not only on the explicit บันทึกร่าง click (A3)', async () => {
+    const showToast = vi.fn();
+    api.payroll.current.mockResolvedValue({ period: periodWith(freshPayrollLine()) });
+    api.payroll.getInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
+    api.payroll.saveInputDraft.mockRejectedValue(new Error('เซิร์ฟเวอร์ปฏิเสธคำขอ'));
+
+    renderWithClient(<PayrollPage user={hrUser} showToast={showToast} />);
+
+    const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
+    fireEvent.change(costOfLiving, { target: { value: '888' } });
+    fireEvent.blur(costOfLiving); // triggers the quiet autosave path, not the button
+
+    await waitFor(() => expect(api.payroll.saveInputDraft).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'เซิร์ฟเวอร์ปฏิเสธคำขอ'));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('บันทึกอัตโนมัติไม่สำเร็จ'));
   });
 });

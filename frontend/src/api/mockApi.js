@@ -1445,6 +1445,79 @@ function taxAllowanceCapsFor(taxYear) {
   ];
 }
 
+// Issue #422 A6: a fabricated PayrollLineDto-shaped row for `payroll.current()`'s mock period --
+// see that method's own comment for why a null period made the draft path unreachable. Deliberately
+// simple round numbers rather than reproducing real Thai tax/SSO math (that stays "not supported in
+// mock mode" on preview()/process() below) -- this only needs to be plausible enough to populate the
+// table and exercise the draft save/restore round trip, not payroll-accurate.
+function mockPayrollLine(employee) {
+  // FIX 6 (adversarial review, issue #422): PayrollCalculator.SSO_MAX_BASE is 17500.00 (Royal
+  // Gazette, 1 Jan 2026), not 15000 -- the pre-2026 ceiling. 15000 fed a fabricated ~750/month
+  // SSO figure into totalDeductions/totalNet/totalGross and the stat strip, contradicting this
+  // file's own "not payroll-accurate" boundary two paragraphs above with a wrong-by-construction
+  // number rather than an honestly-approximate one.
+  const ssoWageBase = Math.min(Number(employee.salary || 0), 17500);
+  const socialSecurity = Math.round(ssoWageBase * 0.05);
+  const specialPays = Array.from({ length: 9 }, (_, index) => ({
+    key: `specialPay${index + 1}`,
+    label: `พิเศษ ${index + 1}`,
+    amount: 0,
+  }));
+  return {
+    id: null,
+    employeeId: employee.id,
+    employeeCode: employee.code,
+    employeeName: employee.nameTh,
+    departmentName: employee.departmentTh,
+    bankName: employee.bank,
+    bankAccount: employee.bankAccount,
+    baseSalary: employee.salary,
+    dailyRate: 0,
+    hourlyRate: 0,
+    specialPays,
+    specialPayTotal: 0,
+    overtimePay: 0,
+    commissionPay: 0,
+    grossEarnings: employee.salary,
+    nonTaxableIncome: 0,
+    unpaidLeaveDays: 0,
+    unpaidLeaveDeduction: 0,
+    grossTaxableIncome: employee.salary,
+    ssoWageBase,
+    socialSecurity,
+    projectedAnnualIncome: employee.salary * 12,
+    taxExpenseDeduction: 0,
+    taxAllowanceTotal: 100000,
+    taxableAnnualIncome: employee.salary * 12,
+    annualTax: 0,
+    withholdingTax: 0,
+    studentLoanDeduction: 0,
+    legalExecutionDeduction: 0,
+    otherPostTaxDeductions: 0,
+    totalDeductions: socialSecurity,
+    netPay: employee.salary - socialSecurity,
+    calculationNote: null,
+    directorRemuneration: 0,
+    warningLetterDeduction: 0,
+    customerReturnDeduction: 0,
+    otherPretaxDeduction: 0,
+    leaveRefundDays: 0,
+    leaveDeductionRefund: 0,
+    withholdingTaxOverride: null,
+    mealAllowance: 0,
+    perDiemExempt: 0,
+    perDiemTaxable: 0,
+    perDiemBasis: null,
+    bonusPay: 0,
+    otherOneOffPay: 0,
+    customerReturnAlreadyEarned: false,
+    garnishmentType: null,
+    customerReturnRequested: 0,
+    daysWorked: null,
+    payType: 'M',
+  };
+}
+
 // --- ticket helpers ---
 
 // Mirrors TicketService.requireViewAccess: viewer role required, sales reps
@@ -4989,20 +5062,53 @@ export const api = {
   // comment), so every progress read below reports totalRemitted = 0 -- an honest reflection of
   // "mock mode never runs real payroll", not a bug to fix.
 
-  // No seeded payroll-period data yet — `current` returns an empty period so
-  // PayrollPage degrades to its built-in empty state; the mutating actions
-  // (preview/process/exportFile) are explicit user-triggered calculations that
-  // would require reproducing real payroll/tax logic to fake convincingly, so
-  // they surface a clear "not supported in mock mode" error instead of
-  // fabricating financial figures (real backend implementation is in hrApi.js).
+  // Issue #422 A6 fix: `current` used to return `{ period: null }` unconditionally, which made
+  // the draft path (getInputDraft/saveInputDraft below -- both genuine in-memory
+  // implementations, unlike preview/process) totally unreachable under VITE_USE_MOCKS=true:
+  // PayrollPage's canSaveDraft requires a real period, so nothing in mock mode could ever
+  // exercise a draft save/restore, and anyone verifying on the mock/demo build would wrongly
+  // conclude "drafts don't work" (see mockPayrollLine's own comment). The mutating actions
+  // (preview/process/exportFile) stay explicit user-triggered calculations that would require
+  // reproducing real payroll/tax logic to fake convincingly, so they still surface a clear "not
+  // supported in mock mode" error instead of fabricating financial figures (real backend
+  // implementation is in hrApi.js) -- clicking the บันทึกร่าง button under mocks therefore saves
+  // the draft successfully and then shows the preview error, which is honest for mock mode, not
+  // a bug.
   // Mirrors PayrollController + PayrollService (payroll/): view/export/payslip
   // reads are hr/ceo; process + distributePayslips are hr-only; downloadOwnPayslip
   // stays open to any authenticated user (Java is isAuthenticated()) so the
   // employee dashboard's "My payslip" button keeps working.
   payroll: {
-    async current() {
+    async current(params = {}) {
       hasRole('hr', 'ceo');
-      return delay({ period: null });
+      const payrollMonth = params.payrollMonth
+        ? `${params.payrollMonth}-01`
+        : `${new Date().toISOString().slice(0, 7)}-01`;
+      // A6 fix (issue #422): a few real seeded, active employees -- always PREVIEW, never
+      // persisted (id: null, matching PayrollService#currentOrPreview's fallback shape for a
+      // month with no saved row yet) -- so canSaveDraft (PayrollPage.jsx) can be true and the
+      // draft round trip is actually reachable in the default verification surface.
+      const lines = db.employees.filter((employee) => employee.active).slice(0, 3).map(mockPayrollLine);
+      const sum = (pick) => lines.reduce((total, line) => total + pick(line), 0);
+      return delay({
+        period: {
+          id: null,
+          payrollMonth,
+          periodStart: payrollMonth,
+          periodEnd: payrollMonth,
+          payDate: null,
+          status: 'PREVIEW',
+          processedAt: null,
+          processedById: null,
+          lineCount: lines.length,
+          totalGross: sum((line) => line.grossEarnings),
+          totalDeductions: sum((line) => line.totalDeductions),
+          totalNet: sum((line) => line.netPay),
+          totalSocialSecurity: sum((line) => line.socialSecurity),
+          totalWithholdingTax: sum((line) => line.withholdingTax),
+          lines,
+        },
+      });
     },
     // Special-pay carry-forward (2026-07-23): no seeded prior payroll_line data in mock mode, so
     // there is nothing to carry forward — return an empty suggestions list rather than fabricating

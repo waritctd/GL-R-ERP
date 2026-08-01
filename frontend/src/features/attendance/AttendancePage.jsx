@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
@@ -72,8 +74,6 @@ export function AttendancePage({ user, showToast }) {
   // HR/CEO only. A ฝ่าย manager is already pinned to their own division server-side, so offering
   // them this control would imply a reach they don't have.
   const [divisionId, setDivisionId] = useState('');
-  const [days, setDays] = useState([]);
-  const [loading, setLoading] = useState(false);
   const [employeeOptions, setEmployeeOptions] = useState([]);
   const [unmapped, setUnmapped] = useState([]);
   const [unmappedOpen, setUnmappedOpen] = useState(false);
@@ -95,27 +95,58 @@ export function AttendancePage({ user, showToast }) {
     ? { from: monthStart, to: today }
     : { from: selectedDate, to: selectedDate };
 
-  const loadDays = useCallback(async () => {
-    setLoading(true);
-    try {
-      const response = await api.attendance.daily({
-        from: range.from,
-        to: range.to,
-        ...(employeeId ? { employeeId } : {}),
-        ...(divisionId ? { divisionId } : {}),
-      });
-      setDays(response.days || []);
-      setExpandedKey(null);
-    } catch (error) {
-      showToast('error', error.message || 'โหลดข้อมูลเวลาทำงานไม่สำเร็จ');
-    } finally {
-      setLoading(false);
-    }
-  }, [range.from, range.to, employeeId, divisionId, showToast]);
+  // Issue #422 B2: onto react-query so this screen participates in the shared cache (an OT
+  // approval or a same-day recalculation elsewhere can now reach it via invalidation, and it gets
+  // a 60s poll + window-focus refetch, same as PayrollPage below) instead of the plain
+  // useState+useEffect loader that made it a dead end for both.
+  const daysQuery = useQuery({
+    queryKey: queryKeys.attendanceDailyScoped(range.from, range.to, employeeId, divisionId),
+    queryFn: () => api.attendance.daily({
+      from: range.from,
+      to: range.to,
+      ...(employeeId ? { employeeId } : {}),
+      ...(divisionId ? { divisionId } : {}),
+    }).then((response) => response.days || []),
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+  });
+  const days = daysQuery.data ?? [];
+  // `isLoading` (true only for the FIRST fetch of a given scope, i.e. no cached data yet) drives
+  // the table's loading skeleton AND (adversarial-review fix, P2) the รีเฟรช button's disabled
+  // state below -- `isFetching` (true for ANY fetch in flight, including the silent 60s poll) was
+  // used for the button originally, but that made it flicker disabled on every background poll
+  // with no user action involved. This does let a rapid multi-click on รีเฟรช fan out that many
+  // real `GET /attendance/daily` requests (measured: 3 clicks -> 4 calls total, incl. the mount
+  // fetch) -- TanStack Query v5's `refetch()` does NOT dedupe against other in-flight fetches for
+  // the same key by default (`cancelRefetch: true`), and this `queryFn` does not wire the
+  // `signal` argument through to `api.attendance.daily` to make cancellation possible either.
+  // Left as-is: the outcome is harmless (React Query still serialises the resulting STATE updates
+  // -- last response to resolve wins, same table either way), and wiring `signal` through would
+  // touch the shared `apiRequest` helper (and its mock counterpart) for every endpoint, not just
+  // this one. Worth doing if this page ever talks to a slow/rate-limited backend.
+  const loading = daysQuery.isLoading;
 
+  // Adversarial-review fix (P0): same infinite-loop hazard as PayrollPage's identical effect --
+  // `showToast` (useToast()/App.jsx) is a plain, re-created-per-render function; with it in this
+  // effect's deps, calling it re-renders App, which hands a new `showToast` identity back down,
+  // which re-fires this effect for as long as `daysQuery.error` stays non-null. A ref holds the
+  // latest callback without being a dependency, and the effect keys on the error's MESSAGE (a
+  // primitive) instead of the Error object or the callback.
+  const showToastRef = useRef(showToast);
   useEffect(() => {
-    loadDays();
-  }, [loadDays]);
+    showToastRef.current = showToast;
+  });
+  const daysQueryErrorMessage = daysQuery.error?.message;
+  useEffect(() => {
+    if (daysQueryErrorMessage) showToastRef.current('error', daysQueryErrorMessage || 'โหลดข้อมูลเวลาทำงานไม่สำเร็จ');
+  }, [daysQueryErrorMessage]);
+
+  // A day's expanded punch-detail panel belongs to the scope the user is currently looking at
+  // (date/employee/division) -- reset only when THAT changes, not on every background poll of the
+  // same scope, or an open panel would silently collapse under someone reading it every 60s.
+  useEffect(() => {
+    setExpandedKey(null);
+  }, [range.from, range.to, employeeId, divisionId]);
 
   // A ฝ่าย manager's picker cannot come from the shared `employees` prop — that list is HR-only,
   // so it holds exactly one entry for them. This endpoint returns their actual team.
@@ -226,7 +257,7 @@ export function AttendancePage({ user, showToast }) {
       const written = response?.recalculatedDays ?? 0;
       showToast('success', `คำนวณข้อมูลย้อนหลังเรียบร้อย — ${written.toLocaleString()} รายการ`);
       setRecalcOpen(false);
-      await loadDays();
+      await daysQuery.refetch();
     } catch (error) {
       showToast('error', error.message || 'คำนวณข้อมูลย้อนหลังไม่สำเร็จ');
     } finally {
@@ -255,7 +286,7 @@ export function AttendancePage({ user, showToast }) {
           + (cleared ? ` · เอาออก ${cleared.toLocaleString()} คน` : ''),
       );
       setMarkPresentOpen(false);
-      await loadDays();
+      await daysQuery.refetch();
     } catch (error) {
       showToast('error', error.message || 'บันทึกไม่สำเร็จ');
     } finally {
@@ -288,7 +319,7 @@ export function AttendancePage({ user, showToast }) {
         'success',
         response.status === 'duplicate_file' ? 'ไฟล์นี้เคยนำเข้าแล้ว' : 'นำเข้าไฟล์เวลาเรียบร้อย',
       );
-      await loadDays();
+      await daysQuery.refetch();
     } catch (error) {
       showToast('error', error.message || 'นำเข้าไฟล์ไม่สำเร็จ');
     } finally {
@@ -376,7 +407,7 @@ export function AttendancePage({ user, showToast }) {
                 ทำเครื่องหมายเข้างาน
               </Button>
             ) : null}
-            <Button variant="secondary" onClick={loadDays} disabled={loading}>
+            <Button variant="secondary" onClick={() => daysQuery.refetch()} disabled={daysQuery.isLoading}>
               <Icon name="refresh" />
               รีเฟรช
             </Button>

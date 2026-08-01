@@ -173,6 +173,10 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
   });
   const employeeOptions = useMemo(() => employeesQuery.data ?? [], [employeesQuery.data]);
 
+  // Issue #422 B4: a modest poll + window-focus refetch on this queue specifically -- OT
+  // approvals are genuinely multi-user (an approval made in another session must show up here
+  // without a manual reload). The app-wide `refetchOnWindowFocus: false` default
+  // (api/queryClient.js) stays put; this is a per-query opt-in, not a default flip.
   const requestsQuery = useQuery({
     queryKey: queryKeys.overtimeRequests(appliedFilters),
     queryFn: () => api.overtime.list({
@@ -181,6 +185,8 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
       status: appliedFilters.status,
       ...(appliedFilters.employeeId ? { employeeId: appliedFilters.employeeId } : {}),
     }).then((response) => response.requests || []),
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
   });
   const requests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
   const loading = requestsQuery.isLoading || requestsQuery.isFetching;
@@ -249,8 +255,20 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employeesQuery.data]);
 
+  // Issue #422 B3 fix: invalidate the ['overtime'] PREFIX, not the exact
+  // queryKeys.overtimeRequests(appliedFilters) -- every other filter combination (a different
+  // date range/status/employee a sibling tab or another reviewer has open) used to stay stale
+  // until its own filters were reapplied.
   function invalidateOvertime() {
-    return queryClient.invalidateQueries({ queryKey: queryKeys.overtimeRequests(appliedFilters) });
+    return queryClient.invalidateQueries({ queryKey: ['overtime'] });
+  }
+
+  // Issue #422 B5 fix: approve/reject each change line.overtimePay, a figure PayrollPage reads,
+  // with no way for that screen to find out short of a manual reload. Invalidating the
+  // ['payroll'] prefix alongside invalidateOvertime() lets an open PayrollPage tab pick the
+  // change up on its own next poll/focus refetch (issue #422 B1).
+  function invalidatePayrollUpstream() {
+    return queryClient.invalidateQueries({ queryKey: ['payroll'] });
   }
 
   function updateFilter(field, value) {
@@ -278,6 +296,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
       showToast('success', 'อนุมัติ OT แล้ว');
       setConfirmState(null);
       invalidateOvertime();
+      invalidatePayrollUpstream();
     },
     onError: (error) => showToast('error', error.message || 'อนุมัติ OT ไม่สำเร็จ'),
   });
@@ -287,6 +306,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
     onSuccess: () => {
       showToast('success', 'ปฏิเสธคำขอ OT แล้ว');
       setConfirmState(null);
+      invalidatePayrollUpstream();
       invalidateOvertime();
     },
     onError: (error) => showToast('error', error.message || 'ปฏิเสธ OT ไม่สำเร็จ'),

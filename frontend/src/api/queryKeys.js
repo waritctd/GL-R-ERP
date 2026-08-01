@@ -30,9 +30,20 @@ export const queryKeys = {
   // unfiltered fetch shares one cache entry with anything else that reads
   // "every commission record" for the current payroll month.
   commissionsList: (payrollMonth) => ['commissions', 'list', payrollMonth ?? ''],
+  // Issue #422 B5: reserved for a future react-query migration of CommissionPage's payrollReady()
+  // read (GET /api/commissions/payroll-ready, the hr-only summary view) -- CommissionPage itself
+  // stays imperative in this fix (out of scope; invalidating the ['payroll'] prefix from its
+  // mutations is sufficient now that PayrollPage is a query), so nothing constructs this key yet.
+  commissionsPayrollReady: (payrollMonth) => ['commissions', 'payrollReady', payrollMonth ?? ''],
   // Self-service landing (EmployeeSelfService): own attendance.daily() reads. `to` defaults to
   // "today" server-side when omitted, same as AttendancePage's self view.
   attendanceDaily: (from, to) => ['attendance', 'daily', from ?? '', to ?? ''],
+  // AttendancePage's team/company view (issue #422 B2): scoped by employeeId/divisionId as well
+  // as the date range, unlike attendanceDaily above -- EmployeeSelfService's key has neither
+  // filter (it is always "my own" attendance), so it stays untouched rather than widened, and
+  // this is a distinct key rather than an overload of it.
+  attendanceDailyScoped: (from, to, employeeId, divisionId) =>
+    ['attendance', 'daily', 'scoped', from ?? '', to ?? '', employeeId ?? '', divisionId ?? ''],
   specialMoneyRequests: (filters = {}) => ['specialMoney', 'list', filters.from, filters.to, filters.status, filters.employeeId, filters.type],
   specialMoneyEmployees: () => ['specialMoney', 'employees'],
   specialMoneyTypes: () => ['specialMoney', 'types'],
