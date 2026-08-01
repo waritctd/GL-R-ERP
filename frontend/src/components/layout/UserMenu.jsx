@@ -24,7 +24,7 @@ export function UserMenu({ user, employee, canViewProfile, onNavigate, onLogout 
 
   useEffect(() => {
     if (!open) return undefined;
-    itemRefs.current[0]?.focus();
+    itemRefs.current.filter(Boolean)[0]?.focus();
     function handleKeyDown(event) {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -72,7 +72,7 @@ export function UserMenu({ user, employee, canViewProfile, onNavigate, onLogout 
         <div
           role="menu"
           aria-label="เมนูผู้ใช้"
-          className="absolute top-[calc(100%+8px)] right-0 w-[240px] bg-surface border border-border-subtle rounded-[12px] shadow-[0_8px_24px_rgba(0,0,0,0.12)] z-[200] overflow-hidden"
+          className="absolute top-[calc(100%+8px)] right-0 z-[200] w-[min(240px,calc(100vw-32px))] max-w-[calc(100vw-32px)] overflow-hidden rounded-md border border-border-subtle bg-surface shadow-[0_8px_24px_rgba(0,0,0,0.12)]"
         >
           <div className="py-3 px-4 border-b border-border">
             <strong className="block !text-sm !text-text truncate">{employee?.nameTh || user.name}</strong>

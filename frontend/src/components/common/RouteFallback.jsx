@@ -8,7 +8,14 @@ import { Skeleton } from './Skeleton.jsx';
  */
 export function RouteFallback() {
   return (
-    <div className="page-stack" role="status" aria-live="polite" aria-busy="true">
+    <div
+      className="page-stack route-fallback"
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+      aria-label="กำลังโหลดหน้าที่เลือก"
+    >
+      <span className="sr-only">กำลังโหลดหน้าที่เลือก</span>
       <Skeleton height={28} />
       <Skeleton height={140} />
       <Skeleton height={140} />

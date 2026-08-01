@@ -2,6 +2,7 @@ import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { SALES_ENABLED } from '../../app/features.js';
 import { hasPermission, isDivisionManager } from '../../app/permissions.js';
+import { PRODUCT_NAME } from '../../app/product.js';
 import { roleLabel } from '../../utils/format.js';
 import { Button } from '../common/Button.jsx';
 import { ErrorBoundary } from '../common/ErrorBoundary.jsx';
@@ -258,7 +259,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
             <Icon name="menu" />
           </Button>
           <div className="topbar-title">
-            <span>GL&R HR</span>
+            <span>{PRODUCT_NAME}</span>
             <small>{roleLabel(user.role)}</small>
           </div>
           <div className="topbar-user">

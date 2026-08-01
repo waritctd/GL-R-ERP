@@ -78,7 +78,8 @@ describe('AppShell navigation (drawer content, no persistent tablet rail)', () =
 
     const dealsLink = await screen.findByRole('link', { name: 'รายการดีล (Deal pipeline)' });
     expect(dealsLink.getAttribute('title')).toBe('รายการดีล (Deal pipeline)');
-    expect(screen.getByRole('button', { name: 'GL&R home' }).getAttribute('title')).toBe('GL&R home');
+    expect(screen.getByRole('button', { name: 'GL&R ERP home' }).getAttribute('title')).toBe('GL&R ERP home');
+    expect(screen.getByText('GL&R ERP')).toBeTruthy();
   });
 
   it('preserves the active route highlight', async () => {
@@ -136,6 +137,7 @@ describe('AppShell navigation (drawer content, no persistent tablet rail)', () =
 
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
+
 });
 
 // Account role-scoped views (finalized design, owner-confirmed 2026-07-24): nav

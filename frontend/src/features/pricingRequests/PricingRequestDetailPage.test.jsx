@@ -363,12 +363,21 @@ function buildSalesView(overrides = {}) {
 function renderDetailPage({
   user = importUser,
   request = buildRequest(),
+  detailError = null,
+  detailPromise = null,
   factoryQuotes = [],
   costings = [],
   attachments = [],
   showToast = vi.fn(),
+  routeId = request?.summary?.id ?? 501,
 } = {}) {
-  api.pricingRequests.get.mockResolvedValue({ pricingRequest: request });
+  if (detailPromise) {
+    api.pricingRequests.get.mockReturnValue(detailPromise);
+  } else if (detailError) {
+    api.pricingRequests.get.mockRejectedValue(detailError);
+  } else {
+    api.pricingRequests.get.mockResolvedValue({ pricingRequest: request });
+  }
   api.pricingRequests.listFactoryQuotes.mockResolvedValue({ items: factoryQuotes });
   api.pricingRequests.listCostings.mockResolvedValue({ items: costings });
   api.pricingRequests.listAttachments.mockResolvedValue({ items: attachments });
@@ -379,7 +388,7 @@ function renderDetailPage({
 
   const utils = render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[`/pricing-requests/${request.summary.id}`]}>
+      <MemoryRouter initialEntries={[`/pricing-requests/${routeId}`]}>
         <Routes>
           <Route path="/pricing-requests/:id" element={<PricingRequestDetailPage user={user} showToast={showToast} />} />
         </Routes>
@@ -396,6 +405,44 @@ async function waitForLoaded(request = buildRequest()) {
 beforeEach(() => {
   vi.clearAllMocks();
   setApiDefaults();
+});
+
+describe('PricingRequestDetailPage unavailable states', () => {
+  it('renders a contextual loading state while the detail is pending', async () => {
+    renderDetailPage({
+      detailPromise: new Promise(() => {}),
+      routeId: 501,
+    });
+
+    expect((await screen.findByRole('status')).textContent).toContain('กำลังโหลดใบขอราคา');
+    expect(screen.getByText('กำลังดึงรายละเอียดสินค้า ผู้รับ และสถานะล่าสุด')).toBeTruthy();
+  });
+
+  it('renders a recoverable error state and retries the existing query', async () => {
+    const error = new Error('โหลดใบขอราคาไม่สำเร็จ');
+    renderDetailPage({ detailError: error, routeId: 501 });
+
+    expect((await screen.findByRole('alert')).textContent).toContain('โหลดใบขอราคาไม่สำเร็จ');
+
+    api.pricingRequests.get.mockResolvedValueOnce({ pricingRequest: buildRequest() });
+    fireEvent.click(screen.getByRole('button', { name: /ลองใหม่/ }));
+
+    await waitForLoaded();
+    expect(api.pricingRequests.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses a safe back action for sales users who cannot open the pricing-request queue', async () => {
+    renderDetailPage({
+      user: salesOwner,
+      request: null,
+      routeId: 501,
+    });
+
+    expect(await screen.findByText('ไม่พบใบขอราคานี้')).toBeTruthy();
+    expect(screen.getByText('ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'กลับ' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'กลับไปที่คิวใบขอราคา' })).toBeNull();
+  });
 });
 
 describe('PricingRequestDetailPage role-scoped raw quote/costing visibility (UI-level only — see file header)', () => {

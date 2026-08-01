@@ -1,14 +1,18 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { hasPermission } from '../../app/permissions.js';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from '../../components/common/Icon.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
+import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
+import { toUserErrorDescription, toUserErrorMessage } from '../../utils/userMessages.js';
 import {
   canActOnPricingDecision,
   canConfirmOrder,
@@ -76,9 +80,19 @@ function dispatchStatusBadge(quote) {
   const tone = status === 'FAILED' ? 'danger' : 'warning';
   const attempt = quote.dispatchAttemptCount > 1 ? ` (ครั้งที่ ${quote.dispatchAttemptCount})` : '';
   return (
-    <StatusBadge tone={tone}>
+    <StatusBadge key={`dispatch-${quote.id}`} tone={tone}>
       {(DISPATCH_STATUS_LABEL[status] ?? status) + attempt}
     </StatusBadge>
+  );
+}
+
+function PricingRequestDetailSkeleton() {
+  return (
+    <div className="grid w-[min(560px,100%)] gap-3" aria-hidden="true">
+      <Skeleton height={28} width="52%" />
+      <Skeleton height={96} />
+      <SkeletonText lines={3} />
+    </div>
   );
 }
 
@@ -228,6 +242,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
     queryClient.invalidateQueries({ queryKey: queryKeys.customerQuotations(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: ['pricingRequests', 'queue'] });
   }
+
+  const canReturnToPricingQueue = hasPermission(user?.role, 'canViewPricingRequestQueue');
+  const returnToSafeList = () => {
+    if (canReturnToPricingQueue) {
+      navigate('/pricing-requests');
+      return;
+    }
+    navigate(-1);
+  };
 
   function useActionMutation(fn, successMessage) {
     return useMutation({
@@ -479,11 +502,57 @@ export function PricingRequestDetailPage({ user, showToast }) {
     && ['DRAFT', 'MORE_INFO_REQUIRED'].includes(summary?.status);
 
   if (detailQuery.isLoading) {
-    return <div className="page-stack"><p className="text-sm text-text-muted">กำลังโหลด...</p></div>;
+    return (
+      <div className="page-stack">
+        <StatePanel
+          state="loading"
+          title="กำลังโหลดใบขอราคา"
+          description="กำลังดึงรายละเอียดสินค้า ผู้รับ และสถานะล่าสุด"
+        >
+          <PricingRequestDetailSkeleton />
+        </StatePanel>
+      </div>
+    );
+  }
+
+  if (detailQuery.isError) {
+    return (
+      <div className="page-stack">
+        <StatePanel
+          state="error"
+          title={toUserErrorMessage(detailQuery.error, 'โหลดใบขอราคาไม่สำเร็จ')}
+          description={toUserErrorDescription(detailQuery.error, 'ลองใหม่อีกครั้ง หรือกลับไปที่รายการคำขอ')}
+          action={(
+            <button type="button" className="secondary-button" onClick={() => detailQuery.refetch()}>
+              <Icon name="refresh" size={14} />
+              ลองใหม่
+            </button>
+          )}
+          secondaryAction={(
+            <button type="button" className="primary-button" onClick={returnToSafeList}>
+              {canReturnToPricingQueue ? 'กลับไปที่คิวใบขอราคา' : 'กลับ'}
+            </button>
+          )}
+        />
+      </div>
+    );
   }
 
   if (!summary) {
-    return <div className="page-stack"><p className="text-sm text-text-muted">ไม่พบใบขอราคา</p></div>;
+    return (
+      <div className="page-stack">
+        <StatePanel
+          state="notFound"
+          title="ไม่พบใบขอราคานี้"
+          description="ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้"
+          action={(
+            <button type="button" className="primary-button" onClick={returnToSafeList}>
+              {canReturnToPricingQueue ? 'กลับไปที่คิวใบขอราคา' : 'กลับ'}
+            </button>
+          )}
+        />
+      </div>
+    );
   }
 
   return (
@@ -685,8 +754,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   ) : null}
                   {quote.items?.length ? (
                     <div className="mt-3 flex flex-col gap-1 border-t border-border-subtle pt-3 text-xs text-text-muted">
-                      {quote.items.map((line) => (
-                        <span key={line.id}>
+                      {quote.items.map((line, index) => (
+                        <span key={line.id ?? `${line.pricingRequestItemId ?? 'item'}-${index}`}>
                           Item #{line.pricingRequestItemId} · raw {formatCurrency(line.rawUnitPrice, line.currency)} · {line.unitBasis ?? '-'} · {line.sqmPerUnit ? `${line.sqmPerUnit} sqm/unit` : '-'}
                         </span>
                       ))}
@@ -785,16 +854,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <StatusBadge tone={costing.status === 'SUBMITTED' ? 'success' : 'warning'}>{costing.status}{costing.stale ? ' · stale' : ''}</StatusBadge>
                   <span className="text-xs text-text-muted">{costing.totalLandedCostThb != null ? formatCurrency(costing.totalLandedCostThb, 'THB') : '-'}</span>
                   {isImport(user) && costing.id === latestOpenCosting?.id ? (
-                    <>
+                    <Fragment key={`costing-actions-${costing.id}`}>
                       <button type="button" className="secondary-button" onClick={() => recalculateCosting.mutate(costing)} data-testid="pcr-costing-recalculate">คำนวณใหม่</button>
                       <button type="button" className="secondary-button" disabled={costing.status !== 'CALCULATED' || costing.stale} onClick={() => setConfirmAction({ type: 'submitCosting', costing })} data-testid="pcr-costing-submit">Submit to CEO</button>
-                    </>
+                    </Fragment>
                   ) : null}
                 </div>
                 {canSeeRaw(user) && costing.items?.length ? (
                   <div className="mt-2 flex flex-col gap-1 text-xs text-text-muted">
-                    {costing.items.map((item) => (
-                      <span key={item.id}>{item.factoryName} · Rev {item.factoryQuoteRevisionNo} · raw {formatCurrency(item.rawUnitPrice, item.rawCurrency)} · landed {formatCurrency(item.landedCostPerUnitThb, 'THB')}</span>
+                    {costing.items.map((item, index) => (
+                      <span key={item.id ?? `${item.factoryName ?? 'factory'}-${item.factoryQuoteRevisionNo ?? 'rev'}-${index}`}>{item.factoryName} · Rev {item.factoryQuoteRevisionNo} · raw {formatCurrency(item.rawUnitPrice, item.rawCurrency)} · landed {formatCurrency(item.landedCostPerUnitThb, 'THB')}</span>
                     ))}
                   </div>
                 ) : null}
@@ -841,7 +910,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 return margin == null || margin === '' || minPrice == null || minPrice === '';
               });
               return (
-                <div className="rounded-md border border-border bg-surface p-3">
+                <div key={decision.id} className="rounded-md border border-border bg-surface p-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <strong>{decision.decisionCode}</strong>
                     <StatusBadge tone="neutral">Version {decision.decisionVersionNo}</StatusBadge>
@@ -993,7 +1062,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
               const quotation = currentCustomerQuotation;
               const editable = isCustomerQuotationEditable(quotation) && canManageCustomerQuotation(user, summary);
               return (
-                <div className="flex flex-col gap-3">
+                <div key={quotation.id} className="flex flex-col gap-3">
                   <div className="text-sm"><strong>เลขที่</strong> {quotation.number}</div>
                   <div className="flex flex-col gap-2">
                     {quotation.items.map((item) => {
@@ -1101,7 +1170,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       Preview XLSX
                     </button>
                     {editable ? (
-                      <>
+                      <Fragment key={`quotation-actions-${quotation.id}`}>
                         <button type="button" className="secondary-button" onClick={() => saveQuotation.mutate(quotation)} disabled={saveQuotation.isPending}>
                           บันทึก
                         </button>
@@ -1113,7 +1182,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           onClick={() => cancelQuotation.mutate(quotation)}>
                           ยกเลิกร่าง
                         </button>
-                      </>
+                      </Fragment>
                     ) : null}
                     {/* Widened per design correction 3: reachable once REVISION_REQUESTED too,
                         not only ISSUED — same guard the backend's createRevision now enforces. */}
