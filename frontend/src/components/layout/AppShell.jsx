@@ -15,9 +15,21 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const drawerRef = useRef(null);
   const menuButtonRef = useRef(null);
+  const mainRef = useRef(null);
   const location = useLocation();
   const navigate = useNavigate();
   const drawerId = 'mobile-navigation-drawer';
+  const mainContentId = 'main-content';
+
+  // WCAG 2.2 §2.4.1 Bypass Blocks: a bare `href="#main-content"` moves the
+  // viewport but focus-follows-fragment behaviour is inconsistent across
+  // browsers, so this focuses the target explicitly rather than relying on
+  // it. `tabIndex={-1}` on <main> (below) makes it programmatically
+  // focusable without adding it to the normal tab sequence.
+  const handleSkipLinkClick = useCallback((event) => {
+    event.preventDefault();
+    mainRef.current?.focus();
+  }, []);
   const isTeamManager = isDivisionManager(user);
   const navItems = [
     { path: '/', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
@@ -186,6 +198,18 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
 
   return (
     <div className="app-shell">
+      {/* WCAG 2.2 §2.4.1 Bypass Blocks: the first focusable element in the
+          shell, ahead of the sidebar's ~10 nav items + group headers, so
+          keyboard/screen-reader users don't re-traverse the nav on every
+          route. sr-only until focused; `focus:not-sr-only` brings it on
+          screen only while focused. */}
+      <a
+        href={`#${mainContentId}`}
+        onClick={handleSkipLinkClick}
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[200] focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-surface focus:shadow-lg"
+      >
+        ข้ามไปยังเนื้อหาหลัก
+      </a>
       <Sidebar
         id={drawerId}
         drawerRef={drawerRef}
@@ -202,7 +226,18 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
         onClick={closeDrawer}
         tabIndex={-1}
       />
-      <main className="app-main">
+      {/* tabIndex={-1}: focusable via the skip link's .focus() call, but not
+          part of the normal Tab sequence. The global `:focus-visible`
+          outline rule in styles.css excludes `[tabindex="-1"]`, and an
+          outset outline would clip against `.app-shell`'s `overflow:
+          hidden`, so an inset ring (reusing the same focus-ring token) is
+          used here to confirm the landing without changing layout. */}
+      <main
+        id={mainContentId}
+        ref={mainRef}
+        tabIndex={-1}
+        className="app-main outline-none focus-visible:shadow-[inset_0_0_0_3px_var(--color-indigo-ring)]"
+      >
         <header className="topbar">
           <Button
             ref={menuButtonRef}
