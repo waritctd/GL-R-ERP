@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { Icon } from '../../components/common/Icon.jsx';
+import { useMediaQuery } from '../../hooks/useIsMobile.js';
 import { formatThaiDate } from '../../utils/format.js';
 import { activePricingRequestsSummary } from '../pricingRequests/pricingRequestMeta.js';
 
@@ -39,14 +41,17 @@ export function TicketContextPanel({
   latestQuotation = null,
   events = [],
   bannerText = null,
-  notesAvailable = false,
   canComment = false,
-  noteText = '',
-  onNoteTextChange,
-  onSubmitNote,
-  noteSubmitting = false,
+  commentText = '',
+  onCommentTextChange,
+  onSubmitComment,
+  commentSubmitting = false,
+  showCommentForm = true,
   canViewPricingRequests = true,
 }) {
+  const isDesktopRail = useMediaQuery('(min-width: 1280px)');
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const expanded = isDesktopRail || mobileOpen;
   const pricingSummary = activePricingRequestsSummary(pricingRequests);
   const latestPr = pricingSummary ? pricingSummary.requests[pricingSummary.requests.length - 1] : null;
   const assignedImport = canViewPricingRequests
@@ -55,7 +60,7 @@ export function TicketContextPanel({
       : 'ยังไม่มี PCR'
     : 'ไม่แสดงในมุมมองนี้';
 
-  const recentNotes = [...events]
+  const recentComments = [...events]
     .filter((event) => COMMENT_EVENT_KINDS.has(event.kind) && event.message)
     .sort((a, b) => {
       const at = timestamp(a.createdAt);
@@ -67,75 +72,89 @@ export function TicketContextPanel({
     })
     .slice(0, 3);
 
+  const content = expanded ? (
+    <div className="flex flex-col gap-5">
+      <ContextSection title="Next action" icon="chevronRight">
+        <p className="m-0 rounded-md border border-info-border bg-info-bg px-3 py-2 text-sm font-bold text-info">
+          {bannerText || 'ไม่มี Next action ในสถานะนี้'}
+        </p>
+      </ContextSection>
+
+      <ContextSection title="ความคิดเห็น" icon="pencil">
+        <div className="flex flex-col gap-3">
+          {canComment && showCommentForm ? (
+            <div className="flex flex-col gap-2">
+              <textarea
+                rows={3}
+                value={commentText}
+                onChange={(event) => onCommentTextChange?.(event.target.value)}
+                placeholder="เพิ่มความคิดเห็น..."
+                className="min-h-20 resize-y text-base"
+              />
+              <button
+                type="button"
+                className="secondary-button self-end"
+                disabled={commentSubmitting || !commentText.trim()}
+                onClick={onSubmitComment}
+              >
+                ส่งความคิดเห็น
+              </button>
+            </div>
+          ) : null}
+          {recentComments.length > 0 ? (
+            <ul className="m-0 flex list-none flex-col gap-2 p-0">
+              {recentComments.map((comment) => (
+                <li key={comment.id} className="rounded-md bg-surface-muted px-3 py-2 text-xs">
+                  <p className="m-0 text-text-secondary">{comment.message}</p>
+                  <small className="mt-1 block text-2xs font-semibold text-text-muted">
+                    {comment.actorName || '-'} · {formatThaiDate(comment.createdAt)}
+                  </small>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="m-0 text-xs text-text-muted">ยังไม่มีความคิดเห็น</p>
+          )}
+        </div>
+      </ContextSection>
+
+      <ContextSection title="Key dates" icon="calendar">
+        <dl className="m-0">
+          <FieldRow label="ติดตามครั้งถัดไป" value={formatThaiDate(summary.nextFollowUpAt)} />
+          <FieldRow label="ติดตามล่าสุด" value={formatThaiDate(summary.lastFollowUpAt)} />
+          <FieldRow label="วันวางบิล" value={formatThaiDate(summary.billingDate)} />
+          <FieldRow label="ครบกำหนดชำระ" value={formatThaiDate(summary.dueDate)} danger={summary.overdue} />
+          <FieldRow label="ใบเสนอราคาหมดอายุ" value={formatThaiDate(latestQuotation?.validityDate)} />
+        </dl>
+      </ContextSection>
+
+      <ContextSection title="People" icon="users">
+        <dl className="m-0">
+          <FieldRow label="เจ้าของดีล" value={summary.createdByName} />
+          <FieldRow label="Import บน PCR" value={assignedImport} />
+          <FieldRow label="บัญชี" value={summary.closeConfirmedByName || 'ยังไม่ระบุ'} />
+          <FieldRow label="ผู้ติดต่อ" value={summary.contactName} />
+        </dl>
+      </ContextSection>
+    </div>
+  ) : null;
+
   return (
     <aside className="rounded-lg border border-border bg-surface p-4 shadow-sm" aria-label="บริบทดีล">
-      <div className="flex flex-col gap-5">
-        <ContextSection title="Next action" icon="chevronRight">
-          <p className="m-0 rounded-md border border-info-border bg-info-bg px-3 py-2 text-sm font-bold text-info">
-            {bannerText || 'ไม่มี Next action ในสถานะนี้'}
-          </p>
-        </ContextSection>
-
-        <ContextSection title="Notes" icon="pencil">
-          {notesAvailable ? (
-            <div className="flex flex-col gap-3">
-              {canComment ? (
-                <div className="flex flex-col gap-2">
-                  <textarea
-                    rows={3}
-                    value={noteText}
-                    onChange={(event) => onNoteTextChange?.(event.target.value)}
-                    placeholder="เพิ่มบันทึก..."
-                    className="min-h-20 resize-y text-base"
-                  />
-                  <button
-                    type="button"
-                    className="secondary-button self-end"
-                    disabled={noteSubmitting || !noteText.trim()}
-                    onClick={onSubmitNote}
-                  >
-                    เพิ่มบันทึก
-                  </button>
-                </div>
-              ) : null}
-              {recentNotes.length > 0 ? (
-                <ul className="m-0 flex list-none flex-col gap-2 p-0">
-                  {recentNotes.map((note) => (
-                    <li key={note.id} className="rounded-md bg-surface-muted px-3 py-2 text-xs">
-                      <p className="m-0 text-text-secondary">{note.message}</p>
-                      <small className="mt-1 block text-2xs font-semibold text-text-muted">
-                        {note.actorName || '-'} · {formatThaiDate(note.createdAt)}
-                      </small>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="m-0 text-xs text-text-muted">ยังไม่มีบันทึก</p>
-              )}
-            </div>
-          ) : (
-            <p className="m-0 text-xs text-text-muted">Notes ยังไม่พร้อมใช้งานใน API ปัจจุบัน</p>
-          )}
-        </ContextSection>
-
-        <ContextSection title="Key dates" icon="calendar">
-          <dl className="m-0">
-            <FieldRow label="ติดตามครั้งถัดไป" value={formatThaiDate(summary.nextFollowUpAt)} />
-            <FieldRow label="ติดตามล่าสุด" value={formatThaiDate(summary.lastFollowUpAt)} />
-            <FieldRow label="วันวางบิล" value={formatThaiDate(summary.billingDate)} />
-            <FieldRow label="ครบกำหนดชำระ" value={formatThaiDate(summary.dueDate)} danger={summary.overdue} />
-            <FieldRow label="ใบเสนอราคาหมดอายุ" value={formatThaiDate(latestQuotation?.validityDate)} />
-          </dl>
-        </ContextSection>
-
-        <ContextSection title="People" icon="users">
-          <dl className="m-0">
-            <FieldRow label="เจ้าของดีล" value={summary.createdByName} />
-            <FieldRow label="Import บน PCR" value={assignedImport} />
-            <FieldRow label="บัญชี" value={summary.closeConfirmedByName || 'ยังไม่ระบุ'} />
-            <FieldRow label="ผู้ติดต่อ" value={summary.contactName} />
-          </dl>
-        </ContextSection>
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-3 bg-transparent text-left xl:hidden"
+        aria-expanded={mobileOpen}
+        onClick={() => setMobileOpen((open) => !open)}
+      >
+        <span className="min-w-0">
+          <span className="block text-sm font-extrabold text-text">บริบทดีล</span>
+          <span className="block text-xs font-semibold text-text-muted">ความคิดเห็น · วันที่ · คนเกี่ยวข้อง</span>
+        </span>
+        <Icon name="chevronDown" size={16} className={`shrink-0 text-text-muted transition-transform ${mobileOpen ? 'rotate-180' : ''}`} />
+      </button>
+      <div className={mobileOpen ? 'mt-4 xl:mt-0' : 'xl:mt-0'}>
+        {content}
       </div>
     </aside>
   );

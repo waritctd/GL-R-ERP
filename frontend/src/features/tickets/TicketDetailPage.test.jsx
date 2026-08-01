@@ -316,7 +316,7 @@ describe('TicketDetailPage', () => {
     expect(within(chip).queryByText('฿0.00')).toBeNull();
   });
 
-  it('renders the ticket context panel with mirrored next action, dates, people, and recent notes', async () => {
+  it('collapses the context panel below xl by default and expands to show mirrored next action, dates, people, and recent comments', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
         summary: {
@@ -342,6 +342,8 @@ describe('TicketDetailPage', () => {
     renderTicketDetailPage(salesOwnerUser);
 
     const panel = await screen.findByRole('complementary', { name: 'บริบทดีล' });
+    expect(within(panel).queryByText('Key dates')).toBeNull();
+    fireEvent.click(within(panel).getByRole('button', { name: /บริบทดีล/ }));
     expect(screen.getAllByText('ถึงคิวคุณ: สร้างใบขอราคา').length).toBe(2);
     expect(within(panel).getByText('20 ก.ค. 2569')).not.toBeNull();
     expect(within(panel).getByText('31 ก.ค. 2569')).not.toBeNull();
@@ -351,14 +353,28 @@ describe('TicketDetailPage', () => {
     expect(within(panel).getByText('บันทึกสำหรับบริบทดีล')).not.toBeNull();
   });
 
-  it('adds a context-panel note through the existing ticket comment endpoint', async () => {
+  it('adds a context-panel comment through the existing ticket comment endpoint', async () => {
     renderTicketDetailPage(salesOwnerUser);
 
     const panel = await screen.findByRole('complementary', { name: 'บริบทดีล' });
-    fireEvent.change(within(panel).getByPlaceholderText('เพิ่มบันทึก...'), { target: { value: 'จดไว้จากแผงบริบท' } });
-    fireEvent.click(within(panel).getByRole('button', { name: 'เพิ่มบันทึก' }));
+    fireEvent.click(within(panel).getByRole('button', { name: /บริบทดีล/ }));
+    fireEvent.change(within(panel).getByPlaceholderText('เพิ่มความคิดเห็น...'), { target: { value: 'จดไว้จากแผงบริบท' } });
+    fireEvent.click(within(panel).getByRole('button', { name: 'ส่งความคิดเห็น' }));
 
     await waitFor(() => expect(api.tickets.comment).toHaveBeenCalledWith(701, { message: 'จดไว้จากแผงบริบท' }));
+  });
+
+  it('does not render a second comment control in the context panel on the activity tab', async () => {
+    renderTicketDetailPage(salesOwnerUser);
+
+    await openTab(/กิจกรรม/);
+    expect(screen.getByPlaceholderText('เพิ่มความคิดเห็น...')).not.toBeNull();
+
+    const panel = await screen.findByRole('complementary', { name: 'บริบทดีล' });
+    fireEvent.click(within(panel).getByRole('button', { name: /บริบทดีล/ }));
+
+    expect(within(panel).queryByPlaceholderText('เพิ่มความคิดเห็น...')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'ส่งความคิดเห็น' })).toHaveLength(1);
   });
 
   it('renders legacy quotation revisions read-only — no revise/mark-sent/mark-decision buttons', async () => {

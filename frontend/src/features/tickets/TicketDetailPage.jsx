@@ -315,7 +315,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   // Comment
   const [commentText, setCommentText] = useState('');
-  const [contextNoteText, setContextNoteText] = useState('');
+  const [contextCommentText, setContextCommentText] = useState('');
 
   // Confirmation dialogs (state-driven, replaces native browser confirm)
   const [confirm, setConfirm] = useState(null); // { kind: 'deleteAttachment', id, name } | { kind: 'cancelTicket' } | { kind: 'finalPayment' } | null
@@ -467,7 +467,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     setPaymentModal(false);
     setBillingModal(false);
     setCommentText('');
-    setContextNoteText('');
+    setContextCommentText('');
   }
 
   // Generic action mutation — a drop-in replacement for the old doAction(fn,
@@ -1089,9 +1089,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     await doAction(() => api.tickets.comment(ticketId, { message: commentText.trim() }), 'เพิ่มความคิดเห็นแล้ว');
   }
 
-  async function handleContextNote() {
-    if (!contextNoteText.trim()) return;
-    await doAction(() => api.tickets.comment(ticketId, { message: contextNoteText.trim() }), 'เพิ่มบันทึกแล้ว');
+  async function handleContextComment() {
+    if (!contextCommentText.trim()) return;
+    await doAction(() => api.tickets.comment(ticketId, { message: contextCommentText.trim() }), 'เพิ่มความคิดเห็นแล้ว');
   }
 
   async function handleRecordPayment() {
@@ -2048,12 +2048,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           latestQuotation={latestQuotation}
           events={events}
           bannerText={bannerText}
-          notesAvailable
           canComment={can.comment}
-          noteText={contextNoteText}
-          onNoteTextChange={setContextNoteText}
-          onSubmitNote={handleContextNote}
-          noteSubmitting={actionLoading}
+          commentText={contextCommentText}
+          onCommentTextChange={setContextCommentText}
+          onSubmitComment={handleContextComment}
+          commentSubmitting={actionLoading}
+          showCommentForm={visibleActiveTab !== 'activity'}
           canViewPricingRequests={canViewPricingRequests}
         />
       </div>
