@@ -20,7 +20,6 @@ import {
   paymentStageLabel,
   quotationRecipientLabel,
   quotationStatusLabel,
-  ticketStatusLabel,
 } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx';
@@ -33,6 +32,7 @@ import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
+import { TicketContextPanel } from './TicketContextPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
 import { allowedTargetStages, canMarkLost, canSetStage, nextStage } from './stageMeta.js';
 import {
@@ -315,6 +315,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   // Comment
   const [commentText, setCommentText] = useState('');
+  const [contextNoteText, setContextNoteText] = useState('');
 
   // Confirmation dialogs (state-driven, replaces native browser confirm)
   const [confirm, setConfirm] = useState(null); // { kind: 'deleteAttachment', id, name } | { kind: 'cancelTicket' } | { kind: 'finalPayment' } | null
@@ -466,6 +467,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     setPaymentModal(false);
     setBillingModal(false);
     setCommentText('');
+    setContextNoteText('');
   }
 
   // Generic action mutation — a drop-in replacement for the old doAction(fn,
@@ -702,8 +704,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // the remaining actions apply.
   const hasActions = can.editItems || can.revokeCloseConfirm
     || (st === 'draft' && isOwner && items.length === 0);
-
-  const status = ticketStatusLabel(st);
 
   // Next-action summary for the current viewer only — derived strictly from the
   // `can` flags above (which already encode real status+role permission checks).
@@ -1089,6 +1089,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     await doAction(() => api.tickets.comment(ticketId, { message: commentText.trim() }), 'เพิ่มความคิดเห็นแล้ว');
   }
 
+  async function handleContextNote() {
+    if (!contextNoteText.trim()) return;
+    await doAction(() => api.tickets.comment(ticketId, { message: contextNoteText.trim() }), 'เพิ่มบันทึกแล้ว');
+  }
+
   async function handleRecordPayment() {
     const amount = Number(paymentDraft.amount);
     if (!amount || amount <= 0) {
@@ -1178,19 +1183,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         overflowItems={overflowItems}
         onRefresh={refreshTicket}
       />
-      <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted sm:gap-4">
-        <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-        {summary.hasEdits && <StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge>}
-        <span>สร้างโดย <strong className="text-text-secondary">{summary.createdByName || '-'}</strong> · {formatThaiDate(summary.createdAt)}</span>
-        {summary.assignedToName && (
-          <span>เจ้าหน้าที่นำเข้าที่ดูแล <strong className="text-text-secondary">{summary.assignedToName}</strong></span>
-        )}
-      </div>
+
+      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-start">
 
       {/* Deal pipeline (V50): the 14-stage journey with stage-gated doc actions.
           Generation buttons reuse the exact handlers/permissions of the action
           row; once a document exists (quotation / ใบแจ้งยอดมัดจำ) it stays
           reachable from here through the later stages too. */}
+      <div className="min-w-0 xl:col-start-1">
       <DealStagePanel
         ref={dealStagePanelRef}
         user={user}
@@ -1238,6 +1238,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           </>
         ) : null}
       />
+      </div>
 
       {/* Ticket-detail IA rebuild Phase 2 (see
           docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md
@@ -1255,14 +1256,17 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           `?tab=documents` deep link (account, or an import rep who isn't
           this ticket's assignee) falls back to ภาพรวม instead of
           highlighting a tab with no button and rendering nothing. */}
-      <Tabs
-        items={visibleTabItems}
-        value={visibleActiveTab}
-        onChange={setActiveTab}
-        ariaLabel="รายละเอียดดีล"
-        idPrefix="ticket-detail"
-      />
+      <div className="min-w-0 xl:col-start-1">
+        <Tabs
+          items={visibleTabItems}
+          value={visibleActiveTab}
+          onChange={setActiveTab}
+          ariaLabel="รายละเอียดดีล"
+          idPrefix="ticket-detail"
+        />
+      </div>
 
+      <div className="min-w-0 xl:col-start-1">
       <TabPanel id="overview" idPrefix="ticket-detail" active={visibleActiveTab === 'overview'}>
           <section className="panel">
             <div className="panel-header">
@@ -2035,6 +2039,24 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             addingActivity={addActivityMutation.isPending}
           />
       </TabPanel>
+      </div>
+
+      <div className="min-w-0 xl:sticky xl:top-[18rem] xl:col-start-2 xl:row-start-1 xl:row-span-4 xl:max-h-[calc(100vh-19rem)] xl:overflow-y-auto">
+        <TicketContextPanel
+          summary={summary}
+          pricingRequests={pricingRequests}
+          latestQuotation={latestQuotation}
+          events={events}
+          bannerText={bannerText}
+          notesAvailable
+          canComment={can.comment}
+          noteText={contextNoteText}
+          onNoteTextChange={setContextNoteText}
+          onSubmitNote={handleContextNote}
+          noteSubmitting={actionLoading}
+          canViewPricingRequests={canViewPricingRequests}
+        />
+      </div>
 
       {/* "จัดการดีล" danger zone (ticket-detail IA rebuild Phase 1): เสียงาน /
           ยกเลิก moved off the working surface into a clearly-labelled,
@@ -2044,7 +2066,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           modals), only demoted from sitting inline among the day-to-day
           pipeline controls. */}
       {(canLostDeal || can.cancel) ? (
-        <section className="rounded-xl border border-danger-border bg-danger-bg p-4 sm:p-5" aria-labelledby="deal-danger-zone-heading">
+        <section className="rounded-xl border border-danger-border bg-danger-bg p-4 sm:p-5 xl:col-start-1" aria-labelledby="deal-danger-zone-heading">
           <h2 id="deal-danger-zone-heading" className="m-0 text-sm font-extrabold text-danger-dark">จัดการดีล</h2>
           <p className="mt-1 text-xs text-danger-dark">การดำเนินการเหล่านี้ส่งผลต่อทั้งดีล และบางรายการย้อนกลับไม่ได้ — ใช้เมื่อจำเป็นเท่านั้น</p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -2073,6 +2095,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           </div>
         </section>
       ) : null}
+      </div>
 
       {paymentModal && (
         <Modal

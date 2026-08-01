@@ -152,7 +152,7 @@ export function PhaseTracker({ salesStage, lost = false }) {
                 style={{ width: `${fill * 100}%` }}
               />
             </div>
-            <span className="truncate text-2xs font-semibold text-text-muted">{phase.name}</span>
+            <span className="text-2xs font-semibold leading-tight text-text-muted [overflow-wrap:anywhere]">{phase.name}</span>
           </div>
         );
       })}
