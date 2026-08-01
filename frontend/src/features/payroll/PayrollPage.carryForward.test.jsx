@@ -10,6 +10,11 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
+// hasPermission(user?.role, 'canManagePayroll') reads false for an absent user (issue #390 --
+// canManage is an allowlist off ROLE_PERMISSIONS), so every render below passes a real HR user
+// explicitly rather than relying on an implicit default.
+const hrUser = { role: 'hr', employeeId: 10 };
+
 vi.mock('../../api/index.js', () => ({
   api: {
     payroll: {
@@ -97,7 +102,7 @@ describe('PayrollPage special-pay carry-forward', () => {
       ],
     });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     // Deliberately not asserting the exact month string (it derives from "today", so hardcoding it
     // would make the test flake across a real month boundary) — only that a payrollMonth was passed.
@@ -138,7 +143,7 @@ describe('PayrollPage special-pay carry-forward', () => {
       ],
     });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     await waitFor(() => expect(costOfLiving.value).toBe('700'));
@@ -159,7 +164,7 @@ describe('PayrollPage special-pay carry-forward', () => {
       period: freshPreviewPeriod({ id: 7, status: 'PROCESSED' }),
     });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     expect(api.payroll.suggestedInputs).not.toHaveBeenCalled();

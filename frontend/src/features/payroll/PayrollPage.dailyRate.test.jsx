@@ -13,6 +13,11 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
+// hasPermission(user?.role, 'canManagePayroll') reads false for an absent user (issue #390 --
+// canManage is an allowlist off ROLE_PERMISSIONS), so every render below passes a real HR user
+// explicitly rather than relying on an implicit default.
+const hrUser = { role: 'hr', employeeId: 10 };
+
 vi.mock('../../api/index.js', () => ({
   api: {
     payroll: {
@@ -116,7 +121,7 @@ describe('PayrollPage daily-rate (pay_type = D) support', () => {
   it('does not render the days-worked field for a monthly (pay_type != D) employee', async () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriodWith(monthlyLine) });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     await waitFor(() => expect(screen.getAllByText('พนักงาน รายเดือน').length).toBeGreaterThan(0));
     expect(screen.queryByLabelText(/จำนวนวันทำงานในงวดนี้/, { selector: 'input' })).toBeNull();
@@ -125,7 +130,7 @@ describe('PayrollPage daily-rate (pay_type = D) support', () => {
   it('renders the days-worked field for a daily-rate (pay_type = D) employee, reachable from payType', async () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriodWith(dailyRateLine()) });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const daysWorked = await screen.findByLabelText(/จำนวนวันทำงานในงวดนี้/, { selector: 'input' });
     expect(daysWorked).not.toBeNull();
@@ -136,7 +141,7 @@ describe('PayrollPage daily-rate (pay_type = D) support', () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriodWith(dailyRateLine()) });
     api.payroll.preview.mockResolvedValue({ period: previewPeriodWith(dailyRateLine()) });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const daysWorked = await screen.findByLabelText(/จำนวนวันทำงานในงวดนี้/, { selector: 'input' });
     fireEvent.change(daysWorked, { target: { value: '25' } });
@@ -155,7 +160,7 @@ describe('PayrollPage daily-rate (pay_type = D) support', () => {
       period: previewPeriodWith(dailyRateLine({ daysWorked: 25 })),
     });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const daysWorked = await screen.findByLabelText(/จำนวนวันทำงานในงวดนี้/, { selector: 'input' });
     await waitFor(() => expect(daysWorked.value).toBe('25'));
@@ -170,7 +175,7 @@ describe('PayrollPage daily-rate (pay_type = D) support', () => {
   it('the days-worked input is bounded to 31 (matching the backend @Max/DB CHECK)', async () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriodWith(dailyRateLine()) });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const daysWorked = await screen.findByLabelText(/จำนวนวันทำงานในงวดนี้/, { selector: 'input' });
     expect(daysWorked.max).toBe('31');
@@ -179,7 +184,7 @@ describe('PayrollPage daily-rate (pay_type = D) support', () => {
   it('warns (list row + detail panel) when a daily-rate employee has no days-worked entered yet', async () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriodWith(dailyRateLine()) });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     await screen.findByLabelText(/จำนวนวันทำงานในงวดนี้/, { selector: 'input' });
     expect(screen.getAllByText(/ยังไม่ได้ระบุจำนวนวันทำงาน/).length).toBeGreaterThan(0);
@@ -192,7 +197,7 @@ describe('PayrollPage daily-rate (pay_type = D) support', () => {
     // Preview/Process, by design, exactly like grossEarnings/netPay do).
     api.payroll.current.mockResolvedValue({ period: previewPeriodWith(dailyRateLine()) });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const daysWorked = await screen.findByLabelText(/จำนวนวันทำงานในงวดนี้/, { selector: 'input' });
     expect(screen.queryByText(/พนักงานรายวันจะได้รับเงินเดือน/)).not.toBeNull();

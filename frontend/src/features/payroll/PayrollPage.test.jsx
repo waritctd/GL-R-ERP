@@ -83,8 +83,14 @@ function previewPeriod(overrides = {}) {
   };
 }
 
+// hasPermission(user?.role, 'canManagePayroll') reads false for an absent user (issue #390 review
+// fix -- canManage is now an allowlist off ROLE_PERMISSIONS, not a `role !== 'ceo'` denylist), so
+// every render below must pass a real user explicitly or these tests would exercise the read-only
+// (CEO-shaped) page instead of the full HR management view they intend to cover.
+const hrUser = { role: 'hr', employeeId: 10 };
+
 function renderPayrollPage() {
-  return render(<PayrollPage showToast={vi.fn()} />);
+  return render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 }
 
 async function openDocumentsMenu() {
@@ -134,7 +140,7 @@ describe('PayrollPage adjustment inputs', () => {
   });
 
   it('uses Excel-based UAT defaults and shows a Baht prefix on money fields', async () => {
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     const gprs = screen.getByLabelText(/พิเศษ 6 \(ค่า GPRS\)/);
@@ -147,7 +153,7 @@ describe('PayrollPage adjustment inputs', () => {
   });
 
   it('allows clearing zero/default amounts and sends them as zeroes', async () => {
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     const gprs = screen.getByLabelText(/พิเศษ 6 \(ค่า GPRS\)/);
@@ -902,7 +908,7 @@ describe('PayrollPage adjustment inputs', () => {
         'พนักงาน GLR-001 พนักงาน ทดสอบ มีการจ่ายเบี้ยเลี้ยง (เบี้ยเลี้ยง ตจว/ตปท) แต่ไม่ได้ระบุฐานตามมาตรา 42'
         + ' (เหมาจ่ายตามอัตราราชการ มาตรา 42(2) หรือจ่ายจริงตามหน้าที่ มาตรา 42(1)) กรุณาเลือกฐานก่อนประมวลผลเงินเดือน',
       ));
-      render(<PayrollPage showToast={showToast} />);
+      render(<PayrollPage user={hrUser} showToast={showToast} />);
       const taxable = await openPerDiemSection();
       fireEvent.change(taxable, { target: { value: '300' } });
 
@@ -936,7 +942,7 @@ describe('PayrollPage adjustment inputs', () => {
     }));
     const showToast = vi.fn();
 
-    render(<PayrollPage showToast={showToast} />);
+    render(<PayrollPage user={hrUser} showToast={showToast} />);
 
     await openDocumentsMenu();
     fireEvent.click(screen.getByRole('menuitem', { name: /รายละเอียดเงินเดือนรายเดือน/ }));
@@ -958,7 +964,7 @@ describe('PayrollPage adjustment inputs', () => {
     }));
     const showToast = vi.fn();
 
-    render(<PayrollPage showToast={showToast} />);
+    render(<PayrollPage user={hrUser} showToast={showToast} />);
 
     await openDocumentsMenu();
     const detailItem = screen.getByRole('menuitem', { name: /รายละเอียดเงินเดือนรายเดือน/ });
@@ -976,7 +982,7 @@ describe('PayrollPage adjustment inputs', () => {
   it('keeps the three statutory export kinds gated on a real period id even though payroll-detail is not', async () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: null, status: 'PREVIEW', lineCount: 1 }) });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     await openDocumentsMenu();
     const kbankItem = screen.getByRole('menuitem', { name: /KBank Payroll/ });
@@ -994,7 +1000,7 @@ describe('PayrollPage adjustment inputs', () => {
       api.payroll.downloadPayslipsZip.mockResolvedValue(new Blob(['PK'], { type: 'application/zip' }));
       const showToast = vi.fn();
 
-      render(<PayrollPage showToast={showToast} />);
+      render(<PayrollPage user={hrUser} showToast={showToast} />);
 
       await openDocumentsMenu();
       const zipItem = screen.getByRole('menuitem', { name: /ดาวน์โหลดสลิปเงินเดือนทั้งหมด/ });
@@ -1008,7 +1014,7 @@ describe('PayrollPage adjustment inputs', () => {
     it('is disabled for an unprocessed period (no periodId yet)', async () => {
       api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: null, status: 'PREVIEW' }) });
 
-      render(<PayrollPage showToast={vi.fn()} />);
+      render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
       await openDocumentsMenu();
       const zipItem = screen.getByRole('menuitem', { name: /ดาวน์โหลดสลิปเงินเดือนทั้งหมด/ });
@@ -1019,7 +1025,7 @@ describe('PayrollPage adjustment inputs', () => {
     it('is disabled for a VOID period even though it has a real periodId', async () => {
       api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 1, status: 'VOID' }) });
 
-      render(<PayrollPage showToast={vi.fn()} />);
+      render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
       await openDocumentsMenu();
       const zipItem = screen.getByRole('menuitem', { name: /ดาวน์โหลดสลิปเงินเดือนทั้งหมด/ });
@@ -1352,5 +1358,138 @@ describe('PayrollPage adjustment inputs', () => {
       expect(defaulted.closest('label').textContent).toContain('ค่าเริ่มต้นของระบบ');
       expect(chosenByHr.closest('label').textContent).not.toContain('ค่าเริ่มต้นของระบบ');
     });
+  });
+});
+
+// Split (issue #390): PayrollController grants CEO the same read access as HR (every GET, plus
+// the non-persisting POST /preview and /preview/export/{kind}, is
+// @PreAuthorize("hasAnyRole('HR','CEO')")) but keeps every write hasRole('HR') only (process, PUT
+// input-draft, PUT component-tax-treatments, POST distribute). `PayrollPage` now takes a `user`
+// prop and derives `canManage = hasPermission(user?.role, 'canManagePayroll')` from it -- an
+// ALLOWLIST read off ROLE_PERMISSIONS, not a `role !== 'ceo'` denylist, so an absent/unknown user
+// reads as NO management access (hasPermission(undefined, ...) is false). These tests pin down
+// the negative case (CEO cannot reach or see the mutating controls), which is the one that
+// actually matters; the positive "HR still has them" case is the pre-existing suite above, which
+// now passes the module-level `hrUser` explicitly through `renderPayrollPage()`.
+describe('PayrollPage read-only CEO view (issue #390)', () => {
+  const ceoUser = { role: 'ceo', employeeId: 99 };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    URL.createObjectURL = vi.fn(() => 'blob:payslip');
+    URL.revokeObjectURL = vi.fn();
+    api.payroll.current.mockResolvedValue({ period: previewPeriod() });
+    api.payroll.preview.mockResolvedValue({ period: previewPeriod() });
+    api.payroll.downloadPayslip.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }));
+    api.payroll.exportFile.mockResolvedValue(new Blob(['HPCT'], { type: 'application/octet-stream' }));
+    api.payroll.distributePayslips.mockResolvedValue({ periodId: 7, totalLines: 1, alreadySent: 0, queued: 1 });
+    api.payroll.suggestedInputs.mockResolvedValue({ payrollMonth: '2026-07-01', suggestions: [] });
+    api.payroll.getInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
+    api.payroll.saveInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
+    api.payroll.getComponentTaxTreatments.mockResolvedValue({ taxYear: 2026, items: [] });
+    api.payroll.saveComponentTaxTreatments.mockResolvedValue({ taxYear: 2026, items: [] });
+  });
+
+  afterEach(() => {
+    if (originalMatchMedia) {
+      window.matchMedia = originalMatchMedia;
+    } else {
+      delete window.matchMedia;
+    }
+  });
+
+  it('shows the read-only oversight badge for CEO and hides it for HR', async () => {
+    const { unmount } = render(<PayrollPage user={ceoUser} showToast={vi.fn()} />);
+    await screen.findByText('มุมมองสำหรับผู้บริหาร — อ่านอย่างเดียว');
+    unmount();
+
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+    await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
+    expect(screen.queryByText('มุมมองสำหรับผู้บริหาร — อ่านอย่างเดียว')).toBeNull();
+  });
+
+  // The test that matters: CEO cannot reach ประมวลผลเงินเดือน (POST /process, hasRole('HR')
+  // only) at all -- not present in the DOM, not merely disabled. HR keeps it, same as every
+  // pre-existing test in this file that never passes a `user` prop.
+  it('never renders the ประมวลผลเงินเดือน (process) button for CEO, while HR still has it', async () => {
+    const { unmount } = render(<PayrollPage user={ceoUser} showToast={vi.fn()} />);
+    await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
+    expect(screen.queryByRole('button', { name: /ประมวลผลเงินเดือน/i })).toBeNull();
+    // The read-only replacement still surfaces the period status/headcount as plain text, scoped
+    // to its own labelled region (the table's footer row also renders "N คน", so an unscoped text
+    // query would ambiguously match both).
+    const statusRegion = screen.getByRole('region', { name: 'สถานะรอบเงินเดือน' });
+    expect(within(statusRegion).getByText(`${previewPeriod().lineCount} คน`)).toBeTruthy();
+    unmount();
+
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
+    expect(await screen.findByRole('button', { name: /ประมวลผลเงินเดือน/i })).toBeTruthy();
+  });
+
+  it('drops the ส่งอีเมลสลิปเงินเดือน (HR-only distribute) menu item for CEO but keeps the document exports and bulk payslip zip', async () => {
+    api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
+    render(<PayrollPage user={ceoUser} showToast={vi.fn()} />);
+
+    const menu = await openDocumentsMenu();
+    expect(within(menu).queryByRole('menuitem', { name: /ส่งอีเมลสลิปเงินเดือน/i })).toBeNull();
+    expect(within(menu).getByRole('menuitem', { name: /ดาวน์โหลด ภ\.ง\.ด\.1/ })).toBeTruthy();
+    expect(within(menu).getByRole('menuitem', { name: /ดาวน์โหลดสลิปเงินเดือนทั้งหมด/ })).toBeTruthy();
+  });
+
+  it('lets CEO still download a saved payslip -- exports and payslip reads stay hasAnyRole(HR,CEO)', async () => {
+    api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
+    render(<PayrollPage user={ceoUser} showToast={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^ดาวน์โหลดสลิป$/i }));
+    await waitFor(() => expect(api.payroll.downloadPayslip).toHaveBeenCalledWith(7, 55));
+  });
+
+  it('disables every special-pay input for CEO in the detail panel instead of hiding the read (input-draft GET is hasAnyRole(HR,CEO))', async () => {
+    render(<PayrollPage user={ceoUser} showToast={vi.fn()} />);
+
+    const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
+    const gprs = screen.getByLabelText(/พิเศษ 6 \(ค่า GPRS\)/);
+    // The value is still visible (a granted read) -- only editing is blocked.
+    expect(costOfLiving.value).toBe('500');
+    expect(costOfLiving.disabled).toBe(true);
+    expect(gprs.disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: /รายการหักรายบุคคล/ }));
+    const unpaidLeaveDays = screen.getByLabelText(/วันลาไม่รับค่าจ้าง/, { selector: 'input' });
+    const withholdingOverride = screen.getByLabelText(/ภาษีหัก ณ ที่จ่าย \(กำหนดเอง\)/, { selector: 'input' });
+    expect(unpaidLeaveDays.disabled).toBe(true);
+    expect(withholdingOverride.disabled).toBe(true);
+  });
+
+  // canSaveDraft now requires canManage -- PUT /input-draft is hasRole('HR') only, so the
+  // autosave status badge (and the autosave itself, since the inputs it would fire from are
+  // disabled above) must not appear for a CEO session at all.
+  it('never shows the draft-autosave status badge for CEO', async () => {
+    render(<PayrollPage user={ceoUser} showToast={vi.fn()} />);
+    await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('disables the tax-treatment classification selects for CEO and hides the บันทึกการจัดประเภท save button', async () => {
+    api.payroll.getComponentTaxTreatments.mockResolvedValue({
+      taxYear: 2026,
+      items: [{
+        employeeId: 1,
+        employeeName: 'พนักงาน ทดสอบ',
+        employeeCode: 'GLR-001',
+        byComponent: { SPECIAL_PAY_1: 'REGULAR_REPROJECT' },
+        explicitlyClassifiedComponents: ['SPECIAL_PAY_1'],
+      }],
+    });
+    render(<PayrollPage user={ceoUser} showToast={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /การจัดประเภทภาษีหัก ณ ที่จ่าย/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /พนักงาน ทดสอบ \(GLR-001\)/ }));
+
+    const treatmentSelect = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/, { selector: 'select' });
+    expect(treatmentSelect.disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: /บันทึกการจัดประเภท/ })).toBeNull();
+    // รีเฟรช (GET only) stays available -- reads are still hasAnyRole(HR,CEO).
+    expect(screen.getByRole('button', { name: /รีเฟรช/ })).toBeTruthy();
   });
 });

@@ -404,6 +404,15 @@ export const ROLE_PERMISSIONS = {
   // its own key since the two gates are defined independently server-side.
   canCreateManualCommission: ['sales_manager', 'ceo'],
   canViewPayrollCommissions: ['hr'],
+  // Split (issue #390): the SPA used to conflate view and manage under one key, which is why the
+  // CEO's deliberate backend read grant (PayrollController: every GET, plus the non-persisting
+  // POST /preview and /preview/export/{kind}, is hasAnyRole('HR','CEO')) was unreachable -- the
+  // route and every mutating control gated on the single `canManagePayroll` key, which is
+  // HR-only. canViewPayroll now gates the /payroll route and the read affordances (period
+  // summary, lines, exports, payslip downloads, preview); canManagePayroll stays HR-only and
+  // gates every write (process, input-draft PUT, tax-allowances PUT, ytd-seed PUT,
+  // component-tax-treatments PUT, distribute). See PayrollPage.jsx's `canManage`.
+  canViewPayroll: ['hr', 'ceo'],
   canManagePayroll: ['hr'],
   canManagePriceImport: ['ceo', 'import'],
   canManageCatalogProducts: ['ceo', 'import'],

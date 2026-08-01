@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
+import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
 import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
 import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
@@ -693,8 +694,18 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
-export function PayrollPage({ showToast }) {
+export function PayrollPage({ user, showToast }) {
   const isMobile = useIsMobile();
+  // Split (issue #390): PayrollController mirrors -- every GET, plus the non-persisting POST
+  // /preview and /preview/export/{kind}, is @PreAuthorize("hasAnyRole('HR','CEO')"); every write
+  // (process, PUT input-draft, PUT tax-allowances, PUT ytd-seed, PUT component-tax-treatments,
+  // POST distribute) is hasRole('HR') only. This is an ALLOWLIST read straight off
+  // ROLE_PERMISSIONS.canManagePayroll (routes.js) via the same `hasPermission` helper every other
+  // route guard uses -- deliberately NOT a `role !== 'ceo'` denylist, which would fail OPEN (grant
+  // every write) to any role added to canViewPayroll later without anyone touching this file.
+  // `hasPermission(undefined, ...)` returns false, so an absent `user` reads as no management
+  // access, not full access -- every caller (including tests) must pass a real user explicitly.
+  const canManage = hasPermission(user?.role, 'canManagePayroll');
   const [month, setMonth] = useState(thisMonth);
   const [period, setPeriod] = useState(null);
   const [adjustments, setAdjustments] = useState({});
@@ -763,7 +774,10 @@ export function PayrollPage({ showToast }) {
   // is already the source of truth and always wins regardless, so saving a draft here would do
   // nothing useful. Hidden rather than shown-but-inert, so HR is not misled into thinking a save
   // did something for an already-touched period.
-  const canSaveDraft = period?.status === 'PREVIEW' && !period?.id;
+  // CEO can never save a draft (PUT /input-draft is hasRole('HR') only) -- folded into the same
+  // condition as the pre-existing period-state gate so the autosave status badge and the blur
+  // autosave below both stay off for a read-only session, not just visually hidden.
+  const canSaveDraft = canManage && period?.status === 'PREVIEW' && !period?.id;
   const processBlockedReason = emptyPeriod
     ? 'ยังไม่มีพนักงานในรอบเงินเดือนนี้ — กดคำนวณตัวอย่างหรือเลือกรอบเดือนที่มีข้อมูลก่อนประมวลผล'
     : null;
@@ -1093,14 +1107,17 @@ export function PayrollPage({ showToast }) {
       disabled: Boolean(disabledBecauseBusy || !hasProcessedPeriod),
       disabledReason: disabledBecauseBusy || (!hasSavedPeriod ? needsSavedPeriod : period?.status !== 'PROCESSED' ? needsProcessedPeriod : null),
     },
-    {
+    // POST /{periodId}/distribute is hasRole('HR') only -- omitted entirely for a read-only CEO
+    // session rather than shown disabled (nothing on this page lets CEO reach a state where it
+    // would ever become available, so a disabled entry would just be dead weight in the menu).
+    ...(canManage ? [{
       key: 'email-payslips',
       label: 'ส่งอีเมลสลิปเงินเดือน',
       icon: 'mail',
       onSelect: distributePayslips,
       disabled: Boolean(disabledBecauseBusy || !hasSavedPeriod),
       disabledReason: disabledBecauseBusy || (!hasSavedPeriod ? needsSavedPeriod : null),
-    },
+    }] : []),
   ];
   const draftStatusLabel = draftSaveStatus === 'error'
     ? 'บันทึกอัตโนมัติไม่สำเร็จ'
@@ -1124,6 +1141,14 @@ export function PayrollPage({ showToast }) {
         subtitle="Payroll Processing"
         actions={(
           <div className="toolbar-actions mobile:w-full mobile:items-stretch mobile:gap-2">
+            {/* Read-only oversight indicator (issue #390): the backend deliberately grants CEO a
+                read of everything on this page (PayrollController: every GET plus the
+                non-persisting preview endpoints are hasAnyRole('HR','CEO')) while every write
+                stays HR-only -- this badge is the one visible cue that the missing controls below
+                are intentional, not a bug. */}
+            {!canManage && (
+              <StatusBadge tone="info">มุมมองสำหรับผู้บริหาร — อ่านอย่างเดียว</StatusBadge>
+            )}
             <label>
               รอบเดือน
               <input
@@ -1219,60 +1244,73 @@ export function PayrollPage({ showToast }) {
           {/* Run — the irreversible action. Kept in its own region with the period state and pushed
               after routine preview/export/send work. Phone stays editable; the extra mobile-only
               typed phrase lives in the confirm dialog instead of disabling this button outright.
+              POST /process is hasRole('HR') only — a CEO session never sees this button at all
+              (not disabled: no state would ever enable it for that role), only the same period
+              status in a neutral, non-actionable readout.
 
-              Issue #394 fix: the region's border only turns danger-red once the action is actually
-              armed (a real period with lines to process, ready to fire an irreversible commit) — an
-              unmet precondition (emptyPeriod, see processBlockedReason below) is a disabled control
-              waiting on data, not a failure, so it reads in a neutral border instead. Red on a screen
-              that also surfaces genuine payroll failures must stay reserved for genuine failures, or
-              HR learns to ignore it. */}
-          <section
-            className={cn(
-              'payroll-process-region ml-auto flex flex-wrap items-center gap-x-3.5 gap-y-2.5 rounded-md border bg-surface-muted px-3 py-2.5 nav-drawer:ml-0 nav-drawer:w-full nav-drawer:justify-between mobile:items-stretch',
-              emptyPeriod ? 'border-border' : 'border-danger-border',
-            )}
-            aria-labelledby="payroll-process-title"
-          >
-            <div className="grid min-w-0 gap-1">
-              <span id="payroll-process-title" className="text-sm font-black text-text">ปิดรอบเงินเดือน</span>
-              <small className="flex flex-wrap items-center gap-1.5 text-xs font-extrabold text-text-muted">
-                <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-                <span>{period?.lineCount || 0} คน</span>
-              </small>
-            </div>
-            <div className="grid min-w-0 gap-1 mobile:w-full">
-              <Button
-                type="button"
-                variant="danger"
-                size="sm"
-                className="mobile:w-full"
-                onClick={process}
-                disabled={loading || saving || emptyPeriod}
-                aria-describedby={processBlockedReason ? 'payroll-process-block-reason' : undefined}
-                title={processBlockedReason || undefined}
-              >
-                <Icon name="check" size={15} />
-                ประมวลผลเงินเดือน
-              </Button>
-              {/* Informational state, not an error: this explains why the button is
-                  unavailable right now, so it reads in muted body colour rather than
-                  danger red. Utilities at the call site, not a styles.css rule —
-                  styles.css sits in @layer legacy and loses to any text utility a
-                  future caller adds here. An `info` icon carries the same "this is
-                  guidance, not an alarm" signal non-visually too (WCAG 1.4.1 — the
-                  disabled state must not rely on the border colour alone). */}
-              {processBlockedReason && (
-                <span
-                  id="payroll-process-block-reason"
-                  role="note"
-                  className="flex max-w-[34ch] items-start gap-1 text-xs font-semibold text-text-muted"
-                >
-                  <Icon name="info" size={13} className="mt-0.5 shrink-0" />
-                  {processBlockedReason}
-                </span>
+              Issue #394: within the HR branch, the region's border only turns danger-red once the
+              action is actually armed (a real period with lines to process, ready to fire an
+              irreversible commit) — an unmet precondition (emptyPeriod, see processBlockedReason)
+              is a disabled control waiting on data, not a failure, so it reads neutral instead.
+              Red on a screen that also surfaces genuine payroll failures must stay reserved for
+              genuine failures, or HR learns to ignore it. */}
+          {canManage ? (
+            <section
+              className={cn(
+                'payroll-process-region ml-auto flex flex-wrap items-center gap-x-3.5 gap-y-2.5 rounded-md border bg-surface-muted px-3 py-2.5 nav-drawer:ml-0 nav-drawer:w-full nav-drawer:justify-between mobile:items-stretch',
+                emptyPeriod ? 'border-border' : 'border-danger-border',
               )}
-            </div>
-          </section>
+              aria-labelledby="payroll-process-title"
+            >
+              <div className="grid min-w-0 gap-1">
+                <span id="payroll-process-title" className="text-sm font-black text-text">ปิดรอบเงินเดือน</span>
+                <small className="flex flex-wrap items-center gap-1.5 text-xs font-extrabold text-text-muted">
+                  <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                  <span>{period?.lineCount || 0} คน</span>
+                </small>
+              </div>
+              <div className="grid min-w-0 gap-1 mobile:w-full">
+                <Button
+                  type="button"
+                  variant="danger"
+                  size="sm"
+                  className="mobile:w-full"
+                  onClick={process}
+                  disabled={loading || saving || emptyPeriod}
+                  aria-describedby={processBlockedReason ? 'payroll-process-block-reason' : undefined}
+                  title={processBlockedReason || undefined}
+                >
+                  <Icon name="check" size={15} />
+                  ประมวลผลเงินเดือน
+                </Button>
+                {/* Informational state, not an error: this explains why the button is
+                    unavailable right now, so it reads in muted body colour rather than
+                    danger red. Utilities at the call site, not a styles.css rule —
+                    styles.css sits in @layer legacy and loses to any text utility a
+                    future caller adds here. An `info` icon carries the same "this is
+                    guidance, not an alarm" signal non-visually too (WCAG 1.4.1 — the
+                    disabled state must not rely on the border colour alone). */}
+                {processBlockedReason && (
+                  <span
+                    id="payroll-process-block-reason"
+                    role="note"
+                    className="flex max-w-[34ch] items-start gap-1 text-xs font-semibold text-text-muted"
+                  >
+                    <Icon name="info" size={13} className="mt-0.5 shrink-0" />
+                    {processBlockedReason}
+                  </span>
+                )}
+              </div>
+            </section>
+          ) : (
+            <section
+              className="ml-auto flex items-center gap-2 rounded-md border border-border bg-surface-muted px-3 py-2.5 nav-drawer:ml-0 nav-drawer:w-full mobile:items-stretch"
+              aria-label="สถานะรอบเงินเดือน"
+            >
+              <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+              <span className="text-xs font-extrabold text-text-muted">{period?.lineCount || 0} คน</span>
+            </section>
+          )}
         </div>
       </FilterBar>
 
@@ -1282,7 +1320,7 @@ export function PayrollPage({ showToast }) {
           sections 1 and 10. Collapsed by default so it does not compete with the main payroll
           workflow above; one employee per sub-section, per the owner's "never a shrunken
           fifteen-column table" mobile decision (section 9c). */}
-      <TaxTreatmentMatrixSection payrollMonth={month} showToast={showToast} />
+      <TaxTreatmentMatrixSection payrollMonth={month} showToast={showToast} canManage={canManage} />
 
       {/* B1/B4 fix (Opus review, 2026-07-31): layout moved to Tailwind utilities at the call site
           (CLAUDE.md Tailwind-first) instead of a `.payroll-workspace` styles.css rule -- two states,
@@ -1482,6 +1520,7 @@ export function PayrollPage({ showToast }) {
                         placeholder="0"
                         value={selectedAdjustment.daysWorked}
                         onChange={(event) => updateAdjustment('daysWorked', event.target.value)}
+                        disabled={!canManage}
                       />
                     </label>
                     <small className="block">
@@ -1522,7 +1561,7 @@ export function PayrollPage({ showToast }) {
                     return (
                       <label key={field.key} htmlFor={inputId}>
                         {field.label}
-                        <MoneyInput id={inputId} value={selectedAdjustment[field.key]} onChange={(value) => updateAdjustment(field.key, value)} />
+                        <MoneyInput id={inputId} value={selectedAdjustment[field.key]} onChange={(value) => updateAdjustment(field.key, value)} disabled={!canManage} />
                       </label>
                     );
                   })}
@@ -1541,7 +1580,7 @@ export function PayrollPage({ showToast }) {
                 <FormGrid>
                   <label htmlFor="payroll-meal-allowance">
                     ค่าอาหาร
-                    <MoneyInput id="payroll-meal-allowance" value={selectedAdjustment.mealAllowance} onChange={(value) => updateAdjustment('mealAllowance', value)} />
+                    <MoneyInput id="payroll-meal-allowance" value={selectedAdjustment.mealAllowance} onChange={(value) => updateAdjustment('mealAllowance', value)} disabled={!canManage} />
                   </label>
                   <label htmlFor="payroll-per-diem-exempt">
                     เบี้ยเลี้ยง — ส่วนที่ยกเว้นภาษี (ม.42)
@@ -1549,7 +1588,7 @@ export function PayrollPage({ showToast }) {
                       label="เบี้ยเลี้ยง — ส่วนที่ยกเว้นภาษี (ม.42)"
                       text="ส่วนของเบี้ยเลี้ยงที่อยู่ภายในอัตราที่ได้รับการยกเว้นภาษีตามมาตรา 42 กรอกแยกจากส่วนเกิน"
                     />
-                    <MoneyInput id="payroll-per-diem-exempt" value={selectedAdjustment.perDiemExempt} onChange={(value) => updateAdjustment('perDiemExempt', value)} />
+                    <MoneyInput id="payroll-per-diem-exempt" value={selectedAdjustment.perDiemExempt} onChange={(value) => updateAdjustment('perDiemExempt', value)} disabled={!canManage} />
                   </label>
                   <label htmlFor="payroll-per-diem-taxable">
                     เบี้ยเลี้ยง — ส่วนเกิน (เสียภาษี)
@@ -1557,7 +1596,7 @@ export function PayrollPage({ showToast }) {
                       label="เบี้ยเลี้ยง — ส่วนเกิน (เสียภาษี)"
                       text="ส่วนของเบี้ยเลี้ยงที่เกินอัตรายกเว้นตามมาตรา 42 ถือเป็นเงินได้ต้องเสียภาษีตามปกติ"
                     />
-                    <MoneyInput id="payroll-per-diem-taxable" value={selectedAdjustment.perDiemTaxable} onChange={(value) => updateAdjustment('perDiemTaxable', value)} />
+                    <MoneyInput id="payroll-per-diem-taxable" value={selectedAdjustment.perDiemTaxable} onChange={(value) => updateAdjustment('perDiemTaxable', value)} disabled={!canManage} />
                   </label>
                   {/* F2 fix (Opus review, 2026-07-30): shown only once a per-diem amount is actually
                       entered -- HR classifying a basis for money nobody paid has nothing to classify,
@@ -1576,6 +1615,7 @@ export function PayrollPage({ showToast }) {
                         id="payroll-per-diem-basis"
                         value={selectedAdjustment.perDiemBasis}
                         onChange={(event) => updateAdjustment('perDiemBasis', event.target.value)}
+                        disabled={!canManage}
                       >
                         <option value="">— เลือกฐาน —</option>
                         {PER_DIEM_BASIS_OPTIONS.map((option) => (
@@ -1602,7 +1642,7 @@ export function PayrollPage({ showToast }) {
                     return (
                       <label key={field.key} htmlFor={inputId}>
                         {field.label}
-                        <MoneyInput id={inputId} value={selectedAdjustment[field.key]} onChange={(value) => updateAdjustment(field.key, value)} />
+                        <MoneyInput id={inputId} value={selectedAdjustment[field.key]} onChange={(value) => updateAdjustment(field.key, value)} disabled={!canManage} />
                       </label>
                     );
                   })}
@@ -1614,7 +1654,7 @@ export function PayrollPage({ showToast }) {
                   <label htmlFor="payroll-non-taxable-income">
                     รายได้อื่นๆ (ไม่คิดภาษี)
                     <InfoTip label="รายได้อื่นๆ (ไม่คิดภาษี)" text="รายได้ส่วนนี้จะไม่ถูกนำไปรวมในฐานคำนวณภาษีเงินได้ของพนักงาน" />
-                    <MoneyInput id="payroll-non-taxable-income" value={selectedAdjustment.nonTaxableIncome} onChange={(value) => updateAdjustment('nonTaxableIncome', value)} />
+                    <MoneyInput id="payroll-non-taxable-income" value={selectedAdjustment.nonTaxableIncome} onChange={(value) => updateAdjustment('nonTaxableIncome', value)} disabled={!canManage} />
                   </label>
                 </FormGrid>
               </CollapsibleSection>
@@ -1624,7 +1664,7 @@ export function PayrollPage({ showToast }) {
                   <label htmlFor="payroll-unpaid-leave-days">
                     วันลาไม่รับค่าจ้าง
                     <InfoTip label="วันลาไม่รับค่าจ้าง" text="ตัวเลขนี้ถูกกรอกล่วงหน้าจากวันลาที่อนุมัติเกินโควตาในเดือนนี้ (ระบบวันลา) สามารถแก้ไขได้ก่อนคำนวณ/ประมวลผล" />
-                    <input id="payroll-unpaid-leave-days" type="number" min="0" step="0.25" placeholder="0" value={selectedAdjustment.unpaidLeaveDays} onChange={(event) => updateAdjustment('unpaidLeaveDays', event.target.value)} />
+                    <input id="payroll-unpaid-leave-days" type="number" min="0" step="0.25" placeholder="0" value={selectedAdjustment.unpaidLeaveDays} onChange={(event) => updateAdjustment('unpaidLeaveDays', event.target.value)} disabled={!canManage} />
                     {Number(selectedLine.leaveRefundDays || 0) > 0 ? (
                       <small className="block text-warning">
                         ระบบคืนเครดิตวันลาไม่รับค่าจ้างค้างคืน {selectedLine.leaveRefundDays} วัน ({formatMoney(selectedLine.leaveDeductionRefund)}) ให้อัตโนมัติในงวดนี้แล้ว
@@ -1640,12 +1680,12 @@ export function PayrollPage({ showToast }) {
                   <label htmlFor="payroll-student-loan-deduction">
                     หัก กยศ.
                     <InfoTip label="หัก กยศ." text="รายการหักภาระผูกพันกองทุนเงินให้กู้ยืมเพื่อการศึกษา หักหลังคำนวณภาษีแล้ว" />
-                    <MoneyInput id="payroll-student-loan-deduction" value={selectedAdjustment.studentLoanDeduction} onChange={(value) => updateAdjustment('studentLoanDeduction', value)} />
+                    <MoneyInput id="payroll-student-loan-deduction" value={selectedAdjustment.studentLoanDeduction} onChange={(value) => updateAdjustment('studentLoanDeduction', value)} disabled={!canManage} />
                   </label>
                   <label htmlFor="payroll-legal-execution-deduction">
                     หักอายัดกรมบังคับคดี
                     <InfoTip label="หักอายัดกรมบังคับคดี" text="รายการหักตามคำสั่งอายัดเงินเดือนจากกรมบังคับคดี หักหลังคำนวณภาษีแล้ว" />
-                    <MoneyInput id="payroll-legal-execution-deduction" value={selectedAdjustment.legalExecutionDeduction} onChange={(value) => updateAdjustment('legalExecutionDeduction', value)} />
+                    <MoneyInput id="payroll-legal-execution-deduction" value={selectedAdjustment.legalExecutionDeduction} onChange={(value) => updateAdjustment('legalExecutionDeduction', value)} disabled={!canManage} />
                   </label>
                   {/* P1 fix (Opus review, 2026-07-30): never selectable before this fix, so every
                       garnishment silently used the SALARY cap (backend defaults null to SALARY) —
@@ -1663,6 +1703,7 @@ export function PayrollPage({ showToast }) {
                         id="payroll-garnishment-type"
                         value={selectedAdjustment.garnishmentType}
                         onChange={(event) => updateAdjustment('garnishmentType', event.target.value)}
+                        disabled={!canManage}
                       >
                         <option value="">— เลือกประเภท (ค่าเริ่มต้น: เงินเดือน/ค่าจ้าง) —</option>
                         {GARNISHMENT_TYPE_OPTIONS.map((option) => (
@@ -1673,7 +1714,7 @@ export function PayrollPage({ showToast }) {
                   )}
                   <label htmlFor="payroll-other-post-tax-deductions">
                     หักอื่น ๆ หลังภาษี
-                    <MoneyInput id="payroll-other-post-tax-deductions" value={selectedAdjustment.otherPostTaxDeductions} onChange={(value) => updateAdjustment('otherPostTaxDeductions', value)} />
+                    <MoneyInput id="payroll-other-post-tax-deductions" value={selectedAdjustment.otherPostTaxDeductions} onChange={(value) => updateAdjustment('otherPostTaxDeductions', value)} disabled={!canManage} />
                   </label>
                   <label htmlFor="payroll-withholding-tax-override">
                     ภาษีหัก ณ ที่จ่าย (กำหนดเอง)
@@ -1681,7 +1722,7 @@ export function PayrollPage({ showToast }) {
                       label="ภาษีหัก ณ ที่จ่าย (กำหนดเอง)"
                       text="กรอกจำนวนภาษีที่ต้องการหักจริงสำหรับพนักงานคนนี้ในงวดนี้ จะแทนที่ค่าที่ระบบคำนวณ (และค่ามาตรฐานที่ตั้งไว้ในประวัติพนักงาน) เว้นว่างเพื่อใช้ค่าที่คำนวณอัตโนมัติ การคำนวณภาษีทั้งปียังคงเดิม เปลี่ยนเฉพาะยอดหักจริงงวดนี้"
                     />
-                    <MoneyInput id="payroll-withholding-tax-override" value={selectedAdjustment.withholdingTaxOverride} onChange={(value) => updateAdjustment('withholdingTaxOverride', value)} />
+                    <MoneyInput id="payroll-withholding-tax-override" value={selectedAdjustment.withholdingTaxOverride} onChange={(value) => updateAdjustment('withholdingTaxOverride', value)} disabled={!canManage} />
                     <small className="block text-muted">
                       เว้นว่าง = คำนวณอัตโนมัติ · ภาษีงวดนี้ที่ใช้จริง: {formatMoney(selectedLine.withholdingTax)}
                     </small>
@@ -1697,11 +1738,11 @@ export function PayrollPage({ showToast }) {
                 <FormGrid>
                   <label htmlFor="payroll-warning-letter-deduction">
                     หักตามใบเตือน
-                    <MoneyInput id="payroll-warning-letter-deduction" value={selectedAdjustment.warningLetterDeduction} onChange={(value) => updateAdjustment('warningLetterDeduction', value)} />
+                    <MoneyInput id="payroll-warning-letter-deduction" value={selectedAdjustment.warningLetterDeduction} onChange={(value) => updateAdjustment('warningLetterDeduction', value)} disabled={!canManage} />
                   </label>
                   <label htmlFor="payroll-customer-return-deduction">
                     หักลูกค้าคืนสินค้า
-                    <MoneyInput id="payroll-customer-return-deduction" value={selectedAdjustment.customerReturnDeduction} onChange={(value) => updateAdjustment('customerReturnDeduction', value)} />
+                    <MoneyInput id="payroll-customer-return-deduction" value={selectedAdjustment.customerReturnDeduction} onChange={(value) => updateAdjustment('customerReturnDeduction', value)} disabled={!canManage} />
                   </label>
                   {/* P1 fix (Opus review, 2026-07-30): always false before this fix (never rendered),
                       so the flag was always the unearned/pre-tax path — the fix for the real June 2026
@@ -1714,6 +1755,7 @@ export function PayrollPage({ showToast }) {
                         type="checkbox"
                         checked={selectedAdjustment.customerReturnAlreadyEarned}
                         onChange={(event) => updateAdjustment('customerReturnAlreadyEarned', event.target.checked)}
+                        disabled={!canManage}
                       />
                       คอมมิชชันนี้รับไปแล้ว (หักเป็นเงินคืนหลังภาษี ไม่ลดรายได้คิดภาษีงวดนี้)
                       <InfoTip
@@ -1724,7 +1766,7 @@ export function PayrollPage({ showToast }) {
                   )}
                   <label htmlFor="payroll-other-pretax-deduction">
                     หักอื่น ๆ ก่อนภาษี
-                    <MoneyInput id="payroll-other-pretax-deduction" value={selectedAdjustment.otherPretaxDeduction} onChange={(value) => updateAdjustment('otherPretaxDeduction', value)} />
+                    <MoneyInput id="payroll-other-pretax-deduction" value={selectedAdjustment.otherPretaxDeduction} onChange={(value) => updateAdjustment('otherPretaxDeduction', value)} disabled={!canManage} />
                   </label>
                 </FormGrid>
               </CollapsibleSection>
@@ -1803,7 +1845,7 @@ export function PayrollPage({ showToast }) {
  * defaulting this" from "someone chose this" — the distinction the branch's back-loading-risk
  * mitigation depends on.
  */
-function TaxTreatmentMatrixSection({ payrollMonth, showToast }) {
+function TaxTreatmentMatrixSection({ payrollMonth, showToast, canManage }) {
   const taxYear = Number(String(payrollMonth || '').slice(0, 4)) || new Date().getFullYear();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -1934,6 +1976,7 @@ function TaxTreatmentMatrixSection({ payrollMonth, showToast }) {
                           id={inputId}
                           value={value}
                           onChange={(event) => setValue(item.employeeId, field.key, event.target.value)}
+                          disabled={!canManage}
                         >
                           {TAX_TREATMENT_OPTIONS.map((option) => (
                             <option key={option.value || 'unset'} value={option.value}>{option.label}</option>
@@ -1956,10 +1999,14 @@ function TaxTreatmentMatrixSection({ payrollMonth, showToast }) {
           <Icon name="refresh" />
           รีเฟรช
         </Button>
-        <Button type="button" onClick={save} disabled={loading || saving || !hasEdits}>
-          <Icon name="check" />
-          บันทึกการจัดประเภท
-        </Button>
+        {/* PUT /component-tax-treatments is hasRole('HR') only -- omitted for a read-only CEO
+            session (the selects above are disabled too, so there is never anything to save). */}
+        {canManage && (
+          <Button type="button" onClick={save} disabled={loading || saving || !hasEdits}>
+            <Icon name="check" />
+            บันทึกการจัดประเภท
+          </Button>
+        )}
       </div>
     </CollapsibleSection>
   );
@@ -1974,7 +2021,7 @@ function MiniMetric({ label, value }) {
   );
 }
 
-function MoneyInput({ id, value, onChange }) {
+function MoneyInput({ id, value, onChange, disabled = false }) {
   function handleChange(event) {
     const { value: nextValue } = event.target;
     if (nextValue !== '' && Number(nextValue) < 0) {
@@ -1996,6 +2043,7 @@ function MoneyInput({ id, value, onChange }) {
         placeholder="0.00"
         value={value ?? ''}
         onChange={handleChange}
+        disabled={disabled}
       />
     </span>
   );

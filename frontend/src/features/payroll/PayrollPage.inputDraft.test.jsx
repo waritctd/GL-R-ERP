@@ -16,6 +16,11 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
+// hasPermission(user?.role, 'canManagePayroll') reads false for an absent user (issue #390 --
+// canManage is an allowlist off ROLE_PERMISSIONS), so every render below passes a real HR user
+// explicitly rather than relying on an implicit default.
+const hrUser = { role: 'hr', employeeId: 10 };
+
 vi.mock('../../api/index.js', () => ({
   api: {
     payroll: {
@@ -114,7 +119,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
       return { payrollMonth: payload.payrollMonth, drafts: savedDrafts };
     });
 
-    const { unmount } = render(<PayrollPage showToast={vi.fn()} />);
+    const { unmount } = render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /ค่าอาหาร \/ เบี้ยเลี้ยง/ }));
     const mealAllowance = await screen.findByLabelText(/ค่าอาหาร/, { selector: 'input' });
@@ -129,7 +134,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
     // Simulate an actual browser reload: unmount this instance entirely and mount a brand-new one
     // (fresh React state), exactly as a real page reload would produce.
     unmount();
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /ค่าอาหาร \/ เบี้ยเลี้ยง/ }));
     const reloadedMealAllowance = await screen.findByLabelText(/ค่าอาหาร/, { selector: 'input' });
@@ -159,7 +164,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
       return { payrollMonth: payload.payrollMonth, drafts: savedDrafts };
     });
 
-    const { unmount } = render(<PayrollPage showToast={vi.fn()} />);
+    const { unmount } = render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     // Suggestion pre-fills the field to 3000 first.
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
@@ -177,7 +182,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
     // A real reload: fresh component instance, suggestion still resolves to 3000 (nothing about
     // the carry-forward config changed) -- only the saved draft should determine the outcome now.
     unmount();
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const reloadedCostOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     await waitFor(() => expect(reloadedCostOfLiving.value).toBe(''));
@@ -188,7 +193,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
     api.payroll.getInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
     api.payroll.saveInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     expect(screen.getByRole('status').textContent).toContain('บันทึกแล้ว');
@@ -211,7 +216,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
       return new Promise((resolve) => pendingSaves.push(resolve));
     });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     fireEvent.change(costOfLiving, { target: { value: '111' } });
@@ -243,7 +248,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
       drafts: [{ employeeId: 1, specialPay1: 999 }],
     });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     await waitFor(() => expect(costOfLiving.value).toBe('5000'));
@@ -260,7 +265,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
       drafts: [{ employeeId: 1, specialPay1: 950 }],
     });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     await waitFor(() => expect(costOfLiving.value).toBe('950'));
@@ -290,7 +295,7 @@ describe('PayrollPage input draft (survives a reload before processing)', () => 
       ),
     });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    render(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const daysWorked = await screen.findByLabelText(/จำนวนวันทำงานในงวดนี้/, { selector: 'input' });
     await waitFor(() => expect(daysWorked.value).toBe('25'));

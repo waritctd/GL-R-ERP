@@ -342,7 +342,7 @@ export function App() {
             />
             <Route
               path="/payroll"
-              element={<PayrollPage showToast={showToast} />}
+              element={<PayrollPage user={user} showToast={showToast} />}
             />
             {/* Frozen sales stack — param-wired to keep working / URL-addressable. */}
             {SALES_ENABLED && (

@@ -75,6 +75,12 @@ describe('allowedRoute', () => {
     expect(allowedRoute('payroll', hr)).toBe('payroll');
   });
 
+  // Split (issue #390): allowedRoute mirrors canAccessPath's canViewPayroll gate.
+  it('lets CEO reach the payroll route too (read-only oversight, #390)', () => {
+    const ceo = { role: 'ceo', employeeId: 1 };
+    expect(allowedRoute('payroll', ceo)).toBe('payroll');
+  });
+
   it('blocks an employee from HR-only routes', () => {
     expect(allowedRoute('employees', employee)).toBe('dashboard');
     expect(allowedRoute('requests', employee)).toBe('dashboard');
@@ -183,6 +189,24 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/my-requests', hr)).toBe(true);
     expect(canAccessPath('/profile', hr)).toBe(true);
     expect(canAccessPath('/my-requests', { role: 'sales', employeeId: null })).toBe(false);
+  });
+
+  // Split (issue #390): PayrollController mirrors -- every GET, plus the non-persisting POST
+  // /preview and /preview/export/{kind}, is hasAnyRole('HR','CEO'), so the ROUTE only needs
+  // canViewPayroll (hr+ceo). Every write stays canManagePayroll (hr-only) and is gated inside
+  // PayrollPage.jsx itself, not at the route level -- ceo reaching '/payroll' here is read-only
+  // oversight, not the manage capability.
+  it('lets CEO reach /payroll for read-only oversight, same route HR uses to manage it (#390)', () => {
+    expect(canAccessPath('/payroll', hr)).toBe(true);
+    expect(canAccessPath('/payroll', ceo)).toBe(true);
+    expect(hasPermission('ceo', 'canViewPayroll')).toBe(true);
+    expect(hasPermission('ceo', 'canManagePayroll')).toBe(false);
+    expect(hasPermission('hr', 'canManagePayroll')).toBe(true);
+    // Every other role stays blocked from the route entirely, same as before the split.
+    expect(canAccessPath('/payroll', sales)).toBe(false);
+    expect(canAccessPath('/payroll', employee)).toBe(false);
+    expect(canAccessPath('/payroll', importer)).toBe(false);
+    expect(canAccessPath('/payroll', account)).toBe(false);
   });
 
   it('scopes commissions to commission-viewing roles', () => {
