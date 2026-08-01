@@ -30,9 +30,11 @@ import { loginAs, switchRole, spaGoto } from './helpers/auth.js';
 //
 // The invoice-gated tail of this test was scoped out with a `test.fixme()` on
 // the phase-2 branch because it drove `#ticket-invoice-file` — a ticket-page
-// upload control gated `isAccount`, while `AttachmentController
-// .requireTicketAccess` grants only participants OR {hr, sales_manager, ceo},
-// so it 403'd against the real service. The diagnosis then was "the close's
+// upload control gated `isAccount`, while AttachmentController's gate granted
+// only participants OR {hr, sales_manager, ceo}, so it 403'd against the real
+// service. (Issue #389 rebuilt that gate — account now READS every deal
+// document — but the WRITE side is still participant OR sales_manager/ceo,
+// never account, so the reasoning below is unchanged.) The diagnosis then was "the close's
 // INVOICE precondition is unreachable in production". That was wrong: it IS
 // reachable, just not there. `CommissionService.createFromDeal` (account-only)
 // dual-writes the INVOICE ticket attachment alongside the commission, so the

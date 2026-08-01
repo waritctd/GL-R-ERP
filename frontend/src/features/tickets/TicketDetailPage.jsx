@@ -333,25 +333,29 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     enabled: !!ticketId,
   });
   const ticket = ticketQuery.data ?? null;
-  // FIX 2 (Opus review): AttachmentController.requireTicketAccess is a
-  // genuinely different, WIDER, identity-based model than every other tab's
-  // role gate — it grants the ticket's participants (createdById/
-  // assignedToId) OR role in {hr, sales_manager, ceo}, not a role-only
-  // check. Computed here (rather than after the loading/no-ticket early
-  // return below, where `isOwner` already lives) so the attachments query
-  // itself never fires for a viewer the backend would 403 — same reasoning
-  // as `activitiesQuery`'s own `enabled` gate for FIX 1. `hr` omitted below:
-  // it never reaches this page at all (route-gated), so the literal,
-  // owner-approved rule is exactly role===ceo||sales_manager||isOwner||
-  // assignee — this is a presentation projection of the existing backend
-  // gate (attachments_* in TicketIaAuthzMatrixIntegrationTest), not a new
-  // authorization rule, and touches neither the backend nor salesViewScope.js.
+  // FIX 2 (Opus review), rewritten for issue #389. Still an identity-aware gate rather than a
+  // role-only one — the deal's participants (createdById/assignedToId) reach its documents
+  // regardless of role — but the ROLE half is no longer this page's private invention: it mirrors
+  // TicketAccessPolicy.canViewDocuments, which is `sales`- AND `import`-scoped to participation.
+  //
+  // What changed: `account` used to be filtered out here, faithfully mirroring a backend gate
+  // that 403'd it — but that 403 was the bug. account is the role asked to confirm deposit and
+  // final-payment receipts against exactly these files, so hiding the tab would have left #389's
+  // fix invisible. A non-assignee `import` stays filtered out, unchanged: AttachType spans
+  // SIGNED_QUOTATION/INVOICE, which carry the approved customer price that salesViewScope already
+  // hides from import (quotation/dealQuotation/payment/depositNotice all false) and that the
+  // backend refuses it on three other endpoints. `hr` needs no mention — route-gated off this
+  // page entirely, and now refused by the backend too.
+  //
+  // Computed here (rather than after the loading/no-ticket early return below, where `isOwner`
+  // already lives) so the attachments query never fires for a viewer the backend would 403 —
+  // same reasoning as `activitiesQuery`'s own `enabled` gate for FIX 1. Presentation projection
+  // of the backend gate, not a new authorization rule.
   const documentsTicketSummary = ticket?.summary ?? null;
   const canViewDocumentsTab = Boolean(documentsTicketSummary) && (
-    role === 'ceo'
-    || role === 'sales_manager'
-    || user.id === documentsTicketSummary.createdById
+    user.id === documentsTicketSummary.createdById
     || user.id === documentsTicketSummary.assignedToId
+    || ROLE_PERMISSIONS.canViewTicketDocuments.includes(role)
   );
   const actionsQuery = useQuery({
     queryKey: queryKeys.ticketActions(ticketId),
@@ -605,6 +609,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const { summary, items, events, quotations } = ticket;
   const st = summary.status;
   const isOwner = user.id === summary.createdById;
+  // Issue #389: reading a deal's documents is now the same question as reading the deal (so
+  // account/import reach the เอกสาร panel and hr no longer does), but WRITING one stays narrow —
+  // TicketAccessPolicy.canManageDocuments is participant OR sales_manager/ceo. Mirrored here so
+  // the panel does not offer account/import an upload the backend answers with a 403.
+  const canManageDocuments = isOwner
+    || (summary.assignedToId != null && user.id === summary.assignedToId)
+    || ROLE_PERMISSIONS.canManageTicketDocuments.includes(role);
 
   const showProposed = ROLE_PERMISSIONS.canProposePrices.includes(role) || ROLE_PERMISSIONS.canApproveReject.includes(role);
   // ข้อ 10.1: Import sees only rawPrice + proposedPrice — NOT approvedPrice or CEO-set prices
@@ -1908,15 +1919,21 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                   creating the commission — the sales rep would silently lose it.
                   That is why this is not simply re-gated to a role the backend
                   permits: the control that used to live here was gated isAccount
-                  while AttachmentController.requireTicketAccess grants only
-                  participants OR hr/sales_manager/ceo, so it 403'd for
-                  real (pinned by TicketIaAuthzMatrixIntegrationTest
-                  .attachments_accountIsNeitherParticipantNorManagerAndIsRefused)
-                  and only ever looked functional because mockApi.js had no authz
-                  on attachments at all. Do not reintroduce it — the regression
-                  guard is TicketDetailPage.test.jsx, "offers NO ใบกำกับภาษี
-                  upload control in เอกสาร". */}
-              {!TERMINAL.includes(st) && (
+                  and 403'd for real, and only ever looked functional because
+                  mockApi.js had no authz on attachments at all.
+
+                  Issue #389 fixed the OTHER half of that gate — account can now
+                  READ every deal document (it is asked to confirm money against
+                  them) and hr can no longer read any — but the WRITE side was
+                  left deliberately narrow for exactly the reason above:
+                  TicketAccessPolicy.canManageDocuments is participant OR
+                  sales_manager/ceo, never account. Pinned by
+                  AttachmentTicketAccessIntegrationTest
+                  .accountCannotUploadADocument_theTaxInvoiceKeepsExactlyOneEntryPoint.
+                  Do not reintroduce it — the frontend regression guard is
+                  TicketDetailPage.test.jsx, "offers NO ใบกำกับภาษี upload
+                  control in เอกสาร". */}
+              {!TERMINAL.includes(st) && canManageDocuments && (
                 <label className="cursor-pointer max-[720px]:w-full" htmlFor="ticket-attachment-file">
                   <input
                     id="ticket-attachment-file"
@@ -1969,7 +1986,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                       style={{ fontSize: 12, color: 'var(--color-link)', textDecoration: 'none', whiteSpace: 'nowrap' }}>
                       ดูไฟล์
                     </a>
-                    {!TERMINAL.includes(st) && (
+                    {!TERMINAL.includes(st) && (canManageDocuments || att.uploadedBy === user.id) && (
                       <button type="button" className="icon-button"
                         style={{ color: 'var(--color-danger)', flexShrink: 0 }}
                         onClick={() => handleDeleteAttachment(att.id, att.fileName)}>
