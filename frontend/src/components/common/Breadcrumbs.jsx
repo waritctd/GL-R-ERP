@@ -1,4 +1,5 @@
 import { Icon } from './Icon.jsx';
+import { Link } from 'react-router-dom';
 
 export function Breadcrumbs({ items }) {
   if (!items || items.length === 0) return null;
@@ -10,7 +11,11 @@ export function Breadcrumbs({ items }) {
           const isLast = index === items.length - 1;
           return (
             <li key={item.label + index}>
-              {typeof item.onClick === 'function' && !isLast ? (
+              {item.to && !isLast ? (
+                <Link to={item.to}>
+                  {item.label}
+                </Link>
+              ) : typeof item.onClick === 'function' && !isLast ? (
                 <button type="button" onClick={item.onClick}>
                   {item.label}
                 </button>

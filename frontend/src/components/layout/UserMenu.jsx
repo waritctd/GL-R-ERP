@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Avatar } from '../common/Avatar.jsx';
 import { Icon } from '../common/Icon.jsx';
 
@@ -7,11 +7,32 @@ import { Icon } from '../common/Icon.jsx';
  * anchored in the topbar) so the two header popovers behave identically. The
  * topbar sits outside `.content-scroll`, so absolute positioning is not clipped.
  */
-export function UserMenu({ user, employee, canViewProfile, onNavigate, onLogout }) {
-  const [open, setOpen] = useState(false);
+export function UserMenu({
+  user,
+  employee,
+  canViewProfile,
+  onNavigate,
+  onLogout,
+  open: controlledOpen,
+  onOpenChange,
+}) {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const ref = useRef(null);
   const triggerRef = useRef(null);
   const itemRefs = useRef([]);
+  const menuId = 'user-menu-panel';
+  const open = controlledOpen ?? uncontrolledOpen;
+
+  const setOpen = useCallback((nextOpen) => {
+    const resolvedOpen = typeof nextOpen === 'function' ? nextOpen(open) : nextOpen;
+    if (controlledOpen === undefined) setUncontrolledOpen(resolvedOpen);
+    onOpenChange?.(resolvedOpen);
+  }, [controlledOpen, onOpenChange, open]);
+
+  const closeAndRestore = useCallback(() => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }, [setOpen]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -20,7 +41,7 @@ export function UserMenu({ user, employee, canViewProfile, onNavigate, onLogout 
     }
     document.addEventListener('mousedown', handlePointer);
     return () => document.removeEventListener('mousedown', handlePointer);
-  }, [open]);
+  }, [open, setOpen]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -28,8 +49,7 @@ export function UserMenu({ user, employee, canViewProfile, onNavigate, onLogout 
     function handleKeyDown(event) {
       if (event.key === 'Escape') {
         event.preventDefault();
-        setOpen(false);
-        triggerRef.current?.focus();
+        closeAndRestore();
         return;
       }
       if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
@@ -43,7 +63,7 @@ export function UserMenu({ user, employee, canViewProfile, onNavigate, onLogout 
     }
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [open]);
+  }, [closeAndRestore, open]);
 
   function select(action) {
     setOpen(false);
@@ -63,6 +83,7 @@ export function UserMenu({ user, employee, canViewProfile, onNavigate, onLogout 
         onClick={() => setOpen((value) => !value)}
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
         aria-label="เมนูผู้ใช้"
       >
         <Avatar employee={employee} name={user.name} size="sm" />
@@ -70,9 +91,10 @@ export function UserMenu({ user, employee, canViewProfile, onNavigate, onLogout 
 
       {open && (
         <div
+          id={menuId}
           role="menu"
           aria-label="เมนูผู้ใช้"
-          className="absolute top-[calc(100%+8px)] right-0 z-[200] w-[min(240px,calc(100vw-32px))] max-w-[calc(100vw-32px)] overflow-hidden rounded-md border border-border-subtle bg-surface shadow-[0_8px_24px_rgba(0,0,0,0.12)]"
+          className="absolute top-[calc(100%+12px)] right-0 z-[200] w-[min(240px,calc(100vw-32px))] max-w-[calc(100vw-32px)] overflow-hidden rounded-md border border-border-subtle bg-surface shadow-[0_8px_24px_rgba(0,0,0,0.12)] max-[720px]:fixed max-[720px]:top-[74px] max-[720px]:right-4 max-[720px]:left-4 max-[720px]:w-auto max-[720px]:max-w-none"
         >
           <div className="py-3 px-4 border-b border-border">
             <strong className="block !text-sm !text-text truncate">{employee?.nameTh || user.name}</strong>

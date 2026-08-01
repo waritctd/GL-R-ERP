@@ -32,6 +32,18 @@ describe('Panel', () => {
     expect(screen.getByRole('button', { name: 'ดำเนินการ' })).toBeTruthy();
   });
 
+  it('keeps flush worklist panel titles inset from the border', () => {
+    render(
+      <Panel title="สิ่งที่ต้องทำ" className="!p-0 overflow-hidden">
+        <p>เนื้อหา</p>
+      </Panel>,
+    );
+
+    const header = screen.getByRole('heading', { name: 'สิ่งที่ต้องทำ' }).closest('div');
+    expect(header?.className).toContain('px-5');
+    expect(header?.className).toContain('border-b');
+  });
+
   it('merges caller className last', () => {
     render(<Panel data-testid="panel" className="p-2">เนื้อหา</Panel>);
     expect(screen.getByTestId('panel').className).toContain('p-2');

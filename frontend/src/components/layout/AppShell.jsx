@@ -14,6 +14,7 @@ import { UserMenu } from './UserMenu.jsx';
 
 export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [activeTopbarPopover, setActiveTopbarPopover] = useState(null);
   const drawerRef = useRef(null);
   const menuButtonRef = useRef(null);
   const mainRef = useRef(null);
@@ -140,12 +141,14 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     { path: '/tax-allowance', label: 'ค่าลดหย่อนภาษี', helper: 'Tax allowance (ล.ย.01)', icon: 'calculator', group: 'self', show: !!user.employeeId },
   ].filter((item) => item.show);
 
+  const closeTopbarPopover = useCallback(() => setActiveTopbarPopover(null), []);
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);
 
   // Close the mobile drawer whenever the URL changes (navigation happened).
   useEffect(() => {
     closeDrawer();
-  }, [closeDrawer, location.pathname]);
+    closeTopbarPopover();
+  }, [closeDrawer, closeTopbarPopover, location.pathname]);
 
   useEffect(() => {
     if (!isDrawerOpen) return undefined;
@@ -251,15 +254,18 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
             variant="icon"
             className="!hidden nav-drawer:!inline-flex nav-drawer:flex-[0_0_44px]"
             type="button"
-            onClick={() => setIsDrawerOpen((open) => !open)}
+            onClick={() => {
+              closeTopbarPopover();
+              setIsDrawerOpen((open) => !open);
+            }}
             aria-label="เปิดเมนูนำทาง"
             aria-controls={drawerId}
             aria-expanded={isDrawerOpen}
           >
             <Icon name="menu" />
           </Button>
-          <div className="topbar-title">
-            <span>{PRODUCT_NAME}</span>
+          <div className="topbar-title" aria-label="พื้นที่ทำงานปัจจุบัน">
+            <span translate="no">{PRODUCT_NAME}</span>
             <small>{roleLabel(user.role)}</small>
           </div>
           <div className="topbar-user">
@@ -267,8 +273,14 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
               <strong>{employee?.nameTh || user.name}</strong>
               <span>{user.email}</span>
             </div>
-            <NotificationBell onNavigate={(link) => navigate(link)} />
+            <NotificationBell
+              open={activeTopbarPopover === 'notifications'}
+              onOpenChange={(open) => setActiveTopbarPopover(open ? 'notifications' : null)}
+              onNavigate={(link) => navigate(link)}
+            />
             <UserMenu
+              open={activeTopbarPopover === 'user'}
+              onOpenChange={(open) => setActiveTopbarPopover(open ? 'user' : null)}
               user={user}
               employee={employee}
               canViewProfile={!!user.employeeId}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { Link, NavLink, useLocation } from 'react-router-dom';
 import { PRODUCT_MARK, PRODUCT_NAME, PRODUCT_PORTAL_LABEL } from '../../app/product.js';
 import { Icon } from '../common/Icon.jsx';
 
@@ -49,7 +49,6 @@ function NavItemLink({ item, pathname }) {
 }
 
 export function Sidebar({ id, drawerRef, isDrawerOpen = false, items }) {
-  const navigate = useNavigate();
   const { pathname } = useLocation();
   // Collapsed groups are the exception (default = expanded), so absence from
   // this set means "open" — nothing to persist for the common case.
@@ -89,7 +88,7 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items }) {
       className={`sidebar ${isDrawerOpen ? 'is-mobile-drawer-open' : ''}`}
       tabIndex={-1}
     >
-      <button className="brand" type="button" onClick={() => navigate('/')} aria-label={`${PRODUCT_NAME} home`} title={`${PRODUCT_NAME} home`}>
+      <Link className="brand" to="/" aria-label={`${PRODUCT_NAME} home`} title={`${PRODUCT_NAME} home`}>
         <span className="brand-mark">
           <i />
           <i />
@@ -100,7 +99,7 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items }) {
           <strong>{PRODUCT_MARK}</strong>
           <small>{PRODUCT_PORTAL_LABEL}</small>
         </span>
-      </button>
+      </Link>
 
       <nav className="nav-list" aria-label="Primary navigation">
         {ungrouped.map((item) => (
