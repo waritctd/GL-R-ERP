@@ -60,7 +60,7 @@ public class AttendanceRepository {
 
     private Long upsertPunch(NormalizedAttendancePunch punch, DeviceRecord device) {
         if (!device.siteCode().equals(punch.siteCode())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Attendance device does not belong to requested site");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เครื่องสแกนนี้ไม่ได้อยู่ประจำไซต์งานที่ระบุ");
         }
         Long employeeId = findEmployeeIdByBadge(punch.badgeCode());
         String rawPayloadJson = toJson(punch.rawPayload());
@@ -120,7 +120,7 @@ public class AttendanceRepository {
         DeviceRecord device = findDevice(punches.get(0).deviceCode());
         for (NormalizedAttendancePunch punch : punches) {
             if (!device.siteCode().equals(punch.siteCode())) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "Attendance device does not belong to requested site");
+                throw new ApiException(HttpStatus.BAD_REQUEST, "เครื่องสแกนนี้ไม่ได้อยู่ประจำไซต์งานที่ระบุ");
             }
         }
         Map<String, Long> employeeByBadge = findEmployeeIdsByBadges(
@@ -222,7 +222,7 @@ public class AttendanceRepository {
             Long importedByEmployeeId) {
         DeviceRecord device = findDevice(deviceCode);
         if (!device.siteCode().equals(siteCode)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Attendance device does not belong to requested site");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เครื่องสแกนนี้ไม่ได้อยู่ประจำไซต์งานที่ระบุ");
         }
         Long id = jdbc.queryForObject("""
             INSERT INTO hr.attendance_import_file (
@@ -403,7 +403,7 @@ public class AttendanceRepository {
                 """, Map.of("deviceCode", deviceCode),
                 (rs, rowNum) -> new DeviceRecord(rs.getLong("device_id"), rs.getString("site_code")));
         } catch (EmptyResultDataAccessException exception) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Attendance device is not registered");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ยังไม่ได้ลงทะเบียนเครื่องสแกนนี้ในระบบ");
         }
     }
 
@@ -427,7 +427,7 @@ public class AttendanceRepository {
         try {
             return objectMapper.writeValueAsString(rawPayload);
         } catch (com.fasterxml.jackson.core.JsonProcessingException | RuntimeException exception) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid attendance raw payload");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ข้อมูลดิบจากเครื่องสแกนไม่ถูกต้อง");
         }
     }
 

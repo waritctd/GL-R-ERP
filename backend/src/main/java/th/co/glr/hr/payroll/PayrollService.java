@@ -322,7 +322,7 @@ public class PayrollService {
     public PayrollExportFile export(PayrollExportKind kind, long periodId, LocalDate effectiveDate, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงวดเงินเดือนนี้"));
         LocalDate payrollMonth = period.payrollMonth();
         LocalDate payDate = resolveEffectiveDate(effectiveDate, payrollMonth);
         AppProperties.Employer employer = appProperties.getPayroll().getEmployer();
@@ -355,7 +355,7 @@ public class PayrollService {
                 content = buildDetailContent(detailPeriod);
                 auditFields = DETAIL_EXPORT_AUDIT_FIELDS;
             }
-            default -> throw new ApiException(HttpStatus.BAD_REQUEST, "Unsupported export kind");
+            default -> throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับประเภทไฟล์ส่งออกนี้");
         }
         auditPayrollAccess("EXPORT_PAYROLL_" + kind.name(), actor, period, auditFields);
         return new PayrollExportFile(kind, kind.fileName(payDate), content);
@@ -492,7 +492,7 @@ public class PayrollService {
     public byte[] bulkPayslipZip(long periodId, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงวดเงินเดือนนี้"));
         if (!"PROCESSED".equals(period.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "งวดนี้ยังไม่ได้ประมวลผล ไม่สามารถดาวน์โหลดสลิปเงินเดือนทั้งหมดได้");
@@ -532,11 +532,11 @@ public class PayrollService {
     public byte[] payslipPdf(long periodId, long lineId, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงวดเงินเดือนนี้"));
         PayrollLineDto line = period.lines().stream()
             .filter(item -> item.id() != null && item.id() == lineId)
             .findFirst()
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll line not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการเงินเดือนนี้"));
         byte[] pdf = payslipRenderer.toPdf(line, period);
         auditPayrollLineAccess("VIEW_PAYSLIP_PDF", actor, period, line,
             "earnings,sso,tax,deductions,net_pay,bank_account");
@@ -546,14 +546,14 @@ public class PayrollService {
 
     public byte[] ownPayslipPdf(long periodId, UserPrincipal actor) {
         if (actor == null || actor.employeeId() == null) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงวดเงินเดือนนี้"));
         PayrollLineDto line = period.lines().stream()
             .filter(item -> item.employeeId() == actor.employeeId())
             .findFirst()
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payslip not found for this payroll period"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบสลิปเงินเดือนสำหรับงวดนี้"));
         byte[] pdf = payslipRenderer.toPdf(line, period);
         auditPayrollLineAccess("VIEW_OWN_PAYSLIP_PDF", actor, period, line,
             "earnings,sso,tax,deductions,net_pay,bank_account");
@@ -601,7 +601,7 @@ public class PayrollService {
         PayrollTaxAllowanceInput proposedAllowances, UserPrincipal actor
     ) {
         if (actor == null || actor.employeeId() == null) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         LocalDate payrollMonth = LocalDate.of(taxYear, effectiveMonth, 1);
 
@@ -1528,14 +1528,14 @@ public class PayrollService {
 
     private LocalDate normalizeMonth(LocalDate payrollMonth) {
         if (payrollMonth == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "payrollMonth is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุงวดเงินเดือน");
         }
         return payrollMonth.withDayOfMonth(1);
     }
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
         if (actor == null || !allowed.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 

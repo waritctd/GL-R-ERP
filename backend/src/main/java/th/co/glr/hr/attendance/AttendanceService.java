@@ -61,13 +61,13 @@ public class AttendanceService {
         LocalDate effectiveTo = toDate == null ? today : toDate;
         LocalDate effectiveFrom = fromDate == null ? effectiveTo.withDayOfMonth(1) : fromDate;
         if (effectiveTo.isBefore(effectiveFrom)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "toDate must be on or after fromDate");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่สิ้นสุดต้องไม่มาก่อนวันที่เริ่มต้น");
         }
         // employees × days: an unbounded range is a genuine latency/memory hazard company-wide.
         if (ChronoUnit.DAYS.between(effectiveFrom, effectiveTo) >= AttendanceDailyService.MAX_RANGE_DAYS) {
             throw new ApiException(
                 HttpStatus.BAD_REQUEST,
-                "Date range must be shorter than " + AttendanceDailyService.MAX_RANGE_DAYS + " days");
+                "ช่วงวันที่ต้องสั้นกว่า " + AttendanceDailyService.MAX_RANGE_DAYS + " วัน");
         }
 
         AttendanceScope scope = resolveScope(user, requestedEmployeeId, requestedDivisionId);
@@ -100,10 +100,10 @@ public class AttendanceService {
     /** Re-derives daily rows for a range. HR/CEO only; also the historical backfill entry point. */
     public int recalculateDaily(LocalDate fromDate, LocalDate toDate, Long employeeId) {
         if (fromDate == null || toDate == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "fromDate and toDate are required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุวันที่เริ่มต้นและวันที่สิ้นสุด");
         }
         if (toDate.isBefore(fromDate)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "toDate must be on or after fromDate");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่สิ้นสุดต้องไม่มาก่อนวันที่เริ่มต้น");
         }
         return dailyService.recalculateRange(fromDate, toDate, employeeId);
     }
@@ -180,7 +180,7 @@ public class AttendanceService {
         LocalDate effectiveTo = toDate == null ? today : toDate;
         LocalDate effectiveFrom = fromDate == null ? effectiveTo.minusDays(30) : fromDate;
         if (effectiveTo.isBefore(effectiveFrom)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "toDate must be on or after fromDate");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่สิ้นสุดต้องไม่มาก่อนวันที่เริ่มต้น");
         }
         int limit = requestedLimit == null ? 500 : Math.max(1, Math.min(requestedLimit, 2_000));
 
@@ -226,13 +226,13 @@ public class AttendanceService {
             return new AttendanceScope(requestedEmployeeId, requestedDivisionId);
         }
         if (user.employeeId() == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "User is not linked to an employee");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล");
         }
         if (user.manager() && user.divisionId() != null) {
             return AttendanceScope.division(requestedEmployeeId, user.divisionId());
         }
         if (requestedEmployeeId != null && !requestedEmployeeId.equals(user.employeeId())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return AttendanceScope.self(user.employeeId());
     }
@@ -258,7 +258,7 @@ public class AttendanceService {
     public AttendanceWfhRosterResult markPresent(
             UserPrincipal user, LocalDate workDate, List<Long> employeeIds, String notes) {
         if (workDate == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "workDate is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุวันที่ทำงาน");
         }
         Set<Long> requestedIds = employeeIds == null ? Set.of() : Set.copyOf(employeeIds);
 
@@ -270,7 +270,7 @@ public class AttendanceService {
             .map(AttendanceEmployeeOption::employeeId)
             .collect(Collectors.toSet());
         if (!allowedIds.containsAll(requestedIds)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "One or more employees are outside your attendance scope");
+            throw new ApiException(HttpStatus.FORBIDDEN, "มีพนักงานบางคนอยู่นอกขอบเขตการดูแลของคุณ");
         }
 
         return dailyService.setWfhRoster(workDate, requestedIds, notes);
@@ -345,14 +345,14 @@ public class AttendanceService {
     @Transactional
     public RotateAgentTokenResponse rotateDeviceToken(String rawDeviceCode) {
         if (rawDeviceCode == null || rawDeviceCode.isBlank()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Device code is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุรหัสเครื่องสแกน");
         }
         String deviceCode = rawDeviceCode.trim().toUpperCase();
         String token = generateAgentToken();
         OffsetDateTime rotatedAt = OffsetDateTime.now();
         int updated = attendanceRepository.updateAgentTokenHash(deviceCode, sha256Hex(token), rotatedAt);
         if (updated != 1) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "Attendance device is not registered");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ยังไม่ได้ลงทะเบียนเครื่องสแกนนี้ในระบบ");
         }
         return new RotateAgentTokenResponse(deviceCode, token, rotatedAt);
     }
@@ -365,14 +365,19 @@ public class AttendanceService {
     private void authenticateDevice(String siteCode, String deviceCode, String agentToken) {
         AttendanceDeviceCredential device = attendanceRepository.findDeviceCredential(deviceCode).orElse(null);
         if (device == null || !device.active()) {
+            // Returned to the physical scanner/agent process on receivePunch's device-auth path
+            // only (never rendered in the browser UI — see receivePunch's single call site above).
+            // Left in English: an out-of-repo device agent may match on this text, and there is no
+            // human-facing surface to translate it for.
             throw new ApiException(HttpStatus.UNAUTHORIZED, "Unknown or inactive attendance device");
         }
         if (!device.siteCode().equals(siteCode)) {
-            throw new ApiException(HttpStatus.UNAUTHORIZED, "Attendance device does not belong to requested site");
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "เครื่องสแกนนี้ไม่ได้อยู่ประจำไซต์งานที่ระบุ");
         }
         if (device.tokenHash() != null) {
             if (agentToken == null || agentToken.isBlank()
                 || !constantTimeEquals(device.tokenHash(), sha256Hex(agentToken.trim()))) {
+                // Same device-agent-only reasoning as above.
                 throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid attendance agent token");
             }
             return;
@@ -380,10 +385,12 @@ public class AttendanceService {
         // Transitional fallback: no per-device token issued yet — accept the legacy shared token.
         String shared = properties.getAttendance().getAgentToken();
         if (shared == null || shared.isBlank()) {
+            // Device-agent-only (see above); the config gap here also has no human UI to inform.
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
                 "Attendance device has no agent token; rotate one to enable punches");
         }
         if (agentToken == null || agentToken.isBlank() || !constantTimeEquals(shared, agentToken.trim())) {
+            // Same device-agent-only reasoning as above.
             throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid attendance agent token");
         }
     }

@@ -9,7 +9,7 @@ import th.co.glr.hr.common.ApiException;
 
 @Service
 public class AuthService {
-    private static final String INVALID_CREDENTIALS = "Invalid email or password";
+    private static final String INVALID_CREDENTIALS = "อีเมลหรือรหัสผ่านไม่ถูกต้อง";
 
     private final EmployeeAuthRepository employees;
     private final PasswordEncoder passwordEncoder;
@@ -22,6 +22,9 @@ public class AuthService {
     public AuthResponse login(LoginRequest request, HttpServletRequest httpRequest) {
         LoginRequest safeRequest = request == null ? new LoginRequest(null, null, null) : request;
         if (hasText(safeRequest.role())) {
+            // Left in English: `role` is only ever populated by the mock-mode quick-login buttons
+            // (LoginPage.jsx, gated on VITE_USE_MOCKS), which never call this real service — so this
+            // branch has no reachable Thai-UI path to translate for.
             throw new ApiException(HttpStatus.FORBIDDEN, "Role login is disabled");
         }
         if (!hasText(safeRequest.email()) || !hasText(safeRequest.password())) {
@@ -47,26 +50,26 @@ public class AuthService {
         if (value instanceof UserPrincipal user) {
             return new AuthResponse(user);
         }
-        throw new ApiException(HttpStatus.UNAUTHORIZED, "Not authenticated");
+        throw new ApiException(HttpStatus.UNAUTHORIZED, "กรุณาเข้าสู่ระบบก่อนใช้งาน");
     }
 
     public AuthResponse changePassword(ChangePasswordRequest request, HttpSession session) {
         Object value = session.getAttribute(SessionContext.SESSION_USER_KEY);
         if (!(value instanceof UserPrincipal user)) {
-            throw new ApiException(HttpStatus.UNAUTHORIZED, "Not authenticated");
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "กรุณาเข้าสู่ระบบก่อนใช้งาน");
         }
 
         EmployeeLoginRecord employee = employees.findByEmployeeId(user.id())
-            .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Not authenticated"));
+            .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "กรุณาเข้าสู่ระบบก่อนใช้งาน"));
         if (!employee.active() || !passwordMatches(request.currentPassword(), employee)) {
-            throw new ApiException(HttpStatus.UNAUTHORIZED, "Current password is incorrect");
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "รหัสผ่านปัจจุบันไม่ถูกต้อง");
         }
         if (passwordEncoder.matches(request.newPassword(), employee.passwordHash())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "New password must differ from the current password");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "รหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสผ่านเดิม");
         }
         if (hasText(employee.employeeCode())
             && request.newPassword().equals(employee.employeeCode().trim())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "New password must not be your employee code");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "รหัสผ่านใหม่ต้องไม่ใช่รหัสพนักงานของคุณ");
         }
 
         employees.updatePassword(employee.employeeId(), passwordEncoder.encode(request.newPassword()));

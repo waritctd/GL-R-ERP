@@ -123,7 +123,7 @@ public class TicketService {
         // business reading it (mirrors salesViewScope.js hiding the "payment" section
         // from import's view of TicketDetailPage).
         if (IMPORT_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return tickets.findReceiptsByTicket(ticketId);
     }
@@ -137,7 +137,7 @@ public class TicketService {
         requireRole(actor, VIEWER_ROLES);
         TicketDto ticket = requireTicket(ticketId);
         if ("sales".equals(actor.role()) && ticket.summary().createdById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return projectForRole(ticket, actor.role());
     }
@@ -174,7 +174,7 @@ public class TicketService {
         if (request.entryChannel() != null && !request.entryChannel().isBlank()
                 && !EntryChannel.isValid(request.entryChannel())) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
-                "Unknown entry channel '" + request.entryChannel() + "'");
+                "ไม่รองรับช่องทางรับงาน '" + request.entryChannel() + "'");
         }
         // Guard priority the same way as entryChannel: an unvalidated value hits the
         // chk_ticket_priority CHECK column in the repository and fails closed (500).
@@ -182,7 +182,7 @@ public class TicketService {
         if (request.priority() != null && !request.priority().isBlank()
                 && !Priority.isValid(request.priority())) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
-                "Unknown priority '" + request.priority() + "'");
+                "ไม่รองรับระดับความสำคัญ '" + request.priority() + "'");
         }
         String code = tickets.nextTicketCode();
         long id = tickets.create(request, code, actor.id(), actor.name());
@@ -235,7 +235,7 @@ public class TicketService {
     @Transactional
     public TicketDto proposePrice(long ticketId, ProposePriceRequest request, UserPrincipal actor) {
         if (!IMPORT_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
@@ -243,7 +243,7 @@ public class TicketService {
         String currentStatus = s.status();
         if (!PROPOSE_ALLOWED_STATUSES.contains(currentStatus)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "Cannot propose price when ticket is '" + currentStatus + "'");
+                "เสนอราคาไม่ได้เมื่อดีลอยู่ในสถานะ '" + currentStatus + "'");
         }
         tickets.replaceItems(ticketId, request.items());
         String snapshot = buildItemSnapshot(request.items());
@@ -326,7 +326,7 @@ public class TicketService {
         }
         String recipientType = request.recipientType().trim();
         if (!QuotationRecipient.isValid(recipientType) || QuotationRecipient.UNSPECIFIED.equals(recipientType)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown quotation recipient '" + recipientType + "'");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับผู้รับใบเสนอราคา '" + recipientType + "'");
         }
         requireRole(actor, SALES_ROLES);
         TicketDto full = requireTicket(ticketId);
@@ -335,10 +335,10 @@ public class TicketService {
         String fromStatus = s.status();
         if (!QUOTATION_ALLOWED_STATUSES.contains(fromStatus)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "Expected status 'approved' or 'quotation_issued' but ticket is '" + fromStatus + "'");
+                "ออกใบเสนอราคาได้เฉพาะดีลที่อยู่ในสถานะ 'approved' หรือ 'quotation_issued' เท่านั้น (สถานะปัจจุบัน: '" + fromStatus + "')");
         }
         if (s.createdById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only the ticket owner can generate a quotation");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะเจ้าของดีลเท่านั้นที่สามารถออกใบเสนอราคาได้");
         }
         boolean acceptedInChain = full.quotations().stream()
             .anyMatch(q -> recipientType.equals(q.recipientType()) && QuotationStatus.ACCEPTED.equals(q.docStatus()));
@@ -444,10 +444,10 @@ public class TicketService {
         QuotationDto quotation = ticket.quotations().stream()
             .filter(q -> q.id() == quotationId)
             .findFirst()
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Quotation not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบเสนอราคานี้"));
         if (!legalQuotationTransition(quotation.docStatus(), targetStatus)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "Cannot mark quotation " + targetStatus + " from " + quotation.docStatus());
+                "ไม่สามารถเปลี่ยนใบเสนอราคาเป็น " + targetStatus + " จากสถานะ " + quotation.docStatus() + " ได้");
         }
         tickets.markQuotationStatus(ticketId, quotationId, targetStatus);
         String message = quotation.number() + " (" + quotation.recipientType() + ")"
@@ -486,12 +486,12 @@ public class TicketService {
         // quotations list to fall through to a "quotation not found" 404 — import
         // downloading a quotation file is a permission question, not a lookup miss.
         if (IMPORT_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         QuotationDto quotation = ticket.quotations().stream()
             .filter(q -> q.id() == quotationId)
             .findFirst()
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Quotation not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบเสนอราคานี้"));
 
         List<TicketItemDto> snapshotItems = tickets.findQuotationItemsByQuotationId(quotationId, ticketId);
         if (!snapshotItems.isEmpty()) {
@@ -638,7 +638,7 @@ public class TicketService {
         // would reset paymentStatus and deadlock the later transitions.
         if (s.paymentStatus() != null && !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "Payment track already past CUSTOMER_CONFIRMED");
+                "ขั้นตอนการรับชำระเงินผ่านสถานะ CUSTOMER_CONFIRMED ไปแล้ว");
         }
         tickets.updatePaymentStatus(ticketId, "CUSTOMER_CONFIRMED");
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -660,7 +660,7 @@ public class TicketService {
         TicketSummaryDto s = ticket.summary();
         requireActive(s);
         if (!"DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Expected paymentStatus=DEPOSIT_NOTICE_ISSUED");
+            throw new ApiException(HttpStatus.CONFLICT, "ต้องออกใบแจ้งรับมัดจำก่อนจึงจะยืนยันรับชำระมัดจำได้");
         }
         var notice = tickets.latestIssuedDepositNotice(ticketId).orElse(null);
         BigDecimal amount = notice != null && notice.depositAmount() != null
@@ -690,12 +690,12 @@ public class TicketService {
             || depositPolicyBypassesNotice;
         if (!TicketStatus.QUOTATION_ISSUED.equals(s.status()) || !depositReady) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "IR requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED/DEPOSIT_PAID or a waived deposit policy");
+                "ออกใบขอนำเข้า (IR) ได้เฉพาะเมื่อออกใบเสนอราคาแล้วและรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น");
         }
         // Never restart an in-flight fulfillment track: re-issuing the IR would
         // downgrade IR_SENT/SHIPPING/GOODS_RECEIVED back to IR_ISSUED.
         if (s.fulfillmentStatus() != null) {
-            throw new ApiException(HttpStatus.CONFLICT, "Import request already issued");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอนำเข้านี้ถูกออกไปแล้ว");
         }
         tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.IR_ISSUED);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -713,7 +713,7 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
         if (!FulfilmentStatus.IR_ISSUED.equals(s.fulfillmentStatus())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Expected fulfillmentStatus=IR_ISSUED");
+            throw new ApiException(HttpStatus.CONFLICT, "ต้องออกใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าส่ง IR แล้วได้");
         }
         tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.IR_SENT);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -727,7 +727,7 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
         if (!FulfilmentStatus.IR_SENT.equals(s.fulfillmentStatus())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Expected fulfillmentStatus=IR_SENT");
+            throw new ApiException(HttpStatus.CONFLICT, "ต้องส่งใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าเริ่มจัดส่งได้");
         }
         tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.SHIPPING);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -741,7 +741,7 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
         if (!FulfilmentStatus.SHIPPING.equals(s.fulfillmentStatus())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Expected fulfillmentStatus=SHIPPING");
+            throw new ApiException(HttpStatus.CONFLICT, "ดีลต้องอยู่ในขั้นตอนจัดส่งก่อนจึงจะทำเครื่องหมายว่าได้รับสินค้าได้");
         }
         tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.GOODS_RECEIVED);
         // Also advance payment track to AWAITING_FINAL_PAYMENT if deposit was paid
@@ -916,7 +916,7 @@ public class TicketService {
         requireActive(s);
         if (!canConfirmFinalPaymentNow(s)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "Expected paymentStatus=DEPOSIT_PAID/AWAITING_FINAL_PAYMENT or a waived deposit policy");
+                "ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรือดีลนี้ได้รับการยกเว้นมัดจำ) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้");
         }
         BigDecimal outstanding = payableAmount(ticket).subtract(nullToZero(tickets.sumPaid(ticketId)));
         if (outstanding.signum() <= 0) {
@@ -961,7 +961,7 @@ public class TicketService {
         requireActive(s);
         String kind = request.kind() == null ? null : request.kind().trim().toUpperCase();
         if (!PAYMENT_RECEIPT_KINDS.contains(kind)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown payment kind '" + request.kind() + "'");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับประเภทการรับชำระเงิน '" + request.kind() + "'");
         }
         BigDecimal amount = request.amount();
         if (amount == null || amount.signum() <= 0) {
@@ -1066,7 +1066,7 @@ public class TicketService {
 
     private TicketItemDto requireLineItem(Map<Long, TicketItemDto> itemsById, Long itemId) {
         if (itemId == null || !itemsById.containsKey(itemId)) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "Item not found in this ticket");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการนี้ในดีล");
         }
         return itemsById.get(itemId);
     }
@@ -1132,7 +1132,7 @@ public class TicketService {
     @Transactional
     public TicketDto updateStage(long ticketId, String targetStage, String note, UserPrincipal actor) {
         if (!DealStage.isValid(targetStage)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown stage '" + targetStage + "'");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับสถานะขั้นตอนการขาย '" + targetStage + "'");
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireStageWriteAccess(s, targetStage, actor);
@@ -1145,7 +1145,7 @@ public class TicketService {
         }
         requireActive(s);
         if (targetStage.equals(s.salesStage())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Deal is already in stage " + targetStage);
+            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้อยู่ในขั้นตอน " + targetStage + " อยู่แล้ว");
         }
         boolean backward = DealStage.indexOf(targetStage) < DealStage.indexOf(s.salesStage())
             && !DealStage.isRoutineBackwardMove(s.salesStage(), targetStage);
@@ -1192,7 +1192,7 @@ public class TicketService {
     @Transactional
     public DealActivityDto addActivity(long ticketId, DealActivityRequest request, UserPrincipal actor) {
         if (!DealActivityKind.isValid(request.kind())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown activity kind '" + request.kind() + "'");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับประเภทกิจกรรม '" + request.kind() + "'");
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
@@ -1226,7 +1226,7 @@ public class TicketService {
     @Transactional
     public TicketDto markLost(long ticketId, String reason, String note, UserPrincipal actor) {
         if (!DealLostReason.isValid(reason)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown lost reason '" + reason + "'");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับเหตุผลการเสียงาน '" + reason + "'");
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
@@ -1234,7 +1234,7 @@ public class TicketService {
         // Lifecycle, not lost_reason — a reopened deal is ACTIVE and still carries
         // the reason it was lost for last time; it must be losable again.
         if (DealLifecycle.CLOSED_LOST.equals(s.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Deal is already marked lost");
+            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ถูกทำเครื่องหมายเสียงานไปแล้ว");
         }
         tickets.markDealLost(ticketId, reason);
         // Stage untouched by design: reopening resumes exactly where the deal was.
@@ -1264,7 +1264,7 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         if (!DealLifecycle.CLOSED_LOST.equals(s.lifecycle()) || s.lostReason() == null) {
-            throw new ApiException(HttpStatus.CONFLICT, "Deal is not marked lost");
+            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ยังไม่ได้ถูกทำเครื่องหมายเสียงาน");
         }
         tickets.clearDealLost(ticketId);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -1360,7 +1360,7 @@ public class TicketService {
     @Transactional
     public TicketDto setTenderRequirement(long ticketId, String value, UserPrincipal actor) {
         if (!TenderRequirement.isValid(value)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown tender requirement '" + value + "'");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับเงื่อนไขการประมูล '" + value + "'");
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
@@ -1375,7 +1375,7 @@ public class TicketService {
     @Transactional
     public TicketDto setEntryChannel(long ticketId, String value, String note, UserPrincipal actor) {
         if (!EntryChannel.isValid(value)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown entry channel '" + value + "'");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับช่องทางรับงาน '" + value + "'");
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
@@ -1397,7 +1397,7 @@ public class TicketService {
     @Transactional
     public TicketDto waiveDeposit(long ticketId, String policy, String reason, UserPrincipal actor) {
         if (!DepositPolicy.NON_REQUIRED.contains(policy)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown deposit waiver policy '" + policy + "'");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับนโยบายยกเว้นมัดจำ '" + policy + "'");
         }
         if (reason == null || reason.isBlank()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเหตุผลนโยบายมัดจำ");
@@ -1433,7 +1433,7 @@ public class TicketService {
                 return;
             }
         }
-        throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
     }
 
     /** Lost/reopen belong to the sales side: deal owner, sales_manager, or ceo. */
@@ -1441,13 +1441,13 @@ public class TicketService {
         String role = actor.role();
         boolean isOwner = SALES_ROLES.contains(role) && s.createdById() == actor.id();
         if (!isOwner && !"sales_manager".equals(role) && !"ceo".equals(role)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
     private void requireQuotationWriteAccess(TicketSummaryDto s, UserPrincipal actor) {
         if (!canManageQuotation(s, actor)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
@@ -1469,15 +1469,15 @@ public class TicketService {
     @Transactional
     public TicketDto cancel(long ticketId, String reason, String note, UserPrincipal actor) {
         if (!DealCancelReason.isValid(reason)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown cancel reason '" + reason + "'");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับเหตุผลการยกเลิก '" + reason + "'");
         }
         TicketDto ticket = requireTicket(ticketId);
         String currentStatus = ticket.summary().status();
         if (TicketStatus.CLOSED.equals(currentStatus) || TicketStatus.CANCELLED.equals(currentStatus)) {
-            throw new ApiException(HttpStatus.CONFLICT, "Cannot cancel a closed or already cancelled ticket");
+            throw new ApiException(HttpStatus.CONFLICT, "ไม่สามารถยกเลิกดีลที่ปิดหรือถูกยกเลิกไปแล้วได้");
         }
         if (ticket.summary().createdById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         tickets.cancelDeal(ticketId, reason);
         String message = blankToNull(note) == null
@@ -1623,7 +1623,7 @@ public class TicketService {
         boolean itemExists = requireTicket(ticketId).items().stream()
             .anyMatch(it -> it.id() == itemId);
         if (!itemExists) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "Item not found in this ticket");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการนี้ในดีล");
         }
         tickets.updateItemManualPrice(itemId, request.manualPrice(), request.reason());
         // Audit trail: an override silently changing an item's price with no ticket_event
@@ -1908,14 +1908,14 @@ public class TicketService {
 
     private TicketDto requireTicket(long id) {
         return tickets.findById(id)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
     }
 
     private TicketSummaryDto loadAndVerifyStatus(long ticketId, String expectedStatus) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         if (!expectedStatus.equals(s.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "Expected status '" + expectedStatus + "' but ticket is '" + s.status() + "'");
+                "ต้องการสถานะ '" + expectedStatus + "' แต่ดีลนี้อยู่ในสถานะ '" + s.status() + "'");
         }
         return s;
     }
@@ -1929,13 +1929,13 @@ public class TicketService {
 
     private void requireOwner(TicketSummaryDto summary, UserPrincipal actor) {
         if (summary.createdById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
         if (!allowed.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 

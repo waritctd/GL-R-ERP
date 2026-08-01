@@ -556,7 +556,7 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
     private static void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable callable) {
         assertThatThrownBy(callable)
             .isInstanceOf(ApiException.class)
-            .hasMessageContaining("Forbidden");
+            .hasMessageContaining("ไม่มีสิทธิ์เข้าถึงรายการนี้");
     }
 
     private static MockHttpSession sessionFor(UserPrincipal actor) {

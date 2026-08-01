@@ -660,7 +660,7 @@ function nextPricingRequestCode() {
 
 function findPricingRequestRaw(id) {
   const pr = mockPricingRequests.find((p) => p.id === Number(id));
-  if (!pr) fail('Pricing request not found', 404);
+  if (!pr) fail('ไม่พบใบขอราคานี้', 404);
   return pr;
 }
 
@@ -668,7 +668,7 @@ function findPricingRequestRaw(id) {
 // ProcurementRepository.withItems (joins request/ticket codes + item display fields for read).
 function findFactoryPurchaseOrderRaw(id) {
   const po = mockFactoryPurchaseOrders.find((p) => p.id === Number(id));
-  if (!po) fail('Factory purchase order not found', 404);
+  if (!po) fail('ไม่พบใบสั่งซื้อโรงงานนี้', 404);
   return po;
 }
 
@@ -715,7 +715,7 @@ function scheduleMockFactoryQuoteDispatch(quote, actor) {
 // the top of every factory-quote mutation this branch touches.
 function mockRequireNotCeoReviewing(pr) {
   if (pr.status === 'CEO_REVIEWING') {
-    fail('Pricing request is under CEO review — factory quote mutations are frozen', 409);
+    fail('ใบขอราคานี้อยู่ระหว่างการพิจารณาของ CEO — ไม่สามารถแก้ไขราคาโรงงานได้ในขณะนี้', 409);
   }
 }
 
@@ -930,11 +930,11 @@ function recalcMockCustomerQuotationTotals(quotation) {
 function mockCustomerQuotationViewAccess(id) {
   const user = hasRole('sales', 'sales_manager', 'ceo', 'import');
   const quotation = mockCustomerQuotations.find((q) => q.id === Number(id));
-  if (!quotation) fail('Customer quotation not found', 404);
+  if (!quotation) fail('ไม่พบใบเสนอราคาลูกค้านี้', 404);
   if (user.role === 'sales') {
     const pr = findPricingRequestRaw(quotation.pricingRequestId);
     const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-    if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+    if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   }
   return quotation;
 }
@@ -943,10 +943,10 @@ function mockCustomerQuotationViewAccess(id) {
 // on this aggregate (caller must already have called hasRole('sales') for `user`).
 function mockCustomerQuotationEditAccess(id, user) {
   const quotation = mockCustomerQuotations.find((q) => q.id === Number(id));
-  if (!quotation) fail('Customer quotation not found', 404);
+  if (!quotation) fail('ไม่พบใบเสนอราคาลูกค้านี้', 404);
   const pr = findPricingRequestRaw(quotation.pricingRequestId);
   const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-  if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+  if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return quotation;
 }
 
@@ -1032,14 +1032,14 @@ function buildPricingRequestDetail(pr) {
 }
 
 function requirePricingRequestViewable(id, user) {
-  if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('Forbidden', 403);
+  if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   const pr = findPricingRequestRaw(id);
   const ticket = db.tickets.find((t) => t.id === pr.ticketId);
   const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
   if (pr.status === 'DRAFT' && !draftOversight && ticket?.createdById !== user.id) {
-    fail('Pricing request not found', 404);
+    fail('ไม่พบใบขอราคานี้', 404);
   }
-  if (user.role === 'sales' && ticket?.createdById !== user.id) fail('Forbidden', 403);
+  if (user.role === 'sales' && ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return pr;
 }
 
@@ -1067,19 +1067,19 @@ function normalizePricingRequestCurrency(targetCurrency) {
 function requirePricingRequestItemFieldsValid(items) {
   items.forEach((item, index) => {
     if (item.requestedQty == null || !(Number(item.requestedQty) >= 0.0001)) {
-      fail('requestedQty must be at least 0.0001', 400);
+      fail('requestedQty ต้องมากกว่าหรือเท่ากับ 0.0001', 400);
     }
     if (!item.requestedUnit?.trim()) {
-      fail('requestedUnit must not be blank', 400);
+      fail('requestedUnit ต้องไม่เว้นว่าง', 400);
     }
     // Mirrors PricingRequestItemRequest's @NotBlank requestedUnitBasis (V68,
     // financial-integrity review Finding B) — the machine-readable basis
     // PricingCostingService now normalizes the requested quantity against.
     if (!item.requestedUnitBasis?.trim()) {
-      fail('requestedUnitBasis must not be blank', 400);
+      fail('requestedUnitBasis ต้องไม่เว้นว่าง', 400);
     }
     if (!item.quantityType?.trim()) {
-      fail('quantityType must not be blank', 400);
+      fail('quantityType ต้องไม่เว้นว่าง', 400);
     }
     // Mirrors PricingRequestService.validateItems: an item must actually name
     // a product somehow — a link to an existing deal line, a catalog
@@ -1149,7 +1149,7 @@ function submitPricingRequestCatalogGate(pr) {
 function mockRequireConversionFactor(value, pricingRequestItemId, factorName) {
   const numeric = Number(value);
   if (value == null || !(numeric > 0)) {
-    fail(`Pricing request item ${pricingRequestItemId} is missing the ${factorName} conversion factor needed to normalize its price/quantity`, 422);
+    fail(`รายการที่ ${pricingRequestItemId} ในใบขอราคายังไม่มีค่าแปลงหน่วย ${factorName} ที่จำเป็นสำหรับคำนวณราคา/จำนวน`, 422);
   }
   return numeric;
 }
@@ -1162,7 +1162,7 @@ function mockPricePerPiece(rawPrice, quotedUnitBasis, factors, pricingRequestIte
     case 'PER_BOX': return Number(rawPrice) / mockRequireConversionFactor(factors.piecesPerBox, pricingRequestItemId, 'piecesPerBox');
     case 'PER_SQM': return Number(rawPrice) * mockRequireConversionFactor(factors.sqmPerUnit, pricingRequestItemId, 'sqmPerUnit');
     case 'PER_LINEAR_M': return Number(rawPrice) * mockRequireConversionFactor(factors.linearMPerUnit, pricingRequestItemId, 'linearMPerUnit');
-    default: fail(`Unsupported factory quote unit basis '${quotedUnitBasis}'`, 422); return null;
+    default: fail(`ไม่รองรับหน่วยนับของใบเสนอราคาโรงงาน '${quotedUnitBasis}'`, 422); return null;
   }
 }
 
@@ -1174,7 +1174,7 @@ function mockQuantityToPieces(requestedQty, requestedUnitBasis, factors, pricing
     case 'PER_BOX': return Number(requestedQty) * mockRequireConversionFactor(factors.piecesPerBox, pricingRequestItemId, 'piecesPerBox');
     case 'PER_SQM': return Number(requestedQty) / mockRequireConversionFactor(factors.sqmPerUnit, pricingRequestItemId, 'sqmPerUnit');
     case 'PER_LINEAR_M': return Number(requestedQty) / mockRequireConversionFactor(factors.linearMPerUnit, pricingRequestItemId, 'linearMPerUnit');
-    default: fail(`Unsupported requested unit basis '${requestedUnitBasis}'`, 422); return null;
+    default: fail(`ไม่รองรับหน่วยนับที่ขอ '${requestedUnitBasis}'`, 422); return null;
   }
 }
 
@@ -1237,13 +1237,13 @@ function publicUser(user) {
 }
 
 function requireSession() {
-  if (!sessionUser) fail('Not authenticated', 401);
+  if (!sessionUser) fail('กรุณาเข้าสู่ระบบก่อนใช้งาน', 401);
   return sessionUser;
 }
 
 function hasRole(...roles) {
   const user = requireSession();
-  if (!roles.includes(user.role)) fail('Forbidden', 403);
+  if (!roles.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return user;
 }
 
@@ -1410,7 +1410,7 @@ function deductionObligationProgressPublic(row) {
 function requireTaxAllowanceAttachmentAccess(declaration, user) {
   const isOwner = user.employeeId != null && user.employeeId === declaration.employeeId;
   const isHr = user.role === 'hr';
-  if (!isOwner && !isHr) fail('Attachment not found', 404);
+  if (!isOwner && !isHr) fail('ไม่พบไฟล์แนบนี้', 404);
 }
 
 function taxAllowanceCapsFor(taxYear) {
@@ -1445,7 +1445,7 @@ function taxAllowanceCapsFor(taxYear) {
 function requireTicketViewer(id) {
   const user = hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
   const ticket = findTicketRaw(Number(id));
-  if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
+  if (user.role === 'sales' && ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return { user, ticket };
 }
 
@@ -1457,7 +1457,7 @@ function requireTicketViewer(id) {
 // DOES need) never accidentally inherit the deposit-notice denial.
 function requireDepositNoticeViewer(ticketId) {
   const result = requireTicketViewer(ticketId);
-  if (result.user.role === 'import') fail('Forbidden', 403);
+  if (result.user.role === 'import') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return result;
 }
 
@@ -1500,7 +1500,7 @@ function accountListScopeIncludes(ticket) {
 
 function findTicketRaw(id) {
   const ticket = db.tickets.find((t) => t.id === id);
-  if (!ticket) fail('Ticket not found', 404);
+  if (!ticket) fail('ไม่พบดีลนี้', 404);
   return ticket;
 }
 
@@ -1540,7 +1540,7 @@ function requireAttachmentTicketAccess(ticketId, { write = false } = {}) {
   const allowed = isParticipant || (write
     ? ATTACHMENT_WRITER_ROLES.includes(user.role)
     : ATTACHMENT_VIEWER_ROLES.includes(user.role));
-  if (!allowed) fail('Forbidden', 403);
+  if (!allowed) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return { user, ticket };
 }
 
@@ -1738,7 +1738,7 @@ function reserveStockForTicket(ticket, user, payload = {}) {
   let total = 0;
   for (const line of lines) {
     const item = ticket.items.find((it) => it.id === Number(line.itemId));
-    if (!item) fail('Item not found in this ticket', 404);
+    if (!item) fail('ไม่พบรายการนี้ในดีล', 404);
     const qty = moneyValue(line.qtyFromStock);
     if (qty < 0 || qty > Number(item.qty || 0)) fail('จำนวนสินค้าจากสต็อกต้องไม่เกินจำนวนที่สั่ง', 400);
     item.qtyFromStock = qty;
@@ -1764,7 +1764,7 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
   const combined = new Map();
   for (const line of lines) {
     const item = ticket.items.find((it) => it.id === Number(line.itemId));
-    if (!item) fail('Item not found in this ticket', 404);
+    if (!item) fail('ไม่พบรายการนี้ในดีล', 404);
     const qty = moneyValue(line.qty);
     if (qty <= 0) fail('จำนวนส่งมอบต้องมากกว่า 0', 400);
     combined.set(item.id, moneyValue((combined.get(item.id) ?? 0) + qty));
@@ -1823,7 +1823,7 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
 
 function recordPaymentForTicket(ticket, user, payload) {
   const kind = String(payload.kind ?? '').trim().toUpperCase();
-  if (!['DEPOSIT', 'BALANCE', 'ADJUSTMENT'].includes(kind)) fail(`Unknown payment kind '${payload.kind}'`, 400);
+  if (!['DEPOSIT', 'BALANCE', 'ADJUSTMENT'].includes(kind)) fail(`ไม่รองรับประเภทการรับชำระเงิน '${payload.kind}'`, 400);
   const amount = moneyValue(payload.amount);
   if (amount <= 0) fail('ยอดรับชำระต้องมากกว่า 0', 400);
   const payable = payableAmount(ticket);
@@ -1890,7 +1890,7 @@ function mockDocPlaceholderBlob(lines) {
 async function buildMockQuotationXlsx(ticketId, quotationId) {
   const ticket = findTicketRaw(Number(ticketId));
   const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
-  if (!quotation) fail('Quotation not found', 404);
+  if (!quotation) fail('ไม่พบใบเสนอราคานี้', 404);
 
   const hasSnapshot = Array.isArray(quotation.items) && quotation.items.length > 0;
   const issueDate = quotation.issuedAt ? new Date(quotation.issuedAt) : new Date();
@@ -1917,7 +1917,7 @@ async function buildMockQuotationXlsx(ticketId, quotationId) {
 function buildMockQuotationHtml(ticketId, quotationId) {
   const ticket = findTicketRaw(Number(ticketId));
   const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
-  if (!quotation) fail('Quotation not found', 404);
+  if (!quotation) fail('ไม่พบใบเสนอราคานี้', 404);
   const hasSnapshot = Array.isArray(quotation.items) && quotation.items.length > 0;
   const priceItems = hasSnapshot ? quotation.items : ticket.items.filter((it) => it.approvedPrice != null);
   const customerName = hasSnapshot ? (quotation.customerName ?? '') : (ticket.customerName ?? '');
@@ -1948,7 +1948,7 @@ td{border:1px solid #e2e8f0;padding:8px 10px;font-size:13px}
 // ── Remaining invoice XLSX (demo placeholder) — real file from RemainingInvoiceRenderer.java ─
 async function buildMockRemainingInvoiceXlsx(ticketId) {
   const ticket = findTicketRaw(Number(ticketId));
-  if (!ticket) fail('Ticket not found', 404);
+  if (!ticket) fail('ไม่พบดีลนี้', 404);
 
   const today = new Date();
   const thaiYear2 = String(today.getFullYear() + 543).slice(-2);
@@ -2160,7 +2160,7 @@ function mockAttendanceScope(user, params = {}) {
     }
     return { employees };
   }
-  if (!user.employeeId) fail('User is not linked to an employee', 400);
+  if (!user.employeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
   if (dashboardManager(user) && dashboardDivisionId(user)) {
     const division = db.employees.filter(
       (employee) => employee.divisionId === dashboardDivisionId(user),
@@ -2169,7 +2169,7 @@ function mockAttendanceScope(user, params = {}) {
     // Both predicates AND, so an out-of-division id matches nothing rather than leaking.
     return { employees: requested ? division.filter((e) => e.id === requested) : division };
   }
-  if (params.employeeId && Number(params.employeeId) !== user.employeeId) fail('Forbidden', 403);
+  if (params.employeeId && Number(params.employeeId) !== user.employeeId) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   const self = employeeForUser(user);
   return { employees: self ? [self] : [] };
 }
@@ -2509,15 +2509,15 @@ function canReviewOvertime(user, employeeId) {
 
 function leaveTypeByCode(code) {
   const type = db.leaveTypes.find((item) => item.code === String(code || '').toUpperCase());
-  if (!type) fail('Invalid leave type', 400);
+  if (!type) fail('ประเภทการลาไม่ถูกต้อง', 400);
   return type;
 }
 
 function workingDaysBetween(startDate, endDate) {
   const start = new Date(`${startDate}T00:00:00`);
   const end = new Date(`${endDate}T00:00:00`);
-  if (end < start) fail('Leave end date must be on or after start date', 400);
-  if (startDate.slice(0, 4) !== endDate.slice(0, 4)) fail('Leave requests cannot span quota years', 400);
+  if (end < start) fail('วันที่สิ้นสุดการลาต้องไม่มาก่อนวันที่เริ่มต้น', 400);
+  if (startDate.slice(0, 4) !== endDate.slice(0, 4)) fail('คำขอลาต้องไม่คร่อมปีโควตา', 400);
   let days = 0;
   const cursor = new Date(start);
   while (cursor <= end) {
@@ -2525,7 +2525,7 @@ function workingDaysBetween(startDate, endDate) {
     if (day !== 0 && day !== 6) days += 1;
     cursor.setDate(cursor.getDate() + 1);
   }
-  if (days <= 0) fail('Leave range must include at least one weekday', 400);
+  if (days <= 0) fail('ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน', 400);
   return days;
 }
 
@@ -2539,17 +2539,17 @@ const LEAVE_WORKDAY_END = '17:30';
 // Saturday/Sunday half-day would slip through while the identical whole-day request is rejected by
 // workingDaysBetween.
 function workingDayFraction(startDate, startTime, endTime) {
-  if (!startTime || !endTime) fail('Both start time and end time are required for sub-day leave', 400);
+  if (!startTime || !endTime) fail('การลาแบบระบุช่วงเวลาต้องระบุเวลาเริ่มต้นและเวลาสิ้นสุด', 400);
   const dayOfWeek = new Date(`${startDate}T00:00:00`).getDay();
-  if (dayOfWeek === 0 || dayOfWeek === 6) fail('Leave range must include at least one weekday', 400);
+  if (dayOfWeek === 0 || dayOfWeek === 6) fail('ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน', 400);
   if (startTime < LEAVE_WORKDAY_START || startTime > LEAVE_WORKDAY_END
     || endTime < LEAVE_WORKDAY_START || endTime > LEAVE_WORKDAY_END) {
-    fail('Leave times must be within working hours (08:30-17:30)', 400);
+    fail('เวลาลาต้องอยู่ในช่วงเวลาทำงาน (08:30-17:30)', 400);
   }
   const [startH, startM] = startTime.split(':').map(Number);
   const [endH, endM] = endTime.split(':').map(Number);
   const minutes = (endH * 60 + endM) - (startH * 60 + startM);
-  if (minutes <= 0) fail('Leave end time must be after start time', 400);
+  if (minutes <= 0) fail('เวลาสิ้นสุดการลาต้องอยู่หลังเวลาเริ่มต้น', 400);
   const fraction = Math.round((minutes / (8 * 60)) * 100) / 100;
   return Math.min(1, fraction);
 }
@@ -2615,7 +2615,7 @@ function overtimeMinutesBetween(startAt, endAt) {
   const start = new Date(startAt);
   const end = new Date(endAt);
   const diff = Math.round((end.getTime() - start.getTime()) / 60000);
-  if (Number.isNaN(diff) || diff <= 0) fail('Overtime end time must be after start time', 400);
+  if (Number.isNaN(diff) || diff <= 0) fail('เวลาสิ้นสุดการทำงานล่วงเวลาต้องอยู่หลังเวลาเริ่มต้น', 400);
   return diff;
 }
 
@@ -2638,11 +2638,11 @@ function validateOvertimeRetroactiveWindow(payload) {
   const earliest = new Date(Date.now() - OT_RETROACTIVE_WINDOW_DAYS * 86400000)
     .toISOString().slice(0, 10);
   if (workDate < earliest) {
-    fail(`Overtime can only be filed up to ${OT_RETROACTIVE_WINDOW_DAYS} days after the work date`, 400);
+    fail(`ยื่นคำขอทำงานล่วงเวลาย้อนหลังได้ไม่เกิน ${OT_RETROACTIVE_WINDOW_DAYS} วันหลังวันที่ทำงาน`, 400);
   }
   const reason = (payload.reason || '').trim();
   if (reason.length < OT_BACKDATED_REASON_MIN_LENGTH) {
-    fail('A retroactive overtime request must explain clearly why it is late', 400);
+    fail('คำขอทำงานล่วงเวลาย้อนหลังต้องระบุเหตุผลที่ยื่นล่าช้าอย่างชัดเจน', 400);
   }
 }
 
@@ -2754,7 +2754,7 @@ function employeeWithRequestMeta(employee) {
 
 function findEmployee(id) {
   const employee = db.employees.find((item) => item.id === Number(id));
-  if (!employee) fail('Employee not found', 404);
+  if (!employee) fail('ไม่พบข้อมูลพนักงาน', 404);
   return employee;
 }
 
@@ -2884,8 +2884,8 @@ export const api = {
 
       // Collapsed to one message (matches AuthService.INVALID_CREDENTIALS): must not
       // reveal whether the email exists, only whether the credential pair is valid.
-      if (!user) fail('Invalid email or password', 401);
-      if (!requestedRole && payload?.password && payload.password !== user.password) fail('Invalid email or password', 401);
+      if (!user) fail('อีเมลหรือรหัสผ่านไม่ถูกต้อง', 401);
+      if (!requestedRole && payload?.password && payload.password !== user.password) fail('อีเมลหรือรหัสผ่านไม่ถูกต้อง', 401);
 
       sessionUser = user;
 
@@ -2913,13 +2913,13 @@ export const api = {
     async changePassword(payload) {
       const user = requireSession();
       if (!payload?.currentPassword || payload.currentPassword !== user.password) {
-        fail('Current password is incorrect', 401);
+        fail('รหัสผ่านปัจจุบันไม่ถูกต้อง', 401);
       }
       if (!payload?.newPassword || payload.newPassword.length < 8) {
-        fail('New password must be at least 8 characters', 400);
+        fail('รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร', 400);
       }
       if (payload.newPassword === user.password) {
-        fail('New password must differ from the current password', 400);
+        fail('รหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสผ่านเดิม', 400);
       }
       user.password = payload.newPassword;
       user.mustChangePassword = false;
@@ -2957,7 +2957,7 @@ export const api = {
       const user = requireSession();
       const employee = findEmployee(id);
       // Mirrors EmployeeService.get(): hr, or the employee viewing themselves — no other role.
-      if (user.role !== 'hr' && user.employeeId !== employee.id) fail('Forbidden', 403);
+      if (user.role !== 'hr' && user.employeeId !== employee.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       return delay({ employee: employeeWithRequestMeta(employee) });
     },
     async update(id, payload) {
@@ -3008,7 +3008,7 @@ export const api = {
     async update(id, payload) {
       hasRole('hr');
       const request = db.profileRequests.find((item) => item.id === Number(id));
-      if (!request) fail('Profile request not found', 404);
+      if (!request) fail('ไม่พบคำขอแก้ไขข้อมูลส่วนตัวนี้', 404);
       request.status = payload.status;
       request.reviewedAt = new Date().toISOString().slice(0, 10);
       if (payload.reviewerNote !== undefined) request.reviewerNote = payload.reviewerNote;
@@ -3023,7 +3023,7 @@ export const api = {
       // sales_manager: read+comment oversight only — kept here (not routed through
       // requireTicketViewer) to match the existing inline-array pattern; must move
       // in lockstep with requireTicketViewer/get() and TicketService.VIEWER_ROLES.
-      if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       let list = structuredClone(db.tickets);
       if (user.role === 'sales') list = list.filter((t) => t.createdById === user.id);
       // Phase B (role-scoped views): import/account only see the slice of the deal
@@ -3084,10 +3084,10 @@ export const api = {
 
     async get(id) {
       const user = requireSession();
-      if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const ticket = structuredClone(db.tickets.find((t) => t.id === Number(id)));
-      if (!ticket) fail('Ticket not found', 404);
-      if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
+      if (!ticket) fail('ไม่พบดีลนี้', 404);
+      if (user.role === 'sales' && ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       return delay({ ticket: projectTicketDetailForRole(buildTicketDetail(ticket), user.role) });
     },
 
@@ -3095,7 +3095,7 @@ export const api = {
       // Phase B: the payment ledger is ฝ่ายบัญชี's own document — import has no
       // business reading it (mirrors TicketService.listPayments).
       const { user } = requireTicketViewer(id);
-      if (user.role === 'import') fail('Forbidden', 403);
+      if (user.role === 'import') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       return delay({ items: receiptsForTicket(id) });
     },
 
@@ -3350,14 +3350,14 @@ export const api = {
       // Phase B: mirrors TicketService.loadQuotationContext's explicit import denial —
       // a permission question, not a lookup miss, so it must not silently 404 instead.
       const { user } = requireTicketViewer(ticketId);
-      if (user.role === 'import') fail('Forbidden', 403);
+      if (user.role === 'import') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const blob = await tryBackendBlob(`/api/tickets/${ticketId}/quotations/${quotationId}/file?format=xlsx`);
       return blob ?? buildMockQuotationXlsx(ticketId, quotationId);
     },
 
     async downloadQuotationPdf(ticketId, quotationId) {
       const { user } = requireTicketViewer(ticketId);
-      if (user.role === 'import') fail('Forbidden', 403);
+      if (user.role === 'import') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const blob = await tryBackendBlob(`/api/tickets/${ticketId}/quotations/${quotationId}/file?format=pdf`);
       return blob ?? buildMockQuotationHtml(ticketId, quotationId);
     },
@@ -3415,12 +3415,12 @@ export const api = {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
       if (!DEAL_CANCEL_REASONS.some((r) => r.code === payload.reason)) {
-        fail(`Unknown cancel reason '${payload.reason}'`, 400);
+        fail(`ไม่รองรับเหตุผลการยกเลิก '${payload.reason}'`, 400);
       }
-      if (ticket.status === 'closed' || ticket.status === 'cancelled') fail('Cannot cancel', 409);
+      if (ticket.status === 'closed' || ticket.status === 'cancelled') fail('ไม่สามารถยกเลิกได้', 409);
       // Ownership gate — the Java service has always had this; the mock did not,
       // which made it MORE permissive than production (the dangerous direction).
-      if (ticket.createdById !== user.id) fail('Forbidden', 403);
+      if (ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const prev = ticket.status;
       ticket.status = 'cancelled';
       ticket.lifecycle = 'CANCELLED';
@@ -3477,7 +3477,7 @@ export const api = {
       // Mirrors DepositNoticeService.getRemainingInvoiceXlsx: read gate first — and,
       // per Phase B, that gate now denies import outright (a financial document).
       const { ticket } = requireDepositNoticeViewer(id);
-      if (ticket.status !== 'quotation_issued') fail('Expected quotation_issued', 409);
+      if (ticket.status !== 'quotation_issued') fail('ต้องออกใบเสนอราคาแล้วก่อนจึงจะดำเนินการขั้นตอนนี้ได้', 409);
       const blob = await tryBackendBlob(`/api/tickets/${id}/remaining-invoice/file`);
       return blob ?? buildMockRemainingInvoiceXlsx(Number(id));
     },
@@ -3487,11 +3487,11 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
       // Mirrors TicketService.confirmCustomer: owner-only.
-      if (ticket.createdById !== user.id) fail('Forbidden', 403);
-      if (ticket.status !== 'quotation_issued') fail('Expected quotation_issued', 409);
+      if (ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (ticket.status !== 'quotation_issued') fail('ต้องออกใบเสนอราคาแล้วก่อนจึงจะดำเนินการขั้นตอนนี้ได้', 409);
       // Never downgrade the payment track (mirrors TicketService.confirmCustomer).
       if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
-        fail('Payment track already past CUSTOMER_CONFIRMED', 409);
+        fail('ขั้นตอนการรับชำระเงินผ่านสถานะ CUSTOMER_CONFIRMED ไปแล้ว', 409);
       }
       ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -3509,7 +3509,7 @@ export const api = {
       const user = hasRole('account', 'ceo');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
-      if (ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') fail('Expected paymentStatus=DEPOSIT_NOTICE_ISSUED', 409);
+      if (ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') fail('ต้องออกใบแจ้งรับมัดจำก่อนจึงจะยืนยันรับชำระมัดจำได้', 409);
       const notice = latestIssuedDepositNotice(ticket.id);
       const amount = notice?.depositAmount ?? moneyValue(payableAmount(ticket) * 0.5);
       if (amount <= 0) fail('ไม่พบยอดมัดจำสำหรับบันทึกรับชำระ', 409);
@@ -3532,9 +3532,9 @@ export const api = {
         && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED');
       if (ticket.status !== 'quotation_issued'
           || (!['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID'].includes(ticket.paymentStatus) && !waivedReady)) {
-        fail('Requires quotation_issued + paymentStatus=DEPOSIT_NOTICE_ISSUED or DEPOSIT_PAID', 409);
+        fail('ต้องออกใบเสนอราคาแล้วและรับชำระหรือแจ้งมัดจำแล้วก่อนจึงจะดำเนินการขั้นตอนนี้ได้', 409);
       }
-      if (ticket.fulfillmentStatus != null) fail('Import request already issued', 409);
+      if (ticket.fulfillmentStatus != null) fail('คำขอนำเข้านี้ถูกออกไปแล้ว', 409);
       ticket.fulfillmentStatus = 'IR_ISSUED';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'IR_ISSUED', ticket.status, ticket.status, null);
@@ -3546,7 +3546,7 @@ export const api = {
       const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
-      if (ticket.fulfillmentStatus !== 'IR_ISSUED') fail('Expected fulfillmentStatus=IR_ISSUED', 409);
+      if (ticket.fulfillmentStatus !== 'IR_ISSUED') fail('ต้องออกใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าส่ง IR แล้วได้', 409);
       ticket.fulfillmentStatus = 'IR_SENT';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'IR_SENT', ticket.status, ticket.status, null);
@@ -3557,7 +3557,7 @@ export const api = {
       const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
-      if (ticket.fulfillmentStatus !== 'IR_SENT') fail('Expected fulfillmentStatus=IR_SENT', 409);
+      if (ticket.fulfillmentStatus !== 'IR_SENT') fail('ต้องส่งใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าเริ่มจัดส่งได้', 409);
       ticket.fulfillmentStatus = 'SHIPPING';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'SHIPPING', ticket.status, ticket.status, null);
@@ -3568,7 +3568,7 @@ export const api = {
       const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
-      if (ticket.fulfillmentStatus !== 'SHIPPING') fail('Expected fulfillmentStatus=SHIPPING', 409);
+      if (ticket.fulfillmentStatus !== 'SHIPPING') fail('ดีลต้องอยู่ในขั้นตอนจัดส่งก่อนจึงจะทำเครื่องหมายว่าได้รับสินค้าได้', 409);
       ticket.fulfillmentStatus = 'GOODS_RECEIVED';
       if (ticket.paymentStatus === 'DEPOSIT_PAID') {
         ticket.paymentStatus = 'AWAITING_FINAL_PAYMENT';
@@ -3589,7 +3589,7 @@ export const api = {
       requireActive(ticket);
       const allowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
         || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
-      if (!allowed) fail('Expected paymentStatus=DEPOSIT_PAID/AWAITING_FINAL_PAYMENT or a waived deposit policy', 409);
+      if (!allowed) fail('ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรือดีลนี้ได้รับการยกเว้นมัดจำ) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้', 409);
       const outstanding = moneyValue(payableAmount(ticket) - sumPaid(ticket.id));
       if (outstanding <= 0) {
         if (ticket.paymentStatus !== 'FULLY_PAID') {
@@ -3616,11 +3616,11 @@ export const api = {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
-      if (dealStageIndex(payload.stage) < 0) fail(`Unknown stage '${payload.stage}'`, 400);
-      if (!dealCanSetStage(user, ticket, payload.stage)) fail('Forbidden', 403);
+      if (dealStageIndex(payload.stage) < 0) fail(`ไม่รองรับสถานะขั้นตอนการขาย '${payload.stage}'`, 400);
+      if (!dealCanSetStage(user, ticket, payload.stage)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       // Lifecycle, not lostReason: a reopened deal is ACTIVE and keeps its reason (V57).
       if (ticket.lifecycle === 'CLOSED_LOST') fail('ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ', 409);
-      if (ticket.salesStage === payload.stage) fail(`Deal is already in stage ${payload.stage}`, 409);
+      if (ticket.salesStage === payload.stage) fail(`ดีลนี้อยู่ในขั้นตอน ${payload.stage} อยู่แล้ว`, 409);
       const backward = dealStageIndex(payload.stage) < dealStageIndex(ticket.salesStage)
         && !isRoutineBackwardMove(ticket.salesStage, payload.stage);
       const skipForward = dealStageIndex(payload.stage) - dealStageIndex(ticket.salesStage) > 1;
@@ -3648,9 +3648,9 @@ export const api = {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
-      if (!DEAL_LOST_REASONS.some((r) => r.code === payload.reason)) fail(`Unknown lost reason '${payload.reason}'`, 400);
-      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
-      if (ticket.lifecycle === 'CLOSED_LOST') fail('Deal is already marked lost', 409);
+      if (!DEAL_LOST_REASONS.some((r) => r.code === payload.reason)) fail(`ไม่รองรับเหตุผลการเสียงาน '${payload.reason}'`, 400);
+      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (ticket.lifecycle === 'CLOSED_LOST') fail('ดีลนี้ถูกทำเครื่องหมายเสียงานไปแล้ว', 409);
       ticket.lostReason = payload.reason;
       ticket.lostAt = new Date().toISOString();
       ticket.lifecycle = 'CLOSED_LOST';
@@ -3664,8 +3664,8 @@ export const api = {
     async reopen(id, payload = {}) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
-      if (ticket.lifecycle !== 'CLOSED_LOST' || ticket.lostReason == null) fail('Deal is not marked lost', 409);
+      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (ticket.lifecycle !== 'CLOSED_LOST' || ticket.lostReason == null) fail('ดีลนี้ยังไม่ได้ถูกทำเครื่องหมายเสียงาน', 409);
       // lostReason/lostAt deliberately PRESERVED (V57): erasing them left the row
       // indistinguishable from one never lost, so "why did we lose this before we
       // reopened it" needed parsing Thai free text out of an event message.
@@ -3680,7 +3680,7 @@ export const api = {
     async hold(id, payload = {}) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
+      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
       ticket.lifecycle = 'ON_HOLD';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -3691,7 +3691,7 @@ export const api = {
     async dormant(id, payload = {}) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
+      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!['ACTIVE', 'ON_HOLD'].includes(ticket.lifecycle ?? 'ACTIVE')) fail('พัก dormant ได้เฉพาะดีลที่ active หรือ on hold', 409);
       ticket.lifecycle = 'DORMANT';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -3702,7 +3702,7 @@ export const api = {
     async resume(id, payload = {}) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
+      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!['ON_HOLD', 'DORMANT'].includes(ticket.lifecycle)) fail('ดำเนินการต่อได้เฉพาะดีลที่พักไว้', 409);
       ticket.lifecycle = 'ACTIVE';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -3713,9 +3713,9 @@ export const api = {
     async setTenderRequirement(id, payload) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
+      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
-      if (!['REQUIRED', 'NOT_REQUIRED', 'UNKNOWN'].includes(payload.value)) fail(`Unknown tender requirement '${payload.value}'`, 400);
+      if (!['REQUIRED', 'NOT_REQUIRED', 'UNKNOWN'].includes(payload.value)) fail(`ไม่รองรับเงื่อนไขการประมูล '${payload.value}'`, 400);
       ticket.tenderRequirement = payload.value;
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage, `tender_requirement → ${payload.value}`);
@@ -3725,9 +3725,9 @@ export const api = {
     async setEntryChannel(id, payload) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
+      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
-      if (!['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].includes(payload.value)) fail(`Unknown entry channel '${payload.value}'`, 400);
+      if (!['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].includes(payload.value)) fail(`ไม่รองรับช่องทางรับงาน '${payload.value}'`, 400);
       if (ticket.entryChannel && ticket.entryChannel !== 'DESIGNER_LED' && ticket.entryChannel !== payload.value && !(payload.note || '').trim()) {
         fail('การเปลี่ยน entry channel ต้องระบุเหตุผล', 400);
       }
@@ -3742,7 +3742,7 @@ export const api = {
       const user = hasRole('account', 'ceo');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
-      if (!['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'].includes(payload.policy)) fail(`Unknown deposit waiver policy '${payload.policy}'`, 400);
+      if (!['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'].includes(payload.policy)) fail(`ไม่รองรับนโยบายยกเว้นมัดจำ '${payload.policy}'`, 400);
       if (!(payload.reason || '').trim()) fail('ต้องระบุเหตุผลนโยบายมัดจำ', 400);
       ticket.depositPolicy = payload.policy;
       ticket.depositPolicyReason = payload.reason.trim();
@@ -3763,9 +3763,9 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       // Deliberately NOT requireActive: a rep can still log why a deal went quiet
       // on a non-ACTIVE deal (mirrors TicketService.addActivity — see handoff 103).
-      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
-      if (!payload?.activityDate) fail('activityDate is required', 400);
-      if (!dealIsValidActivityKind(payload?.kind)) fail(`Unknown activity kind '${payload?.kind}'`, 400);
+      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!payload?.activityDate) fail('ต้องระบุวันที่ทำกิจกรรม', 400);
+      if (!dealIsValidActivityKind(payload?.kind)) fail(`ไม่รองรับประเภทกิจกรรม '${payload?.kind}'`, 400);
       const activity = {
         id: mockDealActivitySeq++,
         ticketId: ticket.id,
@@ -3783,14 +3783,14 @@ export const api = {
     async listActivities(id) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
+      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       return delay({ items: dealActivitiesForTicket(ticket.id) });
     },
 
     async updateTracking(id, payload) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('Forbidden', 403);
+      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
       if (payload?.winProbability != null
         && (Number(payload.winProbability) < 0 || Number(payload.winProbability) > 100)) {
@@ -3841,8 +3841,8 @@ export const api = {
     async balances(params = {}) {
       const user = requireSession();
       const employeeId = params.employeeId ? Number(params.employeeId) : user.employeeId;
-      if (!employeeId) fail('User is not linked to an employee', 400);
-      if (!['hr', 'ceo'].includes(user.role) && employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
+      if (!employeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
+      if (!['hr', 'ceo'].includes(user.role) && employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       findEmployee(employeeId);
       const year = Number(params.year || new Date().getFullYear());
       return delay({ balances: db.leaveTypes.map((type) => leaveBalance(employeeId, type, year)) });
@@ -3852,8 +3852,8 @@ export const api = {
     async contactDefaults(params = {}) {
       const user = requireSession();
       const employeeId = params.employeeId ? Number(params.employeeId) : user.employeeId;
-      if (!employeeId) fail('User is not linked to an employee', 400);
-      if (!['hr', 'ceo'].includes(user.role) && employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
+      if (!employeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
+      if (!['hr', 'ceo'].includes(user.role) && employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const employee = findEmployee(employeeId);
       return delay({ contactDefaults: leaveContactDefaults(employee) });
     },
@@ -3873,15 +3873,15 @@ export const api = {
     async create(payload) {
       const user = requireSession();
       const employeeId = payload.employeeId ? Number(payload.employeeId) : user.employeeId;
-      if (!employeeId) fail('User is not linked to an employee', 400);
-      if (employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('Forbidden', 403);
+      if (!employeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
+      if (employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const employee = findEmployee(employeeId);
       const leaveType = leaveTypeByCode(payload.leaveTypeCode);
       // Sub-day leave (2026-07-25): times present -> fractional day, single-date only (mirrors
       // LeaveService#computeTotalDays / #validateSubDayTimes). No times -> existing whole-day count.
       const hasSubDayTimes = Boolean(payload.startTime && payload.endTime);
       if (hasSubDayTimes && payload.startDate !== payload.endDate) {
-        fail('Sub-day leave must start and end on the same date', 400);
+        fail('การลาแบบระบุช่วงเวลาต้องเริ่มต้นและสิ้นสุดในวันเดียวกัน', 400);
       }
       const totalDays = hasSubDayTimes
         ? workingDayFraction(payload.startDate, payload.startTime, payload.endTime)
@@ -3951,9 +3951,9 @@ export const api = {
     async approve(id, payload = {}) {
       const user = requireSession();
       const request = db.leaveRequests.find((item) => item.id === Number(id));
-      if (!request) fail('Leave request not found', 404);
-      if (!canReviewLeave(user, request.employeeId)) fail('Forbidden', 403);
-      if (request.status !== 'SUBMITTED') fail('Leave request has already been reviewed', 409);
+      if (!request) fail('ไม่พบคำขอลานี้', 404);
+      if (!canReviewLeave(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (request.status !== 'SUBMITTED') fail('คำขอลานี้ได้รับการพิจารณาไปแล้ว', 409);
       const now = new Date().toISOString();
       request.status = 'APPROVED';
       request.reviewedById = user.employeeId;
@@ -3967,9 +3967,9 @@ export const api = {
     async reject(id, payload = {}) {
       const user = requireSession();
       const request = db.leaveRequests.find((item) => item.id === Number(id));
-      if (!request) fail('Leave request not found', 404);
-      if (!canReviewLeave(user, request.employeeId)) fail('Forbidden', 403);
-      if (request.status !== 'SUBMITTED') fail('Leave request has already been reviewed', 409);
+      if (!request) fail('ไม่พบคำขอลานี้', 404);
+      if (!canReviewLeave(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (request.status !== 'SUBMITTED') fail('คำขอลานี้ได้รับการพิจารณาไปแล้ว', 409);
       const now = new Date().toISOString();
       request.status = 'REJECTED';
       request.reviewedById = user.employeeId;
@@ -3983,11 +3983,11 @@ export const api = {
     async cancel(id, payload = {}) {
       const user = requireSession();
       const request = db.leaveRequests.find((item) => item.id === Number(id));
-      if (!request) fail('Leave request not found', 404);
+      if (!request) fail('ไม่พบคำขอลานี้', 404);
       const approver = canReviewLeave(user, request.employeeId);
-      if (!approver && request.employeeId !== user.employeeId) fail('Forbidden', 403);
-      if (!approver && request.status !== 'SUBMITTED') fail('Only submitted leave requests can be cancelled by employees', 409);
-      if (!['SUBMITTED', 'APPROVED'].includes(request.status)) fail('Only active leave requests can be cancelled', 409);
+      if (!approver && request.employeeId !== user.employeeId) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!approver && request.status !== 'SUBMITTED') fail('พนักงานยกเลิกได้เฉพาะคำขอลาที่ยังไม่ได้รับการพิจารณาเท่านั้น', 409);
+      if (!['SUBMITTED', 'APPROVED'].includes(request.status)) fail('ยกเลิกได้เฉพาะคำขอลาที่ยังอยู่ระหว่างพิจารณาเท่านั้น', 409);
       const now = new Date().toISOString();
       request.status = 'CANCELLED';
       request.cancelledAt = now;
@@ -4048,12 +4048,12 @@ export const api = {
     async create(payload) {
       const user = requireSession();
       const employeeId = payload.employeeId ? Number(payload.employeeId) : user.employeeId;
-      if (!employeeId) fail('User is not linked to an employee', 400);
+      if (!employeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
       // Filing OT on another employee's behalf is manager-only, not HR. Verified
       // against OvertimeService.submit() → resolveTargetEmployee(), which calls the
       // same managesEmployee() helper as requireManager() and has no hr/admin bypass
       // ("Employees can only request their own overtime").
-      if (employeeId !== user.employeeId && !canReviewOvertime(user, employeeId)) fail('Forbidden', 403);
+      if (employeeId !== user.employeeId && !canReviewOvertime(user, employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       findEmployee(employeeId);
       validateOvertimeRetroactiveWindow(payload);
       const plannedMinutes = overtimeMinutesBetween(payload.plannedStartAt, payload.plannedEndAt);
@@ -4094,10 +4094,10 @@ export const api = {
     async approve(id, payload = {}) {
       const user = requireSession();
       const request = db.overtimeRequests.find((item) => item.id === Number(id));
-      if (!request) fail('Overtime request not found', 404);
+      if (!request) fail('ไม่พบคำขอทำงานล่วงเวลานี้', 404);
       const now = new Date().toISOString();
       if (request.status === 'SUBMITTED') {
-        if (!canReviewOvertime(user, request.employeeId)) fail('Forbidden', 403);
+        if (!canReviewOvertime(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
         const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
         request.status = 'MANAGER_APPROVED';
         request.actualMinutes = request.actualMinutes ?? request.plannedMinutes;
@@ -4112,7 +4112,7 @@ export const api = {
         return delay({ request: buildOvertimeRecord(request) });
       }
       if (request.status === 'MANAGER_APPROVED') {
-        if (user.role !== 'ceo') fail('Only the CEO can approve manager-approved overtime', 403);
+        if (user.role !== 'ceo') fail('เฉพาะ CEO เท่านั้นที่สามารถอนุมัติคำขอทำงานล่วงเวลาที่หัวหน้างานอนุมัติแล้วได้', 403);
         request.status = 'APPROVED';
         request.ceoApprovedBy = user.employeeId;
         request.ceoApprovedAt = now;
@@ -4123,16 +4123,16 @@ export const api = {
         request.updatedAt = now;
         return delay({ request: buildOvertimeRecord(request) });
       }
-      fail('Overtime request has already been reviewed', 409);
+      fail('คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว', 409);
     },
 
     async reject(id, payload = {}) {
       const user = requireSession();
       const request = db.overtimeRequests.find((item) => item.id === Number(id));
-      if (!request) fail('Overtime request not found', 404);
+      if (!request) fail('ไม่พบคำขอทำงานล่วงเวลานี้', 404);
       const now = new Date().toISOString();
       if (request.status === 'SUBMITTED') {
-        if (!canReviewOvertime(user, request.employeeId)) fail('Forbidden', 403);
+        if (!canReviewOvertime(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
         request.status = 'REJECTED';
         request.reviewedById = user.employeeId;
         request.reviewedByName = user.name;
@@ -4142,7 +4142,7 @@ export const api = {
         return delay({ request: buildOvertimeRecord(request) });
       }
       if (request.status === 'MANAGER_APPROVED') {
-        if (user.role !== 'ceo') fail('Only the CEO can approve manager-approved overtime', 403);
+        if (user.role !== 'ceo') fail('เฉพาะ CEO เท่านั้นที่สามารถอนุมัติคำขอทำงานล่วงเวลาที่หัวหน้างานอนุมัติแล้วได้', 403);
         request.status = 'REJECTED';
         request.reviewedById = user.employeeId;
         request.reviewedByName = user.name;
@@ -4151,17 +4151,17 @@ export const api = {
         request.updatedAt = now;
         return delay({ request: buildOvertimeRecord(request) });
       }
-      fail('Overtime request has already been reviewed', 409);
+      fail('คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว', 409);
     },
 
     async cancel(id, payload = {}) {
       const user = requireSession();
       const request = db.overtimeRequests.find((item) => item.id === Number(id));
-      if (!request) fail('Overtime request not found', 404);
+      if (!request) fail('ไม่พบคำขอทำงานล่วงเวลานี้', 404);
       const approver = canReviewOvertime(user, request.employeeId);
-      if (!approver && request.employeeId !== user.employeeId) fail('Forbidden', 403);
-      if (!approver && request.status !== 'SUBMITTED') fail('Only submitted overtime requests can be cancelled by employees', 409);
-      if (!['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED'].includes(request.status)) fail('Only active overtime requests can be cancelled', 409);
+      if (!approver && request.employeeId !== user.employeeId) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!approver && request.status !== 'SUBMITTED') fail('พนักงานยกเลิกได้เฉพาะคำขอทำงานล่วงเวลาที่ยังไม่ได้รับการพิจารณาเท่านั้น', 409);
+      if (!['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED'].includes(request.status)) fail('ยกเลิกได้เฉพาะคำขอทำงานล่วงเวลาที่ยังอยู่ระหว่างพิจารณาเท่านั้น', 409);
       const now = new Date().toISOString();
       request.status = 'CANCELLED';
       request.cancelledAt = now;
@@ -4218,8 +4218,8 @@ export const api = {
     async usage(params = {}) {
       const user = requireSession();
       const employeeId = params.employeeId ? Number(params.employeeId) : null;
-      if (!employeeId) fail('employeeId is required', 400);
-      if (!canAccessSpecialMoneyEmployee(user, employeeId)) fail('Forbidden', 403);
+      if (!employeeId) fail('ต้องระบุรหัสพนักงาน', 400);
+      if (!canAccessSpecialMoneyEmployee(user, employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const year = params.year ? Number(params.year) : new Date().getFullYear();
       const approvedAmountThisYearByType = {};
       const approvedCountLifetimeByType = {};
@@ -4242,7 +4242,7 @@ export const api = {
       let list = db.specialMoneyRequests;
       const includeAll = canViewAllSpecialMoney(user);
       if (!includeAll) {
-        if (params.employeeId && !canAccessSpecialMoneyEmployee(user, Number(params.employeeId))) fail('Forbidden', 403);
+        if (params.employeeId && !canAccessSpecialMoneyEmployee(user, Number(params.employeeId))) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
         list = list.filter((item) => item.employeeId === user.employeeId || canReviewSpecialMoney(user, item.employeeId));
       }
       if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
@@ -4256,18 +4256,18 @@ export const api = {
     async create(payload) {
       const user = requireSession();
       const actorEmployeeId = user.employeeId;
-      if (!actorEmployeeId) fail('User is not linked to an employee', 400);
+      if (!actorEmployeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
       const employeeId = payload.employeeId ? Number(payload.employeeId) : actorEmployeeId;
       // Filing on another employee's behalf is manager-only, not HR -- mirrors
       // SpecialMoneyService.resolveTargetEmployee(), which has no hr/admin
       // bypass ("Employees can only submit their own special-money requests").
-      if (employeeId !== actorEmployeeId && !canReviewSpecialMoney(user, employeeId)) fail('Forbidden', 403);
+      if (employeeId !== actorEmployeeId && !canReviewSpecialMoney(user, employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       findEmployee(employeeId);
       const type = specialMoneyType(payload.requestType);
-      if (!type) fail('Invalid special money request type', 400);
-      if (!payload.eventDate) fail('eventDate is required', 400);
-      if (!payload.requestedAmount || Number(payload.requestedAmount) <= 0) fail('requestedAmount must be positive', 400);
-      if (!payload.reason || !payload.reason.trim()) fail('reason is required', 400);
+      if (!type) fail('ประเภทคำขอเงินพิเศษไม่ถูกต้อง', 400);
+      if (!payload.eventDate) fail('ต้องระบุวันที่เกิดเหตุ', 400);
+      if (!payload.requestedAmount || Number(payload.requestedAmount) <= 0) fail('requestedAmount ต้องมากกว่า 0', 400);
+      if (!payload.reason || !payload.reason.trim()) fail('ต้องระบุเหตุผล', 400);
 
       const id = Math.max(0, ...db.specialMoneyRequests.map((item) => item.id)) + 1;
       const now = new Date().toISOString();
@@ -4308,10 +4308,10 @@ export const api = {
     async approve(id, payload = {}) {
       const user = requireSession();
       const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
-      if (!request) fail('Special money request not found', 404);
+      if (!request) fail('ไม่พบคำขอเงินพิเศษนี้', 404);
       const now = new Date().toISOString();
       if (request.status === 'SUBMITTED') {
-        if (!canReviewSpecialMoney(user, request.employeeId)) fail('Forbidden', 403);
+        if (!canReviewSpecialMoney(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
         request.status = 'MANAGER_APPROVED';
         request.managerApprovedBy = user.employeeId;
         request.managerApprovedAt = now;
@@ -4322,7 +4322,7 @@ export const api = {
         return delay({ request: buildSpecialMoneyRecord(request) });
       }
       if (request.status === 'MANAGER_APPROVED') {
-        if (user.role !== 'ceo') fail('Only the CEO can approve manager-approved special-money requests', 403);
+        if (user.role !== 'ceo') fail('เฉพาะ CEO เท่านั้นที่สามารถอนุมัติคำขอเงินพิเศษที่หัวหน้างานอนุมัติแล้วได้', 403);
         request.status = 'APPROVED';
         request.approvedAmount = payload.approvedAmount != null ? Number(payload.approvedAmount) : request.requestedAmount;
         request.capOverrideReason = payload.capOverrideReason || null;
@@ -4335,16 +4335,16 @@ export const api = {
         request.updatedAt = now;
         return delay({ request: buildSpecialMoneyRecord(request) });
       }
-      fail('Special money request has already been reviewed', 409);
+      fail('คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว', 409);
     },
 
     async reject(id, payload = {}) {
       const user = requireSession();
       const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
-      if (!request) fail('Special money request not found', 404);
+      if (!request) fail('ไม่พบคำขอเงินพิเศษนี้', 404);
       const now = new Date().toISOString();
       if (request.status === 'SUBMITTED') {
-        if (!canReviewSpecialMoney(user, request.employeeId)) fail('Forbidden', 403);
+        if (!canReviewSpecialMoney(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
         request.status = 'REJECTED';
         request.reviewedById = user.employeeId;
         request.reviewedAt = now;
@@ -4353,7 +4353,7 @@ export const api = {
         return delay({ request: buildSpecialMoneyRecord(request) });
       }
       if (request.status === 'MANAGER_APPROVED') {
-        if (user.role !== 'ceo') fail('Only the CEO can approve manager-approved special-money requests', 403);
+        if (user.role !== 'ceo') fail('เฉพาะ CEO เท่านั้นที่สามารถอนุมัติคำขอเงินพิเศษที่หัวหน้างานอนุมัติแล้วได้', 403);
         request.status = 'REJECTED';
         request.reviewedById = user.employeeId;
         request.reviewedAt = now;
@@ -4361,7 +4361,7 @@ export const api = {
         request.updatedAt = now;
         return delay({ request: buildSpecialMoneyRecord(request) });
       }
-      fail('Special money request has already been reviewed', 409);
+      fail('คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว', 409);
     },
 
     // Stricter than overtime.cancel: only the employee themselves or whoever
@@ -4371,11 +4371,11 @@ export const api = {
     async cancel(id, payload = {}) {
       const user = requireSession();
       const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
-      if (!request) fail('Special money request not found', 404);
+      if (!request) fail('ไม่พบคำขอเงินพิเศษนี้', 404);
       const isEmployee = request.employeeId === user.employeeId;
       const isRequester = request.requestedById != null && request.requestedById === user.employeeId;
-      if (!isEmployee && !isRequester) fail('Forbidden', 403);
-      if (request.status !== 'SUBMITTED') fail('Only submitted special money requests can be cancelled', 409);
+      if (!isEmployee && !isRequester) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (request.status !== 'SUBMITTED') fail('ยกเลิกได้เฉพาะคำขอเงินพิเศษที่ยังไม่ได้รับการพิจารณาเท่านั้น', 409);
       const now = new Date().toISOString();
       request.status = 'CANCELLED';
       request.cancelledAt = now;
@@ -4393,7 +4393,7 @@ export const api = {
     // (route access), which is deliberately broader for the two roles above.
     async list(params = {}) {
       const user = requireSession();
-      if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       let list = db.commissions;
       if (user.role === 'sales') list = list.filter((item) => item.salesRepId === user.id);
       if (params.payrollMonth) list = list.filter((item) => commissionMonth(item.payrollMonth) === params.payrollMonth.slice(0, 7));
@@ -4406,9 +4406,9 @@ export const api = {
     // flow — this method is not wired into any control in this slice, kept for API parity).
     async create(payload) {
       const user = hasRole('account', 'sales_manager', 'ceo');
-      if (!payload.invoiceAttachment) fail('Tax invoice file is required', 400);
+      if (!payload.invoiceAttachment) fail('ต้องแนบไฟล์ใบกำกับภาษี', 400);
       if (db.commissions.some((item) => item.invoiceDetails.invoiceNumber === payload.invoiceNumber)) {
-        fail('Invoice number already exists', 409);
+        fail('เลขที่ใบกำกับภาษีนี้มีอยู่ในระบบแล้ว', 409);
       }
       // Step 9 gate + cross-check — mirrors CommissionService#resolveDealLinkage exactly. Unlinked
       // (sourceTicketId absent) commissions are unaffected: snapshot stays null, mismatch false.
@@ -4416,9 +4416,9 @@ export const api = {
       let dealAmountMismatch = false;
       if (payload.sourceTicketId != null) {
         const linkedTicket = db.tickets.find((t) => t.id === Number(payload.sourceTicketId));
-        if (!linkedTicket) fail('Ticket not found', 404);
+        if (!linkedTicket) fail('ไม่พบดีลนี้', 404);
         if (linkedTicket.salesStage !== 'CLOSED_PAID') {
-          fail('Deal has not reached final payment (CLOSED_PAID); commission cannot be submitted yet.', 422);
+          fail('ดีลนี้ยังไม่ถึงขั้นตอนรับชำระเงินครบถ้วน (CLOSED_PAID) จึงยังยื่นค่าคอมมิชชั่นไม่ได้', 422);
         }
         dealPayableAmountSnapshot = payableAmount(linkedTicket);
         dealAmountMismatch = commissionDealMismatch(payload.grossAmount, dealPayableAmountSnapshot);
@@ -4498,21 +4498,21 @@ export const api = {
      */
     async createFromDeal(payload) {
       const user = hasRole('account');
-      if (!payload.invoiceAttachment) fail('Tax invoice file is required', 400);
+      if (!payload.invoiceAttachment) fail('ต้องแนบไฟล์ใบกำกับภาษี', 400);
       const ticketId = Number(payload.ticketId);
       const ticket = db.tickets.find((t) => t.id === ticketId);
-      if (!ticket) fail('Ticket not found', 404);
+      if (!ticket) fail('ไม่พบดีลนี้', 404);
       const salesRepId = ticket.createdById;
       if (db.commissions.some((item) => item.sourceTicketId === ticketId
         && item.kind === 'SALE'
         && !['VOID', 'REJECTED'].includes(item.status))) {
-        fail('A commission already exists for this deal', 409);
+        fail('มีรายการค่าคอมมิชชั่นสำหรับดีลนี้อยู่แล้ว', 409);
       }
       if (db.commissions.some((item) => item.invoiceDetails.invoiceNumber === payload.invoiceNumber)) {
-        fail('Invoice number already exists', 409);
+        fail('เลขที่ใบกำกับภาษีนี้มีอยู่ในระบบแล้ว', 409);
       }
       if (ticket.salesStage !== 'CLOSED_PAID') {
-        fail('Deal has not reached final payment (CLOSED_PAID); commission cannot be submitted yet.', 422);
+        fail('ดีลนี้ยังไม่ถึงขั้นตอนรับชำระเงินครบถ้วน (CLOSED_PAID) จึงยังยื่นค่าคอมมิชชั่นไม่ได้', 422);
       }
       const dealPayableAmountSnapshot = payableAmount(ticket);
       const effectiveGrossAmount = payload.grossAmount != null && payload.grossAmount !== ''
@@ -4598,9 +4598,9 @@ export const api = {
         fail('กรุณาระบุเหตุผลในการแก้ไข', 400);
       }
       const record = db.commissions.find((item) => item.id === Number(id));
-      if (!record) fail('Commission record not found', 404);
+      if (!record) fail('ไม่พบรายการค่าคอมมิชชั่นนี้', 404);
       if (['VOID', 'REJECTED'].includes(record.status)) {
-        fail('Cannot edit a void commission record', 409);
+        fail('ไม่สามารถแก้ไขรายการค่าคอมมิชชั่นที่ถูกยกเลิกแล้วได้', 409);
       }
       const valueOrExisting = (value, existing) => (value === null || value === undefined || value === '' ? existing : Number(value));
       Object.assign(record.invoiceDetails, {
@@ -4620,7 +4620,7 @@ export const api = {
       // amount fields below which key on invoice_id and can touch a shared clawback pair.
       if (payload.weightMultiplier !== null && payload.weightMultiplier !== undefined && payload.weightMultiplier !== '') {
         const weight = Number(payload.weightMultiplier);
-        if (![1, 2, 3].includes(weight)) fail('weightMultiplier must be 1, 2, or 3', 400);
+        if (![1, 2, 3].includes(weight)) fail('weightMultiplier ต้องเป็น 1, 2 หรือ 3', 400);
         record.weightMultiplier = weight;
       }
       const calc = invoiceCalculation(record.invoiceDetails);
@@ -4637,10 +4637,10 @@ export const api = {
     async approve(id) {
       const user = hasRole('sales_manager', 'ceo');
       const record = db.commissions.find((item) => item.id === Number(id));
-      if (!record) fail('Commission record not found', 404);
+      if (!record) fail('ไม่พบรายการค่าคอมมิชชั่นนี้', 404);
       const now = new Date().toISOString();
       if (record.status === 'SUBMITTED') {
-        if (user.role !== 'sales_manager') fail('Only a sales manager can review submitted commissions', 403);
+        if (user.role !== 'sales_manager') fail('เฉพาะผู้จัดการฝ่ายขายเท่านั้นที่สามารถพิจารณาค่าคอมมิชชั่นที่ยื่นเข้ามาได้', 403);
         record.status = 'MANAGER_APPROVED';
         record.managerApprovedBy = user.employeeId || user.id;
         record.managerApprovedByName = user.name;
@@ -4651,7 +4651,7 @@ export const api = {
         return delay({ commission: buildCommissionRecord(record) });
       }
       if (record.status === 'MANAGER_APPROVED') {
-        if (user.role !== 'ceo') fail('Only the CEO can review manager-approved commissions', 403);
+        if (user.role !== 'ceo') fail('เฉพาะ CEO เท่านั้นที่สามารถพิจารณาค่าคอมมิชชั่นที่ผู้จัดการฝ่ายขายอนุมัติแล้วได้', 403);
         record.status = 'APPROVED';
         record.ceoApprovedBy = user.employeeId || user.id;
         record.ceoApprovedByName = user.name;
@@ -4661,20 +4661,20 @@ export const api = {
         record.updatedAt = now;
         return delay({ commission: buildCommissionRecord(record) });
       }
-      fail('Commission record has already been reviewed', 409);
+      fail('รายการค่าคอมมิชชั่นนี้ได้รับการพิจารณาไปแล้ว', 409);
     },
 
     async reject(id, payload = {}) {
       const user = hasRole('sales_manager', 'ceo');
       const record = db.commissions.find((item) => item.id === Number(id));
-      if (!record) fail('Commission record not found', 404);
+      if (!record) fail('ไม่พบรายการค่าคอมมิชชั่นนี้', 404);
       const now = new Date().toISOString();
       if (record.status === 'SUBMITTED') {
-        if (user.role !== 'sales_manager') fail('Only a sales manager can review submitted commissions', 403);
+        if (user.role !== 'sales_manager') fail('เฉพาะผู้จัดการฝ่ายขายเท่านั้นที่สามารถพิจารณาค่าคอมมิชชั่นที่ยื่นเข้ามาได้', 403);
       } else if (record.status === 'MANAGER_APPROVED') {
-        if (user.role !== 'ceo') fail('Only the CEO can review manager-approved commissions', 403);
+        if (user.role !== 'ceo') fail('เฉพาะ CEO เท่านั้นที่สามารถพิจารณาค่าคอมมิชชั่นที่ผู้จัดการฝ่ายขายอนุมัติแล้วได้', 403);
       } else {
-        fail('Commission record has already been reviewed', 409);
+        fail('รายการค่าคอมมิชชั่นนี้ได้รับการพิจารณาไปแล้ว', 409);
       }
       record.status = 'REJECTED';
       record.rejectedById = user.employeeId || user.id;
@@ -4690,9 +4690,9 @@ export const api = {
     async clawback(id, payload) {
       const user = hasRole('sales_manager', 'ceo');
       const original = db.commissions.find((item) => item.id === Number(id));
-      if (!original) fail('Commission record not found', 404);
-      if (original.kind !== 'SALE' || original.status !== 'APPROVED') fail('Only approved sale commissions can be clawed back', 409);
-      if (db.commissions.some((item) => item.cancellationOfId === original.id && item.status !== 'VOID')) fail('This commission already has an active clawback', 409);
+      if (!original) fail('ไม่พบรายการค่าคอมมิชชั่นนี้', 404);
+      if (original.kind !== 'SALE' || original.status !== 'APPROVED') fail('เรียกคืนได้เฉพาะค่าคอมมิชชั่นประเภทการขายที่อนุมัติแล้วเท่านั้น', 409);
+      if (db.commissions.some((item) => item.cancellationOfId === original.id && item.status !== 'VOID')) fail('รายการค่าคอมมิชชั่นนี้มีการเรียกคืนที่ยังดำเนินการอยู่แล้ว', 409);
       const nextId = Math.max(0, ...db.commissions.map((item) => item.id)) + 1;
       // The structuredClone below carries `weightMultiplier` over from the original
       // automatically (not overridden in the object below) — mirrors CommissionRepository
@@ -4733,23 +4733,23 @@ export const api = {
     async createManualCommission(payload) {
       const user = hasRole('sales_manager', 'ceo');
       const salesRepId = Number(payload.salesRepId);
-      if (!payload.salesRepId || !salesRepId) fail('salesRepId is required', 400);
+      if (!payload.salesRepId || !salesRepId) fail('ต้องระบุรหัสพนักงานขาย', 400);
       if (!isManualCommissionKind(payload.kind)) {
-        fail('kind must be ADJUSTMENT, MANAGER, STOCK_BONUS, or INCENTIVE', 400);
+        fail('kind ต้องเป็น ADJUSTMENT, MANAGER, STOCK_BONUS หรือ INCENTIVE', 400);
       }
       if (payload.amount === null || payload.amount === undefined || payload.amount === '' || Number.isNaN(Number(payload.amount))) {
-        fail('amount is required', 400);
+        fail('ต้องระบุจำนวนเงิน', 400);
       }
       const amount = commissionRound2(Number(payload.amount));
       if (!payload.reason || !String(payload.reason).trim()) {
-        fail('A reason is required for a manual commission entry', 400);
+        fail('ต้องระบุเหตุผลสำหรับรายการค่าคอมมิชชั่นแบบกรอกเอง', 400);
       }
       // A MANAGER-kind entry represents team/manager commission earned, not a correction — never
       // negative. An ADJUSTMENT may legitimately be negative (a deduction/clawback-style
       // correction). Mirrors CommissionService's sign check exactly (STOCK_BONUS/INCENTIVE have
       // no backend sign check either — the form keeps them non-negative client-side only).
       if (payload.kind === 'MANAGER' && amount < 0) {
-        fail('A MANAGER commission entry cannot be negative', 400);
+        fail('รายการค่าคอมมิชชั่นประเภท MANAGER ต้องไม่ติดลบ', 400);
       }
       const month = commissionMonth(payload.payrollMonth || new Date().toISOString());
       const ceoCreated = user.role === 'ceo';
@@ -4796,9 +4796,9 @@ export const api = {
 
     async simulate(payload) {
       const user = requireSession();
-      if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('Forbidden', 403);
+      if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (user.role === 'sales' && (Number(payload.transportFee || 0) > 0 || Number(payload.cutFee || 0) > 0 || Number(payload.shortfall || 0) > 0)) {
-        fail('Sales cannot edit deduction fields', 403);
+        fail('ฝ่ายขายไม่มีสิทธิ์แก้ไขช่องรายการหักเงิน', 403);
       }
       const salesRepId = user.role === 'sales' ? user.id : Number(payload.salesRepId || user.id);
       const month = commissionMonth(payload.payrollMonth || new Date().toISOString());
@@ -4987,7 +4987,7 @@ export const api = {
     // getTaxAllowances/saveTaxAllowances above), except applyTaxAllowanceDeclaration.
     async getMyTaxAllowanceDeclarations(params = {}) {
       const user = requireSession();
-      if (!user.employeeId) fail('User is not linked to an employee', 400);
+      if (!user.employeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
       const taxYear = params.year ? Number(params.year) : new Date().getFullYear();
       const items = db.taxAllowanceDeclarations
         .filter((row) => row.employeeId === user.employeeId && row.taxYear === taxYear)
@@ -4997,8 +4997,8 @@ export const api = {
     },
     async submitMyTaxAllowanceDeclaration(body = {}) {
       const user = requireSession();
-      if (!user.employeeId) fail('User is not linked to an employee', 400);
-      if (!body.taxYear) fail('taxYear is required', 400);
+      if (!user.employeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
+      if (!body.taxYear) fail('ต้องระบุปีภาษี', 400);
       const taxYear = Number(body.taxYear);
       const alreadyPending = db.taxAllowanceDeclarations.some(
         (row) => row.employeeId === user.employeeId && row.taxYear === taxYear && row.status === 'PENDING'
@@ -5023,7 +5023,7 @@ export const api = {
       const user = requireSession();
       const row = db.taxAllowanceDeclarations.find((item) => item.declarationId === Number(id));
       // 404, not 403, on a foreign row -- mirrors TaxAllowanceDeclarationService#withdrawOwn.
-      if (!row || row.employeeId !== user.employeeId) fail('Declaration not found', 404);
+      if (!row || row.employeeId !== user.employeeId) fail('ไม่พบแบบแจ้งค่าลดหย่อนนี้', 404);
       if (row.status !== 'PENDING') fail('เฉพาะรายการที่รออนุมัติเท่านั้นที่ยกเลิกได้', 409);
       row.status = 'WITHDRAWN';
       return delay(null);
@@ -5047,10 +5047,10 @@ export const api = {
     },
     async createTaxAllowanceDeclarationOnBehalf(body = {}) {
       const user = hasRole('hr');
-      if (!body.employeeId || !body.taxYear) fail('employeeId and taxYear are required', 400);
+      if (!body.employeeId || !body.taxYear) fail('ต้องระบุรหัสพนักงานและปีภาษี', 400);
       const employeeId = Number(body.employeeId);
       const taxYear = Number(body.taxYear);
-      if (!db.employees.some((employee) => employee.id === employeeId)) fail('Employee not found', 404);
+      if (!db.employees.some((employee) => employee.id === employeeId)) fail('ไม่พบข้อมูลพนักงาน', 404);
       // Clear the way, mirroring TaxAllowanceDeclarationService#createOnBehalf.
       db.taxAllowanceDeclarations
         .filter((row) => row.employeeId === employeeId && row.taxYear === taxYear && row.status === 'PENDING')
@@ -5076,7 +5076,7 @@ export const api = {
     async approveTaxAllowanceDeclaration(id, body = {}) {
       const user = hasRole('hr');
       const row = db.taxAllowanceDeclarations.find((item) => item.declarationId === Number(id));
-      if (!row) fail('Declaration not found', 404);
+      if (!row) fail('ไม่พบแบบแจ้งค่าลดหย่อนนี้', 404);
       if (row.status !== 'PENDING') fail('รายการนี้ได้รับการพิจารณาไปแล้ว', 409);
       supersedeApprovedTaxAllowanceDeclarations(row.employeeId, row.taxYear, row.declarationId);
       row.status = 'APPROVED';
@@ -5089,7 +5089,7 @@ export const api = {
       const user = hasRole('hr');
       if (!body?.reviewerNote?.trim()) fail('ต้องระบุเหตุผลในการปฏิเสธ', 400);
       const row = db.taxAllowanceDeclarations.find((item) => item.declarationId === Number(id));
-      if (!row) fail('Declaration not found', 404);
+      if (!row) fail('ไม่พบแบบแจ้งค่าลดหย่อนนี้', 404);
       if (row.status !== 'PENDING') fail('รายการนี้ได้รับการพิจารณาไปแล้ว', 409);
       row.status = 'REJECTED';
       row.reviewedById = user.employeeId;
@@ -5124,7 +5124,7 @@ export const api = {
     async uploadTaxAllowanceAttachment(declarationId, file) {
       const user = requireSession();
       const declaration = db.taxAllowanceDeclarations.find((item) => item.declarationId === Number(declarationId));
-      if (!declaration) fail('Declaration not found', 404);
+      if (!declaration) fail('ไม่พบแบบแจ้งค่าลดหย่อนนี้', 404);
       requireTaxAllowanceAttachmentAccess(declaration, user);
       const attachmentId = Math.max(0, ...db.taxAllowanceAttachments.map((row) => row.attachmentId)) + 1;
       const row = {
@@ -5145,7 +5145,7 @@ export const api = {
     async listTaxAllowanceAttachments(declarationId) {
       const user = requireSession();
       const declaration = db.taxAllowanceDeclarations.find((item) => item.declarationId === Number(declarationId));
-      if (!declaration) fail('Declaration not found', 404);
+      if (!declaration) fail('ไม่พบแบบแจ้งค่าลดหย่อนนี้', 404);
       requireTaxAllowanceAttachmentAccess(declaration, user);
       const items = db.taxAllowanceAttachments.filter((row) => row.declarationId === declaration.declarationId);
       return delay({ items });
@@ -5156,9 +5156,9 @@ export const api = {
     async downloadTaxAllowanceAttachment(attachmentId) {
       const user = requireSession();
       const attachment = db.taxAllowanceAttachments.find((row) => row.attachmentId === Number(attachmentId));
-      if (!attachment) fail('Attachment not found', 404);
+      if (!attachment) fail('ไม่พบไฟล์แนบนี้', 404);
       const declaration = db.taxAllowanceDeclarations.find((item) => item.declarationId === attachment.declarationId);
-      if (!declaration) fail('Attachment not found', 404);
+      if (!declaration) fail('ไม่พบไฟล์แนบนี้', 404);
       requireTaxAllowanceAttachmentAccess(declaration, user);
       if (attachment.deletedAt) fail('ไฟล์นี้ถูกลบแล้ว', 404);
       throw new Error('การดาวน์โหลดไฟล์หลักฐานไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
@@ -5166,9 +5166,9 @@ export const api = {
     async deleteTaxAllowanceAttachment(attachmentId, reason) {
       const user = requireSession();
       const attachment = db.taxAllowanceAttachments.find((row) => row.attachmentId === Number(attachmentId));
-      if (!attachment) fail('Attachment not found', 404);
+      if (!attachment) fail('ไม่พบไฟล์แนบนี้', 404);
       const declaration = db.taxAllowanceDeclarations.find((item) => item.declarationId === attachment.declarationId);
-      if (!declaration) fail('Attachment not found', 404);
+      if (!declaration) fail('ไม่พบไฟล์แนบนี้', 404);
       requireTaxAllowanceAttachmentAccess(declaration, user);
       if (attachment.deletedAt) fail('ไฟล์นี้ถูกลบไปแล้ว', 409);
       attachment.deletedAt = new Date().toISOString();
@@ -5221,7 +5221,7 @@ export const api = {
     // above for why the record/lifecycle CAN be faked genuinely here.
     async getMyDeductionObligations() {
       const user = requireSession();
-      if (!user.employeeId) fail('User is not linked to an employee', 400);
+      if (!user.employeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
       const items = db.deductionObligations
         .filter((row) => row.employeeId === user.employeeId)
         .sort((a, b) => new Date(b.startDate) - new Date(a.startDate))
@@ -5240,16 +5240,16 @@ export const api = {
     async getDeductionObligationProgress(id) {
       hasRole('hr', 'ceo');
       const row = db.deductionObligations.find((item) => item.id === Number(id));
-      if (!row) fail('Obligation not found', 404);
+      if (!row) fail('ไม่พบรายการภาระผูกพันนี้', 404);
       return delay(deductionObligationProgressPublic(row));
     },
     async createDeductionObligation(body = {}) {
       const user = hasRole('hr');
       if (!body.employeeId || !body.kind || !body.authorityReference || !body.startDate) {
-        fail('employeeId, kind, authorityReference and startDate are required', 400);
+        fail('ต้องระบุ employeeId, kind, authorityReference และ startDate', 400);
       }
       const employee = db.employees.find((item) => item.id === Number(body.employeeId));
-      if (!employee) fail('Employee not found', 404);
+      if (!employee) fail('ไม่พบข้อมูลพนักงาน', 404);
       const alreadyActive = db.deductionObligations.some(
         (row) => row.employeeId === Number(body.employeeId) && row.kind === body.kind && row.status === 'ACTIVE'
       );
@@ -5272,7 +5272,7 @@ export const api = {
     async updateDeductionObligation(id, body = {}) {
       const user = hasRole('hr');
       const row = db.deductionObligations.find((item) => item.id === Number(id));
-      if (!row) fail('Obligation not found', 404);
+      if (!row) fail('ไม่พบรายการภาระผูกพันนี้', 404);
       if (row.status === 'STOPPED') fail('ไม่สามารถแก้ไขรายการที่ปิดแล้ว (STOPPED) ได้', 409);
       row.monthlyInstructedAmount = Number(body.monthlyInstructedAmount) || 0;
       row.instructedTotal = body.instructedTotal == null || body.instructedTotal === '' ? null : Number(body.instructedTotal);
@@ -5285,7 +5285,7 @@ export const api = {
     async stopDeductionObligation(id) {
       const user = hasRole('hr');
       const row = db.deductionObligations.find((item) => item.id === Number(id));
-      if (!row) fail('Obligation not found', 404);
+      if (!row) fail('ไม่พบรายการภาระผูกพันนี้', 404);
       if (row.status === 'STOPPED') fail('รายการนี้ถูกปิดไปแล้ว', 409);
       row.status = 'STOPPED';
       row.updatedById = user.employeeId;
@@ -5295,7 +5295,7 @@ export const api = {
     async acknowledgeDeductionObligationCompletion(id) {
       const user = hasRole('hr');
       const row = db.deductionObligations.find((item) => item.id === Number(id));
-      if (!row) fail('Obligation not found', 404);
+      if (!row) fail('ไม่พบรายการภาระผูกพันนี้', 404);
       if (row.status !== 'COMPLETED') fail('รายการนี้ยังไม่ครบยอดตามที่หน่วยงานแจ้ง', 409);
       row.completionAcknowledgedById = user.employeeId;
       row.completionAcknowledgedAt = new Date().toISOString();
@@ -5306,9 +5306,9 @@ export const api = {
     async overrideDeductionObligationContinue(id, body = {}) {
       const user = hasRole('hr');
       const row = db.deductionObligations.find((item) => item.id === Number(id));
-      if (!row) fail('Obligation not found', 404);
+      if (!row) fail('ไม่พบรายการภาระผูกพันนี้', 404);
       if (row.status !== 'COMPLETED') fail('รายการนี้ยังไม่ครบยอด จึงยังไม่มีอะไรให้ override', 409);
-      if (!body.reason) fail('reason is required', 400);
+      if (!body.reason) fail('ต้องระบุเหตุผล', 400);
       row.overrideContinuePastTotal = true;
       row.overrideById = user.employeeId;
       row.overrideAt = new Date().toISOString();
@@ -5320,7 +5320,7 @@ export const api = {
     async clearDeductionObligationOverride(id) {
       const user = hasRole('hr');
       const row = db.deductionObligations.find((item) => item.id === Number(id));
-      if (!row) fail('Obligation not found', 404);
+      if (!row) fail('ไม่พบรายการภาระผูกพันนี้', 404);
       if (row.status !== 'COMPLETED') fail('รายการนี้ไม่ได้อยู่ในสถานะ override', 409);
       row.overrideContinuePastTotal = false;
       row.overrideById = null;
@@ -5727,7 +5727,7 @@ export const api = {
       const ticket = findTicketRaw(Number(ticketId));
       // Phase 1 lifecycle gate (mirrors DepositNoticeService.createDraft).
       requireActive(ticket);
-      if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) fail('Ticket must be approved', 409);
+      if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) fail('ดีลต้องได้รับการอนุมัติก่อน', 409);
 
       // Auto-build items from approved ticket items
       const items = payload.items?.length ? payload.items : ticket.items
@@ -5764,7 +5764,7 @@ export const api = {
 
     async get(docId) {
       const doc = mockDepositNotices.find((d) => d.id === Number(docId));
-      if (!doc) fail('Deposit notice not found', 404);
+      if (!doc) fail('ไม่พบใบแจ้งรับมัดจำนี้', 404);
       // Mirrors DepositNoticeService.getById: read gate on the owning ticket.
       requireDepositNoticeViewer(doc.ticketId);
       return delay({ depositNotice: structuredClone(doc) });
@@ -5773,8 +5773,8 @@ export const api = {
     async update(docId, payload) {
       requireSession();
       const doc = mockDepositNotices.find((d) => d.id === Number(docId));
-      if (!doc) fail('Deposit notice not found', 404);
-      if (doc.status !== 'DRAFT') fail('Deposit notice is not draft', 409);
+      if (!doc) fail('ไม่พบใบแจ้งรับมัดจำนี้', 404);
+      if (doc.status !== 'DRAFT') fail('ใบแจ้งรับมัดจำนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)', 409);
       Object.assign(doc, {
         customerName:    payload.customerName    ?? doc.customerName,
         customerTaxId:   payload.customerTaxId   ?? doc.customerTaxId,
@@ -5793,7 +5793,7 @@ export const api = {
 
     async preview(docId) {
       const doc = mockDepositNotices.find((d) => d.id === Number(docId));
-      if (!doc) fail('Deposit notice not found', 404);
+      if (!doc) fail('ไม่พบใบแจ้งรับมัดจำนี้', 404);
       // Mirrors DepositNoticeService.preview: read gate on the owning ticket.
       requireDepositNoticeViewer(doc.ticketId);
       // Return HTML string directly (not wrapped in JSON)
@@ -5803,15 +5803,15 @@ export const api = {
     async issue(docId) {
       const user = requireSession();
       const doc = mockDepositNotices.find((d) => d.id === Number(docId));
-      if (!doc) fail('Deposit notice not found', 404);
-      if (doc.status !== 'DRAFT') fail('Not a draft', 409);
+      if (!doc) fail('ไม่พบใบแจ้งรับมัดจำนี้', 404);
+      if (doc.status !== 'DRAFT') fail('ไม่ได้อยู่ในสถานะร่าง (DRAFT)', 409);
       const ticket = findTicketRaw(doc.ticketId);
 
       // Mirrors DepositNoticeService.issue: the document IS the payment-track step.
       // Requires a customer-confirmed quotation; advances paymentStatus and leaves
       // the main status at quotation_issued (no more document_issued flip).
       if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
-        fail('Deposit notice requires quotation_issued + paymentStatus=CUSTOMER_CONFIRMED', 409);
+        fail('ออกใบแจ้งรับมัดจำได้เฉพาะเมื่อออกใบเสนอราคาแล้วและลูกค้ายืนยันคำสั่งซื้อแล้วเท่านั้น', 409);
       }
       // Phase 1 lifecycle gate (mirrors DepositNoticeService.requireActiveLifecycle).
       requireActive(ticket);
@@ -5835,7 +5835,7 @@ export const api = {
 
     async downloadXlsx(docId) {
       const rawDoc = mockDepositNotices.find((d) => d.id === Number(docId));
-      if (!rawDoc) fail('Deposit notice not found', 404);
+      if (!rawDoc) fail('ไม่พบใบแจ้งรับมัดจำนี้', 404);
       // Mirrors DepositNoticeService.getXlsx: read gate on the owning ticket.
       requireDepositNoticeViewer(rawDoc.ticketId);
       const backendBlob = await tryBackendBlob(`/api/deposit-notices/${docId}/file?format=xlsx`);
@@ -5867,7 +5867,7 @@ export const api = {
 
     async downloadPdf(docId) {
       const rawDoc = mockDepositNotices.find((d) => d.id === Number(docId));
-      if (!rawDoc) fail('Deposit notice not found', 404);
+      if (!rawDoc) fail('ไม่พบใบแจ้งรับมัดจำนี้', 404);
       // Mirrors DepositNoticeService.getPdf: read gate on the owning ticket.
       requireDepositNoticeViewer(rawDoc.ticketId);
       const blob = await tryBackendBlob(`/api/deposit-notices/${docId}/file?format=pdf`);
@@ -6032,12 +6032,12 @@ export const api = {
   pricingRequests: {
     async listForTicket(ticketId) {
       const user = requireSession();
-      if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('Forbidden', 403);
+      if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
-      if (!ticket) fail('Ticket not found', 404);
+      if (!ticket) fail('ไม่พบดีลนี้', 404);
       // Mirrors PricingRequestService.listForTicket: sales may only see requests
       // on tickets they created.
-      if (user.role === 'sales' && ticket.createdById !== user.id) fail('Forbidden', 403);
+      if (user.role === 'sales' && ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
       const items = mockPricingRequests
         .filter((pr) => pr.ticketId === Number(ticketId))
@@ -6050,7 +6050,7 @@ export const api = {
       const user = requireSession();
       // Mirrors PricingRequestService.list: same viewer roles as a single
       // request, plus sales is scoped to only its own created tickets.
-      if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('Forbidden', 403);
+      if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (params.status && ![
         'DRAFT',
         'SUBMITTED',
@@ -6062,7 +6062,7 @@ export const api = {
         'CANCELLED',
         'SUPERSEDED',
       ].includes(params.status)) {
-        fail(`Unknown status '${params.status}'`, 400);
+        fail(`ไม่รองรับสถานะ '${params.status}'`, 400);
       }
       let list = mockPricingRequests;
       if (user.role === 'sales') {
@@ -6102,35 +6102,35 @@ export const api = {
       // must be ACTIVE, and every field is validated BEFORE persisting.
       const user = hasRole('sales');
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
-      if (!ticket) fail('Ticket not found', 404);
+      if (!ticket) fail('ไม่พบดีลนี้', 404);
       requirePricingRequestDealActive(ticket);
-      if (ticket.createdById !== user.id) fail('Forbidden', 403);
+      if (ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!payload.clientRequestId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.clientRequestId)) {
-        fail('clientRequestId must be a UUID', 400);
+        fail('clientRequestId ต้องเป็น UUID', 400);
       }
       const existing = mockPricingRequests.find((pr) => (
         pr.requestedById === user.id && pr.clientRequestId === payload.clientRequestId
       ));
       if (existing) {
-        if (existing.ticketId !== Number(ticketId)) fail('clientRequestId has already been used for a different ticket', 409);
+        if (existing.ticketId !== Number(ticketId)) fail('clientRequestId นี้ถูกใช้ไปแล้วกับดีลอื่น', 409);
         return delay({ pricingRequest: buildPricingRequestDetail(existing) });
       }
       if (!PRICING_REQUEST_RECIPIENT_VALUES.includes(payload.recipientType)) {
-        fail(`Unknown recipient type '${payload.recipientType}'`, 400);
+        fail(`ไม่รองรับประเภทผู้รับ '${payload.recipientType}'`, 400);
       }
-      if (!payload.items?.length) fail('items must not be empty', 400);
+      if (!payload.items?.length) fail('ต้องมีรายการอย่างน้อย 1 รายการ', 400);
       requirePricingRequestItemFieldsValid(payload.items);
       for (const item of payload.items) {
         if (!PRICING_REQUEST_QUANTITY_TYPE_VALUES.includes(item.quantityType)) {
-          fail(`Unknown quantity type '${item.quantityType}'`, 400);
+          fail(`ไม่รองรับประเภทจำนวน '${item.quantityType}'`, 400);
         }
         // Mirrors PricingRequestService.validateItems's UnitBasis.isValid check.
         if (!UNIT_BASIS_VALUES.includes(item.requestedUnitBasis)) {
-          fail(`Unknown requestedUnitBasis '${item.requestedUnitBasis}'`, 400);
+          fail(`ไม่รองรับ requestedUnitBasis '${item.requestedUnitBasis}'`, 400);
         }
       }
       if (payload.targetCurrency && payload.targetCurrency.trim().length !== 3) {
-        fail('targetCurrency must be a 3-letter currency code', 400);
+        fail('targetCurrency ต้องเป็นรหัสสกุลเงิน 3 ตัวอักษร', 400);
       }
       if (payload.recipientContactId == null && !payload.recipientLabel?.trim()) {
         fail('ต้องระบุผู้รับคำขอราคา (recipientContactId หรือ recipientLabel)', 400);
@@ -6138,7 +6138,7 @@ export const api = {
       const validSourceItemIds = new Set((ticket.items ?? []).map((i) => i.id));
       for (const item of payload.items) {
         if (item.sourceTicketItemId != null && !validSourceItemIds.has(item.sourceTicketItemId)) {
-          fail(`sourceTicketItemId ${item.sourceTicketItemId} does not belong to ticket ${ticketId}`, 400);
+          fail(`sourceTicketItemId ${item.sourceTicketItemId} ไม่ได้เป็นของดีล ${ticketId}`, 400);
         }
       }
 
@@ -6231,11 +6231,11 @@ export const api = {
       const user = hasRole('sales');
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
-      if (pr.status !== 'DRAFT') fail(`Expected status 'DRAFT' but pricing request is '${pr.status}'`, 409);
-      if (!payload.recipientType?.trim()) fail('recipientType must not be blank', 400);
+      if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (pr.status !== 'DRAFT') fail(`ต้องเป็นใบขอราคาที่อยู่ในสถานะ 'DRAFT' เท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
+      if (!payload.recipientType?.trim()) fail('recipientType ต้องไม่เว้นว่าง', 400);
       if (!PRICING_REQUEST_RECIPIENT_VALUES.includes(payload.recipientType)) {
-        fail(`Unknown recipient type '${payload.recipientType}'`, 400);
+        fail(`ไม่รองรับประเภทผู้รับ '${payload.recipientType}'`, 400);
       }
       if (payload.recipientContactId == null && !payload.recipientLabel?.trim()) {
         fail('ต้องระบุผู้รับคำขอราคา (recipientContactId หรือ recipientLabel)', 400);
@@ -6244,21 +6244,21 @@ export const api = {
         requirePricingRequestItemFieldsValid(payload.items);
         for (const item of payload.items) {
           if (!PRICING_REQUEST_QUANTITY_TYPE_VALUES.includes(item.quantityType)) {
-            fail(`Unknown quantity type '${item.quantityType}'`, 400);
+            fail(`ไม่รองรับประเภทจำนวน '${item.quantityType}'`, 400);
           }
           if (!UNIT_BASIS_VALUES.includes(item.requestedUnitBasis)) {
-            fail(`Unknown requestedUnitBasis '${item.requestedUnitBasis}'`, 400);
+            fail(`ไม่รองรับ requestedUnitBasis '${item.requestedUnitBasis}'`, 400);
           }
         }
         const validSourceItemIds = new Set((ticket?.items ?? []).map((i) => i.id));
         for (const item of payload.items) {
           if (item.sourceTicketItemId != null && !validSourceItemIds.has(item.sourceTicketItemId)) {
-            fail(`sourceTicketItemId ${item.sourceTicketItemId} does not belong to ticket ${pr.ticketId}`, 400);
+            fail(`sourceTicketItemId ${item.sourceTicketItemId} ไม่ได้เป็นของดีล ${pr.ticketId}`, 400);
           }
         }
       }
       if (payload.targetCurrency != null && payload.targetCurrency.trim().length !== 3) {
-        fail('targetCurrency must be a 3-letter currency code', 400);
+        fail('targetCurrency ต้องเป็นรหัสสกุลเงิน 3 ตัวอักษร', 400);
       }
 
       pr.recipientType = payload.recipientType;
@@ -6314,11 +6314,11 @@ export const api = {
       const user = hasRole('import');
       const pr = findPricingRequestRaw(id);
       if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS'].includes(pr.status)) {
-        fail('Pricing request must be under Import review before factory quote drafts can be generated', 409);
+        fail('ใบขอราคาต้องอยู่ระหว่างการตรวจสอบของฝ่ายนำเข้าก่อนจึงจะสร้างร่างอีเมลราคาโรงงานได้', 409);
       }
       const byFactory = new Map();
       for (const item of pr.items) {
-        if (!item.factory) fail(`Pricing request item ${item.id} has no resolved factory`, 422);
+        if (!item.factory) fail(`รายการที่ ${item.id} ในใบขอราคายังไม่ได้ระบุโรงงาน`, 422);
         byFactory.set(item.factory, [...(byFactory.get(item.factory) ?? []), item]);
       }
       for (const [factoryName, items] of byFactory) {
@@ -6399,15 +6399,15 @@ export const api = {
     async getFactoryQuote(id) {
       hasRole('import', 'ceo');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
-      if (!quote) fail('Factory quote not found', 404);
+      if (!quote) fail('ไม่พบใบเสนอราคาโรงงานนี้', 404);
       return delay({ factoryQuote: quote });
     },
 
     async updateFactoryQuote(id, payload) {
       hasRole('import');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
-      if (!quote) fail('Factory quote not found', 404);
-      if (quote.status !== 'DRAFT') fail('Only draft factory quote emails can be edited', 409);
+      if (!quote) fail('ไม่พบใบเสนอราคาโรงงานนี้', 404);
+      if (quote.status !== 'DRAFT') fail('แก้ไขได้เฉพาะอีเมลราคาโรงงานที่ยังเป็นฉบับร่างเท่านั้น', 409);
       Object.assign(quote, {
         emailTo: payload.emailTo ?? quote.emailTo,
         emailSubject: payload.emailSubject ?? quote.emailSubject,
@@ -6426,16 +6426,16 @@ export const api = {
     async sendFactoryQuote(id, payload = {}) {
       const user = hasRole('import');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
-      if (!quote) fail('Factory quote not found', 404);
-      if (!payload.clientRequestId) fail('clientRequestId must be a UUID', 400);
+      if (!quote) fail('ไม่พบใบเสนอราคาโรงงานนี้', 404);
+      if (!payload.clientRequestId) fail('clientRequestId ต้องเป็น UUID', 400);
       if (quote.status === 'REQUESTED') return delay({ factoryQuote: quote });
-      if (quote.status !== 'DRAFT') fail('Only draft factory quote emails can be sent', 409);
+      if (quote.status !== 'DRAFT') fail('ส่งได้เฉพาะอีเมลราคาโรงงานที่ยังเป็นฉบับร่างเท่านั้น', 409);
       const existingForClient = mockFactoryQuoteDispatchClientRequests.find(
         (d) => d.clientRequestId === payload.clientRequestId
       );
       if (existingForClient) {
         if (existingForClient.quoteId !== quote.id) {
-          fail('clientRequestId has already been used for another factory quote', 409);
+          fail('clientRequestId นี้ถูกใช้ไปแล้วกับใบเสนอราคาโรงงานอื่น', 409);
         }
         return delay({ factoryQuote: quote });
       }
@@ -6458,8 +6458,8 @@ export const api = {
     async receiveFactoryQuote(id, payload) {
       const user = hasRole('import');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
-      if (!quote) fail('Factory quote not found', 404);
-      if (!payload.clientRequestId) fail('clientRequestId must be a UUID', 400);
+      if (!quote) fail('ไม่พบใบเสนอราคาโรงงานนี้', 404);
+      if (!payload.clientRequestId) fail('clientRequestId ต้องเป็น UUID', 400);
       // Idempotency replay: a lost-response retry (same actor + clientRequestId)
       // must not be treated as a new commercial revision. Look this up BEFORE any
       // mutation and short-circuit with the quote the original call landed on.
@@ -6469,16 +6469,16 @@ export const api = {
       );
       if (existingReceipt) {
         const receiptQuote = mockFactoryQuotes.find((q) => q.id === existingReceipt.factoryQuoteId);
-        if (!receiptQuote) fail('Factory quote not found', 404);
+        if (!receiptQuote) fail('ไม่พบใบเสนอราคาโรงงานนี้', 404);
         // Compare the QUOTE CHAIN, not the pricing request: a pricing request has one quote
         // per factory, so reusing a clientRequestId against a DIFFERENT factory's quote in the
         // same pricing request must 409, not silently return the wrong factory's quote.
         if (chainId(receiptQuote) !== chainId(quote)) {
-          fail('clientRequestId has already been used for another factory quote', 409);
+          fail('clientRequestId นี้ถูกใช้ไปแล้วกับใบเสนอราคาโรงงานอื่น', 409);
         }
         return delay({ factoryQuote: receiptQuote });
       }
-      if (!quote.current) fail('Only the current factory quote revision can receive a response', 409);
+      if (!quote.current) fail('รับคำตอบได้เฉพาะ revision ล่าสุดของใบเสนอราคาโรงงานเท่านั้น', 409);
       const pr = findPricingRequestRaw(quote.pricingRequestId);
       mockRequireNotCeoReviewing(pr);
       const applyResponse = (target) => {
@@ -6522,7 +6522,7 @@ export const api = {
         return delay({ factoryQuote: quote });
       }
       if (!['RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(quote.status)) {
-        fail(`Factory quote cannot receive a response in status ${quote.status}`, 409);
+        fail(`ใบเสนอราคาโรงงานนี้ไม่สามารถรับคำตอบได้ในสถานะ ${quote.status}`, 409);
       }
       quote.status = 'SUPERSEDED';
       quote.current = false;
@@ -6541,9 +6541,9 @@ export const api = {
     async startFactoryNegotiation(id, payload) {
       const user = hasRole('import');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
-      if (!quote) fail('Factory quote not found', 404);
+      if (!quote) fail('ไม่พบใบเสนอราคาโรงงานนี้', 404);
       mockRequireNotCeoReviewing(findPricingRequestRaw(quote.pricingRequestId));
-      if (quote.status !== 'RESPONSE_RECEIVED' || !quote.current) fail('Only a current received response can enter negotiation', 409);
+      if (quote.status !== 'RESPONSE_RECEIVED' || !quote.current) fail('เข้าสู่ขั้นตอนต่อรองได้เฉพาะคำตอบล่าสุดที่ได้รับเท่านั้น', 409);
       quote.status = 'NEGOTIATING';
       quote.negotiationNote = payload.note;
       quote.updatedAt = new Date().toISOString();
@@ -6554,9 +6554,9 @@ export const api = {
     async markFactoryQuoteReady(id) {
       const user = hasRole('import');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
-      if (!quote) fail('Factory quote not found', 404);
+      if (!quote) fail('ไม่พบใบเสนอราคาโรงงานนี้', 404);
       mockRequireNotCeoReviewing(findPricingRequestRaw(quote.pricingRequestId));
-      if (!['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) || !quote.current) fail('Current response must have raw prices before it can be marked ready', 409);
+      if (!['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) || !quote.current) fail('คำตอบล่าสุดต้องมีราคาต้นทางก่อนจึงจะทำเครื่องหมายว่าพร้อมได้', 409);
       quote.status = 'READY_FOR_COSTING';
       quote.updatedAt = new Date().toISOString();
       pushPricingRequestEvent(findPricingRequestRaw(quote.pricingRequestId), user, 'FACTORY_RESPONSE_READY_FOR_COSTING', null, null);
@@ -6566,7 +6566,7 @@ export const api = {
     async markFactoryQuoteNotAvailable(id, payload) {
       const user = hasRole('import');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
-      if (!quote) fail('Factory quote not found', 404);
+      if (!quote) fail('ไม่พบใบเสนอราคาโรงงานนี้', 404);
       mockRequireNotCeoReviewing(findPricingRequestRaw(quote.pricingRequestId));
       quote.status = 'NOT_AVAILABLE';
       quote.note = payload.reason;
@@ -6577,7 +6577,7 @@ export const api = {
     async uploadFactoryQuoteAttachment(id, file) {
       hasRole('import');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
-      if (!quote) fail('Factory quote not found', 404);
+      if (!quote) fail('ไม่พบใบเสนอราคาโรงงานนี้', 404);
       mockRequireNotCeoReviewing(findPricingRequestRaw(quote.pricingRequestId));
       const attachment = {
         id: mockFactoryQuoteAttachmentSeq++,
@@ -6611,10 +6611,10 @@ export const api = {
       // READY_FOR_CEO_REVIEW/CEO_REVIEWING are deliberately excluded — a submitted costing is
       // frozen until the CEO explicitly returns the request (-> COSTING_REVISION_REQUIRED).
       if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS', 'COSTING_REVISION_REQUIRED'].includes(pr.status)) {
-        fail('Pricing request is not ready for costing', 409);
+        fail('ใบขอราคานี้ยังไม่พร้อมสำหรับการคำนวณต้นทุน', 409);
       }
       const readyFactories = new Set(mockFactoryQuotes.filter((q) => q.pricingRequestId === pr.id && q.current && q.status === 'READY_FOR_COSTING').map((q) => q.factoryName));
-      for (const item of pr.items) if (!readyFactories.has(item.factory)) fail(`Factory quote for ${item.factory} is not ready for costing`, 422);
+      for (const item of pr.items) if (!readyFactories.has(item.factory)) fail(`ใบเสนอราคาของโรงงาน ${item.factory} ยังไม่พร้อมสำหรับการคำนวณต้นทุน`, 422);
       const existing = mockPricingCostings.find((c) => c.pricingRequestId === pr.id && ['DRAFT', 'CALCULATED'].includes(c.status));
       if (existing) return delay({ costing: existing });
       const costing = { id: mockPricingCostingSeq++, costingCode: `PCO-2026-${String(mockPricingCostingSeq).padStart(4, '0')}`, pricingRequestId: pr.id, versionNo: mockPricingCostingSeq, status: 'DRAFT', stale: false, staleReason: null, note: payload.note ?? null, createdBy: user.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), calculatedAt: null, submittedBy: null, submittedAt: null, totalLandedCostThb: null, items: [] };
@@ -6632,20 +6632,20 @@ export const api = {
     async getCosting(id) {
       hasRole('import', 'ceo');
       const costing = mockPricingCostings.find((c) => c.id === Number(id));
-      if (!costing) fail('Costing not found', 404);
+      if (!costing) fail('ไม่พบการคำนวณต้นทุนนี้', 404);
       return delay({ costing });
     },
 
     async recalculateCosting(id, payload = {}) {
       const user = hasRole('import');
       const costing = mockPricingCostings.find((c) => c.id === Number(id));
-      if (!costing) fail('Costing not found', 404);
-      if (costing.status === 'SUBMITTED') fail('Submitted costing is immutable', 409);
+      if (!costing) fail('ไม่พบการคำนวณต้นทุนนี้', 404);
+      if (costing.status === 'SUBMITTED') fail('การคำนวณต้นทุนที่ส่งไปแล้วไม่สามารถแก้ไขได้', 409);
       const pr = findPricingRequestRaw(costing.pricingRequestId);
       costing.items = pr.items.map((item) => {
         const quote = mockFactoryQuotes.find((q) => q.pricingRequestId === pr.id && q.factoryName === item.factory && q.current && q.status === 'READY_FOR_COSTING');
         const quoteItem = quote?.items.find((qi) => qi.pricingRequestItemId === item.id);
-        if (!quote || !quoteItem) fail(`Factory quote for ${item.factory} is not ready for costing`, 422);
+        if (!quote || !quoteItem) fail(`ใบเสนอราคาของโรงงาน ${item.factory} ยังไม่พร้อมสำหรับการคำนวณต้นทุน`, 422);
         // Finding B (financial-integrity review, commit 3): normalize BOTH the quoted price
         // and the requested quantity onto a common basis (physical pieces) before multiplying
         // — see mockPricePerPiece/mockQuantityToPieces above, mirroring
@@ -6690,9 +6690,9 @@ export const api = {
     async submitCosting(id, payload = {}) {
       const user = hasRole('import');
       const costing = mockPricingCostings.find((c) => c.id === Number(id));
-      if (!costing) fail('Costing not found', 404);
-      if (costing.stale) fail('Costing is stale and must be recalculated before submit', 409);
-      if (costing.status !== 'CALCULATED') fail('Only a calculated costing can be submitted', 409);
+      if (!costing) fail('ไม่พบการคำนวณต้นทุนนี้', 404);
+      if (costing.stale) fail('ข้อมูลต้นทุนล้าสมัยแล้ว ต้องคำนวณใหม่ก่อนส่ง', 409);
+      if (costing.status !== 'CALCULATED') fail('ส่งได้เฉพาะการคำนวณต้นทุนที่คำนวณเสร็จแล้วเท่านั้น', 409);
       const pr = findPricingRequestRaw(costing.pricingRequestId);
       costing.status = 'SUBMITTED';
       costing.submittedBy = user.id;
@@ -6714,12 +6714,12 @@ export const api = {
     async startPricingDecision(id, payload = {}) {
       const user = hasRole('ceo');
       const pr = findPricingRequestRaw(id);
-      if (pr.status !== 'READY_FOR_CEO_REVIEW') fail('Pricing request is not ready for CEO review', 409);
+      if (pr.status !== 'READY_FOR_CEO_REVIEW') fail('ใบขอราคานี้ยังไม่พร้อมส่งให้ CEO พิจารณา', 409);
       const openDraft = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'DRAFT');
       if (openDraft) return delay({ decision: openDraft });
       const submittedCostings = mockPricingCostings.filter((c) => c.pricingRequestId === pr.id && c.status === 'SUBMITTED');
       const costing = submittedCostings[submittedCostings.length - 1];
-      if (!costing) fail('Pricing request has no submitted costing', 409);
+      if (!costing) fail('ใบขอราคานี้ยังไม่มีการคำนวณต้นทุนที่ส่งเข้ามา', 409);
       const currency = (payload.currency || pr.targetCurrency || 'THB').toUpperCase();
       const defaultMarginPct = payload.defaultMarginPct ?? null;
       const decisionVersionNo = mockPricingDecisions.filter((d) => d.pricingRequestId === pr.id).length + 1;
@@ -6806,9 +6806,9 @@ export const api = {
       const user = hasRole('sales', 'sales_manager', 'ceo', 'import');
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      if (user.role === 'sales' && ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (user.role === 'sales' && ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
-      if (!decision) fail('No approved pricing decision yet', 404);
+      if (!decision) fail('ยังไม่มีมติราคาที่ได้รับอนุมัติ', 404);
       // Design correction 2 ("never leak cost to Sales"): a fresh object literal per item with
       // ONLY these fields — never a spread of the raw (cost/margin-bearing) decision item.
       return delay({
@@ -6835,19 +6835,19 @@ export const api = {
     async getPricingDecision(id) {
       hasRole('import', 'ceo');
       const decision = mockPricingDecisions.find((d) => d.id === Number(id));
-      if (!decision) fail('Pricing decision not found', 404);
+      if (!decision) fail('ไม่พบมติราคานี้', 404);
       return delay({ decision });
     },
 
     async updatePricingDecision(id, payload) {
       hasRole('ceo');
       const decision = mockPricingDecisions.find((d) => d.id === Number(id));
-      if (!decision) fail('Pricing decision not found', 404);
-      if (decision.status !== 'DRAFT') fail('Decision is not open for editing', 409);
+      if (!decision) fail('ไม่พบมติราคานี้', 404);
+      if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่แก้ไขได้', 409);
       if (payload.ceoNote != null) decision.ceoNote = payload.ceoNote;
       for (const itemPayload of payload.items ?? []) {
         const item = decision.items.find((i) => i.id === Number(itemPayload.pricingDecisionItemId));
-        if (!item) fail(`Item ${itemPayload.pricingDecisionItemId} does not belong to this decision`, 400);
+        if (!item) fail(`รายการที่ ${itemPayload.pricingDecisionItemId} ไม่ได้เป็นของมติราคานี้`, 400);
         if (itemPayload.marginPct != null) {
           item.proposedMarginPct = itemPayload.marginPct;
           item.proposedSellingPricePerRequestedUnit =
@@ -6865,8 +6865,8 @@ export const api = {
     async recalculatePricingDecision(id, payload = {}) {
       hasRole('ceo');
       const decision = mockPricingDecisions.find((d) => d.id === Number(id));
-      if (!decision) fail('Pricing decision not found', 404);
-      if (decision.status !== 'DRAFT') fail('Decision is not open for editing', 409);
+      if (!decision) fail('ไม่พบมติราคานี้', 404);
+      if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่แก้ไขได้', 409);
       if (payload.defaultMarginPct != null) decision.defaultMarginPct = payload.defaultMarginPct;
       for (const item of decision.items) {
         const margin = payload.defaultMarginPct != null ? payload.defaultMarginPct : item.proposedMarginPct;
@@ -6882,18 +6882,18 @@ export const api = {
     async approvePricingDecision(id, payload = {}) {
       const user = hasRole('ceo');
       const decision = mockPricingDecisions.find((d) => d.id === Number(id));
-      if (!decision) fail('Pricing decision not found', 404);
+      if (!decision) fail('ไม่พบมติราคานี้', 404);
       if (payload.clientRequestId && decision.approveClientRequestId === payload.clientRequestId
           && decision.status === 'APPROVED') {
         return delay({ decision });
       }
-      if (decision.status !== 'DRAFT') fail('Decision is not open for approval', 409);
+      if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่รออนุมัติ', 409);
       const pr = findPricingRequestRaw(decision.pricingRequestId);
-      if (pr.status !== 'CEO_REVIEWING') fail('Pricing request is not under CEO review', 409);
+      if (pr.status !== 'CEO_REVIEWING') fail('ใบขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
       const missingMargin = decision.items.filter((i) => i.proposedMarginPct == null).map((i) => i.id);
       const missingMinimum = decision.items.filter((i) => i.minimumSellingPricePerRequestedUnit == null).map((i) => i.id);
       if (missingMargin.length || missingMinimum.length) {
-        fail(`Every item needs a margin and a minimum selling price before approval — missing margin: [${missingMargin}], missing minimum selling price: [${missingMinimum}]`, 422);
+        fail(`ทุกรายการต้องระบุ margin และราคาขายขั้นต่ำก่อนอนุมัติ — รายการที่ยังไม่มี margin: [${missingMargin}], รายการที่ยังไม่มีราคาขายขั้นต่ำ: [${missingMinimum}]`, 422);
       }
       // Never trust a stored/client-supplied selling price — recompute from frozen cost + margin.
       for (const item of decision.items) {
@@ -6918,12 +6918,12 @@ export const api = {
 
     async returnPricingDecisionToImport(id, payload) {
       const user = hasRole('ceo');
-      if (!payload?.returnReason?.trim()) fail('returnReason is required', 400);
+      if (!payload?.returnReason?.trim()) fail('ต้องระบุเหตุผลการตีกลับ', 400);
       const decision = mockPricingDecisions.find((d) => d.id === Number(id));
-      if (!decision) fail('Pricing decision not found', 404);
-      if (decision.status !== 'DRAFT') fail('Decision is not open for editing', 409);
+      if (!decision) fail('ไม่พบมติราคานี้', 404);
+      if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่แก้ไขได้', 409);
       const pr = findPricingRequestRaw(decision.pricingRequestId);
-      if (pr.status !== 'CEO_REVIEWING') fail('Pricing request is not under CEO review', 409);
+      if (pr.status !== 'CEO_REVIEWING') fail('ใบขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
       decision.status = 'RETURNED';
       decision.returnReason = payload.returnReason;
       decision.returnedAt = new Date().toISOString();
@@ -6949,7 +6949,7 @@ export const api = {
       const user = hasRole('sales');
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (payload.clientRequestId) {
         const replay = mockCustomerQuotations.find(
           (q) => q.issuedById === user.id && q.clientRequestId === payload.clientRequestId);
@@ -6971,7 +6971,7 @@ export const api = {
       const pr = findPricingRequestRaw(id);
       if (user.role === 'sales') {
         const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-        if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+        if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       }
       return delay({
         items: mockCustomerQuotations
@@ -7179,7 +7179,7 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       // Owner-only, mirrors OrderConfirmationService.requireOwner (ticket owner, not merely the
       // pricing request's own requestedById).
-      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
 
       if (pr.orderConfirmedAt) {
         if (payload.clientRequestId && payload.clientRequestId === pr.orderConfirmClientRequestId) {
@@ -7237,7 +7237,7 @@ export const api = {
       const user = hasRole('sales');
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
 
       const accepted = mockCustomerQuotations.find(
         (q) => q.pricingRequestId === pr.id && q.docStatus === 'ACCEPTED');
@@ -7260,7 +7260,7 @@ export const api = {
       // BEFORE confirmOrder fails here exactly like the real backend's requireApprovedTicket.
       requireActive(ticket);
       if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) {
-        fail('Deposit notice can only be created for approved tickets', 409);
+        fail('สร้างใบแจ้งรับมัดจำได้เฉพาะดีลที่อนุมัติแล้วเท่านั้น', 409);
       }
 
       const notes = mockNoteTemplates.filter((t) => t.defaultSelected).map((t) => t.text);
@@ -7299,8 +7299,8 @@ export const api = {
       const user = hasRole('sales');
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
-      if (pr.status !== 'DRAFT') fail(`Expected status 'DRAFT' but pricing request is '${pr.status}'`, 409);
+      if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (pr.status !== 'DRAFT') fail(`ต้องเป็นใบขอราคาที่อยู่ในสถานะ 'DRAFT' เท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
       requirePricingRequestDealActive(ticket);
       if (pr.items.length === 0) fail('ต้องมีรายการสินค้าอย่างน้อย 1 รายการก่อนส่งคำขอราคา', 400);
       if (pr.recipientContactId == null && !pr.recipientLabel?.trim()) fail('ต้องระบุผู้รับคำขอราคา', 400);
@@ -7343,7 +7343,7 @@ export const api = {
       // pricing requests on the same deal may go to two different Import users).
       const user = hasRole('import');
       const pr = findPricingRequestRaw(id);
-      if (pr.status !== 'SUBMITTED') fail('Only a submitted pricing request can be picked up', 409);
+      if (pr.status !== 'SUBMITTED') fail('รับเรื่องได้เฉพาะใบขอราคาที่ถูกยื่นแล้วเท่านั้น', 409);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       requirePricingRequestDealActive(ticket);
       const now = new Date().toISOString();
@@ -7362,10 +7362,10 @@ export const api = {
       // import user, IMPORT_REVIEWING only.
       const user = hasRole('import');
       const pr = findPricingRequestRaw(id);
-      if (pr.assignedImportId == null || pr.assignedImportId !== user.id) fail('Forbidden', 403);
-      if (pr.status !== 'IMPORT_REVIEWING') fail(`Expected status 'IMPORT_REVIEWING' but pricing request is '${pr.status}'`, 409);
+      if (pr.assignedImportId == null || pr.assignedImportId !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (pr.status !== 'IMPORT_REVIEWING') fail(`ต้องเป็นใบขอราคาที่อยู่ในสถานะ 'IMPORT_REVIEWING' เท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
       // Mirrors RequestMoreInformationRequest's @NotBlank message.
-      if (!payload.message?.trim()) fail('message must not be blank', 400);
+      if (!payload.message?.trim()) fail('ต้องระบุข้อความ', 400);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       const now = new Date().toISOString();
       pr.status = 'MORE_INFO_REQUIRED';
@@ -7385,8 +7385,8 @@ export const api = {
       const user = hasRole('sales');
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
-      if (pr.status !== 'MORE_INFO_REQUIRED') fail(`Expected status 'MORE_INFO_REQUIRED' but pricing request is '${pr.status}'`, 409);
+      if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (pr.status !== 'MORE_INFO_REQUIRED') fail(`ต้องเป็นใบขอราคาที่อยู่ในสถานะ 'MORE_INFO_REQUIRED' เท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
       const now = new Date().toISOString();
       pr.status = 'IMPORT_REVIEWING';
       pr.updatedAt = now;
@@ -7401,13 +7401,13 @@ export const api = {
       const user = hasRole('sales');
       const parent = requirePricingRequestViewable(id, user);
       const ticket = db.tickets.find((t) => t.id === parent.ticketId);
-      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (['DRAFT', 'CANCELLED', 'SUPERSEDED'].includes(parent.status)) {
-        fail('Customer-change revisions can only be created from an active submitted pricing request', 409);
+        fail('สร้าง revision จากการเปลี่ยนแปลงของลูกค้าได้เฉพาะจากใบขอราคาที่ยื่นและยังดำเนินการอยู่เท่านั้น', 409);
       }
-      if (!payload.revisionReason?.trim()) fail('revisionReason must not be blank', 400);
-      if (!payload.clientRequestId) fail('clientRequestId must be a UUID', 400);
-      if (!payload.items?.length) fail('items must not be empty', 400);
+      if (!payload.revisionReason?.trim()) fail('revisionReason ต้องไม่เว้นว่าง', 400);
+      if (!payload.clientRequestId) fail('clientRequestId ต้องเป็น UUID', 400);
+      if (!payload.items?.length) fail('ต้องมีรายการอย่างน้อย 1 รายการ', 400);
       requirePricingRequestItemFieldsValid(payload.items ?? []);
       const parentStatus = parent.status;
       const revisionId = mockPricingRequestSeq++;
@@ -7469,9 +7469,9 @@ export const api = {
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       const isOwnerOrCeo = user.role === 'ceo' || ticket?.createdById === user.id;
-      if (!isOwnerOrCeo) fail('Forbidden', 403);
+      if (!isOwnerOrCeo) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!pricingRequestCanTransition(pr.status, 'CANCELLED')) {
-        fail(`Cannot cancel pricing request in status '${pr.status}'`, 409);
+        fail(`ไม่สามารถยกเลิกใบขอราคาที่อยู่ในสถานะ '${pr.status}' ได้`, 409);
       }
       const now = new Date().toISOString();
       const fromStatus = pr.status;
@@ -7495,9 +7495,9 @@ export const api = {
       const user = hasRole('sales');
       const pr = requirePricingRequestViewable(id, user);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!['DRAFT', 'MORE_INFO_REQUIRED'].includes(pr.status)) {
-        fail('Pricing request attachments can only be uploaded while DRAFT or MORE_INFO_REQUIRED', 409);
+        fail('แนบไฟล์ได้เฉพาะเมื่อใบขอราคาอยู่ในสถานะ DRAFT หรือ MORE_INFO_REQUIRED เท่านั้น', 409);
       }
       requirePricingRequestDealActive(ticket);
       const attachment = {
@@ -7530,11 +7530,11 @@ export const api = {
       // DRAFT/MORE_INFO_REQUIRED only.
       const user = hasRole('sales');
       const owningPr = mockPricingRequests.find((p) => (p.attachments ?? []).some((a) => a.id === Number(id)));
-      if (!owningPr) fail('Pricing request attachment not found', 404);
+      if (!owningPr) fail('ไม่พบไฟล์แนบของใบขอราคานี้', 404);
       const ticket = db.tickets.find((t) => t.id === owningPr.ticketId);
-      if (ticket?.createdById !== user.id) fail('Forbidden', 403);
+      if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!['DRAFT', 'MORE_INFO_REQUIRED'].includes(owningPr.status)) {
-        fail('Pricing request attachments can only be deleted while DRAFT or MORE_INFO_REQUIRED', 409);
+        fail('ลบไฟล์แนบได้เฉพาะเมื่อใบขอราคาอยู่ในสถานะ DRAFT หรือ MORE_INFO_REQUIRED เท่านั้น', 409);
       }
       owningPr.attachments = (owningPr.attachments ?? []).filter((a) => a.id !== Number(id));
       return delay({ ok: true });
@@ -7547,7 +7547,7 @@ export const api = {
       // request.
       const user = hasRole('import');
       const owningPr = mockPricingRequests.find((p) => (p.attachments ?? []).some((a) => a.id === Number(id)));
-      if (!owningPr) fail('Pricing request attachment not found', 404);
+      if (!owningPr) fail('ไม่พบไฟล์แนบของใบขอราคานี้', 404);
       requirePricingRequestViewable(owningPr.id, user);
       const attachment = owningPr.attachments.find((a) => a.id === Number(id));
       attachment.includeInFactoryEmail = Boolean(includeInFactoryEmail);

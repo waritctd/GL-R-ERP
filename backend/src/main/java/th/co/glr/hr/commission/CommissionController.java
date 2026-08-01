@@ -227,7 +227,7 @@ public class CommissionController {
             }
             return LocalDate.parse(trimmed).withDayOfMonth(1);
         } catch (DateTimeParseException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid payroll month");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "งวดเงินเดือนไม่ถูกต้อง");
         }
     }
 }

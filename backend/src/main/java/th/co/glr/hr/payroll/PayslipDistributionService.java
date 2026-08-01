@@ -38,7 +38,7 @@ public class PayslipDistributionService {
     public PayslipDistributionResponse queueDistribution(long periodId, UserPrincipal actor) {
         requireRole(actor);
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงวดเงินเดือนนี้"));
         Set<Long> sentLineIds = payrollRepository.findSentPayslipLineIds(periodId);
         int totalLines = (int) period.lines().stream().filter(line -> line.id() != null).count();
         int alreadySent = (int) period.lines().stream()
@@ -59,7 +59,7 @@ public class PayslipDistributionService {
         try {
             requireRole(actor);
             PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
-                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงวดเงินเดือนนี้"));
             Set<Long> sentLineIds = payrollRepository.findSentPayslipLineIds(periodId);
             Map<Long, String> emails = payrollRepository.findEmployeeEmailsByIds(period.lines().stream()
                 .map(PayrollLineDto::employeeId)
@@ -104,7 +104,7 @@ public class PayslipDistributionService {
 
     private void requireRole(UserPrincipal actor) {
         if (actor == null || !DISTRIBUTE_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 

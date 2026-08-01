@@ -139,7 +139,7 @@ public class AttachmentController {
      */
     private void requireTicketReadAccess(long ticketId, UserPrincipal actor) {
         if (!TicketAccessPolicy.canViewDocuments(requireTicketSummary(ticketId), actor)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
@@ -152,13 +152,13 @@ public class AttachmentController {
      */
     private void requireTicketWriteAccess(long ticketId, UserPrincipal actor) {
         if (!TicketAccessPolicy.canManageDocuments(requireTicketSummary(ticketId), actor)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
     private TicketSummaryDto requireTicketSummary(long ticketId) {
         TicketDto ticket = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
         return ticket.summary();
     }
 

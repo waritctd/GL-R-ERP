@@ -43,10 +43,10 @@ public class ProfileRequestService {
     @Transactional
     public ProfileRequestDto create(CreateProfileRequestRequest request, UserPrincipal user) {
         if (user.employeeId() == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "User is not linked to an employee");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล");
         }
         if (!SUPPORTED_FIELDS.contains(request.fieldKey())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Unsupported profile field");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับฟิลด์ข้อมูลส่วนตัวนี้");
         }
         long id = profileRequests.create(user.employeeId(), request, user);
         return profileRequests.findById(id).map(this::toDto).orElseThrow();
@@ -55,17 +55,17 @@ public class ProfileRequestService {
     @Transactional
     public ProfileRequestDto update(long id, UpdateProfileRequestRequest request, UserPrincipal reviewer) {
         if (request.status() == null || request.status().isBlank()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Status is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุสถานะ");
         }
         ProfileRequestRecord existing = profileRequests.findById(id)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Profile request not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอแก้ไขข้อมูลส่วนตัวนี้"));
         if (!"pending".equals(existing.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Profile request has already been reviewed");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอแก้ไขข้อมูลส่วนตัวนี้ได้รับการพิจารณาไปแล้ว");
         }
 
         int updated = profileRequests.updatePendingStatus(id, request.status(), reviewer, request.reviewerNote());
         if (updated != 1) {
-            throw new ApiException(HttpStatus.CONFLICT, "Profile request has already been reviewed");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอแก้ไขข้อมูลส่วนตัวนี้ได้รับการพิจารณาไปแล้ว");
         }
         if ("approved".equals(request.status()) && "pending".equals(existing.status())) {
             applyApprovedRequest(existing);
@@ -89,7 +89,7 @@ public class ProfileRequestService {
                 String phone = parts.length > 1 ? parts[1].trim() : null;
                 employees.updateEmergencyContact(request.employeeId(), name, phone);
             }
-            default -> throw new ApiException(HttpStatus.BAD_REQUEST, "Unsupported profile field");
+            default -> throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับฟิลด์ข้อมูลส่วนตัวนี้");
         }
     }
 

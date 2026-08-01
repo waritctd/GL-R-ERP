@@ -179,7 +179,7 @@ public class PricingRequestController {
         String path = pricingRequests.attachmentFilePath(attachmentId, user);
         Resource resource = new FileSystemResource(path);
         if (!resource.exists()) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "Pricing request attachment file not found");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบของใบขอราคานี้");
         }
         String mime = attachment.mimeType() != null ? attachment.mimeType() : MediaType.APPLICATION_OCTET_STREAM_VALUE;
         return ResponseEntity.ok()

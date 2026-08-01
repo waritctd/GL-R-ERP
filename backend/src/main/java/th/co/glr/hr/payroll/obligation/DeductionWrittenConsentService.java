@@ -63,7 +63,7 @@ public class DeductionWrittenConsentService {
                     + " ไม่ใช่ประเภทที่ต้องมีหนังสือยินยอม (item (1) หรือคำสั่งศาล/บังคับคดี ไม่ต้องขอความยินยอม)");
         }
         if (!employeeRepository.exists(request.employeeId())) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "Employee not found");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบข้อมูลพนักงาน");
         }
         List<DeductionWrittenConsentDto> before = repository.findAll(request.employeeId(), request.deductionKind());
         repository.upsert(request, actor.employeeId());
@@ -75,7 +75,7 @@ public class DeductionWrittenConsentService {
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
         if (actor == null || !allowed.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 }

@@ -31,7 +31,7 @@ class ProfileRequestControllerTest {
     void requiresAuthenticationForProfileRequestList() throws Exception {
         mvc.perform(get("/api/profile-requests"))
             .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.message").value("Not authenticated"));
+            .andExpect(jsonPath("$.message").value("กรุณาเข้าสู่ระบบก่อนใช้งาน"));
 
         verifyNoInteractions(profileRequestService);
     }
@@ -54,7 +54,7 @@ class ProfileRequestControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"status\":\"approved\"}"))
             .andExpect(status().isForbidden())
-            .andExpect(jsonPath("$.message").value("Forbidden"));
+            .andExpect(jsonPath("$.message").value("ไม่มีสิทธิ์เข้าถึงรายการนี้"));
 
         verifyNoInteractions(profileRequestService);
     }
