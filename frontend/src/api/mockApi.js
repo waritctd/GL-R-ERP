@@ -56,6 +56,14 @@ import {
   monthlyTierBase as calcMonthlyTierBase,
   progressiveCommission as calcProgressiveCommission,
   round2 as commissionRound2,
+  // Issue #405: auto-computed INCENTIVE ladder + STOCK_BONUS — mirrors
+  // CommissionService#computeRepPayrollCommissions exactly, including the fix-forward effective
+  // month gate and the manual-entry double-count suppression guard (see payrollReady below).
+  monthlyIncentive as calcMonthlyIncentive,
+  stockSaleBonus as calcStockSaleBonus,
+  INCENTIVE_LADDER,
+  STOCK_BONUS_DEFAULTS,
+  INCENTIVE_STOCK_BONUS_EFFECTIVE_MONTH,
 } from '../features/commissions/commissionCalc.js';
 
 const db = createDemoDatabase();
@@ -2077,6 +2085,35 @@ const MANUAL_COMMISSION_KINDS = ['ADJUSTMENT', 'MANAGER', 'STOCK_BONUS', 'INCENT
 
 function isManualCommissionKind(kind) {
   return MANUAL_COMMISSION_KINDS.includes(kind);
+}
+
+// Issue #405: stockShare(ticket) = SUM(item.qtyFromStock) / SUM(item.qty), 0 when the ticket has
+// no items or its items sum to 0 qty (or the ticket can't be found) — mirrors
+// CommissionRepository#sumActiveStockActualReceived's GROUP BY ticket_id subquery.
+function ticketStockShare(ticketId) {
+  const ticket = db.tickets.find((t) => t.id === Number(ticketId));
+  const items = ticket?.items ?? [];
+  const totalQty = items.reduce((sum, item) => sum + Number(item.qty || 0), 0);
+  if (totalQty === 0) return 0;
+  const stockQty = items.reduce((sum, item) => sum + Number(item.qtyFromStock || 0), 0);
+  return stockQty / totalQty;
+}
+
+// Issue #405: STOCK_BONUS's per-rep-per-month "stock receipts" input — SUM(actualReceived x
+// stockShare(ticket)) across every APPROVED commission this rep/month with a sourceTicketId.
+// Review fix (2026-08-02): mirrors the APPROVED-only records payrollReady's own reps/manualTotals
+// aggregation above already restricts itself to (NOT the broader VOID/REJECTED-exclusion
+// sumActiveWeightedActualReceived uses for the unrelated simulate() preview) -- an earlier
+// version of this used that broader filter and let a still-SUBMITTED receipt (nobody approved)
+// contribute to a paid stock bonus. Unapproved money must never reach a payroll figure. Records
+// with no sourceTicketId (every manual kind) are excluded by the filter itself.
+function stockReceiptsForRep(salesRepId, month) {
+  return db.commissions
+    .filter((item) => item.salesRepId === salesRepId
+      && item.sourceTicketId != null
+      && commissionMonth(item.payrollMonth) === month
+      && item.status === 'APPROVED')
+    .reduce((sum, item) => sum + Number(item.actualReceived || 0) * ticketStockShare(item.sourceTicketId), 0);
 }
 
 function buildCommissionRecord(record) {
@@ -4849,12 +4886,28 @@ export const api = {
       // this point (the `approved` filter above), so a manual entry still sitting at
       // MANAGER_APPROVED correctly does not count yet.
       const manualTotals = new Map();
+      // Issue #405 transition safeguard, REWORKED (2026-08-02 review): summed per-kind manual
+      // amount, not just "does one exist" — mirrors
+      // CommissionService#computeRepPayrollCommissions's reworked guard exactly. A POSITIVE
+      // summed amount is a hand-typed REPLACEMENT and suppresses the auto limb; a ZERO or
+      // NEGATIVE summed amount is a CORRECTION layered on top, so the auto limb still computes
+      // and the correction (already folded into manualTotals/manualAmount below) adds to it. A
+      // negative manual INCENTIVE previously zeroed the entire auto limb instead of adding a
+      // correction on top of it — see the backend method's comment for the full rationale.
+      const manualIncentiveTotals = new Map();
+      const manualStockBonusTotals = new Map();
       approved.forEach((item) => {
         if (isManualCommissionKind(item.kind)) {
           manualTotals.set(item.salesRepId, {
             salesRepName: item.salesRepName,
             amount: (manualTotals.get(item.salesRepId)?.amount || 0) + Number(item.manualAmount || 0),
           });
+          if (item.kind === 'INCENTIVE') {
+            manualIncentiveTotals.set(item.salesRepId, (manualIncentiveTotals.get(item.salesRepId) || 0) + Number(item.manualAmount || 0));
+          }
+          if (item.kind === 'STOCK_BONUS') {
+            manualStockBonusTotals.set(item.salesRepId, (manualStockBonusTotals.get(item.salesRepId) || 0) + Number(item.manualAmount || 0));
+          }
           return;
         }
         // Commission redesign calc-refine: accumulate the WEIGHTED actual-received (real cash x
@@ -4864,6 +4917,10 @@ export const api = {
         current.weightedActualReceived += Number(item.actualReceived || 0) * Number(item.weightMultiplier || 1);
         reps.set(item.salesRepId, current);
       });
+      // Issue #405, ข้อ 12 fix-forward gate: a payroll month before 2026-08-01 has no matching
+      // config generation (see V108), so both auto-computed limbs stay at zero — mirrors
+      // CommissionRepository#findIncentiveTiers/#findStockBonusConfig's generation-selection SQL.
+      const effectiveMonth = month >= INCENTIVE_STOCK_BONUS_EFFECTIVE_MONTH;
       const salesReps = [...reps.values()].map((rep) => {
         const safeWeighted = Math.max(0, rep.weightedActualReceived);
         // Full precision here (not rounded to 2dp) — only the final commission total rounds.
@@ -4871,17 +4928,33 @@ export const api = {
         const tierCommission = progressiveCommission(safeBase);
         const manualAmount = manualTotals.get(rep.salesRepId)?.amount || 0;
         manualTotals.delete(rep.salesRepId);
+        // Suppress the auto limb only when the summed manual amount of that kind is STRICTLY
+        // POSITIVE (a replacement) — zero/negative (a correction) leaves the auto limb computing.
+        const incentiveReplaced = (manualIncentiveTotals.get(rep.salesRepId) || 0) > 0;
+        const incentiveAmount = (!effectiveMonth || incentiveReplaced)
+          ? 0
+          : calcMonthlyIncentive(safeBase, INCENTIVE_LADDER);
+        const stockBonusReplaced = (manualStockBonusTotals.get(rep.salesRepId) || 0) > 0;
+        // Review fix (performance mirror): short-circuit before the stock-receipts scan when the
+        // config is disabled or the limb is replaced — STOCK_BONUS_DEFAULTS.enabled is false by
+        // default, so this also matches "ships config-gated OFF" for the mock.
+        const stockBonusAmount = (!effectiveMonth || stockBonusReplaced || !STOCK_BONUS_DEFAULTS.enabled)
+          ? 0
+          : calcStockSaleBonus(stockReceiptsForRep(rep.salesRepId, month), STOCK_BONUS_DEFAULTS);
         return {
           salesRepId: rep.salesRepId,
           salesRepName: rep.salesRepName,
           commissionableBase: commissionRound2(safeBase),
-          commissionAmount: commissionRound2(tierCommission + manualAmount),
+          commissionAmount: commissionRound2(tierCommission + incentiveAmount + stockBonusAmount + manualAmount),
           manualAdjustmentAmount: commissionRound2(manualAmount),
+          incentiveAmount: commissionRound2(incentiveAmount),
+          stockBonusAmount: commissionRound2(stockBonusAmount),
         };
       });
       // A rep whose ONLY approved commission this month is a manual entry (e.g. a MANAGER
       // commission for someone with no SALE commission yet) still needs a summary row: tier
-      // base/commission are zero, the manual amount is the whole total. Mirrors
+      // base/commission are zero, the manual amount is the whole total. Issue #405: their
+      // auto-computed incentive/stock-bonus are kept explicitly zero too — mirrors
       // CommissionService#payrollReadySummary's second loop exactly.
       manualTotals.forEach((entry, salesRepId) => {
         salesReps.push({
@@ -4890,6 +4963,8 @@ export const api = {
           commissionableBase: 0,
           commissionAmount: commissionRound2(entry.amount),
           manualAdjustmentAmount: commissionRound2(entry.amount),
+          incentiveAmount: 0,
+          stockBonusAmount: 0,
         });
       });
       salesReps.sort((a, b) => String(a.salesRepName || '').localeCompare(String(b.salesRepName || ''), 'th'));
@@ -4899,6 +4974,8 @@ export const api = {
           status: 'PAYROLL_READY',
           totalCommissionableBase: salesReps.reduce((sum, item) => sum + item.commissionableBase, 0),
           totalCommissionAmount: salesReps.reduce((sum, item) => sum + item.commissionAmount, 0),
+          totalIncentiveAmount: salesReps.reduce((sum, item) => sum + item.incentiveAmount, 0),
+          totalStockBonusAmount: salesReps.reduce((sum, item) => sum + item.stockBonusAmount, 0),
           salesReps,
         },
       });

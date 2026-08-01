@@ -1411,7 +1411,8 @@ textarea:focus {
 }
 
 .commission-payroll-table {
-  grid-template-columns: minmax(0,1.8fr) minmax(0,1fr) minmax(0,1fr);
+  /* Issue #405: added อินเซนทีฟ + โบนัสขายของในสต๊อค columns between ฐานค่าคอม and ค่าคอม. */
+  grid-template-columns: minmax(0,1.8fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1.2fr) minmax(0,1fr);
 }
 
 .payroll-table {
