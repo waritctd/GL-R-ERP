@@ -131,21 +131,47 @@ function normalizeForCatalogMatch(value) {
   return String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+// How many candidates the fuzzy fallback asks for. Deliberately larger than the number a row
+// could plausibly match: GET /catalog/prices is `ORDER BY f.name, pp.collection, pp.product_code
+// LIMIT :limit` (CatalogRepository) — ALPHABETICAL BY FACTORY, not by relevance — so a small
+// limit does not return "the 5 best candidates", it returns the alphabetically-first factories
+// and hides the rest. See FUZZY_MATCH_LIMIT's use below for why a FULL page is treated as
+// ambiguous rather than as a candidate set.
+const FUZZY_MATCH_LIMIT = 50;
+
 // Fuzzy fallback (V110 follow-up) for deal lines created before the catalog link existed (no
 // ticketItem.catalogPriceId to seed productId from): auto-applies ONLY when the search returns
-// EXACTLY ONE candidate whose collection/productName AND size normalize to the same string as
-// this row's model/size. Zero or ambiguous results are left alone — the row just falls back to
-// the normal manual catalog search, exactly as it did before this fallback existed. A wrong
-// auto-match would feed a wrong base price into costing, so it is never silent — see the
-// catalogAutoApplied badge rendered on the row below.
+// EXACTLY ONE candidate that agrees with this row on every descriptive field the row actually
+// has. Zero or ambiguous results are left alone — the row just falls back to the normal manual
+// catalog search, exactly as it did before this fallback existed. A wrong auto-match would feed
+// a wrong base price into costing, so it is never silent — see the catalogAutoApplied badge
+// rendered on the row below.
+//
+// The predicate deliberately covers factory/color/texture as well as model/size. Matching on
+// model+size alone was not enough: deriveItemFromCatalogProduct OVERWRITES brand/factory/color/
+// texture from the chosen product, so a candidate agreeing on model+size but differing on
+// factory would silently rewrite the deal line's factory (and point productId at that other
+// factory's price). Each field is only enforced when the ROW has a value for it — a blank field
+// on the row is "unknown", not "must be blank on the product".
 function findSingleFuzzyCatalogMatch(candidates, item) {
-  const rowModel = normalizeForCatalogMatch(item.model);
-  const rowSize = normalizeForCatalogMatch(item.size);
-  const matches = (candidates ?? []).filter((product) => {
-    const productModel = normalizeForCatalogMatch(product.collection || product.productName);
-    const productSize = normalizeForCatalogMatch(product.sizeRaw);
-    return productModel === rowModel && productSize === rowSize;
-  });
+  const list = candidates ?? [];
+  // A full page means the server truncated: because the ordering is alphabetical rather than
+  // relevance-ranked, matches beyond the cut are invisible here, so "exactly one match" would be
+  // an artifact of truncation rather than evidence of uniqueness. Ambiguity is UNKNOWN, not
+  // absent — decline to guess and leave the row for a manual search.
+  if (list.length >= FUZZY_MATCH_LIMIT) return null;
+  const agreesOn = (rowValue, productValue) => {
+    const row = normalizeForCatalogMatch(rowValue);
+    if (!row) return true; // row has no opinion on this field
+    return row === normalizeForCatalogMatch(productValue);
+  };
+  const matches = list.filter((product) => (
+    agreesOn(item.model, product.collection || product.productName)
+    && agreesOn(item.size, product.sizeRaw)
+    && agreesOn(item.factory, product.factoryName)
+    && agreesOn(item.color, product.color)
+    && agreesOn(item.texture, product.surface)
+  ));
   return matches.length === 1 ? matches[0] : null;
 }
 
@@ -298,7 +324,7 @@ export function PricingRequestCreateModal({
         if (item.productId != null || !item.model?.trim()) continue;
         let res;
         try {
-          res = await api.catalog.prices(item.model, undefined, 5);
+          res = await api.catalog.prices(item.model, undefined, FUZZY_MATCH_LIMIT);
         } catch {
           continue;
         }
@@ -319,6 +345,15 @@ export function PricingRequestCreateModal({
           // Re-check productId at apply time, not just at fetch time — the user may have picked
           // a product manually while this request was in flight.
           if (!isTarget || row.productId != null) return row;
+          // The match was computed from the row as it looked when the search STARTED. Applying it
+          // to the row as it looks NOW would overwrite whatever the user typed in between: this
+          // effect holds the window open for seconds across a many-line deal, and a user fixing
+          // row 4's model/size by hand clears nothing the guard above can see (productId is
+          // already null on exactly the rows this effect targets). So re-confirm the row still
+          // describes the product that was searched for, and drop the match if it has moved on.
+          const describesSameProduct = normalizeForCatalogMatch(row.model) === normalizeForCatalogMatch(item.model)
+            && normalizeForCatalogMatch(row.size) === normalizeForCatalogMatch(item.size);
+          if (!describesSameProduct) return row;
           return { ...deriveItemFromCatalogProduct(row, match), catalogAutoApplied: true };
         }));
       }

@@ -15,9 +15,15 @@
 -- as "custom", not picked from the catalog, legitimately has no catalog identity). ON DELETE
 -- SET NULL: if a catalog price row is later retired, the deal line itself must not be blocked
 -- or cascaded away -- it just loses its catalog cross-reference and reverts to free text.
+-- catalog_product_code is TEXT, not VARCHAR(n), to match BOTH its source
+-- (price_catalog.product_prices.product_code, TEXT since V40) and its existing sibling
+-- (sales.pricing_request_item.catalog_product_code, TEXT since V61). A narrower column here
+-- would turn a long product code from an imported factory price sheet into a 22001
+-- string-data-right-truncation — i.e. a 500 on deal create/editItems — for a value the catalog
+-- itself accepts happily.
 ALTER TABLE sales.ticket_item
     ADD COLUMN catalog_price_id BIGINT,
-    ADD COLUMN catalog_product_code VARCHAR(80);
+    ADD COLUMN catalog_product_code TEXT;
 
 ALTER TABLE sales.ticket_item
     ADD CONSTRAINT fk_ticket_item_catalog_price

@@ -564,6 +564,100 @@ describe('PricingRequestCreateModal fuzzy catalog fallback (V110 follow-up)', ()
     expect(api.catalog.prices).not.toHaveBeenCalled();
   });
 
+  // Review finding F1. GET /catalog/prices is `ORDER BY f.name, ... LIMIT :limit` — alphabetical
+  // by FACTORY, not relevance-ranked. So a candidate agreeing on model+size can still be the
+  // wrong product, and deriveItemFromCatalogProduct would then overwrite the row's factory/
+  // color/texture from it. The predicate must therefore use every descriptive field the row has.
+  it('does NOT auto-apply a model+size match that disagrees with the row on factory', async () => {
+    api.catalog.prices.mockClear();
+    api.catalog.prices.mockResolvedValueOnce({
+      items: [{
+        priceId: 903, productCode: 'PC-903', factoryName: 'Aaa Ceramics',
+        grade: 'Aaa', collection: 'A1', sizeRaw: '60x60', color: 'ขาว', surface: 'ด้าน',
+        price: 99, currency: 'THB', priceUnit: 'per_piece',
+      }],
+    });
+    // The deal line names a DIFFERENT factory. Matching on model+size alone would have applied
+    // this candidate and silently rewritten the row's factory to "Aaa Ceramics".
+    renderModal({
+      ticketItems: [ticketItem({ model: 'A1', size: '60x60', factory: 'Zzz Ceramica' })],
+    });
+
+    await waitFor(() => expect(api.catalog.prices).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(screen.queryByText(/จับคู่สินค้าจาก Catalog/)).toBeNull();
+    expect(screen.queryByText(/Catalog #903/)).toBeNull();
+    expect(screen.getByDisplayValue('Zzz Ceramica')).not.toBeNull();
+  });
+
+  // Review finding F1, second half: a FULL page back from the server means the result set was
+  // truncated, so anything past the cut is invisible. "Exactly one match" is then an artifact of
+  // truncation, not evidence of uniqueness — ambiguity is UNKNOWN, so decline to guess.
+  it('declines to auto-apply when the result set is a full page (truncation hides ambiguity)', async () => {
+    api.catalog.prices.mockClear();
+    // 50 rows = FUZZY_MATCH_LIMIT. Exactly one agrees with the row, but the page is full — so
+    // the ONLY thing that can reject it is the full-page guard. The row blanks factory/color/
+    // texture so the field predicate has no opinion and cannot mask what is under test.
+    const filler = Array.from({ length: 49 }, (_, n) => ({
+      priceId: 1000 + n, productCode: `F-${n}`, factoryName: `Factory ${n}`,
+      collection: 'A1', sizeRaw: 'other-size', color: '', surface: '',
+    }));
+    api.catalog.prices.mockResolvedValueOnce({
+      items: [...filler, {
+        priceId: 904, productCode: 'PC-904', factoryName: 'SCG Ceramics',
+        grade: 'SCG', collection: 'A1', sizeRaw: '60x60', color: '', surface: '',
+        price: 120, currency: 'THB',
+      }],
+    });
+    renderModal({
+      ticketItems: [ticketItem({ model: 'A1', size: '60x60', factory: '', color: '', texture: '' })],
+    });
+
+    await waitFor(() => expect(api.catalog.prices).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(screen.queryByText(/จับคู่สินค้าจาก Catalog/)).toBeNull();
+    expect(screen.queryByText(/Catalog #904/)).toBeNull();
+  });
+
+  // Review finding F2. The match is computed from the row as it looked when the search STARTED.
+  // If the user retypes the row while it is in flight, applying the old match would destroy what
+  // they just typed — and productId is already null on exactly these rows, so the productId
+  // guard cannot catch it.
+  it('drops the match when the user has retyped the row while the search was in flight', async () => {
+    api.catalog.prices.mockClear();
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    api.catalog.prices.mockImplementationOnce(() => held);
+
+    // Row blanks factory/color/texture so the field predicate has no opinion — the returned
+    // candidate is a genuine match for the row AS SEARCHED, leaving the staleness re-check as
+    // the only thing that can reject it.
+    renderModal({
+      ticketItems: [ticketItem({ model: 'A1', size: '60x60', factory: '', color: '', texture: '' })],
+    });
+    await waitFor(() => expect(api.catalog.prices).toHaveBeenCalled());
+
+    // User corrects the model by hand while the search for "A1" is still open.
+    const modelInputs = screen.getAllByDisplayValue('A1');
+    fireEvent.change(modelInputs[modelInputs.length - 1], { target: { value: 'B9' } });
+
+    release({
+      items: [{
+        priceId: 905, productCode: 'PC-905', factoryName: 'SCG Ceramics',
+        grade: 'SCG', collection: 'A1', sizeRaw: '60x60', color: '', surface: '',
+        price: 120, currency: 'THB',
+      }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // What the user typed survives; the stale match is discarded.
+    expect(screen.getByDisplayValue('B9')).not.toBeNull();
+    expect(screen.queryByText(/Catalog #905/)).toBeNull();
+    expect(screen.queryByText(/จับคู่สินค้าจาก Catalog/)).toBeNull();
+  });
+
   // Regression guard: these searches run SEQUENTIALLY, so the in-flight window across a
   // many-line deal is seconds long. Deleting a row during it re-indexes every row after the
   // deleted one. An apply keyed on array index would land row 2's match on row 3 — silently
@@ -593,10 +687,13 @@ describe('PricingRequestCreateModal fuzzy catalog fallback (V110 follow-up)', ()
     // Delete row 0 while row 1's search is still open — row 601 is now at index 0, 602 at 1.
     fireEvent.click(screen.getByRole('button', { name: 'ลบรายการที่ 1' }));
 
+    // The candidate must agree with the row on every descriptive field the row has (F1's
+    // predicate), so colour/surface/factory mirror ticketItem()'s defaults here — otherwise the
+    // match is correctly rejected and this test would be asserting the wrong thing.
     releaseSecondSearch({
       items: [{
         priceId: 902, productCode: 'PC-902', factoryName: 'SCG Ceramics',
-        grade: 'SCG', collection: 'B2', sizeRaw: '30x30', color: 'ดำ', surface: 'มัน',
+        grade: 'SCG', collection: 'B2', sizeRaw: '30x30', color: 'ขาว', surface: 'ด้าน',
         price: 250, currency: 'THB', priceUnit: 'per_piece',
       }],
     });
