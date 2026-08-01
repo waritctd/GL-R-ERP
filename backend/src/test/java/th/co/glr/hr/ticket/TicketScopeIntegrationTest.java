@@ -20,6 +20,7 @@ import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerRepository;
+import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.deposit.DepositNoticeRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
@@ -91,7 +92,8 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
             new ObjectMapper(), customers, new QuotationRenderer(), pricingRequestService);
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets,
-            notifications, new DepositNoticeRenderer(), new RemainingInvoiceRenderer());
+            notifications, new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers,
+            new CustomerQuotationRepository(jdbc));
 
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), new FactoryEmailService(mock(JavaMailSender.class), "test@glr.co.th"),

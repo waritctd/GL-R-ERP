@@ -19,6 +19,10 @@ vi.mock('../../api/index.js', () => ({
       downloadXlsx: vi.fn(),
       downloadPdf: vi.fn(),
     },
+    pricingRequests: {
+      listForTicket: vi.fn(),
+      createDepositNoticeFromQuotation: vi.fn(),
+    },
     customers: {
       search: vi.fn(),
     },
@@ -59,6 +63,17 @@ describe('DepositNoticePage', () => {
         id: 9001, ticketId: 701, version: 1, status: 'DRAFT', docNumber: null,
         customerName: 'บริษัท ทดสอบ จำกัด', customerTaxId: '', customerAddress: '',
         projectName: '', reference: '', depositPercent: 0.5, notes: [], items: [],
+      },
+    });
+    // Default: no pricing requests on this ticket at all — every existing (pre-chain) test
+    // below relies on the legacy ticket-level createDraft path, which is exactly the fallback
+    // this resolution degrades to.
+    api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
+    api.pricingRequests.createDepositNoticeFromQuotation.mockResolvedValue({
+      depositNotice: {
+        id: 9003, ticketId: 701, version: 1, status: 'DRAFT', docNumber: null,
+        customerName: 'บริษัท ทดสอบ จำกัด', customerTaxId: '', customerAddress: '',
+        projectName: '', reference: 'QT-2026-0001', depositPercent: 0.5, notes: [], items: [],
       },
     });
     api.depositNotices.update.mockResolvedValue({ depositNotice: {} });
@@ -207,6 +222,63 @@ describe('DepositNoticePage', () => {
     // Mutation succeeding invalidates depositNotices(ticketId), which refetches
     // listByTicket — the second call is that background refetch.
     await waitFor(() => expect(api.depositNotices.listByTicket).toHaveBeenCalledTimes(2));
+  });
+
+  // Branch fix (deposit-notice autofill): a chain deal — one of this ticket's pricing requests
+  // has an accepted customer quotation (status QUOTATION_ACCEPTED) — must use the correct
+  // endpoint instead of the legacy ticket-level route.
+  it('uses the pricing-request quotation endpoint when the ticket has an accepted quotation', async () => {
+    api.pricingRequests.listForTicket.mockResolvedValue({
+      items: [
+        { id: 501, status: 'QUOTATION_ISSUED' },
+        { id: 502, status: 'QUOTATION_ACCEPTED' },
+      ],
+    });
+    renderDepositNoticePage();
+
+    const createButton = await screen.findByRole('button', { name: /สร้างเอกสารฉบับร่าง/ });
+    fireEvent.click(createButton);
+
+    await waitFor(() => expect(api.pricingRequests.createDepositNoticeFromQuotation).toHaveBeenCalledTimes(1));
+    expect(api.pricingRequests.createDepositNoticeFromQuotation).toHaveBeenCalledWith(502, { depositPercent: 0.5 });
+    expect(api.depositNotices.createDraft).not.toHaveBeenCalled();
+  });
+
+  // No pricing request on this ticket has an accepted quotation (e.g. still mid-negotiation,
+  // or a legacy ticket with pricing requests that never went through the chain) — must fall
+  // back to today's ticket-level route rather than erroring.
+  it('falls back to the ticket-level route when no pricing request has an accepted quotation', async () => {
+    api.pricingRequests.listForTicket.mockResolvedValue({
+      items: [{ id: 501, status: 'QUOTATION_ISSUED' }],
+    });
+    renderDepositNoticePage();
+
+    const createButton = await screen.findByRole('button', { name: /สร้างเอกสารฉบับร่าง/ });
+    fireEvent.click(createButton);
+
+    await waitFor(() => expect(api.depositNotices.createDraft).toHaveBeenCalledTimes(1));
+    expect(api.depositNotices.createDraft).toHaveBeenCalledWith('701', {
+      notes: ['หมายเหตุมาตรฐาน'],
+      depositPercent: 0.5,
+    });
+    expect(api.pricingRequests.createDepositNoticeFromQuotation).not.toHaveBeenCalled();
+  });
+
+  // A failure anywhere in the resolution step (network error, permission edge case) must
+  // degrade to the fallback path, never break the button or surface an unhandled rejection.
+  it('falls back to the ticket-level route when resolving pricing requests fails', async () => {
+    api.pricingRequests.listForTicket.mockRejectedValue(new Error('network error'));
+    renderDepositNoticePage();
+
+    const createButton = await screen.findByRole('button', { name: /สร้างเอกสารฉบับร่าง/ });
+    fireEvent.click(createButton);
+
+    await waitFor(() => expect(api.depositNotices.createDraft).toHaveBeenCalledTimes(1));
+    expect(api.depositNotices.createDraft).toHaveBeenCalledWith('701', {
+      notes: ['หมายเหตุมาตรฐาน'],
+      depositPercent: 0.5,
+    });
+    expect(api.pricingRequests.createDepositNoticeFromQuotation).not.toHaveBeenCalled();
   });
 
   it('renders the existing draft document instead of the empty state', async () => {

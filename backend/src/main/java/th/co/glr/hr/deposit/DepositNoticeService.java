@@ -1,14 +1,22 @@
 package th.co.glr.hr.deposit;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.customer.CustomerDto;
+import th.co.glr.hr.customer.CustomerRepository;
+import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationDto;
+import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationItemDto;
+import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.ticket.DealLifecycle;
+import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketItemDto;
@@ -34,15 +42,20 @@ public class DepositNoticeService {
     private final NotificationRepository notifications;
     private final DepositNoticeRenderer renderer;
     private final RemainingInvoiceRenderer remainingRenderer;
+    private final CustomerRepository customers;
+    private final CustomerQuotationRepository quotations;
 
     public DepositNoticeService(DepositNoticeRepository docs, TicketRepository tickets,
                            NotificationRepository notifications, DepositNoticeRenderer renderer,
-                           RemainingInvoiceRenderer remainingRenderer) {
+                           RemainingInvoiceRenderer remainingRenderer, CustomerRepository customers,
+                           CustomerQuotationRepository quotations) {
         this.docs              = docs;
         this.tickets           = tickets;
         this.notifications     = notifications;
         this.renderer          = renderer;
         this.remainingRenderer = remainingRenderer;
+        this.customers         = customers;
+        this.quotations        = quotations;
     }
 
     public List<DocumentNoteTemplateDto> getNoteTemplates() {
@@ -68,7 +81,8 @@ public class DepositNoticeService {
         TicketSummaryDto s = requireApprovedTicket(ticketId, actor);
         requireActiveLifecycle(s);
 
-        // Auto-populate items from approved ticket items if not provided
+        // Auto-populate items from approved ticket items (legacy) or, failing that, the
+        // ticket's own customer-quotation chain (new pricing-request flow) if not provided.
         List<DepositNoticeItemRequest> items = buildItemsFromRequest(req, ticketId);
         List<String> notes = req.notes() != null ? req.notes()
             : docs.findNoteTemplates().stream()
@@ -76,10 +90,39 @@ public class DepositNoticeService {
                 .map(DocumentNoteTemplateDto::text)
                 .toList();
 
+        // Header autofill (this branch's fix): customerTaxId/customerAddress/projectName were
+        // never populated for a deal created through the pricing-request chain — only
+        // customerName had a ticket-summary fallback. Sourced from the customer master via the
+        // ticket's own customerId (address = "address branch", matching
+        // DepositNoticePage.selectCustomer's own [address, branch].filter(Boolean).join(' ')
+        // convention on the frontend) and, for projectName, the ticket summary itself. A caller-
+        // supplied non-blank value always wins; a null customerId (never linked to a customer
+        // master row) safely leaves these fields blank rather than throwing.
+        String customerTaxId = blankToNull(req.customerTaxId());
+        String customerAddress = blankToNull(req.customerAddress());
+        String projectName = blankToNull(req.projectName());
+        if ((customerTaxId == null || customerAddress == null) && s.customerId() != null) {
+            CustomerDto customer = customers.findById(s.customerId()).orElse(null);
+            if (customer != null) {
+                if (customerTaxId == null) {
+                    customerTaxId = blankToNull(customer.taxId());
+                }
+                if (customerAddress == null) {
+                    customerAddress = List.of(customer.address(), customer.branch()).stream()
+                        .filter(v -> v != null && !v.isBlank())
+                        .reduce((a, b) -> a + " " + b)
+                        .orElse(null);
+                }
+            }
+        }
+        if (projectName == null) {
+            projectName = blankToNull(s.projectName());
+        }
+
         var effective = new DepositNoticeDraftRequest(
             req.customerName() != null ? req.customerName() : s.customerName(),
-            req.customerTaxId(), req.customerAddress(),
-            req.projectName(), req.reference(),
+            customerTaxId, customerAddress,
+            projectName, req.reference(),
             req.depositPercent() != null ? req.depositPercent() : new BigDecimal("0.50"),
             notes, items
         );
@@ -349,9 +392,31 @@ public class DepositNoticeService {
         }
     }
 
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
     private List<DepositNoticeItemRequest> buildItemsFromRequest(DepositNoticeDraftRequest req, long ticketId) {
         if (req.items() != null && !req.items().isEmpty()) return req.items();
-        // Auto-build from approved ticket items
+
+        // Legacy path: sales.ticket_item.approved_price, written only by the @Deprecated
+        // TicketService.approve (no controller route) — kept working for any ticket that still
+        // carries it, e.g. one manually approved before the pricing-request chain existed.
+        List<DepositNoticeItemRequest> legacyItems = buildLegacyItems(ticketId);
+        if (!legacyItems.isEmpty()) return legacyItems;
+
+        // New-chain fallback (this branch's fix): every deal created through the pricing-request
+        // chain has approved_price = NULL on every ticket_item (see this class's own diagnosis in
+        // the branch handoff) — buildLegacyItems above always returns empty for such a deal, which
+        // is exactly the bug. Source items from the ticket's own customer quotation instead.
+        CustomerQuotationDto chosen = pickQuotation(quotations.findByTicket(ticketId));
+        if (chosen != null) {
+            return itemsFromQuotation(chosen.items());
+        }
+        return List.of();
+    }
+
+    private List<DepositNoticeItemRequest> buildLegacyItems(long ticketId) {
         return tickets.findById(ticketId)
             .map(t -> {
                 int[] seq = {1};
@@ -370,5 +435,64 @@ public class DepositNoticeService {
                     .toList();
             })
             .orElse(List.of());
+    }
+
+    /**
+     * Picks the quotation to source deposit-notice items from when no explicit items were given
+     * and no legacy {@code approved_price} exists: the LATEST ACCEPTED revision, or — if the
+     * customer has not yet accepted any revision — the latest ISSUED one. {@code
+     * CustomerQuotationRepository#findByTicket} returns rows ordered ASCENDING by {@code
+     * quotation_id} ALONE — deliberately NOT by {@code quotation_revision_no} (see that method's
+     * own Javadoc: the revision counter is scoped to a single pricing request and is not
+     * comparable across the multiple pricing requests one ticket can have) — so a single forward
+     * scan that keeps overwriting "latest seen" for each status is equivalent to sorting
+     * descending by {@code quotation_id} and taking the first match, without a second
+     * list/comparator.
+     */
+    private CustomerQuotationDto pickQuotation(List<CustomerQuotationDto> candidates) {
+        CustomerQuotationDto latestAccepted = null;
+        CustomerQuotationDto latestIssued = null;
+        for (CustomerQuotationDto q : candidates) {
+            if (QuotationStatus.ACCEPTED.equals(q.docStatus())) {
+                latestAccepted = q;
+            } else if (QuotationStatus.ISSUED.equals(q.docStatus())) {
+                latestIssued = q;
+            }
+        }
+        return latestAccepted != null ? latestAccepted : latestIssued;
+    }
+
+    /**
+     * Maps a customer quotation's items to deposit-notice item requests. The single shared mapping
+     * used by both {@link #buildItemsFromRequest} (this class's own ticket-chain fallback above)
+     * and {@code OrderConfirmationService.createDepositNoticeFromQuotation} (the explicit
+     * quotation-driven entry point), so the two paths can never drift apart — extracted here
+     * (rather than duplicated, as it was before this branch) because both already depend on this
+     * package for {@link DepositNoticeItemRequest} itself.
+     */
+    public static List<DepositNoticeItemRequest> itemsFromQuotation(List<CustomerQuotationItemDto> quotationItems) {
+        List<DepositNoticeItemRequest> items = new ArrayList<>();
+        for (CustomerQuotationItemDto item : quotationItems) {
+            String description = item.description() != null && !item.description().isBlank()
+                ? item.description() : "รายการสินค้า";
+            BigDecimal discount = item.salesDiscount();
+            String discountLabel = discount != null && discount.signum() > 0
+                ? "ส่วนลด " + discount.stripTrailingZeros().toPlainString() + " ต่อหน่วย" : null;
+            items.add(new DepositNoticeItemRequest(
+                item.seq(), description, item.requestedQuantity(), unitLabel(item.requestedUnitBasis()),
+                item.approvedUnitPrice(), discountLabel, item.finalUnitPrice()));
+        }
+        return items;
+    }
+
+    public static String unitLabel(String unitBasis) {
+        if (unitBasis == null) return "หน่วย";
+        return switch (unitBasis) {
+            case UnitBasis.PER_SQM -> "ตร.ม.";
+            case UnitBasis.PER_PIECE -> "แผ่น";
+            case UnitBasis.PER_BOX -> "กล่อง";
+            case UnitBasis.PER_LINEAR_M -> "เมตร";
+            default -> unitBasis;
+        };
     }
 }
