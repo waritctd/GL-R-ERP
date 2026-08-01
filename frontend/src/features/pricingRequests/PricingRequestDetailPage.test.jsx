@@ -431,6 +431,27 @@ describe('PricingRequestDetailPage unavailable states', () => {
     expect(api.pricingRequests.get).toHaveBeenCalledTimes(2);
   });
 
+  it('renders a not-found state for an existing 404 outcome without offering retry', async () => {
+    const error = Object.assign(new Error('ไม่พบใบขอราคานี้'), { status: 404 });
+    renderDetailPage({ detailError: error, routeId: 9999 });
+
+    expect(await screen.findByText('ไม่พบใบขอราคานี้')).toBeTruthy();
+    expect(screen.getByText('ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'กลับไปที่คิวใบขอราคา' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /ลองใหม่/ })).toBeNull();
+  });
+
+  it('renders a safe denied state for an existing 403 outcome without exposing record detail', async () => {
+    const error = Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 });
+    renderDetailPage({ detailError: error, routeId: 501 });
+
+    expect(await screen.findByText('ยังเปิดใบขอราคานี้ไม่ได้')).toBeTruthy();
+    expect(screen.getByText('ระบบไม่เปิดเผยรายละเอียดของใบขอราคาที่คุณไม่มีสิทธิ์เข้าถึง')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'กลับไปที่คิวใบขอราคา' })).toBeTruthy();
+    expect(screen.queryByText('ไม่มีสิทธิ์เข้าถึงรายการนี้')).toBeNull();
+    expect(screen.queryByRole('button', { name: /ลองใหม่/ })).toBeNull();
+  });
+
   it('uses a safe back action for sales users who cannot open the pricing-request queue', async () => {
     renderDetailPage({
       user: salesOwner,

@@ -66,13 +66,16 @@ test.describe('Batch 1 safety foundations', () => {
     await expect(dismiss).toHaveCount(0);
   });
 
-  test('pricing-request detail not-found state uses a safe return action for sales', async ({ page }) => {
-    await loginAs(page, 'sales');
+  for (const viewport of VIEWPORTS) {
+    test(`pricing-request detail not-found state uses a safe return action for sales @ ${viewport.name}`, async ({ page }) => {
+      await loginAtViewport(page, 'sales', viewport);
 
-    await spaGoto(page, '/pricing-requests/not-a-number');
+      await spaGoto(page, '/pricing-requests/not-a-number');
 
-    await expect(page.getByText('ไม่พบใบขอราคานี้')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'กลับ' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'กลับไปที่คิวใบขอราคา' })).toHaveCount(0);
-  });
+      await expect(page.getByText('ไม่พบใบขอราคานี้')).toBeVisible();
+      await expect(page.getByRole('button', { name: 'กลับ' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'กลับไปที่คิวใบขอราคา' })).toHaveCount(0);
+      await expectNoHorizontalPageOverflow(page);
+    });
+  }
 });

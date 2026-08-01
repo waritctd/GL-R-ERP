@@ -88,12 +88,32 @@ function dispatchStatusBadge(quote) {
 
 function PricingRequestDetailSkeleton() {
   return (
-    <div className="grid w-[min(560px,100%)] gap-3" aria-hidden="true">
-      <Skeleton height={28} width="52%" />
-      <Skeleton height={96} />
-      <SkeletonText lines={3} />
+    <div className="grid w-[min(760px,100%)] gap-3" aria-hidden="true">
+      <div className="grid gap-2 rounded-md border border-border bg-surface p-4 shadow-sm">
+        <Skeleton height={24} width="42%" />
+        <Skeleton height={14} width="64%" />
+        <div className="grid gap-2 pt-2 sm:grid-cols-2">
+          <Skeleton height={16} />
+          <Skeleton height={16} />
+          <Skeleton height={16} />
+          <Skeleton height={16} />
+        </div>
+      </div>
+      <div className="grid gap-2 rounded-md border border-border bg-surface p-4 shadow-sm">
+        <Skeleton height={18} width="34%" />
+        <Skeleton height={58} />
+        <Skeleton height={58} />
+      </div>
+      <div className="grid gap-2 rounded-md border border-border bg-surface p-4 shadow-sm">
+        <Skeleton height={18} width="28%" />
+        <SkeletonText lines={2} />
+      </div>
     </div>
   );
+}
+
+function apiStatus(error) {
+  return typeof error?.status === 'number' ? error.status : null;
 }
 
 function defaultResponseItems(quote) {
@@ -500,6 +520,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const canEditPricingRequestAttachments = isSales(user)
     && summary?.ticketCreatedById === user?.employeeId
     && ['DRAFT', 'MORE_INFO_REQUIRED'].includes(summary?.status);
+  const detailErrorStatus = apiStatus(detailQuery.error);
 
   if (detailQuery.isLoading) {
     return (
@@ -516,6 +537,40 @@ export function PricingRequestDetailPage({ user, showToast }) {
   }
 
   if (detailQuery.isError) {
+    if (detailErrorStatus === 404) {
+      return (
+        <div className="page-stack">
+          <StatePanel
+            state="notFound"
+            title="ไม่พบใบขอราคานี้"
+            description="ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้"
+            action={(
+              <button type="button" className="primary-button" onClick={returnToSafeList}>
+                {canReturnToPricingQueue ? 'กลับไปที่คิวใบขอราคา' : 'กลับ'}
+              </button>
+            )}
+          />
+        </div>
+      );
+    }
+
+    if (detailErrorStatus === 403) {
+      return (
+        <div className="page-stack">
+          <StatePanel
+            state="denied"
+            title="ยังเปิดใบขอราคานี้ไม่ได้"
+            description="ระบบไม่เปิดเผยรายละเอียดของใบขอราคาที่คุณไม่มีสิทธิ์เข้าถึง"
+            action={(
+              <button type="button" className="primary-button" onClick={returnToSafeList}>
+                {canReturnToPricingQueue ? 'กลับไปที่คิวใบขอราคา' : 'กลับ'}
+              </button>
+            )}
+          />
+        </div>
+      );
+    }
+
     return (
       <div className="page-stack">
         <StatePanel
