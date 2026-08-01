@@ -47,11 +47,11 @@ test.describe('HR — overtime, leave, attendance', () => {
     await loginAs(page, 'employee');
     await spaGoto(page, '/employee-requests?tab=ot');
 
-    const today = new Date().toISOString().slice(0, 10);
-    await page.locator('#ot-work-date').fill(today);
+    const workDate = nextWeekdayAtLeast(0);
+    await page.locator('#ot-work-date').fill(workDate);
     await page.locator('#ot-day-type').selectOption('WORKDAY');
-    await page.locator('#ot-planned-start').fill(`${today}T19:00`);
-    await page.locator('#ot-planned-end').fill(`${today}T21:00`);
+    await page.locator('#ot-planned-start').fill(`${workDate}T19:00`);
+    await page.locator('#ot-planned-end').fill(`${workDate}T21:00`);
     await page.locator('#ot-reason').fill(reason);
     await page.getByRole('button', { name: 'ส่งคำขอ' }).click();
 

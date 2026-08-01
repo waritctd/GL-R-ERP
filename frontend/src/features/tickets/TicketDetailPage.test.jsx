@@ -303,6 +303,80 @@ describe('TicketDetailPage', () => {
     expect(screen.getAllByText('฿50,000.00').length).toBeGreaterThan(0);
   });
 
+  it('renders a dash for มูลค่าดีล until a price exists', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({ summary: { status: 'approved', amountPayable: 0 } }),
+    });
+
+    renderTicketDetailPage();
+
+    const label = await screen.findByText('มูลค่าดีล');
+    const chip = label.closest('div');
+    expect(within(chip).getByText('—')).not.toBeNull();
+    expect(within(chip).queryByText('฿0.00')).toBeNull();
+  });
+
+  it('collapses the context panel below xl by default and expands to show mirrored next action, dates, people, and recent comments', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: {
+          lifecycle: 'ACTIVE',
+          salesStage: 'QUOTE_DESIGN_SIDE',
+          nextFollowUpAt: '2026-07-20',
+          billingDate: '2026-07-21',
+          dueDate: '2026-07-31',
+          contactName: 'คุณอรุณ ติดต่อ',
+        },
+        events: [
+          {
+            id: 3,
+            kind: 'COMMENTED',
+            actorName: 'สมชาย ใจดี',
+            message: 'บันทึกสำหรับบริบทดีล',
+            createdAt: '2026-07-18T09:00:00.000Z',
+          },
+        ],
+      }),
+    });
+
+    renderTicketDetailPage(salesOwnerUser);
+
+    const panel = await screen.findByRole('complementary', { name: 'บริบทดีล' });
+    expect(within(panel).queryByText('Key dates')).toBeNull();
+    fireEvent.click(within(panel).getByRole('button', { name: /บริบทดีล/ }));
+    expect(screen.getAllByText('ถึงคิวคุณ: สร้างใบขอราคา').length).toBe(2);
+    expect(within(panel).getByText('20 ก.ค. 2569')).not.toBeNull();
+    expect(within(panel).getByText('31 ก.ค. 2569')).not.toBeNull();
+    expect(within(panel).getByText('สมชาย ใจดี')).not.toBeNull();
+    expect(within(panel).getByText('ยังไม่มี PCR')).not.toBeNull();
+    expect(within(panel).getByText('คุณอรุณ ติดต่อ')).not.toBeNull();
+    expect(within(panel).getByText('บันทึกสำหรับบริบทดีล')).not.toBeNull();
+  });
+
+  it('adds a context-panel comment through the existing ticket comment endpoint', async () => {
+    renderTicketDetailPage(salesOwnerUser);
+
+    const panel = await screen.findByRole('complementary', { name: 'บริบทดีล' });
+    fireEvent.click(within(panel).getByRole('button', { name: /บริบทดีล/ }));
+    fireEvent.change(within(panel).getByPlaceholderText('เพิ่มความคิดเห็น...'), { target: { value: 'จดไว้จากแผงบริบท' } });
+    fireEvent.click(within(panel).getByRole('button', { name: 'ส่งความคิดเห็น' }));
+
+    await waitFor(() => expect(api.tickets.comment).toHaveBeenCalledWith(701, { message: 'จดไว้จากแผงบริบท' }));
+  });
+
+  it('does not render a second comment control in the context panel on the activity tab', async () => {
+    renderTicketDetailPage(salesOwnerUser);
+
+    await openTab(/กิจกรรม/);
+    expect(screen.getByPlaceholderText('เพิ่มความคิดเห็น...')).not.toBeNull();
+
+    const panel = await screen.findByRole('complementary', { name: 'บริบทดีล' });
+    fireEvent.click(within(panel).getByRole('button', { name: /บริบทดีล/ }));
+
+    expect(within(panel).queryByPlaceholderText('เพิ่มความคิดเห็น...')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'ส่งความคิดเห็น' })).toHaveLength(1);
+  });
+
   it('renders legacy quotation revisions read-only — no revise/mark-sent/mark-decision buttons', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
@@ -813,7 +887,7 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(salesOwnerUser);
 
-      expect(await screen.findByText('ถึงคิวคุณ: สร้างใบขอราคา')).not.toBeNull();
+      expect((await screen.findAllByText('ถึงคิวคุณ: สร้างใบขอราคา')).length).toBeGreaterThan(0);
       const stickyButtons = await screen.findAllByRole('button', { name: /สร้างใบขอราคา/ });
       expect(stickyButtons).toHaveLength(1);
       expect(screen.queryByRole('dialog')).toBeNull();
@@ -860,7 +934,7 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(salesOwnerUser);
 
-      expect(await screen.findByText('ถึงคิวคุณ: ออกใบเสนอราคา')).not.toBeNull();
+      expect((await screen.findAllByText('ถึงคิวคุณ: ออกใบเสนอราคา')).length).toBeGreaterThan(0);
       const stickyButtons = await screen.findAllByRole('button', { name: /ออกใบเสนอราคา/ });
       expect(stickyButtons).toHaveLength(1);
 
@@ -900,7 +974,7 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(salesOwnerUser);
 
-      expect(await screen.findByText('ถึงคิวคุณ: ยืนยันคำสั่งซื้อ')).not.toBeNull();
+      expect((await screen.findAllByText('ถึงคิวคุณ: ยืนยันคำสั่งซื้อ')).length).toBeGreaterThan(0);
       const stickyButtons = await screen.findAllByRole('button', { name: /ยืนยันคำสั่งซื้อ/ });
       expect(stickyButtons).toHaveLength(1);
 
@@ -954,7 +1028,7 @@ describe('TicketDetailPage', () => {
 
       // Wait for the resolver to settle on ISSUE_QUOTATION (it renders
       // CREATE_PCR first, before api.pricingRequests.listForTicket resolves).
-      await screen.findByText('ถึงคิวคุณ: ออกใบเสนอราคา');
+      await screen.findAllByText('ถึงคิวคุณ: ออกใบเสนอราคา');
       const stickyButton = screen.getByTestId('ticket-primary-action');
       expect(stickyButton.getAttribute('data-action')).toBe('issue_quotation');
       // DealQuotationPanel now lives inside the "ใบเสนอราคา" tab — open it
@@ -1023,7 +1097,7 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(salesOwnerUser, showToast);
 
-      await screen.findByText('ถึงคิวคุณ: ออกใบเสนอราคา');
+      await screen.findAllByText('ถึงคิวคุณ: ออกใบเสนอราคา');
       const stickyButton = screen.getByTestId('ticket-primary-action');
       // Open the "ใบเสนอราคา" tab, then wait for the quotations query to
       // settle so the click below exercises the "current exists but isn't
@@ -1072,7 +1146,7 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(salesOwnerUser, showToast);
 
-      await screen.findByText('ถึงคิวคุณ: ออกใบเสนอราคา');
+      await screen.findAllByText('ถึงคิวคุณ: ออกใบเสนอราคา');
       // Deliberately NOT calling openTab(/ใบเสนอราคา/) here — the sticky
       // button is clicked while still on the default ภาพรวม tab, which is
       // the exact precondition the review's repro names ("on the default
@@ -1135,7 +1209,7 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(salesManagerUser);
 
-      expect(await screen.findByText(/รอชำระมัดจำ/)).not.toBeNull();
+      expect((await screen.findAllByText(/รอชำระมัดจำ/)).length).toBeGreaterThan(0);
     });
 
     it('never shows "รอชำระมัดจำ" to account — account is the role that clears it', async () => {
