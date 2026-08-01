@@ -215,9 +215,6 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
         drawerRef={drawerRef}
         isDrawerOpen={isDrawerOpen}
         items={navItems}
-        user={user}
-        employee={employee}
-        onLogout={onLogout}
       />
       <button
         type="button"

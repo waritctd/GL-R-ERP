@@ -1155,9 +1155,25 @@ export function PayrollPage({ showToast }) {
         )}
       />
 
-      <CompactStatRow
-        items={payrollSummaryItems}
-      />
+      {/* Issue #394 fix: a bare "-" in all four tiles read as broken UI, not "no
+          data yet". `loading` now drives CompactStatRow's own skeleton state
+          (already built for exactly this, just never wired up here) for the
+          normal fetch-in-flight window; the true empty case — no period at all
+          once loading has settled (e.g. the initial load failed) — gets a real
+          empty state explaining what would populate the strip, instead of four
+          silent dashes. */}
+      {!loading && !period ? (
+        <EmptyState
+          icon="badgeDollar"
+          title="ยังไม่มีข้อมูลสรุปเงินเดือน"
+          description="เลือกรอบเดือนที่มีข้อมูลพนักงาน หรือกดคำนวณตัวอย่างเพื่อโหลดข้อมูล"
+        />
+      ) : (
+        <CompactStatRow
+          items={payrollSummaryItems}
+          loading={loading}
+        />
+      )}
 
       {/* Phase A command surface: routine commands are Preview + one labelled document menu. Process
           stays in its own Tailwind-styled region so the irreversible action remains visually apart
@@ -1202,9 +1218,19 @@ export function PayrollPage({ showToast }) {
 
           {/* Run — the irreversible action. Kept in its own region with the period state and pushed
               after routine preview/export/send work. Phone stays editable; the extra mobile-only
-              typed phrase lives in the confirm dialog instead of disabling this button outright. */}
+              typed phrase lives in the confirm dialog instead of disabling this button outright.
+
+              Issue #394 fix: the region's border only turns danger-red once the action is actually
+              armed (a real period with lines to process, ready to fire an irreversible commit) — an
+              unmet precondition (emptyPeriod, see processBlockedReason below) is a disabled control
+              waiting on data, not a failure, so it reads in a neutral border instead. Red on a screen
+              that also surfaces genuine payroll failures must stay reserved for genuine failures, or
+              HR learns to ignore it. */}
           <section
-            className="payroll-process-region ml-auto flex flex-wrap items-center gap-x-3.5 gap-y-2.5 rounded-md border border-danger-border bg-surface-muted px-3 py-2.5 nav-drawer:ml-0 nav-drawer:w-full nav-drawer:justify-between mobile:items-stretch"
+            className={cn(
+              'payroll-process-region ml-auto flex flex-wrap items-center gap-x-3.5 gap-y-2.5 rounded-md border bg-surface-muted px-3 py-2.5 nav-drawer:ml-0 nav-drawer:w-full nav-drawer:justify-between mobile:items-stretch',
+              emptyPeriod ? 'border-border' : 'border-danger-border',
+            )}
             aria-labelledby="payroll-process-title"
           >
             <div className="grid min-w-0 gap-1">
@@ -1232,13 +1258,16 @@ export function PayrollPage({ showToast }) {
                   unavailable right now, so it reads in muted body colour rather than
                   danger red. Utilities at the call site, not a styles.css rule —
                   styles.css sits in @layer legacy and loses to any text utility a
-                  future caller adds here. */}
+                  future caller adds here. An `info` icon carries the same "this is
+                  guidance, not an alarm" signal non-visually too (WCAG 1.4.1 — the
+                  disabled state must not rely on the border colour alone). */}
               {processBlockedReason && (
                 <span
                   id="payroll-process-block-reason"
                   role="note"
-                  className="max-w-[34ch] text-xs font-semibold text-text-muted"
+                  className="flex max-w-[34ch] items-start gap-1 text-xs font-semibold text-text-muted"
                 >
+                  <Icon name="info" size={13} className="mt-0.5 shrink-0" />
                   {processBlockedReason}
                 </span>
               )}
