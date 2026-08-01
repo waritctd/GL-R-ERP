@@ -330,9 +330,17 @@ export const ROLE_PERMISSIONS = {
   // Frontend-only presentation split; never narrows what
   // TicketService.VIEWER_ROLES actually allows a read of.
   canViewDealPipeline: ['sales', 'sales_manager', 'ceo'],
-  // Sales/CRM tool — catalog browsing scoped to the same audience as
-  // canViewTickets. Frontend-only gate: GET /api/catalog has no backend
-  // role check yet.
+  // Sales/CRM tool — which roles get the catalog SCREENS, scoped to the same
+  // audience as canViewTickets.
+  //
+  // This is a FRONTEND UX CHOICE, deliberately narrower than the API, and it is
+  // NOT a security boundary — do not read it as one (#388 did, and filed the
+  // divergence as a vulnerability). GET /api/catalog and GET /api/catalog/prices
+  // are open to any authenticated user on the real backend, by product decision:
+  // #205 (product owner, 2026-07-16) for browsing, and the owner's 2026-08-01
+  // ruling closing #388 confirming that "browsable by any logged-in user" covers
+  // the supplier purchase price too. Narrowing this list hides a screen; it does
+  // not protect the data, and nothing about the data is meant to be protected.
   canViewCatalog: ['sales', 'import', 'ceo', 'account', 'sales_manager'],
   // Money-receipt confirmations (รับยอดมัดจำ / รับชำระเต็มจำนวน) belong to
   // ฝ่ายบัญชี, with CEO as fallback. Mirrors TicketService.ACCOUNT_ROLES.
