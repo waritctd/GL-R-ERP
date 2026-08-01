@@ -253,8 +253,8 @@ AND NOT EXISTS (SELECT 1 FROM sales.quotation q WHERE q.number = 'QN-2026-00002'
 --    gross_amount / commissionable_base / actual_received mapping and
 --    the dual-approval columns are explained in the top-of-file note.
 -- ---------------------------------------------------------------------
-INSERT INTO sales.invoice_details (invoice_number, invoice_date, gross_amount)
-SELECT v.invoice_number, v.invoice_date, v.gross_amount
+INSERT INTO sales.invoice_details (invoice_number, invoice_date, gross_amount, evidence_provenance)
+SELECT v.invoice_number, v.invoice_date, v.gross_amount, 'UAT_SEED'
 FROM (VALUES
     ('UAT-INV-0001', DATE '2026-06-28', 240000::numeric),
     ('UAT-INV-0002', DATE '2026-07-03', 620000::numeric),

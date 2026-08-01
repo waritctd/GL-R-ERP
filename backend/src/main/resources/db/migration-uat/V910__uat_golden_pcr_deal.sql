@@ -598,8 +598,8 @@ WHERE NOT EXISTS (
 --    commission_record guarded by (invoice_id, sales_rep_id, kind) not
 --    exists, mirroring V903's own guard shape exactly.
 -- ---------------------------------------------------------------------
-INSERT INTO sales.invoice_details (invoice_number, invoice_date, gross_amount)
-SELECT 'UAT-INV-GOLD-01', DATE '2026-07-11', 584007.07
+INSERT INTO sales.invoice_details (invoice_number, invoice_date, gross_amount, evidence_provenance)
+SELECT 'UAT-INV-GOLD-01', DATE '2026-07-11', 584007.07, 'UAT_SEED'
 WHERE NOT EXISTS (SELECT 1 FROM sales.invoice_details i WHERE i.invoice_number = 'UAT-INV-GOLD-01');
 
 INSERT INTO sales.commission_record (
