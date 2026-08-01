@@ -10,7 +10,7 @@ import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
 import { SkeletonCard } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { formatMoney, formatThaiDate, bangkokMonthStartIso } from '../../utils/format.js';
+import { formatMoney, formatThaiDate, bangkokMonthStartIso, greetingName } from '../../utils/format.js';
 
 /**
  * CEO exec-cockpit landing (plan: docs/agent-handoffs/valiant-watching-map.md
@@ -285,7 +285,7 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
     || otManagerApprovedQuery.isLoading || otSubmittedQuery.isLoading || leaveSubmittedQuery.isLoading;
 
   const today = formatThaiDate(new Date().toISOString());
-  const greeting = `สวัสดี, คุณ${employee?.nickName || employee?.nameTh || user?.name || ''}`;
+  const greeting = `สวัสดี, ${greetingName(employee?.nickName || employee?.nameTh || user?.name)}`;
 
   return (
     <PageStack>

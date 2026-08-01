@@ -14,6 +14,7 @@ import {
   formatBangkokTime,
   formatShortDate,
   formatThaiDate,
+  greetingName,
   leaveStatusLabel,
   overtimeStatusLabel,
   requestStatus,
@@ -189,7 +190,7 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], dash
   return (
     <PageStack>
       <PageHeader
-        title={`สวัสดี คุณ${firstName}`}
+        title={`สวัสดี ${greetingName(firstName)}`}
         subtitle={`${formatThaiDate(new Date())} · เวลาทำงานและคำขอของคุณ`}
       />
 
