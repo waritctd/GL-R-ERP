@@ -72,10 +72,17 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  *       sales_manager / ceo only) — import and account are refused the activity feed, not just
  *       hr/employee. Comment at {@code TicketService.requireDealOwnership}: "Lost/reopen belong
  *       to the sales side."</li>
- *   <li>{@link AttachmentController#requireTicketAccess} is participant-or-manager, and
- *       {@code MANAGER_ROLES} includes {@code hr} — so hr, which cannot read a ticket anywhere
- *       else in this matrix, CAN read/upload/delete its attachments. This is pinned as-is (a
- *       known wider path under separate review), not fixed here.</li>
+ *   <li>{@link AttachmentController} used to gate a deal's documents on its own private
+ *       {@code MANAGER_ROLES = {hr, sales_manager, ceo}} — so hr, which cannot read a ticket
+ *       anywhere else in this matrix, could read/upload/delete its attachments, while account,
+ *       the role that confirms money against those very files, could not read them. Earlier
+ *       revisions of this file pinned that as a known wider path under separate review; issue
+ *       #389 closed it, and document reads now go through
+ *       {@code TicketAccessPolicy.canViewDocuments}, which shares one {@code VIEWER_ROLES}
+ *       constant with {@link TicketService}. Document reads remain NARROWER than deal reads for
+ *       {@code import} — see {@code attachments_importCanReadTheDealShellButNotItsCustomerFacing
+ *       Documents} below, which is of a piece with the {@code projectForRole}/quotation-file/
+ *       ledger/deposit-notice refusals this matrix already pins for that role.</li>
  *   <li>{@link th.co.glr.hr.deposit.DepositNoticeService#listByTicket} denies import too, despite
  *       its own {@code VIEWER_ROLES} {@code Set.of(...)} literal still listing {@code "import"}
  *       as a member — {@code requireTicketViewer} has a second, explicit import check right after
@@ -461,8 +468,15 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // เอกสาร (attachments) — AttachmentController.requireTicketAccess() / participant
-    // (createdById or assignedToId) OR MANAGER_ROLES = {hr, sales_manager, ceo}
+    // เอกสาร (attachments) — AttachmentController.requireTicketReadAccess() /
+    // TicketAccessPolicy.canViewDocuments: participant (createdById or assignedToId) OR a deal
+    // VIEWER_ROLE, with sales AND import both scoped to deals they participate in. Issue #389
+    // replaced the old blanket MANAGER_ROLES = {hr, sales_manager, ceo}, which was too wide (hr
+    // read every deal's documents while being refused the deal itself) and too narrow (account,
+    // the role that confirms money against these files, was refused them). import stays refused
+    // as a non-participant — see the pin below for why that is narrower than the deal read.
+    // Writing is the separate canManageDocuments question, covered by
+    // AttachmentTicketAccessIntegrationTest; this matrix only pins the read.
     //
     // Exercised through MockMvc against the real HTTP route (GET /api/tickets/{id}/attachments)
     // rather than by calling attachmentController.list(...) directly: that method is
@@ -472,14 +486,32 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
     // Same pattern AttachmentControllerTest already uses for this controller.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
+    /**
+     * THE PIN for import's refusal (issue #389 review). Import can read the deal SHELL — the
+     * assertion below proves it — and that is deliberately NOT enough to read the deal's
+     * documents. {@code AttachType} is {@code {PO, SIGNED_QUOTATION, INVOICE, OTHER}}, so a
+     * document read hands over the countersigned quotation and the ใบกำกับภาษี, both carrying the
+     * approved customer price; this matrix already pins import's 403 on the quotation FILE
+     * ({@code quotationFile_importCannotDownloadIt}-style cases), on the payment ledger
+     * ({@code ledger_*}) and on deposit notices, and {@code TicketService#projectForRole} nulls
+     * quotations out of import's DTO entirely.
+     *
+     * <p>An earlier revision of this branch granted import document reads on the reasoning "it
+     * already reads the deal". That was refuted in review: it reads the shell, not the customer
+     * documents. If this test goes red because someone re-added import to
+     * {@code TicketAccessPolicy#canViewDocuments}, that is a customer-price exposure, not a
+     * regression to patch around.
+     */
     @Test
-    void attachments_importIsNeitherParticipantNorManagerAndIsRefused() throws Exception {
+    void attachments_importCanReadTheDealShellButNotItsCustomerFacingDocuments() throws Exception {
+        assertThatCode(() -> ticketService.get(ticketId, importActor)).doesNotThrowAnyException();
         assertAttachmentsForbidden(importActor);
     }
 
     @Test
-    void attachments_accountIsNeitherParticipantNorManagerAndIsRefused() throws Exception {
-        assertAttachmentsForbidden(accountActor);
+    void attachments_accountReadsTheDocumentsItMustConfirmMoneyAgainst() throws Exception {
+        assertThatCode(() -> ticketService.get(ticketId, accountActor)).doesNotThrowAnyException();
+        assertAttachmentsOk(accountActor);
     }
 
     @Test
@@ -498,17 +530,16 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     /**
-     * Pins the known wider path (owner-confirmed, tracked separately, NOT fixed here): hr cannot
-     * read a ticket, its pricing, its quotations, its ledger, its deposit notices, or its
-     * activity feed anywhere else in this matrix — but IS in AttachmentController.MANAGER_ROLES,
-     * so hr CAN list/read/upload/delete this ticket's attachments. If this test ever goes red
-     * because someone "fixed" MANAGER_ROLES, that is an intentional authz change requiring its
-     * own review, not a regression to silently patch around.
+     * The wider path this matrix used to pin as a known divergence is CLOSED (issue #389). hr
+     * cannot read a ticket, its pricing, its quotations, its ledger, its deposit notices or its
+     * activity feed anywhere else in this matrix, and it can no longer read that ticket's
+     * documents either — the lone {@code MANAGER_ROLES} constant that granted it was the only
+     * sales access hr held anywhere in the system, and it was unintended.
      */
     @Test
-    void attachments_hrCanReadThemDespiteBeingUnableToReadTheTicketItself() throws Exception {
+    void attachments_hrCannotReadThemAnyMoreThanItCanReadTheTicketItself() throws Exception {
         assertForbidden(() -> ticketService.get(ticketId, hrActor));
-        assertAttachmentsOk(hrActor);
+        assertAttachmentsForbidden(hrActor);
     }
 
     @Test

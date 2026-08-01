@@ -48,8 +48,12 @@ public class TicketService {
     // sales_manager is read+comment-only oversight (a project-manager-style follow-up
     // role for the sales team) — it must NEVER be added to SALES_ROLES/IMPORT_ROLES/
     // CEO_ROLES/ACCOUNT_ROLES, only here.
-    private static final Set<String> VIEWER_ROLES =
-        Set.of("sales", "import", "ceo", "account", "sales_manager");
+    //
+    // #389: this is an ALIAS of TicketAccessPolicy.VIEWER_ROLES, not a second literal.
+    // AttachmentController used to carry its own hand-written copy of "who may reach a
+    // deal" and the two drifted (hr gained every deal's documents, account lost them);
+    // both now read the one constant, so that class of bug cannot recur silently.
+    private static final Set<String> VIEWER_ROLES = TicketAccessPolicy.VIEWER_ROLES;
     private static final Set<String> QUOTATION_ALLOWED_STATUSES =
         Set.of(TicketStatus.APPROVED, TicketStatus.QUOTATION_ISSUED);
     private static final Set<String> PROPOSE_ALLOWED_STATUSES =

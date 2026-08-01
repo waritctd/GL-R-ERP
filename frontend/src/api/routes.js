@@ -345,6 +345,24 @@ export const ROLE_PERMISSIONS = {
   // Money-receipt confirmations (รับยอดมัดจำ / รับชำระเต็มจำนวน) belong to
   // ฝ่ายบัญชี, with CEO as fallback. Mirrors TicketService.ACCOUNT_ROLES.
   canConfirmPayments: ['account', 'ceo'],
+  // Who may READ a deal's documents (the เอกสาร panel) without being one of its participants.
+  // Mirrors TicketAccessPolicy.canViewDocuments' role half — deliberately NARROWER than
+  // canViewTickets: `sales` and `import` reach a deal's documents only on deals they participate
+  // in. AttachType spans {PO, SIGNED_QUOTATION, INVOICE, OTHER} and the list endpoint applies no
+  // type filter, so a document read hands over the countersigned quotation and the ใบกำกับภาษี —
+  // the approved customer price, which salesViewScope already hides from import and which the
+  // backend refuses it on the quotation file, the payment ledger and deposit notices.
+  canViewTicketDocuments: ['ceo', 'account', 'sales_manager'],
+  // Who may ATTACH or REMOVE a deal's documents without being one of its participants
+  // (the deal's own rep or whoever picked it up keep the ability regardless of role).
+  // Mirrors TicketAccessPolicy.DOCUMENT_WRITER_ROLES — strictly narrower than reading a
+  // document, which now follows canViewTickets exactly (issue #389).
+  //
+  // account is deliberately absent even though it READS every deal document: the closing tax
+  // invoice has exactly one entry point (POST /api/commissions/from-deal), which dual-writes
+  // the INVOICE attachment AND the rep's commission. A second upload path would satisfy the
+  // close gate's invoiceOnFile check while the rep silently loses their commission.
+  canManageTicketDocuments: ['sales_manager', 'ceo'],
   canCreateTickets: ['sales'],
   canPickupTickets: ['import'],
   canProposePrices: ['import'],

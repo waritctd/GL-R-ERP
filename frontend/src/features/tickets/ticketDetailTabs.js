@@ -133,19 +133,25 @@ export const TICKET_DETAIL_TABS = [
     // Maps onto today's attachments section as-is (per this branch's brief:
     // "map onto what exists" — SALES_VIEW_SECTION_IDS has no `attachments`
     // id). This role-level predicate is deliberately coarse (same `() =>
-    // true` as ภาพรวม) because AttachmentController.requireTicketAccess is a
-    // genuinely DIFFERENT, wider, IDENTITY-based model (ticket participant —
-    // createdById/assignedToId — OR role in {hr, sales_manager, ceo}) than
-    // every other tab's role-only gate, and role+sections alone can't express
-    // it — it needs THIS ticket's createdById/assignedToId, not just the
-    // viewer's role. FIX 2 (Opus review): TicketDetailPage.jsx applies that
-    // real per-instance gate on top (`canViewDocumentsTab` — role===ceo||
-    // sales_manager||isOwner||user.id===summary.assignedToId), filtering the
-    // tab out of the rendered list and out of `visibleActiveTab` for anyone
-    // it excludes — so `account` (never a participant) and a non-assignee
-    // `import` no longer get a rendered tab, a swallowed 403, and a lying
-    // "ยังไม่มีไฟล์แนบ" empty state. See attachments_* in
-    // TicketIaAuthzMatrixIntegrationTest for the refusals this mirrors.
+    // true` as ภาพรวม) because the document gate is IDENTITY-aware in a way
+    // role+sections alone cannot express: a deal's participants (its
+    // createdById/assignedToId) reach its documents regardless of role, and
+    // that needs THIS ticket, not just the viewer's role. TicketDetailPage.jsx
+    // applies the real per-instance gate on top (`canViewDocumentsTab`),
+    // filtering the tab out of the rendered list and out of `visibleActiveTab`
+    // for anyone it excludes, so nobody gets a rendered tab, a swallowed 403
+    // and a lying "ยังไม่มีไฟล์แนบ" empty state.
+    //
+    // Issue #389: the ROLE half of that gate is now
+    // ROLE_PERMISSIONS.canViewTicketDocuments, mirroring
+    // TicketAccessPolicy.canViewDocuments. `account` DOES see this tab now —
+    // it is the role asked to confirm money against these very files — while
+    // a non-assignee `import` still does not, because AttachType spans
+    // SIGNED_QUOTATION/INVOICE and those carry the approved customer price
+    // salesViewScope already hides from import. Writing is narrower again;
+    // see ROLE_PERMISSIONS.canManageTicketDocuments. The refusals this mirrors
+    // are pinned by attachments_* in TicketIaAuthzMatrixIntegrationTest and by
+    // AttachmentTicketAccessIntegrationTest.
     isVisible: () => true,
   },
   {

@@ -1419,10 +1419,22 @@ function findTicketRaw(id) {
   return ticket;
 }
 
-// Mirrors AttachmentController.requireTicketAccess: ticket participant (creator or assignee) OR
-// MANAGER_ROLES {hr, sales_manager, ceo}. Note what is NOT here — `account` gets no grant, exactly
-// as in the Java gate. ฝ่ายบัญชี records the closing tax invoice through
-// CommissionService.createFromDeal, which dual-writes the INVOICE ticket attachment itself.
+// Mirrors AttachmentController + TicketAccessPolicy (ticket/TicketAccessPolicy.java). Issue #389
+// split one blanket MANAGER_ROLES {hr, sales_manager, ceo} — wrong in both directions — into two
+// questions:
+//
+//   READ  (canViewDocuments): participant (creator or assignee) OR a deal VIEWER_ROLE, with both
+//         `sales` and `import` scoped to deals they participate in. So `hr` — which reads no deal,
+//         quotation, ledger or activity feed anywhere — reads no deal document either, and
+//         `account`, the role that confirms money against these files, finally can. `import` stays
+//         out: AttachType spans SIGNED_QUOTATION/INVOICE, which carry the approved customer price
+//         that projectForRole/loadQuotationContext/listPayments/DepositNoticeService all withhold
+//         from it — reading the deal shell is deliberately not enough.
+//   WRITE (canManageDocuments): participant OR {sales_manager, ceo}. Deliberately NOT `account`:
+//         ฝ่ายบัญชี records the closing tax invoice through CommissionService.createFromDeal, which
+//         dual-writes the INVOICE ticket attachment AND the rep's commission in one transaction. A
+//         second account-writable upload path would satisfy the close gate's invoiceOnFile check
+//         while the rep silently loses their commission.
 //
 // This namespace had NO role gate at all until 2026-07-30 — `requireSession()` and nothing else —
 // which is why the same defect was misdiagnosed twice: `deposit-fulfilment-close.spec.js` drove
@@ -1430,13 +1442,20 @@ function findTicketRaw(id) {
 // issue-#199 shape CLAUDE.md names ("a mock more permissive than production is the dangerous
 // direction"). Keep this in step with the Java gate — and note authz here is still an approximation,
 // never the evidence for a permission claim.
-function requireAttachmentTicketAccess(ticketId) {
+// Note: NOT TicketAccessPolicy.VIEWER_ROLES — `import` is absent by design (see above), and
+// `sales` is filtered by the participant check rather than by membership.
+const ATTACHMENT_VIEWER_ROLES = ['ceo', 'account', 'sales_manager'];
+const ATTACHMENT_WRITER_ROLES = ['sales_manager', 'ceo'];
+
+function requireAttachmentTicketAccess(ticketId, { write = false } = {}) {
   const user = requireSession();
   const ticket = findTicketRaw(Number(ticketId));
   const isParticipant = ticket.createdById === user.id
     || (ticket.assignedToId != null && ticket.assignedToId === user.id);
-  const isManager = ['hr', 'sales_manager', 'ceo'].includes(user.role);
-  if (!isParticipant && !isManager) fail('Forbidden', 403);
+  const allowed = isParticipant || (write
+    ? ATTACHMENT_WRITER_ROLES.includes(user.role)
+    : ATTACHMENT_VIEWER_ROLES.includes(user.role));
+  if (!allowed) fail('Forbidden', 403);
   return { user, ticket };
 }
 
@@ -5424,7 +5443,7 @@ export const api = {
       return delay({ attachments: structuredClone(mockAttachments.filter((a) => a.ticketId === Number(ticketId))) });
     },
     async upload(ticketId, file, attachType) {
-      const { user } = requireAttachmentTicketAccess(ticketId);
+      const { user } = requireAttachmentTicketAccess(ticketId, { write: true });
       const attachment = {
         id: mockAttachSeq++, ticketId: Number(ticketId), quotationId: null,
         fileName: file?.name ?? 'file.pdf',
@@ -5442,10 +5461,10 @@ export const api = {
       const user = requireSession();
       const idx = mockAttachments.findIndex((a) => a.id === Number(id));
       if (idx < 0) fail('ไม่พบไฟล์', 404);
-      // Mirrors AttachmentController.requireAttachmentAccess: the uploader may always remove their
-      // own file; everyone else goes through the ticket gate.
+      // Mirrors AttachmentController.requireAttachmentWriteAccess: the uploader may always remove
+      // their own file; everyone else goes through the deal's WRITE gate.
       if (mockAttachments[idx].uploadedBy !== user.id) {
-        requireAttachmentTicketAccess(mockAttachments[idx].ticketId);
+        requireAttachmentTicketAccess(mockAttachments[idx].ticketId, { write: true });
       }
       mockAttachments.splice(idx, 1);
       return delay({ ok: true });

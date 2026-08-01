@@ -27,6 +27,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.ticket.TicketAccessPolicy;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketSummaryDto;
@@ -34,8 +35,6 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
 @RestController
 @RequestMapping("/api")
 public class AttachmentController {
-    private static final Set<String> MANAGER_ROLES = Set.of("hr", "sales_manager", "ceo");
-
     private final AttachmentRepository attachments;
     private final SessionContext sessions;
     private final TicketRepository tickets;
@@ -55,7 +54,7 @@ public class AttachmentController {
     @GetMapping("/tickets/{ticketId}/attachments")
     Map<String, List<AttachmentDto>> list(@PathVariable long ticketId, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        requireTicketAccess(ticketId, user);
+        requireTicketReadAccess(ticketId, user);
         return Map.of("attachments", attachments.findByTicketId(ticketId));
     }
 
@@ -68,7 +67,7 @@ public class AttachmentController {
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        requireTicketAccess(ticketId, user);
+        requireTicketWriteAccess(ticketId, user);
         if (file.isEmpty()) throw new ApiException(HttpStatus.BAD_REQUEST, "ไฟล์ว่างเปล่า");
 
         FileStorageService.StoredFile storedFile = fileStorage.store("tickets", ticketId, file, Set.of());
@@ -82,7 +81,7 @@ public class AttachmentController {
         UserPrincipal user = sessions.requireUser(session);
         AttachmentDto dto = attachments.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์"));
-        requireAttachmentAccess(dto, user);
+        requireAttachmentReadAccess(dto, user);
         String filePath = attachments.findFilePathById(id);
         if (filePath == null) throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์บนเซิร์ฟเวอร์");
 
@@ -103,13 +102,13 @@ public class AttachmentController {
         UserPrincipal user = sessions.requireUser(session);
         AttachmentDto dto = attachments.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์"));
-        requireAttachmentAccess(dto, user);
+        requireAttachmentWriteAccess(dto, user);
         String filePath = attachments.findFilePathById(id);
         // F5 fix (2026-07-30): CommissionService#createFromDeal registers this SAME physical file
         // a second time, independently, as ข้อ 15 evidence (hr.file_attachment, referenced by
         // sales.invoice_details.invoice_attachment_id) — and the ticket's own creator is always
         // the deal's sales rep, i.e. the person the commission pays. Without this check, that rep
-        // could reach this endpoint (requireAttachmentAccess admits ticket participants) and
+        // could reach this endpoint (requireAttachmentWriteAccess admits ticket participants) and
         // delete both the row AND the file out from under an approved commission — invoice_
         // attachment_id would stay non-null (V102's CHECK sees no reason to object) while the
         // file it points at silently stops existing. Refuse outright rather than just skipping
@@ -127,22 +126,54 @@ public class AttachmentController {
         return Map.of("ok", true);
     }
 
-    private void requireTicketAccess(long ticketId, UserPrincipal actor) {
-        TicketDto ticket = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
-        TicketSummaryDto summary = ticket.summary();
-        boolean isParticipant = actor.id() == summary.createdById()
-            || (summary.assignedToId() != null && actor.id() == summary.assignedToId());
-        boolean isManager = MANAGER_ROLES.contains(actor.role());
-        if (!isParticipant && !isManager) {
+    /**
+     * Reading a deal's documents is the same access question as reading the deal
+     * ({@code TicketService#requireViewAccess}) — see {@link TicketAccessPolicy#canViewDocuments}.
+     *
+     * <p>#389: this used to be one blanket {@code MANAGER_ROLES = {hr, sales_manager, ceo}} set
+     * that answered BOTH read and write, and it was wrong in both directions — {@code hr} could
+     * download every customer contract, PO and tax invoice on every deal despite being refused the
+     * deal itself everywhere else, while {@code account} could not open the receipt it is required
+     * to confirm money against. Read and write are now two separate questions, both answered by
+     * {@link TicketAccessPolicy} rather than by a role list local to this controller.
+     */
+    private void requireTicketReadAccess(long ticketId, UserPrincipal actor) {
+        if (!TicketAccessPolicy.canViewDocuments(requireTicketSummary(ticketId), actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
         }
     }
 
-    private void requireAttachmentAccess(AttachmentDto dto, UserPrincipal actor) {
+    /**
+     * Attaching or removing a document is strictly narrower than reading one — notably {@code
+     * account} may read every deal's documents but may NOT upload here, because the tax invoice
+     * has exactly one entry point ({@code CommissionService#createFromDeal}) and a second one
+     * would satisfy the close gate's {@code invoiceOnFile} check without ever creating the rep's
+     * commission. See {@link TicketAccessPolicy#DOCUMENT_WRITER_ROLES}.
+     */
+    private void requireTicketWriteAccess(long ticketId, UserPrincipal actor) {
+        if (!TicketAccessPolicy.canManageDocuments(requireTicketSummary(ticketId), actor)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+        }
+    }
+
+    private TicketSummaryDto requireTicketSummary(long ticketId) {
+        TicketDto ticket = tickets.findById(ticketId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+        return ticket.summary();
+    }
+
+    /** The uploader may always reach their own file; everyone else goes through the deal gate. */
+    private void requireAttachmentReadAccess(AttachmentDto dto, UserPrincipal actor) {
         if (actor.id() == dto.uploadedBy()) {
             return;
         }
-        requireTicketAccess(dto.ticketId(), actor);
+        requireTicketReadAccess(dto.ticketId(), actor);
+    }
+
+    private void requireAttachmentWriteAccess(AttachmentDto dto, UserPrincipal actor) {
+        if (actor.id() == dto.uploadedBy()) {
+            return;
+        }
+        requireTicketWriteAccess(dto.ticketId(), actor);
     }
 }
