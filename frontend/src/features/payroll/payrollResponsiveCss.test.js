@@ -134,7 +134,7 @@ describe('payroll detail panel container-query grids (Defect 2 regression guard)
     // `@container` (Tailwind v4, no plugin) on the `<aside>` itself -- the two money-field grids
     // below key their column count off THIS element's width, not the viewport's, since the panel
     // is a sticky side column at >=1366px and a fixed-width overlay below that.
-    expect(payrollPageJsx).toMatch(/className=\{cn\(PANEL_CLASS, 'payroll-detail-panel', '@container'/);
+    expect(payrollPageJsx).toMatch(/className=\{cn\(\s*PANEL_CLASS,\s*'payroll-detail-panel',\s*'@container'/);
   });
 
   it('collapses both money-field grids to 1 column below the panel container-query floor', () => {
@@ -249,5 +249,49 @@ describe('InfoTip trigger hit-slop (Item 4c regression guard)', () => {
   it('grows the clickable area to >=44x44 via an invisible ::before, not a bigger visible circle', () => {
     // 16px visible + 14px inset on each side = 44px hit area.
     expect(stylesCss).toMatch(/\.info-tip-trigger::before\s*{[^}]*content:\s*'';[^}]*position:\s*absolute;[^}]*inset:\s*-14px;/);
+  });
+});
+
+// Phase B (2026-07-31): PRODUCT.md now says phone payroll is fully editable. jsdom cannot prove
+// phone layout or touch-target pixels, so this guards the Tailwind call-site utilities and the
+// source-level mobile Process contract directly.
+describe('payroll phone editability and touch targets (Phase B regression guard)', () => {
+  const rawPayrollPageJsx = fs.readFileSync(path.resolve(__dirname, './PayrollPage.jsx'), 'utf8');
+  const rawDataTableJsx = fs.readFileSync(path.resolve(__dirname, '../../components/common/DataTable.jsx'), 'utf8');
+  const payrollPageJsx = rawPayrollPageJsx.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  it('removes the payroll desktop-only notice instead of hiding it with dead CSS', () => {
+    expect(fs.existsSync(path.resolve(__dirname, '../../components/common/DesktopOnlyNotice.jsx'))).toBe(false);
+    expect(fs.existsSync(path.resolve(__dirname, '../../components/common/DesktopOnlyNotice.test.jsx'))).toBe(false);
+    expect(payrollPageJsx).not.toContain('DesktopOnlyNotice');
+  });
+
+  it('does not reintroduce the mobile-disabled Process button gate', () => {
+    expect(payrollPageJsx).not.toMatch(/disabled=\{[^}]*isMobile/);
+    expect(payrollPageJsx).toContain("const MOBILE_PROCESS_CONFIRM_PHRASE = 'ประมวลผล';");
+    expect(payrollPageJsx).toContain('requireReason={requiresMobileProcessPhrase}');
+    expect(payrollPageJsx).toContain('validateReason={(value) => value === MOBILE_PROCESS_CONFIRM_PHRASE}');
+  });
+
+  it('raises phone touch targets with Tailwind utilities at the call sites', () => {
+    expect(payrollPageJsx).toContain('className="mobile:min-h-[44px]"');
+    expect(payrollPageJsx).toContain('className="w-[9.5rem] mobile:min-h-[44px]"');
+    expect(rawDataTableJsx).toContain('className="mobile:min-h-[44px]"');
+    expect(payrollPageJsx).toContain('mobile:[&_input:not([type=checkbox])]:min-h-[44px]');
+    expect(payrollPageJsx).toContain('mobile:[&_select]:min-h-[44px]');
+  });
+
+  it('turns the phone detail panel into a full-screen flow with a sticky header', () => {
+    expect(payrollPageJsx).toContain('mobile:inset-0 mobile:max-h-[100dvh] mobile:w-full mobile:rounded-none mobile:border-0 mobile:p-4 mobile:pt-0');
+    expect(payrollPageJsx).toContain('mobile:sticky mobile:top-0 mobile:z-10 mobile:-mx-4 mobile:mb-4 mobile:border-b');
+  });
+
+  it('makes the mobile row hierarchy Thai-first and folds duplicate/zero money rows', () => {
+    expect(payrollPageJsx).toContain("header: 'ล่วงเวลา/คอมมิชชัน'");
+    expect(payrollPageJsx).not.toContain("header: 'OT / Commission'");
+    expect(payrollPageJsx).toContain('PayrollMobileZeroDisclosure');
+    expect(payrollPageJsx).toContain("header: 'สุทธิ'");
+    expect(payrollPageJsx).toContain('hideOnMobile: true');
+    expect(payrollPageJsx).toContain('mobile:[&::before]:hidden');
   });
 });
