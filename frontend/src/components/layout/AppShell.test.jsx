@@ -78,7 +78,7 @@ describe('AppShell navigation (drawer content, no persistent tablet rail)', () =
 
     const dealsLink = await screen.findByRole('link', { name: 'รายการดีล (Deal pipeline)' });
     expect(dealsLink.getAttribute('title')).toBe('รายการดีล (Deal pipeline)');
-    expect(screen.getByRole('button', { name: 'GL&R ERP home' }).getAttribute('title')).toBe('GL&R ERP home');
+    expect(screen.getByRole('link', { name: 'GL&R ERP home' }).getAttribute('title')).toBe('GL&R ERP home');
     expect(screen.getByText('GL&R ERP')).toBeTruthy();
   });
 
@@ -136,6 +136,35 @@ describe('AppShell navigation (drawer content, no persistent tablet rail)', () =
     fireEvent.click(screen.getByRole('button', { name: 'ปิดเมนู' }));
 
     await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it('keeps notification and profile popovers mutually exclusive in the topbar', async () => {
+    renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
+
+    const notificationTrigger = await screen.findByRole('button', { name: /การแจ้งเตือน/ });
+    const userTrigger = screen.getByRole('button', { name: 'เมนูผู้ใช้' });
+
+    fireEvent.click(notificationTrigger);
+    expect(await screen.findByRole('dialog', { name: 'การแจ้งเตือน' })).toBeTruthy();
+
+    fireEvent.click(userTrigger);
+    expect(await screen.findByRole('menu', { name: 'เมนูผู้ใช้' })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'การแจ้งเตือน' })).toBeNull());
+
+    fireEvent.click(notificationTrigger);
+    expect(await screen.findByRole('dialog', { name: 'การแจ้งเตือน' })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('menu', { name: 'เมนูผู้ใช้' })).toBeNull());
+  });
+
+  it('gives the profile menu the same mobile viewport-safe positioning contract as header overlays', async () => {
+    renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'เมนูผู้ใช้' }));
+    const menu = await screen.findByRole('menu', { name: 'เมนูผู้ใช้' });
+
+    expect(menu.className).toContain('max-[720px]:fixed');
+    expect(menu.className).toContain('max-[720px]:left-4');
+    expect(menu.className).toContain('max-[720px]:right-4');
   });
 
 });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -28,14 +28,30 @@ function timeAgo(iso) {
   return `${Math.floor(diff / 86400)} วันที่แล้ว`;
 }
 
-export function NotificationBell({ onNavigate }) {
+export function NotificationBell({
+  onNavigate,
+  open: controlledOpen,
+  onOpenChange,
+}) {
   const queryClient = useQueryClient();
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const ref = useRef(null);
   const triggerRef = useRef(null);
   const panelRef = useRef(null);
   const itemRefs = useRef([]);
   const panelId = 'notification-panel';
+  const open = controlledOpen ?? uncontrolledOpen;
+
+  const setOpen = useCallback((nextOpen) => {
+    const resolvedOpen = typeof nextOpen === 'function' ? nextOpen(open) : nextOpen;
+    if (controlledOpen === undefined) setUncontrolledOpen(resolvedOpen);
+    onOpenChange?.(resolvedOpen);
+  }, [controlledOpen, onOpenChange, open]);
+
+  const closeAndRestore = useCallback(() => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }, [setOpen]);
 
   // Polling moves from a manual setInterval to refetchInterval — same 30s
   // cadence, but the cache now lives at queryKeys.notifications() so any
@@ -62,11 +78,6 @@ export function NotificationBell({ onNavigate }) {
       closeAndRestore();
     },
   });
-
-  function closeAndRestore() {
-    setOpen(false);
-    triggerRef.current?.focus();
-  }
 
   useEffect(() => {
     if (!open) return;
@@ -112,7 +123,7 @@ export function NotificationBell({ onNavigate }) {
       document.removeEventListener('mousedown', handlePointer);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [open]);
+  }, [closeAndRestore, open, setOpen]);
 
   function handleClick(item) {
     if (!item.read) {
@@ -143,7 +154,7 @@ export function NotificationBell({ onNavigate }) {
         title="การแจ้งเตือน"
         aria-label={triggerLabel}
         aria-haspopup="dialog"
-        aria-controls={panelId}
+        aria-controls={open ? panelId : undefined}
         aria-expanded={open}
       >
         <Icon name="bell" />
@@ -160,7 +171,7 @@ export function NotificationBell({ onNavigate }) {
           ref={panelRef}
           role="dialog"
           aria-label="การแจ้งเตือน"
-          className="absolute top-[calc(100%+8px)] right-0 z-[200] w-[min(340px,calc(100vw-32px))] max-w-[calc(100vw-32px)] overflow-hidden rounded-md border border-border-subtle bg-surface shadow-[0_8px_24px_rgba(0,0,0,0.12)] max-[720px]:fixed max-[720px]:top-[74px] max-[720px]:right-4 max-[720px]:left-4 max-[720px]:w-auto max-[720px]:max-w-none"
+          className="absolute top-[calc(100%+12px)] right-0 z-[200] w-[min(340px,calc(100vw-32px))] max-w-[calc(100vw-32px)] overflow-hidden rounded-md border border-border-subtle bg-surface shadow-[0_8px_24px_rgba(0,0,0,0.12)] max-[720px]:fixed max-[720px]:top-[74px] max-[720px]:right-4 max-[720px]:left-4 max-[720px]:w-auto max-[720px]:max-w-none"
           tabIndex={-1}
         >
           <div className="flex items-center justify-between py-3 px-4 border-b border-border">
