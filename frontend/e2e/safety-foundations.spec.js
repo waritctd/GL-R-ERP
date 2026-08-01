@@ -72,9 +72,9 @@ test.describe('Batch 1 safety foundations', () => {
 
       await spaGoto(page, '/pricing-requests/not-a-number');
 
-      await expect(page.getByText('ไม่พบใบขอราคานี้')).toBeVisible();
+      await expect(page.getByText('ไม่พบคำขอราคานี้')).toBeVisible();
       await expect(page.getByRole('button', { name: 'กลับ' })).toBeVisible();
-      await expect(page.getByRole('button', { name: 'กลับไปที่คิวใบขอราคา' })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'กลับไปที่คิวคำขอราคา' })).toHaveCount(0);
       await expectNoHorizontalPageOverflow(page);
     });
   }

@@ -105,8 +105,8 @@ test('sales -> import -> ceo -> sales walks a PCR from draft to quotation-accept
   const ticketPath = new URL(page.url()).pathname;
 
   // ── sales: create + submit the pricing request straight to Import ──
-  await page.getByRole('button', { name: 'สร้างใบขอราคา' }).click();
-  const pcrModal = page.getByRole('dialog', { name: 'สร้างใบขอราคา' });
+  await page.getByRole('button', { name: 'สร้างคำขอราคา' }).click();
+  const pcrModal = page.getByRole('dialog', { name: 'สร้างคำขอราคา' });
   await expect(pcrModal).toBeVisible();
   await pcrModal.getByPlaceholder('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ').fill('คุณทดสอบ ผู้รับ');
   // Pick a real catalog product (see the file-header note): submit() 422s

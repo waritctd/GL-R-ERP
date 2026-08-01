@@ -94,8 +94,8 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   // entry point (see the createFromDeal step near the end of this test).
   const ticketId = ticketPath.split('/').pop();
 
-  await page.getByRole('button', { name: 'สร้างใบขอราคา' }).click();
-  const pcrModal = page.getByRole('dialog', { name: 'สร้างใบขอราคา' });
+  await page.getByRole('button', { name: 'สร้างคำขอราคา' }).click();
+  const pcrModal = page.getByRole('dialog', { name: 'สร้างคำขอราคา' });
   await expect(pcrModal).toBeVisible();
   await pcrModal.getByPlaceholder('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ').fill('คุณทดสอบ ผู้รับ');
   // Same catalog pick as pcr-chain.spec.js (REFIN / "Corner", priceId 5,
