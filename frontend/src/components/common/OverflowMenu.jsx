@@ -29,6 +29,7 @@ export function OverflowMenu({
   items,
   label = 'การดำเนินการเพิ่มเติม',
   align = 'end',
+  mobilePlacement = 'down',
   triggerLabel,
   triggerIcon = 'moreHorizontal',
   triggerClassName,
@@ -116,6 +117,10 @@ export function OverflowMenu({
           role="menu"
           aria-label={label}
           className={`absolute top-full z-20 mt-1 min-w-[12rem] rounded-lg border border-border bg-surface py-1 shadow-lg ${
+            mobilePlacement === 'up'
+              ? 'mobile:top-auto mobile:bottom-full mobile:mt-0 mobile:mb-1 mobile:max-h-[calc(100dvh-7rem)] mobile:overflow-y-auto'
+              : ''
+          } ${
             align === 'end' ? 'right-0' : 'left-0'
           }`}
         >
@@ -135,7 +140,7 @@ export function OverflowMenu({
               data-testid={item.testId}
               aria-disabled={item.disabled || undefined}
               title={item.disabled ? item.disabledReason : undefined}
-              className={`flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm font-bold focus-visible:outline-none ${
+              className={`flex w-full flex-col items-start justify-center gap-0.5 px-3 py-2 text-left text-sm font-bold mobile:min-h-[44px] mobile:px-4 mobile:py-3 focus-visible:outline-none ${
                 item.disabled
                   ? 'cursor-not-allowed opacity-60'
                   : 'hover:bg-surface-hover focus-visible:bg-surface-hover'

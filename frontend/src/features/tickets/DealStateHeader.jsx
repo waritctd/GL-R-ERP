@@ -82,7 +82,7 @@ export function DealStateHeader({
   const actionControls = (
     <div className="flex shrink-0 items-center gap-2">
       {primaryAction ? <div className="shrink-0">{primaryAction}</div> : null}
-      <OverflowMenu items={overflowItems} />
+      <OverflowMenu items={overflowItems} mobilePlacement="up" />
     </div>
   );
 
@@ -127,13 +127,14 @@ export function DealStateHeader({
           {summary.projectName ? (
             <p className="mt-0.5 truncate text-sm text-text-muted">{summary.projectName}</p>
           ) : null}
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-text-muted sm:gap-4 mobile:hidden">
-            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-            {summary.hasEdits ? <StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge> : null}
-            <span>สร้างโดย <strong className="text-text-secondary">{summary.createdByName || '-'}</strong> · {formatThaiDate(summary.createdAt)}</span>
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-text-muted sm:gap-4">
+            <span className="mobile:hidden"><StatusBadge tone={status.tone}>{status.label}</StatusBadge></span>
+            {summary.hasEdits ? <span className="mobile:hidden"><StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge></span> : null}
+            <span className="mobile:hidden">สร้างโดย <strong className="text-text-secondary">{summary.createdByName || '-'}</strong> · {formatThaiDate(summary.createdAt)}</span>
             {summary.assignedToName ? (
-              <span>เจ้าหน้าที่นำเข้าที่ดูแล <strong className="text-text-secondary">{summary.assignedToName}</strong></span>
+              <span className="mobile:hidden">เจ้าหน้าที่นำเข้าที่ดูแล <strong className="text-text-secondary">{summary.assignedToName}</strong></span>
             ) : null}
+            <span>อัปเดตล่าสุด <strong className="text-text-secondary">{formatThaiDate(summary.updatedAt)}</strong></span>
           </div>
         </div>
         {onRefresh ? (
