@@ -1,9 +1,58 @@
 import React from 'react';
-import { render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
-import { PunchDetail, punchRole } from './AttendancePage.jsx';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { AttendancePage, PunchDetail, punchRole } from './AttendancePage.jsx';
+import { api } from '../../api/index.js';
+import { useToast } from '../../hooks/useToast.js';
+import { Toast } from '../../components/common/Toast.jsx';
 
 globalThis.React = React;
+
+vi.mock('../../api/index.js', () => ({
+  api: {
+    attendance: {
+      daily: vi.fn(),
+      employees: vi.fn(),
+      devices: vi.fn(),
+      unmapped: vi.fn(),
+      list: vi.fn(),
+      importDat: vi.fn(),
+      recalculate: vi.fn(),
+      markPresent: vi.fn(),
+    },
+  },
+}));
+
+const hrUser = { role: 'hr', employeeId: 1 };
+
+function renderWithClient(ui) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
+
+// Mirrors App.jsx's real wiring (App.jsx:99): useToast() hands back a `showToast` function that is
+// re-created (a new identity) on every render of whatever owns it -- unlike a test's `vi.fn()`,
+// which never changes identity and so cannot reproduce the infinite-render-loop hazard this
+// harness exists to catch (issue #422 adversarial review, BLOCKING 1). `onShowToast` is called
+// once per actual invocation, independent of the (unstable) function identity itself, so a test
+// can count how many times the real callback fired without that count being confused by identity
+// changes.
+function AppShapedHarness({ children, onShowToast }) {
+  const { toast, showToast, dismissToast } = useToast();
+  function wrappedShowToast(kind, message) {
+    onShowToast?.(kind, message);
+    showToast(kind, message);
+  }
+  return (
+    <>
+      {children(wrappedShowToast)}
+      <Toast toast={toast} onDismiss={dismissToast} />
+    </>
+  );
+}
 
 describe('punchRole', () => {
   it('labels the first scan as clock-in (เข้า) and the last as clock-out (ออก)', () => {
@@ -44,5 +93,96 @@ describe('PunchDetail — first punch is clock-in, last is clock-out', () => {
     // Mid-day scans are neither clock-in nor clock-out.
     expect(within(rows[1]).getByText('ระหว่างวัน')).toBeTruthy();
     expect(within(rows[2]).getByText('ระหว่างวัน')).toBeTruthy();
+  });
+});
+
+// Issue #422 BLOCKING 4 (adversarial review): the whole B2 slice (useQuery, the four refetch()
+// conversions, the scoped key, the relocated setExpandedKey(null) effect) previously shipped with
+// NO rendering test at all -- this file only ever exercised the pure PunchDetail/punchRole
+// helpers above. That gap is exactly how BLOCKING 1's infinite-loop regression in this same file
+// went undetected.
+describe('AttendancePage rendering (issue #422 B2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.attendance.daily.mockResolvedValue({ days: [] });
+    api.attendance.employees.mockResolvedValue({ employees: [] });
+    api.attendance.devices.mockResolvedValue({ devices: [] });
+    api.attendance.unmapped.mockResolvedValue({ badges: [] });
+  });
+
+  it('loads and renders the daily attendance table on mount', async () => {
+    api.attendance.daily.mockResolvedValue({
+      days: [{
+        employee_id: 1,
+        work_date: '2026-08-01',
+        employee_name: 'พนักงาน ทดสอบ',
+        employee_code: 'GLR-001',
+        check_in: '2026-08-01T08:00:00+07:00',
+        check_out: '2026-08-01T17:00:00+07:00',
+        total_minutes: 480,
+        status: 'ON_TIME',
+        punch_count: 2,
+      }],
+    });
+
+    renderWithClient(<AttendancePage user={hrUser} showToast={vi.fn()} />);
+
+    await screen.findByText('พนักงาน ทดสอบ');
+    expect(api.attendance.daily).toHaveBeenCalledTimes(1);
+  });
+
+  it('the รีเฟรช button refetches the daily attendance query', async () => {
+    renderWithClient(<AttendancePage user={hrUser} showToast={vi.fn()} />);
+
+    const refreshButton = await screen.findByRole('button', { name: /รีเฟรช/ });
+    // Wait for the FIRST fetch to actually resolve (the button is disabled while `isLoading`,
+    // issue #422 P2 fix) before clicking, or the click is a no-op on a disabled button.
+    await waitFor(() => expect(refreshButton.disabled).toBe(false));
+    await waitFor(() => expect(api.attendance.daily).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(refreshButton);
+
+    await waitFor(() => expect(api.attendance.daily).toHaveBeenCalledTimes(2));
+  });
+
+  // BLOCKING 1 (P0, adversarial review): a query-error toast effect that puts an unstable
+  // `showToast` in its dependency array re-fires every time `showToast` is called -- calling it
+  // re-renders whatever owns the toast state, which hands back a NEW `showToast` identity, which
+  // re-fires the effect for as long as the query's error stays non-null. Every other test in this
+  // file (and the one this replaces before the fix) missed this because `vi.fn()` never changes
+  // identity; `AppShapedHarness` above reproduces App.jsx's actual (unstable) wiring.
+  //
+  // Counting actual `showToast` invocations (via `onShowToast`) rather than asserting "render()
+  // doesn't throw or hang": empirically, the pre-fix code neither throws nor settles cleanly here
+  // -- React/RTL's `act` keeps flushing the cascade for as long as anything gives it more real
+  // wall-clock time (confirmed: adding an extra `await new Promise(setTimeout, 50)` after the
+  // initial render made this exact test HANG rather than fail, which is worse for CI than a red
+  // test). `onShowToast` throwing once it is called more than once is the trip wire: it aborts
+  // the cascade deterministically and quickly (within the SAME flush `findByRole` below already
+  // triggers -- instrumenting the pre-fix effect directly showed 19 calls within that single
+  // wait, no extra delay needed) instead of letting it run long enough to hang the test process.
+  it('does not call showToast more than once when api.attendance.daily fails, driven by an App-shaped (unstable) showToast', async () => {
+    api.attendance.daily.mockRejectedValue(new Error('เครือข่ายขัดข้อง'));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const showToastCalls = [];
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AppShapedHarness
+          onShowToast={(kind, message) => {
+            showToastCalls.push({ kind, message });
+            if (showToastCalls.length > 1) {
+              throw new Error(`showToast called ${showToastCalls.length} times -- infinite render loop`);
+            }
+          }}
+        >
+          {(showToast) => <AttendancePage user={hrUser} showToast={showToast} />}
+        </AppShapedHarness>
+      </QueryClientProvider>,
+    );
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('เครือข่ายขัดข้อง');
+    expect(showToastCalls).toHaveLength(1);
   });
 });

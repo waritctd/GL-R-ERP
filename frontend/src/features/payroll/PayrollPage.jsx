@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
 import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
@@ -600,6 +602,29 @@ function hasPayrollInput(input) {
   return payrollInputKeys.some((key) => parsePayrollNumber(input[key]) > 0);
 }
 
+// A5 fix (issue #422): the two raw `<input type="number">` fields on this page (unpaidLeaveDays,
+// daysWorked) have no equivalent of MoneyInput's own onChange clamp, so a typed "-5" reached
+// updateAdjustment verbatim -- @PositiveOrZero on PayrollEmployeeInputRequest then 400s the
+// ENTIRE draft/preview/process PUT with no client-side signal at all (every OTHER employee's
+// legitimate edits silently rejected along with it). Mirrors MoneyInput's own clamp exactly.
+function clampNonNegative(value) {
+  if (value !== '' && Number(value) < 0) return '0';
+  return value;
+}
+
+// A5 belt-and-braces (issue #422): MoneyInput and clampNonNegative above already stop a negative
+// from being TYPED into any field on this page, but saveDraft() below scans the built payload one
+// more time before sending it -- a defensive backstop against a future field that forgets the
+// clamp, not a redundant check. Returns the first offending {employeeId, key} pair, or null.
+function findNegativeAdjustmentField(inputs) {
+  for (const input of inputs) {
+    for (const key of payrollInputKeys) {
+      if (Number(input[key]) < 0) return { employeeId: input.employeeId, key };
+    }
+  }
+  return null;
+}
+
 function ReconciliationNote({ item }) {
   if (!item?.column?.heroLabel) return null;
   if (item.matchesHero) {
@@ -724,7 +749,6 @@ export function PayrollPage({ user, showToast }) {
   const isDesktopPanel = useMediaQuery('(min-width: 1366px)');
   const isOverlayPanel = !isDesktopPanel;
   const detailPanelRef = useRef(null);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [confirmProcess, setConfirmProcess] = useState(false);
   // Leave -> payroll unpaid-day deduction (2026-07-23): the raw suggestions response, kept only so
@@ -739,6 +763,7 @@ export function PayrollPage({ user, showToast }) {
   const adjustmentsRef = useRef({});
   const draftDirtyRef = useRef(false);
   const draftVersionRef = useRef(0);
+  const queryClient = useQueryClient();
 
   const selectedLine = useMemo(
     () => (period?.lines || []).find((line) => Number(line.employeeId) === Number(selectedEmployeeId)) || period?.lines?.[0] || null,
@@ -769,16 +794,52 @@ export function PayrollPage({ user, showToast }) {
   // "enables Process Payroll for a fresh (never-processed) period ... id === null" test, which pins
   // this down as the regression guard against "simplifying" it back to `!period?.id`.
   const emptyPeriod = !period || !(period.lineCount > 0);
-  // Payroll input draft (2026-07-30): a draft is only ever consulted on load() for a brand-new,
-  // never-touched run (same condition as the suggested-inputs/draft fetch in load() above) -- once
-  // a period is PROCESSED, or VOID with real pre-loaded lines (like July's), the line's own value
-  // is already the source of truth and always wins regardless, so saving a draft here would do
-  // nothing useful. Hidden rather than shown-but-inert, so HR is not misled into thinking a save
-  // did something for an already-touched period.
+  // Payroll input draft (2026-07-30; WIDENED 2026-08-02, issue #422 A1): this used to require
+  // `period?.status === 'PREVIEW' && !period?.id` -- a brand-new, never-touched run only -- on
+  // the theory that a draft would be "useless" once a period was PROCESSED or
+  // VOID-with-real-lines, because the line's own persisted value always wins in
+  // adjustmentFromLine regardless. That reasoning holds for RESTORE, but not for
+  // EDIT-IN-PROGRESS: every field on those periods stays fully editable (gated only on
+  // !canManage below), so the old gate just let HR type into a form that silently kept nothing
+  // -- no badge, no toast, no save (issue #422 §A1: "I saved a draft and it was gone", reported
+  // from a PROCESSED month and from a VOID month with pre-loaded real inputs alike).
+  //
+  // Widening this to "any loaded period, any status" is safe by construction, not just
+  // convenient: draftValue()'s own `> 0` precedence (see its comment above) means a committed
+  // non-zero figure already on the line ALWAYS beats whatever a draft restore would supply -- a
+  // draft can only ever fill in a field that is genuinely blank/zero on the real line. One
+  // residual gap is pre-existing and intentionally NOT fixed here (it would change restore
+  // precedence for already-committed payroll): HR clearing a non-zero COMMITTED field down to 0
+  // still sees the committed value reappear on reload, because draftValue can't distinguish
+  // "never touched" from "deliberately zeroed" once a real persisted value exists.
+  //
   // CEO can never save a draft (PUT /input-draft is hasRole('HR') only) -- folded into the same
-  // condition as the pre-existing period-state gate so the autosave status badge and the blur
-  // autosave below both stay off for a read-only session, not just visually hidden.
-  const canSaveDraft = canManage && period?.status === 'PREVIEW' && !period?.id;
+  // condition as the period-existence check so the autosave status badge and the blur autosave
+  // below both stay off for a read-only session, not just visually hidden.
+  const canSaveDraft = canManage && Boolean(period);
+  // "Latest" mirror of canSaveDraft for code that runs OUTSIDE this render's own closure -- the
+  // month-change effect's cleanup (A4 below) and the beforeunload listener. Both are set up once
+  // per effect instance and, without this, would keep reading whatever canSaveDraft/period were
+  // AT THE TIME that effect instance was created (e.g. right when `month` changed, before `load`
+  // even resolved), not the current render's values -- a stale closure, not a "wrong month" bug,
+  // but just as silent. Updated in a post-render effect (not during render itself -- React's own
+  // lint rules forbid mutating a ref while rendering), which still runs well before either
+  // consumer below can possibly fire.
+  const canSaveDraftRef = useRef(canSaveDraft);
+  useEffect(() => {
+    canSaveDraftRef.current = canSaveDraft;
+  });
+  // P2 fix (issue #422, adversarial review, round 2): a monotonically incremented VISIT token,
+  // not a "latest month VALUE" mirror -- bumped directly in the month-change effect's own body
+  // below (never in a separate no-deps passive effect: a promise settling in the microtask right
+  // after `setMonth` commits, but before a SEPARATE effect gets its turn in the passive-effect
+  // flush, would still see the stale value and slip through). A value mirror is not enough on its
+  // own either way: July -> June -> July makes `month === monthAtStart` true again by
+  // coincidence, so a save from the FIRST (abandoned) July visit would pass a value-based guard
+  // as if it belonged to the second. Each visit -- including a round trip back to a month HR
+  // already left -- gets its own token value, so `saveDraft()`'s resolution can tell "this exact
+  // visit" from "a same-named but different visit" instead of merely "this month name".
+  const monthVisitTokenRef = useRef(0);
   const processBlockedReason = emptyPeriod
     ? 'ยังไม่มีพนักงานในรอบเงินเดือนนี้ — กดคำนวณตัวอย่างหรือเลือกรอบเดือนที่มีข้อมูลก่อนประมวลผล'
     : null;
@@ -799,19 +860,28 @@ export function PayrollPage({ user, showToast }) {
   // steal Tab or respond to Escape, since the rest of the page beside it is not actually hidden.
   useDialogFocus({ active: isOverlayPanel && detailOpen, containerRef: detailPanelRef, onClose: closeDetailPanel });
 
-  async function load() {
-    setLoading(true);
-    try {
+  // Issue #422 B1: PayrollPage onto react-query, so it participates in the shared cache (an
+  // approval elsewhere can now invalidate it -- see B5's `['payroll']` prefix calls in
+  // CommissionPage/OvertimePanel/LeavePage) and gets a 60s poll + window-focus refetch instead of
+  // being a dead end that only ever refreshed on month change or an explicit action. A combined
+  // queryFn (period + suggestions + draft in one) rather than three separate queries: it keeps
+  // the exact sequencing/resilience the old imperative load() had (a failing suggestion or draft
+  // fetch must never block the period from loading -- each keeps its own try/catch) and gives one
+  // single query-cache entry to invalidate from elsewhere.
+  const payrollQuery = useQuery({
+    queryKey: queryKeys.payrollCurrent(month),
+    queryFn: async () => {
       const response = await api.payroll.current({ payrollMonth: month });
       const nextPeriod = response.period;
-      // Special-pay carry-forward, and payroll input draft (2026-07-30): only fetch/apply either
-      // when starting a fresh run for this month (PREVIEW with no processed/void period yet) — an
-      // already-touched period (PROCESSED, or VOID like July's pre-loaded real inputs) already
-      // reflects real, submitted values in the line itself and must never be overwritten by a
-      // stale suggestion OR a stale draft. See adjustmentFromLine's precedence: the line's own
-      // value always wins first regardless.
+      // Special-pay carry-forward (2026-07-23): a SUGGESTION only makes sense for a genuinely
+      // fresh run (PREVIEW with no processed/void period yet) -- an already-touched period
+      // (PROCESSED, or VOID like July's pre-loaded real inputs) already reflects real, submitted
+      // values in the line itself, and adjustmentFromLine's own precedence means the line's value
+      // always wins regardless, so fetching a suggestion for it would be pure waste, not a
+      // correctness issue. (issue #422 A1 widened the DRAFT fetch below past this same gate --
+      // see canSaveDraft's own comment for why a draft, unlike a suggestion, is NOT safe to skip
+      // once a period is touched: the fields stay editable regardless of status.)
       let suggestionsByEmployee = {};
-      let draftByEmployee = {};
       if (nextPeriod?.status === 'PREVIEW' && !nextPeriod?.id) {
         try {
           // Optional chaining keeps this resilient if a caller's api.payroll mock predates this
@@ -822,28 +892,46 @@ export function PayrollPage({ user, showToast }) {
         } catch {
           suggestionsByEmployee = {};
         }
-        try {
-          // Same resilience as suggestedInputs above -- a draft is a convenience restore only and
-          // must never block payroll from loading.
-          const draftResponse = await api.payroll.getInputDraft?.({ payrollMonth: month });
-          draftByEmployee = indexSuggestionsByEmployee(draftResponse?.drafts);
-        } catch {
-          draftByEmployee = {};
-        }
       }
-      setSuggestionsByEmployee(suggestionsByEmployee);
-      draftDirtyRef.current = false;
-      setDraftDirty(false);
-      setDraftSaving(false);
-      setDraftSaveStatus('saved');
-      draftVersionRef.current = 0;
-      applyPeriod(nextPeriod, { applyUatDefaults: true, suggestionsByEmployee, draftByEmployee });
-    } catch (error) {
-      showToast('error', error.message || 'โหลดเงินเดือนไม่สำเร็จ');
-    } finally {
-      setLoading(false);
-    }
-  }
+      // Payroll input draft (2026-07-30; UNCONDITIONAL as of issue #422 A1): fetched on every
+      // load, not only a fresh PREVIEW run -- see canSaveDraft's own comment for the full
+      // reasoning. Same resilience as suggestedInputs above -- a draft is a convenience restore
+      // only and must never block payroll from loading.
+      let draftByEmployee = {};
+      try {
+        const draftResponse = await api.payroll.getInputDraft?.({ payrollMonth: month });
+        draftByEmployee = indexSuggestionsByEmployee(draftResponse?.drafts);
+      } catch {
+        draftByEmployee = {};
+      }
+      return { period: nextPeriod, suggestionsByEmployee, draftByEmployee };
+    },
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+  });
+  // `isLoading` (true only for the FIRST fetch of a given month, i.e. no cached data yet) drives
+  // every loading skeleton on this page -- unlike `isFetching`, it stays false during the silent
+  // 60s poll/focus refetch, so a background refresh never flashes the table/stat strip.
+  const loading = payrollQuery.isLoading;
+
+  // Adversarial-review fix (P0): `showToast` comes from useToast() (App.jsx) and is a PLAIN
+  // function re-created on every App render -- calling it does setToast(...), which re-renders
+  // App, which hands this component a new `showToast` identity, which (if `showToast` sat in this
+  // effect's deps, as it used to) re-fires the effect for as long as `payrollQuery.error` stays
+  // non-null: an infinite `Maximum update depth exceeded` loop that every test here missed only
+  // because every test passes a stable `vi.fn()` instead of an App-shaped one. Fixed two ways at
+  // once: a ref holds the LATEST showToast without being a dependency (mutated in its own
+  // no-deps effect, not during render -- see canSaveDraftRef's identical pattern above), and the
+  // effect keys on the error's MESSAGE (a primitive), not the Error object or the callback, so it
+  // only re-fires when the failure actually changes.
+  const showToastRef = useRef(showToast);
+  useEffect(() => {
+    showToastRef.current = showToast;
+  });
+  const payrollQueryErrorMessage = payrollQuery.error?.message;
+  useEffect(() => {
+    if (payrollQueryErrorMessage) showToastRef.current('error', payrollQueryErrorMessage || 'โหลดเงินเดือนไม่สำเร็จ');
+  }, [payrollQueryErrorMessage]);
 
   function applyPeriod(nextPeriod, { applyUatDefaults = false, suggestionsByEmployee = {}, draftByEmployee = {} } = {}) {
     setPeriod(nextPeriod);
@@ -861,24 +949,113 @@ export function PayrollPage({ user, showToast }) {
     setSelectedEmployeeId((current) => current || nextPeriod?.lines?.[0]?.employeeId || null);
   }
 
+  // Applies the query's data to local state whenever it changes -- the INITIAL load for a month
+  // AND every subsequent background refetch (60s poll / window focus) alike.
+  //
+  // Governing constraint (issue #422 B1, read this twice): a background refetch must NEVER
+  // clobber what HR is currently typing. period/suggestionsByEmployee (server-derived, read-only)
+  // always update; adjustments (the FORM values) are re-applied only when the form is clean
+  // (`!draftDirtyRef.current`) -- while dirty, only `period` is updated (so e.g. the stat strip
+  // and other-employees' figures stay live), and the typed values are left exactly as HR left
+  // them. The next successful autosave, an explicit บันทึกร่าง, or a month change is what
+  // eventually reconciles them with the server -- never a silent background overwrite
+  // mid-keystroke.
   useEffect(() => {
+    if (!payrollQuery.data) return;
+    const { period: nextPeriod, suggestionsByEmployee: nextSuggestions, draftByEmployee } = payrollQuery.data;
+    setSuggestionsByEmployee(nextSuggestions);
+    if (draftDirtyRef.current) {
+      setPeriod(nextPeriod);
+      return;
+    }
+    applyPeriod(nextPeriod, { applyUatDefaults: true, suggestionsByEmployee: nextSuggestions, draftByEmployee });
+    setDraftSaveStatus('saved');
+  }, [payrollQuery.data]);
+
+  // draftPayload() is declared here (above the month-change effect below, which references it)
+  // rather than down with payload() -- function declarations are hoisted either way, but this
+  // repo's lint config flags a hook body reading a value declared later in the same component as
+  // an ordering hazard, so the textual order is made to match the dependency.
+  function draftPayload() {
+    return {
+      payrollMonth: `${month}-01`,
+      inputs: Object.values(adjustmentsRef.current).map(normalizedAdjustment),
+    };
+  }
+
+  // A4 fix (issue #422): flush whatever HR had typed for the OUTGOING month before switching (or
+  // unmounting) -- this effect used to just call load() for the new month, which unconditionally
+  // reset draftDirtyRef.current with no attempt to save the previous month's in-progress edits
+  // first.
+  //
+  // Adversarial-review correction: an earlier version of this fix introduced a separate
+  // `flushDraftFor(monthValue)` helper here, on the theory that `draftPayload()` above "reads the
+  // current month from closure" and would read the INCOMING month by the time this cleanup runs.
+  // That theory was wrong and the reviewer proved it by mutation-testing: swapping
+  // `draftPayload()` back in here left every test green. `month` is a plain primitive captured by
+  // this render's closure -- both `draftPayload` and this effect (including the cleanup it
+  // returns) are (re)created together on every render that this component function runs, so they
+  // close over the SAME `month` binding. When `month` changes, React tears down the PREVIOUS
+  // effect instance (the one created during the render where `month` was still the outgoing
+  // value) before setting up the new one, so the cleanup below runs with `draftPayload`'s closure
+  // still pointing at the outgoing month -- exactly like `month` itself does. This is unlike
+  // canSaveDraftRef/draftDirtyRef just below, which genuinely DO need to be refs: those track
+  // values that can change (via other state updates) WITHOUT this effect re-running, since its
+  // dependency array is `[month]` alone -- a plain closure over `canSaveDraft`/`draftDirty` here
+  // would go stale the moment either changed without a month change, which is exactly the
+  // scenario this effect exists to handle correctly.
+  useEffect(() => {
+    // Bumped here, in this effect's own body -- see monthVisitTokenRef's own comment above for
+    // why this exact spot (not a separate passive effect, not during render).
+    monthVisitTokenRef.current += 1;
     setSelectedEmployeeId(null);
     setDetailOpen(false);
     setPayDate(`${month}-26`); // default salary pay date is the 26th of the selected month
-    load();
+    // A new month starts with a clean slate; any dirty tracking belongs to the OUTGOING month
+    // (flushed by this same effect's cleanup, below) and must not leak into the incoming one.
+    draftDirtyRef.current = false;
+    setDraftDirty(false);
+    setDraftSaving(false);
+    setDraftSaveStatus('saved');
+    draftVersionRef.current = 0;
+    return () => {
+      if (draftDirtyRef.current && canSaveDraftRef.current) {
+        // Fire-and-forget: switching months (or navigating away) must not block on this, and
+        // there is nowhere left to show a toast by the time it resolves/rejects. Errors are
+        // swallowed deliberately -- the beforeunload guard below is the backstop for the case
+        // that actually matters (closing the tab with unsaved work); a failed background flush on
+        // ordinary month navigation just means the next autosave-on-blur picks it up again.
+        void api.payroll.saveInputDraft(draftPayload()).catch(() => {});
+      }
+    };
+    // draftPayload is deliberately NOT a dependency: it is a new function every render (not
+    // memoized), so listing it would make this effect re-run -- and flush a save attempt -- on
+    // every keystroke rather than only on an actual month change. It closes over the correct
+    // (outgoing) month by construction; see draftPayload's own comment above for why that is
+    // safe here, unlike the refs this same effect reads for canSaveDraft/draftDirty.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [month]);
+
+  // A4 fix (issue #422): warn before an actual tab close/reload with unsaved draft edits --
+  // `grep -rn "beforeunload" frontend/src` was zero hits before this. No async save is attempted
+  // here (browsers do not reliably wait for one); this is purely the "are you sure" backstop for
+  // the case the month-change/unmount flush above cannot cover (the whole page going away, not a
+  // React-driven cleanup).
+  useEffect(() => {
+    function handleBeforeUnload(event) {
+      if (draftDirtyRef.current && canSaveDraftRef.current) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
 
   function payload() {
     return {
       payrollMonth: `${month}-01`,
       inputs: Object.values(adjustments).map(normalizedAdjustment).filter(hasPayrollInput),
-    };
-  }
-
-  function draftPayload() {
-    return {
-      payrollMonth: `${month}-01`,
-      inputs: Object.values(adjustmentsRef.current).map(normalizedAdjustment),
     };
   }
 
@@ -891,6 +1068,18 @@ export function PayrollPage({ user, showToast }) {
     try {
       const response = await api.payroll.preview(payload());
       applyPeriod(response.period);
+      // B1 fix (issue #422): seed the result straight into the query cache so the NEXT background
+      // poll (60s) diffs against this fresh value instead of the stale pre-preview one -- without
+      // this, the UI would flash back to the old figures for up to a minute before the poll caught
+      // up. suggestionsByEmployee/draftByEmployee are reset to {} to match applyPeriod's own
+      // defaults above (preview does not re-consult either) -- if the background "data arrived"
+      // effect re-runs off this seed, it recomputes the identical adjustments applyPeriod just
+      // set, so this is idempotent, not a second, possibly-different apply.
+      queryClient.setQueryData(queryKeys.payrollCurrent(month), {
+        period: response.period,
+        suggestionsByEmployee: {},
+        draftByEmployee: {},
+      });
       showToast('success', 'คำนวณตัวอย่างเงินเดือนแล้ว');
     } catch (error) {
       showToast('error', error.message || 'คำนวณเงินเดือนไม่สำเร็จ');
@@ -905,11 +1094,44 @@ export function PayrollPage({ user, showToast }) {
   // picked with no amount yet), not just what already qualifies for submission.
   async function saveDraft({ quiet = false } = {}) {
     if (!canSaveDraft) return;
+    // P2 fix (issue #422, adversarial review, round 2): captured so the resolution below can
+    // detect HR having since moved on from THIS EXACT visit to a month while this PUT was in
+    // flight -- see monthVisitTokenRef's own comment for why this is a token, not `month` itself
+    // (a value comparison alone is fooled by a round trip back to the same month).
+    const visitTokenAtStart = monthVisitTokenRef.current;
+    const draftPayloadValue = draftPayload();
+    // A5 belt-and-braces (issue #422): MoneyInput and clampNonNegative already stop a negative
+    // from being TYPED into any field on this page, but refuse to SEND one anyway -- a single
+    // negative used to 400 the ENTIRE draft PUT with no visible error (issue #422 §A2/A5), taking
+    // every OTHER employee's legitimate edits down with it. Naming exactly which employee/field is
+    // wrong and refusing client-side is safer than silently clamping here: clamping would change a
+    // number HR actually typed without them noticing.
+    const negativeField = findNegativeAdjustmentField(draftPayloadValue.inputs);
+    if (negativeField) {
+      setDraftSaveStatus('error');
+      showToast(
+        'error',
+        `บันทึกร่างไม่สำเร็จ — พบค่าติดลบในข้อมูลพนักงานรหัส ${negativeField.employeeId} กรุณาแก้ไขก่อนบันทึกอีกครั้ง`,
+      );
+      return;
+    }
     const versionAtStart = draftVersionRef.current;
     setDraftSaving(true);
     setDraftSaveStatus('saving');
     try {
-      await api.payroll.saveInputDraft(draftPayload());
+      await api.payroll.saveInputDraft(draftPayloadValue);
+      // P2 fix (issue #422, adversarial review; round 2 corrected the guard from a month-VALUE
+      // comparison to a visit-TOKEN comparison): if HR has since moved on from this exact visit
+      // (a genuine month change, OR a round trip back to the same month -- July -> June -> July
+      // bumps the token twice, so the second July visit's token differs from the first's even
+      // though the month VALUE is identical again), this resolution belongs to a visit that is no
+      // longer on screen. The badge/toast must not paint a save-state signal for the WRONG visit
+      // (e.g. the first July visit's late success/failure flipping a freshly reloaded second July
+      // visit's clean badge to "รอบันทึกอัตโนมัติ"/"บันทึกอัตโนมัติไม่สำเร็จ" for work that visit
+      // never touched). The A4 month-change flush already accounts for the outgoing visit's own
+      // final state when HR left it; this stale resolution has nothing further to contribute to
+      // what's on screen now, so it is a no-op here.
+      if (monthVisitTokenRef.current !== visitTokenAtStart) return;
       if (draftVersionRef.current === versionAtStart) {
         draftDirtyRef.current = false;
         setDraftDirty(false);
@@ -919,11 +1141,20 @@ export function PayrollPage({ user, showToast }) {
       }
       if (!quiet) showToast('success', 'บันทึกร่างข้อมูลเงินเดือนแล้ว');
     } catch (error) {
+      // Same cross-visit guard as the success path above.
+      if (monthVisitTokenRef.current !== visitTokenAtStart) return;
       setDraftSaveStatus('error');
-      if (!quiet) showToast('error', error.message || 'บันทึกร่างไม่สำเร็จ');
+      // A3 fix (issue #422): a failed autosave used to be swallowed entirely (`if (!quiet)` also
+      // guarded the ERROR toast, not just the success one) -- a 400/403/409 surfaced only as a
+      // small badge in the page header, easy to miss and, before A1, not even rendered at all on
+      // a PROCESSED/VOID period. Always visible now, quiet autosave or not.
+      showToast('error', error.message || 'บันทึกร่างไม่สำเร็จ');
     } finally {
       setDraftSaving(false);
-      if (draftDirtyRef.current && draftVersionRef.current !== versionAtStart && canSaveDraft) {
+      if (
+        monthVisitTokenRef.current === visitTokenAtStart
+        && draftDirtyRef.current && draftVersionRef.current !== versionAtStart && canSaveDraft
+      ) {
         void saveDraft({ quiet: true });
       }
     }
@@ -932,6 +1163,23 @@ export function PayrollPage({ user, showToast }) {
   function autosaveDraft() {
     if (!canSaveDraft || !draftDirtyRef.current || draftSaving) return;
     saveDraft({ quiet: true });
+  }
+
+  // Issue #422 owner decision (one button, not two): the existing preview command doubles as the
+  // draft-save trigger for HR instead of a second button -- PUT /input-draft, THEN POST /preview.
+  // CEO cannot write a draft (PUT /input-draft is hasRole('HR') only), so the CEO branch (see the
+  // button JSX below) calls `preview` directly instead of this, keeping the original คำนวณตัวอย่าง
+  // label so it never promises a save CEO cannot perform.
+  //
+  // saveDraft() above never throws -- it catches its own errors and always toasts them (A3) -- so
+  // awaiting it here and unconditionally continuing to `preview()` afterward satisfies the owner's
+  // third condition verbatim: "if the draft PUT fails, still surface the error and still run the
+  // preview (read-only, useful on its own) -- but the toast must say the draft did not save."
+  // saveDraft's own error toast already says exactly that; nothing extra is needed here.
+  async function saveDraftAndPreview() {
+    setSaving(true);
+    await saveDraft({ quiet: false });
+    await preview(); // preview() owns `saving` for the rest of this action, incl. the final reset.
   }
 
   function handleAdjustmentBlur(event) {
@@ -949,6 +1197,13 @@ export function PayrollPage({ user, showToast }) {
     try {
       const response = await api.payroll.process(payload());
       applyPeriod(response.period);
+      // B1 fix (issue #422): same cache-seed as preview() above, same reasoning -- keeps the next
+      // background poll from flashing back to the pre-process figures for up to a minute.
+      queryClient.setQueryData(queryKeys.payrollCurrent(month), {
+        period: response.period,
+        suggestionsByEmployee: {},
+        draftByEmployee: {},
+      });
       // The backend clears hr.payroll_input_draft for this month once processed (see
       // PayrollService#process) -- there is nothing left to save a draft over now.
       draftDirtyRef.current = false;
@@ -1206,16 +1461,24 @@ export function PayrollPage({ user, showToast }) {
           without keeping dead `.payroll-actions-*` legacy rules in styles.css. */}
       <FilterBar className="flex-col items-stretch gap-[14px]">
         <div className="flex flex-wrap items-center gap-3">
-          {/* Review — safe, read-only recompute. */}
+          {/* Review — safe, read-only recompute. Issue #422 owner decision (one button, not two):
+              for HR this doubles as the draft-save trigger (บันทึกร่าง; saveDraftAndPreview PUTs
+              the draft, THEN previews) instead of a second button. CEO cannot write a draft
+              (PUT /input-draft is hasRole('HR') only), so this branches on canManage rather than
+              canSaveDraft -- the label must never promise a save CEO cannot perform, even on a
+              render where canSaveDraft happens to be false for HR too (e.g. period not loaded
+              yet). */}
           <div className="flex flex-wrap items-center gap-2">
             <Button
               type="button"
-              onClick={preview}
+              onClick={canManage ? saveDraftAndPreview : preview}
               disabled={loading || saving}
-              title="คำนวณตัวอย่างจากข้อมูลล่าสุด โดยยังไม่ประมวลผลเงินเดือน"
+              title={canManage
+                ? 'บันทึกร่างข้อมูลเงินเดือนที่พิมพ์ไว้ แล้วคำนวณตัวอย่างจากข้อมูลล่าสุด'
+                : 'คำนวณตัวอย่างจากข้อมูลล่าสุด โดยยังไม่ประมวลผลเงินเดือน'}
             >
-              <Icon name="search" />
-              คำนวณตัวอย่าง
+              <Icon name={canManage ? 'save' : 'search'} />
+              {canManage ? 'บันทึกร่าง' : 'คำนวณตัวอย่าง'}
             </Button>
 
             {/* Phase A: the export format selector became four document menu actions, but the
@@ -1520,7 +1783,11 @@ export function PayrollPage({ user, showToast }) {
                         step="0.5"
                         placeholder="0"
                         value={selectedAdjustment.daysWorked}
-                        onChange={(event) => updateAdjustment('daysWorked', event.target.value)}
+                        // A5 fix (issue #422): this raw <input type="number"> has no equivalent of
+                        // MoneyInput's own negative clamp -- a typed "-5" reached updateAdjustment
+                        // verbatim and 400'd the whole draft/preview/process PUT with no visible
+                        // error.
+                        onChange={(event) => updateAdjustment('daysWorked', clampNonNegative(event.target.value))}
                         disabled={!canManage}
                       />
                     </label>
@@ -1665,7 +1932,9 @@ export function PayrollPage({ user, showToast }) {
                   <label htmlFor="payroll-unpaid-leave-days">
                     วันลาไม่รับค่าจ้าง
                     <InfoTip label="วันลาไม่รับค่าจ้าง" text="ตัวเลขนี้ถูกกรอกล่วงหน้าจากวันลาที่อนุมัติเกินโควตาในเดือนนี้ (ระบบวันลา) สามารถแก้ไขได้ก่อนคำนวณ/ประมวลผล" />
-                    <input id="payroll-unpaid-leave-days" type="number" min="0" step="0.25" placeholder="0" value={selectedAdjustment.unpaidLeaveDays} onChange={(event) => updateAdjustment('unpaidLeaveDays', event.target.value)} disabled={!canManage} />
+                    {/* A5 fix (issue #422): same clamp as daysWorked above -- this raw
+                        <input type="number"> has no equivalent of MoneyInput's own negative clamp. */}
+                    <input id="payroll-unpaid-leave-days" type="number" min="0" step="0.25" placeholder="0" value={selectedAdjustment.unpaidLeaveDays} onChange={(event) => updateAdjustment('unpaidLeaveDays', clampNonNegative(event.target.value))} disabled={!canManage} />
                     {Number(selectedLine.leaveRefundDays || 0) > 0 ? (
                       <small className="block text-warning">
                         ระบบคืนเครดิตวันลาไม่รับค่าจ้างค้างคืน {selectedLine.leaveRefundDays} วัน ({formatMoney(selectedLine.leaveDeductionRefund)}) ให้อัตโนมัติในงวดนี้แล้ว
