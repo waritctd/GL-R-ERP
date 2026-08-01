@@ -10,7 +10,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
-import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
+import { formatThaiDate, fulfilmentStatusLabel, greetingName } from '../../utils/format.js';
 import { nextFulfilmentActionCode, nextImportAction } from '../tickets/importActions.js';
 
 /**
@@ -205,7 +205,7 @@ export function ImportOverview({ user, employee }) {
   const pricingQueueCount = pricingRequests.filter((pr) => pr.status === 'SUBMITTED').length;
   const procurementQueueCount = tickets.filter((t) => nextFulfilmentActionCode(t) != null).length;
 
-  const greeting = `สวัสดี, คุณ${employee?.nickName || employee?.nameTh || user?.name || ''}`;
+  const greeting = `สวัสดี, ${greetingName(employee?.nickName || employee?.nameTh || user?.name)}`;
 
   return (
     <PageStack>
