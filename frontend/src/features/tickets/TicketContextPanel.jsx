@@ -23,12 +23,19 @@ function FieldRow({ label, value, danger = false }) {
   );
 }
 
-function ContextSection({ title, icon, children }) {
+// Thai label carries the meaning, English sits under it as a helper — the same
+// pairing the workspace tabs use (ภาพรวม / Overview). The panel previously mixed
+// the two registers inside one card: `ความคิดเห็น` in Thai next to `Next action`,
+// `Key dates` and `People` in English, in a Thai-first product.
+function ContextSection({ title, helper, icon, children }) {
   return (
     <section className="border-t border-border pt-4 first:border-t-0 first:pt-0">
       <div className="mb-3 flex items-center gap-2">
         <Icon name={icon} size={15} className="text-text-muted" />
-        <h2 className="m-0 text-sm font-extrabold text-text">{title}</h2>
+        <h2 className="m-0 flex flex-col text-sm font-extrabold leading-tight text-text">
+          {title}
+          {helper ? <span className="text-2xs font-normal text-text-muted">{helper}</span> : null}
+        </h2>
       </div>
       {children}
     </section>
@@ -74,13 +81,13 @@ export function TicketContextPanel({
 
   const content = expanded ? (
     <div className="flex flex-col gap-5">
-      <ContextSection title="Next action" icon="chevronRight">
+      <ContextSection title="ขั้นตอนถัดไป" helper="Next action" icon="chevronRight">
         <p className="m-0 rounded-md border border-info-border bg-info-bg px-3 py-2 text-sm font-bold text-info">
-          {bannerText || 'ไม่มี Next action ในสถานะนี้'}
+          {bannerText || 'ไม่มีขั้นตอนถัดไปในสถานะนี้'}
         </p>
       </ContextSection>
 
-      <ContextSection title="ความคิดเห็น" icon="pencil">
+      <ContextSection title="ความคิดเห็น" helper="Comments" icon="pencil">
         <div className="flex flex-col gap-3">
           {canComment && showCommentForm ? (
             <div className="flex flex-col gap-2">
@@ -118,7 +125,7 @@ export function TicketContextPanel({
         </div>
       </ContextSection>
 
-      <ContextSection title="Key dates" icon="calendar">
+      <ContextSection title="วันสำคัญ" helper="Key dates" icon="calendar">
         <dl className="m-0">
           <FieldRow label="ติดตามครั้งถัดไป" value={formatThaiDate(summary.nextFollowUpAt)} />
           <FieldRow label="ติดตามล่าสุด" value={formatThaiDate(summary.lastFollowUpAt)} />
@@ -128,7 +135,7 @@ export function TicketContextPanel({
         </dl>
       </ContextSection>
 
-      <ContextSection title="People" icon="users">
+      <ContextSection title="ผู้เกี่ยวข้อง" helper="People" icon="users">
         <dl className="m-0">
           <FieldRow label="เจ้าของดีล" value={summary.createdByName} />
           <FieldRow label="Import บน PCR" value={assignedImport} />
@@ -143,13 +150,13 @@ export function TicketContextPanel({
     <aside className="rounded-lg border border-border bg-surface p-4 shadow-sm" aria-label="บริบทดีล">
       <button
         type="button"
-        className="flex w-full items-center justify-between gap-3 bg-transparent text-left xl:hidden"
+        className="flex min-h-11 w-full items-center justify-between gap-3 bg-transparent text-left xl:hidden"
         aria-expanded={mobileOpen}
         onClick={() => setMobileOpen((open) => !open)}
       >
         <span className="min-w-0">
           <span className="block text-sm font-extrabold text-text">บริบทดีล</span>
-          <span className="block text-xs font-semibold text-text-muted">ความคิดเห็น · วันที่ · คนเกี่ยวข้อง</span>
+          <span className="block text-xs font-semibold text-text-muted">ความคิดเห็น · วันสำคัญ · ผู้เกี่ยวข้อง</span>
         </span>
         <Icon name="chevronDown" size={16} className={`shrink-0 text-text-muted transition-transform ${mobileOpen ? 'rotate-180' : ''}`} />
       </button>
