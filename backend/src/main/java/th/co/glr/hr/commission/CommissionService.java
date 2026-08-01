@@ -575,14 +575,20 @@ public class CommissionService {
         List<SalesRepCommissionSummaryDto> repSummaries = new ArrayList<>();
         BigDecimal totalBase = BigDecimal.ZERO;
         BigDecimal totalCommission = BigDecimal.ZERO;
+        BigDecimal totalIncentive = BigDecimal.ZERO;
+        BigDecimal totalStockBonus = BigDecimal.ZERO;
         for (RepPayrollCommission rep : reps) {
             repSummaries.add(new SalesRepCommissionSummaryDto(
-                rep.salesRepId(), rep.salesRepName(), rep.tierCommissionableBase(), rep.totalCommission(), rep.manualAdjustmentAmount()));
+                rep.salesRepId(), rep.salesRepName(), rep.tierCommissionableBase(), rep.totalCommission(),
+                rep.manualAdjustmentAmount(), rep.incentiveAmount(), rep.stockBonusAmount()));
             totalBase = totalBase.add(rep.tierCommissionableBase());
             totalCommission = totalCommission.add(rep.totalCommission());
+            totalIncentive = totalIncentive.add(rep.incentiveAmount());
+            totalStockBonus = totalStockBonus.add(rep.stockBonusAmount());
         }
         repSummaries.sort(Comparator.comparing(SalesRepCommissionSummaryDto::salesRepName, Comparator.nullsLast(String::compareTo)));
-        return new PayrollCommissionSummaryDto(month, "PAYROLL_READY", totalBase, totalCommission, repSummaries);
+        return new PayrollCommissionSummaryDto(
+            month, "PAYROLL_READY", totalBase, totalCommission, totalIncentive, totalStockBonus, repSummaries);
     }
 
     /**
@@ -609,11 +615,34 @@ public class CommissionService {
         // manual entry still sitting at MANAGER_APPROVED correctly does not count yet.
         Map<Long, BigDecimal> manualTotals = new LinkedHashMap<>();
         Map<Long, String> manualOnlyRepNames = new LinkedHashMap<>();
+        // Issue #405 transition safeguard, REWORKED (2026-08-02 review): a rep-month's approved
+        // manual INCENTIVE/STOCK_BONUS entries are tracked here as a SUMMED AMOUNT per kind, not
+        // just "does one exist" -- because "does one exist" mis-fired on a zero/negative manual
+        // entry. A manual entry of a given kind can mean two different things and they must be
+        // treated oppositely:
+        //   - POSITIVE amount: a hand-typed REPLACEMENT (the pre-#405 way of doing this whole
+        //     kind by hand) -- a human decided the figure for that kind that month, so it wins
+        //     and the auto-computed limb is suppressed entirely.
+        //   - ZERO or NEGATIVE amount: a CORRECTION layered on top of the auto-computed figure
+        //     (e.g. "-5,000, overpaid last cycle's incentive") -- the auto limb must still
+        //     compute normally, and the correction is added on top via manualAmount below, same
+        //     as it already is for ADJUSTMENT. Suppressing the auto limb here would silently turn
+        //     a -5,000 correction into a -5,000 total instead of (auto + -5,000).
+        // A rep with no manual entry of that kind defaults to ZERO here, which correctly does NOT
+        // suppress (grouped.getOrDefault(...).signum() > 0 is false for zero).
+        Map<Long, BigDecimal> manualIncentiveTotals = new LinkedHashMap<>();
+        Map<Long, BigDecimal> manualStockBonusTotals = new LinkedHashMap<>();
         for (CommissionRecord record : records) {
             if (MANUAL_KINDS.contains(record.kind())) {
                 BigDecimal amount = record.manualAmount() == null ? BigDecimal.ZERO : record.manualAmount();
                 manualTotals.merge(record.salesRepId(), amount, BigDecimal::add);
                 manualOnlyRepNames.putIfAbsent(record.salesRepId(), record.salesRepName());
+                if (CommissionKind.INCENTIVE.equals(record.kind())) {
+                    manualIncentiveTotals.merge(record.salesRepId(), amount, BigDecimal::add);
+                }
+                if (CommissionKind.STOCK_BONUS.equals(record.kind())) {
+                    manualStockBonusTotals.merge(record.salesRepId(), amount, BigDecimal::add);
+                }
                 continue;
             }
             // Commission redesign calc-refine: accumulate the WEIGHTED actual-received (real cash
@@ -624,6 +653,13 @@ public class CommissionService {
                 .add(record.actualReceived(), record.weightMultiplier());
         }
         List<TierConfig> tiers = tiers();
+        // Issue #405: load the INCENTIVE ladder + STOCK_BONUS config ONCE for the whole month
+        // (not per rep) -- both are config rows that never vary by rep, and this is also the
+        // single place both payrollReadySummary and payrollCommissionTotalsByEmployee (via this
+        // shared method) read them from, so the two callers can never diverge.
+        List<IncentiveTierConfig> incentiveLadder = commissions.findIncentiveTiers(payrollMonth);
+        StockBonusConfig stockBonusConfig = commissions.findStockBonusConfig(payrollMonth).orElse(StockBonusConfig.disabled());
+        BigDecimal zero = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
         List<RepPayrollCommission> results = new ArrayList<>();
         Set<Long> repIds = new HashSet<>();
         for (RepAccumulator rep : grouped.values()) {
@@ -633,13 +669,35 @@ public class CommissionService {
             BigDecimal tierCommission = calculator.progressiveCommission(safeBase, tiers);
             BigDecimal displayBase = safeBase.setScale(2, RoundingMode.HALF_UP);
             BigDecimal manualAmount = manualTotals.getOrDefault(rep.salesRepId, BigDecimal.ZERO);
-            BigDecimal finalCommission = tierCommission.add(manualAmount);
-            results.add(new RepPayrollCommission(rep.salesRepId, rep.salesRepName, displayBase, manualAmount, finalCommission));
+            // Suppress the auto limb only when the rep's summed manual entries of that kind are
+            // STRICTLY POSITIVE (a replacement) -- zero/negative (a correction) leaves the auto
+            // limb computing normally; see the map-building comment above for the full rationale.
+            boolean incentiveReplaced = manualIncentiveTotals.getOrDefault(rep.salesRepId, BigDecimal.ZERO).signum() > 0;
+            BigDecimal incentiveAmount = incentiveReplaced
+                ? zero
+                : calculator.monthlyIncentive(safeBase, incentiveLadder);
+            boolean stockBonusReplaced = manualStockBonusTotals.getOrDefault(rep.salesRepId, BigDecimal.ZERO).signum() > 0;
+            // Review fix (performance): short-circuit before the repo call (a GROUP BY ticket_id
+            // aggregate over the whole sales.ticket_item table) when there is nothing to compute
+            // -- config disabled, or the auto limb is replaced by a positive manual entry. Without
+            // this, computeRepPayrollCommissions ran that full aggregate once per rep on every
+            // payroll run, including every historic month, even though STOCK_BONUS ships
+            // config-gated OFF and would resolve to zero anyway.
+            BigDecimal stockBonusAmount = (stockBonusReplaced || !stockBonusConfig.enabled())
+                ? zero
+                : calculator.stockSaleBonus(commissions.sumActiveStockActualReceived(rep.salesRepId, payrollMonth), stockBonusConfig);
+            BigDecimal finalCommission = tierCommission.add(incentiveAmount).add(stockBonusAmount).add(manualAmount);
+            results.add(new RepPayrollCommission(
+                rep.salesRepId, rep.salesRepName, displayBase, manualAmount, incentiveAmount, stockBonusAmount, finalCommission));
             repIds.add(rep.salesRepId);
         }
         // A rep whose ONLY approved commission this month is a manual entry (e.g. a MANAGER
         // commission for someone with no SALE commission yet) still needs a row: tier base/tier
-        // commission are zero, the manual amount is the whole total.
+        // commission are zero, the manual amount is the whole total. Issue #405: their auto-computed
+        // incentive/stock-bonus are kept explicitly zero too -- a zero tier base already resolves
+        // both calculator calls to zero on their own (monthlyIncentive/stockSaleBonus both treat a
+        // non-positive base/receipts as zero), but this branch has no safeBase to feed them and
+        // zero manual-only reps never earn a SALE-driven auto-computed limb in the first place.
         for (Map.Entry<Long, BigDecimal> entry : manualTotals.entrySet()) {
             if (repIds.contains(entry.getKey())) {
                 continue;
@@ -647,7 +705,7 @@ public class CommissionService {
             BigDecimal manualAmount = entry.getValue();
             results.add(new RepPayrollCommission(
                 entry.getKey(), manualOnlyRepNames.get(entry.getKey()),
-                BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP), manualAmount, manualAmount));
+                zero, manualAmount, zero, zero, manualAmount));
         }
         return results;
     }
@@ -673,6 +731,7 @@ public class CommissionService {
      * Per-rep breakdown shared between {@link #payrollReadySummary} and {@link
      * #payrollCommissionTotalsByEmployee} -- {@code totalCommission} is the number payroll must
      * pay: {@code tierCommissionableBase} run through the tier table, plus {@code
+     * incentiveAmount}, {@code stockBonusAmount} (issue #405), plus {@code
      * manualAdjustmentAmount}.
      */
     public record RepPayrollCommission(
@@ -680,6 +739,8 @@ public class CommissionService {
         String salesRepName,
         BigDecimal tierCommissionableBase,
         BigDecimal manualAdjustmentAmount,
+        BigDecimal incentiveAmount,
+        BigDecimal stockBonusAmount,
         BigDecimal totalCommission) {}
 
     private CommissionRecord requireRecord(long id) {

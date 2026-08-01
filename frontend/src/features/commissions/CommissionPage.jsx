@@ -12,7 +12,17 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { commissionStatusLabel as statusInfo, dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
-import { invoiceCalculation, monthlyTierBase, round2, tierBreakdown } from './commissionCalc.js';
+import {
+  invoiceCalculation,
+  monthlyTierBase,
+  round2,
+  tierBreakdown,
+  // Issue #405: the auto-computed INCENTIVE ladder, mirrored here so the sales rep's own
+  // informational monthly summary matches HR's authoritative payrollReadySummary exactly.
+  monthlyIncentive,
+  INCENTIVE_LADDER,
+  INCENTIVE_STOCK_BONUS_EFFECTIVE_MONTH,
+} from './commissionCalc.js';
 
 const today = new Date().toISOString().slice(0, 10);
 const thisMonth = new Date().toISOString().slice(0, 7);
@@ -416,8 +426,16 @@ export function CommissionPage({ user, showToast }) {
     const manualTotal = records
       .filter((item) => isManualKind(item.kind) && item.status === 'APPROVED')
       .reduce((sum, item) => sum + Number(item.manualAmount || 0), 0);
-    return { base, ...tierResult, manualTotal, total: round2(tierResult.total + manualTotal) };
-  }, [records, isSales]);
+    // Issue #405: the auto-computed INCENTIVE ladder, informational-mirror of
+    // CommissionService#computeRepPayrollCommissions -- zero before the 2026-08-01 fix-forward
+    // effective month, and suppressed (zero) when the rep already has an APPROVED manual
+    // INCENTIVE entry this month, same double-count guard as the authoritative HR view.
+    const manualIncentiveApproved = records.some((item) => item.kind === 'INCENTIVE' && item.status === 'APPROVED');
+    const incentiveAmount = (month < INCENTIVE_STOCK_BONUS_EFFECTIVE_MONTH || manualIncentiveApproved)
+      ? 0
+      : monthlyIncentive(base, INCENTIVE_LADDER);
+    return { base, ...tierResult, manualTotal, incentiveAmount, total: round2(tierResult.total + incentiveAmount + manualTotal) };
+  }, [records, isSales, month]);
 
   function canManagerReview(record) {
     return record.status === 'SUBMITTED' && user.role === 'sales_manager';
@@ -1436,6 +1454,15 @@ function MonthlyTierPanel({ summary }) {
           <code className="font-mono text-base font-bold">{formatMoney(summary.total)}</code>
         </span>
       </div>
+      {summary.incentiveAmount ? (
+        // Issue #405: the auto-computed INCENTIVE ladder amount, already folded into
+        // "ค่าคอมประมาณการ" on top of the tier commission — informational mirror of
+        // CommissionService#computeRepPayrollCommissions.
+        <div className="mt-2 flex items-center justify-between gap-3 text-sm">
+          <span className="text-text-muted">อินเซนทีฟ (นอกขั้นบันได)</span>
+          <code className="font-mono">{formatMoney(summary.incentiveAmount)}</code>
+        </div>
+      ) : null}
       {summary.manualTotal ? (
         // Manual entries (feat/commission-manual-adjustments) never feed the tier calc above —
         // this is the rep's own APPROVED manual amount, already folded into "ค่าคอมประมาณการ"
@@ -1502,6 +1529,12 @@ function PayrollSummary({ summary, loading }) {
         <div className="commission-payroll-table table-head">
           <span>Sales Rep</span>
           <span>ฐานค่าคอม</span>
+          {/* Issue #405: the auto-computed INCENTIVE ladder + STOCK_BONUS, already folded into
+              the "ค่าคอม" total column, surfaced separately so HR can see the breakdown. The
+              stock-bonus column stays visible (not conditionally hidden) even though it reads
+              all-zero until the CEO enables sales.stock_bonus_config -- that is expected. */}
+          <span>อินเซนทีฟ</span>
+          <span>โบนัสขายของในสต๊อค</span>
           <span>ค่าคอม</span>
         </div>
         {(summary.salesReps ?? []).length === 0 ? (
@@ -1510,6 +1543,8 @@ function PayrollSummary({ summary, loading }) {
           <div key={rep.salesRepId} className="commission-payroll-table data-row">
             <strong>{rep.salesRepName || rep.salesRepId}</strong>
             <code>{formatMoney(rep.commissionableBase)}</code>
+            <code>{formatMoney(rep.incentiveAmount)}</code>
+            <code>{formatMoney(rep.stockBonusAmount)}</code>
             <code>{formatMoney(rep.commissionAmount)}</code>
           </div>
         ))}

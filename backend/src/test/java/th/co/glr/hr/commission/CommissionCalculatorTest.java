@@ -3,10 +3,23 @@ package th.co.glr.hr.commission;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class CommissionCalculatorTest {
     private final CommissionCalculator calculator = new CommissionCalculator();
+
+    // Issue #405: the ladder as seeded by V108 (effective 2026-08-01) -- no 80,000 row.
+    private static final List<IncentiveTierConfig> INCENTIVE_LADDER = List.of(
+        new IncentiveTierConfig(1, new BigDecimal("3000000.00"), new BigDecimal("15000.00"), LocalDate.of(2026, 8, 1)),
+        new IncentiveTierConfig(2, new BigDecimal("4000000.00"), new BigDecimal("25000.00"), LocalDate.of(2026, 8, 1)),
+        new IncentiveTierConfig(3, new BigDecimal("6000000.00"), new BigDecimal("50000.00"), LocalDate.of(2026, 8, 1)),
+        new IncentiveTierConfig(4, new BigDecimal("8000000.00"), new BigDecimal("65000.00"), LocalDate.of(2026, 8, 1))
+    );
+
+    private static final StockBonusConfig ENABLED_STOCK_BONUS =
+        new StockBonusConfig(true, LocalDate.of(2026, 8, 1), new BigDecimal("100000.00"), new BigDecimal("1000.00"));
 
     @Test
     void progressiveCommission_appliesHighRollerRateAboveThreeMillion() {
@@ -131,5 +144,198 @@ class CommissionCalculatorTest {
         BigDecimal commission = calculator.progressiveCommission(new BigDecimal("3200000.00"));
 
         assertThat(commission).isEqualByComparingTo(new BigDecimal("55250.00"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Issue #405 — monthlyIncentive: ladder boundaries (highest threshold reached wins, NOT
+    // cumulative/pro-rated), plus the explicit "no 80,000 row" and empty/null-input guards.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void monthlyIncentive_justBelowFirstThreshold_paysZero() {
+        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("2999999.99"), INCENTIVE_LADDER);
+
+        assertThat(incentive).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    void monthlyIncentive_atFirstThreshold_pays15000() {
+        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("3000000.00"), INCENTIVE_LADDER);
+
+        assertThat(incentive).isEqualByComparingTo(new BigDecimal("15000.00"));
+    }
+
+    @Test
+    void monthlyIncentive_justBelowSecondThreshold_staysAt15000() {
+        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("3999999.99"), INCENTIVE_LADDER);
+
+        assertThat(incentive).isEqualByComparingTo(new BigDecimal("15000.00"));
+    }
+
+    @Test
+    void monthlyIncentive_atSecondThreshold_pays25000() {
+        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("4000000.00"), INCENTIVE_LADDER);
+
+        assertThat(incentive).isEqualByComparingTo(new BigDecimal("25000.00"));
+    }
+
+    @Test
+    void monthlyIncentive_justBelowThirdThreshold_staysAt25000() {
+        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("5999999.99"), INCENTIVE_LADDER);
+
+        assertThat(incentive).isEqualByComparingTo(new BigDecimal("25000.00"));
+    }
+
+    @Test
+    void monthlyIncentive_atThirdThreshold_pays50000() {
+        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("6000000.00"), INCENTIVE_LADDER);
+
+        assertThat(incentive).isEqualByComparingTo(new BigDecimal("50000.00"));
+    }
+
+    @Test
+    void monthlyIncentive_atFourthThreshold_pays65000() {
+        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("8000000.00"), INCENTIVE_LADDER);
+
+        assertThat(incentive).isEqualByComparingTo(new BigDecimal("65000.00"));
+    }
+
+    @Test
+    void monthlyIncentive_wellAboveFourthThreshold_staysAt65000_noEightyThousandRow() {
+        // The workbook's second "8.00 ล้าน -> 80,000" row is superseded and must NOT exist -- a
+        // base of 12,000,000 pays 65,000, the same as exactly 8,000,000.
+        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("12000000.00"), INCENTIVE_LADDER);
+
+        assertThat(incentive).isEqualByComparingTo(new BigDecimal("65000.00"));
+    }
+
+    @Test
+    void monthlyIncentive_emptyLadder_paysZero() {
+        // An empty (or mis-seeded, i.e. any payroll month before 2026-08-01) ladder must mean
+        // ZERO -- never an invented default table (deliberately unlike TierConfig.defaults()).
+        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("9000000.00"), List.of());
+
+        assertThat(incentive).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    void monthlyIncentive_nullOrNegativeBase_paysZero() {
+        assertThat(calculator.monthlyIncentive(null, INCENTIVE_LADDER)).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(calculator.monthlyIncentive(new BigDecimal("-100.00"), INCENTIVE_LADDER)).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Issue #405 — stockSaleBonus: STEPPED, not a percentage; disabled/null config; negative
+    // receipts.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void stockSaleBonus_justBelowOneBlock_paysZero() {
+        BigDecimal bonus = calculator.stockSaleBonus(new BigDecimal("99999.99"), ENABLED_STOCK_BONUS);
+
+        assertThat(bonus).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    void stockSaleBonus_exactlyOneBlock_pays1000() {
+        BigDecimal bonus = calculator.stockSaleBonus(new BigDecimal("100000.00"), ENABLED_STOCK_BONUS);
+
+        assertThat(bonus).isEqualByComparingTo(new BigDecimal("1000.00"));
+    }
+
+    @Test
+    void stockSaleBonus_twoAndAHalfBlocks_paysTwoWholeBlocksNotTwoThousandFiveHundred() {
+        // Stepped: the ฿50,000 remainder above two whole ฿100,000 blocks earns nothing. A naive
+        // 1% read of ฿250,000 would give ฿2,500 -- that is NOT this rule.
+        BigDecimal bonus = calculator.stockSaleBonus(new BigDecimal("250000.00"), ENABLED_STOCK_BONUS);
+
+        assertThat(bonus).isEqualByComparingTo(new BigDecimal("2000.00"));
+        assertThat(bonus).isNotEqualByComparingTo(new BigDecimal("2500.00"));
+    }
+
+    @Test
+    void stockSaleBonus_disabledConfig_paysZero() {
+        StockBonusConfig disabled = new StockBonusConfig(false, LocalDate.of(2026, 8, 1), new BigDecimal("100000.00"), new BigDecimal("1000.00"));
+
+        BigDecimal bonus = calculator.stockSaleBonus(new BigDecimal("250000.00"), disabled);
+
+        assertThat(bonus).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    void stockSaleBonus_nullConfig_paysZero() {
+        BigDecimal bonus = calculator.stockSaleBonus(new BigDecimal("250000.00"), null);
+
+        assertThat(bonus).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    void stockSaleBonus_negativeReceipts_paysZero() {
+        // e.g. a month where a CLAWBACK's negative actual_received outweighs the stock-linked
+        // sales -- the clamp-at-zero-before-flooring rule.
+        BigDecimal bonus = calculator.stockSaleBonus(new BigDecimal("-50000.00"), ENABLED_STOCK_BONUS);
+
+        assertThat(bonus).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    void stockSaleBonus_defaultDisabledSeedConfig_paysZero() {
+        // The literal V108 seed row: enabled = FALSE. Proves the "ships config-gated OFF" claim
+        // against the exact config shape production starts with.
+        StockBonusConfig seeded = new StockBonusConfig(false, LocalDate.of(2026, 8, 1), new BigDecimal("100000.00"), new BigDecimal("1000.00"));
+
+        BigDecimal bonus = calculator.stockSaleBonus(new BigDecimal("1000000.00"), seeded);
+
+        assertThat(bonus).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Issue #405 — the four-rep workbook reconciliation table, to the satang. Each rep's tier
+    // base and tier commission are asserted first (proving the existing tier math is untouched),
+    // then the incentive on top, then the combined total the issue's own table specifies.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void workbookReconciliation_chanida_belowFloorIncentiveThreshold_noIncentive() {
+        BigDecimal tierBase = new BigDecimal("1373688.69");
+        BigDecimal tierCommission = calculator.progressiveCommission(tierBase);
+        BigDecimal incentive = calculator.monthlyIncentive(tierBase, INCENTIVE_LADDER);
+
+        assertThat(tierCommission).isEqualByComparingTo(new BigDecimal("11230.33"));
+        assertThat(incentive).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(tierCommission.add(incentive)).isEqualByComparingTo(new BigDecimal("11230.33"));
+    }
+
+    @Test
+    void workbookReconciliation_suwannee_belowFloorIncentiveThreshold_noIncentive() {
+        BigDecimal tierBase = new BigDecimal("559711.64");
+        BigDecimal tierCommission = calculator.progressiveCommission(tierBase);
+        BigDecimal incentive = calculator.monthlyIncentive(tierBase, INCENTIVE_LADDER);
+
+        assertThat(tierCommission).isEqualByComparingTo(new BigDecimal("2322.84"));
+        assertThat(incentive).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(tierCommission.add(incentive)).isEqualByComparingTo(new BigDecimal("2322.84"));
+    }
+
+    @Test
+    void workbookReconciliation_jennet_reachesFirstIncentiveThreshold() {
+        BigDecimal tierBase = new BigDecimal("3246381.33");
+        BigDecimal tierCommission = calculator.progressiveCommission(tierBase);
+        BigDecimal incentive = calculator.monthlyIncentive(tierBase, INCENTIVE_LADDER);
+
+        assertThat(tierCommission).isEqualByComparingTo(new BigDecimal("56757.39"));
+        assertThat(incentive).isEqualByComparingTo(new BigDecimal("15000.00"));
+        assertThat(tierCommission.add(incentive)).isEqualByComparingTo(new BigDecimal("71757.39"));
+    }
+
+    @Test
+    void workbookReconciliation_praphatsorn_reachesSecondIncentiveThreshold() {
+        BigDecimal tierBase = new BigDecimal("5051807.61");
+        BigDecimal tierCommission = calculator.progressiveCommission(tierBase);
+        BigDecimal incentive = calculator.monthlyIncentive(tierBase, INCENTIVE_LADDER);
+
+        assertThat(tierCommission).isEqualByComparingTo(new BigDecimal("115433.75"));
+        assertThat(incentive).isEqualByComparingTo(new BigDecimal("25000.00"));
+        assertThat(tierCommission.add(incentive)).isEqualByComparingTo(new BigDecimal("140433.75"));
     }
 }
