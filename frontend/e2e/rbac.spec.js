@@ -84,18 +84,23 @@ test.describe('rbac gating (frontend-gating only, not a backend authz proof)', (
         const expected = canAccessPath(routePath, user);
         await spaGoto(page, routePath);
 
+        // Both branches now land on `routePath` — issue #391 stopped denied routes
+        // redirecting to '/' so a shared deep link keeps its URL and the refusal
+        // survives a reload. The URL alone therefore no longer distinguishes allow
+        // from deny; the access-denied view's presence is what does.
+        await expect
+          .poll(() => new URL(page.url()).pathname, {
+            message: `${role} @ ${routePath}: URL must be preserved either way (#391)`,
+          })
+          .toBe(routePath);
+
+        const denial = page.getByRole('heading', { name: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' });
         if (expected) {
-          await expect
-            .poll(() => new URL(page.url()).pathname, {
-              message: `${role} @ ${routePath}: expected ALLOW (render), canAccessPath said true`,
-            })
-            .toBe(routePath);
+          await expect(denial, `${role} @ ${routePath}: expected ALLOW (render), canAccessPath said true`)
+            .toBeHidden();
         } else {
-          await expect
-            .poll(() => new URL(page.url()).pathname, {
-              message: `${role} @ ${routePath}: expected REDIRECT to /, canAccessPath said false`,
-            })
-            .toBe('/');
+          await expect(denial, `${role} @ ${routePath}: expected DENY in place, canAccessPath said false`)
+            .toBeVisible();
         }
       }
     });
