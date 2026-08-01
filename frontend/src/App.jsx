@@ -43,6 +43,9 @@ const CommissionPage = lazy(() => import('./features/commissions/CommissionPage.
 const AccountOverview = lazy(() => import('./features/dashboard/AccountOverview.jsx').then(toDefault('AccountOverview')));
 const AccountFinancePage = lazy(() => import('./features/finance/AccountFinancePage.jsx').then(toDefault('AccountFinancePage')));
 const PayrollPage = lazy(() => import('./features/payroll/PayrollPage.jsx').then(toDefault('PayrollPage')));
+// ล.ย.01 tax-allowance declaration (issue #387): employee self-service form + HR review register.
+const TaxAllowancePage = lazy(() => import('./features/taxAllowance/TaxAllowancePage.jsx').then(toDefault('TaxAllowancePage')));
+const TaxAllowanceReviewPage = lazy(() => import('./features/taxAllowance/TaxAllowanceReviewPage.jsx').then(toDefault('TaxAllowanceReviewPage')));
 const DepositNoticePage = lazy(() => import('./features/deposits/DepositNoticePage.jsx').then(toDefault('DepositNoticePage')));
 const CeoSettingsPage = lazy(() => import('./features/ceoSettings/CeoSettingsPage.jsx').then(toDefault('CeoSettingsPage')));
 const PriceImportPage = lazy(() => import('./features/catalog/PriceImportPage.jsx').then(toDefault('PriceImportPage')));
@@ -99,6 +102,7 @@ export function App() {
     employees,
     profileRequests,
     dashboardSummary,
+    taxAllowanceSummary,
     resetData,
     createEmployee,
     updateEmployee,
@@ -324,8 +328,20 @@ export function App() {
                   employee={currentEmployee}
                   profileRequests={ownRequests}
                   onCreateRequest={createProfileRequest}
+                  taxAllowanceSummary={taxAllowanceSummary}
                 />
               )}
+            />
+            {/* ล.ย.01 tax-allowance declaration (issue #387). Guarded in permissions.js's
+                PATH_GUARDS — `/tax-allowance` needs an employeeId (same shape as /profile),
+                `/tax-allowance-review` needs canViewTaxAllowanceRegister (hr/ceo). */}
+            <Route
+              path="/tax-allowance"
+              element={<TaxAllowancePage user={user} showToast={showToast} />}
+            />
+            <Route
+              path="/tax-allowance-review"
+              element={<TaxAllowanceReviewPage user={user} showToast={showToast} />}
             />
             <Route
               path="/employee-requests"

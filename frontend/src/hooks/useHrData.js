@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/index.js';
 import { queryKeys } from '../api/queryKeys.js';
 import { hasPermission } from '../app/permissions.js';
+import { declaredAllowanceTotal } from '../features/taxAllowance/taxAllowanceSchema.js';
+import { selectCurrentDeclaration, taxAllowanceStatusInfo } from '../features/taxAllowance/taxAllowanceStatus.js';
 
 export function useHrData({ user, showToast }) {
   const queryClient = useQueryClient();
@@ -48,6 +50,38 @@ export function useHrData({ user, showToast }) {
     enabled: !!user && !!api.dashboard?.summary,
   });
   const dashboardSummary = dashboardSummaryQuery.data ?? null;
+
+  // Tax-allowance profile summary (issue #387 screen 4) — fetched once here and passed down as a
+  // prop, matching `profileRequests`'s own pattern, rather than ProfilePage fetching it itself.
+  const currentTaxYear = new Date().getFullYear();
+  const taxAllowanceDeclarationsQuery = useQuery({
+    queryKey: queryKeys.taxAllowanceDeclarationsMe(currentTaxYear),
+    queryFn: () => api.payroll.getMyTaxAllowanceDeclarations(currentTaxYear).then((response) => response.items || []),
+    enabled: !!user?.employeeId,
+  });
+  const currentTaxAllowanceDeclaration = useMemo(
+    () => selectCurrentDeclaration(taxAllowanceDeclarationsQuery.data ?? []),
+    [taxAllowanceDeclarationsQuery.data],
+  );
+  // Same queryKey/queryFn shape (an array of attachment rows) as TaxAllowanceEvidencePanel.jsx's
+  // own attachments query for this declaration — sharing one cache entry, not colliding under the
+  // same key with a differently-shaped one. This query used to return a bare count instead of the
+  // array, which crashed TaxAllowanceEvidencePanel's `(attachmentsQuery.data ?? []).filter(...)`
+  // with "filter is not a function" the moment both queries were active for the same declaration
+  // (e.g. viewing /tax-allowance right after this hook had already populated the profile summary).
+  const taxAllowanceEvidenceQuery = useQuery({
+    queryKey: queryKeys.taxAllowanceAttachments(currentTaxAllowanceDeclaration?.declarationId ?? null),
+    queryFn: () => api.payroll
+      .listTaxAllowanceAttachments(currentTaxAllowanceDeclaration.declarationId)
+      .then((response) => response.items || []),
+    enabled: !!currentTaxAllowanceDeclaration?.declarationId,
+  });
+  const taxAllowanceSummary = useMemo(() => ({
+    statusInfo: taxAllowanceStatusInfo(currentTaxAllowanceDeclaration),
+    declaredTotal: declaredAllowanceTotal(currentTaxAllowanceDeclaration),
+    evidenceCount: (taxAllowanceEvidenceQuery.data ?? []).filter((item) => !item.deletedAt).length,
+    expiresOn: currentTaxAllowanceDeclaration?.expiresOn ?? null,
+  }), [currentTaxAllowanceDeclaration, taxAllowanceEvidenceQuery.data]);
 
   // --- Mutations (exposed as same-signature async wrappers) ---
   const createEmployeeMutation = useMutation({
@@ -106,6 +140,7 @@ export function useHrData({ user, showToast }) {
     employees,
     profileRequests,
     dashboardSummary,
+    taxAllowanceSummary,
     resetData,
     createEmployee: (payload) => createEmployeeMutation.mutateAsync(payload),
     updateEmployee: (id, payload) => updateEmployeeMutation.mutateAsync({ id, payload }),

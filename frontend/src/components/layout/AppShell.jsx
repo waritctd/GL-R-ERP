@@ -113,6 +113,10 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // the topbar UserMenu, and the two pages are merged into /profile. /requests
     // stays here because an HR review queue is work, not personal admin.
     { path: '/requests', label: 'คำขอแก้ไขข้อมูล', helper: 'Profile requests', icon: 'clipboard', group: 'hr', show: hasPermission(user.role, 'canReviewProfileRequests'), badge: pendingRequestCount },
+    // Tax-allowance (ล.ย.01) HR register (issue #387) — mirrors the route's own guard
+    // (canViewTaxAllowanceRegister: hr+ceo) so CEO's read-only visibility into the register
+    // still gets a nav entry, even though only hr can act on a row (canReviewTaxAllowances).
+    { path: '/tax-allowance-review', label: 'ตรวจสอบค่าลดหย่อนภาษี', helper: 'Tax allowance review (ล.ย.01)', icon: 'badgeCheck', group: 'hr', show: hasPermission(user.role, 'canViewTaxAllowanceRegister') },
     // Split (issue #390): nav visibility follows read access (hr+ceo); CEO lands on a read-only
     // view of the same page (PayrollPage.jsx gates writes on canManagePayroll internally).
     { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canViewPayroll') },
@@ -130,6 +134,9 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       match: ['/employee-requests', '/overtime'],
     },
     { path: '/leave', label: 'วันลา', helper: 'Leave', icon: 'clipboard', group: 'self', show: !!user.employeeId || hasPermission(user.role, 'canViewAllLeave') },
+    // Tax-allowance (ล.ย.01) self-service declaration (issue #387) — mirrors the route's own
+    // guard in permissions.js's PATH_GUARDS (`!!u.employeeId`, same shape as /profile).
+    { path: '/tax-allowance', label: 'ค่าลดหย่อนภาษี', helper: 'Tax allowance (ล.ย.01)', icon: 'calculator', group: 'self', show: !!user.employeeId },
   ].filter((item) => item.show);
 
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);

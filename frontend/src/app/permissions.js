@@ -88,6 +88,15 @@ const PATH_GUARDS = [
   // POST /preview and /preview/export/{kind} are hasAnyRole('HR','CEO'); every write stays
   // hr-only and is gated inside PayrollPage.jsx (canManagePayroll), not at the route level.
   { test: (p) => p === '/payroll', can: (u) => hasPermission(u.role, 'canViewPayroll') },
+  // ล.ย.01 tax-allowance declaration (issue #387). `/tax-allowance` is the
+  // employee's own declaration form — same "must have an employeeId" shape as
+  // `/profile` above, and just as important to guard explicitly: unknown paths
+  // fail OPEN in canAccessPath (the `if (!guard) return true` below), so omitting
+  // this entry would let any logged-in user without an employeeId reach it.
+  { test: (p) => p === '/tax-allowance', can: (u) => !!u.employeeId },
+  // `/tax-allowance-review` is HR/CEO's register — mirrors
+  // TaxAllowanceDeclarationService's GET /declarations gate (hasAnyRole('HR','CEO')).
+  { test: (p) => p === '/tax-allowance-review', can: (u) => hasPermission(u.role, 'canViewTaxAllowanceRegister') },
   // /employee-requests hosts both the overtime and welfare/special-money tabs
   // (RequestsPage.jsx), so it is visible to anyone either sub-page would be
   // visible to. /overtime stays guarded identically since it's a same-page
