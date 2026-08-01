@@ -126,6 +126,13 @@ export const API_ROUTES = {
     list: '/api/price-calc-configs',
     update: '/api/price-calc-configs',
   },
+  // BRANCH 1 of the sales pricing-formula redesign (config storage + CEO editing UI only).
+  // Mirrors PricingFormulaConfigController -- a NEW endpoint, distinct from priceCalcConfigs
+  // above (which keeps serving the separate catalog price calculator, untouched).
+  pricingFormulaConfig: {
+    get: '/api/pricing-formula-config',
+    update: '/api/pricing-formula-config',
+  },
   attachments: {
     list: (ticketId) => `/api/tickets/${ticketId}/attachments`,
     upload: (ticketId) => `/api/tickets/${ticketId}/attachments`,
