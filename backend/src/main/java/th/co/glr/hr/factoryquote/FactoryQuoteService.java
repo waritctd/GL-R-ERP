@@ -99,7 +99,7 @@ public class FactoryQuoteService {
         PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId);
         if (!DRAFT_STATUSES.contains(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ใบขอราคาต้องอยู่ระหว่างการตรวจสอบของฝ่ายนำเข้าก่อนจึงจะสร้างร่างอีเมลราคาโรงงานได้");
+                "คำขอราคาต้องอยู่ระหว่างการตรวจสอบของฝ่ายนำเข้าก่อนจึงจะสร้างร่างอีเมลราคาโรงงานได้");
         }
         requireActiveDeal(summary.ticketId());
         List<PricingRequestItemDto> items = pricingRequests.findItems(pricingRequestId);
@@ -123,7 +123,7 @@ public class FactoryQuoteService {
             addEvent(summary, actor, PricingRequestEventKind.FACTORY_EMAIL_READY, summary.status(), summary.status(),
                 "Factory email draft ready for " + factoryName);
             notifyCeo(summary, PricingRequestEventKind.FACTORY_EMAIL_READY,
-                "ใบขอราคา " + summary.requestCode() + " สร้างร่างอีเมลโรงงาน " + factoryName);
+                "คำขอราคา " + summary.requestCode() + " สร้างร่างอีเมลโรงงาน " + factoryName);
         }
         return list(pricingRequestId, actor);
     }
@@ -288,7 +288,7 @@ public class FactoryQuoteService {
             int transitioned = pricingRequests.transition(summary.id(), summary.status(),
                 PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
             if (transitioned == 0) {
-                throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+                throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
             }
         }
         PricingRequestSummaryDto currentSummary = requirePricingRequest(quote.pricingRequestId());
@@ -299,7 +299,7 @@ public class FactoryQuoteService {
                 summary.status(), currentSummary.status(), "Factory request sent to " + quote.factoryName(),
                 dispatchId);
             notifyCeo(currentSummary, PricingRequestEventKind.FACTORY_EMAIL_SENT,
-                "ใบขอราคา " + currentSummary.requestCode() + " ส่งคำขอโรงงาน " + quote.factoryName());
+                "คำขอราคา " + currentSummary.requestCode() + " ส่งคำขอโรงงาน " + quote.factoryName());
         }
 
         quotes.markDispatchFinalized(dispatchId);
@@ -506,7 +506,7 @@ public class FactoryQuoteService {
                 int transitioned = pricingRequests.transition(summary.id(), summary.status(),
                     PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
                 if (transitioned == 0) {
-                    throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+                    throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
                 }
                 toStatus = PricingRequestStatus.AWAITING_FACTORY_RESPONSE;
             }
@@ -515,7 +515,7 @@ public class FactoryQuoteService {
             addEvent(summary, actor, PricingRequestEventKind.FACTORY_RESPONSE_RECEIVED, summary.status(), toStatus,
                 "Factory response received from " + current.factoryName());
             notifyCeo(summary, PricingRequestEventKind.FACTORY_RESPONSE_RECEIVED,
-                "ใบขอราคา " + summary.requestCode() + " ได้รับราคาจาก " + current.factoryName());
+                "คำขอราคา " + summary.requestCode() + " ได้รับราคาจาก " + current.factoryName());
         } else if (Set.of(FactoryQuoteStatus.RESPONSE_RECEIVED, FactoryQuoteStatus.NEGOTIATING,
                 FactoryQuoteStatus.READY_FOR_COSTING).contains(current.status())) {
             quotes.supersede(current.id());
@@ -542,7 +542,7 @@ public class FactoryQuoteService {
             addEvent(summary, actor, PricingRequestEventKind.FACTORY_RESPONSE_REVISED, summary.status(), toStatus,
                 "Factory response revised for " + current.factoryName());
             notifyCeo(summary, PricingRequestEventKind.FACTORY_RESPONSE_REVISED,
-                "ใบขอราคา " + summary.requestCode() + " มีราคาฉบับปรับปรุงจาก " + current.factoryName());
+                "คำขอราคา " + summary.requestCode() + " มีราคาฉบับปรับปรุงจาก " + current.factoryName());
         } else {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาโรงงานนี้ไม่สามารถรับคำตอบได้ในสถานะ " + current.status());
         }
@@ -580,7 +580,7 @@ public class FactoryQuoteService {
         addEvent(summary, actor, PricingRequestEventKind.FACTORY_NEGOTIATION_STARTED, summary.status(), summary.status(),
             request.note());
         notifyCeo(summary, PricingRequestEventKind.FACTORY_NEGOTIATION_STARTED,
-            "ใบขอราคา " + summary.requestCode() + " เริ่มเจรจากับ " + quote.factoryName());
+            "คำขอราคา " + summary.requestCode() + " เริ่มเจรจากับ " + quote.factoryName());
         return requireQuote(quoteId);
     }
 
@@ -598,7 +598,7 @@ public class FactoryQuoteService {
         addEvent(summary, actor, PricingRequestEventKind.FACTORY_RESPONSE_READY_FOR_COSTING, summary.status(), summary.status(),
             "Factory response ready for costing: " + quote.factoryName());
         notifyCeo(summary, PricingRequestEventKind.FACTORY_RESPONSE_READY_FOR_COSTING,
-            "ใบขอราคา " + summary.requestCode() + " พร้อมคำนวณต้นทุนสำหรับ " + quote.factoryName());
+            "คำขอราคา " + summary.requestCode() + " พร้อมคำนวณต้นทุนสำหรับ " + quote.factoryName());
         return requireQuote(quoteId);
     }
 
@@ -616,7 +616,7 @@ public class FactoryQuoteService {
         addEvent(summary, actor, PricingRequestEventKind.FACTORY_NOT_AVAILABLE, summary.status(), summary.status(),
             request.reason());
         notifyCeo(summary, PricingRequestEventKind.FACTORY_NOT_AVAILABLE,
-            "ใบขอราคา " + summary.requestCode() + " โรงงานไม่สามารถเสนอราคาได้: " + quote.factoryName());
+            "คำขอราคา " + summary.requestCode() + " โรงงานไม่สามารถเสนอราคาได้: " + quote.factoryName());
         return requireQuote(quoteId);
     }
 
@@ -626,7 +626,7 @@ public class FactoryQuoteService {
             String factoryName = firstText(item.resolvedFactoryName(), item.factory());
             if (factoryName == null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    "รายการที่ " + item.id() + " ในใบขอราคายังไม่ได้ระบุโรงงาน");
+                    "รายการที่ " + item.id() + " ในคำขอราคายังไม่ได้ระบุโรงงาน");
             }
             byFactory.computeIfAbsent(factoryName, ignored -> new ArrayList<>()).add(item);
         }
@@ -655,7 +655,7 @@ public class FactoryQuoteService {
         for (ReceiveFactoryQuoteItemRequest responseItem : responseItems) {
             PricingRequestItemDto requestItem = requestItemsById.get(responseItem.pricingRequestItemId());
             if (requestItem == null) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "รายการตอบกลับนี้ไม่ได้เป็นของใบขอราคานี้");
+                throw new ApiException(HttpStatus.BAD_REQUEST, "รายการตอบกลับนี้ไม่ได้เป็นของคำขอราคานี้");
             }
             String itemFactory = firstText(requestItem.resolvedFactoryName(), requestItem.factory());
             if (!quote.factoryName().equals(itemFactory)) {
@@ -698,7 +698,7 @@ public class FactoryQuoteService {
 
     private PricingRequestSummaryDto requirePricingRequest(long pricingRequestId) {
         return pricingRequests.findSummary(pricingRequestId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอราคานี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
     }
 
     private FactoryQuoteDto requireQuote(long quoteId) {
@@ -718,7 +718,7 @@ public class FactoryQuoteService {
     private void requireMutablePricingRequest(PricingRequestSummaryDto summary, Set<String> allowedStatuses) {
         if (!allowedStatuses.contains(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ใบขอราคาที่อยู่ในสถานะ '" + summary.status() + "' ไม่สามารถแก้ไขผ่านขั้นตอนราคาโรงงานได้");
+                "คำขอราคาที่อยู่ในสถานะ '" + summary.status() + "' ไม่สามารถแก้ไขผ่านขั้นตอนราคาโรงงานได้");
         }
     }
 

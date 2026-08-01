@@ -88,7 +88,7 @@ public class PricingDecisionService {
         requireRole(actor, CEO_ROLES);
         PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId);
         if (!PricingRequestStatus.READY_FOR_CEO_REVIEW.equals(summary.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคานี้ยังไม่พร้อมส่งให้ CEO พิจารณา");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ยังไม่พร้อมส่งให้ CEO พิจารณา");
         }
         requireActiveDeal(summary.ticketId());
         String clientRequestId = validateUuid(request.clientRequestId());
@@ -106,7 +106,7 @@ public class PricingDecisionService {
             PricingDecisionDto existing = requireDecision(decisionId);
             if (existing.pricingRequestId() != pricingRequestId) {
                 throw new ApiException(HttpStatus.CONFLICT,
-                    "clientRequestId นี้ถูกใช้ไปแล้วกับใบขอราคาอื่น");
+                    "clientRequestId นี้ถูกใช้ไปแล้วกับคำขอราคาอื่น");
             }
             return existing;
         }
@@ -128,7 +128,7 @@ public class PricingDecisionService {
         int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.READY_FOR_CEO_REVIEW,
             PricingRequestStatus.CEO_REVIEWING, null, null);
         if (transitioned == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         addEvent(summary, actor, PricingRequestEventKind.PRICING_DECISION_STARTED,
             PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.CEO_REVIEWING,
@@ -207,7 +207,7 @@ public class PricingDecisionService {
         }
         PricingRequestSummaryDto summary = requirePricingRequest(decision.pricingRequestId());
         if (!PricingRequestStatus.CEO_REVIEWING.equals(summary.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO");
         }
         requireActiveDeal(summary.ticketId());
 
@@ -244,14 +244,14 @@ public class PricingDecisionService {
         int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.CEO_REVIEWING,
             PricingRequestStatus.APPROVED_FOR_QUOTATION, null, null);
         if (transitioned == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         addEvent(summary, actor, PricingRequestEventKind.PRICING_DECISION_APPROVED,
             PricingRequestStatus.CEO_REVIEWING, PricingRequestStatus.APPROVED_FOR_QUOTATION,
             "CEO อนุมัติราคาขายแล้ว");
         notifications.notifyEmployeeForPricingRequest(summary.requestedById(), summary.id(),
             PricingRequestEventKind.PRICING_DECISION_APPROVED,
-            "ใบขอราคา " + summary.requestCode() + " ได้รับอนุมัติราคาขายแล้ว");
+            "คำขอราคา " + summary.requestCode() + " ได้รับอนุมัติราคาขายแล้ว");
         return requireDecision(decisionId);
     }
 
@@ -276,7 +276,7 @@ public class PricingDecisionService {
         int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.CEO_REVIEWING,
             PricingRequestStatus.COSTING_REVISION_REQUIRED, null, null);
         if (transitioned == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         addEvent(summary, actor, PricingRequestEventKind.PRICING_DECISION_RETURNED,
             PricingRequestStatus.CEO_REVIEWING, PricingRequestStatus.COSTING_REVISION_REQUIRED,
@@ -284,11 +284,11 @@ public class PricingDecisionService {
         if (summary.assignedImportId() != null) {
             notifications.notifyEmployeeForPricingRequest(summary.assignedImportId(), summary.id(),
                 PricingRequestEventKind.PRICING_DECISION_RETURNED,
-                "ใบขอราคา " + summary.requestCode() + " ถูก CEO ตีกลับให้แก้ไขต้นทุน");
+                "คำขอราคา " + summary.requestCode() + " ถูก CEO ตีกลับให้แก้ไขต้นทุน");
         } else {
             notifications.notifyByRoleForPricingRequest("import", summary.id(),
                 PricingRequestEventKind.PRICING_DECISION_RETURNED,
-                "ใบขอราคา " + summary.requestCode() + " ถูก CEO ตีกลับให้แก้ไขต้นทุน");
+                "คำขอราคา " + summary.requestCode() + " ถูก CEO ตีกลับให้แก้ไขต้นทุน");
         }
         return requireDecision(decisionId);
     }
@@ -367,7 +367,7 @@ public class PricingDecisionService {
             }
         }
         if (latest == null) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคานี้ยังไม่มีการคำนวณต้นทุนที่ส่งเข้ามา");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ยังไม่มีการคำนวณต้นทุนที่ส่งเข้ามา");
         }
         return latest;
     }
@@ -379,7 +379,7 @@ public class PricingDecisionService {
         }
         PricingRequestSummaryDto summary = requirePricingRequest(decision.pricingRequestId());
         if (!PricingRequestStatus.CEO_REVIEWING.equals(summary.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO");
         }
         requireActiveDeal(summary.ticketId());
         return decision;
@@ -392,7 +392,7 @@ public class PricingDecisionService {
 
     private PricingRequestSummaryDto requirePricingRequest(long pricingRequestId) {
         return pricingRequests.findSummary(pricingRequestId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอราคานี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
     }
 
     private void requireActiveDeal(long ticketId) {

@@ -181,7 +181,7 @@ public class PricingRequestService {
         }
         if (!PricingRequestStatus.DRAFT.equals(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ต้องเป็นใบขอราคาที่อยู่ในสถานะ 'DRAFT' เท่านั้น (สถานะปัจจุบัน: '" + summary.status() + "')");
+                "ต้องเป็นคำขอราคาที่อยู่ในสถานะ 'DRAFT' เท่านั้น (สถานะปัจจุบัน: '" + summary.status() + "')");
         }
         TicketSummaryDto ticket = requireTicket(summary.ticketId());
         requireActive(ticket);
@@ -209,7 +209,7 @@ public class PricingRequestService {
 
         boolean updated = requests.updateDraft(id, request);
         if (!updated) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_UPDATED, PricingRequestStatus.DRAFT, PricingRequestStatus.DRAFT,
@@ -226,7 +226,7 @@ public class PricingRequestService {
         }
         if (!PricingRequestStatus.DRAFT.equals(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ต้องเป็นใบขอราคาที่อยู่ในสถานะ 'DRAFT' เท่านั้น (สถานะปัจจุบัน: '" + summary.status() + "')");
+                "ต้องเป็นคำขอราคาที่อยู่ในสถานะ 'DRAFT' เท่านั้น (สถานะปัจจุบัน: '" + summary.status() + "')");
         }
         TicketSummaryDto ticket = requireTicket(summary.ticketId());
         requireActive(ticket);
@@ -299,15 +299,15 @@ public class PricingRequestService {
             // requireViewable() read above and this call. Don't re-query to
             // build a nicer message — see PricingRequestRepository.transition's
             // Javadoc for why.
-            throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_SUBMITTED, PricingRequestStatus.DRAFT,
             PricingRequestStatus.SUBMITTED, null, null);
         notifications.notifyByRoleForPricingRequest("import", summary.id(), "PRICING_REQUEST_SUBMITTED",
-            "ใบขอราคา " + summary.requestCode() + " รอการรับเรื่อง");
+            "คำขอราคา " + summary.requestCode() + " รอการรับเรื่อง");
         notifyCeo(summary, PricingRequestEventKind.PRICING_REQUEST_SUBMITTED,
-            "ใบขอราคา " + summary.requestCode() + " ถูกส่งเข้าสู่ Pricing workflow");
+            "คำขอราคา " + summary.requestCode() + " ถูกส่งเข้าสู่ Pricing workflow");
         return detail(id);
     }
 
@@ -316,7 +316,7 @@ public class PricingRequestService {
         requireRole(actor, IMPORT_ROLES);
         PricingRequestSummaryDto summary = requireViewable(id, actor);
         if (!PricingRequestStatus.SUBMITTED.equals(summary.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "รับเรื่องได้เฉพาะใบขอราคาที่ถูกยื่นแล้วเท่านั้น");
+            throw new ApiException(HttpStatus.CONFLICT, "รับเรื่องได้เฉพาะคำขอราคาที่ถูกยื่นแล้วเท่านั้น");
         }
         TicketSummaryDto ticket = requireTicket(summary.ticketId());
         requireActive(ticket);
@@ -333,15 +333,15 @@ public class PricingRequestService {
         if (rows == 0) {
             // Compare-and-set miss: someone else already picked this up between
             // requireViewable()'s read and here.
-            throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคานี้ถูกรับเรื่องไปแล้วโดยผู้ใช้อื่น");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ถูกรับเรื่องไปแล้วโดยผู้ใช้อื่น");
         }
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_PICKED_UP, PricingRequestStatus.SUBMITTED,
             PricingRequestStatus.IMPORT_REVIEWING, null, null);
         notifications.notifyEmployeeForPricingRequest(summary.requestedById(), summary.id(), "PICKED_UP",
-            "ใบขอราคา " + summary.requestCode() + " ถูกรับเรื่องแล้ว");
+            "คำขอราคา " + summary.requestCode() + " ถูกรับเรื่องแล้ว");
         notifyCeo(summary, PricingRequestEventKind.PRICING_REQUEST_PICKED_UP,
-            "ใบขอราคา " + summary.requestCode() + " ถูกรับเรื่องโดย Import");
+            "คำขอราคา " + summary.requestCode() + " ถูกรับเรื่องโดย Import");
         return detail(id);
     }
 
@@ -357,15 +357,15 @@ public class PricingRequestService {
         requireActive(ticket);
         int rows = requests.requestMoreInformation(id, summary.status());
         if (rows == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.MORE_INFO_REQUESTED, summary.status(),
             PricingRequestStatus.MORE_INFO_REQUIRED, request.message(), toDueDateMetadataJson(request.dueDate()));
         notifications.notifyEmployeeForPricingRequest(summary.requestedById(), summary.id(), "MORE_INFO_REQUIRED",
-            "ใบขอราคา " + summary.requestCode() + " ต้องการข้อมูลเพิ่มเติม");
+            "คำขอราคา " + summary.requestCode() + " ต้องการข้อมูลเพิ่มเติม");
         notifyCeo(summary, PricingRequestEventKind.MORE_INFO_REQUESTED,
-            "ใบขอราคา " + summary.requestCode() + " ถูกขอข้อมูลเพิ่มเติมจาก Sales");
+            "คำขอราคา " + summary.requestCode() + " ถูกขอข้อมูลเพิ่มเติมจาก Sales");
         return detail(id);
     }
 
@@ -378,7 +378,7 @@ public class PricingRequestService {
         }
         if (!PricingRequestStatus.MORE_INFO_REQUIRED.equals(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ต้องเป็นใบขอราคาที่อยู่ในสถานะ 'MORE_INFO_REQUIRED' เท่านั้น (สถานะปัจจุบัน: '" + summary.status() + "')");
+                "ต้องเป็นคำขอราคาที่อยู่ในสถานะ 'MORE_INFO_REQUIRED' เท่านั้น (สถานะปัจจุบัน: '" + summary.status() + "')");
         }
         TicketSummaryDto ticket = requireTicket(summary.ticketId());
         requireActive(ticket);
@@ -387,7 +387,7 @@ public class PricingRequestService {
             .orElse(PricingRequestStatus.IMPORT_REVIEWING);
         int rows = requests.resumeFromMoreInformation(id, resumeStatus);
         if (rows == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.MORE_INFO_RESPONDED, PricingRequestStatus.MORE_INFO_REQUIRED,
@@ -398,10 +398,10 @@ public class PricingRequestService {
         // pickup(), but a defensive check here costs nothing.
         if (summary.assignedImportId() != null) {
             notifications.notifyEmployeeForPricingRequest(summary.assignedImportId(), summary.id(), "MORE_INFO_RESPONDED",
-                "ใบขอราคา " + summary.requestCode() + " ได้รับข้อมูลเพิ่มเติมแล้ว");
+                "คำขอราคา " + summary.requestCode() + " ได้รับข้อมูลเพิ่มเติมแล้ว");
         }
         notifyCeo(summary, PricingRequestEventKind.MORE_INFO_RESPONDED,
-            "ใบขอราคา " + summary.requestCode() + " ได้รับข้อมูลเพิ่มเติมจาก Sales");
+            "คำขอราคา " + summary.requestCode() + " ได้รับข้อมูลเพิ่มเติมจาก Sales");
         return detail(id);
     }
 
@@ -422,11 +422,11 @@ public class PricingRequestService {
         }
         if (!PricingRequestStatus.canTransition(summary.status(), PricingRequestStatus.CANCELLED)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ไม่สามารถยกเลิกใบขอราคาที่อยู่ในสถานะ '" + summary.status() + "' ได้");
+                "ไม่สามารถยกเลิกคำขอราคาที่อยู่ในสถานะ '" + summary.status() + "' ได้");
         }
         int rows = requests.transition(id, summary.status(), PricingRequestStatus.CANCELLED, null, actor.id());
         if (rows == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         requests.cancelOpenStep2Children(id, request.reason(), actor.id());
         // Step 5 (V75, review follow-up): defensive, currently unreachable in practice —
@@ -443,7 +443,7 @@ public class PricingRequestService {
             PricingRequestEventKind.PRICING_REQUEST_CANCELLED, summary.status(), PricingRequestStatus.CANCELLED,
             request.reason(), metadataJson);
         notifyCeo(summary, PricingRequestEventKind.PRICING_REQUEST_CANCELLED,
-            "ใบขอราคา " + summary.requestCode() + " ถูกยกเลิก");
+            "คำขอราคา " + summary.requestCode() + " ถูกยกเลิก");
         return detail(id);
     }
 
@@ -458,7 +458,7 @@ public class PricingRequestService {
         if (Set.of(PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, PricingRequestStatus.SUPERSEDED)
                 .contains(parent.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "สร้าง revision จากการเปลี่ยนแปลงของลูกค้าได้เฉพาะจากใบขอราคาที่ยื่นและยังดำเนินการอยู่เท่านั้น");
+                "สร้าง revision จากการเปลี่ยนแปลงของลูกค้าได้เฉพาะจากคำขอราคาที่ยื่นและยังดำเนินการอยู่เท่านั้น");
         }
         TicketSummaryDto ticket = requireTicket(parent.ticketId());
         requireActive(ticket);
@@ -467,7 +467,7 @@ public class PricingRequestService {
         if (existing != null) {
             if (existing.parentPricingRequestId() == null || existing.parentPricingRequestId() != id) {
                 throw new ApiException(HttpStatus.CONFLICT,
-                    "clientRequestId นี้ถูกใช้ไปแล้วกับใบขอราคาอื่น");
+                    "clientRequestId นี้ถูกใช้ไปแล้วกับคำขอราคาอื่น");
             }
             return detail(existing.id());
         }
@@ -488,7 +488,7 @@ public class PricingRequestService {
         }
         int superseded = requests.supersedeForCustomerRevision(parent.id(), newId);
         if (superseded == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "ใบขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         requests.cancelOpenStep2Children(parent.id(), "Customer change revision created", actor.id());
         // Step 5 (V75, design correction 1): also supersede any DRAFT/APPROVED pricing_decision
@@ -502,7 +502,7 @@ public class PricingRequestService {
             PricingRequestEventKind.PRICING_REQUEST_CREATED, null, PricingRequestStatus.DRAFT,
             request.revisionReason(), toRevisionMetadataJson(parent.id()));
         notifyCeo(parent, PricingRequestEventKind.PRICING_REQUEST_REVISED,
-            "ใบขอราคา " + parent.requestCode() + " มี customer-change revision ใหม่");
+            "คำขอราคา " + parent.requestCode() + " มี customer-change revision ใหม่");
         return detail(newId);
     }
 
@@ -528,7 +528,7 @@ public class PricingRequestService {
         }
         if (!ATTACHMENT_EDITABLE_STATUSES.contains(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "แนบไฟล์ได้เฉพาะเมื่อใบขอราคาอยู่ในสถานะ DRAFT หรือ MORE_INFO_REQUIRED เท่านั้น");
+                "แนบไฟล์ได้เฉพาะเมื่อคำขอราคาอยู่ในสถานะ DRAFT หรือ MORE_INFO_REQUIRED เท่านั้น");
         }
         TicketSummaryDto ticket = requireTicket(summary.ticketId());
         requireActive(ticket);
@@ -549,7 +549,7 @@ public class PricingRequestService {
     /** Resolves and authorizes an attachment id back to its parent request in one step. */
     private PricingRequestAttachmentDto requireViewableAttachment(long attachmentId, UserPrincipal actor) {
         PricingRequestAttachmentDto attachment = requests.findAttachment(attachmentId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบของใบขอราคานี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบของคำขอราคานี้"));
         requireViewable(attachment.pricingRequestId(), actor);
         return attachment;
     }
@@ -562,7 +562,7 @@ public class PricingRequestService {
         requireViewableAttachment(attachmentId, actor);
         String path = requests.findAttachmentFilePath(attachmentId);
         if (path == null) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบของใบขอราคานี้");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบของคำขอราคานี้");
         }
         return path;
     }
@@ -571,14 +571,14 @@ public class PricingRequestService {
     public void deleteAttachment(long attachmentId, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         PricingRequestAttachmentDto attachment = requests.findAttachment(attachmentId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบของใบขอราคานี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบของคำขอราคานี้"));
         PricingRequestSummaryDto summary = requireViewable(attachment.pricingRequestId(), actor);
         if (summary.ticketCreatedById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (!ATTACHMENT_EDITABLE_STATUSES.contains(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ลบไฟล์แนบได้เฉพาะเมื่อใบขอราคาอยู่ในสถานะ DRAFT หรือ MORE_INFO_REQUIRED เท่านั้น");
+                "ลบไฟล์แนบได้เฉพาะเมื่อคำขอราคาอยู่ในสถานะ DRAFT หรือ MORE_INFO_REQUIRED เท่านั้น");
         }
         String path = requests.findAttachmentFilePath(attachmentId);
         requests.deleteAttachment(attachmentId);
@@ -606,7 +606,7 @@ public class PricingRequestService {
         PricingRequestAttachmentDto attachment = requireViewableAttachment(attachmentId, actor);
         int rows = requests.setIncludeInFactoryEmail(attachmentId, Boolean.TRUE.equals(request.includeInFactoryEmail()));
         if (rows == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "ไม่สามารถอัปเดตไฟล์แนบของใบขอราคานี้ได้");
+            throw new ApiException(HttpStatus.CONFLICT, "ไม่สามารถอัปเดตไฟล์แนบของคำขอราคานี้ได้");
         }
         return requests.findAttachment(attachment.id()).orElseThrow();
     }
@@ -779,7 +779,7 @@ public class PricingRequestService {
 
     private PricingRequestDetailDto detail(long id) {
         PricingRequestSummaryDto summary = requests.findSummary(id)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอราคานี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
         return new PricingRequestDetailDto(summary, requests.findItems(id), requests.findEvents(id));
     }
 
@@ -791,7 +791,7 @@ public class PricingRequestService {
     private PricingRequestSummaryDto requireViewable(long id, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
         PricingRequestSummaryDto summary = requests.findSummary(id)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอราคานี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
         // A DRAFT is the rep's private scratchpad (see this class's Javadoc) — only
         // the owning sales rep and managerial oversight (ceo/sales_manager) may see
         // it. import/account must not, even though they can see every other status.
@@ -800,7 +800,7 @@ public class PricingRequestService {
         // ids to enumerate other reps' in-flight drafts. 404 is indistinguishable
         // from "no such id", which is what we want a non-owner to see.
         if (PricingRequestStatus.DRAFT.equals(summary.status()) && !canSeeDraft(actor, summary)) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอราคานี้");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้");
         }
         if ("sales".equals(actor.role()) && summary.ticketCreatedById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
