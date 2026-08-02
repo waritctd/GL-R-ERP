@@ -152,10 +152,11 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   // ── sales: issue + accept the customer quotation, confirm the order ─
   await switchRole(page, 'sales');
   await spaGoto(page, ticketPath);
-  // Ticket-detail IA rebuild Phase 2 (FIX 5, Opus review): DealQuotationPanel
-  // now lives inside the "ใบเสนอราคา" tab — a fresh navigation always lands
-  // on ภาพรวม, so this locator found nothing until the tab was opened.
-  await page.getByRole('tab', { name: 'ใบเสนอราคา' }).click();
+  // DealQuotationPanel lives inside a tab — a fresh navigation lands on the
+  // default tab, so this locator finds nothing until that tab is opened.
+  // Slice C2b renamed it: the quotation panel's home is now "เอกสาร" (it was
+  // "ใบเสนอราคา"), and the default landing tab is now "ดีล" (it was "ภาพรวม").
+  await page.getByRole('tab', { name: 'เอกสาร' }).click();
   const quotationPanel = page.getByTestId('deal-quotation-panel');
   await expect(quotationPanel).toBeVisible();
   await quotationPanel.getByTestId('deal-quotation-create').click();

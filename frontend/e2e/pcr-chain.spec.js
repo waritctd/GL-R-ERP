@@ -170,11 +170,14 @@ test('sales -> import -> ceo -> sales walks a PCR from draft to quotation-accept
   // ── sales: create + issue the customer quotation, record ACCEPTED ───
   await switchRole(page, 'sales');
   await spaGoto(page, ticketPath);
-  // Ticket-detail IA rebuild Phase 2 (FIX 5, Opus review): DealQuotationPanel
-  // now lives inside the "ใบเสนอราคา" tab, not on the page by default — a
-  // fresh navigation always lands on ภาพรวม, so this locator found nothing
-  // until the tab was opened.
-  await page.getByRole('tab', { name: 'ใบเสนอราคา' }).click();
+  // DealQuotationPanel lives inside a tab, not on the page by default — a
+  // fresh navigation lands on the default tab, so this locator finds nothing
+  // until that tab is opened. Slice C2b renamed it: the quotation panel's home
+  // is now "เอกสาร" (it was "ใบเสนอราคา"), and the default landing tab is now
+  // "ดีล" (it was "ภาพรวม"). The tab's helper span is aria-hidden, so the
+  // accessible name is the label alone — matching on the old label found
+  // nothing at all rather than falling back.
+  await page.getByRole('tab', { name: 'เอกสาร' }).click();
   const quotationPanel = page.getByTestId('deal-quotation-panel');
   await expect(quotationPanel).toBeVisible();
   await quotationPanel.getByTestId('deal-quotation-create').click();

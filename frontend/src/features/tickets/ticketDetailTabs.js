@@ -1,6 +1,13 @@
-// Ticket-detail IA rebuild Phase 2: the SEVEN tabs from the "Tabs (the deal's
-// depth)" table in
-// docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md.
+// Ticket-detail IA rebuild Phase 2 built the SEVEN tabs from the "Tabs (the
+// deal's depth)" table in
+// docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md,
+// grouped by SYSTEM OBJECT. Slice C2b regroups those into SIX tabs grouped by
+// JOB instead — ดีล · สินค้าและราคา · เอกสาร · การเงิน · จัดซื้อ-ส่งมอบ · ประวัติ,
+// the owner-approved target. This slice is a pure relocation: every predicate
+// below is byte-identical to its pre-Slice-C2b counterpart, only moved to
+// wherever its content now lives (a tab-level `isVisible`, or — where a
+// section merged into an unconditional tab — an inner render condition inside
+// TicketDetailPage.jsx). Nothing here widens or narrows who can see what.
 //
 // Each tab is ROLE-projection ONLY: `isVisible(role, sections)` decides
 // whether the tab BUTTON appears at all, never whether its content is dimmed
@@ -15,14 +22,14 @@
 //
 // This module reads `visibleSections(role)` (salesViewScope.js) rather than
 // duplicating its per-role section map — that module's role logic is an
-// authorization-adjacent surface this branch does not touch. Two tabs need
-// an EXTRA role filter on top of `visibleSections` because that module's
-// map, by its own design, is coarser than these tabs need:
+// authorization-adjacent surface this branch does not touch. One predicate
+// needs an EXTRA role filter on top of `visibleSections` because that
+// module's map, by its own design, is coarser than these tabs need:
 //
-//   - ราคา / ใบเสนอราคา: `visibleSections('account')` leaves `pricingRequest`/
-//     `dealQuotation`/`quotation` on for `account` (that role only loses
-//     `pricingRequest`+`dealTracking`... see salesViewScope's own account
-//     branch) — but `PricingRequestService.VIEWER_ROLES` and
+//   - ราคา / เอกสาร (formerly ใบเสนอราคา): `visibleSections('account')` leaves
+//     `pricingRequest`/`dealQuotation`/`quotation` on for `account` (that
+//     role only loses `pricingRequest`+`dealTracking`... see salesViewScope's
+//     own account branch) — but `PricingRequestService.VIEWER_ROLES` and
 //     `CustomerQuotationService.VIEW_ROLES` both exclude `account` for real
 //     (`pricing_accountCannotReadAPricingRequest`,
 //     `quotation_accountCannotListCustomerQuotations`). TicketDetailPage
@@ -30,20 +37,31 @@
 //     `canViewPricingRequests` local) — this module names the same 4 roles
 //     so the tab model doesn't drift from what the page already enforces.
 //
+//     Post-Slice-C2b, only the ใบเสนอราคา half of this filter is still a
+//     TAB-level gate (now on `documents`, unchanged). The ราคา half is no
+//     longer a tab gate at all — PricingRequestPanel merged into `items`
+//     (an unconditionally-visible tab), so that predicate now lives as an
+//     INNER render condition inside TicketDetailPage.jsx, combining the same
+//     `canViewPricingRequests` local with `sections.pricingRequest` — see
+//     that file's own comment at the render site and the `items` entry
+//     below.
+//
 // One KNOWN GAP, reported rather than silently patched (per this branch's
 // brief: "tell me in your report rather than inventing one"): `import` is
-// NOT shown the ใบเสนอราคา tab here, because `visibleSections('import')`
-// already sets both `dealQuotation` and `quotation` to `false` — but
-// `quotation_salesManagerCeoImportCanAllList` proves the real
-// `CustomerQuotationService` grants `import` VIEW access, and the IA spec's
-// own Quotations-tab row lists "import(view)". Fixing this would mean either
-// editing salesViewScope.js's role logic (out of bounds for this branch — see
-// CLAUDE.md's authorization-change rule) or rendering a tab with a role
-// filter that contradicts the content gate the rest of the page already uses
-// for the exact same sections, which would produce a visible-but-empty tab —
-// worse than today. So `import` continues to not see this tab, UNCHANGED
-// from its pre-Phase-2 behaviour (not a new regression) — flagged here as a
-// follow-up for whoever next touches salesViewScope.js's import branch.
+// NOT shown the เอกสาร tab here (formerly ใบเสนอราคา — Slice C2b only
+// renamed/relocated the predicate, it is unchanged), because
+// `visibleSections('import')` already sets both `dealQuotation` and
+// `quotation` to `false` — but `quotation_salesManagerCeoImportCanAllList`
+// proves the real `CustomerQuotationService` grants `import` VIEW access,
+// and the IA spec's own Quotations-tab row lists "import(view)". Fixing this
+// would mean either editing salesViewScope.js's role logic (out of bounds
+// for this branch — see CLAUDE.md's authorization-change rule) or rendering
+// a tab with a role filter that contradicts the content gate the rest of the
+// page already uses for the exact same sections, which would produce a
+// visible-but-empty tab — worse than today. So `import` continues to not see
+// this tab, UNCHANGED from its pre-Phase-2, pre-Slice-C2b behaviour (not a
+// new regression) — flagged here as a follow-up for whoever next touches
+// salesViewScope.js's import branch.
 
 import { visibleSections } from './salesViewScope.js';
 
@@ -58,30 +76,48 @@ const PRICING_AND_QUOTATION_ROLES = new Set(['sales', 'import', 'ceo', 'sales_ma
 
 export const TICKET_DETAIL_TABS = [
   {
-    id: 'overview',
-    label: 'ภาพรวม',
+    id: 'deal',
+    label: 'ดีล',
     helper: 'ข้อมูลดีล',
     // Backed by TicketService.get()/requireViewAccess — every role that can
     // reach this page at all (the ticket query itself already 403'd hr/
     // employee/non-owner-sales upstream, so this component never renders for
-    // them) may see the overview tab: customer/project/contact, items, notes.
+    // them) may see the ดีล tab: customer/project/contact, key dates, and
+    // (Slice C2b) DealTrackingPanel, moved in from the old activity tab —
+    // that panel's own `canViewDealTracking` inner gate travels with it,
+    // unchanged (see TicketDetailPage.jsx's own comment at that render
+    // site).
     // overview_hrCannotReadTheTicket / overview_employeeCannotReadTheTicket /
     // overview_nonOwnerSalesRepCannotReadAnotherRepsTicket /
     // overview_ownerImportCeoAccountSalesManagerCanAllReadIt
     isVisible: () => true,
   },
   {
-    id: 'pricing',
-    label: 'ราคา',
-    helper: 'คำขอราคา',
+    id: 'items',
+    label: 'สินค้าและราคา',
+    helper: 'รายการและราคา',
+    // The items table (+ "แก้ไขรายการสินค้า") carries the same unconditional
+    // gate as `deal` above — every viewer who reaches this page at all may
+    // see its own item list:
+    // overview_hrCannotReadTheTicket / overview_employeeCannotReadTheTicket /
+    // overview_nonOwnerSalesRepCannotReadAnotherRepsTicket /
+    // overview_ownerImportCeoAccountSalesManagerCanAllReadIt
+    //
+    // PricingRequestPanel (formerly its own whole-tab ราคา gate) merges in
+    // here behind an INNER render condition instead — `isVisible` below
+    // stays `() => true` because the items table itself is never hidden,
+    // but TicketDetailPage.jsx reproduces the exact old predicate
+    // (`Boolean(sections.pricingRequest) && canViewPricingRequests`, the
+    // same 4-role list named in this file's header) around just the panel.
+    // See that file's own comment at the render site.
     // pricing_accountCannotReadAPricingRequest / pricing_hrCannotReadAPricingRequest /
     // pricing_employeeCannotReadAPricingRequest /
     // pricing_salesImportCeoSalesManagerCanAllReadIt
-    isVisible: (role, sections) => Boolean(sections.pricingRequest) && PRICING_AND_QUOTATION_ROLES.has(role),
+    isVisible: () => true,
   },
   {
-    id: 'quotations',
-    label: 'ใบเสนอราคา',
+    id: 'documents',
+    label: 'เอกสาร',
     helper: 'เอกสารลูกค้า',
     // quotation_accountCannotListCustomerQuotations / quotation_hrCannotListCustomerQuotations /
     // quotation_employeeCannotListCustomerQuotations /
@@ -91,6 +127,14 @@ export const TICKET_DETAIL_TABS = [
     // The role filter is load-bearing for `account` here (see this file's
     // header) — `sections.dealQuotation`/`sections.quotation` alone are NOT
     // enough, since salesViewScope.js keeps both `true` for that role.
+    //
+    // Content: DealQuotationPanel + DealLegacyQuotations, moved verbatim
+    // from the old `quotations` tab (same gate, same content, only the id/
+    // label changed). This id previously belonged to the attachments tab —
+    // that tab's own `() => true` gate + its per-instance
+    // `canViewDocumentsTab` filter both moved to `history` below, unchanged.
+    // Reusing the `documents` id for different content is intentional (see
+    // this slice's brief) — DealAttachmentsPanel is NOT part of this tab.
     isVisible: (role, sections) => (
       Boolean(sections.dealQuotation || sections.quotation) && PRICING_AND_QUOTATION_ROLES.has(role)
     ),
@@ -108,7 +152,14 @@ export const TICKET_DETAIL_TABS = [
     // salesViewScope.js already sets both `payment` and `depositNotice` false
     // for `import` and leaves them true for sales/sales_manager/ceo/account —
     // exactly matching the real gates above, so no extra role filter is
-    // needed here (unlike the pricing/quotations tabs).
+    // needed here (unlike `documents` above).
+    //
+    // Slice C2b also relocates "ยกเลิกการยืนยันปิดงาน" here from the old
+    // การดำเนินการอื่น ๆ grab-bag (dissolved along with the tab it sat in) —
+    // gated on `can.revokeCloseConfirm`, unchanged. That action's real
+    // server gate (`canRevokeCloseConfirmation`) is account/ceo-only, and
+    // both roles pass this tab's own `payment`/`depositNotice` gate, so the
+    // relocation can never strand the button behind a hidden tab.
     isVisible: (role, sections) => Boolean(sections.payment || sections.depositNotice),
   },
   {
@@ -122,42 +173,13 @@ export const TICKET_DETAIL_TABS = [
     //
     // The narrower ProcurementService.RAW_PO_ROLES={import,ceo} sub-view
     // (rawPo_* tests) is enforced INSIDE DealFulfilmentPanel already — never
-    // re-gated at the tab level, same as the pricing tab's cost/margin
-    // sub-sections.
+    // re-gated at the tab level, same as the items tab's pricing sub-section.
     isVisible: (role, sections) => Boolean(sections.delivery),
   },
   {
-    id: 'documents',
-    label: 'เอกสาร',
-    helper: 'ไฟล์แนบ',
-    // Maps onto today's attachments section as-is (per this branch's brief:
-    // "map onto what exists" — SALES_VIEW_SECTION_IDS has no `attachments`
-    // id). This role-level predicate is deliberately coarse (same `() =>
-    // true` as ภาพรวม) because the document gate is IDENTITY-aware in a way
-    // role+sections alone cannot express: a deal's participants (its
-    // createdById/assignedToId) reach its documents regardless of role, and
-    // that needs THIS ticket, not just the viewer's role. TicketDetailPage.jsx
-    // applies the real per-instance gate on top (`canViewDocumentsTab`),
-    // filtering the tab out of the rendered list and out of `visibleActiveTab`
-    // for anyone it excludes, so nobody gets a rendered tab, a swallowed 403
-    // and a lying "ยังไม่มีไฟล์แนบ" empty state.
-    //
-    // Issue #389: the ROLE half of that gate is now
-    // ROLE_PERMISSIONS.canViewTicketDocuments, mirroring
-    // TicketAccessPolicy.canViewDocuments. `account` DOES see this tab now —
-    // it is the role asked to confirm money against these very files — while
-    // a non-assignee `import` still does not, because AttachType spans
-    // SIGNED_QUOTATION/INVOICE and those carry the approved customer price
-    // salesViewScope already hides from import. Writing is narrower again;
-    // see ROLE_PERMISSIONS.canManageTicketDocuments. The refusals this mirrors
-    // are pinned by attachments_* in TicketIaAuthzMatrixIntegrationTest and by
-    // AttachmentTicketAccessIntegrationTest.
-    isVisible: () => true,
-  },
-  {
-    id: 'activity',
-    label: 'กิจกรรม',
-    helper: 'ประวัติ',
+    id: 'history',
+    label: 'ประวัติ',
+    helper: 'กิจกรรมและไฟล์แนบ',
     // FIX 1 (Opus review, owner decision): previously gated on
     // `sections.dealTracking`, which took down the WHOLE tab — including the
     // plain audit trail (`ticket.events`, IA region 18) and the comment box —
@@ -168,20 +190,35 @@ export const TICKET_DETAIL_TABS = [
     // unchanged for every viewer role — only `TicketService.listActivities`
     // (the follow-up feed, region 17) is genuinely gated on
     // `requireDealOwnership`. The owner decided: show this tab to every
-    // viewer of the deal (same `() => true` as ภาพรวม/เอกสาร), and move the
-    // narrower gate INSIDE it — see DealHistoryPanel's `canViewActivityFeed`/
-    // `canAddActivity` props and TicketDetailPage.jsx's own doc comment on
-    // this tab's JSX for exactly what stays restricted.
+    // viewer of the deal (same `() => true` as ดีล/สินค้าและราคา), and move
+    // the narrower gate INSIDE it — see DealHistoryPanel's
+    // `canViewActivityFeed`/`canAddActivity` props and TicketDetailPage.jsx's
+    // own doc comment on this tab's JSX for exactly what stays restricted.
     // activities_importCannotReadTheActivityFeed / activities_accountCannotReadTheActivityFeed /
     // activities_hrCannotReadTheActivityFeed / activities_employeeCannotReadTheActivityFeed /
     // activities_nonOwnerSalesRepCannotReadAnotherRepsActivityFeed /
     // activities_ownerSalesManagerCeoCanAllReadIt (still refused — just no
     // longer taking the audit trail + comment box down with them)
+    //
+    // Slice C2b also folds DealAttachmentsPanel in here from the old
+    // `documents` (attachments) tab — that tab's own `() => true` role gate
+    // travels with it (identity, not role, decides who reaches attachments,
+    // same reasoning as this tab's own gate), but its per-instance
+    // `canViewDocumentsTab` check — formerly a TAB-level filter in
+    // TicketDetailPage.jsx (`visibleTabItems`/`visibleActiveTab`'s old
+    // 'documents' special-casing) — is now an INNER render condition around
+    // just the attachments panel, since this tab is unconditional and has
+    // no tab-level analogue left to filter. See TicketDetailPage.jsx's own
+    // comment at that render site; the underlying predicate
+    // (createdById/assignedToId participant OR
+    // ROLE_PERMISSIONS.canViewTicketDocuments) is untouched. Issue #389's
+    // attachments_*/AttachmentTicketAccessIntegrationTest citations still
+    // apply to that inner condition, unchanged.
     isVisible: () => true,
   },
 ];
 
-export const DEFAULT_TICKET_DETAIL_TAB_ID = 'overview';
+export const DEFAULT_TICKET_DETAIL_TAB_ID = 'deal';
 
 /** The ordered list of tab ids `role` may see for this deal. */
 export function visibleTicketDetailTabIds(role) {
@@ -193,7 +230,7 @@ export function visibleTicketDetailTabIds(role) {
  * `tabId` if it is one `role` may currently see, else
  * `DEFAULT_TICKET_DETAIL_TAB_ID` — an absent, unknown, or role-hidden `?tab=`
  * value (a stale deep link after a role change, a typo, hand-edited URL)
- * never renders a blank/forbidden panel, it silently falls back to Overview.
+ * never renders a blank/forbidden panel, it silently falls back to ดีล.
  */
 export function resolveTicketDetailTab(tabId, role) {
   const visible = visibleTicketDetailTabIds(role);
