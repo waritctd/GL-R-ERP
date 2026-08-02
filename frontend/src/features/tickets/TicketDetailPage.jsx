@@ -40,7 +40,7 @@ import {
   allowedTargetStages, canMarkLost, canSetStage, nextStage, PAYMENT_SUBSTEPS,
 } from './stageMeta.js';
 import {
-  DEFAULT_TICKET_DETAIL_TAB_ID, resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
+  resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
 import { resolveWorkState } from './workState.js';
 
@@ -90,7 +90,10 @@ const IN_PAGE_JUMP_TARGET = {
 // `activeTab`/`setActiveTab` live) switches to the owning tab FIRST and only
 // then performs the jump/ref-call, once that tab's own panel has mounted.
 const JUMP_TARGET_TAB = {
-  'deal-tracking-panel': 'activity',
+  // Slice C2b: DealTrackingPanel moved from the old `activity` tab into
+  // `deal` (see ticketDetailTabs.js's own comment on that tab) — this jump
+  // target moves with it, unchanged element id.
+  'deal-tracking-panel': 'deal',
   'deal-fulfilment-panel': 'fulfilment',
   'deal-deposit-panel': 'money',
 };
@@ -792,24 +795,27 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     downloadRemainingInvoice: st === 'quotation_issued' && fs === 'GOODS_RECEIVED' && isSales,
   };
 
-  // FIX 2 (Opus review): `tabItems`/`activeTab` above are role-level only
-  // (computed before `ticket` loads at all) — เอกสาร additionally needs
-  // `canViewDocumentsTab`'s per-instance identity check, computed once
-  // `ticket` is available. Filtered here, right where isOwner/summary are
-  // finally known, rather than widening `ticketDetailTabs.js`'s (role,
-  // sections)-only `isVisible` signature for one tab.
-  const visibleTabItems = tabItems.filter((tab) => tab.id !== 'documents' || canViewDocumentsTab);
-  const visibleActiveTab = (activeTab === 'documents' && !canViewDocumentsTab) ? DEFAULT_TICKET_DETAIL_TAB_ID : activeTab;
+  // Slice C2b: the FIX 2 (Opus review) per-instance เอกสาร (attachments)
+  // filter that used to live here — `tabItems`/`activeTab` are role-level
+  // only, but the old `documents` (attachments) tab additionally needed
+  // `canViewDocumentsTab`'s per-instance identity check — is gone. That
+  // content now lives inside `history`, an unconditionally-visible tab, so
+  // there is no longer a TAB to filter out or fall back from; the identity
+  // check instead gates just the attachments panel as an inner render
+  // condition (see the `history` TabPanel below). No tab in
+  // ticketDetailTabs.js is per-instance gated any more, so `tabItems`/
+  // `activeTab` are used directly, unfiltered.
+  const visibleTabItems = tabItems;
+  const visibleActiveTab = activeTab;
 
-  // การดำเนินการอื่น ๆ now holds only the rare actions — the workflow-shaped
-  // dual-track confirmations/close live in the sticky header, docs live in
-  // DealStagePanel's เอกสารของขั้นนี้ row, and แก้ไขสถานะ/พักดีลไว้/พัก dormant/
-  // ขอแก้ไข/เสียงาน/ยกเลิก moved into the header overflow menu and the bottom
-  // "จัดการดีล" danger zone (ticket-detail IA rebuild Phase 1 — see
-  // workState.js's own doc comment). The section hides entirely when none of
-  // the remaining actions apply.
-  const hasActions = can.editItems || can.revokeCloseConfirm
-    || (st === 'draft' && isOwner && items.length === 0);
+  // การดำเนินการอื่น ๆ (ticket-detail IA rebuild Phase 1's leftover grab-bag —
+  // see workState.js's own doc comment for where its other siblings went)
+  // is dissolved as of Slice C2b: `can.editItems` moves into the items
+  // table's own panel header (it's an items action) and `can.revokeCloseConfirm`
+  // moves into the money tab (it's a close-lifecycle action, unrelated to
+  // items) — each rendered directly at its new site below rather than behind
+  // one shared `hasActions` flag. The empty-draft hint travels with
+  // `can.editItems` into the items panel.
 
   // Next-action summary for the current viewer only — derived strictly from the
   // `can` flags above (which already encode real status+role permission checks).
@@ -950,28 +956,32 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'create_pcr') {
       // Ticket-detail IA rebuild Phase 2: PricingRequestPanel now lives
-      // inside the "ราคา" tab, mounted only while that tab is active —
-      // `runOnTab` switches to it first, then calls the ref (see this
-      // component's own doc comment on `runOnTab`).
+      // inside the "สินค้าและราคา" tab (Slice C2b renamed/merged the old
+      // "ราคา" tab into `items` — same panel, same mount point), mounted
+      // only while that tab is active — `runOnTab` switches to it first,
+      // then calls the ref (see this component's own doc comment on
+      // `runOnTab`).
       stickyPrimaryAction = (
-        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('pricing', () => pricingRequestPanelRef.current?.openCreate())}>
+        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('items', () => pricingRequestPanelRef.current?.openCreate())}>
           <Icon name="plus" size={14} />
           {workStateAction.label}
         </button>
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'issue_quotation') {
-      // DealQuotationPanel now lives inside the "ใบเสนอราคา" tab.
+      // DealQuotationPanel now lives inside the "เอกสาร" tab (Slice C2b
+      // renamed the old "ใบเสนอราคา" tab id from `quotations` to `documents`
+      // — same panel, same content, same gate).
       stickyPrimaryAction = (
-        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('quotations', () => dealQuotationPanelRef.current?.openIssueQuotation())}>
+        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('documents', () => dealQuotationPanelRef.current?.openIssueQuotation())}>
           {workStateAction.label}
         </button>
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'confirm_order') {
-      // DealQuotationPanel now lives inside the "ใบเสนอราคา" tab.
+      // DealQuotationPanel now lives inside the "เอกสาร" tab (see comment above).
       stickyPrimaryAction = (
-        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('quotations', () => dealQuotationPanelRef.current?.openConfirmOrder())}>
+        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('documents', () => dealQuotationPanelRef.current?.openConfirmOrder())}>
           {workStateAction.label}
         </button>
       );
@@ -1380,30 +1390,30 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       />
       </div>
 
-      {/* Ticket-detail IA rebuild Phase 2 (see
-          docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md
-          "Tabs (the deal's depth)"): the seven role-projected tabs —
-          ticketDetailTabs.js decides which ones this viewer's role may see
-          at all (never a security boundary, same as salesViewScope.js it
-          reads from), and Tabs.jsx keeps only the active one mounted.
-          FIX 2 (Opus review): `tabItems`'s role-level filter can't express
-          เอกสาร's per-instance identity gate (it needs THIS ticket's
-          createdById/assignedToId, not just the viewer's role — see
-          `canViewDocumentsTab`'s own doc comment above), so it's filtered
-          out here a second time; `visibleActiveTab` mirrors the same
-          fallback `resolveTicketDetailTab` already uses for a role-hidden
-          tab, for the one tab that predicate can't see: a stale/forbidden
-          `?tab=documents` deep link (account, or an import rep who isn't
-          this ticket's assignee) falls back to ภาพรวม instead of
-          highlighting a tab with no button and rendering nothing. */}
+      {/* Ticket-detail IA rebuild Phase 2 built the seven role-projected tabs
+          from docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md
+          "Tabs (the deal's depth)", grouped by system object. Slice C2b
+          ("the 7→6 tab restructure") regroups them into six tabs grouped by
+          JOB instead — ดีล · สินค้าและราคา · เอกสาร · การเงิน · จัดซื้อ-ส่งมอบ ·
+          ประวัติ — per the owner-approved IA. ticketDetailTabs.js still
+          decides which ones this viewer's role may see at all (never a
+          security boundary, same as salesViewScope.js it reads from), and
+          Tabs.jsx keeps only the active one mounted.
+          FIX 2 (Opus review) used to filter the `documents` (attachments)
+          tab a second time here for its per-instance `canViewDocumentsTab`
+          identity gate. That tab is gone — DealAttachmentsPanel now lives
+          inside `history` (an unconditionally-visible tab) behind an INNER
+          render condition instead, so no tab in ticketDetailTabs.js is
+          per-instance gated any more and this second filter is no longer
+          needed (`visibleTabItems`/`visibleActiveTab` above are now plain
+          aliases of `tabItems`/`activeTab` — see that assignment's own
+          comment). */}
       <div className="min-w-0">
-      <TabPanel id="overview" idPrefix="ticket-detail" active={visibleActiveTab === 'overview'}>
+      <TabPanel id="deal" idPrefix="ticket-detail" active={visibleActiveTab === 'deal'}>
           {/* Ticket-workspace IA rebuild Slice B ("retire the context rail, one
               comment composer"): วันสำคัญ / ผู้เกี่ยวข้อง moved here verbatim from
               the now-deleted TicketContextPanel.jsx sticky rail — same fields,
-              same labels, same assignedImport role-scoped readout. This tab
-              becomes "ดีล" in Slice C; this slice only relocates content into
-              it, nothing is renamed. */}
+              same labels, same assignedImport role-scoped readout. */}
           <div className="grid gap-4 sm:grid-cols-2">
             <section className="rounded-lg border border-border bg-surface p-4 shadow-sm">
               <ContextSection title="วันสำคัญ" helper="Key dates" icon="calendar">
@@ -1428,9 +1438,45 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             </section>
           </div>
 
+          {/* Slice C2b: DealTrackingPanel moved in from the old "activity"
+              tab — same `canViewDealTracking` gate, moved verbatim (see
+              ticketDetailTabs.js's own comment on this tab and
+              JUMP_TARGET_TAB's own doc comment above for the jump-target
+              relocation). */}
+          {canViewDealTracking ? (
+            // id: the sticky bar's FOLLOW_UP/LOG_ACTIVITY jump target (see
+            // IN_PAGE_JUMP_TARGET above) — scroll-mt so it doesn't tuck under
+            // the sticky header, tabIndex so the jump can actually move focus
+            // here.
+            <div id="deal-tracking-panel" tabIndex={-1} className="scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none">
+              <DealTrackingPanel
+                summary={summary}
+                events={events}
+                activities={activities}
+                canEdit={isOwner || role === 'sales_manager' || role === 'ceo'}
+                onUpdateTracking={(payload) => updateTrackingMutation.mutateAsync(payload)}
+                updating={updateTrackingMutation.isPending}
+              />
+            </div>
+          ) : null}
+      </TabPanel>
+
+      <TabPanel id="items" idPrefix="ticket-detail" active={visibleActiveTab === 'items'}>
           <section className="table-panel">
             <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h2>รายการสินค้า ({editMode ? editDraft.length : items.length} รายการ)</h2>
+              {can.editItems && !editMode && (
+                <button type="button" className="secondary-button" disabled={actionLoading}
+                  onClick={() => {
+                    setEditDraft(items.map((item) => ({ ...item })));
+                    setEditNote('');
+                    setEditMode(true);
+                    setFieldErrorsForPrefix('editItems.qty.', {});
+                  }}>
+                  <Icon name="pencil" size={14} />
+                  แก้ไขรายการสินค้า
+                </button>
+              )}
             </div>
 
             {editMode ? (
@@ -1727,58 +1773,44 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 ))}
               </>
             )}
+
+            {/* Slice C2b: this hint travels with can.editItems into the
+                items panel — same condition, unchanged, moved verbatim from
+                the old (now-dissolved) การดำเนินการอื่น ๆ grab-bag below the
+                table. */}
+            {st === 'draft' && isOwner && items.length === 0 && (
+              <div style={{ padding: '0 18px 16px' }}>
+                <span className="rounded-lg border border-border bg-surface-subtle px-3 py-2 text-xs text-text-muted">
+                  ดีลนี้ยังไม่มีรายการสินค้า — กด “แก้ไขรายการสินค้า” เพื่อเพิ่มก่อนส่งขอราคา
+                </span>
+              </div>
+            )}
           </section>
 
-          {hasActions && (
-            <section className="panel" style={{ background: 'var(--color-surface-muted)' }}>
-              <div className="panel-header">
-                <h2>การดำเนินการอื่น ๆ</h2>
-              </div>
-              <div style={{ padding: '12px 18px', display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-                {st === 'draft' && isOwner && items.length === 0 && (
-                  <span className="rounded-lg border border-border bg-surface-subtle px-3 py-2 text-xs text-text-muted">
-                    ดีลนี้ยังไม่มีรายการสินค้า — กด “แก้ไขรายการสินค้า” เพื่อเพิ่มก่อนส่งขอราคา
-                  </span>
-                )}
-                {can.editItems && !editMode && (
-                  <button type="button" className="secondary-button" disabled={actionLoading}
-                    onClick={() => {
-                      setEditDraft(items.map((item) => ({ ...item })));
-                      setEditNote('');
-                      setEditMode(true);
-                      setFieldErrorsForPrefix('editItems.qty.', {});
-                    }}>
-                    <Icon name="pencil" size={14} />
-                    แก้ไขรายการสินค้า
-                  </button>
-                )}
-
-                {can.revokeCloseConfirm && (
-                  <button type="button" className="secondary-button" disabled={actionLoading}
-                    onClick={() => doAction(() => api.tickets.revokeCloseConfirmation(ticketId, {}),
-                      'ยกเลิกการยืนยันปิดงานแล้ว')}>
-                    ยกเลิกการยืนยันปิดงาน
-                  </button>
-                )}
-              </div>
-            </section>
-          )}
-
-      </TabPanel>
-
-      <TabPanel id="pricing" idPrefix="ticket-detail" active={visibleActiveTab === 'pricing'}>
           {/* id: the sticky bar's CREATE_PCR jump target (see
-              IN_PAGE_JUMP_TARGET above). */}
+              IN_PAGE_JUMP_TARGET above). Slice C2b: PricingRequestPanel
+              merges in here from the old whole-tab-gated "ราคา" tab — the
+              old tab-level predicate
+              (`Boolean(sections.pricingRequest) && canViewPricingRequests`,
+              see ticketDetailTabs.js's own comment on the `items` tab)
+              becomes this INNER render condition instead, reproduced
+              exactly: `items` itself is unconditionally visible, so nothing
+              upstream any longer enforces `sections.pricingRequest` for
+              this panel. */}
           <div id="pricing-request-panel" tabIndex={-1} className="scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none">
-            {canViewPricingRequests ? (
+            {canViewPricingRequests && Boolean(sections.pricingRequest) ? (
               <PricingRequestPanel ref={pricingRequestPanelRef} ticketId={ticketId} deal={summary} ticketItems={items} user={user} />
             ) : null}
           </div>
       </TabPanel>
 
-      <TabPanel id="quotations" idPrefix="ticket-detail" active={visibleActiveTab === 'quotations'}>
-          {/* "ราคาและใบเสนอราคา" (Phase 2 Slice S2): the customer-facing tail of
-              the PricingRequest chain (issue/outcome + confirm-order), pulled
+      <TabPanel id="documents" idPrefix="ticket-detail" active={visibleActiveTab === 'documents'}>
+          {/* "เอกสาร" (formerly "ใบเสนอราคา", tab id renamed `quotations` →
+              `documents` in Slice C2b — same content, same gate; this id
+              previously belonged to the attachments tab, whose content moved
+              to `history` below, see ticketDetailTabs.js's own comment).
+              Phase 2 Slice S2: the customer-facing tail of the
+              PricingRequest chain (issue/outcome + confirm-order), pulled
               onto the deal page. Renders nothing until a request reaches
               APPROVED_FOR_QUOTATION — see DealQuotationPanel's own doc
               comment. The factory/costing/CEO-price steps that precede that
@@ -1902,6 +1934,28 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               />
             ) : null}
           </div>
+
+          {/* Slice C2b: relocated here from the dissolved การดำเนินการอื่น ๆ
+              grab-bag — a close-lifecycle action, not an items action, so it
+              belongs with การเงิน rather than สินค้าและราคา. Gate unchanged
+              (`can.revokeCloseConfirm`). Rendered as its own section rather
+              than nested inside the `sections.payment`-gated panel above,
+              since the real server gate (`canRevokeCloseConfirmation`,
+              account/ceo-only) doesn't itself depend on `sections.payment` —
+              though for both those roles it is always true anyway (see
+              ticketDetailTabs.js's own comment on this tab's gate), so the
+              action can never end up stranded behind a hidden `money` tab. */}
+          {can.revokeCloseConfirm && (
+            <section className="panel" style={{ background: 'var(--color-surface-muted)' }}>
+              <div style={{ padding: '12px 18px', display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                <button type="button" className="secondary-button" disabled={actionLoading}
+                  onClick={() => doAction(() => api.tickets.revokeCloseConfirmation(ticketId, {}),
+                    'ยกเลิกการยืนยันปิดงานแล้ว')}>
+                  ยกเลิกการยืนยันปิดงาน
+                </button>
+              </div>
+            </section>
+          )}
       </TabPanel>
 
       <TabPanel id="fulfilment" idPrefix="ticket-detail" active={visibleActiveTab === 'fulfilment'}>
@@ -1929,68 +1983,23 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           </div>
       </TabPanel>
 
-      <TabPanel id="documents" idPrefix="ticket-detail" active={visibleActiveTab === 'documents'}>
-          {/* R5: Attachments. Extracted to DealAttachmentsPanel.jsx
-              (ia-extract Slice C1) — the long "why no ใบกำกับภาษี control
-              here" comment lives there now, verbatim, since it explains that
-              panel's own JSX. `canUpload`/`notTerminal` are computed here
-              (instead of handing the raw `st`/TERMINAL pair down) so the
-              child only ever sees clean booleans; they reproduce the
-              original `!TERMINAL.includes(st) && ...` guards exactly. */}
-          <DealAttachmentsPanel
-            attachments={attachments}
-            attachLoading={attachLoading}
-            canManageDocuments={canManageDocuments}
-            uploadingFile={uploadingFile}
-            onUploadAttachment={handleUploadAttachment}
-            onDeleteAttachment={handleDeleteAttachment}
-            canUpload={!TERMINAL.includes(st) && canManageDocuments}
-            notTerminal={!TERMINAL.includes(st)}
-            user={user}
-          />
-      </TabPanel>
-
-      <TabPanel id="activity" idPrefix="ticket-detail" active={visibleActiveTab === 'activity'}>
-          {/* FIX 1 (Opus review, owner decision): this tab is now visible to
-              every viewer of the deal (ticketDetailTabs.js's own doc comment
-              on the "activity" entry), but DealTrackingPanel's win%/designer/
-              owner/buyer/next-follow-up fields are a DIFFERENT capability
-              from the two the review actually found lost (the audit trail
-              and the comment box, both handled below) — the review named
-              only those two, so this panel keeps its pre-existing
-              dealTracking gate (sales-owner/sales_manager/ceo) rather than
-              newly exposing a capability nobody asked to restore. */}
-          {canViewDealTracking ? (
-            // id: the sticky bar's FOLLOW_UP/LOG_ACTIVITY jump target (see
-            // IN_PAGE_JUMP_TARGET above) — scroll-mt so it doesn't tuck under
-            // the sticky header, tabIndex so the jump can actually move focus
-            // here.
-            <div id="deal-tracking-panel" tabIndex={-1} className="scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none">
-              <DealTrackingPanel
-                summary={summary}
-                events={events}
-                activities={activities}
-                canEdit={isOwner || role === 'sales_manager' || role === 'ceo'}
-                onUpdateTracking={(payload) => updateTrackingMutation.mutateAsync(payload)}
-                updating={updateTrackingMutation.isPending}
-              />
-            </div>
-          ) : null}
-
+      <TabPanel id="history" idPrefix="ticket-detail" active={visibleActiveTab === 'history'}>
           {/* "ประวัติดีล" (IA rebuild): merges the ticket's audit trail
               (ticket.events, formerly its own "ประวัติการดำเนินการ" panel) with
               the deal-tracking activity log (formerly DealTrackingPanel's own
-              "ประวัติการติดตาม (Activity log)" list, trimmed above) into one
-              chronological stream — regions 17+18 of
-              TICKET_INFORMATION_ARCHITECTURE.md.
+              "ประวัติการติดตาม (Activity log)" list) into one chronological
+              stream — regions 17+18 of TICKET_INFORMATION_ARCHITECTURE.md.
               FIX 1 (Opus review, owner decision): the audit trail (events)
               and the comment box (`can.comment`) are backed by
               `TicketService.projectForRole`/`comment`'s `requireViewAccess`,
-              which every viewer of the deal passes — so, unlike before, they
-              are NOT re-gated on `canViewDealTracking` here; only the
-              follow-up feed (`activities`) and its add-activity form stay
-              gated on `requireDealOwnership`, per
-              TicketIaAuthzMatrixIntegrationTest's activities_* cases. */}
+              which every viewer of the deal passes — so they are NOT
+              re-gated on `canViewDealTracking` here; only the follow-up feed
+              (`activities`) and its add-activity form stay gated on
+              `requireDealOwnership`, per TicketIaAuthzMatrixIntegrationTest's
+              activities_* cases. DealTrackingPanel itself (win%/designer/
+              owner/buyer/next-follow-up) is NOT part of this tab any more —
+              Slice C2b moved it into `deal` above, unchanged gate — see
+              ticketDetailTabs.js's own comment on this tab. */}
           <DealHistoryPanel
             events={events}
             activities={activities}
@@ -2005,6 +2014,44 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             onAddActivity={(payload) => addActivityMutation.mutateAsync(payload)}
             addingActivity={addActivityMutation.isPending}
           />
+
+          {/* Slice C2b: DealAttachmentsPanel folds in here from the old
+              `documents` (attachments) tab — that id now holds different
+              content (see the `documents` TabPanel above and
+              ticketDetailTabs.js's own comment on the id reuse). That old
+              tab's own `() => true` role gate travels with it, but its
+              per-instance `canViewDocumentsTab` check — formerly a TAB-level
+              filter in `visibleTabItems`/`visibleActiveTab` (the old
+              'documents' special-casing, now removed — see that
+              assignment's own comment above) — is now this INNER render
+              condition instead, since `history` itself is unconditionally
+              visible and has no tab-level analogue left to filter. Anyone
+              `canViewDocumentsTab` excludes still reaches this whole tab
+              (the history stream above), just not this panel — see
+              `canViewDocumentsTab`'s own doc comment near its declaration
+              for the underlying predicate (unchanged: createdById/
+              assignedToId participant OR
+              ROLE_PERMISSIONS.canViewTicketDocuments).
+              R5: Attachments. Extracted to DealAttachmentsPanel.jsx
+              (ia-extract Slice C1) — the long "why no ใบกำกับภาษี control
+              here" comment lives there now, verbatim, since it explains that
+              panel's own JSX. `canUpload`/`notTerminal` are computed here
+              (instead of handing the raw `st`/TERMINAL pair down) so the
+              child only ever sees clean booleans; they reproduce the
+              original `!TERMINAL.includes(st) && ...` guards exactly. */}
+          {canViewDocumentsTab ? (
+            <DealAttachmentsPanel
+              attachments={attachments}
+              attachLoading={attachLoading}
+              canManageDocuments={canManageDocuments}
+              uploadingFile={uploadingFile}
+              onUploadAttachment={handleUploadAttachment}
+              onDeleteAttachment={handleDeleteAttachment}
+              canUpload={!TERMINAL.includes(st) && canManageDocuments}
+              notTerminal={!TERMINAL.includes(st)}
+              user={user}
+            />
+          ) : null}
       </TabPanel>
       </div>
 
