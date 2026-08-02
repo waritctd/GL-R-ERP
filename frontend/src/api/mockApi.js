@@ -3009,6 +3009,33 @@ const DEMO_ROLE_EMAIL = {
   account:       'demo.import@demo.invalid', // no dedicated account demo
 };
 
+/**
+ * Ascending comparator that mirrors PostgreSQL's default `ORDER BY <col> ASC`.
+ *
+ * The point is NULL placement: PostgreSQL sorts NULLs **last** on an ascending sort (the explicit
+ * `NULLS LAST` written on some of CatalogRepository's sort columns is that default spelled out).
+ * Coercing a null to '' — which this file used to do — sorts it FIRST instead, so a mock that
+ * truncates to `LIMIT :n` would keep a different set of rows than the real query. That is the
+ * issue #434 failure shape: same limit, different order, so truncation drops different rows and
+ * mock-driven verification never sees the real one. An empty string is NOT null in PostgreSQL, so
+ * only null/undefined count as missing here.
+ */
+function pgAsc(a, b) {
+  const aMissing = a === null || a === undefined;
+  const bMissing = b === null || b === undefined;
+  if (aMissing || bMissing) return aMissing === bMissing ? 0 : (aMissing ? 1 : -1);
+  return String(a).localeCompare(String(b));
+}
+
+// Row caps that are HARDCODED in the Java repositories — no caller-supplied limit reaches them,
+// so the mock must apply the same constant or it hands callers a larger set than production ever
+// would. See CatalogRepository.search, CustomerRepository.search, NotificationRepository.
+const CATALOG_SEARCH_LIMIT = 30;
+const CUSTOMER_SEARCH_LIMIT = 30;
+// CatalogController clamps the caller's ?limit to [1, 200] and defaults it to 50.
+const CATALOG_PRICES_DEFAULT_LIMIT = 50;
+const CATALOG_PRICES_MAX_LIMIT = 200;
+
 // Try a real backend fetch (credentials included) and return the Blob, or null on failure.
 async function tryBackendBlob(url) {
   try {
@@ -5735,6 +5762,12 @@ export const api = {
   // covers the supplier purchase price. #388's actual fix is on factoryConfigs /
   // fxRates / priceCalcConfigs below.
   catalog: {
+    // Ordering + truncation mirror CatalogRepository.search: `ORDER BY brand, collection, color
+    // LIMIT 30`. The 30 is HARDCODED in the Java (no caller-supplied limit exists on this
+    // endpoint), and it applies to *every* call — including a non-blank query. This mock used to
+    // slice 30 only on the blank-query branch and return the full unsorted match set otherwise,
+    // i.e. it was systematically MORE forgiving than production exactly where a caller might
+    // reason about "how many matches came back" (issue #434, same shape as the `prices` bug).
     async search(q) {
       requireSession();
       const lower = (q ?? '').toLowerCase();
@@ -5744,8 +5777,11 @@ export const api = {
             c.collection.toLowerCase().includes(lower) ||
             c.color.toLowerCase().includes(lower) ||
             (c.factory ?? '').toLowerCase().includes(lower))
-        : mockCatalog.slice(0, 30);
-      return delay({ items: results });
+        : [...mockCatalog];
+      const ordered = [...results].sort((a, b) => (
+        pgAsc(a.brand, b.brand) || pgAsc(a.collection, b.collection) || pgAsc(a.color, b.color)
+      ));
+      return delay({ items: ordered.slice(0, CATALOG_SEARCH_LIMIT) });
     },
     // `limit` was previously accepted by hrApi but silently DROPPED here, so the mock always
     // returned up to 50 rows regardless of what the caller asked for — a divergence that hid
@@ -5757,7 +5793,11 @@ export const api = {
       requireSession();
       const lower = (q ?? '').toLowerCase();
       const fid = factoryId ? Number(factoryId) : null;
-      const cap = Number(limit) > 0 ? Number(limit) : 50;
+      // Mirrors CatalogController: default 50, then clamped to [1, 200]. Without the upper clamp
+      // the mock would happily honour ?limit=5000 and return 5000 rows where production caps at
+      // 200 — the "mock is more forgiving" direction again (issue #434).
+      const requested = Number(limit) > 0 ? Number(limit) : CATALOG_PRICES_DEFAULT_LIMIT;
+      const cap = Math.min(Math.max(Math.trunc(requested), 1), CATALOG_PRICES_MAX_LIMIT);
       let results = mockProductPrices.filter((p) => {
         if (fid && p.factoryId !== fid) return false;
         if (!lower) return true;
@@ -5770,10 +5810,13 @@ export const api = {
           (p.factoryName   ?? '').toLowerCase().includes(lower)
         );
       });
+      // `ORDER BY f.name, pp.collection NULLS LAST, pp.product_code NULLS LAST` — pgAsc keeps a
+      // null AFTER every present value, which coercing to '' did not: '' sorts first, so a
+      // null-collection row used to survive truncation that the real query would have dropped.
       results = [...results].sort((a, b) => (
-        (a.factoryName ?? '').localeCompare(b.factoryName ?? '')
-        || (a.collection ?? '').localeCompare(b.collection ?? '')
-        || (a.productCode ?? '').localeCompare(b.productCode ?? '')
+        pgAsc(a.factoryName, b.factoryName)
+        || pgAsc(a.collection, b.collection)
+        || pgAsc(a.productCode, b.productCode)
       ));
       return delay({ items: results.slice(0, cap) });
     },
@@ -5987,10 +6030,15 @@ export const api = {
       requireAttachmentTicketAccess(ticketId);
       return delay({ attachments: structuredClone(mockAttachments.filter((a) => a.ticketId === Number(ticketId))) });
     },
-    async upload(ticketId, file, attachType) {
+    // `quotationId` was accepted by hrApi (it is sent as a multipart field when truthy) but
+    // DROPPED here, with the stored record hardcoding `quotationId: null` — so no mock-driven run
+    // could ever produce a quotation-scoped attachment, and any caller branching on that field
+    // silently took the "unscoped" path forever (issue #434, third shape). Now threaded through.
+    async upload(ticketId, file, attachType, quotationId) {
       const { user } = requireAttachmentTicketAccess(ticketId, { write: true });
       const attachment = {
-        id: mockAttachSeq++, ticketId: Number(ticketId), quotationId: null,
+        id: mockAttachSeq++, ticketId: Number(ticketId),
+        quotationId: quotationId ? Number(quotationId) : null,
         fileName: file?.name ?? 'file.pdf',
         attachType: (attachType ?? 'OTHER').toUpperCase(),
         mimeType: file?.type ?? 'application/pdf',
@@ -6024,13 +6072,18 @@ export const api = {
       mockCustomers.push(customer);
       return delay({ customer });
     },
+    // Ordering + truncation mirror CustomerRepository.search: `ORDER BY name LIMIT 30`, with the
+    // 30 hardcoded in the Java (no caller-supplied limit). This mock previously returned every
+    // match in insertion order — unbounded and unsorted — so a caller counting results, or
+    // reading "the first customer", saw something production would never return (issue #434).
     async search(q) {
       requireSession();
       const lower = (q ?? '').toLowerCase();
       const results = lower
         ? mockCustomers.filter((c) => c.name.toLowerCase().includes(lower) || (c.taxId ?? '').includes(lower))
-        : mockCustomers;
-      return delay({ customers: results });
+        : [...mockCustomers];
+      const ordered = [...results].sort((a, b) => pgAsc(a.name, b.name));
+      return delay({ customers: ordered.slice(0, CUSTOMER_SEARCH_LIMIT) });
     },
     async contacts(customerId) {
       requireSession();

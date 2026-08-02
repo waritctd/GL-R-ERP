@@ -40,19 +40,49 @@ Known deliberate divergences worth knowing about: the CEO may cancel a pricing r
 
 ⚠️ Step 1 is **not independently deployable**: ticket-level `submit()` now 409s and the replacement chain does not yet produce a price, so a newly created deal cannot be priced, quoted, or advanced past the pre-quote stages until the later steps land. Do not deploy it alone.
 
-## Mock API contract — shapes are faithful, authz is not
+## Mock API contract — shapes are faithful, authz and behaviour are not
 `frontend/src/api/mockApi.js` (`VITE_USE_MOCKS=true`, the `frontend-mock` launch config) is the
 **default verification surface** — it is what devs, QA and coding agents drive. Its contract is now
 explicit:
 
 - **Endpoints and DTO shapes are a faithful stand-in for the Spring backend.** This is enforced:
   `frontend/src/api/contract.test.js` asserts mockApi's method surface matches `hrApi.js`'s in both
-  directions. If you add a method to `hrApi.js`, add it to `mockApi.js` or the test fails. Genuine
-  exceptions go in that file's `KNOWN_GAPS` with a written reason, not a silent skip.
+  directions, **and that each method declares the same number of parameters** (#434). If you add a
+  method or a parameter to `hrApi.js`, mirror it in `mockApi.js` or the test fails. Genuine
+  exceptions go in that file's `KNOWN_GAPS` / `ARITY_EXEMPTIONS` with a written reason, not a
+  silent skip.
 - **Authorization is NOT authoritative.** The mock's permission gates approximate the Java services
   and are known to diverge. **Verify permission behaviour against the Java service, never the mock.**
   `VITE_USE_MOCKS=true` verification is therefore *incomplete for anything permission-shaped* — say
   so when reporting, rather than claiming a permission rule was verified.
+- **Argument handling — limits, ordering, truncation — is NOT guaranteed by the contract test.**
+  The arity check compares *parameter counts only*. It does not see arguments bundled into a
+  `params` bag (`list({ limit, page, sort })` matches at arity 1 either way), does not check that a
+  declared parameter is actually *used*, and **does not compare ordering at all**. Ordering is not a
+  detail: the same limit under a different sort truncates a *different set of rows*, which is the
+  mechanism of the bug that opened #434. When you mirror a paginated endpoint, mirror its real
+  `ORDER BY` **and** its real `LIMIT` — including whether the cap is caller-supplied or hardcoded in
+  the repository — and cite the Java repository in a comment.
+- **Where the mock MIRRORS a backend computation, mock-driven tests are not independent evidence
+  about that computation.** `computeDraftEtag` deliberately mirrors `PayrollDraftETag.compute`; if
+  the algorithm is wrong the same way on both sides, every mock-driven test passes. A mock can
+  validate plumbing; it can never validate an algorithm it mirrors. Prefer *not* reimplementing
+  payroll/tax/commission math in the mock at all — a "not supported in mock mode" stub is the
+  honest option, and most of this file already takes it.
+
+**The three failure shapes on record**, all of which produced a green suite that was evidence of
+nothing about the behaviour under test:
+
+| Shape | What passes anyway |
+|---|---|
+| Mock **drops** an argument the real API honours (`limit`) | truncation-dependent logic never sees truncation |
+| Mock **mirrors** a backend computation (`computeDraftEtag`) | a shared algorithmic error is invisible on both sides |
+| Mock **omits** a field the feature keys on (`etag`) | the feature's actual code path is never entered |
+
+The common error is treating "green under `VITE_USE_MOCKS=true`" as evidence about *behaviour* when
+it is only ever evidence about *the plumbing the fixture happens to drive*. A mock more permissive
+than production, or a fixture more populated than production, is the same class of lie — and both
+only surface in prod.
 
 A mock that is *more permissive* than production is the dangerous direction: you only find out in
 prod. This is not hypothetical — issue #199 was exactly this (mock let HR approve OT; the real
