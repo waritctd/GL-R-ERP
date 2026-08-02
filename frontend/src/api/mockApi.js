@@ -667,6 +667,11 @@ function sortedFormulaConfig(config) {
   };
 }
 
+// V112 — deal-create modal's ราคาตั้ง (ประมาณการ) display multiplier. Its own single-row store,
+// deliberately separate from mockPriceCalcConfigs (see DealEstimateMarkupController's javadoc for
+// why this is not the margin policy). Matches V112's seed exactly (multiplier 2.000).
+let mockDealEstimateMarkup = { multiplier: 2.0, updatedAt: new Date().toISOString(), updatedBy: null };
+
 // R5: Attachments
 const mockAttachments = [];
 let mockAttachSeq = 1;
@@ -5983,12 +5988,15 @@ export const api = {
   },
 
   // Mirrors FxRateController + BotFxFetchService (pricing/).
-  // #388: list() mirrors FxRateController.READ_ROLES = ceo/import (a costing
-  // input, so it follows PricingCostingService.RAW_COSTING_ROLES). upsert stays
-  // CEO-only.
+  // Owner ruling 2026-08-02: list() widened from #388's ceo/import gate by exactly one role, to
+  // sales, so the deal-create modal's ราคาตั้ง estimate can convert a catalog price to THB for a
+  // plain rep. NOT opened to every authenticated session — the ruling was "should only be to sale".
+  // See FxRateController.READ_ROLES for the full reasoning; it does NOT extend to priceCalcConfigs
+  // below, which is the real margin policy. upsert stays CEO-only, unchanged.
+  // Reminder: this mock's authz is NOT authoritative — the Java service is (see CLAUDE.md).
   fxRates: {
     async list() {
-      hasRole('ceo', 'import');
+      hasRole('ceo', 'import', 'sales');
       return delay({ fxRates: structuredClone(mockFxRates) });
     },
     async upsert(currency, payload) {
@@ -6083,6 +6091,27 @@ export const api = {
       };
       mockPricingFormulaConfigVersions.push(newConfig);
       return delay({ formulaConfig: sortedFormulaConfig(newConfig) });
+    },
+  },
+
+  // Mirrors DealEstimateMarkupController (pricing/), V112. get() is open to any authenticated
+  // session — same reasoning as fxRates.list above (see the controller's javadoc): the deal-create
+  // modal's ราคาตั้ง estimate needs this multiplier for every rep who can pick a catalog item, and
+  // a bare multiplier reveals nothing about landed cost or margin. update stays CEO-only. NOT the
+  // same store as priceCalcConfigs above — that IS the margin policy, this is not.
+  dealEstimateMarkup: {
+    async get() {
+      requireSession();
+      return delay({ dealEstimateMarkup: structuredClone(mockDealEstimateMarkup) });
+    },
+    async update(payload) {
+      const user = hasRole('ceo');
+      mockDealEstimateMarkup = {
+        multiplier: Number(payload.multiplier),
+        updatedAt: new Date().toISOString(),
+        updatedBy: user.id,
+      };
+      return delay({ dealEstimateMarkup: structuredClone(mockDealEstimateMarkup) });
     },
   },
 

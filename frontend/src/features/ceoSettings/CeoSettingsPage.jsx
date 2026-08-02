@@ -451,6 +451,11 @@ export function CeoSettingsPage({ showToast }) {
   // row's error can never bleed onto another row.
   const [fxErrors, setFxErrors] = useState({});       // currency → message
 
+  // Deal-estimate markup (V112) inline edit — single value, same pattern as the FX rows above
+  // but with no per-row keying since there is only ever one multiplier.
+  const [editMarkup, setEditMarkup] = useState(null);   // draft string | null (not editing)
+  const [markupError, setMarkupError] = useState('');
+
   // Config edit modal state
   const [editingConfig, setEditingConfig] = useState(null);  // PriceCalcConfigDto or null
 
@@ -477,7 +482,13 @@ export function CeoSettingsPage({ showToast }) {
   });
   const formulaConfig = formulaConfigQuery.data ?? null;
 
-  const loading = fxRatesQuery.isLoading || configsQuery.isLoading;
+  const markupQuery = useQuery({
+    queryKey: queryKeys.dealEstimateMarkup(),
+    queryFn: () => api.dealEstimateMarkup.get().then((response) => response.dealEstimateMarkup ?? null),
+  });
+  const markup = markupQuery.data ?? null;
+
+  const loading = fxRatesQuery.isLoading || configsQuery.isLoading || markupQuery.isLoading;
 
   useEffect(() => {
     if (fxRatesQuery.error) showToast('error', fxRatesQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
@@ -488,6 +499,9 @@ export function CeoSettingsPage({ showToast }) {
   useEffect(() => {
     if (formulaConfigQuery.error) showToast('error', formulaConfigQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
   }, [formulaConfigQuery.error, showToast]);
+  useEffect(() => {
+    if (markupQuery.error) showToast('error', markupQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
+  }, [markupQuery.error, showToast]);
 
   const saveFxRateMutation = useMutation({
     mutationFn: ({ currency, rateToThb }) => api.fxRates.upsert(currency, { rateToThb }),
@@ -525,6 +539,33 @@ export function CeoSettingsPage({ showToast }) {
     }
     clearFxError(currency);
     saveFxRateMutation.mutate({ currency, rateToThb: Number(val) });
+  }
+
+  const saveMarkupMutation = useMutation({
+    mutationFn: (multiplier) => api.dealEstimateMarkup.update({ multiplier }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.dealEstimateMarkup() });
+      setEditMarkup(null);
+      showToast('success', 'อัปเดตตัวคูณราคาตั้งแล้ว');
+    },
+    onError: (e) => showToast('error', e.message || 'บันทึกไม่สำเร็จ'),
+  });
+
+  // Bounds mirror the backend's UpdateDealEstimateMarkupRequest / V112's
+  // `NUMERIC(6,3) CHECK (multiplier > 0)` column: 999.999 is the largest value the column can
+  // hold, and 0.001 is the smallest value that doesn't round away to 0.000 and trip the CHECK.
+  // Catching this client-side turns a raw Postgres-error toast into a clear Thai message.
+  const MIN_MARKUP = 0.001;
+  const MAX_MARKUP = 999.999;
+
+  function saveMarkup() {
+    const value = Number(editMarkup);
+    if (!editMarkup || isNaN(value) || value < MIN_MARKUP || value > MAX_MARKUP) {
+      setMarkupError(`กรุณากรอกตัวคูณที่ถูกต้อง (${MIN_MARKUP} - ${MAX_MARKUP})`);
+      return;
+    }
+    setMarkupError('');
+    saveMarkupMutation.mutate(value);
   }
 
   function openConfigEdit(cfg) {
@@ -838,6 +879,68 @@ export function CeoSettingsPage({ showToast }) {
           </>
         )}
       </section>
+
+      {/* Deal-estimate markup (V112) — the coarse ราคาตั้ง display multiplier the deal-create
+          modal applies on top of the raw catalog price. Deliberately its own section, separate
+          from "สูตรคำนวณราคา" above: that section IS the margin policy; this is a single bare
+          number with no relationship to it beyond both being CEO-editable pricing inputs. */}
+      {markup ? (
+        <section className="table-panel">
+          <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid var(--color-border)' }}>
+            <h2>ตัวคูณราคาตั้งประมาณการ (หน้าสร้างดีล)</h2>
+          </div>
+          <div style={{ padding: '8px 18px', fontSize: 11, color: 'var(--color-text-muted)', borderBottom: '1px solid var(--color-surface-subtle)' }}>
+            คูณกับราคาแคตตาล็อก (แปลงเป็นบาทแล้ว) เพื่อประมาณ &quot;ราคาตั้ง&quot; ในหน้าสร้างดีล — ไม่ใช่สูตรกำไรจริง ราคาขายจริงยังคำนวณจากขั้นคำขอราคา
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 18px' }}>
+            {editMarkup !== null ? (
+              <div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <input
+                    id="deal-estimate-markup-input"
+                    type="number" step="0.1" min="0"
+                    value={editMarkup}
+                    onChange={(e) => { setEditMarkup(e.target.value); setMarkupError(''); }}
+                    aria-invalid={markupError ? true : undefined}
+                    aria-describedby={markupError ? 'deal-estimate-markup-error' : undefined}
+                    style={{ width: 100, padding: '4px 8px', border: `1px solid ${markupError ? 'var(--color-danger)' : 'var(--color-info-border-strong)'}`, borderRadius: 4, fontSize: 13 }}
+                  />
+                  <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>เท่า</span>
+                  <button type="button" className="primary-button"
+                    style={{ fontSize: 12, padding: '4px 10px' }}
+                    disabled={saveMarkupMutation.isPending}
+                    onClick={saveMarkup}>
+                    {saveMarkupMutation.isPending ? '…' : 'บันทึก'}
+                  </button>
+                  <button type="button" className="secondary-button"
+                    style={{ fontSize: 12, padding: '4px 10px' }}
+                    onClick={() => { setEditMarkup(null); setMarkupError(''); }}>
+                    ยกเลิก
+                  </button>
+                </div>
+                {markupError && (
+                  <p id="deal-estimate-markup-error" role="alert" style={{ margin: '4px 0 0', color: 'var(--color-danger)', fontSize: 11, fontWeight: 600 }}>
+                    {markupError}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <>
+                <strong style={{ fontSize: 15 }}>× {Number(markup.multiplier).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</strong>
+                {/* "แก้ไขตัวคูณ", not the bare "แก้ไข" the ราคาสูตรคำนวณ table above uses — this
+                    section can render at the same time as that table, and a shared accessible
+                    name would make the two edit buttons indistinguishable to assistive tech
+                    (and to a role-query test) once both are on screen. */}
+                <button type="button" className="secondary-button"
+                  style={{ fontSize: 11, padding: '3px 8px' }}
+                  onClick={() => setEditMarkup(String(markup.multiplier))}>
+                  แก้ไขตัวคูณ
+                </button>
+              </>
+            )}
+          </div>
+        </section>
+      ) : null}
 
       {/* Config Edit Modal */}
       {editingConfig && (

@@ -1,20 +1,39 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { dealStageLabel, ticketPriorityLabel } from '../../utils/format.js';
+import { computeItemEstimateThb, formatThb, summarizeItemsEstimate } from './dealEstimatePricing.js';
+
+// Thai copy for each dealEstimatePricing.js `reason` code — keep in sync with that module's
+// EstimateNotComputableReason typedef. An unmapped reason still renders (falls back to the
+// generic message) rather than showing "undefined" to a rep.
+const ESTIMATE_REASON_LABELS = {
+  UNSUPPORTED_UNIT: 'หน่วยราคานี้ยังไม่รองรับ',
+  MISSING_QUANTITY: 'ยังไม่ได้กรอกจำนวน/พื้นที่',
+  NO_FX_RATE: 'ยังไม่มีอัตราแลกเปลี่ยนสำหรับสกุลเงินนี้',
+  NO_CATALOG_PRICE: 'ยังไม่มีราคาแคตตาล็อก',
+  UNIT_BASIS_MISMATCH: 'หน่วยที่เลือกไม่ตรงกับหน่วยราคา — เปลี่ยนหน่วยหรือกรอกอัตราแปลงต่อแผ่น',
+  NOT_CATALOG: 'ไม่ใช่รายการจากแคตตาล็อก',
+  NO_MARKUP: 'ยังไม่มีตัวคูณราคาจาก CEO',
+};
+function estimateReasonLabel(reason) {
+  return ESTIMATE_REASON_LABELS[reason] || 'ยังคำนวณไม่ได้';
+}
 
 const emptyItem = () => ({
   brand: '', model: '', color: '', texture: '', size: '', factory: '',
   unitBasis: 'PIECE', qty: 1, qtySqm: '', sqmPerPiece: null,
-  // source ('catalog' | 'custom') + the catalog's reference price/currency are
-  // UI-only — never sent in the onSubmit payload (see submit() below). They
-  // exist so the items view can badge a line "จากแคตตาล็อก" vs "custom" and
-  // show a read-only reference price, per the Phase 2 mockup.
-  source: 'custom', catalogPrice: null, catalogCurrency: null,
+  // source ('catalog' | 'custom') + the catalog's reference price/currency/priceUnit are UI-only
+  // — never sent in the onSubmit payload (see submit() below). They exist so the items view can
+  // badge a line "จากแคตตาล็อก" vs "custom", show a read-only reference price, and (catalogPriceUnit)
+  // let dealEstimatePricing.js compute the ราคาตั้ง estimate against the right quantity basis.
+  source: 'custom', catalogPrice: null, catalogCurrency: null, catalogPriceUnit: null,
   // catalogPriceId/catalogProductCode ARE sent (see submit()'s items map below) — the catalog
   // identity picked here, persisted on ticket_item (V110) so PricingRequestCreateModal can seed
   // its own catalog link without a re-search. Cleared by updateItem() below whenever the user
@@ -172,6 +191,11 @@ function itemIndexForFieldKey(key) {
 
 // ── small sub-components ──────────────────────────────────────────────────────
 
+// maxHeight 220 was sized for the old 720px-wide modal, where it squeezed the company picker's
+// results down to ~3 visible rows. The modal now renders at size="lg" (see the bottom of this
+// file), so this can grow along with the panel without the dropdown outgrowing it.
+const SEARCH_SELECT_OPTIONS_MAX_HEIGHT = 380;
+
 function SearchSelect({ id, label, value, onSelect, placeholder, options, onSearch, searchValue, onSearchChange, loading, renderOption, renderValue, createNewLabel, onCreateNew, inputRef, error }) {
   const [open, setOpen] = useState(false);
   // Hand-wired aria contract (no <FormField> here — the control renders
@@ -207,7 +231,7 @@ function SearchSelect({ id, label, value, onSelect, placeholder, options, onSear
             aria-describedby={errorId}
           />
           {open && (
-            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.1)', maxHeight: 220, overflowY: 'auto' }}>
+            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.1)', maxHeight: SEARCH_SELECT_OPTIONS_MAX_HEIGHT, overflowY: 'auto' }}>
               {loading && <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--color-text-muted)' }}>กำลังโหลด{label}…</div>}
               {!loading && options.length === 0 && <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--color-text-muted)' }}>ไม่พบข้อมูล</div>}
               {options.map((opt) => (
@@ -361,6 +385,42 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   // focused (not just which item row) so the brand and model inputs for the
   // same row don't both render the same catalogResults dropdown at once.
   const [catalogFocus, setCatalogFocus] = useState(null);
+
+  // ── ราคาตั้ง (ประมาณการ) estimate inputs — FX rates + CEO markup multiplier ────────────
+  // Both fetches degrade silently: if EITHER fails, `estimateReady` below stays false and every
+  // ราคาตั้ง display site is skipped entirely, leaving the existing catalog reference price as the
+  // only price shown (a deal must stay creatable with zero prices — V50). Never surfaced via
+  // showToast from an effect — this repo's useToast has an unstable identity that turns a toast in
+  // a useEffect dep array into an infinite render loop (see CLAUDE.md); these are silent, no-toast
+  // failures on purpose. `retry: false` keeps a genuinely-down endpoint from stalling the modal.
+  const fxRatesQuery = useQuery({
+    queryKey: queryKeys.fxRates(),
+    queryFn: () => api.fxRates.list().then((res) => res.fxRates ?? []),
+    retry: false,
+  });
+  const markupQuery = useQuery({
+    queryKey: queryKeys.dealEstimateMarkup(),
+    queryFn: () => api.dealEstimateMarkup.get().then((res) => res.dealEstimateMarkup ?? null),
+    retry: false,
+  });
+  const fxRatesByCurrency = useMemo(() => {
+    const map = { THB: 1 };
+    for (const rate of fxRatesQuery.data ?? []) {
+      if (rate?.currency) map[rate.currency] = Number(rate.rateToThb);
+    }
+    return map;
+  }, [fxRatesQuery.data]);
+  const markupMultiplier = markupQuery.data?.multiplier ?? null;
+  // Deliberately requires BOTH queries to have actually succeeded with a usable multiplier — never
+  // "readable, so default markup to 1": an un-marked-up supplier cost displayed as ราคาตั้ง is
+  // exactly what the product owner said must not happen (see dealEstimatePricing.js).
+  const estimateReady = fxRatesQuery.isSuccess && markupQuery.isSuccess && markupMultiplier != null;
+  const estimateContext = { fxRatesByCurrency, markupMultiplier };
+  const itemsEstimate = useMemo(
+    () => (estimateReady ? summarizeItemsEstimate(items, estimateContext) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- estimateContext is a fresh object every render; fxRatesByCurrency/markupMultiplier are its real deps
+    [items, estimateReady, fxRatesByCurrency, markupMultiplier],
+  );
 
   // new customer form
   const [showNewCustomer, setShowNewCustomer] = useState(false);
@@ -520,6 +580,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         // sales.pricing_request_item.product_id already points at (V68).
         catalogPriceId: cat.priceId ?? null,
         catalogProductCode: cat.productCode ?? '',
+        catalogPriceUnit: cat.priceUnit ?? null,
       };
     }));
     // Catalog pick fills brand/model/color/texture/size in one shot — clear
@@ -1258,6 +1319,28 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               </span>
             </div>
           ) : null}
+
+          {/* ราคาตั้ง (ประมาณการ) — hidden entirely (not just blank) whenever the FX/markup
+              fetch failed, per the "never fall back to markup=1" rule in dealEstimatePricing.js. */}
+          {estimateReady && item.catalogPrice != null ? (() => {
+            const lineEstimate = computeItemEstimateThb(item, estimateContext);
+            return (
+              <div data-testid={`item-editor-estimate-${index}`} style={{ margin: 0, gridColumn: '1 / -1', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', border: '1px solid var(--color-accent)', borderRadius: 8, background: 'var(--color-success-bg)' }}>
+                <span style={{ fontSize: 11, color: 'var(--color-icon-muted)', fontWeight: 700 }}>
+                  ราคาตั้ง (ประมาณการ) <span style={{ fontWeight: 500, color: 'var(--color-text-muted)' }}>— ราคาแคตตาล็อก × อัตราแลกเปลี่ยน × ตัวคูณ CEO ไม่ใช่ราคาขายจริง</span>
+                </span>
+                {lineEstimate.ok ? (
+                  <span style={{ fontWeight: 800, fontSize: 14, textAlign: 'right' }}>
+                    {formatThb(lineEstimate.unitThb)} บาท/หน่วย
+                    <br />
+                    <span style={{ fontSize: 12 }}>รวม {formatThb(lineEstimate.total)} บาท</span>
+                  </span>
+                ) : (
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-muted)' }}>ยังคำนวณไม่ได้ ({estimateReasonLabel(lineEstimate.reason)})</span>
+                )}
+              </div>
+            );
+          })() : null}
         </div>
       </div>
     );
@@ -1310,6 +1393,11 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   {(item.unitBasis || 'PIECE') === 'SQM'
                     ? (item.qtySqm ? `${item.qtySqm} ตร.ม.` : '—')
                     : (item.qty ? `${item.qty} แผ่น` : '—')}
+                  {estimateReady ? (
+                    <div data-testid={`item-estimate-${index}`} className="mt-0.5 font-semibold text-2xs text-accent-dark">
+                      {itemsEstimate?.perItem[index]?.ok ? `${formatThb(itemsEstimate.perItem[index].total)} บาท` : '—'}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="flex shrink-0 flex-col gap-1">
                   <button type="button" className="icon-button" aria-label={`แก้ไขรายการที่ ${index + 1}`} onClick={() => setEditingItemIndex(index)}>
@@ -1321,6 +1409,19 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                 </div>
               </div>
             ))}
+            {itemsEstimate?.total != null ? (
+              <div data-testid="items-estimate-total" className="flex items-center justify-between rounded-xl border border-accent bg-success-bg px-3.5 py-2.5">
+                <span className="text-xs font-extrabold text-text">
+                  ราคาตั้งรวม (ประมาณการ)
+                  {itemsEstimate.uncomputableCount > 0 ? (
+                    <span data-testid="items-estimate-uncomputable" className="ml-1.5 font-semibold text-2xs text-text-muted">
+                      · ยังคำนวณไม่ได้ {itemsEstimate.uncomputableCount} รายการ
+                    </span>
+                  ) : null}
+                </span>
+                <span className="text-sm font-extrabold text-accent-dark">{formatThb(itemsEstimate.total)} บาท</span>
+              </div>
+            ) : null}
             <button type="button" className="secondary-button" onClick={addItem}>
               <Icon name="plus" size={14} /> เพิ่มรายการสินค้า
             </button>
@@ -1454,6 +1555,19 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                     </span>
                   </div>
                 ))}
+                {itemsEstimate?.total != null ? (
+                  <div data-testid="review-estimate-total" className="mt-1 flex items-center justify-between border-t border-border-subtle pt-1.5 text-sm font-extrabold text-text">
+                    <span>
+                      ราคาตั้งรวม (ประมาณการ)
+                      {itemsEstimate.uncomputableCount > 0 ? (
+                        <span className="ml-1.5 font-semibold text-2xs text-text-muted">
+                          · ยังคำนวณไม่ได้ {itemsEstimate.uncomputableCount} รายการ
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="text-accent-dark">{formatThb(itemsEstimate.total)} บาท</span>
+                  </div>
+                ) : null}
               </div>
             )}
           </div>
@@ -1518,6 +1632,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
       onClose={onClose}
       footer={renderFooter()}
       testId="ticket-create-modal"
+      size="lg"
     >
       {/*
         noValidate: several inputs below still carry the native `required`

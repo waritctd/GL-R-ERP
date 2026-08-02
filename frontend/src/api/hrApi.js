@@ -228,6 +228,10 @@ export const api = {
     get: () => apiRequest(API_ROUTES.pricingFormulaConfig.get),
     update: (payload) => apiRequest(API_ROUTES.pricingFormulaConfig.update, { method: 'POST', body: payload }),
   },
+  dealEstimateMarkup: {
+    get: () => apiRequest(API_ROUTES.dealEstimateMarkup.get),
+    update: (payload) => apiRequest(API_ROUTES.dealEstimateMarkup.update, { method: 'PUT', body: payload }),
+  },
   attachments: {
     list: (ticketId) => apiRequest(API_ROUTES.attachments.list(ticketId)),
     upload: async (ticketId, file, attachType, quotationId) => {
