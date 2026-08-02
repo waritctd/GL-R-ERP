@@ -272,6 +272,24 @@ public class LeaveRepository {
     }
 
     /**
+     * HR's recorded {@code hr.employee.confirm_date}, consulted by §5.2 PERSONAL's "passed
+     * probation" gate (see {@code LeaveService#personalProbationRejectionNote}) ahead of the
+     * computed {@code hire_date + probation_days} fallback, per {@link
+     * th.co.glr.hr.specialmoney.SpecialMoneyPolicyEvaluator#hasPassedProbation}. Nullable, so same
+     * List#get(0) pattern as findHireDate/findProbationDays above -- Stream#findFirst() would NPE
+     * the moment the single row's confirm_date IS null.
+     */
+    public Optional<LocalDate> findConfirmDate(long employeeId) {
+        List<LocalDate> rows = jdbc.query("""
+            SELECT confirm_date
+              FROM hr.employee
+             WHERE employee_id = :employeeId
+            """, Map.of("employeeId", employeeId),
+            (rs, rowNum) -> rs.getObject("confirm_date", LocalDate.class));
+        return rows.isEmpty() ? Optional.empty() : Optional.ofNullable(rows.get(0));
+    }
+
+    /**
      * §5.6 ORDINATION once-per-employment gate (V116), Java-level pre-check paired with the
      * race-proof {@code ux_leave_once_per_employment} partial unique index (see V116's migration
      * comment). Matches the index's own status scope exactly: SUBMITTED/APPROVED count as an

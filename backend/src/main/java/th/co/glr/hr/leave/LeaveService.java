@@ -632,40 +632,48 @@ public class LeaveService {
      * the same cases proven through the real repository (the NULL-column SQL mapping is exactly
      * what Mockito cannot verify).
      *
-     * <p>Resolves "passed probation" the SAME way
-     * {@code SpecialMoneyPolicyEvaluator#evaluateStandardProbationEligibility} already does for
-     * special-money aid: {@code hire_date + probation_days}, where {@code probation_days} falls
-     * back to {@link SpecialMoneyPolicyEvaluator#DEFAULT_PROBATION_DAYS} when NULL on the employee
-     * row. Referencing that constant directly (not a duplicated literal) is what actually prevents
-     * the two rules drifting apart.
+     * <p>Resolves "passed probation" through the SAME shared function
+     * {@code SpecialMoneyPolicyEvaluator#hasPassedProbation} uses for special-money aid eligibility
+     * (owner ruling, 2026-08-03): {@code hr.employee.confirm_date}, when present, is authoritative
+     * and the employee is eligible the day AFTER it; otherwise falls back to {@code hire_date +
+     * probation_days}, where {@code probation_days} falls back to {@link
+     * SpecialMoneyPolicyEvaluator#DEFAULT_PROBATION_DAYS} when NULL on the employee row. Calling the
+     * shared method (not a duplicated copy of the arithmetic) is what actually prevents the two
+     * rules drifting apart.
      *
      * <p>{@code probation_days == 0} means eligible from the hire date itself (no waiting period) --
-     * handled by the plain {@code plusDays(0)} arithmetic below, not a special case. A NULL
-     * hire_date fails closed (returns a rejection), the same direction as every other eligibility
-     * gate in this class -- it must never silently pass.
-     *
-     * <p>DECISION, unlike {@code SpecialMoneyPolicyEvaluator}: this does NOT consult
-     * {@code hr.employee.confirm_date}. The correction this implements was scoped to
-     * {@code hire_date + probation_days}; whether an explicit {@code confirm_date} should also
-     * override PERSONAL eligibility is a separate policy question, left open rather than silently
-     * assumed.
+     * handled by the plain {@code plusDays(0)} arithmetic inside the shared method, not a special
+     * case here. A row with NEITHER {@code confirm_date} NOR {@code hire_date} on file fails closed
+     * (returns a rejection), the same direction as every other eligibility gate in this class -- it
+     * must never silently pass.
      *
      * @return a rejection message, or {@code null} if the employee has passed probation.
      */
     private String personalProbationRejectionNote(long employeeId, LocalDate startDate) {
         Optional<LocalDate> hireDate = leaveRepository.findHireDate(employeeId);
-        if (hireDate.isEmpty()) {
+        Optional<LocalDate> confirmDate = leaveRepository.findConfirmDate(employeeId);
+        if (hireDate.isEmpty() && confirmDate.isEmpty()) {
             return "Your hire date is not on file, so probation status cannot be verified. "
                 + "Contact HR to record it before PERSONAL leave can be used.";
         }
-        int probationDays = leaveRepository.findProbationDays(employeeId)
-            .orElse(SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS);
-        LocalDate probationEndsOn = hireDate.get().plusDays(probationDays);
-        if (probationEndsOn.isAfter(startDate)) {
-            return "PERSONAL leave requires having passed probation (expected " + probationEndsOn
-                + "). Contact HR if this is an exception.";
+        // confirm_date is authoritative when present (see #hasPassedProbation), so probation_days
+        // is only ever consulted on the hire_date fallback path -- skip the extra read otherwise,
+        // the same care findHireDate/findProbationDays already take elsewhere in this class.
+        Integer probationDays =
+            confirmDate.isEmpty() ? leaveRepository.findProbationDays(employeeId).orElse(null) : null;
+        if (SpecialMoneyPolicyEvaluator.hasPassedProbation(
+                hireDate.orElse(null), probationDays, confirmDate.orElse(null), startDate)) {
+            return null;
         }
-        return null;
+        // Presentational only -- the eligibility DECISION above already came from the shared
+        // method; this just recomputes the same "expected eligible on" date for the message,
+        // preferring confirm_date (day-after) the same way the decision itself did.
+        LocalDate probationEndsOn = confirmDate
+            .map(d -> d.plusDays(1))
+            .orElseGet(() -> hireDate.get()
+                .plusDays(probationDays != null ? probationDays : SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS));
+        return "PERSONAL leave requires having passed probation (expected " + probationEndsOn
+            + "). Contact HR if this is an exception.";
     }
 
     /**

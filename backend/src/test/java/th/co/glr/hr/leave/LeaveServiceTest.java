@@ -955,6 +955,75 @@ class LeaveServiceTest {
             org.mockito.ArgumentMatchers.contains("passed probation"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // confirm_date resolution (owner ruling, 2026-08-03): hr.employee.confirm_date, when present,
+    // is authoritative over the computed hire_date + probation_days form, and the employee becomes
+    // eligible the day AFTER it -- NOT on confirm_date itself. Both directions pinned around the
+    // SAME request date (weekdayAfterNotice(), 2026-07-13) so a boundary bug in either direction is
+    // caught. Shares SpecialMoneyPolicyEvaluator#hasPassedProbation with the special-money gate --
+    // see that class's own tests for the resolution's unit coverage in isolation.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void submitRejectsPersonalLeaveOnConfirmDateItself() {
+        // hire_date/probation_days would say "eligible" (hired long ago, low probation_days), but
+        // confirm_date is authoritative and the request date IS confirm_date -- not yet eligible.
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "PERSONAL", weekdayAfterNotice(), weekdayAfterNotice(), "Family matter");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(personalTypeWithMaxConsecutive()));
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
+        when(leaveRepository.findConfirmDate(10L)).thenReturn(Optional.of(weekdayAfterNotice()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(106L);
+        when(leaveRepository.findById(106L)).thenReturn(Optional.of(
+            requestDto(106L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("passed probation"), eq(null), eq(null), eq(null), eq(null), eq(null));
+        // confirm_date is authoritative -- probation_days must never even be read once it is present.
+        verify(leaveRepository, org.mockito.Mockito.never()).findProbationDays(anyLong());
+    }
+
+    @Test
+    void submitAllowsPersonalLeaveTheDayAfterConfirmDate() {
+        // SAME confirm_date family as the rejection above, pinned from the other side: confirm_date
+        // is one day BEFORE the request date this time -> eligible.
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "PERSONAL", weekdayAfterNotice(), weekdayAfterNotice(), "Family matter");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(personalTypeWithMaxConsecutive()));
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
+        when(leaveRepository.findConfirmDate(10L)).thenReturn(Optional.of(weekdayAfterNotice().minusDays(1)));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(107L);
+        when(leaveRepository.findById(107L)).thenReturn(Optional.of(
+            requestDto(107L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+        verify(leaveRepository, org.mockito.Mockito.never()).findProbationDays(anyLong());
+    }
+
+    // NOTE: submitRejectsPersonalLeaveWhenTheEmployeeIsStillInProbation /
+    // submitAllowsPersonalLeaveAfterProbationHasPassed above never stub findConfirmDate, so
+    // Mockito's default Optional.empty() already proves the hire_date+probation_days fallback fires
+    // when confirm_date is NULL -- no separate test needed for that path here.
+
     @Test
     void submitRejectsAnOncePerEmploymentTypeWhenAClaimAlreadyExists() {
         SubmitLeaveRequest request = new SubmitLeaveRequest(
