@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App.jsx';
 
 // Some deeper components (e.g. AppShell.jsx) rely on the classic JSX runtime's
@@ -259,5 +259,81 @@ describe('App / route branches division managers to DivisionManagerOverview', ()
     renderAppAt('/', plainEmployeeUser);
     expect(await screen.findByRole('heading', { name: `สวัสดี คุณ${plainEmployeeUser.name}` })).toBeTruthy();
     expect(screen.queryByText(/ภาพรวมทีม/)).toBeNull();
+  });
+});
+
+// UAT_PHASE1 (app/features.js) is a preview-only ON-switch: this branch's
+// Vercel preview build alone sets VITE_UAT_PHASE1=true (vercel.json), and
+// when it is true, everyone except HR and division managers lands on
+// EmployeeSelfService at '/' — overriding the whole role -> Overview chain
+// above, including the SALES_ENABLED-gated branches. features.js reads
+// import.meta.env at module-load time, so exercising both settings needs
+// vi.stubEnv + vi.resetModules + a dynamic import of a fresh App/api module
+// instance: the static `import { App } from './App.jsx'` (and the api mock
+// it transitively pulled in) at the top of this file already evaluated with
+// the default, unstubbed env before any test ran, so it can only ever prove
+// the UAT_PHASE1-off case.
+describe('App / route with the UAT_PHASE1 preview flag (app/features.js)', () => {
+  const hrUser = { employeeId: 40, name: 'ฝ่ายบุคคล ทดสอบ', role: 'hr', email: 'hr@glr.co' };
+  const salesUserWithEmployeeId = { employeeId: 41, name: 'พนักงานขาย ทดสอบ', role: 'sales', email: 'sales@glr.co' };
+  const salesUserNoEmployeeId = { employeeId: null, name: 'ผู้ใช้ระบบ ทดสอบ', role: 'sales', email: 'sales-noemp@glr.co' };
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  // Re-imports './api/index.js' and './App.jsx' fresh (after vi.resetModules)
+  // so the freshly-evaluated app/features.js picks up the just-stubbed env.
+  async function renderFreshAppAt(path, user) {
+    vi.resetModules();
+    const { api: freshApi } = await import('./api/index.js');
+    freshApi.auth.me.mockResolvedValue({ user });
+
+    const { App: FreshApp } = await import('./App.jsx');
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[path]}>
+          <FreshApp />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it('(a) UAT_PHASE1 on + role sales + has employeeId -> EmployeeSelfService renders, not EmployeeDashboard or SalesOverview', async () => {
+    vi.stubEnv('VITE_UAT_PHASE1', 'true');
+    await renderFreshAppAt('/', salesUserWithEmployeeId);
+
+    expect(await screen.findByRole('heading', { name: `สวัสดี คุณ${salesUserWithEmployeeId.name}` })).toBeTruthy();
+    // EmployeeSelfService's own copy, not shared with SalesOverview's "ดีลของฉัน ..." subtitle.
+    expect(screen.getByText(/เวลาทำงานและคำขอของคุณ/)).toBeTruthy();
+    expect(screen.queryByText(/ดีลของฉัน/)).toBeNull();
+  });
+
+  it('(b) UAT_PHASE1 on + role hr -> HrOverview still renders', async () => {
+    vi.stubEnv('VITE_UAT_PHASE1', 'true');
+    await renderFreshAppAt('/', hrUser);
+
+    expect(await screen.findByRole('heading', { name: 'สวัสดี ฝ่ายบุคคล' })).toBeTruthy();
+  });
+
+  it('(c) UAT_PHASE1 on + a user with NO employeeId -> falls through to EmployeeDashboard, not EmployeeSelfService', async () => {
+    vi.stubEnv('VITE_UAT_PHASE1', 'true');
+    await renderFreshAppAt('/', salesUserNoEmployeeId);
+
+    // EmployeeDashboard's greeting has a comma ("สวัสดี, คุณ..."); EmployeeSelfService's
+    // does not ("สวัสดี คุณ..." — see EmployeeDashboard.jsx / EmployeeSelfService.jsx).
+    expect(await screen.findByRole('heading', { name: `สวัสดี, คุณ${salesUserNoEmployeeId.name}` })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: `สวัสดี คุณ${salesUserNoEmployeeId.name}` })).toBeNull();
+  });
+
+  it('(d) UAT_PHASE1 off -> existing behaviour unchanged (role sales lands on SalesOverview, SALES_ENABLED defaults on)', async () => {
+    vi.stubEnv('VITE_UAT_PHASE1', 'false');
+    await renderFreshAppAt('/', salesUserWithEmployeeId);
+
+    expect(await screen.findByText(/ดีลของฉัน/)).toBeTruthy();
+    expect(screen.queryByText(/เวลาทำงานและคำขอของคุณ/)).toBeNull();
   });
 });

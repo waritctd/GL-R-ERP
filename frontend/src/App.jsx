@@ -7,7 +7,7 @@ import { RouteFallback } from './components/common/RouteFallback.jsx';
 import { LoginPage } from './features/auth/LoginPage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
-import { SALES_ENABLED } from './app/features.js';
+import { SALES_ENABLED, UAT_PHASE1 } from './app/features.js';
 import { hasPermission, isDivisionManager } from './app/permissions.js';
 import { RequireAccess } from './app/RequireAccess.jsx';
 
@@ -212,6 +212,61 @@ export function App() {
     );
   }
 
+  // UAT phase-1 preview short-circuit (app/features.js) — this branch's Vercel
+  // preview build only, see vercel.json's build.env. When UAT_PHASE1 is off
+  // (every build except that one preview), this returns null and the '/'
+  // route falls through unchanged to the existing role -> Overview chain
+  // below. When on, everyone except HR and division managers lands on the
+  // EmployeeSelfService dashboard, regardless of role or SALES_ENABLED — the
+  // requirement for this UAT round is "self-service + employee dashboard
+  // only", not the full role-scoped-views set.
+  function renderUatPhase1Landing() {
+    if (!UAT_PHASE1) return null;
+    if (user.role === 'hr') {
+      return (
+        <HrOverview
+          employees={employees}
+          dashboardSummary={dashboardSummary}
+        />
+      );
+    }
+    if (isDivisionManager(user)) {
+      return (
+        <DivisionManagerOverview
+          user={user}
+          employee={currentEmployee}
+          dashboardSummary={dashboardSummary}
+          showToast={showToast}
+        />
+      );
+    }
+    // EmployeeSelfService is built around the signed-in user's own employee
+    // record (currentEmployee, resolved from user.employeeId — see
+    // useHrData.js), so a user with no employeeId has no such record and
+    // must not be routed there; fall through to the generic EmployeeDashboard
+    // instead, same safety net the existing chain below uses.
+    if (user.employeeId) {
+      return (
+        <EmployeeSelfService
+          user={user}
+          employee={currentEmployee}
+          profileRequests={dashboardRequests}
+          dashboardSummary={dashboardSummary}
+          showToast={showToast}
+        />
+      );
+    }
+    return (
+      <EmployeeDashboard
+        user={user}
+        employee={currentEmployee}
+        profileRequests={dashboardRequests}
+        dashboardSummary={dashboardSummary}
+        showToast={showToast}
+      />
+    );
+  }
+
   return (
     <>
       <Routes>
@@ -228,6 +283,12 @@ export function App() {
           <Route
             path="/"
             element={(
+              // UAT phase-1 preview short-circuit: renderUatPhase1Landing()
+              // returns null (falling through to the chain below unchanged)
+              // whenever UAT_PHASE1 is off, which is every build except this
+              // branch's own Vercel preview — see the function above and
+              // app/features.js.
+              renderUatPhase1Landing() || (
               // Role-scoped views: each role's landing branches off `/` to its own
               // Overview instead of the generic EmployeeDashboard — this generalizes
               // into a role -> Overview map as more roles ship their own (see
@@ -282,6 +343,7 @@ export function App() {
                   dashboardSummary={dashboardSummary}
                   showToast={showToast}
                 />
+              )
               )
             )}
           />

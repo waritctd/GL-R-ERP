@@ -4,6 +4,7 @@
   "installCommand": "npm install --prefix frontend",
   "buildCommand": "npm run build --prefix frontend",
   "outputDirectory": "frontend/dist",
+  "build": { "env": { "VITE_ENABLE_SALES": "false", "VITE_UAT_PHASE1": "true" } },
   "rewrites": [
     { "source": "/api/:path*", "destination": "https://gl-r-erp-uat.onrender.com/api/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
