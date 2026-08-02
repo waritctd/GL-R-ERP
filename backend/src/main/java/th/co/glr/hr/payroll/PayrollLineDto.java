@@ -131,6 +131,18 @@ public record PayrollLineDto(
     // PayrollPage.jsx.
     BigDecimal daysWorked,
     String payType,
+    // Uncapped SSO wage base (V123, defect-2 fix): PayrollCalculator#calculateClassified's own
+    // ssoWageBaseRaw, computed but previously discarded -- ssoWageBase above is that same figure
+    // clamped to [1,650, 17,500], which is what payroll_line.sso_wage_base has always stored and
+    // what tax/contribution math still uses (UNCHANGED by this field). This is purely an additional
+    // persisted figure so SsoExporter can report the real เงินค่าจ้างทั้งสิ้น. Nullable: null means "not
+    // recorded" (every row processed before V123), distinct from a genuine ฿0.00 wage -- see that
+    // migration's column comment and SsoExporter's fallback to ssoWageBase when this is null.
+    // Placed here (not next to ssoWageBase above) so every legacy constructor below except the
+    // 61-arg one is untouched -- only that one forwarding call needed a second trailing null added
+    // (for this field, alongside legalExecutionRequested's existing one) to keep reaching the
+    // canonical constructor.
+    BigDecimal ssoWageGross,
     // Issue #376, D-376-1 fix: the ป.วิ.พ. ม.302 "requested" figure -- the monthly amount actually
     // fed into PayrollCalculator as garnishmentRequested THIS run (DeductionObligationService
     // #resolveMonthlyAmount's return, obligation-clamp already applied if one exists). Carried out
@@ -232,7 +244,12 @@ public record PayrollLineDto(
             withholdingTaxRegularLimb, withholdingTaxCumulativeLimb,
             customerReturnAlreadyEarned, garnishmentType,
             mealAllowance, perDiemExempt, perDiemTaxable, perDiemBasis,
-            customerReturnRequested, daysWorked, payType, null
+            customerReturnRequested, daysWorked, payType,
+            // legalExecutionRequested: never derivable from this arity (see that field's own
+            // javadoc). ssoWageGross: this constructor predates V123 entirely -- every caller at
+            // this arity is a pre-existing test fixture with no SSO-wage-gross concept, so null
+            // (falls back to ssoWageBase in SsoExporter) is correct, not just convenient.
+            null, null
         );
     }
 

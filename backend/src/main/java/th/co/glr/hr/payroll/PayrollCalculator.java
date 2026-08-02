@@ -804,6 +804,7 @@ public class PayrollCalculator {
             unpaidLeaveDeduction,
             grossTaxableIncome,
             ssoWageBase,
+            ssoWageBaseRaw,
             socialSecurity,
             fullAnnualProjection,
             taxExpenseDeduction,

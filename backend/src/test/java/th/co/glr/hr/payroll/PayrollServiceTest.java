@@ -447,7 +447,7 @@ class PayrollServiceTest {
             42L, "GLR-42", "นาง", "กัลยาณี", "ฐิตญาดา", "gullayanee",
             "3100902988046", "1002818495", "3100902988046", "0952555944",
             "99", " ถ.บางนา", "10260",
-            money("30000.00"), money("30000.00"), money("500.00"), money("15000.00"), money("750.00"));
+            money("30000.00"), money("30000.00"), money("500.00"), money("15000.00"), null, money("750.00"), null);
     }
 
     private BigDecimal money(String value) {

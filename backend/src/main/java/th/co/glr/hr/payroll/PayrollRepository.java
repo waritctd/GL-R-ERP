@@ -1324,7 +1324,8 @@ public class PayrollRepository {
                        addr.subdistrict, addr.district, addr.province)), '') AS address_rest,
                    addr.postal_code,
                    pl.net_amount, pl.gross_taxable_income, pl.withholding_tax,
-                   pl.sso_wage_base, pl.social_security
+                   pl.sso_wage_base, pl.sso_wage_gross, pl.social_security,
+                   e.sso_branch_code
               FROM hr.payroll_line pl
               JOIN hr.employee e ON e.employee_id = pl.employee_id
               LEFT JOIN hr.title t ON t.title_id = e.title_id
@@ -1354,7 +1355,12 @@ public class PayrollRepository {
                 rs.getBigDecimal("gross_taxable_income"),
                 rs.getBigDecimal("withholding_tax"),
                 rs.getBigDecimal("sso_wage_base"),
-                rs.getBigDecimal("social_security")));
+                // Nullable, read raw (no money() coercion): NULL is a meaningful "not recorded" for
+                // rows processed before V123, distinct from a genuine ฿0.00 wage. SsoExporter falls
+                // back to sso_wage_base when this is null.
+                rs.getBigDecimal("sso_wage_gross"),
+                rs.getBigDecimal("social_security"),
+                rs.getString("sso_branch_code")));
     }
 
     /**
@@ -1573,7 +1579,7 @@ public class PayrollRepository {
                 special_pay_total, overtime_pay, commission_pay, gross_amount,
                 non_taxable_income,
                 unpaid_leave_days, unpaid_leave_deduction, gross_taxable_income,
-                sso_wage_base, social_security, projected_annual_income,
+                sso_wage_base, sso_wage_gross, social_security, projected_annual_income,
                 tax_expense_deduction, tax_allowance_total, taxable_annual_income,
                 annual_tax, withholding_tax, student_loan_deduction,
                 legal_execution_deduction, other_post_tax_deductions, deductions,
@@ -1599,7 +1605,7 @@ public class PayrollRepository {
                 :specialPayTotal, :overtimePay, :commissionPay, :grossAmount,
                 :nonTaxableIncome,
                 :unpaidLeaveDays, :unpaidLeaveDeduction, :grossTaxableIncome,
-                :ssoWageBase, :socialSecurity, :projectedAnnualIncome,
+                :ssoWageBase, :ssoWageGross, :socialSecurity, :projectedAnnualIncome,
                 :taxExpenseDeduction, :taxAllowanceTotal, :taxableAnnualIncome,
                 :annualTax, :withholdingTax, :studentLoanDeduction,
                 :legalExecutionDeduction, :otherPostTaxDeductions, :deductions,
@@ -1643,6 +1649,10 @@ public class PayrollRepository {
                 .addValue("unpaidLeaveDeduction", line.unpaidLeaveDeduction())
                 .addValue("grossTaxableIncome", line.grossTaxableIncome())
                 .addValue("ssoWageBase", line.ssoWageBase())
+                // Nullable, no COALESCE: NULL genuinely means "not recorded" (see the column comment
+                // in V123), distinct from a computed ฿0.00. Every line processed from here forward
+                // carries the real PayrollCalculator#ssoWageBaseRaw value (see PayrollService).
+                .addValue("ssoWageGross", line.ssoWageGross())
                 .addValue("socialSecurity", line.socialSecurity())
                 .addValue("projectedAnnualIncome", line.projectedAnnualIncome())
                 .addValue("taxExpenseDeduction", line.taxExpenseDeduction())
