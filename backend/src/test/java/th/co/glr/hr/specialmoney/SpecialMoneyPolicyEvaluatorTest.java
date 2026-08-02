@@ -98,7 +98,7 @@ class SpecialMoneyPolicyEvaluatorTest {
                 amounts(Map.of()),
                 EXCLUDED_PROVINCES);
 
-        assertThat(decision.violations()).anyMatch(v -> v.contains("remaining annual balance"));
+        assertThat(decision.violations()).anyMatch(v -> v.contains("วงเงินคงเหลือ"));
         assertThat(decision.eligibleAmount()).isEqualByComparingTo(bd(1000));
     }
 
@@ -117,7 +117,7 @@ class SpecialMoneyPolicyEvaluatorTest {
                 amounts(Map.of()),
                 EXCLUDED_PROVINCES);
 
-        assertThat(decision.violations()).anyMatch(v -> v.contains("older than one month"));
+        assertThat(decision.violations()).anyMatch(v -> v.contains("เกินหนึ่งเดือน"));
     }
 
     @Test
@@ -136,7 +136,7 @@ class SpecialMoneyPolicyEvaluatorTest {
                 noUsage(),
                 amounts(Map.of()),
                 EXCLUDED_PROVINCES);
-        assertThat(medicalDecision.violations()).anyMatch(v -> v.contains("not completed probation"));
+        assertThat(medicalDecision.violations()).anyMatch(v -> v.contains("ยังไม่พ้นทดลองงาน"));
 
         SubmitSpecialMoneyRequest kitRequest =
             new SubmitSpecialMoneyRequest(
@@ -192,7 +192,7 @@ class SpecialMoneyPolicyEvaluatorTest {
                 EXCLUDED_PROVINCES);
 
         assertThat(decision.violations())
-            .anySatisfy(v -> assertThat(v).contains("sales-support"));
+            .anySatisfy(v -> assertThat(v).contains("แผนกสนับสนุนงานขาย"));
     }
 
     // ---------------------------------------------------------------------
@@ -221,7 +221,7 @@ class SpecialMoneyPolicyEvaluatorTest {
                 amounts(Map.of()),
                 EXCLUDED_PROVINCES);
 
-        assertThat(decision.violations()).anyMatch(v -> v.contains("dated in May"));
+        assertThat(decision.violations()).anyMatch(v -> v.contains("เดือนพฤษภาคม"));
     }
 
     @Test
@@ -240,7 +240,7 @@ class SpecialMoneyPolicyEvaluatorTest {
                 amounts(Map.of()),
                 EXCLUDED_PROVINCES);
 
-        assertThat(decision.violations()).anyMatch(v -> v.contains("submitted in June"));
+        assertThat(decision.violations()).anyMatch(v -> v.contains("เดือนมิถุนายน"));
     }
 
     @Test
@@ -285,7 +285,7 @@ class SpecialMoneyPolicyEvaluatorTest {
                 amounts(Map.of()),
                 EXCLUDED_PROVINCES);
 
-        assertThat(decision.violations()).anyMatch(v -> v.contains("maximum of 4 pieces"));
+        assertThat(decision.violations()).anyMatch(v -> v.contains("จำนวนสูงสุด 4 ชิ้น"));
         assertThat(decision.eligibleAmount()).isEqualByComparingTo(bd(1200));
     }
 
@@ -329,7 +329,7 @@ class SpecialMoneyPolicyEvaluatorTest {
                 amountsWithConfiguredSalesSupportCode("17"),
                 EXCLUDED_PROVINCES);
 
-        assertThat(decision.violations()).anyMatch(v -> v.contains("sales-support department"));
+        assertThat(decision.violations()).anyMatch(v -> v.contains("แผนกสนับสนุนงานขาย"));
     }
 
     @Test
@@ -348,7 +348,7 @@ class SpecialMoneyPolicyEvaluatorTest {
                 amountsWithConfiguredSalesSupportCode("17"),
                 EXCLUDED_PROVINCES);
 
-        assertThat(decision.violations()).anyMatch(v -> v.contains("minimum 7 days"));
+        assertThat(decision.violations()).anyMatch(v -> v.contains("ยังทำงานไม่ครบ 7 วัน"));
     }
 
     // ---------------------------------------------------------------------
@@ -372,7 +372,7 @@ class SpecialMoneyPolicyEvaluatorTest {
                 amounts(Map.of("cap", bd(5000))),
                 EXCLUDED_PROVINCES);
 
-        assertThat(decision.violations()).anyMatch(v -> v.contains("once per lifetime"));
+        assertThat(decision.violations()).anyMatch(v -> v.contains("เบิกได้เพียงครั้งเดียว"));
     }
 
     @Test
@@ -412,7 +412,7 @@ class SpecialMoneyPolicyEvaluatorTest {
                 amounts(Map.of("cap", bd(5000))),
                 EXCLUDED_PROVINCES);
 
-        assertThat(decision.violations()).anyMatch(v -> v.contains("not eligible for funeral aid"));
+        assertThat(decision.violations()).anyMatch(v -> v.contains("ไม่เข้าเงื่อนไขเงินช่วยเหลืองานศพ"));
     }
 
     // ---------------------------------------------------------------------
@@ -435,7 +435,7 @@ class SpecialMoneyPolicyEvaluatorTest {
                 amounts(Map.of()),
                 EXCLUDED_PROVINCES);
 
-        assertThat(decision.violations()).anyMatch(v -> v.contains("excluded"));
+        assertThat(decision.violations()).anyMatch(v -> v.contains("ไม่เข้าเงื่อนไขเบี้ยเลี้ยง"));
         assertThat(decision.eligibleAmount()).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
@@ -499,6 +499,6 @@ class SpecialMoneyPolicyEvaluatorTest {
             EVALUATOR.evaluate(
                 type, request, inactiveEmployee, noUsage(), amountsWithConfiguredSalesSupportCode("17"), EXCLUDED_PROVINCES);
 
-        assertThat(decision.violations()).anyMatch(v -> v.contains("not active"));
+        assertThat(decision.violations()).anyMatch(v -> v.contains("ไม่ได้อยู่ในสถานะทำงาน"));
     }
 }

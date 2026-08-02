@@ -77,7 +77,7 @@ describe('PricingRequestPanel', () => {
   });
 
   // Ticket-detail IA rebuild Phase 1 clutter follow-up (FIX 1): this panel no
-  // longer renders its own "สร้างใบขอราคา" button — TicketDetailPage's sticky
+  // longer renders its own "สร้างคำขอราคา" button — TicketDetailPage's sticky
   // header CTA owns that action now (opening this panel's create modal via
   // its forwardRef, see the "imperative handle" describe block below), so
   // the same label no longer appears twice on one page. The empty state
@@ -86,18 +86,18 @@ describe('PricingRequestPanel', () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
     renderPanel();
 
-    expect(await screen.findByText('ยังไม่มีใบขอราคา')).not.toBeNull();
+    expect(await screen.findByText('ยังไม่มีคำขอราคา')).not.toBeNull();
     expect(screen.getByText(/สร้างได้จากปุ่ม/)).not.toBeNull();
-    expect(screen.queryByRole('button', { name: /สร้างใบขอราคา/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /สร้างคำขอราคา/ })).toBeNull();
   });
 
   it('shows a plainer empty-state description for a non-owner (also no create button)', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
     renderPanel({ user: { id: 2, name: 'อื่น', role: 'sales' } });
 
-    await screen.findByText('ยังไม่มีใบขอราคา');
-    expect(screen.getByText('ยังไม่มีใบขอราคาสำหรับดีลนี้')).not.toBeNull();
-    expect(screen.queryByRole('button', { name: /สร้างใบขอราคา/ })).toBeNull();
+    await screen.findByText('ยังไม่มีคำขอราคา');
+    expect(screen.getByText('ยังไม่มีคำขอราคาสำหรับดีลนี้')).not.toBeNull();
+    expect(screen.queryByRole('button', { name: /สร้างคำขอราคา/ })).toBeNull();
   });
 
   describe('imperative handle (sticky header CTA trigger)', () => {
@@ -115,7 +115,7 @@ describe('PricingRequestPanel', () => {
           />
         </QueryClientProvider>,
       );
-      await screen.findByText('ยังไม่มีใบขอราคา');
+      await screen.findByText('ยังไม่มีคำขอราคา');
 
       act(() => ref.current.openCreate());
 
@@ -130,7 +130,7 @@ describe('PricingRequestPanel', () => {
           <PricingRequestPanel ref={ref} ticketId={701} deal={deal} ticketItems={[]} user={salesOwner} />
         </QueryClientProvider>,
       );
-      await screen.findByText('ยังไม่มีใบขอราคา');
+      await screen.findByText('ยังไม่มีคำขอราคา');
 
       act(() => ref.current.openCreate());
 
@@ -193,7 +193,7 @@ describe('PricingRequestPanel', () => {
     });
     renderPanel();
 
-    const submitButton = await screen.findByRole('button', { name: 'ส่งให้ Import' });
+    const submitButton = await screen.findByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' });
     fireEvent.click(submitButton);
 
     await waitFor(() => expect(api.pricingRequests.submit).toHaveBeenCalledWith(1));
@@ -232,7 +232,7 @@ describe('PricingRequestPanel', () => {
   });
 
   // canUpdatePricingRequest is DRAFT-only (mirrors PricingRequestService.updateDraft)
-  // — once submitted, editing must disappear the same way "ส่งให้ Import" does.
+  // — once submitted, editing must disappear the same way "ส่งให้ฝ่ายนำเข้า" does.
   it('does not offer "แก้ไขร่าง" once a request is past DRAFT', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'SUBMITTED' })] });
     renderPanel();
@@ -241,14 +241,14 @@ describe('PricingRequestPanel', () => {
     expect(screen.queryByRole('button', { name: 'แก้ไขร่าง' })).toBeNull();
   });
 
-  it('never offers "ส่งให้ Import" once a request is past DRAFT, even for the CEO (cancel is still allowed)', async () => {
+  it('never offers "ส่งให้ฝ่ายนำเข้า" once a request is past DRAFT, even for the CEO (cancel is still allowed)', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'SUBMITTED' })] });
     renderPanel({ user: { id: 9, name: 'CEO', role: 'ceo' } });
 
     await screen.findByText('PCR-2026-0001');
     // Submit is DRAFT-only and owner-sales-only (PricingRequestService.submit) —
     // the CEO never gets it, regardless of status.
-    expect(screen.queryByRole('button', { name: 'ส่งให้ Import' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' })).toBeNull();
     // Cancel is the one action the CEO gets on ANY cancellable status, as an
     // explicit override (PricingRequestService.cancel).
     expect(screen.getByRole('button', { name: 'ยกเลิก' })).not.toBeNull();

@@ -34,7 +34,8 @@ describe('ErrorBoundary', () => {
         );
       }).not.toThrow();
 
-      expect(screen.getByText('เกิดข้อผิดพลาด / Something went wrong')).toBeTruthy();
+      expect(screen.getByText('โหลดหน้านี้ไม่สำเร็จ')).toBeTruthy();
+      expect(screen.queryByText('boom')).toBeNull();
     });
 
     it('recovers a now-healthy child after "Try again" is clicked', () => {
@@ -76,6 +77,6 @@ describe('ErrorBoundary', () => {
     );
 
     expect(screen.getByText('all good')).toBeTruthy();
-    expect(screen.queryByText('เกิดข้อผิดพลาด / Something went wrong')).toBeNull();
+    expect(screen.queryByText('โหลดหน้านี้ไม่สำเร็จ')).toBeNull();
   });
 });

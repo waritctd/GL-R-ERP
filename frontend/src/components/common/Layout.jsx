@@ -18,7 +18,7 @@ import { cn } from '../../utils/cn.js';
  */
 export function PageStack({ className, children, ...props }) {
   return (
-    <div className={cn('grid grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]', className)} {...props}>
+    <div className={cn('grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]', className)} {...props}>
       {children}
     </div>
   );
@@ -32,6 +32,8 @@ export function PageStack({ className, children, ...props }) {
  * also exported for callers that need custom header content.
  */
 export function Panel({ title, actions, className, children, ...props }) {
+  const isFlushPanel = typeof className === 'string' && /(?:^|\s)!?p-0(?:\s|$)/.test(className);
+
   return (
     <section
       className={cn(
@@ -41,8 +43,10 @@ export function Panel({ title, actions, className, children, ...props }) {
       {...props}
     >
       {title || actions ? (
-        <PanelHeader>
-          {title ? <h2 className="m-0 text-lg">{title}</h2> : null}
+        <PanelHeader
+          className={isFlushPanel ? 'px-5 pt-4 pb-4 mb-0 border-b border-border-subtle max-[720px]:px-4 max-[720px]:py-3.5' : undefined}
+        >
+          {title ? <h2 className="m-0 min-w-0 text-lg break-words">{title}</h2> : null}
           {actions}
         </PanelHeader>
       ) : null}
@@ -59,7 +63,7 @@ export function Panel({ title, actions, className, children, ...props }) {
 function PanelHeader({ className, children, ...props }) {
   return (
     <div
-      className={cn('flex items-center justify-between gap-[14px] mb-4', className)}
+      className={cn('flex min-h-11 flex-wrap items-center justify-between gap-[14px] mb-4', className)}
       {...props}
     >
       {children}

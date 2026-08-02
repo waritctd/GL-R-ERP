@@ -1,20 +1,44 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { dealStageLabel, ticketPriorityLabel } from '../../utils/format.js';
+import { computeItemEstimateThb, formatThb, summarizeItemsEstimate } from './dealEstimatePricing.js';
+
+// Thai copy for each dealEstimatePricing.js `reason` code — keep in sync with that module's
+// EstimateNotComputableReason typedef. An unmapped reason still renders (falls back to the
+// generic message) rather than showing "undefined" to a rep.
+const ESTIMATE_REASON_LABELS = {
+  UNSUPPORTED_UNIT: 'หน่วยราคานี้ยังไม่รองรับ',
+  MISSING_QUANTITY: 'ยังไม่ได้กรอกจำนวน/พื้นที่',
+  NO_FX_RATE: 'ยังไม่มีอัตราแลกเปลี่ยนสำหรับสกุลเงินนี้',
+  NO_CATALOG_PRICE: 'ยังไม่มีราคาแคตตาล็อก',
+  UNIT_BASIS_MISMATCH: 'หน่วยที่เลือกไม่ตรงกับหน่วยราคา — เปลี่ยนหน่วยหรือกรอกอัตราแปลงต่อแผ่น',
+  NOT_CATALOG: 'ไม่ใช่รายการจากแคตตาล็อก',
+  NO_MARKUP: 'ยังไม่มีตัวคูณราคาจาก CEO',
+};
+function estimateReasonLabel(reason) {
+  return ESTIMATE_REASON_LABELS[reason] || 'ยังคำนวณไม่ได้';
+}
 
 const emptyItem = () => ({
   brand: '', model: '', color: '', texture: '', size: '', factory: '',
   unitBasis: 'PIECE', qty: 1, qtySqm: '', sqmPerPiece: null,
-  // source ('catalog' | 'custom') + the catalog's reference price/currency are
-  // UI-only — never sent in the onSubmit payload (see submit() below). They
-  // exist so the items view can badge a line "จากแคตตาล็อก" vs "custom" and
-  // show a read-only reference price, per the Phase 2 mockup.
-  source: 'custom', catalogPrice: null, catalogCurrency: null,
+  // source ('catalog' | 'custom') + the catalog's reference price/currency/priceUnit are UI-only
+  // — never sent in the onSubmit payload (see submit() below). They exist so the items view can
+  // badge a line "จากแคตตาล็อก" vs "custom", show a read-only reference price, and (catalogPriceUnit)
+  // let dealEstimatePricing.js compute the ราคาตั้ง estimate against the right quantity basis.
+  source: 'custom', catalogPrice: null, catalogCurrency: null, catalogPriceUnit: null,
+  // catalogPriceId/catalogProductCode ARE sent (see submit()'s items map below) — the catalog
+  // identity picked here, persisted on ticket_item (V110) so PricingRequestCreateModal can seed
+  // its own catalog link without a re-search. Cleared by updateItem() below whenever the user
+  // hand-edits a descriptive field the link no longer accurately describes.
+  catalogPriceId: null, catalogProductCode: '',
 });
 
 let _catalogTimer = null;
@@ -167,6 +191,11 @@ function itemIndexForFieldKey(key) {
 
 // ── small sub-components ──────────────────────────────────────────────────────
 
+// maxHeight 220 was sized for the old 720px-wide modal, where it squeezed the company picker's
+// results down to ~3 visible rows. The modal now renders at size="lg" (see the bottom of this
+// file), so this can grow along with the panel without the dropdown outgrowing it.
+const SEARCH_SELECT_OPTIONS_MAX_HEIGHT = 380;
+
 function SearchSelect({ id, label, value, onSelect, placeholder, options, onSearch, searchValue, onSearchChange, loading, renderOption, renderValue, createNewLabel, onCreateNew, inputRef, error }) {
   const [open, setOpen] = useState(false);
   // Hand-wired aria contract (no <FormField> here — the control renders
@@ -202,8 +231,8 @@ function SearchSelect({ id, label, value, onSelect, placeholder, options, onSear
             aria-describedby={errorId}
           />
           {open && (
-            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.1)', maxHeight: 220, overflowY: 'auto' }}>
-              {loading && <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--color-text-muted)' }}>กำลังโหลด...</div>}
+            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.1)', maxHeight: SEARCH_SELECT_OPTIONS_MAX_HEIGHT, overflowY: 'auto' }}>
+              {loading && <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--color-text-muted)' }}>กำลังโหลด{label}…</div>}
               {!loading && options.length === 0 && <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--color-text-muted)' }}>ไม่พบข้อมูล</div>}
               {options.map((opt) => (
                 // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- dropdown option row; onMouseDown (not click) preserves input focus for typeahead
@@ -308,7 +337,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   const [editingItemIndex, setEditingItemIndex] = useState(null);
 
   const [loading, setLoading] = useState(false);
-  // Form-level: submit/API failures (สร้างใบขอราคาไม่สำเร็จ, สร้างโครงการไม่สำเร็จ,
+  // Form-level: submit/API failures (สร้างคำขอราคาไม่สำเร็จ, สร้างโครงการไม่สำเร็จ,
   // เพิ่มผู้ติดต่อไม่สำเร็จ). Kept separate from `fieldErrors` — those are two
   // different kinds of problem and shouldn't share one string.
   const [error, setError] = useState('');
@@ -356,6 +385,42 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   // focused (not just which item row) so the brand and model inputs for the
   // same row don't both render the same catalogResults dropdown at once.
   const [catalogFocus, setCatalogFocus] = useState(null);
+
+  // ── ราคาตั้ง (ประมาณการ) estimate inputs — FX rates + CEO markup multiplier ────────────
+  // Both fetches degrade silently: if EITHER fails, `estimateReady` below stays false and every
+  // ราคาตั้ง display site is skipped entirely, leaving the existing catalog reference price as the
+  // only price shown (a deal must stay creatable with zero prices — V50). Never surfaced via
+  // showToast from an effect — this repo's useToast has an unstable identity that turns a toast in
+  // a useEffect dep array into an infinite render loop (see CLAUDE.md); these are silent, no-toast
+  // failures on purpose. `retry: false` keeps a genuinely-down endpoint from stalling the modal.
+  const fxRatesQuery = useQuery({
+    queryKey: queryKeys.fxRates(),
+    queryFn: () => api.fxRates.list().then((res) => res.fxRates ?? []),
+    retry: false,
+  });
+  const markupQuery = useQuery({
+    queryKey: queryKeys.dealEstimateMarkup(),
+    queryFn: () => api.dealEstimateMarkup.get().then((res) => res.dealEstimateMarkup ?? null),
+    retry: false,
+  });
+  const fxRatesByCurrency = useMemo(() => {
+    const map = { THB: 1 };
+    for (const rate of fxRatesQuery.data ?? []) {
+      if (rate?.currency) map[rate.currency] = Number(rate.rateToThb);
+    }
+    return map;
+  }, [fxRatesQuery.data]);
+  const markupMultiplier = markupQuery.data?.multiplier ?? null;
+  // Deliberately requires BOTH queries to have actually succeeded with a usable multiplier — never
+  // "readable, so default markup to 1": an un-marked-up supplier cost displayed as ราคาตั้ง is
+  // exactly what the product owner said must not happen (see dealEstimatePricing.js).
+  const estimateReady = fxRatesQuery.isSuccess && markupQuery.isSuccess && markupMultiplier != null;
+  const estimateContext = { fxRatesByCurrency, markupMultiplier };
+  const itemsEstimate = useMemo(
+    () => (estimateReady ? summarizeItemsEstimate(items, estimateContext) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- estimateContext is a fresh object every render; fxRatesByCurrency/markupMultiplier are its real deps
+    [items, estimateReady, fxRatesByCurrency, markupMultiplier],
+  );
 
   // new customer form
   const [showNewCustomer, setShowNewCustomer] = useState(false);
@@ -457,18 +522,48 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         if (value === 'SQM' && item.qty) updated.qtySqm = (Number(item.qty) * item.sqmPerPiece).toFixed(3);
         if (value === 'PIECE' && item.qtySqm) updated.qty = Math.ceil(Number(item.qtySqm) / item.sqmPerPiece);
       }
+      // A hand-edit to any field that describes WHICH product this row is invalidates a
+      // previously-picked catalog link — what's typed no longer necessarily matches what the
+      // link points at. Mirrors PricingRequestCreateModal.updateItem's identical rule.
+      if (['brand', 'model', 'color', 'texture', 'size', 'factory'].includes(field)) {
+        updated.source = 'custom';
+        updated.catalogPriceId = null;
+        updated.catalogProductCode = '';
+        updated.catalogPrice = null;
+        updated.catalogCurrency = null;
+      }
       return updated;
     }));
   }
 
-  function applyCatalogItem(index, cat) {
+  // `pickedFrom` is which autocomplete the user chose from ('brand' | 'model'), which decides
+  // whether the current ยี่ห้อ text is a deliberate brand entry or merely the search query —
+  // see the brand rule below.
+  function applyCatalogItem(index, cat, pickedFrom) {
     setItems((cur) => cur.map((item, i) => {
       if (i !== index) return item;
       const newQtySqm = item.qty && cat.sqmPerPiece ? (Number(item.qty) * cat.sqmPerPiece).toFixed(3) : '';
+      // Brand bug fix: this used to write the FACTORY name into ยี่ห้อ
+      // (cat.factoryName || cat.brand), which is wrong — factory and brand are
+      // different concepts (factory has its own field below). The catalog's
+      // grade is the right source: ProductPriceDto has no separate "brand" of
+      // its own, and grade is the closest analogue (the same
+      // COALESCE(pri.brand, pp.grade) rule
+      // PricingRequestRepository.snapshotCatalogSelections uses server-side).
+      //
+      // Unlike PricingRequestCreateModal — which has a DEDICATED catalog search
+      // box, so a non-blank brand there is always a deliberate entry that must
+      // win — ยี่ห้อ IS the search box on this form. Text sitting in it after a
+      // pick from the ยี่ห้อ dropdown is the QUERY ("sc"), not a brand, so
+      // keeping it would leave junk in the field and fail this fix's own intent
+      // just as the factory name did. A pick from the รุ่น dropdown is the
+      // other case: ยี่ห้อ was filled independently there, so it wins.
+      const brandTypedIndependently = pickedFrom !== 'brand' && item.brand?.trim();
+      const brand = brandTypedIndependently ? item.brand : (cat.grade || cat.brand || '');
       // support both old catalog (brand/size) and new price catalog (factoryName/sizeRaw)
       return {
         ...item,
-        brand:       cat.factoryName  || cat.brand    || '',
+        brand,
         model:       cat.collection   || cat.productName || cat.productCode || '',
         color:       cat.color        || '',
         texture:     cat.surface      || '',
@@ -480,6 +575,12 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         source: 'catalog',
         catalogPrice: cat.price ?? null,
         catalogCurrency: cat.currency ?? null,
+        // Persisted (V110) — see emptyItem()'s comment. cat.priceId is
+        // ProductPriceDto.priceId, the same price_catalog.product_prices.price_id that
+        // sales.pricing_request_item.product_id already points at (V68).
+        catalogPriceId: cat.priceId ?? null,
+        catalogProductCode: cat.productCode ?? '',
+        catalogPriceUnit: cat.priceUnit ?? null,
       };
     }));
     // Catalog pick fills brand/model/color/texture/size in one shot — clear
@@ -621,6 +722,10 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           unitBasis: item.unitBasis || 'PIECE',
           qty: Number(item.qty) || 0,
           qtySqm: item.qtySqm !== '' && item.qtySqm != null ? Number(item.qtySqm) : null,
+          // Persisted (V110) so PricingRequestCreateModal can seed its own catalog link
+          // without a re-search — see emptyItem()'s comment.
+          catalogPriceId: item.catalogPriceId ?? null,
+          catalogProductCode: item.catalogProductCode?.trim() || null,
         })),
       });
       // Server accepted the deal — the client-only draft has served its
@@ -629,7 +734,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
       clearDraft();
       setDraftSavedAt(null);
     } catch (err) {
-      setError(err.message || 'สร้างใบขอราคาไม่สำเร็จ');
+      setError(err.message || 'สร้างคำขอราคาไม่สำเร็จ');
       setLoading(false);
     }
   }
@@ -706,7 +811,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
         <div className="flex items-start gap-2 rounded-lg border border-info-border bg-info-bg px-3 py-2.5 text-xs text-info-dark">
           <Icon name="info" size={15} className="mt-0.5 shrink-0" />
-          <span>เพิ่มรายการสินค้าอย่างน้อย 1 รายการ ก่อนจึงจะสร้างใบขอราคา (PCR) ได้</span>
+          <span>เพิ่มรายการสินค้าอย่างน้อย 1 รายการ ก่อนจึงจะสร้างคำขอราคาได้</span>
         </div>
 
         {error ? <div className="form-error" role="alert">{error}</div> : null}
@@ -723,7 +828,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           label="บริษัท / ลูกค้า *"
           value={selectedCustomer}
           onSelect={(c) => { setSelectedCustomer(c); if (c) { setShowNewCustomer(false); clearFieldError('customer'); } }}
-          placeholder="พิมพ์ค้นหาชื่อบริษัท..."
+          placeholder="พิมพ์ค้นหาชื่อบริษัท…"
           options={customerOptions}
           onSearch={searchCustomers}
           searchValue={customerSearch}
@@ -748,7 +853,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               <label style={{ margin: 0, gridColumn: '1 / -1' }}>
                 <span style={{ fontSize: 11 }}>ชื่อบริษัท *</span>
-                <input value={newCustomer.name} onChange={(e) => setNewCustomer((p) => ({ ...p, name: e.target.value }))} placeholder="บริษัท ... จำกัด" />
+                <input value={newCustomer.name} onChange={(e) => setNewCustomer((p) => ({ ...p, name: e.target.value }))} placeholder="บริษัท … จำกัด" />
               </label>
               <label style={{ margin: 0 }}>
                 <span style={{ fontSize: 11 }}>เลขประจำตัวผู้เสียภาษี</span>
@@ -769,7 +874,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
               <button type="button" className="primary-button" disabled={!newCustomer.name.trim() || customerSaving} onClick={handleCreateCustomer} style={{ fontSize: 12 }}>
-                {customerSaving ? 'กำลังบันทึก...' : 'บันทึกบริษัทใหม่'}
+                {customerSaving ? 'กำลังบันทึก…' : 'บันทึกบริษัทใหม่'}
               </button>
               <button type="button" className="secondary-button" onClick={() => { setShowNewCustomer(false); setNewCustomer({ name: '', taxId: '', branch: 'สำนักงานใหญ่', address: '', phone: '' }); }} style={{ fontSize: 12 }}>
                 ยกเลิก
@@ -828,7 +933,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                     <input value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)}
                       placeholder="ชื่อโครงการ" style={{ flex: 1 }} />
                     <button type="button" className="primary-button" onClick={handleCreateProject} disabled={creatingProject} style={{ padding: '4px 12px', fontSize: 12 }}>
-                      {creatingProject ? 'กำลังเพิ่ม...' : 'เพิ่ม'}
+                      {creatingProject ? 'กำลังเพิ่ม…' : 'เพิ่ม'}
                     </button>
                   </div>
                 )}
@@ -952,7 +1057,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                       <input value={newContact.email} onChange={(e) => setNewContact((p) => ({ ...p, email: e.target.value }))} placeholder="email@company.com" />
                     </label>
                     <button type="button" className="primary-button" onClick={handleCreateContact} disabled={creatingContact} style={{ gridColumn: '1 / -1', fontSize: 12 }}>
-                      {creatingContact ? 'กำลังเพิ่ม...' : 'เพิ่มผู้ติดต่อ'}
+                      {creatingContact ? 'กำลังเพิ่ม…' : 'เพิ่มผู้ติดต่อ'}
                     </button>
                   </div>
                 )}
@@ -1008,7 +1113,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 60, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.12)', maxHeight: 200, overflowY: 'auto' }}>
                 {catalogResults.map((cat) => (
                   // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- autocomplete option row; onMouseDown (not click) preserves input focus for typeahead
-                  <div key={cat.priceId ?? cat.id} onMouseDown={() => applyCatalogItem(index, cat)}
+                  <div key={cat.priceId ?? cat.id} onMouseDown={() => applyCatalogItem(index, cat, 'brand')}
                     style={{ padding: '7px 10px', fontSize: 12, cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}
                     onMouseEnter={(e) => e.currentTarget.style.background = '#f0f9ff'}
                     onMouseLeave={(e) => e.currentTarget.style.background = ''}
@@ -1039,7 +1144,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               onChange={(e) => onModelInput(index, e.target.value)}
               onFocus={() => { setCatalogFocus({ index, field: 'model' }); if (item.model) onModelInput(index, item.model); }}
               onBlur={() => setTimeout(() => setCatalogFocus(null), 180)}
-              placeholder="เช่น Stone, Elegance, L-Trim..."
+              placeholder="เช่น Stone, Elegance, L-Trim…"
               required
               aria-required="true"
               aria-invalid={fieldErrors[`items.${index}.model`] ? true : undefined}
@@ -1052,7 +1157,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 60, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.12)', maxHeight: 200, overflowY: 'auto' }}>
                 {catalogResults.map((cat) => (
                   // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- autocomplete option row; onMouseDown (not click) preserves input focus for typeahead
-                  <div key={cat.priceId ?? cat.id} onMouseDown={() => applyCatalogItem(index, cat)}
+                  <div key={cat.priceId ?? cat.id} onMouseDown={() => applyCatalogItem(index, cat, 'model')}
                     style={{ padding: '7px 10px', fontSize: 12, cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}
                     onMouseEnter={(e) => e.currentTarget.style.background = '#f0f9ff'}
                     onMouseLeave={(e) => e.currentTarget.style.background = ''}
@@ -1207,13 +1312,35 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   --color-icon-muted (#475569, 7.24:1+ on this row's surfaces) so it reads a step
                   darker than the caveat's --color-text-muted (#5c6b80, 5.19:1) — both clear AA. */}
               <span style={{ fontSize: 11, color: 'var(--color-icon-muted)', fontWeight: 700 }}>
-                ราคาอ้างอิง (แคตตาล็อก) <span style={{ fontWeight: 500, color: 'var(--color-text-muted)' }}>— ราคาขายจริงมาจากขั้น PCR</span>
+                ราคาอ้างอิง (แคตตาล็อก) <span style={{ fontWeight: 500, color: 'var(--color-text-muted)' }}>— ราคาขายจริงมาจากขั้นคำขอราคา</span>
               </span>
               <span style={{ fontWeight: 800, fontSize: 14 }}>
                 {Number(item.catalogPrice).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {item.catalogCurrency}
               </span>
             </div>
           ) : null}
+
+          {/* ราคาตั้ง (ประมาณการ) — hidden entirely (not just blank) whenever the FX/markup
+              fetch failed, per the "never fall back to markup=1" rule in dealEstimatePricing.js. */}
+          {estimateReady && item.catalogPrice != null ? (() => {
+            const lineEstimate = computeItemEstimateThb(item, estimateContext);
+            return (
+              <div data-testid={`item-editor-estimate-${index}`} style={{ margin: 0, gridColumn: '1 / -1', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', border: '1px solid var(--color-accent)', borderRadius: 8, background: 'var(--color-success-bg)' }}>
+                <span style={{ fontSize: 11, color: 'var(--color-icon-muted)', fontWeight: 700 }}>
+                  ราคาตั้ง (ประมาณการ) <span style={{ fontWeight: 500, color: 'var(--color-text-muted)' }}>— ราคาแคตตาล็อก × อัตราแลกเปลี่ยน × ตัวคูณ CEO ไม่ใช่ราคาขายจริง</span>
+                </span>
+                {lineEstimate.ok ? (
+                  <span style={{ fontWeight: 800, fontSize: 14, textAlign: 'right' }}>
+                    {formatThb(lineEstimate.unitThb)} บาท/หน่วย
+                    <br />
+                    <span style={{ fontSize: 12 }}>รวม {formatThb(lineEstimate.total)} บาท</span>
+                  </span>
+                ) : (
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-muted)' }}>ยังคำนวณไม่ได้ ({estimateReasonLabel(lineEstimate.reason)})</span>
+                )}
+              </div>
+            );
+          })() : null}
         </div>
       </div>
     );
@@ -1227,7 +1354,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
       <div className="flex flex-col gap-3">
         <BackLink onClick={() => setView('hub')} />
         <p className="text-xs text-text-muted">
-          รายการที่เพิ่มตรงนี้เป็นข้อมูลเบื้องต้นของดีลเท่านั้น — ฝ่ายนำเข้าจะเห็นก็ต่อเมื่อสร้างใบขอราคาจากหน้าดีลแล้วส่งให้ฝ่ายนำเข้าเท่านั้น (ไม่บังคับตอนนี้)
+          รายการที่เพิ่มตรงนี้เป็นข้อมูลเบื้องต้นของดีลเท่านั้น — ฝ่ายนำเข้าจะเห็นก็ต่อเมื่อสร้างคำขอราคาจากหน้าดีลแล้วส่งให้ฝ่ายนำเข้าเท่านั้น (ไม่บังคับตอนนี้)
         </p>
         {items.length === 0 ? (
           <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border-strong bg-surface px-5 py-8 text-center">
@@ -1266,6 +1393,11 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   {(item.unitBasis || 'PIECE') === 'SQM'
                     ? (item.qtySqm ? `${item.qtySqm} ตร.ม.` : '—')
                     : (item.qty ? `${item.qty} แผ่น` : '—')}
+                  {estimateReady ? (
+                    <div data-testid={`item-estimate-${index}`} className="mt-0.5 font-semibold text-2xs text-accent-dark">
+                      {itemsEstimate?.perItem[index]?.ok ? `${formatThb(itemsEstimate.perItem[index].total)} บาท` : '—'}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="flex shrink-0 flex-col gap-1">
                   <button type="button" className="icon-button" aria-label={`แก้ไขรายการที่ ${index + 1}`} onClick={() => setEditingItemIndex(index)}>
@@ -1277,6 +1409,19 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                 </div>
               </div>
             ))}
+            {itemsEstimate?.total != null ? (
+              <div data-testid="items-estimate-total" className="flex items-center justify-between rounded-xl border border-accent bg-success-bg px-3.5 py-2.5">
+                <span className="text-xs font-extrabold text-text">
+                  ราคาตั้งรวม (ประมาณการ)
+                  {itemsEstimate.uncomputableCount > 0 ? (
+                    <span data-testid="items-estimate-uncomputable" className="ml-1.5 font-semibold text-2xs text-text-muted">
+                      · ยังคำนวณไม่ได้ {itemsEstimate.uncomputableCount} รายการ
+                    </span>
+                  ) : null}
+                </span>
+                <span className="text-sm font-extrabold text-accent-dark">{formatThb(itemsEstimate.total)} บาท</span>
+              </div>
+            ) : null}
             <button type="button" className="secondary-button" onClick={addItem}>
               <Icon name="plus" size={14} /> เพิ่มรายการสินค้า
             </button>
@@ -1410,6 +1555,19 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                     </span>
                   </div>
                 ))}
+                {itemsEstimate?.total != null ? (
+                  <div data-testid="review-estimate-total" className="mt-1 flex items-center justify-between border-t border-border-subtle pt-1.5 text-sm font-extrabold text-text">
+                    <span>
+                      ราคาตั้งรวม (ประมาณการ)
+                      {itemsEstimate.uncomputableCount > 0 ? (
+                        <span className="ml-1.5 font-semibold text-2xs text-text-muted">
+                          · ยังคำนวณไม่ได้ {itemsEstimate.uncomputableCount} รายการ
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="text-accent-dark">{formatThb(itemsEstimate.total)} บาท</span>
+                  </div>
+                ) : null}
               </div>
             )}
           </div>
@@ -1429,7 +1587,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
         <div className="flex items-start gap-2 rounded-lg border border-info-border bg-info-bg px-3 py-2.5 text-xs text-info-dark">
           <Icon name="info" size={15} className="mt-0.5 shrink-0" />
-          <span>สร้างดีลแล้วยังไม่มีราคา — ขั้นต่อไปคือ “สร้างใบขอราคา (PCR)” จากหน้าดีล</span>
+          <span>สร้างดีลแล้วยังไม่มีราคา — ขั้นต่อไปคือ “สร้างคำขอราคา” จากหน้าดีล</span>
         </div>
 
         {error ? <div className="form-error" role="alert">{error}</div> : null}
@@ -1445,7 +1603,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           <button type="button" className="secondary-button" onClick={handleSaveDraft} disabled={loading}>บันทึกร่าง</button>
           <button type="submit" form="ticket-create-form" className="primary-button" disabled={loading || !canCreateNow} data-testid="ticket-create-submit">
             <Icon name="fileText" />
-            {loading ? 'กำลังสร้าง...' : 'สร้างดีล'}
+            {loading ? 'กำลังสร้าง…' : 'สร้างดีล'}
           </button>
         </>
       );
@@ -1474,6 +1632,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
       onClose={onClose}
       footer={renderFooter()}
       testId="ticket-create-modal"
+      size="lg"
     >
       {/*
         noValidate: several inputs below still carry the native `required`

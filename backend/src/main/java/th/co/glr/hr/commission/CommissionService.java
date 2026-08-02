@@ -96,7 +96,7 @@ public class CommissionService {
 
     public List<CommissionRecord> list(LocalDate payrollMonth, UserPrincipal actor) {
         if (!LIST_VIEWER_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         Long salesRepFilter = "sales".equals(actor.role()) ? actor.id() : null;
         return commissions.findRecords(salesRepFilter, payrollMonth);
@@ -110,13 +110,13 @@ public class CommissionService {
     @Transactional
     public CommissionRecord submit(SubmitCommissionRequest request, MultipartFile invoiceAttachment, UserPrincipal actor) {
         if (!SUBMIT_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if ("sales".equals(actor.role()) && hasDeductionOverride(request)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Sales cannot edit deduction fields");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ฝ่ายขายไม่มีสิทธิ์แก้ไขช่องรายการหักเงิน");
         }
         if (invoiceAttachment == null || invoiceAttachment.isEmpty()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Tax invoice file is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องแนบไฟล์ใบกำกับภาษี");
         }
 
         long salesRepId = resolveSalesRep(request.salesRepId(), actor);
@@ -132,6 +132,12 @@ public class CommissionService {
             safeRequest.overpayment()
         );
         DealLinkage linkage = resolveDealLinkage(safeRequest);
+        // Commission-closed-month guard: computed and checked on the DERIVED, normalized
+        // first-of-month value that createCommissionRecord below actually writes -- not on the raw
+        // caller-supplied invoiceDate. Runs before any write (invoice row, file storage, attachment)
+        // so a refused submission leaves nothing behind.
+        LocalDate payrollMonth = saleCommissionPayrollMonth(safeRequest.invoiceDate());
+        requireCommissionPayrollMonthOpen(payrollMonth, safeRequest.invoiceDate());
 
         try {
             long invoiceId = commissions.createInvoice(safeRequest);
@@ -155,7 +161,7 @@ public class CommissionService {
                 safeRequest.sourceTicketId(),
                 salesRepId,
                 actor.id(),
-                saleCommissionPayrollMonth(safeRequest.invoiceDate()),
+                payrollMonth,
                 calculation,
                 linkage.payableSnapshot(),
                 linkage.mismatch()
@@ -165,7 +171,7 @@ public class CommissionService {
             notifySubmitted(created);
             return created;
         } catch (DuplicateKeyException e) {
-            throw new ApiException(HttpStatus.CONFLICT, "Invoice number already exists");
+            throw new ApiException(HttpStatus.CONFLICT, "เลขที่ใบกำกับภาษีนี้มีอยู่ในระบบแล้ว");
         }
     }
 
@@ -203,16 +209,16 @@ public class CommissionService {
             MultipartFile invoiceAttachment,
             UserPrincipal actor) {
         if (!CREATE_FROM_DEAL_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (invoiceAttachment == null || invoiceAttachment.isEmpty()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Tax invoice file is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องแนบไฟล์ใบกำกับภาษี");
         }
         TicketDto ticket = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
         long salesRepId = ticket.summary().createdById();
         if (commissions.hasActiveCommissionForTicket(ticketId)) {
-            throw new ApiException(HttpStatus.CONFLICT, "A commission already exists for this deal");
+            throw new ApiException(HttpStatus.CONFLICT, "มีรายการค่าคอมมิชชั่นสำหรับดีลนี้อยู่แล้ว");
         }
         BigDecimal effectiveGrossAmount = grossAmount != null ? grossAmount : tickets.payableAmount(ticketId);
 
@@ -243,6 +249,12 @@ public class CommissionService {
         // Re-checks CLOSED_PAID and computes the payable-amount cross-check snapshot — the exact
         // same gate submit() has always enforced. Never loosened for this trigger.
         DealLinkage linkage = resolveDealLinkage(request);
+        // Commission-closed-month guard: same guard and same placement rationale as submit() above
+        // -- computed on the DERIVED, normalized first-of-month value, checked before any write
+        // (invoice row, file storage, ticket attachment) so a refused create leaves nothing behind,
+        // including no spurious invoiceOnFile flip on the ticket.
+        LocalDate payrollMonth = saleCommissionPayrollMonth(request.invoiceDate());
+        requireCommissionPayrollMonthOpen(payrollMonth, request.invoiceDate());
 
         try {
             long invoiceId = commissions.createInvoice(request);
@@ -278,7 +290,7 @@ public class CommissionService {
                 ticketId,
                 salesRepId,
                 actor.id(),
-                saleCommissionPayrollMonth(request.invoiceDate()),
+                payrollMonth,
                 calculation,
                 linkage.payableSnapshot(),
                 linkage.mismatch()
@@ -288,7 +300,7 @@ public class CommissionService {
             notifySubmitted(created);
             return created;
         } catch (DuplicateKeyException e) {
-            throw new ApiException(HttpStatus.CONFLICT, "Invoice number already exists");
+            throw new ApiException(HttpStatus.CONFLICT, "เลขที่ใบกำกับภาษีนี้มีอยู่ในระบบแล้ว");
         }
     }
 
@@ -306,10 +318,10 @@ public class CommissionService {
             return new DealLinkage(null, false);
         }
         String salesStage = tickets.findSalesStage(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
         if (!DealStage.CLOSED_PAID.equals(salesStage)) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "Deal has not reached final payment (CLOSED_PAID); commission cannot be submitted yet.");
+                "ดีลนี้ยังไม่ถึงขั้นตอนรับชำระเงินครบถ้วน (CLOSED_PAID) จึงยังยื่นค่าคอมมิชชั่นไม่ได้");
         }
         BigDecimal payable = tickets.payableAmount(ticketId);
         boolean mismatch = isMismatch(request.grossAmount(), payable);
@@ -333,14 +345,14 @@ public class CommissionService {
         requireManagerOrCeo(actor);
         CommissionRecord existing = requireRecord(id);
         if (CommissionStatus.VOID.equals(existing.status()) || CommissionStatus.REJECTED.equals(existing.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Cannot edit a void commission record");
+            throw new ApiException(HttpStatus.CONFLICT, "ไม่สามารถแก้ไขรายการค่าคอมมิชชั่นที่ถูกยกเลิกแล้วได้");
         }
         if (MANUAL_KINDS.contains(existing.kind())) {
             // Manual entries (ADJUSTMENT/MANAGER) have no invoice_details row to edit -- existing
             // .invoiceDetails() is null for them (V84). There is nothing here to update; the
             // manual_amount/manual_reason a manual entry was created with is immutable by design
             // (create a fresh entry, or use the clawback-style correction pattern, if it was wrong).
-            throw new ApiException(HttpStatus.CONFLICT, "Manual commission entries have no invoice deductions to edit");
+            throw new ApiException(HttpStatus.CONFLICT, "รายการค่าคอมมิชชั่นแบบกรอกเองไม่มีรายการหักจากใบกำกับภาษีให้แก้ไข");
         }
         BigDecimal grossAmount = valueOrExisting(request.grossAmount(), existing.invoiceDetails().grossAmount());
         BigDecimal bankFees = valueOrExisting(request.bankFees(), existing.invoiceDetails().bankFees());
@@ -393,11 +405,16 @@ public class CommissionService {
         if (CommissionStatus.MANAGER_APPROVED.equals(existing.status())) {
             return ceoApprove(id, actor, existing);
         }
-        throw new ApiException(HttpStatus.CONFLICT, "Commission record has already been reviewed");
+        throw new ApiException(HttpStatus.CONFLICT, "รายการค่าคอมมิชชั่นนี้ได้รับการพิจารณาไปแล้ว");
     }
 
     private CommissionRecord managerApprove(long id, UserPrincipal actor, CommissionRecord existing) {
         requireManager(actor);
+        // Commission-closed-month guard (reviewer finding F3): a commission created while its
+        // payroll month was still open can still reach approval after that month closes underneath
+        // it -- the same seam OvertimeService guards at both its manager- and CEO-approval stages,
+        // not only at submit. Guards on the RECORD's own payrollMonth, not today's date.
+        requireCommissionPayrollMonthOpen(existing.payrollMonth());
         commissions.managerApprove(id, actor.id());
         CommissionRecord after = requireRecord(id);
         auditService.record(actor, "MANAGER_APPROVE_COMMISSION", "commission_record", id, existing, after);
@@ -407,6 +424,9 @@ public class CommissionService {
 
     private CommissionRecord ceoApprove(long id, UserPrincipal actor, CommissionRecord existing) {
         requireCeo(actor);
+        // Commission-closed-month guard (reviewer finding F3) -- same rationale as managerApprove
+        // above: guards the record's own payrollMonth, which may have closed while it waited here.
+        requireCommissionPayrollMonthOpen(existing.payrollMonth());
         commissions.ceoApprove(id, actor.id());
         CommissionRecord after = requireRecord(id);
         auditService.record(actor, "CEO_APPROVE_COMMISSION", "commission_record", id, existing, after);
@@ -423,7 +443,7 @@ public class CommissionService {
         if (CommissionStatus.MANAGER_APPROVED.equals(existing.status())) {
             return ceoReject(id, request, actor, existing);
         }
-        throw new ApiException(HttpStatus.CONFLICT, "Commission record has already been reviewed");
+        throw new ApiException(HttpStatus.CONFLICT, "รายการค่าคอมมิชชั่นนี้ได้รับการพิจารณาไปแล้ว");
     }
 
     private CommissionRecord managerReject(long id, ReviewCommissionRequest request, UserPrincipal actor, CommissionRecord existing) {
@@ -449,15 +469,24 @@ public class CommissionService {
         requireManagerOrCeo(actor);
         CommissionRecord original = requireRecord(id);
         if (!CommissionKind.SALE.equals(original.kind()) || !CommissionStatus.APPROVED.equals(original.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Only approved sale commissions can be clawed back");
+            throw new ApiException(HttpStatus.CONFLICT, "เรียกคืนได้เฉพาะค่าคอมมิชชั่นประเภทการขายที่อนุมัติแล้วเท่านั้น");
         }
         if (commissions.hasActiveClawbackFor(id)) {
-            throw new ApiException(HttpStatus.CONFLICT, "This commission already has an active clawback");
+            throw new ApiException(HttpStatus.CONFLICT, "รายการค่าคอมมิชชั่นนี้มีการเรียกคืนที่ยังดำเนินการอยู่แล้ว");
         }
+        // Commission-closed-month guard (reviewer finding F2): createClawback is a fourth INSERT
+        // path into sales.commission_record, easy to miss because it always targets the CURRENT
+        // month, not a caller-supplied one. But the current month can itself already be PROCESSED
+        // (prod marked July 2026 PROCESSED on 23 Jul, mid-month) -- an unguarded clawback filed
+        // after that point would take a payroll_month that is already processed, so the negative
+        // row is never deducted and it silently reduces a processed month's tier base, the wrong
+        // direction financially (the rep keeps money that should have been clawed back).
+        LocalDate clawbackPayrollMonth = currentPayrollMonth();
+        requireCommissionPayrollMonthOpen(clawbackPayrollMonth);
         long clawbackId = commissions.createClawback(
             original,
             actor.id(),
-            currentPayrollMonth(),
+            clawbackPayrollMonth,
             request.reason().trim()
         );
         CommissionRecord clawback = requireRecord(clawbackId);
@@ -488,28 +517,31 @@ public class CommissionService {
     public CommissionRecord createManualCommission(
             Long salesRepId, String kind, BigDecimal amount, String reason, LocalDate payrollMonth, UserPrincipal actor) {
         if (!MANUAL_CREATE_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only a sales manager or the CEO may create a manual commission entry");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะผู้จัดการฝ่ายขายหรือ CEO เท่านั้นที่สามารถสร้างรายการค่าคอมมิชชั่นแบบกรอกเองได้");
         }
         if (salesRepId == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "salesRepId is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุรหัสพนักงานขาย");
         }
         if (!MANUAL_KINDS.contains(kind)) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
-                "kind must be one of " + String.join(", ", new java.util.TreeSet<>(MANUAL_KINDS)));
+                "kind ต้องเป็นหนึ่งใน " + String.join(", ", new java.util.TreeSet<>(MANUAL_KINDS)));
         }
         if (amount == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "amount is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุจำนวนเงิน");
         }
         if (reason == null || reason.isBlank()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "A reason is required for a manual commission entry");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเหตุผลสำหรับรายการค่าคอมมิชชั่นแบบกรอกเอง");
         }
         // A MANAGER-kind entry represents team/manager commission earned, not a correction --
         // never negative. An ADJUSTMENT may legitimately be negative (a deduction/clawback-style
         // correction), so no sign restriction there.
         if (CommissionKind.MANAGER.equals(kind) && amount.signum() < 0) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "A MANAGER commission entry cannot be negative");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "รายการค่าคอมมิชชั่นประเภท MANAGER ต้องไม่ติดลบ");
         }
         LocalDate month = payrollMonth == null ? currentPayrollMonth() : payrollMonth(payrollMonth);
+        // Commission-closed-month guard: month here is already the normalized first-of-month value
+        // that commissions.createManualCommission below actually writes.
+        requireCommissionPayrollMonthOpen(month);
         boolean ceoCreated = CEO_ROLES.contains(actor.role());
         long commissionId = commissions.createManualCommission(
             kind,
@@ -529,7 +561,7 @@ public class CommissionService {
     public CommissionSimulationDto simulate(CommissionSimulatorRequest request, UserPrincipal actor) {
         long salesRepId = resolveSalesRep(request.salesRepId(), actor);
         if ("sales".equals(actor.role()) && hasDeductionOverride(request)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Sales cannot edit deduction fields");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ฝ่ายขายไม่มีสิทธิ์แก้ไขช่องรายการหักเงิน");
         }
         LocalDate month = request.payrollMonth() == null ? currentPayrollMonth() : payrollMonth(request.payrollMonth());
         InvoiceCalculation invoice = calculator.calculateInvoice(
@@ -568,21 +600,27 @@ public class CommissionService {
 
     public PayrollCommissionSummaryDto payrollReadySummary(LocalDate payrollMonth, UserPrincipal actor) {
         if (!PAYROLL_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         LocalDate month = payrollMonth == null ? currentPayrollMonth() : payrollMonth(payrollMonth);
         List<RepPayrollCommission> reps = computeRepPayrollCommissions(month);
         List<SalesRepCommissionSummaryDto> repSummaries = new ArrayList<>();
         BigDecimal totalBase = BigDecimal.ZERO;
         BigDecimal totalCommission = BigDecimal.ZERO;
+        BigDecimal totalIncentive = BigDecimal.ZERO;
+        BigDecimal totalStockBonus = BigDecimal.ZERO;
         for (RepPayrollCommission rep : reps) {
             repSummaries.add(new SalesRepCommissionSummaryDto(
-                rep.salesRepId(), rep.salesRepName(), rep.tierCommissionableBase(), rep.totalCommission(), rep.manualAdjustmentAmount()));
+                rep.salesRepId(), rep.salesRepName(), rep.tierCommissionableBase(), rep.totalCommission(),
+                rep.manualAdjustmentAmount(), rep.incentiveAmount(), rep.stockBonusAmount()));
             totalBase = totalBase.add(rep.tierCommissionableBase());
             totalCommission = totalCommission.add(rep.totalCommission());
+            totalIncentive = totalIncentive.add(rep.incentiveAmount());
+            totalStockBonus = totalStockBonus.add(rep.stockBonusAmount());
         }
         repSummaries.sort(Comparator.comparing(SalesRepCommissionSummaryDto::salesRepName, Comparator.nullsLast(String::compareTo)));
-        return new PayrollCommissionSummaryDto(month, "PAYROLL_READY", totalBase, totalCommission, repSummaries);
+        return new PayrollCommissionSummaryDto(
+            month, "PAYROLL_READY", totalBase, totalCommission, totalIncentive, totalStockBonus, repSummaries);
     }
 
     /**
@@ -609,11 +647,34 @@ public class CommissionService {
         // manual entry still sitting at MANAGER_APPROVED correctly does not count yet.
         Map<Long, BigDecimal> manualTotals = new LinkedHashMap<>();
         Map<Long, String> manualOnlyRepNames = new LinkedHashMap<>();
+        // Issue #405 transition safeguard, REWORKED (2026-08-02 review): a rep-month's approved
+        // manual INCENTIVE/STOCK_BONUS entries are tracked here as a SUMMED AMOUNT per kind, not
+        // just "does one exist" -- because "does one exist" mis-fired on a zero/negative manual
+        // entry. A manual entry of a given kind can mean two different things and they must be
+        // treated oppositely:
+        //   - POSITIVE amount: a hand-typed REPLACEMENT (the pre-#405 way of doing this whole
+        //     kind by hand) -- a human decided the figure for that kind that month, so it wins
+        //     and the auto-computed limb is suppressed entirely.
+        //   - ZERO or NEGATIVE amount: a CORRECTION layered on top of the auto-computed figure
+        //     (e.g. "-5,000, overpaid last cycle's incentive") -- the auto limb must still
+        //     compute normally, and the correction is added on top via manualAmount below, same
+        //     as it already is for ADJUSTMENT. Suppressing the auto limb here would silently turn
+        //     a -5,000 correction into a -5,000 total instead of (auto + -5,000).
+        // A rep with no manual entry of that kind defaults to ZERO here, which correctly does NOT
+        // suppress (grouped.getOrDefault(...).signum() > 0 is false for zero).
+        Map<Long, BigDecimal> manualIncentiveTotals = new LinkedHashMap<>();
+        Map<Long, BigDecimal> manualStockBonusTotals = new LinkedHashMap<>();
         for (CommissionRecord record : records) {
             if (MANUAL_KINDS.contains(record.kind())) {
                 BigDecimal amount = record.manualAmount() == null ? BigDecimal.ZERO : record.manualAmount();
                 manualTotals.merge(record.salesRepId(), amount, BigDecimal::add);
                 manualOnlyRepNames.putIfAbsent(record.salesRepId(), record.salesRepName());
+                if (CommissionKind.INCENTIVE.equals(record.kind())) {
+                    manualIncentiveTotals.merge(record.salesRepId(), amount, BigDecimal::add);
+                }
+                if (CommissionKind.STOCK_BONUS.equals(record.kind())) {
+                    manualStockBonusTotals.merge(record.salesRepId(), amount, BigDecimal::add);
+                }
                 continue;
             }
             // Commission redesign calc-refine: accumulate the WEIGHTED actual-received (real cash
@@ -624,6 +685,13 @@ public class CommissionService {
                 .add(record.actualReceived(), record.weightMultiplier());
         }
         List<TierConfig> tiers = tiers();
+        // Issue #405: load the INCENTIVE ladder + STOCK_BONUS config ONCE for the whole month
+        // (not per rep) -- both are config rows that never vary by rep, and this is also the
+        // single place both payrollReadySummary and payrollCommissionTotalsByEmployee (via this
+        // shared method) read them from, so the two callers can never diverge.
+        List<IncentiveTierConfig> incentiveLadder = commissions.findIncentiveTiers(payrollMonth);
+        StockBonusConfig stockBonusConfig = commissions.findStockBonusConfig(payrollMonth).orElse(StockBonusConfig.disabled());
+        BigDecimal zero = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
         List<RepPayrollCommission> results = new ArrayList<>();
         Set<Long> repIds = new HashSet<>();
         for (RepAccumulator rep : grouped.values()) {
@@ -633,13 +701,35 @@ public class CommissionService {
             BigDecimal tierCommission = calculator.progressiveCommission(safeBase, tiers);
             BigDecimal displayBase = safeBase.setScale(2, RoundingMode.HALF_UP);
             BigDecimal manualAmount = manualTotals.getOrDefault(rep.salesRepId, BigDecimal.ZERO);
-            BigDecimal finalCommission = tierCommission.add(manualAmount);
-            results.add(new RepPayrollCommission(rep.salesRepId, rep.salesRepName, displayBase, manualAmount, finalCommission));
+            // Suppress the auto limb only when the rep's summed manual entries of that kind are
+            // STRICTLY POSITIVE (a replacement) -- zero/negative (a correction) leaves the auto
+            // limb computing normally; see the map-building comment above for the full rationale.
+            boolean incentiveReplaced = manualIncentiveTotals.getOrDefault(rep.salesRepId, BigDecimal.ZERO).signum() > 0;
+            BigDecimal incentiveAmount = incentiveReplaced
+                ? zero
+                : calculator.monthlyIncentive(safeBase, incentiveLadder);
+            boolean stockBonusReplaced = manualStockBonusTotals.getOrDefault(rep.salesRepId, BigDecimal.ZERO).signum() > 0;
+            // Review fix (performance): short-circuit before the repo call (a GROUP BY ticket_id
+            // aggregate over the whole sales.ticket_item table) when there is nothing to compute
+            // -- config disabled, or the auto limb is replaced by a positive manual entry. Without
+            // this, computeRepPayrollCommissions ran that full aggregate once per rep on every
+            // payroll run, including every historic month, even though STOCK_BONUS ships
+            // config-gated OFF and would resolve to zero anyway.
+            BigDecimal stockBonusAmount = (stockBonusReplaced || !stockBonusConfig.enabled())
+                ? zero
+                : calculator.stockSaleBonus(commissions.sumActiveStockActualReceived(rep.salesRepId, payrollMonth), stockBonusConfig);
+            BigDecimal finalCommission = tierCommission.add(incentiveAmount).add(stockBonusAmount).add(manualAmount);
+            results.add(new RepPayrollCommission(
+                rep.salesRepId, rep.salesRepName, displayBase, manualAmount, incentiveAmount, stockBonusAmount, finalCommission));
             repIds.add(rep.salesRepId);
         }
         // A rep whose ONLY approved commission this month is a manual entry (e.g. a MANAGER
         // commission for someone with no SALE commission yet) still needs a row: tier base/tier
-        // commission are zero, the manual amount is the whole total.
+        // commission are zero, the manual amount is the whole total. Issue #405: their auto-computed
+        // incentive/stock-bonus are kept explicitly zero too -- a zero tier base already resolves
+        // both calculator calls to zero on their own (monthlyIncentive/stockSaleBonus both treat a
+        // non-positive base/receipts as zero), but this branch has no safeBase to feed them and
+        // zero manual-only reps never earn a SALE-driven auto-computed limb in the first place.
         for (Map.Entry<Long, BigDecimal> entry : manualTotals.entrySet()) {
             if (repIds.contains(entry.getKey())) {
                 continue;
@@ -647,7 +737,7 @@ public class CommissionService {
             BigDecimal manualAmount = entry.getValue();
             results.add(new RepPayrollCommission(
                 entry.getKey(), manualOnlyRepNames.get(entry.getKey()),
-                BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP), manualAmount, manualAmount));
+                zero, manualAmount, zero, zero, manualAmount));
         }
         return results;
     }
@@ -673,6 +763,7 @@ public class CommissionService {
      * Per-rep breakdown shared between {@link #payrollReadySummary} and {@link
      * #payrollCommissionTotalsByEmployee} -- {@code totalCommission} is the number payroll must
      * pay: {@code tierCommissionableBase} run through the tier table, plus {@code
+     * incentiveAmount}, {@code stockBonusAmount} (issue #405), plus {@code
      * manualAdjustmentAmount}.
      */
     public record RepPayrollCommission(
@@ -680,11 +771,13 @@ public class CommissionService {
         String salesRepName,
         BigDecimal tierCommissionableBase,
         BigDecimal manualAdjustmentAmount,
+        BigDecimal incentiveAmount,
+        BigDecimal stockBonusAmount,
         BigDecimal totalCommission) {}
 
     private CommissionRecord requireRecord(long id) {
         return commissions.findById(id)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Commission record not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการค่าคอมมิชชั่นนี้"));
     }
 
     private List<TierConfig> tiers() {
@@ -719,7 +812,7 @@ public class CommissionService {
     private long resolveSalesRep(Long requestedSalesRepId, UserPrincipal actor) {
         if ("sales".equals(actor.role())) {
             if (requestedSalesRepId != null && requestedSalesRepId != actor.id()) {
-                throw new ApiException(HttpStatus.FORBIDDEN, "Sales can only submit their own commissions");
+                throw new ApiException(HttpStatus.FORBIDDEN, "พนักงานขายสามารถยื่นค่าคอมมิชชั่นของตนเองเท่านั้น");
             }
             return actor.id();
         }
@@ -728,19 +821,19 @@ public class CommissionService {
 
     private void requireManager(UserPrincipal actor) {
         if (!MANAGER_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only a sales manager can review submitted commissions");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะผู้จัดการฝ่ายขายเท่านั้นที่สามารถพิจารณาค่าคอมมิชชั่นที่ยื่นเข้ามาได้");
         }
     }
 
     private void requireCeo(UserPrincipal actor) {
         if (!CEO_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only the CEO can review manager-approved commissions");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะ CEO เท่านั้นที่สามารถพิจารณาค่าคอมมิชชั่นที่ผู้จัดการฝ่ายขายอนุมัติแล้วได้");
         }
     }
 
     private void requireManagerOrCeo(UserPrincipal actor) {
         if (!MANAGER_ROLES.contains(actor.role()) && !CEO_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
@@ -890,6 +983,85 @@ public class CommissionService {
                 );
             }
         }
+    }
+
+    /**
+     * Refuses to write/advance a commission against a payroll month that can never be paid, for
+     * either of two distinct reasons -- the person seeing the error needs to tell them apart, so
+     * each gets its own Thai message. Mirrors {@code OvertimeService#requirePayrollMonthOpen}
+     * exactly (same two facts, same two repository checks, same posture) -- see that method's
+     * Javadoc for the full rationale on why a seed-covered month is never {@code PROCESSED} and
+     * therefore needs its own check.
+     *
+     * <p>Owner decision (commission-closed-month-guard plan): REFUSE (409), never roll forward.
+     * Rolling a commission's payroll month forward to the next open month would change which month
+     * it is attributed to -- that is commission ATTRIBUTION logic, which CLAUDE.md protects as
+     * business logic. This guard only ever blocks a write; it never changes where a commission
+     * lands. Not a commission math change: no tier, rate, band, weighting, {@code
+     * payrollReadySummary} figure, or the M+1 rule is touched here.
+     *
+     * <p>Call this on the already-normalized, first-of-month value that will actually be
+     * written/read -- never on a raw caller-supplied date. Guarding the raw input would let a
+     * mid-month date slip past a first-of-month comparison. Six call sites, all of which write or
+     * advance {@code sales.commission_record}: the four creation paths -- {@link
+     * #createManualCommission} (on the resolved {@code month}), {@link #submit}/{@link
+     * #createFromDeal} (on {@link #saleCommissionPayrollMonth(LocalDate)}'s M+1-derived result --
+     * use the {@link #requireCommissionPayrollMonthOpen(LocalDate, LocalDate)} overload there so
+     * the refusal names the invoice date too), and {@link #createClawback} (on {@code
+     * currentPayrollMonth()} -- a clawback filed after the current month is marked PROCESSED
+     * mid-month, as happened on prod 23 Jul 2026, must not silently land in it) -- plus the two
+     * approval stages, {@link #managerApprove(long, UserPrincipal, CommissionRecord)} and {@link
+     * #ceoApprove(long, UserPrincipal, CommissionRecord)} (on the existing record's {@code
+     * payrollMonth()}): a commission created while its month was open can still be approved after
+     * the month closes underneath it, exactly the seam {@code OvertimeService} already guards at
+     * both its manager- and CEO-approval stages.
+     */
+    private void requireCommissionPayrollMonthOpen(LocalDate payrollMonth) {
+        if (commissions.payrollMonthProcessed(payrollMonth)) {
+            throw new ApiException(
+                HttpStatus.CONFLICT,
+                "งวดเงินเดือน " + payrollMonthLabel(payrollMonth)
+                    + " ได้ประมวลผลไปแล้ว จึงไม่สามารถสร้างหรือพิจารณารายการค่าคอมมิชชั่นในงวดนี้ได้อีก"
+            );
+        }
+        if (commissions.payrollMonthSeedCovered(payrollMonth)) {
+            throw new ApiException(
+                HttpStatus.CONFLICT,
+                "งวดเงินเดือน " + payrollMonthLabel(payrollMonth)
+                    + " ถูกจ่ายนอกระบบไปแล้วและได้ยื่นแบบภาษีแล้ว จึงไม่สามารถสร้างหรือพิจารณารายการค่าคอมมิชชั่นในงวดนี้ได้"
+            );
+        }
+    }
+
+    /**
+     * SALE-path variant used only by {@link #submit} and {@link #createFromDeal}: {@code
+     * payrollMonth} there is DERIVED from {@code invoiceDate} via the M+1 rule ({@link
+     * #saleCommissionPayrollMonth(LocalDate)}), so naming only the derived month left the caller
+     * unable to tell why the date they typed produced that refusal (e.g. a 2026-05-15 invoice
+     * refused over payroll month 2026-06 -- reviewer finding F4). Names both the invoice date and
+     * the derived month; same two underlying checks and messages as the single-argument overload.
+     */
+    private void requireCommissionPayrollMonthOpen(LocalDate payrollMonth, LocalDate invoiceDate) {
+        if (commissions.payrollMonthProcessed(payrollMonth)) {
+            throw new ApiException(
+                HttpStatus.CONFLICT,
+                "ใบกำกับภาษีลงวันที่ " + invoiceDate + " ตกในงวดเงินเดือน " + payrollMonthLabel(payrollMonth)
+                    + " (ตามกฎ M+1) ซึ่งได้ประมวลผลไปแล้ว จึงไม่สามารถสร้างรายการค่าคอมมิชชั่นนี้ได้"
+            );
+        }
+        if (commissions.payrollMonthSeedCovered(payrollMonth)) {
+            throw new ApiException(
+                HttpStatus.CONFLICT,
+                "ใบกำกับภาษีลงวันที่ " + invoiceDate + " ตกในงวดเงินเดือน " + payrollMonthLabel(payrollMonth)
+                    + " (ตามกฎ M+1) ซึ่งถูกจ่ายนอกระบบไปแล้วและได้ยื่นแบบภาษีแล้ว จึงไม่สามารถสร้างรายการค่าคอมมิชชั่นนี้ได้"
+            );
+        }
+    }
+
+    /** {@code YYYY-MM}, zero-padded -- the inherited format (bare {@code getMonthValue()}) printed
+     * "2026-6" instead of "2026-06" for any month before October (reviewer finding F4). */
+    private String payrollMonthLabel(LocalDate payrollMonth) {
+        return String.format("%d-%02d", payrollMonth.getYear(), payrollMonth.getMonthValue());
     }
 
     private LocalDate payrollMonth(LocalDate date) {

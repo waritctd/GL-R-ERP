@@ -1,3 +1,9 @@
+import {
+  buildDemoLeaveRequests, buildDemoOvertimeRequests, buildDemoSpecialMoneyRequests,
+  buildDemoProfileRequests, buildDemoNotifications,
+} from './demoHr.js';
+import { buildDemoSalesSeed } from './demoSales.js';
+
 export const divisions = [
   { id: 'SAL', th: 'ขายและการตลาด', en: 'Sales & Marketing' },
   { id: 'WHL', th: 'คลังสินค้าและจัดส่ง', en: 'Warehouse & Logistics' },
@@ -234,6 +240,11 @@ export function createDemoDatabase() {
     // sales tickets. Real role derivation: division AC-ฝ่ายบัญชี → 'account'
     // (DivisionAccessPolicy), gates mirror TicketService.ACCOUNT_ROLES.
     { id: 11, email: 'account@glr.co.th', password: 'demo1234', name: 'คุณบัญชี การเงิน', role: 'account', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
+    // Second sales rep (chore/mock-demo-seed-state-matrix): with a single sales
+    // user, per-rep scoping and DRAFT-pricing-request privacy (owning rep +
+    // CEO/sales_manager only) are never observable locally. Owns tickets
+    // 16-18 and their own DRAFT/SUBMITTED pricing requests — see demoSales.js.
+    { id: 12, email: 'sales2@glr.co.th', password: 'demo1234', name: 'คุณอรุณี ขายเก่ง', role: 'sales', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
   ];
 
   const tickets = [
@@ -587,20 +598,187 @@ export function createDemoDatabase() {
     },
   ];
 
-  const notifications = [
-    { id: 1, userId: 8, ticketId: 2, ticketCode: 'PR-2026-0002', type: 'PRICE_PROPOSED', message: 'Ticket PR-2026-0002 มีราคาเสนอรอการอนุมัติ', read: false, createdAt: iso(2026, 6, 18) + 'T14:00:00Z' },
-    { id: 2, userId: 6, ticketId: 1, ticketCode: 'PR-2026-0001', type: 'APPROVED', message: 'Ticket PR-2026-0001 ได้รับการอนุมัติราคาแล้ว — กด Generate ใบเสนอราคาได้เลย', read: false, createdAt: iso(2026, 6, 18) + 'T10:00:00Z' },
-    { id: 3, userId: 7, ticketId: 4, ticketCode: 'PR-2026-0004', type: 'SUBMITTED', message: 'Ticket PR-2026-0004 รอการรับเรื่อง', read: false, createdAt: iso(2026, 6, 18) + 'T07:30:00Z' },
-    { id: 4, userId: 7, ticketId: 3, ticketCode: 'PR-2026-0003', type: 'PICKED_UP', message: 'Ticket PR-2026-0003 ถูกมอบหมายให้คุณแล้ว', read: true, createdAt: iso(2026, 6, 18) + 'T08:30:00Z' },
+  // Sales/CRM PricingRequest chain state matrix (chore/mock-demo-seed-state-matrix) —
+  // demoSales.js owns tickets 16-18 (rep2's deals + the deal hosting the "extra" downstream
+  // states) plus every PricingRequest/FactoryQuote/PricingCosting/PricingDecision/
+  // CustomerQuotation/DepositNotice/FactoryPurchaseOrder/DealActivity/attachment row. Only
+  // its tickets merge into `tickets` here; the rest is exposed via `salesSeed` below for
+  // mockApi.js to push into its own module-level stores (those live in mockApi.js, not `db`).
+  const salesSeed = buildDemoSalesSeed();
+  tickets.push(...salesSeed.tickets);
+
+  // notifications/profileRequests/leaveRequests/overtimeRequests/specialMoneyRequests now
+  // live in demoHr.js as a full state matrix (chore/mock-demo-seed-state-matrix) — this
+  // replaces both the old handful of rows here AND the now-permanently-unreachable
+  // `if (db.leaveRequests.length === 0) {...}` blocks that used to sit in mockApi.js (dead
+  // code, since this array was never actually empty by the time those blocks ran).
+  const notifications = buildDemoNotifications();
+  const profileRequests = buildDemoProfileRequests(employees);
+  const leaveRequests = buildDemoLeaveRequests(employees);
+  const overtimeRequests = buildDemoOvertimeRequests(employees);
+  const specialMoneyRequests = buildDemoSpecialMoneyRequests(employees);
+
+  // ════════════════════════════════════════════════════════════════════════════════
+  // Attendance: Daily punch records (for multiple employees over several days)
+  // ════════════════════════════════════════════════════════════════════════════════
+  const attendanceRecords = [];
+  const attendanceEmployeeIds = [8, 12, 2, 15, 5];
+  const baseDate = new Date(2026, 6, 28); // July 28, 2026
+  for (let dayOffset = 0; dayOffset < 5; dayOffset++) {
+    const workDate = new Date(baseDate);
+    workDate.setDate(workDate.getDate() + dayOffset);
+    const workDateStr = iso(workDate.getFullYear(), workDate.getMonth() + 1, workDate.getDate());
+
+    for (const empId of attendanceEmployeeIds) {
+      const emp = employees[empId - 1];
+      // Morning punch (in)
+      attendanceRecords.push({
+        id: attendanceRecords.length + 1,
+        employeeId: emp.id, employeeCode: emp.code, employeeName: emp.nameTh,
+        badgeCode: `BC-${20250000 + (emp.id - 1) * 137}`,
+        workDate: workDateStr,
+        punchTime: `${workDateStr}T08:${String(45 + (emp.id % 10)).padStart(2, '0')}:00Z`,
+        punchType: 'IN',
+        location: ['สำนักงานใหญ่', 'คลังสินค้า', 'สาขานนทบุรี'][emp.id % 3],
+      });
+      // Afternoon punch (out)
+      attendanceRecords.push({
+        id: attendanceRecords.length + 1,
+        employeeId: emp.id, employeeCode: emp.code, employeeName: emp.nameTh,
+        badgeCode: `BC-${20250000 + (emp.id - 1) * 137}`,
+        workDate: workDateStr,
+        punchTime: `${workDateStr}T17:${String(45 + (emp.id % 10)).padStart(2, '0')}:00Z`,
+        punchType: 'OUT',
+        location: ['สำนักงานใหญ่', 'คลังสินค้า', 'สาขานนทบุรี'][emp.id % 3],
+      });
+    }
+  }
+
+  // NOTE: this file used to export a `commissionRecords` array here, but it was never
+  // actually wired to the real store (`db.commissions`, seeded in mockApi.js from
+  // demoPayroll.js's `buildDemoCommissions()`) — the key mismatch (`commissionRecords` vs
+  // `commissions`) meant it silently seeded nothing and `db.commissions` was always `[]`.
+  // Removed rather than fixed in place: its shape (flat `invoiceNumber`, `netAmount`,
+  // `commissionBase`, a `PROCESSED` status that doesn't exist) doesn't match what the real
+  // commission handlers read/write (nested `invoiceDetails`, no `PROCESSED` status — see
+  // demoPayroll.js for the correct shape and the full status/kind matrix).
+
+  // ════════════════════════════════════════════════════════════════════════════════
+  // Projects (context for deal pipeline)
+  // ════════════════════════════════════════════════════════════════════════════════
+  const projects = [
+    {
+      id: 1, code: 'PRJ-2026-001', name: 'โครงการ Central Ladprao ชั้น B1',
+      customerName: 'บริษัท ก้าวหน้า คอนสตรัคชั่น จำกัด',
+      location: 'ชั้น B1 ห้างสรรพสินค้า Central Ladprao',
+      status: 'ACTIVE', priority: 'HIGH',
+      estimatedValue: 450000, actualValue: null,
+      startDate: iso(2026, 6, 15), endDate: null,
+      description: 'ปูกระเบื้องในห้องน้ำและห้องน้ำสำหรับคนพิการ',
+    },
+    {
+      id: 2, code: 'PRJ-2026-002', name: 'โครงการ The Emporium Co.',
+      customerName: 'The Emporium Co.',
+      location: 'ศูนย์การค้า The Emporium',
+      status: 'ACTIVE', priority: 'NORMAL',
+      estimatedValue: 174000, actualValue: 174000,
+      startDate: iso(2026, 6, 20), endDate: iso(2026, 7, 30),
+      description: 'ปูกระเบื้องห้องโถงและอื่นๆ',
+    },
+    {
+      id: 3, code: 'PRJ-2026-003', name: 'โครงการ Terminal 21 Property',
+      customerName: 'Terminal 21 Property',
+      location: 'Terminal 21 Bangkok',
+      status: 'ACTIVE', priority: 'HIGH',
+      estimatedValue: 130000, actualValue: 130000,
+      startDate: iso(2026, 6, 1), endDate: null,
+      description: 'ปูกระเบื้องพื้นห้องสินค้าและพื้นที่ทั่วไป',
+    },
   ];
 
-  const profileRequests = [
-    { id: 101, employeeId: employees[8].id, fieldKey: 'phone', fieldLabel: 'เบอร์โทรศัพท์', oldValue: employees[8].phone, newValue: '089-555-2210', requestedBy: employees[8].nameTh, requestedAt: iso(2026, 6, 9), status: 'pending' },
-    { id: 102, employeeId: employees[12].id, fieldKey: 'email', fieldLabel: 'อีเมล', oldValue: employees[12].email, newValue: 'w.new@glr.co.th', requestedBy: employees[12].nameTh, requestedAt: iso(2026, 6, 8), status: 'pending' },
-    { id: 103, employeeId: employees[5].id, fieldKey: 'address', fieldLabel: 'ที่อยู่ปัจจุบัน', oldValue: employees[5].currentAddress.line1, newValue: '88/12 ซอยอ่อนนุช 17 เขตสวนหลวง กทม. 10250', requestedBy: employees[5].nameTh, requestedAt: iso(2026, 6, 7), status: 'pending' },
-    { id: 104, employeeId: employees[19].id, fieldKey: 'emergency', fieldLabel: 'ผู้ติดต่อฉุกเฉิน', oldValue: `${employees[19].emergencyContact.name} · ${employees[19].emergencyContact.phone}`, newValue: 'คุณมานพ แสงทอง · 086-441-9920', requestedBy: employees[19].nameTh, requestedAt: iso(2026, 6, 5), status: 'pending' },
-    { id: 105, employeeId: employees[2].id, fieldKey: 'phone', fieldLabel: 'เบอร์โทรศัพท์', oldValue: employees[2].phone, newValue: '081-902-3344', requestedBy: employees[2].nameTh, requestedAt: iso(2026, 6, 2), status: 'approved' },
+  // ════════════════════════════════════════════════════════════════════════════════
+  // Customers (for sales module)
+  // ════════════════════════════════════════════════════════════════════════════════
+  const customers = [
+    {
+      id: 1, code: 'CUST-001', name: 'ห้างสรรพสินค้า Central',
+      contactPerson: 'นาย สมชาย ใจดี', phone: '02-640-1111', email: 'procurement@central.co.th',
+      address: '1027 ชั้น G-3 ถนนเพชรบุรี ห้างสรรพสินค้า Central World',
+      city: 'กรุงเทพมหานคร', paymentTerms: 'Net 30',
+      status: 'ACTIVE',
+    },
+    {
+      id: 2, code: 'CUST-002', name: 'ABC Corporation',
+      contactPerson: 'นางสาว พิมพ์ พิสัยสุข', phone: '033-555-666', email: 'purchasing@abc.co.th',
+      address: '123/45 ซอย 20 ถนนลาดพร้าว เขตจตุจักร',
+      city: 'กรุงเทพมหานคร', paymentTerms: 'Net 45',
+      status: 'ACTIVE',
+    },
+    {
+      id: 3, code: 'CUST-003', name: 'XYZ Co., Ltd.',
+      contactPerson: 'นาย วิรัช สุนทรชัย', phone: '038-888-999', email: 'import@xyz.co.th',
+      address: '456/7 ชั้น 2 สยามพารากอน ถนนพระรามที่ 1',
+      city: 'กรุงเทพมหานคร', paymentTerms: 'Advance Payment',
+      status: 'ACTIVE',
+    },
+    {
+      id: 4, code: 'CUST-004', name: 'The Emporium Co.',
+      contactPerson: 'นาย สุรเดช ดีไซน์', phone: '02-721-7777', email: 'design@emporium.co.th',
+      address: '622 ถนนสุขุมวิท เขตคลองเตย กรุงเทพมหานคร',
+      city: 'กรุงเทพมหานคร', paymentTerms: 'Net 60',
+      status: 'ACTIVE',
+    },
+    {
+      id: 5, code: 'CUST-005', name: 'Terminal 21 Property',
+      contactPerson: 'นาง สิริชัย ปัญญา', phone: '02-100-7777', email: 'purchasing@terminal21.co.th',
+      address: '88 ชั้น 2 ถนนสุขุมวิท คลองเตย กรุงเทพมหานคร',
+      city: 'กรุงเทพมหานคร', paymentTerms: 'Net 45',
+      status: 'ACTIVE',
+    },
   ];
 
-  return { employees, users, profileRequests, tickets, notifications };
+  // ════════════════════════════════════════════════════════════════════════════════
+  // Product Catalog (tiles/ceramics with pricing)
+  // ════════════════════════════════════════════════════════════════════════════════
+  const products = [
+    {
+      id: 1, code: 'SCG-GRANITE-WHITE', brand: 'SCG', model: 'Granite White', color: 'ขาว',
+      texture: 'ด้าน', size: '60x60 ซม.', factory: 'SCG Ceramics',
+      costPrice: 95, suggestedPrice: 130, minPrice: 115, maxPrice: 150,
+      stock: 2500, unit: 'แผ่น', description: 'กระเบื้องแกรนิตโต้สีขาว ผิวด้าน',
+    },
+    {
+      id: 2, code: 'SCG-GRANITE-BLACK', brand: 'SCG', model: 'Granite Black', color: 'ดำ',
+      texture: 'หยาบ', size: '60x60 ซม.', factory: 'SCG Ceramics',
+      costPrice: 95, suggestedPrice: 135, minPrice: 120, maxPrice: 155,
+      stock: 1800, unit: 'แผ่น', description: 'กระเบื้องแกรนิตโต้สีดำ ผิวหยาบ',
+    },
+    {
+      id: 3, code: 'COTTO-MARBLE', brand: 'Cotto', model: 'Marble Series', color: 'ขาว',
+      texture: 'มัน', size: '60x120 ซม.', factory: 'Cotto Industry',
+      costPrice: 450, suggestedPrice: 580, minPrice: 520, maxPrice: 650,
+      stock: 800, unit: 'แผ่น', description: 'กระเบื้องลายหินอ่อน ขาวผิวมัน',
+    },
+    {
+      id: 4, code: 'COTTO-LUXURY-GOLD', brand: 'Cotto', model: 'Luxury Gold', color: 'ทอง',
+      texture: 'มัน', size: '60x120 ซม.', factory: 'Cotto Industry',
+      costPrice: 600, suggestedPrice: 780, minPrice: 700, maxPrice: 850,
+      stock: 400, unit: 'แผ่น', description: 'กระเบื้องลายทองคำ ผิวมัน',
+    },
+    {
+      id: 5, code: 'DURAGRES-WOOD', brand: 'Duragres', model: 'Wood Texture', color: 'ขาว',
+      texture: 'ลายไม้', size: '20x100 ซม.', factory: 'Duragres Thailand',
+      costPrice: 200, suggestedPrice: 265, minPrice: 240, maxPrice: 300,
+      stock: 1200, unit: 'แผ่น', description: 'กระเบื้องลายไม้ ขาวผิวลายไม้',
+    },
+  ];
+
+  return {
+    employees, users, profileRequests, tickets, notifications,
+    leaveRequests, overtimeRequests, specialMoneyRequests, attendanceRecords,
+    projects, customers, products,
+    // Sales-chain seed rows for mockApi.js's own module-level stores (mockPricingRequests
+    // etc. aren't part of `db` — see mockApi.js's wiring near those declarations).
+    salesSeed,
+  };
 }

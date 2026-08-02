@@ -1,0 +1,21 @@
+-- Payroll input draft optimistic concurrency (issue #422 follow-up, PR #426 left this open):
+-- two HR users editing the same month's draft with no version column meant
+-- `PayrollRepository#saveInputDrafts`'s per-row `INSERT ... ON CONFLICT ... DO UPDATE` let the
+-- second writer silently overwrite the first with no conflict signal to either of them.
+--
+-- `version` is the durable, per-row optimistic-concurrency counter -- bumped on every upsert (see
+-- saveInputDrafts). It is NOT itself what the client sends back on the PUT: the wire-level token
+-- is a month-level ETag computed in Java from every row's (draft_id, employee_id, version) triple
+-- (see PayrollDraftETag#compute), because the unit HR actually edits is the whole month's draft
+-- set, not one employee's row -- the form submits every employee unfiltered on every save.
+-- draft_id (this table's existing IDENTITY primary key, V104) is in that triple too, not just
+-- version -- version alone is not monotonic across a delete-and-reinsert (process() deletes every
+-- draft row for a processed month; a later re-save for the same employee lands right back at
+-- version 0), so draft_id is what breaks that ABA collision. See PayrollService#saveInputDraft for
+-- the lock-then-compare-then-write sequence this column backs.
+--
+-- Additive with a DEFAULT, so every existing draft row grandfathers in at version 0 with no
+-- backfill needed. Forward-only, per this repo's migration discipline -- V104 (which created this
+-- table) is never edited in place.
+ALTER TABLE hr.payroll_input_draft
+    ADD COLUMN version INTEGER NOT NULL DEFAULT 0;

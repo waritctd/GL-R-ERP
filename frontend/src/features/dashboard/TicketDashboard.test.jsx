@@ -19,7 +19,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: {
         list: vi.fn(),
       },
-      // Commit 6: the "รอรับเรื่อง (Import)" queue count now reads from the
+      // Commit 6: the submitted queue count now reads from the
       // PricingRequest queue instead of the (now permanently-0) tickets summary.
       pricingRequests: {
         queue: vi.fn(),

@@ -552,12 +552,86 @@ public class PayrollRepository {
     // (V104) is a separate table from hr.payroll_line: payroll_line is the engine's computed OUTPUT;
     // a draft is raw HR-typed input only, never read by PayrollCalculator, with no bearing on
     // payroll math whatsoever.
+    //
+    // Optimistic concurrency (issue #422 follow-up, V113): every row carries a `version` counter,
+    // bumped on every upsert by #saveInputDrafts. #findInputDraftVersions and #lockInputDraftMonth
+    // below are the two pieces PayrollService#saveInputDraft composes into a locked
+    // compare-then-write -- see that method's own comment for the full sequence, and
+    // PayrollDraftETag for how a row-version list becomes the one token the wire actually carries.
     // ------------------------------------------------------------------------------------------
 
-    /** Every saved draft row for a month, one per employee who has ever saved a draft for it. */
-    public List<PayrollEmployeeInputRequest> findInputDrafts(LocalDate payrollMonth) {
+    /**
+     * One row's optimistic-concurrency identity: which employee, which physical row ({@code
+     * draft_id}), and what version that row is currently at. Ordered by employee_id -- {@link
+     * PayrollDraftETag#compute} depends on that ordering to produce a stable token for a stable
+     * row set.
+     *
+     * <p><b>Why {@code draftId} is here, not just {@code version} (Opus review finding F1, an ABA
+     * hazard):</b> {@code saveInputDrafts}' INSERT branch never sets {@code version} explicitly, so
+     * a brand-new row always lands at the column DEFAULT, 0 -- and {@code process()} deletes every
+     * draft row for a processed month outright, not soft-deletes them. So version is monotonic
+     * WITHIN one row's lifetime, but NOT across a delete-and-reinsert: a later HR-B save for the
+     * same employee/month, after HR-A's stale tab already read an earlier version-0 state that a
+     * process() call in between has since cleared, lands right back at version 0 too -- the exact
+     * same {@code (employeeId, version)} pair, and therefore the exact same ETag, as a genuinely
+     * earlier, already-superseded state. A stale {@code If-Match} from before the process() would
+     * then incorrectly MATCH the post-process state and silently overwrite it. {@code draftId} is
+     * the {@code GENERATED ALWAYS AS IDENTITY} primary key (V104) -- a fresh sequence value every
+     * INSERT, including a reinsert for the same employee/month after a delete -- so folding it into
+     * the ETag material makes a delete-and-reinsert cycle produce a different token even when the
+     * version counter alone would coincide.
+     */
+    public record DraftRowVersion(long draftId, long employeeId, int version) {}
+
+    /**
+     * Serializes every mutating operation on a payroll month's draft set (both {@link
+     * #saveInputDrafts} via {@code saveInputDraft}, and the draft-clearing branch of {@code
+     * process}) against every other one, for the lifetime of the caller's transaction. Keyed on
+     * the month, not any row -- deliberately: the draft set for a brand-new month has NO rows to
+     * {@code SELECT ... FOR UPDATE} yet, so a row lock alone cannot serialize two concurrent first
+     * saves, and the employee set can grow between reads as new employees are hired. An advisory
+     * lock covers the whole month regardless of how many rows currently exist.
+     *
+     * <p>Uses the two-int-key {@code pg_advisory_xact_lock} overload (a separate keyspace in
+     * Postgres from the single-bigint overload {@code PricingDecisionRepository#lockPricingRequest}
+     * already uses) so a payroll-month key can never collide with an unrelated domain's advisory
+     * lock. {@code classId} is an arbitrary constant fixed to this table; {@code objId} folds
+     * year+month into one int (safe well past any date this system will ever process).
+     */
+    private static final int DRAFT_LOCK_CLASS_ID = 0x50444654; // "PDFT", arbitrary but stable
+
+    public void lockInputDraftMonth(LocalDate payrollMonth) {
+        int objId = payrollMonth.getYear() * 100 + payrollMonth.getMonthValue();
+        jdbc.query("SELECT pg_advisory_xact_lock(:classId, :objId)",
+            Map.of("classId", DRAFT_LOCK_CLASS_ID, "objId", objId), (rs, rowNum) -> 0);
+    }
+
+    /** One draft row, both its typed input AND its optimistic-concurrency identity, from the
+     * SAME database read -- see {@link #findInputDraftRows} for why this matters. */
+    public record DraftRow(PayrollEmployeeInputRequest input, DraftRowVersion version) {}
+
+    /**
+     * Every draft row for a month in ONE statement -- both the typed figures ({@link
+     * PayrollEmployeeInputRequest}) and the optimistic-concurrency identity ({@link
+     * DraftRowVersion}) come from the identical result set, ordered by employee_id.
+     *
+     * <p><b>Why this must be one query, not two (Opus review finding F2):</b> {@link
+     * PayrollService#getInputDraft} used to call {@link #findInputDrafts} and {@link
+     * #findInputDraftVersions} as two separate, unsynchronized round trips outside any
+     * transaction. Under READ COMMITTED, each statement takes its own fresh snapshot, so a writer
+     * committing in the gap between them produces a genuine hazard IN THE UNSAFE DIRECTION: the
+     * first read (figures) can return the OLD state while the second read (versions) returns the
+     * NEW state, handing the caller old data paired with a token that is legitimately current. A
+     * caller who edits from that stale view and saves with that (accurate!) token sails straight
+     * through the {@code If-Match} compare -- the very check meant to catch this can't, because
+     * the token it's comparing against is not stale, only the data display it started from was.
+     * Reading both from one ResultSet makes that gap impossible: there is no second round trip to
+     * race against.
+     */
+    public List<DraftRow> findInputDraftRows(LocalDate payrollMonth) {
         return jdbc.query("""
-            SELECT employee_id, special_pay_1, special_pay_2, special_pay_3, special_pay_4, special_pay_5,
+            SELECT draft_id, employee_id, version,
+                   special_pay_1, special_pay_2, special_pay_3, special_pay_4, special_pay_5,
                    special_pay_6, special_pay_7, special_pay_8, special_pay_9,
                    non_taxable_income, unpaid_leave_days, student_loan_deduction, legal_execution_deduction,
                    other_post_tax_deductions, warning_letter_deduction, customer_return_deduction,
@@ -570,34 +644,55 @@ public class PayrollRepository {
              ORDER BY employee_id
             """,
             Map.of("payrollMonth", payrollMonth),
-            (rs, rowNum) -> new PayrollEmployeeInputRequest(
-                rs.getLong("employee_id"),
-                money(rs.getBigDecimal("special_pay_1")), money(rs.getBigDecimal("special_pay_2")),
-                money(rs.getBigDecimal("special_pay_3")), money(rs.getBigDecimal("special_pay_4")),
-                money(rs.getBigDecimal("special_pay_5")), money(rs.getBigDecimal("special_pay_6")),
-                money(rs.getBigDecimal("special_pay_7")), money(rs.getBigDecimal("special_pay_8")),
-                money(rs.getBigDecimal("special_pay_9")),
-                money(rs.getBigDecimal("non_taxable_income")), money(rs.getBigDecimal("unpaid_leave_days")),
-                money(rs.getBigDecimal("student_loan_deduction")), money(rs.getBigDecimal("legal_execution_deduction")),
-                money(rs.getBigDecimal("other_post_tax_deductions")),
-                // Tax-allowance fields are never part of a draft -- see this table's own comment
-                // above; they are the standing declaration, edited only via /api/payroll/tax-allowances.
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-                money(rs.getBigDecimal("warning_letter_deduction")), money(rs.getBigDecimal("customer_return_deduction")),
-                money(rs.getBigDecimal("other_pretax_deduction")),
-                // Nullable/meaningful, read raw (no money() coercion) -- NULL = "no per-run override
-                // typed", distinct from an explicit 0. Same convention as every other reader of this
-                // column (e.g. the payroll_line row mapper below).
-                rs.getBigDecimal("withholding_tax_override"),
-                money(rs.getBigDecimal("meal_allowance")), money(rs.getBigDecimal("per_diem_exempt")),
-                money(rs.getBigDecimal("per_diem_taxable")),
-                rs.getString("per_diem_basis") == null ? null : PerDiemBasis.valueOf(rs.getString("per_diem_basis")),
-                money(rs.getBigDecimal("bonus_pay")), money(rs.getBigDecimal("other_one_off_pay")),
-                rs.getBoolean("customer_return_already_earned"),
-                rs.getString("garnishment_type") == null ? null : PayrollGarnishmentType.valueOf(rs.getString("garnishment_type")),
-                null,
-                rs.getBigDecimal("days_worked")
+            (rs, rowNum) -> new DraftRow(
+                new PayrollEmployeeInputRequest(
+                    rs.getLong("employee_id"),
+                    money(rs.getBigDecimal("special_pay_1")), money(rs.getBigDecimal("special_pay_2")),
+                    money(rs.getBigDecimal("special_pay_3")), money(rs.getBigDecimal("special_pay_4")),
+                    money(rs.getBigDecimal("special_pay_5")), money(rs.getBigDecimal("special_pay_6")),
+                    money(rs.getBigDecimal("special_pay_7")), money(rs.getBigDecimal("special_pay_8")),
+                    money(rs.getBigDecimal("special_pay_9")),
+                    money(rs.getBigDecimal("non_taxable_income")), money(rs.getBigDecimal("unpaid_leave_days")),
+                    money(rs.getBigDecimal("student_loan_deduction")), money(rs.getBigDecimal("legal_execution_deduction")),
+                    money(rs.getBigDecimal("other_post_tax_deductions")),
+                    // Tax-allowance fields are never part of a draft -- see this table's own comment
+                    // above; they are the standing declaration, edited only via /api/payroll/tax-allowances.
+                    null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                    money(rs.getBigDecimal("warning_letter_deduction")), money(rs.getBigDecimal("customer_return_deduction")),
+                    money(rs.getBigDecimal("other_pretax_deduction")),
+                    // Nullable/meaningful, read raw (no money() coercion) -- NULL = "no per-run override
+                    // typed", distinct from an explicit 0. Same convention as every other reader of this
+                    // column (e.g. the payroll_line row mapper below).
+                    rs.getBigDecimal("withholding_tax_override"),
+                    money(rs.getBigDecimal("meal_allowance")), money(rs.getBigDecimal("per_diem_exempt")),
+                    money(rs.getBigDecimal("per_diem_taxable")),
+                    rs.getString("per_diem_basis") == null ? null : PerDiemBasis.valueOf(rs.getString("per_diem_basis")),
+                    money(rs.getBigDecimal("bonus_pay")), money(rs.getBigDecimal("other_one_off_pay")),
+                    rs.getBoolean("customer_return_already_earned"),
+                    rs.getString("garnishment_type") == null ? null : PayrollGarnishmentType.valueOf(rs.getString("garnishment_type")),
+                    null,
+                    rs.getBigDecimal("days_worked")
+                ),
+                new DraftRowVersion(rs.getLong("draft_id"), rs.getLong("employee_id"), rs.getInt("version"))
             ));
+    }
+
+    /** Every draft row's concurrency identity for a month, ordered by employee_id -- the material
+     * {@link PayrollDraftETag#compute} folds into the month-level ETag. Delegates to {@link
+     * #findInputDraftRows} (one query, one source of truth for the row mapper) rather than
+     * running its own narrower SELECT -- the locked caller inside {@code saveInputDraft} doesn't
+     * need the smaller payload badly enough to justify a second, divergent query shape. */
+    public List<DraftRowVersion> findInputDraftVersions(LocalDate payrollMonth) {
+        return findInputDraftRows(payrollMonth).stream().map(DraftRow::version).toList();
+    }
+
+    /** Every saved draft row for a month, one per employee who has ever saved a draft for it.
+     * Delegates to {@link #findInputDraftRows} -- see that method's own javadoc (Opus review
+     * finding F2) for why a caller that also needs the concurrency identity for the SAME read must
+     * call {@link #findInputDraftRows} directly instead of this plus {@link
+     * #findInputDraftVersions} as two separate statements. */
+    public List<PayrollEmployeeInputRequest> findInputDrafts(LocalDate payrollMonth) {
+        return findInputDraftRows(payrollMonth).stream().map(DraftRow::input).toList();
     }
 
     /** Upsert one draft row per submitted input, keyed on (employee_id, payroll_month). */
@@ -649,6 +744,12 @@ public class PayrollRepository {
                     customer_return_already_earned = EXCLUDED.customer_return_already_earned,
                     garnishment_type = EXCLUDED.garnishment_type,
                     days_worked = EXCLUDED.days_worked,
+                    -- Optimistic concurrency (V113): bumped on every upsert, whether this call is
+                    -- HR's own re-save or a genuinely concurrent writer's -- see this table's own
+                    -- comment above for why the whole month's row set, folded through
+                    -- PayrollDraftETag, is what the caller actually compares, not this column
+                    -- directly.
+                    version = payroll_input_draft.version + 1,
                     updated_by = EXCLUDED.updated_by,
                     updated_at = now()
                 """,

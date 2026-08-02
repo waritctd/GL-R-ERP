@@ -8,7 +8,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { Avatar } from '../../components/common/Avatar.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
-import { formatShortDate, requestStatus } from '../../utils/format.js';
+import { formatShortDate, greetingName, requestStatus } from '../../utils/format.js';
 import { hasPermission, canAccessPath } from '../../app/permissions.js';
 import { SALES_ENABLED } from '../../app/features.js';
 import { ActionQueue } from './ActionQueue.jsx';
@@ -85,7 +85,7 @@ function dashboardCards(mode, summary, pendingCount, { navigate, access }) {
       { icon: 'clock', label: 'มาสายวันนี้', value: numberValue(attendance.lateToday), helper: 'Late today', tone: numberValue(attendance.lateToday) > 0 ? 'amber' : 'indigo', onClick: go('/attendance', access.attendance()) },
       { icon: 'bell', label: 'แจ้งเตือนยังไม่อ่าน', value: numberValue(notifications.unread), helper: 'Unread', tone: 'indigo' },
       ...(tickets.total > 0 ? [
-        { icon: 'fileText', label: 'ใบขอราคาเปิดอยู่', value: numberValue(tickets.totalOpen), helper: 'Tickets', tone: 'blue', onClick: go('/tickets', access.tickets()) },
+        { icon: 'fileText', label: 'คำขอราคาเปิดอยู่', value: numberValue(tickets.totalOpen), helper: 'Tickets', tone: 'blue', onClick: go('/tickets', access.tickets()) },
       ] : []),
     ];
   }
@@ -99,7 +99,7 @@ function dashboardCards(mode, summary, pendingCount, { navigate, access }) {
       { icon: 'clock', label: 'มาสายวันนี้', value: numberValue(attendance.lateToday), helper: 'Late today', tone: numberValue(attendance.lateToday) > 0 ? 'amber' : 'indigo', onClick: go('/attendance', access.attendance()) },
       { icon: 'bell', label: 'แจ้งเตือนยังไม่อ่าน', value: numberValue(notifications.unread), helper: 'Unread', tone: 'indigo' },
       ...(tickets.total > 0 ? [
-        { icon: 'fileText', label: 'ใบขอราคาเปิดอยู่', value: numberValue(tickets.totalOpen), helper: 'Tickets', tone: 'blue', onClick: go('/tickets', access.tickets()) },
+        { icon: 'fileText', label: 'คำขอราคาเปิดอยู่', value: numberValue(tickets.totalOpen), helper: 'Tickets', tone: 'blue', onClick: go('/tickets', access.tickets()) },
       ] : []),
     ];
   }
@@ -178,8 +178,8 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
     : [];
   const queueItems = actionQueueItems(mode, dashboardSummary, { navigate, access });
   const title = mode === 'company'
-    ? `สวัสดี, คุณ${employee?.nickName || employee?.nameTh || user?.name || ''}`
-    : `สวัสดี, คุณ${employee?.nickName || employee?.nameTh || user?.name || ''}`;
+    ? `สวัสดี, ${greetingName(employee?.nickName || employee?.nameTh || user?.name)}`
+    : `สวัสดี, ${greetingName(employee?.nickName || employee?.nameTh || user?.name)}`;
   const subtitle = mode === 'company'
     ? 'ภาพรวมระบบทรัพยากรบุคคล'
     : mode === 'manager'

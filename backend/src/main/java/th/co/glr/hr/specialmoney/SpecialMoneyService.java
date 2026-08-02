@@ -56,7 +56,7 @@ public class SpecialMoneyService {
         LocalDate effectiveTo = toDate == null ? today : toDate;
         LocalDate effectiveFrom = fromDate == null ? effectiveTo.withDayOfMonth(1) : fromDate;
         if (effectiveTo.isBefore(effectiveFrom)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "toDate must be on or after fromDate");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่สิ้นสุดต้องไม่มาก่อนวันที่เริ่มต้น");
         }
 
         Long employeeId = requestedEmployeeId;
@@ -66,7 +66,7 @@ public class SpecialMoneyService {
             managerEmployeeId = requireEmployeeId(user);
             managerDivisionId = user.manager() ? user.divisionId() : null;
             if (requestedEmployeeId != null && !canAccessEmployee(user, requestedEmployeeId)) {
-                throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+                throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
             }
         }
 
@@ -89,7 +89,7 @@ public class SpecialMoneyService {
 
     public SpecialMoneyUsageDto usage(long employeeId, int year, UserPrincipal user) {
         if (!canAccessEmployee(user, employeeId)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         UsageSnapshot snapshot = repository.findUsage(employeeId, year);
         Map<String, BigDecimal> amounts = new LinkedHashMap<>();
@@ -108,7 +108,7 @@ public class SpecialMoneyService {
 
         LocalDate today = LocalDate.now(BUSINESS_ZONE);
         EmployeeEligibilitySnapshot eligibility = repository.findEligibility(employeeId, today)
-            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "Employee not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบข้อมูลพนักงาน"));
         UsageSnapshot usage = repository.findUsage(employeeId, usageYear(request, today));
         PolicyAmounts amounts = repository.findPolicyAmounts(type.name(), today);
         Set<String> excludedProvinces = repository.findExcludedProvinces();
@@ -136,7 +136,7 @@ public class SpecialMoneyService {
         if (status == SpecialMoneyStatus.MANAGER_APPROVED) {
             return ceoApprove(id, request, user, actorEmployeeId, existing);
         }
-        throw new ApiException(HttpStatus.CONFLICT, "Special money request has already been reviewed");
+        throw new ApiException(HttpStatus.CONFLICT, "คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว");
     }
 
     private SpecialMoneyRequestDto managerApprove(
@@ -149,7 +149,7 @@ public class SpecialMoneyService {
 
         int updated = repository.managerApprove(id, actorEmployeeId, note(request));
         if (updated != 1) {
-            throw new ApiException(HttpStatus.CONFLICT, "Special money request has already been reviewed");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว");
         }
         SpecialMoneyRequestDto after = requireRequest(id);
         auditService.record(user, "MANAGER_APPROVE_SPECIAL_MONEY_REQUEST", "special_money_request", id, existing, after);
@@ -173,7 +173,7 @@ public class SpecialMoneyService {
         SpecialMoneyType type = parseType(existing.requestType());
         LocalDate today = LocalDate.now(BUSINESS_ZONE);
         EmployeeEligibilitySnapshot eligibility = repository.findEligibility(existing.employeeId(), today)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Employee not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบข้อมูลพนักงาน"));
         UsageSnapshot usage = repository.findUsage(existing.employeeId(), existing.eventDate().getYear());
         PolicyAmounts amounts = repository.findPolicyAmounts(type.name(), today);
         Set<String> excludedProvinces = repository.findExcludedProvinces();
@@ -197,7 +197,7 @@ public class SpecialMoneyService {
         if (exceedsCap && capOverrideReason == null) {
             throw new ApiException(
                 HttpStatus.BAD_REQUEST,
-                "capOverrideReason is required when the approved amount exceeds the policy cap");
+                "ต้องระบุเหตุผลเมื่อจำนวนเงินที่อนุมัติเกินเพดานตามนโยบาย");
         }
 
         // The 25th-of-month payroll cutoff. Rolling forward past an already-PROCESSED month is
@@ -214,7 +214,7 @@ public class SpecialMoneyService {
 
         int updated = repository.ceoApprove(id, actorEmployeeId, approvedAmount, payrollMonth, capOverrideReason, note(request));
         if (updated != 1) {
-            throw new ApiException(HttpStatus.CONFLICT, "Special money request has already been reviewed");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว");
         }
         SpecialMoneyRequestDto after = requireRequest(id);
         auditService.record(user, "CEO_APPROVE_SPECIAL_MONEY_REQUEST", "special_money_request", id, existing, after);
@@ -233,7 +233,7 @@ public class SpecialMoneyService {
         if (status == SpecialMoneyStatus.MANAGER_APPROVED) {
             return ceoReject(id, request, user, actorEmployeeId, existing);
         }
-        throw new ApiException(HttpStatus.CONFLICT, "Special money request has already been reviewed");
+        throw new ApiException(HttpStatus.CONFLICT, "คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว");
     }
 
     private SpecialMoneyRequestDto managerReject(
@@ -245,7 +245,7 @@ public class SpecialMoneyService {
         requireManager(existing.employeeId(), user);
         int updated = repository.reject(id, actorEmployeeId, note(request));
         if (updated != 1) {
-            throw new ApiException(HttpStatus.CONFLICT, "Special money request has already been reviewed");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว");
         }
         SpecialMoneyRequestDto after = requireRequest(id);
         auditService.record(user, "REJECT_SPECIAL_MONEY_REQUEST", "special_money_request", id, existing, after);
@@ -262,7 +262,7 @@ public class SpecialMoneyService {
         requireCeo(user);
         int updated = repository.ceoReject(id, actorEmployeeId, note(request));
         if (updated != 1) {
-            throw new ApiException(HttpStatus.CONFLICT, "Special money request has already been reviewed");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว");
         }
         SpecialMoneyRequestDto after = requireRequest(id);
         auditService.record(user, "CEO_REJECT_SPECIAL_MONEY_REQUEST", "special_money_request", id, existing, after);
@@ -277,15 +277,15 @@ public class SpecialMoneyService {
         boolean isEmployee = existing.employeeId() == actorEmployeeId;
         boolean isRequester = existing.requestedById() != null && existing.requestedById() == actorEmployeeId;
         if (!isEmployee && !isRequester) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (!"SUBMITTED".equals(existing.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Only submitted special money requests can be cancelled");
+            throw new ApiException(HttpStatus.CONFLICT, "ยกเลิกได้เฉพาะคำขอเงินพิเศษที่ยังไม่ได้รับการพิจารณาเท่านั้น");
         }
 
         int updated = repository.cancel(id, actorEmployeeId, note(request));
         if (updated != 1) {
-            throw new ApiException(HttpStatus.CONFLICT, "Special money request can no longer be cancelled");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอเงินพิเศษนี้ไม่สามารถยกเลิกได้แล้ว");
         }
         SpecialMoneyRequestDto after = requireRequest(id);
         auditService.record(user, "CANCEL_SPECIAL_MONEY_REQUEST", "special_money_request", id, existing, after);
@@ -300,26 +300,26 @@ public class SpecialMoneyService {
         Long actorEmployeeId = requireEmployeeId(user);
         long targetEmployeeId = requestedEmployeeId == null ? actorEmployeeId : requestedEmployeeId;
         if (targetEmployeeId != actorEmployeeId && !managesEmployee(targetEmployeeId, user)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Employees can only submit their own special-money requests");
+            throw new ApiException(HttpStatus.FORBIDDEN, "พนักงานสามารถยื่นคำขอเงินพิเศษให้ตนเองเท่านั้น");
         }
         return targetEmployeeId;
     }
 
     private void validateEmployee(long employeeId) {
         if (!repository.employeeExists(employeeId)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Employee not found");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบข้อมูลพนักงาน");
         }
     }
 
     private void requireManager(long employeeId, UserPrincipal user) {
         if (!managesEmployee(employeeId, user)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only the employee's manager can review special-money requests");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะหัวหน้างานของพนักงานเท่านั้นที่สามารถพิจารณาคำขอเงินพิเศษได้");
         }
     }
 
     private void requireCeo(UserPrincipal user) {
         if (user == null || !"ceo".equals(user.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only the CEO can approve manager-approved special-money requests");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะ CEO เท่านั้นที่สามารถอนุมัติคำขอเงินพิเศษที่หัวหน้างานอนุมัติแล้วได้");
         }
     }
 
@@ -440,12 +440,12 @@ public class SpecialMoneyService {
 
     private SpecialMoneyRequestDto requireRequest(long id) {
         return repository.findById(id)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Special money request not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอเงินพิเศษนี้"));
     }
 
     private Long requireEmployeeId(UserPrincipal user) {
         if (user.employeeId() == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "User is not linked to an employee");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล");
         }
         return user.employeeId();
     }
@@ -457,18 +457,18 @@ public class SpecialMoneyService {
         try {
             return SpecialMoneyStatus.valueOf(value.trim().toUpperCase());
         } catch (IllegalArgumentException exception) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid special money status");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "สถานะคำขอเงินพิเศษไม่ถูกต้อง");
         }
     }
 
     private SpecialMoneyType parseType(String value) {
         if (value == null || value.isBlank()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "requestType is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุประเภทคำขอ");
         }
         try {
             return SpecialMoneyType.valueOf(value.trim().toUpperCase());
         } catch (IllegalArgumentException exception) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid special money request type");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ประเภทคำขอเงินพิเศษไม่ถูกต้อง");
         }
     }
 

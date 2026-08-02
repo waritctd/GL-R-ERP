@@ -57,7 +57,7 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
     // pricing-request notification was indistinguishable from a ticket-submitted
     // one. It now notifies as "PRICING_REQUEST_SUBMITTED" with its own title,
     // and "PICKED_UP" (used by pickup()) gained a title of its own instead of
-    // falling through to the generic "อัปเดตสถานะใบขอราคา".
+    // falling through to the generic "อัปเดตสถานะคำขอราคา".
     @Test
     void pricingRequestSubmittedAndPickedUpGetTheirOwnTitles() {
         long importDivision = insertDivision("PCIM", "Import");
@@ -65,8 +65,8 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         long salesDivision = insertDivision("SA", "Sales");
         long salesEmployee = insertEmployee("EMP-301", salesDivision, true);
 
-        repository.notifyByRole("import", 88L, "PRICING_REQUEST_SUBMITTED", "ใบขอราคา PCR-2026-0001 รอการรับเรื่อง");
-        repository.notifyEmployee(salesEmployee, 88L, "PICKED_UP", "ใบขอราคา PCR-2026-0001 ถูกรับเรื่องแล้ว");
+        repository.notifyByRole("import", 88L, "PRICING_REQUEST_SUBMITTED", "คำขอราคา PCR-2026-0001 รอการรับเรื่อง");
+        repository.notifyEmployee(salesEmployee, 88L, "PICKED_UP", "คำขอราคา PCR-2026-0001 ถูกรับเรื่องแล้ว");
 
         List<NotificationDto> importRows = repository.findByEmployeeId(importEmployee);
         assertThat(importRows).hasSize(1);

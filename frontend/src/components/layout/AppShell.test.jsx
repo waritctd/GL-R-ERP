@@ -78,7 +78,8 @@ describe('AppShell navigation (drawer content, no persistent tablet rail)', () =
 
     const dealsLink = await screen.findByRole('link', { name: 'รายการดีล (Deal pipeline)' });
     expect(dealsLink.getAttribute('title')).toBe('รายการดีล (Deal pipeline)');
-    expect(screen.getByRole('button', { name: 'GL&R home' }).getAttribute('title')).toBe('GL&R home');
+    expect(screen.getByRole('link', { name: 'GL&R ERP home' }).getAttribute('title')).toBe('GL&R ERP home');
+    expect(screen.getByText('GL&R ERP')).toBeTruthy();
   });
 
   it('preserves the active route highlight', async () => {
@@ -136,6 +137,36 @@ describe('AppShell navigation (drawer content, no persistent tablet rail)', () =
 
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
+
+  it('keeps notification and profile popovers mutually exclusive in the topbar', async () => {
+    renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
+
+    const notificationTrigger = await screen.findByRole('button', { name: /การแจ้งเตือน/ });
+    const userTrigger = screen.getByRole('button', { name: 'เมนูผู้ใช้' });
+
+    fireEvent.click(notificationTrigger);
+    expect(await screen.findByRole('dialog', { name: 'การแจ้งเตือน' })).toBeTruthy();
+
+    fireEvent.click(userTrigger);
+    expect(await screen.findByRole('menu', { name: 'เมนูผู้ใช้' })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'การแจ้งเตือน' })).toBeNull());
+
+    fireEvent.click(notificationTrigger);
+    expect(await screen.findByRole('dialog', { name: 'การแจ้งเตือน' })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('menu', { name: 'เมนูผู้ใช้' })).toBeNull());
+  });
+
+  it('gives the profile menu the same mobile viewport-safe positioning contract as header overlays', async () => {
+    renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'เมนูผู้ใช้' }));
+    const menu = await screen.findByRole('menu', { name: 'เมนูผู้ใช้' });
+
+    expect(menu.className).toContain('max-[720px]:fixed');
+    expect(menu.className).toContain('max-[720px]:left-4');
+    expect(menu.className).toContain('max-[720px]:right-4');
+  });
+
 });
 
 // Account role-scoped views (finalized design, owner-confirmed 2026-07-24): nav
@@ -162,6 +193,51 @@ describe('AppShell nav — Account role-scoped views', () => {
     expect(await screen.findByText('รายการดีล')).not.toBeNull();
     expect(screen.getByText('ค่าคอมมิชชัน')).not.toBeNull();
     expect(screen.getByText('งานการเงิน')).not.toBeNull();
+  });
+});
+
+// Skip link (WCAG 2.2 §2.4.1 Bypass Blocks, issue #392): must be the first
+// focusable element in the shell — ahead of the sidebar's nav items — and
+// activating it must move real DOM focus onto the <main> landmark, not just
+// scroll to it. A bare `href="#main-content"` moving the viewport without
+// moving focus is the most common way this pattern silently fails.
+describe('AppShell skip link (WCAG 2.2 §2.4.1 Bypass Blocks)', () => {
+  it('renders as the first focusable element, before the sidebar nav', async () => {
+    renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
+
+    const skipLink = await screen.findByRole('link', { name: 'ข้ามไปยังเนื้อหาหลัก' });
+    const firstNavLink = await screen.findByRole('link', { name: 'รายการดีล (Deal pipeline)' });
+
+    // DOCUMENT_POSITION_FOLLOWING (4) means firstNavLink comes after skipLink.
+    expect(skipLink.compareDocumentPosition(firstNavLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('is visually hidden by default via sr-only, not display:none/visibility:hidden', async () => {
+    renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
+
+    const skipLink = await screen.findByRole('link', { name: 'ข้ามไปยังเนื้อหาหลัก' });
+    expect(skipLink.className).toContain('sr-only');
+    expect(skipLink.className).toContain('focus:not-sr-only');
+  });
+
+  it('moves real DOM focus onto <main id="main-content"> when activated, not just the viewport', async () => {
+    renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
+
+    const skipLink = await screen.findByRole('link', { name: 'ข้ามไปยังเนื้อหาหลัก' });
+    fireEvent.click(skipLink);
+
+    await waitFor(() => {
+      expect(document.activeElement?.id).toBe('main-content');
+      expect(document.activeElement?.tagName).toBe('MAIN');
+    });
+  });
+
+  it('targets exactly one <main> landmark', async () => {
+    renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
+    await screen.findByText('เนื้อหา');
+
+    expect(document.querySelectorAll('main')).toHaveLength(1);
+    expect(document.getElementById('main-content')?.tagName).toBe('MAIN');
   });
 });
 

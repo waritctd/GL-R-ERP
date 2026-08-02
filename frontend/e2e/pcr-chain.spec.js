@@ -105,8 +105,8 @@ test('sales -> import -> ceo -> sales walks a PCR from draft to quotation-accept
   const ticketPath = new URL(page.url()).pathname;
 
   // ── sales: create + submit the pricing request straight to Import ──
-  await page.getByRole('button', { name: 'สร้างใบขอราคา' }).click();
-  const pcrModal = page.getByRole('dialog', { name: 'สร้างใบขอราคา' });
+  await page.getByRole('button', { name: 'สร้างคำขอราคา' }).click();
+  const pcrModal = page.getByRole('dialog', { name: 'สร้างคำขอราคา' });
   await expect(pcrModal).toBeVisible();
   await pcrModal.getByPlaceholder('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ').fill('คุณทดสอบ ผู้รับ');
   // Pick a real catalog product (see the file-header note): submit() 422s
@@ -116,27 +116,52 @@ test('sales -> import -> ceo -> sales walks a PCR from draft to quotation-accept
   await pcrModal.getByLabel('ค้นหา Catalog').fill('Corner');
   await pcrModal.getByRole('button', { name: /REFIN/ }).click();
   await expect(pcrModal.getByText('Catalog #5')).toBeVisible();
-  await pcrModal.getByRole('button', { name: 'ส่งให้ Import' }).click();
+  await pcrModal.getByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' }).click();
   await expect(pcrModal).toHaveCount(0);
-  await expect(page.getByText('รอ Import รับเรื่อง').first()).toBeVisible();
+  await expect(page.getByText('รอฝ่ายนำเข้ารับเรื่อง').first()).toBeVisible();
+
+  // The demo seed (demoSales.js) now seeds several other SUBMITTED pricing
+  // requests, so the shared /pricing-requests queue this test visits next is
+  // no longer single-row. Capture THIS deal's own PCR code here, from its
+  // per-deal panel (scoped by ticketId — this ticket has exactly one PCR, the
+  // one just created, regardless of how much seed data exists elsewhere), so
+  // every subsequent step in the import/CEO phases can be pinned to this
+  // exact request instead of "whichever PCR row comes first".
+  const pcrPanel = page.locator('section').filter({ has: page.getByRole('heading', { name: 'คำขอราคา', exact: true }) });
+  const createdPcrCode = (await pcrPanel.locator('code').first().textContent()).trim();
+  expect(createdPcrCode).toMatch(/^PCR-2026-\d+$/);
 
   // ── import: pickup -> factory quote -> costing ──────────────────────
   await switchRole(page, 'import');
   await spaGoto(page, '/pricing-requests');
-  const pcrLink = page.getByRole('link', { name: /^PCR-2026-\d+$/ });
+  // Match the exact code captured above, not the generic /^PCR-2026-\d+$/
+  // pattern — the seed now puts several SUBMITTED requests in this queue, so
+  // the generic pattern resolves to multiple rows (strict-mode violation).
+  // Using .first() here would silently drive a SEEDED request through the
+  // rest of this chain instead of the one this test created, which would
+  // make the test pass while proving nothing about what it claims to.
+  const pcrLink = page.getByRole('link', { name: createdPcrCode, exact: true });
   await expect(pcrLink).toBeVisible();
   const pcrHref = await pcrLink.getAttribute('href');
-  await page.getByTestId('pcr-queue-pickup').click();
+  // Scope the pickup click to this request's own row — data-testid
+  // "pcr-queue-pickup" is repeated once per pickable row now that the queue
+  // is multi-row, so an unscoped click could pick up any of them.
+  const pcrRow = page.getByRole('row').filter({ has: pcrLink });
+  await pcrRow.getByTestId('pcr-queue-pickup').click();
   // Pickup moves the request out of the default SUBMITTED filter, so the
   // row disappears from this queue view — navigate straight to its detail
   // page (captured above) rather than re-querying the list.
-  await expect(page.getByTestId('pcr-queue-pickup')).toHaveCount(0);
+  await expect(pcrLink).toHaveCount(0);
   await spaGoto(page, pcrHref);
+  // Confirm this is genuinely the request just created, not a seeded one
+  // that happened to sort next to it: the detail page's <h1> is
+  // summary.requestCode (PricingRequestDetailPage.jsx, PageHeader `title`).
+  await expect(page.getByRole('heading', { level: 1, name: createdPcrCode })).toBeVisible();
 
-  await expect(page.getByText('Import ตรวจคำขอราคา').first()).toBeVisible();
+  await expect(page.getByText('ฝ่ายนำเข้าตรวจคำขอราคา').first()).toBeVisible();
   await page.getByTestId('pcr-generate-drafts').click();
   await expect(page.getByText('REFIN').first()).toBeVisible();
-  await page.getByPlaceholder('Raw price').fill('100');
+  await page.getByPlaceholder('ราคาโรงงาน').fill('100');
   await page.getByTestId('pcr-quote-save-response').click();
   await expect(page.getByTestId('pcr-quote-ready')).toBeVisible();
   await page.getByTestId('pcr-quote-ready').click();
@@ -146,8 +171,8 @@ test('sales -> import -> ceo -> sales walks a PCR from draft to quotation-accept
   await page.getByTestId('pcr-costing-recalculate').click();
   await expect(page.getByTestId('pcr-costing-submit')).toBeEnabled();
   await page.getByTestId('pcr-costing-submit').click();
-  await page.getByRole('dialog', { name: 'Submit costing to CEO' })
-    .getByRole('button', { name: 'Submit to CEO' }).click();
+  await page.getByRole('dialog', { name: 'ส่งต้นทุนให้ CEO ตรวจ' })
+    .getByRole('button', { name: 'ส่งให้ CEO ตรวจ' }).click();
   await expect(page.getByText('ส่งให้ CEO ตรวจแล้ว').first()).toBeVisible();
 
   // ── ceo: start review -> set minimum selling price -> approve ───────
@@ -170,11 +195,14 @@ test('sales -> import -> ceo -> sales walks a PCR from draft to quotation-accept
   // ── sales: create + issue the customer quotation, record ACCEPTED ───
   await switchRole(page, 'sales');
   await spaGoto(page, ticketPath);
-  // Ticket-detail IA rebuild Phase 2 (FIX 5, Opus review): DealQuotationPanel
-  // now lives inside the "ใบเสนอราคา" tab, not on the page by default — a
-  // fresh navigation always lands on ภาพรวม, so this locator found nothing
-  // until the tab was opened.
-  await page.getByRole('tab', { name: 'ใบเสนอราคา' }).click();
+  // DealQuotationPanel lives inside a tab, not on the page by default — a
+  // fresh navigation lands on the default tab, so this locator finds nothing
+  // until that tab is opened. Slice C2b renamed it: the quotation panel's home
+  // is now "เอกสาร" (it was "ใบเสนอราคา"), and the default landing tab is now
+  // "ดีล" (it was "ภาพรวม"). The tab's helper span is aria-hidden, so the
+  // accessible name is the label alone — matching on the old label found
+  // nothing at all rather than falling back.
+  await page.getByRole('tab', { name: 'เอกสาร' }).click();
   const quotationPanel = page.getByTestId('deal-quotation-panel');
   await expect(quotationPanel).toBeVisible();
   await quotationPanel.getByTestId('deal-quotation-create').click();

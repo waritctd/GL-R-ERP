@@ -55,7 +55,7 @@ public class OvertimeService {
         LocalDate effectiveTo = toDate == null ? today : toDate;
         LocalDate effectiveFrom = fromDate == null ? effectiveTo.withDayOfMonth(1) : fromDate;
         if (effectiveTo.isBefore(effectiveFrom)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "toDate must be on or after fromDate");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่สิ้นสุดต้องไม่มาก่อนวันที่เริ่มต้น");
         }
 
         Long employeeId = requestedEmployeeId;
@@ -65,7 +65,7 @@ public class OvertimeService {
             managerEmployeeId = requireEmployeeId(user);
             managerDivisionId = user.manager() ? user.divisionId() : null;
             if (requestedEmployeeId != null && !canAccessEmployee(user, requestedEmployeeId)) {
-                throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+                throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
             }
         }
 
@@ -92,6 +92,15 @@ public class OvertimeService {
         validateEmployee(employeeId);
         validatePlannedWindow(request);
         validateRetroactiveWindow(request);
+        // Opus review finding F2: this used to live at the BOTTOM of validateRetroactiveWindow,
+        // which returns early for a work date that is today or later -- so a closed payroll month
+        // was only refused for BACKDATED submissions. Hoisted here so it runs for every submit,
+        // matching what this guard's own javadoc has always claimed. Harmless for the current
+        // seed-covered case (Jan-Jun 2026 is entirely in the past, so the old placement did fire),
+        // but the gap was real: record coverage for a current month and same-day OT sailed past
+        // submit, only to be refused a stage later at manager approval -- surfacing the error to
+        // the wrong person, after the request had already entered the queue.
+        requirePayrollMonthOpen(request.workDate());
 
         int plannedMinutes = minutesBetween(request.plannedStartAt(), request.plannedEndAt());
         LocalDate payrollMonth = request.workDate().withDayOfMonth(1);
@@ -114,7 +123,7 @@ public class OvertimeService {
         if (status == OvertimeStatus.MANAGER_APPROVED) {
             return ceoApprove(id, request, user, actorEmployeeId, existing);
         }
-        throw new ApiException(HttpStatus.CONFLICT, "Overtime request has already been reviewed");
+        throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว");
     }
 
     private OvertimeRequestDto managerApprove(
@@ -130,7 +139,7 @@ public class OvertimeService {
         BigDecimal salaryBasis = overtimeRepository.findSalaryBasisAsOf(existing.employeeId(), existing.workDate());
         int updated = overtimeRepository.managerApprove(id, actorEmployeeId, calculation, salaryBasis, note(request));
         if (updated != 1) {
-            throw new ApiException(HttpStatus.CONFLICT, "Overtime request has already been reviewed");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว");
         }
         OvertimeRequestDto after = requireRequest(id);
         auditService.record(user, "MANAGER_APPROVE_OVERTIME_REQUEST", "overtime_request", id, existing, after);
@@ -149,7 +158,7 @@ public class OvertimeService {
 
         int updated = overtimeRepository.ceoApprove(id, actorEmployeeId, note(request));
         if (updated != 1) {
-            throw new ApiException(HttpStatus.CONFLICT, "Overtime request has already been reviewed");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว");
         }
         OvertimeRequestDto after = requireRequest(id);
         auditService.record(user, "CEO_APPROVE_OVERTIME_REQUEST", "overtime_request", id, existing, after);
@@ -182,7 +191,7 @@ public class OvertimeService {
         if (status == OvertimeStatus.MANAGER_APPROVED) {
             return ceoReject(id, request, user, actorEmployeeId, existing);
         }
-        throw new ApiException(HttpStatus.CONFLICT, "Overtime request has already been reviewed");
+        throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว");
     }
 
     private OvertimeRequestDto managerReject(
@@ -194,7 +203,7 @@ public class OvertimeService {
         requireManager(existing.employeeId(), user);
         int updated = overtimeRepository.reject(id, actorEmployeeId, note(request));
         if (updated != 1) {
-            throw new ApiException(HttpStatus.CONFLICT, "Overtime request has already been reviewed");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว");
         }
         OvertimeRequestDto after = requireRequest(id);
         auditService.record(user, "REJECT_OVERTIME_REQUEST", "overtime_request", id, existing, after);
@@ -211,7 +220,7 @@ public class OvertimeService {
         requireCeo(user);
         int updated = overtimeRepository.ceoReject(id, actorEmployeeId, note(request));
         if (updated != 1) {
-            throw new ApiException(HttpStatus.CONFLICT, "Overtime request has already been reviewed");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว");
         }
         OvertimeRequestDto after = requireRequest(id);
         auditService.record(user, "CEO_REJECT_OVERTIME_REQUEST", "overtime_request", id, existing, after);
@@ -225,20 +234,20 @@ public class OvertimeService {
         Long actorEmployeeId = requireEmployeeId(user);
         boolean manager = managesEmployee(existing.employeeId(), user);
         if (!manager && existing.employeeId() != actorEmployeeId) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (!manager && !"SUBMITTED".equals(existing.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Only submitted overtime requests can be cancelled by employees");
+            throw new ApiException(HttpStatus.CONFLICT, "พนักงานยกเลิกได้เฉพาะคำขอทำงานล่วงเวลาที่ยังไม่ได้รับการพิจารณาเท่านั้น");
         }
         if (!"SUBMITTED".equals(existing.status())
                 && !"MANAGER_APPROVED".equals(existing.status())
                 && !"APPROVED".equals(existing.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Only active overtime requests can be cancelled");
+            throw new ApiException(HttpStatus.CONFLICT, "ยกเลิกได้เฉพาะคำขอทำงานล่วงเวลาที่ยังอยู่ระหว่างพิจารณาเท่านั้น");
         }
 
         int updated = overtimeRepository.cancel(id, manager ? actorEmployeeId : null, note(request));
         if (updated != 1) {
-            throw new ApiException(HttpStatus.CONFLICT, "Overtime request can no longer be cancelled");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ไม่สามารถยกเลิกได้แล้ว");
         }
         OvertimeRequestDto after = requireRequest(id);
         auditService.record(user, "CANCEL_OVERTIME_REQUEST", "overtime_request", id, existing, after);
@@ -289,25 +298,25 @@ public class OvertimeService {
         Long actorEmployeeId = requireEmployeeId(user);
         long targetEmployeeId = requestedEmployeeId == null ? actorEmployeeId : requestedEmployeeId;
         if (targetEmployeeId != actorEmployeeId && !managesEmployee(targetEmployeeId, user)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Employees can only request their own overtime");
+            throw new ApiException(HttpStatus.FORBIDDEN, "พนักงานสามารถขอทำงานล่วงเวลาให้ตนเองเท่านั้น");
         }
         return targetEmployeeId;
     }
 
     private void validateEmployee(long employeeId) {
         if (!overtimeRepository.employeeExists(employeeId)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Employee not found");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบข้อมูลพนักงาน");
         }
     }
 
     private void validatePlannedWindow(SubmitOvertimeRequest request) {
         int plannedMinutes = minutesBetween(request.plannedStartAt(), request.plannedEndAt());
         if (plannedMinutes <= 0) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Overtime end time must be after start time");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เวลาสิ้นสุดการทำงานล่วงเวลาต้องอยู่หลังเวลาเริ่มต้น");
         }
         LocalDate startWorkDate = request.plannedStartAt().atZoneSameInstant(BUSINESS_ZONE).toLocalDate();
         if (!startWorkDate.equals(request.workDate())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "workDate must match the planned start date");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ทำงานต้องตรงกับวันที่เริ่มต้นตามแผน");
         }
     }
 
@@ -325,48 +334,64 @@ public class OvertimeService {
         if (request.workDate().isBefore(today.minusDays(windowDays))) {
             throw new ApiException(
                 HttpStatus.BAD_REQUEST,
-                "Overtime can only be filed up to " + windowDays + " days after the work date"
+                "ยื่นคำขอทำงานล่วงเวลาย้อนหลังได้ไม่เกิน " + windowDays + " วันหลังวันที่ทำงาน"
             );
         }
         String reason = request.reason() == null ? "" : request.reason().trim();
         if (reason.length() < BACKDATED_REASON_MIN_LENGTH) {
             throw new ApiException(
                 HttpStatus.BAD_REQUEST,
-                "A retroactive overtime request must explain clearly why it is late (at least "
-                    + BACKDATED_REASON_MIN_LENGTH + " characters)"
+                "คำขอทำงานล่วงเวลาย้อนหลังต้องระบุเหตุผลที่ยื่นล่าช้าอย่างชัดเจน (อย่างน้อย "
+                    + BACKDATED_REASON_MIN_LENGTH + " ตัวอักษร)"
             );
         }
-        requirePayrollMonthOpen(request.workDate());
     }
 
     /**
-     * Refuses to touch a work date whose payroll month has already been processed.
+     * Refuses to touch a work date whose payroll month is closed, for either of two distinct
+     * reasons -- an HR reader needs to tell them apart, so each gets its own Thai message:
      *
-     * <p>Payroll derives overtime by {@code payroll_month} and a processed period is inserted once,
-     * so a request that lands in a closed month is approved and then never paid — silently. This
-     * runs at submit and again at each approval stage, because a request filed before the cut-off
-     * can still be approved after it.
+     * <ol>
+     *   <li><b>Already processed in this system.</b> Payroll derives overtime by {@code
+     *       payroll_month} and a processed period is inserted once, so a request that lands in a
+     *       processed month is approved and then never paid -- silently.
+     *   <li><b>Seed-covered.</b> The month was paid outside the ERP and is already reflected in
+     *       {@code hr.payroll_year_to_date_seed} (PND1 filed) -- see V114. It is never {@code
+     *       PROCESSED} here (a DB trigger refuses that, to avoid double-counting year-to-date
+     *       withholding), so checking {@link OvertimeRepository#payrollMonthProcessed(LocalDate)}
+     *       alone would report such a month as open.
+     * </ol>
+     *
+     * <p>This runs at submit and again at each approval stage, because a request filed before a
+     * month closes -- by either route -- can still be approved after it does.
      */
     private void requirePayrollMonthOpen(LocalDate workDate) {
         LocalDate payrollMonth = workDate.withDayOfMonth(1);
         if (overtimeRepository.payrollMonthProcessed(payrollMonth)) {
             throw new ApiException(
                 HttpStatus.CONFLICT,
-                "Payroll for " + payrollMonth.getYear() + "-" + payrollMonth.getMonthValue()
-                    + " has already been processed; this overtime can no longer be paid"
+                "งวดเงินเดือน " + payrollMonth.getYear() + "-" + payrollMonth.getMonthValue()
+                    + " ได้ประมวลผลไปแล้ว จึงไม่สามารถจ่ายค่าล่วงเวลานี้ได้อีก"
+            );
+        }
+        if (overtimeRepository.payrollMonthSeedCovered(payrollMonth)) {
+            throw new ApiException(
+                HttpStatus.CONFLICT,
+                "งวดเงินเดือน " + payrollMonth.getYear() + "-" + payrollMonth.getMonthValue()
+                    + " ถูกจ่ายนอกระบบไปแล้วและได้ยื่นแบบภาษีแล้ว จึงไม่สามารถยื่นหรืออนุมัติค่าล่วงเวลาในงวดนี้ได้"
             );
         }
     }
 
     private void requireManager(long employeeId, UserPrincipal user) {
         if (!managesEmployee(employeeId, user)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only the employee's manager can review overtime");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะหัวหน้างานของพนักงานเท่านั้นที่สามารถพิจารณาคำขอทำงานล่วงเวลาได้");
         }
     }
 
     private void requireCeo(UserPrincipal user) {
         if (user == null || !"ceo".equals(user.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only the CEO can approve manager-approved overtime");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะ CEO เท่านั้นที่สามารถอนุมัติคำขอทำงานล่วงเวลาที่หัวหน้างานอนุมัติแล้วได้");
         }
     }
 
@@ -397,12 +422,12 @@ public class OvertimeService {
 
     private OvertimeRequestDto requireRequest(long id) {
         return overtimeRepository.findById(id)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Overtime request not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอทำงานล่วงเวลานี้"));
     }
 
     private void requireStatus(OvertimeRequestDto request, OvertimeStatus status) {
         if (!status.name().equals(request.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Overtime request has already been reviewed");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว");
         }
     }
 
@@ -482,7 +507,7 @@ public class OvertimeService {
 
     private Long requireEmployeeId(UserPrincipal user) {
         if (user.employeeId() == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "User is not linked to an employee");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล");
         }
         return user.employeeId();
     }
@@ -494,7 +519,7 @@ public class OvertimeService {
         try {
             return OvertimeStatus.valueOf(value.trim().toUpperCase());
         } catch (IllegalArgumentException exception) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid overtime status");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "สถานะคำขอทำงานล่วงเวลาไม่ถูกต้อง");
         }
     }
 
@@ -505,14 +530,14 @@ public class OvertimeService {
         try {
             return OvertimeDayType.valueOf(value.trim().toUpperCase());
         } catch (IllegalArgumentException exception) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid overtime day type");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ประเภทวันทำงานล่วงเวลาไม่ถูกต้อง");
         }
     }
 
     private int minutesBetween(OffsetDateTime start, OffsetDateTime end) {
         long minutes = Duration.between(start.toInstant(), end.toInstant()).toMinutes();
         if (minutes > Integer.MAX_VALUE) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Overtime window is too long");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ช่วงเวลาทำงานล่วงเวลานานเกินกำหนด");
         }
         return (int) minutes;
     }

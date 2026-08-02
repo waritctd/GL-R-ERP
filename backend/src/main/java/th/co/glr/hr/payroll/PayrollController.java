@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -84,19 +85,47 @@ public class PayrollController {
      * persisted so a browser reload restores exactly what was typed. Same view/edit split as
      * every other payroll sub-resource below (GET is HR+CEO, PUT is HR-only). Never feeds
      * preview/process -- see PayrollService#getInputDraft/#saveInputDraft.
+     *
+     * <p>Optimistic concurrency (issue #422 follow-up, deliberate API contract change): both
+     * endpoints now carry the month-level ETag, additive to the existing DTO -- no field removed
+     * or renamed. GET returns it both ways (the {@code ETag} response header, for HTTP-correctness,
+     * and the response body's {@code etag} field, which is what the React client actually threads
+     * through to the next PUT's {@code If-Match}). PUT now REQUIRES {@code If-Match}; a missing
+     * header 428s rather than being silently allowed -- see PayrollService#saveInputDraft's javadoc
+     * for why. Authz is unchanged on both: GET stays hasAnyRole('HR','CEO'), PUT stays hasRole('HR').
+     *
+     * <p>{@code Cache-Control: private, no-store} (Opus review finding NEW-4, decided rather than
+     * left open): an {@code ETag} is a cache validator, and this payload is HR-typed payroll
+     * figures -- adding a validator to a sensitive response with no explicit cache directive makes
+     * browser disk-caching of it materially more likely than it was before this endpoint had an
+     * ETag at all. No other endpoint in this codebase sets {@code Cache-Control} (grep confirms
+     * zero prior hits), so this is a new pattern, not a regression against an existing one.
      */
     @GetMapping("/input-draft")
     @PreAuthorize("hasAnyRole('HR','CEO')")
-    public PayrollInputDraftDtos.PayrollInputDraftResponse getInputDraft(@RequestParam String payrollMonth, HttpSession session) {
+    public ResponseEntity<PayrollInputDraftDtos.PayrollInputDraftResponse> getInputDraft(
+            @RequestParam String payrollMonth, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return payrollService.getInputDraft(parseMonth(payrollMonth), user);
+        PayrollInputDraftDtos.PayrollInputDraftResponse response = payrollService.getInputDraft(parseMonth(payrollMonth), user);
+        return ResponseEntity.ok()
+            .eTag(response.etag())
+            .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+            .body(response);
     }
 
     @PutMapping("/input-draft")
     @PreAuthorize("hasRole('HR')")
-    public PayrollInputDraftDtos.PayrollInputDraftResponse putInputDraft(@Valid @RequestBody ProcessPayrollRequest request, HttpSession session) {
+    public ResponseEntity<PayrollInputDraftDtos.PayrollInputDraftResponse> putInputDraft(
+            @Valid @RequestBody ProcessPayrollRequest request,
+            @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
+            HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return payrollService.saveInputDraft(normalizedRequest(request), user);
+        PayrollInputDraftDtos.PayrollInputDraftResponse response =
+            payrollService.saveInputDraft(normalizedRequest(request), user, ifMatch);
+        return ResponseEntity.ok()
+            .eTag(response.etag())
+            .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+            .body(response);
     }
 
     /**
@@ -147,7 +176,7 @@ public class PayrollController {
         UserPrincipal user = sessions.requireUser(session);
         PayrollExportKind exportKind = parseKind(kind);
         if (exportKind != PayrollExportKind.PAYROLL_DETAIL) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Only payroll-detail supports a preview export");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ดูตัวอย่างไฟล์ส่งออกได้เฉพาะรายงานแบบ payroll-detail เท่านั้น");
         }
         LocalDate effective = parseEffectiveDate(effectiveDate);
         PayrollExportFile file = payrollService.exportDetailPreview(normalizedRequest(request), effective, user);
@@ -288,7 +317,7 @@ public class PayrollController {
         try {
             return PayrollExportKind.fromSlug(kind);
         } catch (IllegalArgumentException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown export kind: " + kind);
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับประเภทไฟล์ส่งออก: " + kind);
         }
     }
 
@@ -299,7 +328,7 @@ public class PayrollController {
         try {
             return LocalDate.parse(value.trim());
         } catch (DateTimeParseException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid effectiveDate (expected YYYY-MM-DD)");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่มีผลไม่ถูกต้อง (รูปแบบที่ถูกต้องคือ YYYY-MM-DD)");
         }
     }
 
@@ -309,7 +338,7 @@ public class PayrollController {
 
     private LocalDate parseMonth(String value) {
         if (value == null || value.isBlank()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "payrollMonth is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุงวดเงินเดือน");
         }
         String trimmed = value.trim();
         try {
@@ -318,7 +347,7 @@ public class PayrollController {
             }
             return LocalDate.parse(trimmed).withDayOfMonth(1);
         } catch (DateTimeParseException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid payroll month");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "งวดเงินเดือนไม่ถูกต้อง");
         }
     }
 }

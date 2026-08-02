@@ -18,9 +18,9 @@ import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 const EVENT_LABEL = {
   PRICING_REQUEST_CREATED: 'สร้างคำขอราคา (ร่าง)',
   PRICING_REQUEST_UPDATED: 'แก้ไขคำขอราคา',
-  PRICING_REQUEST_SUBMITTED: 'ส่งให้ Import แล้ว',
-  PRICING_REQUEST_PICKED_UP: 'Import รับเรื่องแล้ว',
-  MORE_INFO_REQUESTED: 'Import ขอข้อมูลเพิ่มเติม',
+  PRICING_REQUEST_SUBMITTED: 'ส่งให้ฝ่ายนำเข้าแล้ว',
+  PRICING_REQUEST_PICKED_UP: 'ฝ่ายนำเข้ารับเรื่องแล้ว',
+  MORE_INFO_REQUESTED: 'ฝ่ายนำเข้าขอข้อมูลเพิ่มเติม',
   MORE_INFO_RESPONDED: 'ตอบข้อมูลเพิ่มเติมแล้ว',
   PRICING_REQUEST_CANCELLED: 'ยกเลิกคำขอราคา',
 };
@@ -36,12 +36,12 @@ const EVENT_LABEL = {
  * create gate; this component does not know about ticket status/stage.
  *
  * Ticket-detail IA rebuild Phase 1 clutter follow-up: this panel no longer
- * renders its own "สร้างใบขอราคา" button — the sticky header's primary CTA
+ * renders its own "สร้างคำขอราคา" button — the sticky header's primary CTA
  * (TicketDetailPage's `workState`-derived `CREATE_PCR` action) owns that
  * action outright now, and opens THIS panel's create modal via the forwardRef
  * below (same "parent triggers, panel stays the sole gate + mutation owner"
  * convention DealStagePanel already uses for openEditStage/openHold/...).
- * Before this, the same "สร้างใบขอราคา" label rendered twice on one page (the
+ * Before this, the same "สร้างคำขอราคา" label rendered twice on one page (the
  * sticky bar's own copy, plus this panel's) — the Phase-1 follow-up audit's
  * FIX 1.
  */
@@ -111,19 +111,19 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
   return (
     <section className="table-panel">
       <div className="panel-header">
-        <h2>ใบขอราคา (Pricing Request)</h2>
+        <h2>คำขอราคา</h2>
       </div>
 
       {requests.length === 0 ? (
         <EmptyState
           icon="fileText"
-          title="ยังไม่มีใบขอราคา"
+          title="ยังไม่มีคำขอราคา"
           description={canCreate
-            ? 'ใบขอราคาส่งรายละเอียดสินค้าให้ฝ่ายนำเข้าเสนอราคา — สร้างได้จากปุ่ม “สร้างใบขอราคา” บนแถบด้านบนของหน้า'
-            : 'ยังไม่มีใบขอราคาสำหรับดีลนี้'}
+            ? 'คำขอราคาส่งรายละเอียดสินค้าให้ฝ่ายนำเข้าเสนอราคา — สร้างได้จากปุ่ม “สร้างคำขอราคา” บนแถบด้านบนของหน้า'
+            : 'ยังไม่มีคำขอราคาสำหรับดีลนี้'}
         />
       ) : (
-        <div className="flex flex-col gap-2 p-3">
+        <div className="flex flex-col gap-2 p-4">
           {requests.map((pr) => {
             const status = pricingRequestStatusLabel(pr.status);
             const expanded = expandedId === pr.id;
@@ -148,7 +148,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                     <span className="text-xs text-text-muted">ต้องการภายใน {formatThaiDate(pr.requiredDate)}</span>
                   ) : null}
                   <span className="ml-auto text-xs text-text-muted">
-                    {pr.assignedImportName ? `Import: ${pr.assignedImportName}` : 'ยังไม่มีผู้รับเรื่อง'}
+                    {pr.assignedImportName ? `ฝ่ายนำเข้า: ${pr.assignedImportName}` : 'ยังไม่มีผู้รับเรื่อง'}
                   </span>
                 </button>
 
@@ -166,7 +166,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                         disabled={submitMutation.isPending}
                         onClick={() => submitMutation.mutate(pr.id)}
                       >
-                        ส่งให้ Import
+                        ส่งให้ฝ่ายนำเข้า
                       </button>
                     ) : null}
                     {canRequestInformation(user, pr) ? (
@@ -195,7 +195,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                 {expanded ? (
                   <div className="border-t border-border px-3 py-3">
                     {detailQuery.isLoading ? (
-                      <p className="text-xs text-text-muted">กำลังโหลด...</p>
+                      <p className="text-xs text-text-muted">กำลังโหลดรายละเอียดคำขอราคา…</p>
                     ) : (
                       <>
                         <div className="flex flex-col gap-1.5">
@@ -220,7 +220,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                         </div>
 
                         <div className="mt-3 flex flex-col gap-1.5 border-t border-border-subtle pt-3">
-                          <span className="text-2xs font-bold text-text-muted">ประวัติ (เฉพาะใบขอราคานี้)</span>
+                          <span className="text-2xs font-bold text-text-muted">ประวัติ (เฉพาะคำขอราคานี้)</span>
                           {(detail?.events ?? []).map((event) => (
                             <div key={event.id} className="flex flex-wrap items-baseline gap-2 text-xs">
                               <span className="text-text-muted">{formatThaiDate(event.createdAt)}</span>
@@ -243,6 +243,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
       {createOpen ? (
         <PricingRequestCreateModal
           ticketItems={ticketItems}
+          deal={deal}
           onClose={() => setCreateOpen(false)}
           onCreated={() => { setCreateOpen(false); invalidate(); }}
           createFn={(payload) => api.pricingRequests.create(ticketId, payload)}
@@ -264,8 +265,8 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
             updateFn={(id, payload) => api.pricingRequests.update(id, payload)}
           />
         ) : (
-          <Modal title="แก้ไขร่างใบขอราคา" onClose={() => setEditingId(null)}>
-            <p className="text-xs text-text-muted">กำลังโหลด...</p>
+          <Modal title="แก้ไขร่างคำขอราคา" onClose={() => setEditingId(null)}>
+            <p className="text-xs text-text-muted">กำลังโหลดร่างคำขอราคา…</p>
           </Modal>
         )
       ) : null}
@@ -344,7 +345,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
 
       {cancelDraft ? (
         <Modal
-          title="ยกเลิกใบขอราคา"
+          title="ยกเลิกคำขอราคา"
           onClose={() => setCancelDraft(null)}
           footer={(
             <>

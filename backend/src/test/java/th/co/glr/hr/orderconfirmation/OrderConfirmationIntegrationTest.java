@@ -29,9 +29,11 @@ import th.co.glr.hr.customer.ProjectRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationDto;
 import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateCustomerQuotationRequest;
+import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateRevisionRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuotationRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.RecordQuotationOutcomeRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationService;
+import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.DepositNoticeRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
@@ -87,6 +89,7 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.ticket.TicketStatus;
+import th.co.glr.hr.ticket.TicketSummaryDto;
 
 /**
  * Real-DB acceptance + authz + concurrency coverage for Step 6 (Deposit, Payment, and Order
@@ -177,7 +180,7 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         depositNoticeRepository = new DepositNoticeRepository(jdbc);
         depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets, notifications,
-            new DepositNoticeRenderer(), new RemainingInvoiceRenderer());
+            new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers, quotationRepository);
 
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, notifications);
@@ -320,6 +323,119 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
+    // Deposit-notice autofill (branch fix: DepositNoticeService.createDraft's own header
+    // autofill + new-chain item fallback), driven through the TICKET-LEVEL route — i.e. the
+    // route DepositNoticePage's "สร้างเอกสารฉบับร่าง" button actually calls, not the
+    // pricing-request-scoped createDepositNoticeFromQuotation bridge exercised above.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void createDraft_ticketLevelRoute_autofillsHeaderAndSourcesItemsFromAcceptedQuotation() {
+        long pricingRequestId = driveToQuotationAccepted();
+        orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor);
+
+        // Precondition matching the branch's own diagnosis: every ticket_item on this deal still
+        // carries approved_price = NULL — Steps 1-5 never write that legacy column, so the
+        // TicketService.approve-only writer never ran.
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.ticket_item WHERE ticket_id = :id AND approved_price IS NOT NULL
+            """, Map.of("id", ticketId), Long.class)).isZero();
+
+        CustomerQuotationDto accepted = quotationRepository.findByPricingRequest(pricingRequestId).stream()
+            .filter(q -> QuotationStatus.ACCEPTED.equals(q.docStatus()))
+            .findFirst().orElseThrow();
+
+        TicketSummaryDto ticketSummary = tickets.findById(ticketId).orElseThrow().summary();
+        CustomerDto customer = new CustomerRepository(jdbc).findById(ticketSummary.customerId()).orElseThrow();
+
+        // The ticket-level route, called with no explicit items/header — exactly what
+        // DepositNoticePage's fallback path (and the pre-fix production behaviour) both call.
+        DepositNoticeDto draft = depositNoticeService.createDraft(ticketId,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
+
+        // Items: sourced from the ACCEPTED quotation, not the (all-NULL) ticket_item rows.
+        assertThat(draft.items()).hasSize(1);
+        assertThat(draft.items().get(0).qty())
+            .isEqualByComparingTo(accepted.items().get(0).requestedQuantity());
+        assertThat(draft.items().get(0).netUnitPrice())
+            .isEqualByComparingTo(accepted.items().get(0).finalUnitPrice());
+
+        // Header: customerTaxId/customerAddress from the customer master via ticket.customerId,
+        // projectName from the ticket summary itself.
+        assertThat(draft.customerTaxId()).isEqualTo(customer.taxId());
+        assertThat(draft.customerAddress()).isEqualTo(customer.address() + " " + customer.branch());
+        assertThat(draft.projectName()).isEqualTo(ticketSummary.projectName());
+        assertThat(ticketSummary.projectName()).isNotBlank(); // guards against a vacuously-true assertion above
+    }
+
+    /**
+     * Review finding (fixed before merge, not deferred):
+     * {@code CustomerQuotationRepository.findByTicket} originally copied {@code
+     * findByPricingRequest}'s {@code ORDER BY quotation_revision_no, quotation_id} — but that
+     * counter is scoped to a single pricing request (V74's own migration comment), so it is not
+     * comparable across the multiple pricing requests one ticket can have. This deal has TWO
+     * independent pricing requests: PR#1 is revised once (while still ISSUED, before the customer
+     * ever accepts anything) and THEN accepted, so its accepted quotation ends at {@code
+     * quotation_revision_no = 2} — but PR#2 is created and accepted strictly AFTER that, at its
+     * own first-ever {@code quotation_revision_no = 1}. Sorted by the old key, PR#1's revision-2
+     * row would sort AFTER PR#2's revision-1 row despite being older, so a forward "latest wins"
+     * scan would land on the wrong (superseded-by-time) pricing request's quotation — wrong
+     * quantities and wrong money on a customer financial document. Sorted by {@code quotation_id}
+     * alone (the fix), the actually-newer PR#2 row wins.
+     */
+    @Test
+    void createDraft_picksTheNewerPricingRequestsAcceptedQuotation_notTheOneWithTheHigherRevisionNo() {
+        // PR#1 (created FIRST, raw factory price 100.00): drive to quotation v1 ISSUED — NOT yet
+        // accepted. CustomerQuotationService.createRevision is reachable ONLY from ISSUED/
+        // REVISION_REQUESTED (its own guard rejects ACCEPTED, among others), so the revision must
+        // happen BEFORE the customer's acceptance, not after. Create + issue a commercial-only
+        // revision (v2 — this also immediately supersedes v1, per createRevision's own write),
+        // THEN accept v2. PR#1's accepted quotation ends at revision_no = 2.
+        long pr1Id = driveToQuotationIssuedNotYetAccepted(new BigDecimal("100.00"));
+        CustomerQuotationDto pr1V1Issued = quotationRepository.findByPricingRequest(pr1Id).stream()
+            .filter(q -> QuotationStatus.ISSUED.equals(q.docStatus())).findFirst().orElseThrow();
+        CustomerQuotationDto pr1V2Draft = quotationService.createRevision(pr1V1Issued.id(),
+            new CreateRevisionRequest("correction", UUID.randomUUID().toString()), salesActor);
+        CustomerQuotationDto pr1V2Issued = quotationService.issue(pr1V2Draft.id(),
+            new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor);
+        // recordOutcome returns the quotation it just updated — use that directly rather than a
+        // second findByPricingRequest().filter(ACCEPTED).findFirst() lookup, which would be
+        // ambiguous if more than one row were ever ACCEPTED at once (it can't be here, since v1
+        // is already SUPERSEDED, but this sidesteps the assumption entirely).
+        CustomerQuotationDto pr1Accepted = quotationService.recordOutcome(pr1V2Issued.id(),
+            new RecordQuotationOutcomeRequest(QuotationStatus.ACCEPTED, "ยืนยันหลังแก้ไข", UUID.randomUUID().toString()),
+            salesActor);
+        assertThat(pr1Accepted.docStatus()).isEqualTo(QuotationStatus.ACCEPTED);
+        assertThat(pr1Accepted.quotationRevisionNo()).isEqualTo(2); // the HIGHER revision_no
+        assertThat(pricingRequestService.get(pr1Id, salesActor).summary().status())
+            .isEqualTo(PricingRequestStatus.QUOTATION_ACCEPTED);
+        // confirmOrder gates on QUOTATION_ACCEPTED, so it must run AFTER the outcome above.
+        orderConfirmation.confirmOrder(pr1Id, new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor);
+
+        // PR#2 (created SECOND, raw factory price 250.00 — deliberately different so its line
+        // item is distinguishable from PR#1's): its own first-ever quotation, revision 1 — a
+        // LOWER revision_no than PR#1's, but a HIGHER quotation_id (created strictly later).
+        long pr2Id = driveToQuotationAccepted(new BigDecimal("250.00"));
+        orderConfirmation.confirmOrder(pr2Id, new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor);
+        CustomerQuotationDto pr2Accepted = quotationRepository.findByPricingRequest(pr2Id).stream()
+            .filter(q -> QuotationStatus.ACCEPTED.equals(q.docStatus())).findFirst().orElseThrow();
+        assertThat(pr2Accepted.quotationRevisionNo()).isEqualTo(1); // the LOWER revision_no
+        assertThat(pr2Accepted.id()).isGreaterThan(pr1Accepted.id()); // but the newer row
+
+        DepositNoticeDto draft = depositNoticeService.createDraft(ticketId,
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
+
+        // Wrong-way-round: PR#1's (superseded-by-time, higher-revision) price must be ABSENT —
+        // not merely "PR#2's price is present", which an off-by-one bug could satisfy by
+        // coincidence if the two prices ever collided.
+        assertThat(draft.items()).hasSize(1);
+        assertThat(draft.items().get(0).netUnitPrice())
+            .isEqualByComparingTo(pr2Accepted.items().get(0).finalUnitPrice())
+            .isNotEqualByComparingTo(pr1Accepted.items().get(0).finalUnitPrice());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
     // Authorization
     // ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -426,7 +542,14 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     private long driveToQuotationAccepted() {
-        long pricingRequestId = driveToQuotationIssuedNotYetAccepted();
+        return driveToQuotationAccepted(new BigDecimal("100.00"));
+    }
+
+    /** Same drive, parameterized on the factory's raw unit price — so two independent pricing
+     * requests on the SAME ticket (see the cross-pricing-request ordering test below) can be
+     * driven to two DISTINGUISHABLE accepted quotations. */
+    private long driveToQuotationAccepted(BigDecimal rawUnitPrice) {
+        long pricingRequestId = driveToQuotationIssuedNotYetAccepted(rawUnitPrice);
         CustomerQuotationDto issued = quotationRepository.findByPricingRequest(pricingRequestId).stream()
             .filter(q -> QuotationStatus.ISSUED.equals(q.docStatus()))
             .findFirst().orElseThrow();
@@ -439,6 +562,10 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     private long driveToQuotationIssuedNotYetAccepted() {
+        return driveToQuotationIssuedNotYetAccepted(new BigDecimal("100.00"));
+    }
+
+    private long driveToQuotationIssuedNotYetAccepted(BigDecimal rawUnitPrice) {
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             null, catalogProductId, null, "SCG", "Tile OC", "SCG Tile OC", null, null, "60x60", FACTORY,
             new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
@@ -460,7 +587,7 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest("REF-OC", "THB", "30 days", "45 days",
             "revision", "note", List.of(new ReceiveFactoryQuoteItemRequest(
                 pricingRequestItemId, null, null, new BigDecimal("10.00"), "piece", UnitBasis.PER_PIECE,
-                new BigDecimal("100.00"), "THB", null, new BigDecimal("1.00"), null, null,
+                rawUnitPrice, "THB", null, new BigDecimal("1.00"), null, null,
                 "45 days", null, null)),
             UUID.randomUUID().toString());
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);

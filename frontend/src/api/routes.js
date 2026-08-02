@@ -126,6 +126,19 @@ export const API_ROUTES = {
     list: '/api/price-calc-configs',
     update: '/api/price-calc-configs',
   },
+  // BRANCH 1 of the sales pricing-formula redesign (config storage + CEO editing UI only).
+  // Mirrors PricingFormulaConfigController -- a NEW endpoint, distinct from priceCalcConfigs
+  // above (which keeps serving the separate catalog price calculator, untouched).
+  pricingFormulaConfig: {
+    get: '/api/pricing-formula-config',
+    update: '/api/pricing-formula-config',
+  },
+  // V112 — deal-create modal's ราคาตั้ง (ประมาณการ) display multiplier. NOT priceCalcConfigs:
+  // see DealEstimateMarkupController's javadoc for why this is a separate, openly-readable table.
+  dealEstimateMarkup: {
+    get: '/api/deal-estimate-markup',
+    update: '/api/deal-estimate-markup',
+  },
   attachments: {
     list: (ticketId) => `/api/tickets/${ticketId}/attachments`,
     upload: (ticketId) => `/api/tickets/${ticketId}/attachments`,
@@ -176,14 +189,27 @@ export const API_ROUTES = {
     // it. Mirrors TaxAllowanceDeclarationController.
     taxAllowanceDeclarations: {
       me: '/api/payroll/tax-allowances/declarations/me',
+      // Tax-effect estimate (decision #4, 2026-08-01). Reuses the SAME body shape as `me` (POST) --
+      // no employeeId field anywhere, same self-scoping idiom.
+      estimate: '/api/payroll/tax-allowances/declarations/me/estimate',
       withdraw: (id) => `/api/payroll/tax-allowances/declarations/${id}`,
       register: '/api/payroll/tax-allowances/declarations',
       onBehalf: '/api/payroll/tax-allowances/declarations/on-behalf',
       approve: (id) => `/api/payroll/tax-allowances/declarations/${id}/approve`,
       reject: (id) => `/api/payroll/tax-allowances/declarations/${id}/reject`,
       apply: (id) => `/api/payroll/tax-allowances/declarations/${id}/apply`,
+      // Yearly expiry (decision #10, 2026-08-01): the mirror of the scheduled expiry sweep.
+      reverify: (id) => `/api/payroll/tax-allowances/declarations/${id}/reverify`,
+      // Evidence attachments (decision #5, 2026-08-01). Nested POST/GET, mirrors
+      // PricingRequestController's own `.../{id}/attachments` shape.
+      attachments: (id) => `/api/payroll/tax-allowances/declarations/${id}/attachments`,
     },
     taxAllowanceCaps: '/api/payroll/tax-allowances/caps',
+    // Flat evidence-file routes, sibling of taxAllowances above -- mirrors
+    // PricingRequestController's flat `/pricing-request-attachments/{id}/file` + DELETE shape.
+    // TaxAllowanceAttachmentController.
+    taxAllowanceAttachmentFile: (attachmentId) => `/api/payroll/tax-allowance-attachments/${attachmentId}/file`,
+    taxAllowanceAttachment: (attachmentId) => `/api/payroll/tax-allowance-attachments/${attachmentId}`,
     ytdSeed: '/api/payroll/ytd-seed',
     // P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix. Mirrors
     // PayrollController's component-tax-treatments mapping.
@@ -191,6 +217,19 @@ export const API_ROUTES = {
     // Payroll input draft (2026-07-30): HR's in-progress, not-yet-processed inputs, persisted so a
     // browser reload restores exactly what was typed. Mirrors PayrollController's input-draft mapping.
     inputDraft: '/api/payroll/input-draft',
+    // Deduction obligation tracking (issue #373): กยศ / กรมบังคับคดี obligation record + remittance
+    // ledger. Mirrors DeductionObligationController.
+    deductionObligations: {
+      me: '/api/payroll/deduction-obligations/me',
+      list: '/api/payroll/deduction-obligations',
+      create: '/api/payroll/deduction-obligations',
+      update: (id) => `/api/payroll/deduction-obligations/${id}`,
+      progress: (id) => `/api/payroll/deduction-obligations/${id}/progress`,
+      stop: (id) => `/api/payroll/deduction-obligations/${id}/stop`,
+      acknowledgeCompletion: (id) => `/api/payroll/deduction-obligations/${id}/acknowledge-completion`,
+      overrideContinue: (id) => `/api/payroll/deduction-obligations/${id}/override-continue`,
+      clearOverride: (id) => `/api/payroll/deduction-obligations/${id}/clear-override`,
+    },
   },
   priceImport: {
     factories: '/api/price-import/factories',
@@ -317,13 +356,39 @@ export const ROLE_PERMISSIONS = {
   // Frontend-only presentation split; never narrows what
   // TicketService.VIEWER_ROLES actually allows a read of.
   canViewDealPipeline: ['sales', 'sales_manager', 'ceo'],
-  // Sales/CRM tool — catalog browsing scoped to the same audience as
-  // canViewTickets. Frontend-only gate: GET /api/catalog has no backend
-  // role check yet.
+  // Sales/CRM tool — which roles get the catalog SCREENS, scoped to the same
+  // audience as canViewTickets.
+  //
+  // This is a FRONTEND UX CHOICE, deliberately narrower than the API, and it is
+  // NOT a security boundary — do not read it as one (#388 did, and filed the
+  // divergence as a vulnerability). GET /api/catalog and GET /api/catalog/prices
+  // are open to any authenticated user on the real backend, by product decision:
+  // #205 (product owner, 2026-07-16) for browsing, and the owner's 2026-08-01
+  // ruling closing #388 confirming that "browsable by any logged-in user" covers
+  // the supplier purchase price too. Narrowing this list hides a screen; it does
+  // not protect the data, and nothing about the data is meant to be protected.
   canViewCatalog: ['sales', 'import', 'ceo', 'account', 'sales_manager'],
   // Money-receipt confirmations (รับยอดมัดจำ / รับชำระเต็มจำนวน) belong to
   // ฝ่ายบัญชี, with CEO as fallback. Mirrors TicketService.ACCOUNT_ROLES.
   canConfirmPayments: ['account', 'ceo'],
+  // Who may READ a deal's documents (the เอกสาร panel) without being one of its participants.
+  // Mirrors TicketAccessPolicy.canViewDocuments' role half — deliberately NARROWER than
+  // canViewTickets: `sales` and `import` reach a deal's documents only on deals they participate
+  // in. AttachType spans {PO, SIGNED_QUOTATION, INVOICE, OTHER} and the list endpoint applies no
+  // type filter, so a document read hands over the countersigned quotation and the ใบกำกับภาษี —
+  // the approved customer price, which salesViewScope already hides from import and which the
+  // backend refuses it on the quotation file, the payment ledger and deposit notices.
+  canViewTicketDocuments: ['ceo', 'account', 'sales_manager'],
+  // Who may ATTACH or REMOVE a deal's documents without being one of its participants
+  // (the deal's own rep or whoever picked it up keep the ability regardless of role).
+  // Mirrors TicketAccessPolicy.DOCUMENT_WRITER_ROLES — strictly narrower than reading a
+  // document, which now follows canViewTickets exactly (issue #389).
+  //
+  // account is deliberately absent even though it READS every deal document: the closing tax
+  // invoice has exactly one entry point (POST /api/commissions/from-deal), which dual-writes
+  // the INVOICE attachment AND the rep's commission. A second upload path would satisfy the
+  // close gate's invoiceOnFile check while the rep silently loses their commission.
+  canManageTicketDocuments: ['sales_manager', 'ceo'],
   canCreateTickets: ['sales'],
   canPickupTickets: ['import'],
   canProposePrices: ['import'],
@@ -352,7 +417,23 @@ export const ROLE_PERMISSIONS = {
   // its own key since the two gates are defined independently server-side.
   canCreateManualCommission: ['sales_manager', 'ceo'],
   canViewPayrollCommissions: ['hr'],
+  // Split (issue #390): the SPA used to conflate view and manage under one key, which is why the
+  // CEO's deliberate backend read grant (PayrollController: every GET, plus the non-persisting
+  // POST /preview and /preview/export/{kind}, is hasAnyRole('HR','CEO')) was unreachable -- the
+  // route and every mutating control gated on the single `canManagePayroll` key, which is
+  // HR-only. canViewPayroll now gates the /payroll route and the read affordances (period
+  // summary, lines, exports, payslip downloads, preview); canManagePayroll stays HR-only and
+  // gates every write (process, input-draft PUT, tax-allowances PUT, ytd-seed PUT,
+  // component-tax-treatments PUT, distribute). See PayrollPage.jsx's `canManage`.
+  canViewPayroll: ['hr', 'ceo'],
   canManagePayroll: ['hr'],
+  // Tax-allowance declaration (ล.ย.01) HR review screen (issue #387). Mirrors
+  // TaxAllowanceDeclarationService: the register read (GET /declarations) is
+  // hasAnyRole('HR','CEO'), while every mutation (approve/reject/apply/reverify/
+  // on-behalf) is hasRole('HR') only — CEO gets read-only visibility into who has
+  // declared what, never the reviewer actions.
+  canViewTaxAllowanceRegister: ['hr', 'ceo'],
+  canReviewTaxAllowances: ['hr'],
   canManagePriceImport: ['ceo', 'import'],
   canManageCatalogProducts: ['ceo', 'import'],
   // Import's PricingRequest queue (/pricing-requests). Mirrors

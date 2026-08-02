@@ -62,12 +62,6 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
     void wireRealCollaborators() {
         declarationRepository = new TaxAllowanceDeclarationRepository(jdbc);
         payrollRepository = new PayrollRepository(jdbc);
-        service = new TaxAllowanceDeclarationService(
-            declarationRepository,
-            payrollRepository,
-            mock(EmployeeRepository.class),
-            new TaxAllowanceCapCatalog(),
-            mock(AuditService.class));
 
         CommissionService commissionService = new CommissionService(
             new CommissionRepository(jdbc),
@@ -89,7 +83,24 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             new th.co.glr.hr.payroll.export.Pnd1Exporter(),
             new th.co.glr.hr.payroll.export.SsoExporter(),
             new th.co.glr.hr.payroll.export.PayrollDetailExporter(),
-            new th.co.glr.hr.config.AppProperties());
+            new th.co.glr.hr.config.AppProperties(),
+            new th.co.glr.hr.payroll.obligation.DeductionObligationService(
+                new th.co.glr.hr.payroll.obligation.DeductionObligationRepository(jdbc),
+                mock(th.co.glr.hr.employee.EmployeeRepository.class),
+                mock(AuditService.class),
+                new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
+
+        service = new TaxAllowanceDeclarationService(
+            declarationRepository,
+            payrollRepository,
+            mock(EmployeeRepository.class),
+            new TaxAllowanceCapCatalog(),
+            mock(AuditService.class),
+            // Evidence upload is not exercised here — a mock is enough.
+            mock(FileStorageService.class),
+            // The REAL PayrollService, wired above — this class's byte-for-byte pinning test needs
+            // estimateAllowanceEffect to run the SAME calculator instance #preview does.
+            payrollService);
 
         employeeId = seedEmployee("SEAM-EMP", new BigDecimal("50000.00"));
         hrEmployeeId = seedEmployee("SEAM-HR", new BigDecimal("50000.00"));

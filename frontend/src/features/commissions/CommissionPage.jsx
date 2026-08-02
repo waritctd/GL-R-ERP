@@ -12,7 +12,17 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { commissionStatusLabel as statusInfo, dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
-import { invoiceCalculation, monthlyTierBase, round2, tierBreakdown } from './commissionCalc.js';
+import {
+  invoiceCalculation,
+  monthlyTierBase,
+  round2,
+  tierBreakdown,
+  // Issue #405: the auto-computed INCENTIVE ladder, mirrored here so the sales rep's own
+  // informational monthly summary matches HR's authoritative payrollReadySummary exactly.
+  monthlyIncentive,
+  INCENTIVE_LADDER,
+  INCENTIVE_STOCK_BONUS_EFFECTIVE_MONTH,
+} from './commissionCalc.js';
 
 const today = new Date().toISOString().slice(0, 10);
 const thisMonth = new Date().toISOString().slice(0, 7);
@@ -302,6 +312,17 @@ export function CommissionPage({ user, showToast }) {
   // Sales is read-only (Slice A3, AUTHZ CHANGE): commission creation moved entirely to the
   // accountant's createFromDeal trigger. Mirrors ROLE_PERMISSIONS exactly — see api/routes.js
   // for the "why" comments tying each key back to a CommissionController/Service role gate.
+  // Issue #422 B5 fix: every mutation below that changes a payroll-visible figure
+  // (line.commissionPay) must also invalidate the ['payroll'] prefix so an open PayrollPage tab
+  // picks the change up on its own next poll/focus refetch (issue #422 B1), not only on a manual
+  // reload. CommissionPage itself stays imperative (`load()`) -- a full react-query migration
+  // here is out of scope for this fix; invalidation alone is sufficient now that payroll is a
+  // query. payrollCurrent is ['payroll', 'current', month], so ['payroll'] is the correct prefix
+  // and no other queryKeys.js entry starts with 'payroll'.
+  function invalidatePayrollUpstream() {
+    return queryClient.invalidateQueries({ queryKey: ['payroll'] });
+  }
+
   const canReview = ROLE_PERMISSIONS.canApproveCommissions.includes(user.role); // sales_manager, ceo
   const canListRecords = ROLE_PERMISSIONS.canListCommissionRecords.includes(user.role); // sales, sales_manager, ceo
   const canCreateFromDeal = ROLE_PERMISSIONS.canCreateCommissionFromDeal.includes(user.role); // account
@@ -416,8 +437,16 @@ export function CommissionPage({ user, showToast }) {
     const manualTotal = records
       .filter((item) => isManualKind(item.kind) && item.status === 'APPROVED')
       .reduce((sum, item) => sum + Number(item.manualAmount || 0), 0);
-    return { base, ...tierResult, manualTotal, total: round2(tierResult.total + manualTotal) };
-  }, [records, isSales]);
+    // Issue #405: the auto-computed INCENTIVE ladder, informational-mirror of
+    // CommissionService#computeRepPayrollCommissions -- zero before the 2026-08-01 fix-forward
+    // effective month, and suppressed (zero) when the rep already has an APPROVED manual
+    // INCENTIVE entry this month, same double-count guard as the authoritative HR view.
+    const manualIncentiveApproved = records.some((item) => item.kind === 'INCENTIVE' && item.status === 'APPROVED');
+    const incentiveAmount = (month < INCENTIVE_STOCK_BONUS_EFFECTIVE_MONTH || manualIncentiveApproved)
+      ? 0
+      : monthlyIncentive(base, INCENTIVE_LADDER);
+    return { base, ...tierResult, manualTotal, incentiveAmount, total: round2(tierResult.total + incentiveAmount + manualTotal) };
+  }, [records, isSales, month]);
 
   function canManagerReview(record) {
     return record.status === 'SUBMITTED' && user.role === 'sales_manager';
@@ -724,6 +753,7 @@ export function CommissionPage({ user, showToast }) {
       // ['tickets','detail','16'] and the invalidation would silently no-op. The
       // prefix also correctly refreshes the ticket lists, whose stage/scope changed.
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      invalidatePayrollUpstream();
       setCreateForm(emptyCreateForm);
       setFileInputKey((key) => key + 1);
       setLoadedTicket(null);
@@ -780,6 +810,7 @@ export function CommissionPage({ user, showToast }) {
       showToast('success', 'เพิ่มค่าคอมด้วยตนเองแล้ว');
       setManualForm(emptyManualForm);
       setShowManualForm(false);
+      invalidatePayrollUpstream();
       await load();
     } catch (error) {
       showToast('error', error.message || 'เพิ่มค่าคอมไม่สำเร็จ');
@@ -833,6 +864,7 @@ export function CommissionPage({ user, showToast }) {
       });
       setEditingId(null);
       showToast('success', 'อัปเดตค่าคอมแล้ว');
+      invalidatePayrollUpstream();
       await load();
     } catch (error) {
       showToast('error', error.message || 'อัปเดตไม่สำเร็จ');
@@ -846,6 +878,7 @@ export function CommissionPage({ user, showToast }) {
     try {
       await api.commissions.approve(approveId);
       showToast('success', 'อนุมัติค่าคอมแล้ว');
+      invalidatePayrollUpstream();
       await load();
     } catch (error) {
       showToast('error', error.message || 'อนุมัติไม่สำเร็จ');
@@ -864,6 +897,7 @@ export function CommissionPage({ user, showToast }) {
     try {
       await api.commissions.reject(rejectId, { reviewerNote });
       showToast('success', 'ปฏิเสธค่าคอมแล้ว');
+      invalidatePayrollUpstream();
       await load();
     } catch (error) {
       showToast('error', error.message || 'ปฏิเสธไม่สำเร็จ');
@@ -882,6 +916,7 @@ export function CommissionPage({ user, showToast }) {
     try {
       await api.commissions.clawback(clawbackId, { reason });
       showToast('success', 'บันทึกรายการหักคืนแล้ว');
+      invalidatePayrollUpstream();
       await load();
     } catch (error) {
       showToast('error', error.message || 'บันทึกหักคืนไม่สำเร็จ');
@@ -1115,7 +1150,7 @@ function AccountCreateFromDeal({
               />
               <button type="button" className="secondary-button" disabled={ticketLookupLoading || !ticketIdInput} onClick={onLookup}>
                 <Icon name="search" size={14} />
-                {ticketLookupLoading ? 'กำลังโหลด...' : 'โหลดข้อมูลดีล'}
+                {ticketLookupLoading ? 'กำลังโหลดข้อมูลดีล…' : 'โหลดข้อมูลดีล'}
               </button>
             </div>
             {eligibleTickets.length > 0 ? (
@@ -1436,6 +1471,15 @@ function MonthlyTierPanel({ summary }) {
           <code className="font-mono text-base font-bold">{formatMoney(summary.total)}</code>
         </span>
       </div>
+      {summary.incentiveAmount ? (
+        // Issue #405: the auto-computed INCENTIVE ladder amount, already folded into
+        // "ค่าคอมประมาณการ" on top of the tier commission — informational mirror of
+        // CommissionService#computeRepPayrollCommissions.
+        <div className="mt-2 flex items-center justify-between gap-3 text-sm">
+          <span className="text-text-muted">อินเซนทีฟ (นอกขั้นบันได)</span>
+          <code className="font-mono">{formatMoney(summary.incentiveAmount)}</code>
+        </div>
+      ) : null}
       {summary.manualTotal ? (
         // Manual entries (feat/commission-manual-adjustments) never feed the tier calc above —
         // this is the rep's own APPROVED manual amount, already folded into "ค่าคอมประมาณการ"
@@ -1502,6 +1546,12 @@ function PayrollSummary({ summary, loading }) {
         <div className="commission-payroll-table table-head">
           <span>Sales Rep</span>
           <span>ฐานค่าคอม</span>
+          {/* Issue #405: the auto-computed INCENTIVE ladder + STOCK_BONUS, already folded into
+              the "ค่าคอม" total column, surfaced separately so HR can see the breakdown. The
+              stock-bonus column stays visible (not conditionally hidden) even though it reads
+              all-zero until the CEO enables sales.stock_bonus_config -- that is expected. */}
+          <span>อินเซนทีฟ</span>
+          <span>โบนัสขายของในสต๊อค</span>
           <span>ค่าคอม</span>
         </div>
         {(summary.salesReps ?? []).length === 0 ? (
@@ -1510,6 +1560,8 @@ function PayrollSummary({ summary, loading }) {
           <div key={rep.salesRepId} className="commission-payroll-table data-row">
             <strong>{rep.salesRepName || rep.salesRepId}</strong>
             <code>{formatMoney(rep.commissionableBase)}</code>
+            <code>{formatMoney(rep.incentiveAmount)}</code>
+            <code>{formatMoney(rep.stockBonusAmount)}</code>
             <code>{formatMoney(rep.commissionAmount)}</code>
           </div>
         ))}

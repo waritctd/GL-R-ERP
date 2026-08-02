@@ -112,11 +112,17 @@ code {
   background: var(--color-bg-alt);
 }
 
+/* Issue #396 fix: the login screen used to be a 940px two-column split with
+   the sign-in form on the right and nothing but the logo in the left column
+   — at 1440px that left half read as an unfinished layout, not a deliberate
+   design. Dropped the split entirely rather than inventing filler copy for
+   it: a single centred card, brand mark stacked above the form, same
+   treatment this panel already fell back to below 720px (see the old
+   `@media (max-width: 720px)` overrides this replaces). */
 .login-panel {
-  width: min(940px, 100%);
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0;
+  width: min(440px, 100%);
+  display: flex;
+  flex-direction: column;
   background: var(--color-surface);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
@@ -126,14 +132,11 @@ code {
 
 .login-brand {
   background: var(--color-surface-muted);
-}
-
-.login-brand {
-  padding: 34px;
+  padding: 28px 34px 24px;
   display: flex;
   gap: 12px;
   align-items: flex-start;
-  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .login-brand strong,
@@ -153,10 +156,10 @@ code {
    `.login-brand small` (a LIGHT surface) and inherited --color-text-muted,
    which measures only 3.93:1 on --color-sidebar-bg (#0b1220), a straight
    AA failure. Split out so `.brand small` matches the sidebar's existing,
-   already-verified-safe convention (`.nav-item small`, `.sidebar-account
-   small`, `.nav-group-header` below all use --color-text-faint on this
-   surface, 7.30:1) instead of introducing a new sidebar-scoped token for
-   a value the app already has under another name. */
+   already-verified-safe convention (`.nav-item small`, `.nav-group-header`
+   below both use --color-text-faint on this surface, 7.30:1) instead of
+   introducing a new sidebar-scoped token for a value the app already has
+   under another name. */
 .brand small {
   color: var(--color-text-faint);
   font-size: var(--text-xs);
@@ -185,8 +188,7 @@ code {
 }
 
 .login-form {
-  grid-row: span 2;
-  padding: 42px;
+  padding: 28px 34px 34px;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -197,12 +199,16 @@ code {
   margin: 0;
   font-size: var(--text-2xl);
   line-height: 1.2;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 .login-form p,
 .page-heading p {
   margin: 4px 0 0;
   color: var(--color-text-muted);
+  max-width: 72ch;
+  overflow-wrap: anywhere;
 }
 
 label {
@@ -338,12 +344,11 @@ textarea:focus {
   font-size: var(--text-sm);
 }
 
-/* .nav-item small / .sidebar-account small render on the dark sidebar rail
-   (Sidebar Navy #0b1220) where Ink Faint clears ~7.3:1 contrast — verified,
-   not a Muted Floor violation. The rest of this group renders on white
-   surfaces where Faint only clears ~2.6:1, so it is split out below. */
-.nav-item small,
-.sidebar-account small {
+/* .nav-item small renders on the dark sidebar rail (Sidebar Navy #0b1220)
+   where Ink Faint clears ~7.3:1 contrast — verified, not a Muted Floor
+   violation. The rest of this group renders on white surfaces where Faint
+   only clears ~2.6:1, so it is split out below. */
+.nav-item small {
   display: block;
   color: var(--color-text-faint);
   font-size: var(--text-xs);
@@ -398,11 +403,16 @@ textarea:focus {
   align-items: center;
   padding: 4px 8px 22px;
   text-align: left;
+  text-decoration: none;
 }
 
 .nav-list {
   display: grid;
   gap: 4px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
 }
 
 .nav-item {
@@ -464,8 +474,8 @@ textarea:focus {
 
 /* Section labels grouping the nav rail (งานขาย, บุคคล, …). Mirrors
    .nav-item's rhythm (same radius, horizontal padding, 44px+ touch target)
-   but reads as a label, not a destination: Overline type (11px/800/uppercase,
-   the design system's only sanctioned uppercase-tracking use), Ink Faint by
+   but reads as a label, not a destination: Overline type (11px/800/uppercase),
+   Ink Faint by
    default — verified safe on Sidebar Navy, see the .nav-item small comment
    above — brightening to full white on hover/focus so the affordance reads
    as interactive. */
@@ -490,7 +500,7 @@ textarea:focus {
   font-size: var(--text-2xs);
   font-weight: 800;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
 }
 
 .nav-group-header:hover {
@@ -521,16 +531,6 @@ textarea:focus {
   }
 }
 
-.sidebar-account {
-  margin-top: auto;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  padding-top: 14px;
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 10px;
-  align-items: center;
-}
-
 .app-main {
   min-width: 0;
   flex: 1;
@@ -539,14 +539,14 @@ textarea:focus {
 }
 
 .topbar {
-  height: 66px;
+  height: var(--app-topbar-h);
   max-width: 100%;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 0 28px;
+  padding: 0 max(28px, env(safe-area-inset-right)) 0 max(28px, env(safe-area-inset-left));
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
 }
@@ -591,16 +591,23 @@ textarea:focus {
 }
 
 .content-scroll {
+  --deal-scroll-pad-y: 28px;
+  --deal-scroll-pad-x: max(32px, env(safe-area-inset-right));
+  --deal-scroll-pad-left: max(32px, env(safe-area-inset-left));
   min-width: 0;
   max-width: 100%;
   flex: 1;
   overflow: auto;
-  padding: 28px 32px 42px;
+  padding: var(--deal-scroll-pad-y) var(--deal-scroll-pad-x) 42px var(--deal-scroll-pad-left);
+  scroll-padding-top: calc(var(--deal-header-h, 18rem) + var(--space-4));
+  scroll-padding-bottom: var(--space-8);
+  scrollbar-gutter: stable;
 }
 
 .page-stack {
   display: grid;
   gap: 18px;
+  width: min(100%, 1320px);
   min-width: 0;
   max-width: 1320px;
 }
@@ -613,15 +620,38 @@ textarea:focus {
 }
 
 .page-heading {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: 18px;
+}
+
+.page-heading-copy {
+  min-width: 0;
+}
+
+.page-heading-eyebrow {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.page-heading-context {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .page-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -678,8 +708,10 @@ textarea:focus {
   align-items: center;
   gap: var(--space-1);
   font-size: var(--text-xs);
+  min-width: 0;
 }
 
+.breadcrumbs a,
 .breadcrumbs button {
   border: 0;
   background: transparent;
@@ -688,8 +720,11 @@ textarea:focus {
   font-size: var(--text-xs);
   font-weight: 600;
   cursor: pointer;
+  overflow-wrap: anywhere;
+  text-decoration: none;
 }
 
+.breadcrumbs a:hover,
 .breadcrumbs button:hover {
   text-decoration: underline;
 }
@@ -825,7 +860,28 @@ textarea:focus {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+  min-height: 44px;
   margin-bottom: 16px;
+}
+
+.panel-header h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* `.panel-header` carries no inset of its own — inside `.panel` it borrows that
+   panel's 20px padding. `.table-panel` has none (its tables are meant to run
+   edge to edge), so the same header rendered flush against the card border:
+   "คำขอราคา" measured 1px from the left edge.
+
+   16px, not the 18px `.table-head`/`.data-row` use: every panel this rule
+   actually reaches has a `p-4` body, not a table — the table-topped ones
+   (TicketDetailPage's items, CeoSettingsPage) all set their own inline
+   `padding: 14px 18px`, which still wins here. Matching the body keeps the
+   heading on the same left edge as the content under it. Horizontal only —
+   the header's own `min-height: 44px` already clears the top edge. */
+.table-panel > .panel-header {
+  padding-inline: 16px;
 }
 
 .bar-list,
@@ -1370,7 +1426,8 @@ textarea:focus {
 }
 
 .commission-payroll-table {
-  grid-template-columns: minmax(0,1.8fr) minmax(0,1fr) minmax(0,1fr);
+  /* Issue #405: added อินเซนทีฟ + โบนัสขายของในสต๊อค columns between ฐานค่าคอม and ค่าคอม. */
+  grid-template-columns: minmax(0,1.8fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1.2fr) minmax(0,1fr);
 }
 
 .payroll-table {
@@ -1861,12 +1918,6 @@ textarea:focus {
 .data-row strong,
 .topbar-user strong {
   color: var(--color-text);
-}
-
-/* The account row sits on the dark sidebar, not a white surface — the ink
-   colour above would render it near-invisible (~1.1:1) against the navy. */
-.sidebar-account strong {
-  color: var(--color-surface);
 }
 
 .old-value {
@@ -2625,7 +2676,6 @@ a.status-badge {
      `@container` query on `.payroll-detail-panel` in PayrollPage.jsx, which already collapses to 1
      column well above 720px (the panel is far narrower than the `@sm` container threshold at any
      viewport), so nothing is lost. */
-  .login-panel,
   .form-grid {
     grid-template-columns: 1fr;
   }
@@ -2718,12 +2768,11 @@ a.status-badge {
   }
 
   .login-form {
-    grid-row: auto;
-    padding: 28px;
+    padding: 20px 24px 28px;
   }
 
   .login-brand {
-    border-right: 0;
+    padding: 24px 24px 20px;
   }
 
   .span-2 {
@@ -2736,6 +2785,7 @@ a.status-badge {
   .breadcrumbs,
   .breadcrumbs li,
   .breadcrumbs li > span,
+  .breadcrumbs a,
   .breadcrumbs button {
     min-width: 0;
     overflow-wrap: anywhere;
@@ -2760,7 +2810,7 @@ a.status-badge {
 
   .topbar {
     gap: 10px;
-    padding: 0 16px;
+    padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
   }
 
   .topbar-user-text {
@@ -2778,7 +2828,12 @@ a.status-badge {
   }
 
   .content-scroll {
-    padding: 16px 16px 32px;
+    --deal-scroll-pad-y: 16px;
+    --deal-scroll-pad-x: max(16px, env(safe-area-inset-right));
+    --deal-scroll-pad-left: max(16px, env(safe-area-inset-left));
+    padding: var(--deal-scroll-pad-y) var(--deal-scroll-pad-x) 32px var(--deal-scroll-pad-left);
+    scroll-padding-top: var(--space-4);
+    scroll-padding-bottom: calc(112px + env(safe-area-inset-bottom));
   }
 
   .ticket-list-page {
@@ -2818,6 +2873,16 @@ a.status-badge {
   .pagination {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .page-heading {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .page-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .ticket-pipeline-summary {

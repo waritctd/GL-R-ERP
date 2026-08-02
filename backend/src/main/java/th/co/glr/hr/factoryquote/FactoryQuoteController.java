@@ -133,7 +133,7 @@ public class FactoryQuoteController {
         String path = factoryQuotes.attachmentFilePath(attachmentId, user);
         Resource resource = new FileSystemResource(path);
         if (!resource.exists()) {
-            throw new ApiException(org.springframework.http.HttpStatus.NOT_FOUND, "Factory quote attachment file not found");
+            throw new ApiException(org.springframework.http.HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบราคาโรงงานนี้");
         }
         String mime = attachment.mimeType() != null ? attachment.mimeType() : MediaType.APPLICATION_OCTET_STREAM_VALUE;
         return ResponseEntity.ok()

@@ -43,6 +43,9 @@ const CommissionPage = lazy(() => import('./features/commissions/CommissionPage.
 const AccountOverview = lazy(() => import('./features/dashboard/AccountOverview.jsx').then(toDefault('AccountOverview')));
 const AccountFinancePage = lazy(() => import('./features/finance/AccountFinancePage.jsx').then(toDefault('AccountFinancePage')));
 const PayrollPage = lazy(() => import('./features/payroll/PayrollPage.jsx').then(toDefault('PayrollPage')));
+// ล.ย.01 tax-allowance declaration (issue #387): employee self-service form + HR review register.
+const TaxAllowancePage = lazy(() => import('./features/taxAllowance/TaxAllowancePage.jsx').then(toDefault('TaxAllowancePage')));
+const TaxAllowanceReviewPage = lazy(() => import('./features/taxAllowance/TaxAllowanceReviewPage.jsx').then(toDefault('TaxAllowanceReviewPage')));
 const DepositNoticePage = lazy(() => import('./features/deposits/DepositNoticePage.jsx').then(toDefault('DepositNoticePage')));
 const CeoSettingsPage = lazy(() => import('./features/ceoSettings/CeoSettingsPage.jsx').then(toDefault('CeoSettingsPage')));
 const PriceImportPage = lazy(() => import('./features/catalog/PriceImportPage.jsx').then(toDefault('PriceImportPage')));
@@ -99,6 +102,7 @@ export function App() {
     employees,
     profileRequests,
     dashboardSummary,
+    taxAllowanceSummary,
     resetData,
     createEmployee,
     updateEmployee,
@@ -324,8 +328,20 @@ export function App() {
                   employee={currentEmployee}
                   profileRequests={ownRequests}
                   onCreateRequest={createProfileRequest}
+                  taxAllowanceSummary={taxAllowanceSummary}
                 />
               )}
+            />
+            {/* ล.ย.01 tax-allowance declaration (issue #387). Guarded in permissions.js's
+                PATH_GUARDS — `/tax-allowance` needs an employeeId (same shape as /profile),
+                `/tax-allowance-review` needs canViewTaxAllowanceRegister (hr/ceo). */}
+            <Route
+              path="/tax-allowance"
+              element={<TaxAllowancePage user={user} showToast={showToast} />}
+            />
+            <Route
+              path="/tax-allowance-review"
+              element={<TaxAllowanceReviewPage user={user} showToast={showToast} />}
             />
             <Route
               path="/employee-requests"
@@ -342,7 +358,7 @@ export function App() {
             />
             <Route
               path="/payroll"
-              element={<PayrollPage showToast={showToast} />}
+              element={<PayrollPage user={user} showToast={showToast} />}
             />
             {/* Frozen sales stack — param-wired to keep working / URL-addressable. */}
             {SALES_ENABLED && (
@@ -408,8 +424,11 @@ export function App() {
                     (sales/import/ceo/account/sales_manager) is only enforced if the
                     route is INSIDE RequireAccess. It previously sat outside (dead
                     guard — any logged-in user could reach /catalog); moved in here
-                    (fix/catalog-route-guard). NOTE: GET /api/catalog still has no
-                    backend role check (routes.js) — a separate follow-up. */}
+                    (fix/catalog-route-guard). This guard is a UX choice about who
+                    sees the screen, NOT a security boundary: GET /api/catalog and
+                    /api/catalog/prices are open to any authenticated user by
+                    product decision (#205; owner ruling 2026-08-01 closing #388).
+                    Nothing here is protecting the data. */}
                 <Route
                   path="/catalog"
                   element={<CatalogSearchPage user={user} showToast={showToast} />}
@@ -427,7 +446,16 @@ export function App() {
         </Route>
       </Routes>
       <Toast toast={toast} onDismiss={dismissToast} />
-      {loading ? <div className="loading-veil">Loading...</div> : null}
+      {loading ? (
+        <div
+          className="fixed inset-0 z-[90] grid place-items-center bg-[var(--color-veil)] font-extrabold text-text"
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+        >
+          กำลังเข้าสู่ระบบ...
+        </div>
+      ) : null}
     </>
   );
 }

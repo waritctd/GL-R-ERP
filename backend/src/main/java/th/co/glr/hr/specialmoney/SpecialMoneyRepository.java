@@ -510,7 +510,7 @@ public class SpecialMoneyRepository {
         try {
             return objectMapper.writeValueAsString(detail == null ? Map.of() : detail);
         } catch (JsonProcessingException exception) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid request detail");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "รายละเอียดคำขอไม่ถูกต้อง");
         }
     }
 

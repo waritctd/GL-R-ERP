@@ -36,7 +36,7 @@ describe('NotificationBell', () => {
     vi.clearAllMocks();
     api.notifications.list.mockResolvedValue({
       notifications: [
-        { id: 1, message: 'ใบขอราคาถูกอนุมัติ', read: false, createdAt: new Date().toISOString(), link: '/tickets/1' },
+        { id: 1, message: 'คำขอราคาถูกอนุมัติ', read: false, createdAt: new Date().toISOString(), link: '/tickets/1' },
         { id: 2, message: 'ออกใบแจ้งยอดมัดจำแล้ว', read: true, createdAt: new Date().toISOString(), link: null },
       ],
     });
@@ -46,9 +46,9 @@ describe('NotificationBell', () => {
   it('renders items and the unread badge from a mocked api.notifications.list', async () => {
     renderBell();
 
-    fireEvent.click(screen.getByRole('button', { name: 'การแจ้งเตือน' }));
+    fireEvent.click(await screen.findByRole('button', { name: /การแจ้งเตือน/ }));
 
-    expect(await screen.findByText('ใบขอราคาถูกอนุมัติ')).not.toBeNull();
+    expect(await screen.findByText('คำขอราคาถูกอนุมัติ')).not.toBeNull();
     expect(screen.getByText('ออกใบแจ้งยอดมัดจำแล้ว')).not.toBeNull();
     // Unread badge shows the count of unread items (1).
     expect(screen.getByText('1')).not.toBeNull();
@@ -57,8 +57,8 @@ describe('NotificationBell', () => {
   it('marks an item read and invalidates the shared notifications cache', async () => {
     renderBell();
 
-    fireEvent.click(screen.getByRole('button', { name: 'การแจ้งเตือน' }));
-    const item = await screen.findByText('ใบขอราคาถูกอนุมัติ');
+    fireEvent.click(await screen.findByRole('button', { name: /การแจ้งเตือน/ }));
+    const item = await screen.findByText('คำขอราคาถูกอนุมัติ');
     fireEvent.click(item);
 
     await waitFor(() => expect(api.notifications.markRead).toHaveBeenCalledWith(1));
@@ -66,5 +66,33 @@ describe('NotificationBell', () => {
     // this is the same key the bell polls with refetchInterval, and the key
     // other pages' mutations invalidate to live-update the bell.
     await waitFor(() => expect(api.notifications.list).toHaveBeenCalledTimes(2));
+  });
+
+  it('closes with Escape and restores focus to the notification trigger', async () => {
+    renderBell();
+
+    const trigger = await screen.findByRole('button', { name: /การแจ้งเตือน/ });
+    fireEvent.click(trigger);
+    expect(await screen.findByRole('dialog', { name: 'การแจ้งเตือน' })).toBeTruthy();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'การแจ้งเตือน' })).toBeNull());
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('closes and restores focus after marking all notifications read', async () => {
+    renderBell();
+
+    const trigger = await screen.findByRole('button', { name: /การแจ้งเตือน/ });
+    fireEvent.click(trigger);
+
+    const markAllButton = await screen.findByRole('button', { name: 'อ่านทั้งหมด' });
+    markAllButton.focus();
+    fireEvent.click(markAllButton);
+
+    await waitFor(() => expect(api.notifications.markRead).toHaveBeenCalledWith(1));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'การแจ้งเตือน' })).toBeNull());
+    expect(document.activeElement).toBe(trigger);
   });
 });

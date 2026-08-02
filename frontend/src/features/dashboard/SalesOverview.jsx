@@ -9,7 +9,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { bangkokMonthStartIso, bangkokTodayIso, formatMoney, formatThaiDate } from '../../utils/format.js';
+import { bangkokMonthStartIso, bangkokTodayIso, formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
 import { monthlyTierBase, round2, tierBreakdown } from '../commissions/commissionCalc.js';
 import { followUpStatus, nextSalesAction, sortWorklist, SALES_ACTION } from '../tickets/salesActions.js';
 
@@ -143,7 +143,7 @@ export function SalesOverview({ user, employee }) {
   return (
     <PageStack>
       <PageHeader
-        title={`สวัสดี คุณ${greetName}`}
+        title={`สวัสดี ${greetingName(greetName)}`}
         subtitle={`ดีลของฉัน · ${formatThaiDate(todayIso)} — งานและลูกค้าที่ต้องติดตามวันนี้`}
         actions={(
           <Button type="button" variant="text" onClick={() => navigate('/tickets')}>
@@ -190,7 +190,7 @@ export function SalesOverview({ user, employee }) {
       <div className="grid grid-cols-[1.15fr_0.85fr] items-start gap-[18px] max-[1040px]:grid-cols-1">
         <Panel title="สิ่งที่ต้องทำ">
           {loading ? (
-            <p className="m-0 text-sm text-text-muted">กำลังโหลด...</p>
+            <p className="m-0 text-sm text-text-muted">กำลังโหลดงานที่ต้องทำ…</p>
           ) : worklist.length === 0 ? (
             <div className="empty-state">ไม่มีสิ่งที่ต้องดำเนินการตอนนี้</div>
           ) : (

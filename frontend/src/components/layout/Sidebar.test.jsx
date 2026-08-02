@@ -45,6 +45,12 @@ function renderSidebar() {
 }
 
 describe('Sidebar nav item accessible names', () => {
+  it('uses a real link for the brand home destination', () => {
+    renderSidebar();
+
+    expect(screen.getByRole('link', { name: 'GL&R ERP home' }).getAttribute('href')).toBe('/');
+  });
+
   it('keeps the unread badge count in the link\'s accessible name', () => {
     renderSidebar();
 

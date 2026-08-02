@@ -87,7 +87,7 @@ function pickAcceptedPricingRequest(pricingRequests = []) {
  *      รับสินค้าแล้ว, or the from-stock path via reserveStock.
  *   2. ส่งมอบสินค้า (import/CEO): record/complete delivery against the
  *      deal's own items, with the running progress bar + history.
- * — plus an OPTIONAL third "ใบสั่งซื้อโรงงาน (Factory PO)" block, shown to
+ * — plus an optional third "ใบสั่งซื้อโรงงาน" block, shown to
  * import/CEO only (the same roles ProcurementService.RAW_PO_ROLES allows —
  * see api/mockApi.js's own `hasRole('import', 'ceo')` guard on
  * procurement.listForPricingRequest), summarizing any per-factory purchase
@@ -163,12 +163,12 @@ export function DealFulfilmentPanel({
 
   const issueIrMutation = useMutation({
     mutationFn: () => api.tickets.issueImportRequest(ticketId),
-    onSuccess: () => { showToast?.('success', 'ออก IR แล้ว'); invalidateAfterFulfilmentChange(); },
+    onSuccess: () => { showToast?.('success', 'ออกคำขอนำเข้าแล้ว'); invalidateAfterFulfilmentChange(); },
     onError,
   });
   const markIrSentMutation = useMutation({
     mutationFn: () => api.tickets.markIrSent(ticketId),
-    onSuccess: () => { showToast?.('success', 'ส่ง IR แล้ว'); invalidateAfterFulfilmentChange(); },
+    onSuccess: () => { showToast?.('success', 'ส่งคำขอนำเข้าแล้ว'); invalidateAfterFulfilmentChange(); },
     onError,
   });
   const markShippingMutation = useMutation({
@@ -280,25 +280,25 @@ export function DealFulfilmentPanel({
             {can.issueImportRequest ? (
               <button type="button" className="primary-button" disabled={issueIrMutation.isPending}
                 onClick={() => issueIrMutation.mutate()} data-testid="deal-fulfilment-issue-ir">
-                ออก Import Request (IR)
+                ออกคำขอนำเข้า (IR)
               </button>
             ) : can.markIrSent ? (
               <button type="button" className="primary-button" disabled={markIrSentMutation.isPending}
                 onClick={() => markIrSentMutation.mutate()} data-testid="deal-fulfilment-mark-ir-sent">
-                ส่ง IR แล้ว
+                ส่งคำขอนำเข้าแล้ว
               </button>
             ) : can.markShipping ? (
               <button type="button" className="primary-button" disabled={markShippingMutation.isPending}
                 onClick={() => markShippingMutation.mutate()} data-testid="deal-fulfilment-mark-shipping">
-                สินค้าออกเดินทาง (Shipping)
+                สินค้าออกเดินทาง
               </button>
             ) : can.markGoodsReceived ? (
               <button type="button" className="primary-button" disabled={markGoodsReceivedMutation.isPending}
                 onClick={() => markGoodsReceivedMutation.mutate()} data-testid="deal-fulfilment-mark-goods-received">
-                รับสินค้าแล้ว (Goods Received)
+                รับสินค้าแล้ว
               </button>
             ) : fs == null ? (
-              <p className="text-xs text-text-muted">ยังไม่ออก Import Request</p>
+              <p className="text-xs text-text-muted">ยังไม่ออกคำขอนำเข้า</p>
             ) : null}
             {can.reserveStock ? (
               <button type="button" className="secondary-button" disabled={reserveStockMutation.isPending}
@@ -365,7 +365,7 @@ export function DealFulfilmentPanel({
           <div className="flex flex-col gap-1.5 border-t border-border-subtle pt-2.5">
             <span className="text-2xs font-bold text-text-muted">ประวัติส่งมอบ</span>
             {deliveriesQuery.isLoading ? (
-              <p className="text-xs text-text-muted">กำลังโหลด...</p>
+              <p className="text-xs text-text-muted">กำลังโหลดประวัติส่งมอบ…</p>
             ) : deliveryRecords.length === 0 ? (
               <p className="text-xs text-text-muted">ยังไม่มีรายการส่งมอบ</p>
             ) : (
@@ -390,21 +390,21 @@ export function DealFulfilmentPanel({
           <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
             <div className="flex items-center gap-2">
               <StepNumber no={3} />
-              <strong className="text-sm">ใบสั่งซื้อโรงงาน (Factory PO)</strong>
+              <strong className="text-sm">ใบสั่งซื้อโรงงาน</strong>
               <StepRoleTag owners={['import', 'ceo']} viewerRole={role} />
             </div>
 
             {pr == null ? (
               <p className="text-xs text-text-muted">
-                ยังไม่มีใบขอราคาที่ลูกค้ายืนยันคำสั่งซื้อสำหรับดีลนี้ — ยังสร้างใบสั่งซื้อโรงงานไม่ได้
+                ยังไม่มีคำขอราคาที่ลูกค้ายืนยันคำสั่งซื้อสำหรับดีลนี้ — ยังสร้างใบสั่งซื้อโรงงานไม่ได้
               </p>
             ) : procurementQuery.isLoading ? (
-              <p className="text-xs text-text-muted">กำลังโหลด...</p>
+              <p className="text-xs text-text-muted">กำลังโหลดใบสั่งซื้อโรงงาน…</p>
             ) : purchaseOrders.length === 0 ? (
               <EmptyState
                 icon="fileText"
                 title="ยังไม่มีใบสั่งซื้อโรงงาน"
-                description="ใบสั่งซื้อโรงงาน (แยกตามโรงงาน) จะปรากฏที่นี่เมื่อถูกสร้างขึ้นสำหรับใบขอราคานี้"
+                description="ใบสั่งซื้อแยกตามโรงงานจะปรากฏที่นี่เมื่อถูกสร้างขึ้นสำหรับคำขอราคานี้"
               />
             ) : (
               <div className="flex flex-col gap-1.5">

@@ -1,5 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { attendanceSourceLabel, formatAddress, formatMoney, formatShortDate, formatThaiMonthYearFromMonthInputValue } from './format.js';
+import {
+  attendanceSourceLabel,
+  factoryQuoteStatusLabel,
+  formatAddress,
+  formatMoney,
+  formatShortDate,
+  formatThaiMonthYearFromMonthInputValue,
+  greetingName,
+  pricingCostingStatusLabel,
+  pricingDecisionStatusLabel,
+  quotationStatusLabel,
+} from './format.js';
 
 describe('formatAddress', () => {
   it('joins all four parts, not just line1', () => {
@@ -31,6 +42,36 @@ describe('formatAddress', () => {
   });
 });
 
+// Issue #395: every dashboard greeting used to prepend "คุณ" unconditionally,
+// which doubled up whenever the resolved name already carried an honorific —
+// "สวัสดี คุณคุณสมหมาย ขายดี" for a `user.name` seeded as "คุณสมหมาย ขายดี".
+// Root cause was inconsistent name data (some rows already have a leading
+// honorific, some don't), not a case for stripping/rewriting the stored
+// name — so the greeting now detects an existing honorific instead.
+describe('greetingName', () => {
+  it('prepends "คุณ" for a name with no honorific (the common case: an employee nickname)', () => {
+    expect(greetingName('ภูมิ')).toBe('คุณภูมิ');
+    expect(greetingName('สมชาย ใจดี')).toBe('คุณสมชาย ใจดี');
+  });
+
+  it('does not double "คุณ" when the name already starts with it', () => {
+    expect(greetingName('คุณสมหมาย ขายดี')).toBe('คุณสมหมาย ขายดี');
+  });
+
+  it('does not add "คุณ" on top of a นาย/นาง/นางสาว/ดร. title already in the name', () => {
+    expect(greetingName('นายสมชาย ใจดี')).toBe('นายสมชาย ใจดี');
+    expect(greetingName('นางสมหญิง ใจดี')).toBe('นางสมหญิง ใจดี');
+    expect(greetingName('นางสาวปิยะนุช รุ่งเรือง')).toBe('นางสาวปิยะนุช รุ่งเรือง');
+    expect(greetingName('ดร.วิชัย ธนาคาร')).toBe('ดร.วิชัย ธนาคาร');
+  });
+
+  it('returns an empty string for a missing name instead of a bare "คุณ"', () => {
+    expect(greetingName('')).toBe('');
+    expect(greetingName(null)).toBe('');
+    expect(greetingName(undefined)).toBe('');
+  });
+});
+
 describe('attendanceSourceLabel', () => {
   it('maps each site_code to its display label', () => {
     expect(attendanceSourceLabel({ site_code: 'SHOWROOM' })).toBe('Showroom');
@@ -46,6 +87,19 @@ describe('attendanceSourceLabel', () => {
 
   it('falls through to the raw code for an unknown site', () => {
     expect(attendanceSourceLabel({ site_code: 'FACTORY' })).toBe('FACTORY');
+  });
+});
+
+describe('pricing workflow status labels', () => {
+  it('maps backend pricing workflow codes to user-facing Thai labels', () => {
+    expect(factoryQuoteStatusLabel('READY_FOR_COSTING')).toMatchObject({ label: 'พร้อมคำนวณต้นทุน', tone: 'success' });
+    expect(pricingDecisionStatusLabel('RETURNED')).toMatchObject({ label: 'ตีกลับให้แก้ไข', tone: 'danger' });
+    expect(quotationStatusLabel('REVISION_REQUESTED')).toMatchObject({ label: 'ลูกค้าขอแก้ไข', tone: 'warning' });
+  });
+
+  it('keeps stale costing visible without exposing the raw backend code', () => {
+    expect(pricingCostingStatusLabel('CALCULATED', { stale: true }))
+      .toMatchObject({ label: 'คำนวณแล้ว · ต้องคำนวณใหม่', tone: 'warning' });
   });
 });
 

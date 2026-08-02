@@ -11,7 +11,7 @@ import { Panel, PageStack, StatGrid } from '../../components/common/Layout.jsx';
 import { SkeletonCard, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { formatMoney, formatThaiDate } from '../../utils/format.js';
+import { formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
 
 // No server-side status filter exists on GET /api/commissions (mirrors
 // CommissionController#list — payrollMonth is the only query param it
@@ -52,7 +52,7 @@ function dealAmount(ticket) {
  * into CommissionPage's existing approve flow — never duplicates the
  * approval mutation itself) + a "ดีลทีมที่ต้องดูแล" worklist + a right rail
  * (leaderboard, close-rate). See docs/role-scoped-views.md. Manager keeps
- * every existing nav item (รายการดีล / คิวใบขอราคา / ค่าคอมมิชชัน / แคตตาล็อก)
+ * every existing nav item (รายการดีล / คิวคำขอราคา / ค่าคอมมิชชัน / แคตตาล็อก)
  * — this is only a new landing, nothing here removes a route or a permission.
  *
  * KNOWN DATA GAP (documented, not silently worked around — same convention
@@ -177,7 +177,7 @@ export function ManagerOverview({ user, employee, showToast }) {
   return (
     <PageStack>
       <PageHeader
-        title={`สวัสดี คุณ${firstName}`}
+        title={`สวัสดี ${greetingName(firstName)}`}
         subtitle={`ภาพรวมทีมขาย · ${today} — ผลงานทีม · ค่าคอมที่รอคุณตรวจ · ดีลที่ต้องดูแล`}
         actions={<Button type="button" variant="text" onClick={() => navigate('/tickets')}>ดูดีลทีม →</Button>}
       />

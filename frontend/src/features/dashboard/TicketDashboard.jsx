@@ -14,10 +14,10 @@ import { hasPermission } from '../../app/permissions.js';
 import { ActionQueue } from './ActionQueue.jsx';
 
 function GreetingSubtitle({ role }) {
-  if (role === 'sales') return 'ภาพรวมใบขอราคาของคุณ';
-  if (role === 'import') return 'ภาพรวมใบขอราคาทั้งหมด — ฝ่ายนำเข้า';
-  if (role === 'ceo') return 'ภาพรวมใบขอราคาทั้งหมด — ผู้บริหาร';
-  return 'ภาพรวมใบขอราคา';
+  if (role === 'sales') return 'ภาพรวมคำขอราคาของคุณ';
+  if (role === 'import') return 'ภาพรวมคำขอราคาทั้งหมด — ฝ่ายนำเข้า';
+  if (role === 'ceo') return 'ภาพรวมคำขอราคาทั้งหมด — ผู้บริหาร';
+  return 'ภาพรวมคำขอราคา';
 }
 
 const SHOW_SALES_ROLES = ['import', 'ceo'];
@@ -66,7 +66,7 @@ export function TicketDashboard({ user, employee, showToast }) {
   });
   // Commit 6: summary.submitted is permanently 0 for new deals now that ticket
   // creation no longer auto-submits (TicketService.create/submit, commit 5) —
-  // "รอรับเรื่อง (Import)" now counts the PricingRequest queue instead.
+  // The submitted queue now counts the PricingRequest queue instead.
   // Review-remediation plan Commit D: fetched WITHOUT a status filter (was
   // `status: 'SUBMITTED'` only) so the same query can also back "กำลังดำเนินการ"
   // below, which needs IMPORT_REVIEWING + MORE_INFO_REQUIRED counts — reusing
@@ -133,7 +133,7 @@ export function TicketDashboard({ user, employee, showToast }) {
   // previously every card landed on "ทั้งหมด" and made the user re-apply the
   // exact filter the card already named.
   const queueItems = summary ? [
-    { key: 'submitted', label: 'รอรับเรื่อง (Import)', value: submittedPricingRequestCount, to: canViewPricingQueue ? () => navigate('/pricing-requests') : undefined },
+    { key: 'submitted', label: 'รอฝ่ายนำเข้ารับเรื่อง', value: submittedPricingRequestCount, to: canViewPricingQueue ? () => navigate('/pricing-requests') : undefined },
     // No Step-1 pricing request can reach CEO approval yet (that stage isn't
     // built — see handoff 85's "Known risks" #1), so this deliberately stays on
     // the legacy summary.priceProposed count. Do NOT mistake this for the same
@@ -184,16 +184,16 @@ export function TicketDashboard({ user, employee, showToast }) {
           <ActionQueue items={queueItems} />
 
           <div className="stat-grid">
-            <StatCard icon="fileText"  label="เปิดอยู่ทั้งหมด"   value={summary.totalOpen}       helper="Total open"         tone="indigo" onClick={() => navigate('/tickets')} />
+            <StatCard icon="fileText"  label="เปิดอยู่ทั้งหมด"   value={summary.totalOpen}       helper="ดีลเปิดอยู่"         tone="indigo" onClick={() => navigate('/tickets')} />
             {/* Same reason as the ActionQueue entry above: summary.submitted is
                 permanently 0 for new deals since ticket creation stopped
                 auto-submitting, so this tile counts the PricingRequest queue. */}
-            <StatCard icon="clock"     label="รอรับเรื่อง"         value={submittedPricingRequestCount} helper="Pricing requests" tone="amber"  onClick={canViewPricingQueue ? () => navigate('/pricing-requests') : undefined} />
+            <StatCard icon="clock"     label="รอรับเรื่อง"         value={submittedPricingRequestCount} helper="คำขอราคา" tone="amber"  onClick={canViewPricingQueue ? () => navigate('/pricing-requests') : undefined} />
             {/* Was summary.inReview (legacy ticket status) — new deals never reach
                 'in_review' any more, so this tile was permanently 0 for them. Now
                 counts pricing requests Import has picked up or sent back for more
                 info (IMPORT_REVIEWING / MORE_INFO_REQUIRED). */}
-            <StatCard icon="users"     label="กำลังดำเนินการ"     value={inProgressPricingRequestCount} helper="In review"          tone="blue"   onClick={canViewPricingQueue ? () => navigate('/pricing-requests') : undefined} />
+            <StatCard icon="users"     label="กำลังดำเนินการ"     value={inProgressPricingRequestCount} helper="ฝ่ายนำเข้าดำเนินการ"          tone="blue"   onClick={canViewPricingQueue ? () => navigate('/pricing-requests') : undefined} />
             {/* Deliberately still summary.priceProposed: no Step-1 pricing request
                 can reach CEO approval yet (that stage isn't built) — see handoff 85
                 "Known risks" #1. Not the same oversight as the tile above; there is
@@ -218,7 +218,7 @@ export function TicketDashboard({ user, employee, showToast }) {
           {recent.length > 0 && (
             <section className="panel" style={{ padding: 0, overflow: 'hidden' }}>
               <div className="panel-header" style={{ padding: '14px 18px' }}>
-                <h2>ใบขอราคาล่าสุด</h2>
+                <h2>คำขอราคาล่าสุด</h2>
               </div>
               {isMobile ? (
                 <div className="flex flex-col gap-2.5 p-3">

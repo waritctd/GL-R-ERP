@@ -134,4 +134,52 @@ public class CommissionCalculator {
     private BigDecimal money(BigDecimal value) {
         return (value == null ? BigDecimal.ZERO : value).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
     }
+
+    /**
+     * Issue #405, ข้อ 12: flat monthly INCENTIVE lookup against the rep's FULL-PRECISION monthly
+     * tier base — the comparison uses {@code monthlyTierBase} as-is, the same "don't pre-round"
+     * discipline {@link #progressiveCommission} follows for its own base argument. Highest
+     * threshold reached wins; NOT cumulative, NOT pro-rated. ZERO at 2dp when {@code ladder} is
+     * null/empty (an empty ladder must mean zero — see {@link IncentiveTierConfig}), the base is
+     * null/&le;0, or the base is below every threshold in the ladder.
+     */
+    public BigDecimal monthlyIncentive(BigDecimal monthlyTierBase, List<IncentiveTierConfig> ladder) {
+        BigDecimal zero = BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal base = monthlyTierBase == null ? BigDecimal.ZERO : monthlyTierBase;
+        if (base.signum() <= 0 || ladder == null || ladder.isEmpty()) {
+            return zero;
+        }
+        IncentiveTierConfig winner = null;
+        for (IncentiveTierConfig tierConfig : ladder) {
+            if (base.compareTo(tierConfig.thresholdBase()) < 0) {
+                continue;
+            }
+            if (winner == null || tierConfig.thresholdBase().compareTo(winner.thresholdBase()) > 0) {
+                winner = tierConfig;
+            }
+        }
+        return winner == null ? zero : winner.incentiveAmount().setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Issue #405: the STOCK_BONUS (พิเศษขายของในสต๊อค) rule — STEPPED, not a percentage:
+     * {@code floor(stockReceipts / blockAmount)} whole blocks, each worth {@code bonusPerBlock}.
+     * A partial block earns nothing — e.g. ฿250,000 at a ฿100,000 block pays ฿2,000 (two whole
+     * blocks), NOT ฿2,500 (a naive 1% read of the remainder too). ZERO when {@code config} is
+     * null, not {@link StockBonusConfig#enabled()}, or {@code stockReceipts} &le; 0 — this last
+     * check is also where the "clamp stockReceipts at &ge; 0 before the floor division" rule
+     * from the issue lives: a negative (e.g. CLAWBACK-only) receipts figure floors to the same
+     * zero blocks a clamped-to-0 value would, so no separate clamp is needed before this call.
+     * Ships config-gated OFF ({@link StockBonusConfig#disabled()} / the V108 seed row), so this
+     * returns zero for every real payroll run until the CEO enables it.
+     */
+    public BigDecimal stockSaleBonus(BigDecimal stockReceipts, StockBonusConfig config) {
+        BigDecimal zero = BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal receipts = stockReceipts == null ? BigDecimal.ZERO : stockReceipts;
+        if (config == null || !config.enabled() || receipts.signum() <= 0) {
+            return zero;
+        }
+        BigDecimal blocks = receipts.divide(config.blockAmount(), 0, RoundingMode.FLOOR);
+        return blocks.multiply(config.bonusPerBlock()).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+    }
 }

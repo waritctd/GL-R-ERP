@@ -7,7 +7,12 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { formatMoney, formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
+import {
+  formatMoney,
+  formatThaiDate,
+  pricingRequestStatusLabel,
+  quotationStatusLabel,
+} from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import {
   canConfirmOrder, canCreateCustomerQuotation,
@@ -241,7 +246,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
       createAndIssueQuotation.mutate();
     } else {
       pendingIssueIntentRef.current = false;
-      showToast?.('error', 'ยังออกใบเสนอราคาไม่ได้ — ตรวจสอบสถานะใบขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
+      showToast?.('error', 'ยังออกใบเสนอราคาไม่ได้ — ตรวจสอบสถานะคำขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
     }
   }
 
@@ -267,7 +272,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
       if (pr && canConfirmOrder(user, pr)) {
         confirmOrder.mutate();
       } else {
-        showToast?.('error', 'ยังยืนยันคำสั่งซื้อไม่ได้ — ตรวจสอบสถานะใบขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
+        showToast?.('error', 'ยังยืนยันคำสั่งซื้อไม่ได้ — ตรวจสอบสถานะคำขอราคาในส่วน "ราคาและใบเสนอราคา" ด้านล่าง');
       }
     },
   }));
@@ -310,7 +315,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
         </div>
 
         {quotationsQuery.isLoading ? (
-          <p className="text-sm text-text-muted">กำลังโหลด...</p>
+          <p className="text-sm text-text-muted">กำลังโหลดใบเสนอราคาลูกค้า…</p>
         ) : !current ? (
           canCreateCustomerQuotation(user, pr) ? (
             <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
@@ -326,18 +331,18 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
               </button>
             </div>
           ) : (
-            <p className="text-sm text-text-muted">ยังไม่มีใบเสนอราคาลูกค้าสำหรับใบขอราคานี้</p>
+            <p className="text-sm text-text-muted">ยังไม่มีใบเสนอราคาลูกค้าสำหรับคำขอราคานี้</p>
           )
         ) : (
           <div className="flex flex-col gap-3 rounded-md border border-border bg-surface p-3">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="font-mono text-sm font-bold">{current.number ?? `rev ${current.quotationRevisionNo}`}</span>
+              <span className="font-mono text-sm font-bold">{current.number ?? `ครั้งที่ ${current.quotationRevisionNo}`}</span>
               <StatusBadge tone={
                 ['ISSUED', 'SENT', 'ACCEPTED'].includes(current.docStatus) ? 'success'
                   : ['REJECTED', 'CANCELLED', 'EXPIRED'].includes(current.docStatus) ? 'danger'
                     : current.docStatus === 'REVISION_REQUESTED' ? 'warning' : 'neutral'
               }>
-                {current.docStatus}
+                {quotationStatusLabel(current.docStatus).label}
               </StatusBadge>
               <span className="text-sm text-text-muted">รวมทั้งสิ้น {formatMoney(current.grandTotal)}</span>
               {current.validityDate ? (
@@ -347,10 +352,10 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
 
             <div className="flex flex-wrap gap-2">
               <button type="button" className="secondary-button" disabled={downloadingFormat === 'pdf'} onClick={() => handleDownload('pdf')}>
-                <Icon name="fileText" size={12} /> {downloadingFormat === 'pdf' ? 'กำลังดาวน์โหลด...' : 'PDF'}
+                <Icon name="fileText" size={12} /> {downloadingFormat === 'pdf' ? 'กำลังดาวน์โหลด…' : 'PDF'}
               </button>
               <button type="button" className="secondary-button" disabled={downloadingFormat === 'xlsx'} onClick={() => handleDownload('xlsx')}>
-                <Icon name="fileText" size={12} /> {downloadingFormat === 'xlsx' ? 'กำลังดาวน์โหลด...' : 'Excel'}
+                <Icon name="fileText" size={12} /> {downloadingFormat === 'xlsx' ? 'กำลังดาวน์โหลด…' : 'Excel'}
               </button>
               {isCustomerQuotationEditable(current) && canManageCustomerQuotation(user, pr) ? (
                 <Link to={`/pricing-requests/${pr.id}`} className="secondary-button">
@@ -398,7 +403,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
 
             {['ACCEPTED', 'REJECTED', 'REVISION_REQUESTED', 'EXPIRED', 'SUPERSEDED'].includes(current.docStatus) ? (
               <p className="text-xs text-text-muted">
-                ผลใบเสนอราคา: <strong>{current.docStatus}</strong>
+                ผลใบเสนอราคา: <strong>{quotationStatusLabel(current.docStatus).label}</strong>
                 {current.outcomeNote ? ` — ${current.outcomeNote}` : ''}
               </p>
             ) : null}

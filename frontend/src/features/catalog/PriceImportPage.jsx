@@ -52,6 +52,13 @@ function statusTone(status) {
   return 'neutral';
 }
 
+function statusLabel(status) {
+  if (status === 'ACTIVE')   return 'ใช้งานอยู่';
+  if (status === 'DRAFT')    return 'ร่าง';
+  if (status === 'ARCHIVED') return 'เก็บเป็นประวัติ';
+  return status || 'ไม่ทราบสถานะ';
+}
+
 // ── AddFactoryModal ───────────────────────────────────────────────────────────
 
 function AddFactoryModal({ onClose, onCreated }) {
@@ -145,7 +152,7 @@ function AddFactoryModal({ onClose, onCreated }) {
 
 function UploadResultCard({ result }) {
   return (
-    <Panel title="อัปโหลดและ Commit สำเร็จ">
+    <Panel title="อัปโหลดและบันทึกราคาใช้งานสำเร็จ">
       <div className="flex flex-wrap gap-4 mb-4">
         <div className="flex flex-col items-center p-3 bg-green-50 rounded-md min-w-[90px]">
           <span className="text-2xl font-bold text-green-700">{num(result.committedRows)}</span>
@@ -245,12 +252,12 @@ function VersionsPanel({ versions, currentVersionId }) {
             }`}
           >
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate">{v.label || `Version ${v.versionId}`}</p>
+              <p className="text-sm font-medium truncate">{v.label || `เวอร์ชัน ${v.versionId}`}</p>
               <p className="text-xs text-muted">
                 {v.uploadedAt ? new Date(v.uploadedAt).toLocaleString('th-TH') : ''}
               </p>
             </div>
-            <StatusBadge tone={statusTone(v.status)}>{v.status}</StatusBadge>
+            <StatusBadge tone={statusTone(v.status)}>{statusLabel(v.status)}</StatusBadge>
           </li>
         ))}
       </ul>
@@ -360,7 +367,7 @@ export function PriceImportPage({ showToast }) {
       if (fileRef.current) fileRef.current.value = '';
       await loadVersions(factoryId);
       await loadProducts(factoryId);
-      showToast?.('success', `Commit สำเร็จ ${result.committedRows} รายการ`);
+      showToast?.('success', `บันทึกราคาใช้งานสำเร็จ ${result.committedRows} รายการ`);
     } catch (err) {
       setError(err.message || 'อัปโหลดไม่สำเร็จ');
     } finally {
@@ -408,7 +415,7 @@ export function PriceImportPage({ showToast }) {
     <PageStack>
       <PageHeader
         title="จัดการราคาสินค้า"
-        subtitle="อัปโหลด price list หรือแก้ไขรายสินค้าด้วยตนเอง"
+        subtitle="อัปโหลดรายการราคาหรือแก้ไขรายสินค้าด้วยตนเอง"
       />
 
       {/* Factory selection */}
@@ -441,16 +448,16 @@ export function PriceImportPage({ showToast }) {
       {/* Upload panel */}
       {factoryId && (
         <Panel>
-          <StepLabel n={2}>อัปโหลด Price List</StepLabel>
+          <StepLabel n={2}>อัปโหลดรายการราคา</StepLabel>
           <div className="mb-3">
             <label htmlFor="version-label" className="block text-sm font-medium mb-1">
-              Label (ชื่อ version)
+              ชื่อเวอร์ชันราคา
             </label>
             <input
               id="version-label"
               type="text"
               className="input w-full max-w-md"
-              placeholder="เช่น Price List 2026 Q3"
+              placeholder="เช่น รายการราคา Q3 2026"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
             />
@@ -468,15 +475,15 @@ export function PriceImportPage({ showToast }) {
               Per the plan: "If preview does not exist, add a clear warning/note
               before commit" instead of fabricating one. */}
           <div className="max-w-md rounded-md border border-border-input bg-surface-muted p-3 mb-4">
-            <StepLabel n={3}>ไม่มีขั้นตอนแสดงตัวอย่างก่อน Commit</StepLabel>
+            <StepLabel n={3}>ไม่มีขั้นตอนแสดงตัวอย่างก่อนบันทึก</StepLabel>
             <p className="text-sm text-text-secondary">
-              ระบบนี้จะอ่านไฟล์และตั้งเป็นราคาที่ใช้งานจริง (ACTIVE) ทันทีในขั้นตอนเดียว
-              โดยไม่มีหน้าตรวจสอบก่อน เวอร์ชันราคาเดิมของโรงงานนี้จะถูกเก็บเป็นประวัติ (ARCHIVED)
+              ระบบนี้จะอ่านไฟล์และตั้งเป็นราคาที่ใช้งานจริงทันทีในขั้นตอนเดียว
+              โดยไม่มีหน้าตรวจสอบก่อน เวอร์ชันราคาเดิมของโรงงานนี้จะถูกเก็บเป็นประวัติ
               ไม่ถูกลบ และสินค้าที่ไม่มีในไฟล์ใหม่จะยังคงอยู่ในเวอร์ชันใหม่
             </p>
           </div>
 
-          <StepLabel n={4}>อัปโหลดและ Commit</StepLabel>
+          <StepLabel n={4}>อัปโหลดและบันทึกราคาใช้งาน</StepLabel>
           <Button
             variant="primary"
             onClick={() => setConfirmUpload(true)}
@@ -484,7 +491,7 @@ export function PriceImportPage({ showToast }) {
             className="max-[720px]:min-h-11 max-[720px]:w-full"
           >
             <Icon name="upload" />
-            {uploading ? 'กำลังอัปโหลด…' : 'อัปโหลดและ Commit'}
+            {uploading ? 'กำลังอัปโหลด…' : 'อัปโหลดและบันทึกราคาใช้งาน'}
           </Button>
         </Panel>
       )}
@@ -499,7 +506,7 @@ export function PriceImportPage({ showToast }) {
 
       {/* Products table */}
       {factoryId && (
-        <Panel title="รายการสินค้า (ACTIVE)">
+        <Panel title="รายการสินค้าที่ใช้งานอยู่">
           <div className="flex justify-between items-center mb-3">
             <p className="text-sm text-muted">{products.length} รายการ</p>
             <Button variant="primary" size="sm" onClick={() => setEditingProduct({})}>
@@ -509,7 +516,7 @@ export function PriceImportPage({ showToast }) {
           </div>
 
           {loadingProducts ? (
-            <p className="text-sm text-muted py-6 text-center">กำลังโหลด…</p>
+            <p className="text-sm text-muted py-6 text-center">กำลังโหลดรายการสินค้าของโรงงาน…</p>
           ) : products.length === 0 ? (
             <p className="text-sm text-muted py-6 text-center">
               ยังไม่มีสินค้าสำหรับโรงงานนี้ — อัปโหลดไฟล์หรือเพิ่มสินค้าด้วยตนเอง
@@ -606,9 +613,9 @@ export function PriceImportPage({ showToast }) {
           and carries forward unmatched products — it does not delete data. */}
       <ConfirmDialog
         open={confirmUpload}
-        title="ยืนยันอัปโหลดและ Commit"
-        message="ราคาที่ Commit จะมีผลใช้งานจริงทันที (ACTIVE) เวอร์ชันเดิมของโรงงานนี้จะถูกเก็บเป็นประวัติ ไม่สามารถย้อนกลับจากหน้านี้ได้"
-        confirmLabel="อัปโหลดและ Commit"
+        title="ยืนยันอัปโหลดและบันทึกราคาใช้งาน"
+        message="ราคาที่บันทึกจะมีผลใช้งานจริงทันที เวอร์ชันเดิมของโรงงานนี้จะถูกเก็บเป็นประวัติ ไม่สามารถย้อนกลับจากหน้านี้ได้"
+        confirmLabel="อัปโหลดและบันทึกราคาใช้งาน"
         busy={uploading}
         onConfirm={handleUpload}
         onCancel={() => setConfirmUpload(false)}

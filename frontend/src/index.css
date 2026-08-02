@@ -79,6 +79,11 @@
   --space-6: 24px;
   --space-7: 28px;
   --space-8: 32px;
+  --app-topbar-h: 66px;
+  /* Ticket workspace sticky chrome fallback. TicketDetailPage overwrites this
+     with ResizeObserver after first render; 18rem matches the old hardcoded
+     desktop rail offset so first paint is never worse than the prior layout. */
+  --deal-header-h: 18rem;
 
   /* Radius */
   --radius-sm: 3px;

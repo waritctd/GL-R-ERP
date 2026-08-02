@@ -80,7 +80,7 @@ export function ProcurementFulfilmentPage({ user, showToast }) {
 
       <Panel title="งานรับเข้าคลัง / ส่งมอบ" className="!p-0 overflow-hidden">
         {ticketsQuery.isLoading ? (
-          <p className="px-4 py-6 text-sm text-text-muted">กำลังโหลด...</p>
+          <p className="px-4 py-6 text-sm text-text-muted">กำลังโหลดงานรับเข้าคลังและส่งมอบ…</p>
         ) : fulfilmentRows.length === 0 ? (
           <EmptyState
             icon="check"

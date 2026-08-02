@@ -184,6 +184,10 @@ export function LeavePage({ user, currentEmployee, showToast }) {
   });
   const leaveTypes = useMemo(() => leaveTypesQuery.data ?? [], [leaveTypesQuery.data]);
 
+  // Issue #422 B4: a modest poll + window-focus refetch on this queue specifically -- leave
+  // approvals are genuinely multi-user (a manager/HR approval made in another session must show
+  // up here without a manual reload). The app-wide `refetchOnWindowFocus: false` default
+  // (api/queryClient.js) stays put; this is a per-query opt-in, not a default flip.
   const requestsQuery = useQuery({
     queryKey: queryKeys.leaveRequests(appliedFilters),
     queryFn: () => api.leave.list({
@@ -192,6 +196,8 @@ export function LeavePage({ user, currentEmployee, showToast }) {
       status: appliedFilters.status,
       ...(appliedFilters.employeeId ? { employeeId: appliedFilters.employeeId } : {}),
     }).then((response) => response.requests || []),
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
   });
   const requests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
   const loading = requestsQuery.isLoading || requestsQuery.isFetching;
@@ -324,11 +330,15 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employeesQuery.data, leaveTypesQuery.data]);
 
+  // Issue #422 B3 fix: invalidate the ['leave'] PREFIX, not the exact
+  // queryKeys.leaveRequests(appliedFilters)/leaveBalances(formEmployeeId, balancesYear) pair --
+  // every other filter combination (a different date range/status/employee a sibling tab or
+  // another reviewer has open) used to stay stale until its own filters were reapplied. Every key
+  // this module defines (leaveRequests/leaveBalances/leaveEmployees/leaveTypes/
+  // leaveContactDefaults) is already prefixed with 'leave', so the broader invalidation
+  // subsumes the two specific calls this replaces with no narrower alternative needed.
   function invalidateLeave() {
-    return Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.leaveRequests(appliedFilters) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.leaveBalances(formEmployeeId, balancesYear) }),
-    ]);
+    return queryClient.invalidateQueries({ queryKey: ['leave'] });
   }
 
   function updateFilter(field, value) {
@@ -381,12 +391,21 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     onError: (error) => showToast('error', error.message || 'ส่งคำขอลาไม่สำเร็จ'),
   });
 
+  // Issue #422 B5 fix: approve/reject/cancel each change a figure PayrollPage reads
+  // (unpaidLeaveDays, via suggested-inputs) with no way for that screen to find out short of a
+  // manual reload. Invalidating the ['payroll'] prefix alongside invalidateLeave() lets an open
+  // PayrollPage tab pick the change up on its own next poll/focus refetch (issue #422 B1).
+  function invalidatePayrollUpstream() {
+    return queryClient.invalidateQueries({ queryKey: ['payroll'] });
+  }
+
   const approveMutation = useMutation({
     mutationFn: (id) => api.leave.approve(id, {}).then((response) => response.request),
     onSuccess: () => {
       showToast('success', 'อนุมัติวันลาแล้ว');
       setConfirmState(null);
       invalidateLeave();
+      invalidatePayrollUpstream();
     },
     onError: (error) => showToast('error', error.message || 'อนุมัติวันลาไม่สำเร็จ'),
   });
@@ -397,6 +416,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
       showToast('success', 'ปฏิเสธคำขอลาแล้ว');
       setConfirmState(null);
       invalidateLeave();
+      invalidatePayrollUpstream();
     },
     onError: (error) => showToast('error', error.message || 'ปฏิเสธวันลาไม่สำเร็จ'),
   });
@@ -407,6 +427,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
       showToast('success', 'ยกเลิกคำขอลาแล้ว');
       setConfirmState(null);
       invalidateLeave();
+      invalidatePayrollUpstream();
     },
     onError: (error) => showToast('error', error.message || 'ยกเลิกวันลาไม่สำเร็จ'),
   });

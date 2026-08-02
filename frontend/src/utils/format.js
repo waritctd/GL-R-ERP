@@ -77,6 +77,28 @@ export function formatMoney(value) {
   })}`;
 }
 
+// Thai honorifics a stored name may already carry — either the employee
+// master's `nameTh` (title_id-derived, e.g. "นายสมชาย ใจดี") or a free-text
+// `user.name` seeded with one baked in (e.g. "คุณสมหมาย ขายดี"). Order doesn't
+// affect matching (`startsWith` is checked per-entry), but 'นางสาว' is listed
+// so it reads clearly alongside its own prefix 'นาง'.
+const THAI_HONORIFICS = ['นางสาว', 'นาง', 'นาย', 'ดร.', 'คุณ'];
+
+// Prepends the "คุณ" salutation used by dashboard greetings, but only when
+// `name` doesn't already start with a Thai honorific. Every greeting used to
+// prepend "คุณ" unconditionally, which doubled up whenever the resolved name
+// already carried one — see issue #395 ("สวัสดี คุณคุณสมหมาย ขายดี"). The
+// doubling traces to inconsistent name data (some `user.name` rows are
+// seeded with "คุณ" already in them; `employee.nameTh` separately bakes in a
+// นาย/นาง/นางสาว title), not to this helper's own logic — detecting an
+// existing honorific here is the fix, not stripping/rewriting the stored
+// name (that's a data concern, out of scope for this helper).
+export function greetingName(name) {
+  const trimmed = (name ?? '').trim();
+  if (!trimmed) return '';
+  return THAI_HONORIFICS.some((title) => trimmed.startsWith(title)) ? trimmed : `คุณ${trimmed}`;
+}
+
 export function initialsFromName(name = '') {
   return name
     .split(/\s+/)
@@ -105,7 +127,7 @@ export function roleLabel(role) {
 export function ticketStatusLabel(status) {
   const map = {
     draft:            { label: 'แบบร่าง',          tone: 'neutral' },
-    submitted:        { label: 'รอรับเรื่องจากฝ่าย Import', tone: 'warning' },
+    submitted:        { label: 'รอฝ่ายนำเข้ารับเรื่อง', tone: 'warning' },
     in_review:        { label: 'กำลังดำเนินการ',    tone: 'info' },
     price_proposed:   { label: 'รอการอนุมัติ',      tone: 'warning' },
     approved:         { label: 'อนุมัติแล้ว',       tone: 'success' },
@@ -124,8 +146,8 @@ export function ticketStatusLabel(status) {
 export function pricingRequestStatusLabel(status) {
   const map = {
     DRAFT: { label: 'แบบร่าง', tone: 'neutral' },
-    SUBMITTED: { label: 'รอ Import รับเรื่อง', tone: 'warning' },
-    IMPORT_REVIEWING: { label: 'Import ตรวจคำขอราคา', tone: 'info' },
+    SUBMITTED: { label: 'รอฝ่ายนำเข้ารับเรื่อง', tone: 'warning' },
+    IMPORT_REVIEWING: { label: 'ฝ่ายนำเข้าตรวจคำขอราคา', tone: 'info' },
     AWAITING_FACTORY_RESPONSE: { label: 'รอราคาโรงงาน', tone: 'warning' },
     COSTING_IN_PROGRESS: { label: 'กำลังร่างต้นทุน', tone: 'info' },
     READY_FOR_CEO_REVIEW: { label: 'ส่งให้ CEO ตรวจแล้ว', tone: 'success' },
@@ -140,6 +162,40 @@ export function pricingRequestStatusLabel(status) {
     MORE_INFO_REQUIRED: { label: 'รอข้อมูลเพิ่มเติม', tone: 'warning' },
     SUPERSEDED: { label: 'ถูกแทนที่แล้ว', tone: 'neutral' },
     CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },
+  };
+  return map[status] ?? { label: status || '-', tone: 'neutral' };
+}
+
+export function factoryQuoteStatusLabel(status) {
+  const map = {
+    DRAFT: { label: 'ร่างอีเมลถึงโรงงาน', tone: 'neutral' },
+    REQUESTED: { label: 'ส่งขอราคาแล้ว', tone: 'warning' },
+    RESPONSE_RECEIVED: { label: 'ได้รับราคาโรงงานแล้ว', tone: 'info' },
+    NEGOTIATING: { label: 'กำลังเจรจา', tone: 'warning' },
+    READY_FOR_COSTING: { label: 'พร้อมคำนวณต้นทุน', tone: 'success' },
+    CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },
+  };
+  return map[status] ?? { label: status || '-', tone: 'neutral' };
+}
+
+export function pricingCostingStatusLabel(status, options = {}) {
+  const map = {
+    DRAFT: { label: 'ร่างต้นทุน', tone: 'neutral' },
+    CALCULATED: { label: 'คำนวณแล้ว', tone: 'warning' },
+    SUBMITTED: { label: 'ส่งให้ CEO แล้ว', tone: 'success' },
+    CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },
+  };
+  const info = map[status] ?? { label: status || '-', tone: 'neutral' };
+  if (!options.stale) return info;
+  return { label: `${info.label} · ต้องคำนวณใหม่`, tone: 'warning' };
+}
+
+export function pricingDecisionStatusLabel(status) {
+  const map = {
+    DRAFT: { label: 'รอพิจารณา', tone: 'warning' },
+    APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
+    RETURNED: { label: 'ตีกลับให้แก้ไข', tone: 'danger' },
+    SUPERSEDED: { label: 'ถูกแทนที่แล้ว', tone: 'neutral' },
   };
   return map[status] ?? { label: status || '-', tone: 'neutral' };
 }
@@ -306,8 +362,8 @@ export function overdueBadgeLabel(overdue) {
 
 export function fulfilmentStatusLabel(value) {
   const map = {
-    IR_ISSUED: { label: 'ออก IR แล้ว', tone: 'info' },
-    IR_SENT: { label: 'สั่งซื้อผู้ผลิตแล้ว', tone: 'info' },
+    IR_ISSUED: { label: 'ออกคำขอนำเข้าแล้ว', tone: 'info' },
+    IR_SENT: { label: 'ส่งคำขอนำเข้าแล้ว', tone: 'info' },
     PICKED_UP: { label: 'รับจากผู้ผลิตแล้ว', tone: 'info' },
     SHIPPING: { label: 'สินค้าเดินทาง', tone: 'info' },
     CUSTOMS_CLEARANCE: { label: 'รอออกของ', tone: 'warning' },
@@ -354,10 +410,12 @@ export function quotationRecipientLabel(value) {
 export function quotationStatusLabel(value) {
   const map = {
     DRAFT: { label: 'แบบร่าง', tone: 'neutral' },
+    READY_TO_ISSUE: { label: 'พร้อมออกใบเสนอราคา', tone: 'warning' },
     ISSUED: { label: 'ออกแล้ว', tone: 'success' },
     SENT: { label: 'ส่งแล้ว', tone: 'info' },
-    ACCEPTED: { label: 'รับแล้ว', tone: 'success' },
-    REJECTED: { label: 'ปฏิเสธ', tone: 'danger' },
+    ACCEPTED: { label: 'ลูกค้ายอมรับ', tone: 'success' },
+    REJECTED: { label: 'ลูกค้าปฏิเสธ', tone: 'danger' },
+    REVISION_REQUESTED: { label: 'ลูกค้าขอแก้ไข', tone: 'warning' },
     EXPIRED: { label: 'หมดอายุ', tone: 'warning' },
     CANCELLED: { label: 'ยกเลิก', tone: 'danger' },
     SUPERSEDED: { label: 'ถูกแทนที่', tone: 'neutral' },

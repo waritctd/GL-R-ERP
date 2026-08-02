@@ -131,7 +131,7 @@ public class CustomerQuotationController {
                 .body(bytes);
         }
         if (!"pdf".equalsIgnoreCase(format)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown format '" + format + "'");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับรูปแบบไฟล์ '" + format + "'");
         }
         byte[] bytes = quotations.renderPdf(id, user);
         return ResponseEntity.ok()
