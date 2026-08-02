@@ -163,10 +163,20 @@ public class SsoExporter {
             Cp874.spaces(27));
     }
 
-    /** SSN = the employee's social-security number, falling back to the national id. */
+    /**
+     * The เลขประจำตัวประกันสังคม field keys on the <b>national id</b> (เลขบัตรประชาชน), falling back to
+     * {@code social_security_no} only when an employee has no national id on file.
+     *
+     * <p>This preference was REVERSED on 2026-08-03 (owner ruling). It previously preferred
+     * {@code social_security_no}, but GL&amp;R's accepted สปส.1-10/1 filings key on เลขบัตรประชาชน — for
+     * modern Thai records the two are the same 13 digits, so the old order was usually harmless, but
+     * any employee whose {@code social_security_no} holds something else (a legacy SSO number, or a
+     * stale value) would be filed under a number the SSO cannot match to the person. National id is
+     * the field the SSO actually reconciles against, so it wins.
+     */
     private String ssn(PayrollExportRow row) {
-        String n = digits(row.socialSecurityNo());
-        return n.isEmpty() ? digits(row.nationalId()) : n;
+        String n = digits(row.nationalId());
+        return n.isEmpty() ? digits(row.socialSecurityNo()) : n;
     }
 
     private long rateTimes100(String ratePercent) {

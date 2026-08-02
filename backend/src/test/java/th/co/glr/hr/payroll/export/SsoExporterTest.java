@@ -281,6 +281,49 @@ class SsoExporterTest {
         assertThat(detail.substring(82, 96)).isEqualTo("00000001500000");
     }
 
+    /**
+     * เลขประจำตัวประกันสังคม keys on the NATIONAL ID (owner ruling 2026-08-03), not social_security_no.
+     * The two ids below deliberately DIFFER — with a fixture where they match (as every other fixture
+     * in this file has them), this assertion passes under either preference and proves nothing.
+     */
+    @Test
+    void detailKeysOnNationalIdNotSocialSecurityNo() {
+        PayrollExportRow row = new PayrollExportRow(
+            1, "E1", "นาย", "ทดสอบ", "ระบบ", null,
+            "9000000000001", null, "9000000000002", null, // nationalId != socialSecurityNo
+            null, null, null,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            new BigDecimal("15000.00"), null, new BigDecimal("750.00"), null);
+
+        List<String> lines = records(exporter.export(
+            List.of(row), employer(), LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 26)));
+        String detail = lines.stream().filter(l -> l.startsWith("2")).findFirst().orElseThrow();
+
+        assertThat(detail.substring(1, 14)).as("must be the national id").isEqualTo("9000000000001");
+        assertThat(detail.substring(1, 14)).as("must NOT be social_security_no")
+            .isNotEqualTo("9000000000002");
+    }
+
+    /**
+     * Falls back to social_security_no only when there is no national id on file — so an employee
+     * missing a national id is still keyed, rather than filed under 13 zeros.
+     */
+    @Test
+    void detailFallsBackToSocialSecurityNoWhenNationalIdIsMissing() {
+        PayrollExportRow row = new PayrollExportRow(
+            1, "E1", "นาย", "ทดสอบ", "ระบบ", null,
+            null, null, "9000000000002", null, // no national id
+            null, null, null,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            new BigDecimal("15000.00"), null, new BigDecimal("750.00"), null);
+
+        List<String> lines = records(exporter.export(
+            List.of(row), employer(), LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 26)));
+        String detail = lines.stream().filter(l -> l.startsWith("2")).findFirst().orElseThrow();
+
+        assertThat(detail.substring(1, 14)).isEqualTo("9000000000002");
+    }
+
     /** Synthetic national id: "9" + a 12-digit zero-padded sequence number. Never a real Thai id. */
     private String syntheticId(int seq) {
         return "9" + String.format("%012d", seq);
