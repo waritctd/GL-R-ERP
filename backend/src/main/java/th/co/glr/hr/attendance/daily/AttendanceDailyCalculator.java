@@ -33,6 +33,18 @@ import th.co.glr.hr.attendance.schedule.WorkSchedule;
  * time would fabricate late/early minutes, which under Thai Labour Protection Act §76 is precisely
  * the failure mode to avoid — those figures are reporting-only and must never become a deduction.
  *
+ * <h2>ฝ่ายขาย may scan in only (V117)</h2>
+ * §4 of the governing announcement exempts sales from the check-out half of the requirement
+ * ("ฝ่ายขาย อนุญาตให้ทาบบัตรเข้างานอย่างเดียวได้"). When {@link WorkSchedule#requiresCheckOut()} is
+ * {@code false} and only a morning punch exists, that is a complete, compliant day — never
+ * {@link AttendanceDayFlag#MISSING_CHECK_OUT} — but the missing-scan-is-never-imputed rule above
+ * still applies in full: {@code earlyLeaveMinutes} stays 0 (there is nothing to measure against) and
+ * {@code totalMinutes} stays {@code null} (unknown, not zero). Check-in is still mandatory for
+ * everyone, sales included, so a lone afternoon punch is still {@link AttendanceDayFlag#MISSING_CHECK_IN}
+ * regardless of {@code requiresCheckOut}, and lateness is still evaluated normally from the check-in.
+ * A sales employee who does scan out is unaffected: the ordinary two-punch path applies unchanged,
+ * including early-leave.
+ *
  * <h2>Known non-goals</h2>
  * Mid-day punches (lunch, moving between sites) are counted but not modelled — there is no break or
  * shift concept in the schema to model them against. Night shifts that wrap past midnight are not
@@ -88,10 +100,13 @@ public class AttendanceDailyCalculator {
         if (ordered.size() == 1) {
             PunchRecord lone = ordered.get(0);
             if (isBeforeOrAtMidpoint(lone, schedule)) {
-                // Arrived and never scanned out.
+                // Arrived and never scanned out. Compliant as-is for a schedule that does not
+                // require a check-out (V117, ฝ่ายขาย) — see this class's javadoc.
                 checkInPunch = lone;
                 checkOutPunch = null;
-                flags.add(AttendanceDayFlag.MISSING_CHECK_OUT);
+                if (schedule.requiresCheckOut()) {
+                    flags.add(AttendanceDayFlag.MISSING_CHECK_OUT);
+                }
             } else {
                 // Scanned out having never scanned in. Treating this as an arrival instead would
                 // report someone as turning up at 17:25 and manufacture ~530 late minutes.
@@ -159,7 +174,7 @@ public class AttendanceDailyCalculator {
             // Rows only exist for days that have punches, so a stored row is never an absence.
             // DashboardRepository counts is_absent = FALSE as "present"; keep that true.
             false,
-            statusOf(holiday, workday, checkIn, checkOut, lateMinutes),
+            statusOf(holiday, workday, checkIn, checkOut, lateMinutes, schedule.requiresCheckOut()),
             flags
         );
     }
@@ -177,7 +192,7 @@ public class AttendanceDailyCalculator {
 
     private static AttendanceDayStatus statusOf(
             boolean holiday, boolean workday, OffsetDateTime checkIn, OffsetDateTime checkOut,
-            int lateMinutes) {
+            int lateMinutes, boolean requiresCheckOut) {
         // Checked before the plain !workday branch so a holiday is never reported as an ordinary
         // NON_WORKDAY — see AttendanceDayFlag#HOLIDAY for why the two carry different pay meaning.
         if (holiday) {
@@ -189,7 +204,11 @@ public class AttendanceDailyCalculator {
         if (checkIn == null) {
             return AttendanceDayStatus.MISSING_CHECK_IN;
         }
-        if (checkOut == null) {
+        // A lone check-in is only a compliance problem when this schedule requires a check-out
+        // (V117: ฝ่ายขาย does not). Otherwise fall through to the same LATE/PRESENT headline a
+        // two-punch day gets — a check-in-only sales day is a complete, compliant day, not merely
+        // "missing something we chose to ignore".
+        if (checkOut == null && requiresCheckOut) {
             return AttendanceDayStatus.MISSING_CHECK_OUT;
         }
         return lateMinutes > 0 ? AttendanceDayStatus.LATE : AttendanceDayStatus.PRESENT;

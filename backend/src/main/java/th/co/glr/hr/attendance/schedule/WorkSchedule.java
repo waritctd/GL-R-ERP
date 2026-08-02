@@ -25,13 +25,21 @@ import java.util.Set;
  * @param graceMinutes minutes after {@code workStart} before a check-in counts late. A
  *                     <strong>threshold, not an allowance</strong> — see {@link #isLate}.
  * @param workdays     days of the week the schedule applies to; other days are non-workdays
+ * @param requiresCheckOut whether a missing check-out is a compliance problem for this schedule.
+ *                     {@code true} for every schedule except V117's {@code SALES_5D}: §4 of the
+ *                     governing announcement (ประกาศ วันเวลาทำงาน และการหยุดงาน, effective 1 ต.ค.
+ *                     2567) lets ฝ่ายขาย scan in only ("ฝ่ายขาย อนุญาตให้ทาบบัตรเข้างานอย่างเดียวได้").
+ *                     When {@code false}, {@code AttendanceDailyCalculator} must not flag a lone
+ *                     check-in as {@code MISSING_CHECK_OUT} — check-in is still mandatory for
+ *                     everyone; only the check-out side of the requirement is relaxed.
  */
 public record WorkSchedule(
     ZoneId zone,
     LocalTime workStart,
     LocalTime workEnd,
     int graceMinutes,
-    Set<DayOfWeek> workdays
+    Set<DayOfWeek> workdays,
+    boolean requiresCheckOut
 ) {
     public WorkSchedule {
         if (zone == null || workStart == null || workEnd == null || workdays == null) {
@@ -44,6 +52,17 @@ public record WorkSchedule(
             throw new IllegalArgumentException("graceMinutes must not be negative");
         }
         workdays = Set.copyOf(workdays);
+    }
+
+    /**
+     * Convenience constructor for the common case of a schedule that requires both scans —
+     * every schedule before V117's {@code SALES_5D}. Keeps every pre-existing call site (production
+     * and test) compiling unchanged; only sales-schedule-specific code needs the 6-arg canonical
+     * constructor directly.
+     */
+    public WorkSchedule(ZoneId zone, LocalTime workStart, LocalTime workEnd, int graceMinutes,
+            Set<DayOfWeek> workdays) {
+        this(zone, workStart, workEnd, graceMinutes, workdays, true);
     }
 
     public boolean isWorkday(LocalDate date) {
