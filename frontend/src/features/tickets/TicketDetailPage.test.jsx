@@ -43,6 +43,11 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         // mutations, self-contained like DealQuotationPanel's.
         setDepositPolicy: vi.fn(),
         confirmDepositPaid: vi.fn(),
+        // Slice C2b moved the revoke-close-confirm control into the "การเงิน"
+        // tab (see TicketDetailPage.jsx's own comment on that section) —
+        // Slice E's DealMoneyTimeline rebuild left it untouched, in place,
+        // outside that new component.
+        revokeCloseConfirmation: vi.fn(),
         // Fulfilment (Phase 3 Slice S4 — handoff 105): DealFulfilmentPanel's
         // own mutations, same self-contained pattern.
         issueImportRequest: vi.fn(),
@@ -574,6 +579,49 @@ describe('TicketDetailPage', () => {
     // the scoped assertion above didn't accidentally start passing vacuously.
     expect(screen.getByText(/คุณบัญชี/)).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกรับชำระเงิน' })).toBeNull();
+  });
+
+  // Slice C2b moved this control into the การเงิน tab (see
+  // TicketDetailPage.jsx's own comment above the `can.revokeCloseConfirm`
+  // section) — Slice E's DealMoneyTimeline rebuild left it in place, outside
+  // that new component, and untouched. Not previously covered by a dedicated
+  // test; adding one here per the "every existing action must still be
+  // present and behave identically" requirement.
+  it('renders "ยกเลิกการยืนยันปิดงาน" for account with REVOKE_CLOSE_CONFIRM, and calls revokeCloseConfirmation on click', async () => {
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'CLOSED_PAID', paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'FULLY_DELIVERED', status: 'quotation_issued',
+      },
+      availableActions: [{ action: 'REVOKE_CLOSE_CONFIRM', kind: 'operational', label: 'ยกเลิกการยืนยันปิดงาน' }],
+    });
+    api.tickets.revokeCloseConfirmation.mockResolvedValue({ ticket: buildTicket() });
+
+    renderTicketDetailPage(accountUser);
+    await openTab(/การเงิน/);
+
+    const button = await screen.findByRole('button', { name: 'ยกเลิกการยืนยันปิดงาน' });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(api.tickets.revokeCloseConfirmation).toHaveBeenCalledWith(701, {}));
+  });
+
+  // Wrong-way-round: without the REVOKE_CLOSE_CONFIRM action on offer, the
+  // button must not render at all — even for a role (account) that CAN see
+  // it once the action is actually available.
+  it('wrong-way-round: hides "ยกเลิกการยืนยันปิดงาน" for account when REVOKE_CLOSE_CONFIRM is not an available action', async () => {
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued',
+      },
+      availableActions: [{ action: 'SET_BILLING', kind: 'payment', label: 'ตั้งค่าการวางบิล' }],
+    });
+
+    renderTicketDetailPage(accountUser);
+    await openTab(/การเงิน/);
+
+    await screen.findByRole('button', { name: 'ตั้งค่าการวางบิล' });
+    expect(screen.queryByRole('button', { name: 'ยกเลิกการยืนยันปิดงาน' })).toBeNull();
+    expect(api.tickets.revokeCloseConfirmation).not.toHaveBeenCalled();
   });
 
   it('lets Accounting open Ticket Detail without calling or rendering Pricing Requests', async () => {

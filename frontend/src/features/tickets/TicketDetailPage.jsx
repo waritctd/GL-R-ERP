@@ -10,14 +10,11 @@ import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
-import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { Tabs, TabPanel } from '../../components/common/Tabs.jsx';
 import {
   dealStageLabel,
   formatMoney,
   formatThaiDate,
-  overdueBadgeLabel,
-  paymentStageLabel,
   quotationRecipientLabel,
 } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
@@ -31,13 +28,14 @@ import { DealDepositPanel } from './DealDepositPanel.jsx';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 import { DealLegacyQuotations } from './DealLegacyQuotations.jsx';
+import { DealMoneyTimeline } from './DealMoneyTimeline.jsx';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
 import {
-  allowedTargetStages, canMarkLost, canSetStage, nextStage, PAYMENT_SUBSTEPS,
+  allowedTargetStages, canMarkLost, canSetStage, nextStage,
 } from './stageMeta.js';
 import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
@@ -121,51 +119,12 @@ const TERMINAL = ['closed', 'cancelled'];
 // tokens) moved into DealLegacyQuotations.jsx (ia-extract Slice C1) — it had
 // exactly one caller and that caller moved with it.
 
-// Slice A "chip diet": moved out of DealStagePanel (see its own doc comment)
-// into the money tab's own payment section — the one place on the page that
-// didn't already show this. The payment stage's inner progression
-// (ลูกค้ายืนยัน → ... → ชำระครบแล้ว) is finer-grained than both the header's
-// single "การชำระเงิน" chip (DealStateHeader) and this tab's own
-// paymentStageLabel badge in its panel-header — unlike the old "ยอดชำระ"
-// badge and "นโยบายมัดจำ" badge that used to sit next to this strip in
-// DealStagePanel, which were straight duplicates of that same panel-header
-// badge and of DealDepositPanel's own policy badge, respectively, and were
-// deleted rather than moved.
-function PaymentSubstepChips({ currentCode }) {
-  const currentIdx = PAYMENT_SUBSTEPS.findIndex((s) => s.code === currentCode);
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <span className="text-2xs font-bold text-text-muted">การชำระเงิน:</span>
-      {PAYMENT_SUBSTEPS.map((step, i) => {
-        const done = i < currentIdx;
-        const current = i === currentIdx;
-        return (
-          <span
-            key={step.code}
-            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-2xs font-bold ${
-              done ? 'bg-success-bg text-success-dark'
-                : current ? 'bg-info-bg text-info'
-                  : 'bg-surface-subtle text-text-muted'
-            }`}
-          >
-            {done ? <Icon name="check" size={11} /> : null}
-            {step.label}
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
-// Mirrors DealDepositPanel's own (unexported) `bypassesNotice` — duplicated
-// rather than imported, matching the precedent DealFulfilmentPanel's own
-// StepRoleTag/StepNumber comment sets for small single-purpose helpers no
-// file exports yet. A policy other than the default REQUIRED skips the
-// deposit-notice/payment steps entirely, so the substep progression above
-// doesn't mean anything for those deals.
-function depositBypassesNotice(policy) {
-  return ['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'].includes(policy);
-}
+// Slice A "chip diet" moved PaymentSubstepChips out of DealStagePanel (see
+// its own doc comment) into the money tab's own payment section. Slice E
+// moved it again, along with the rest of that section, into
+// DealMoneyTimeline.jsx (see that file's own doc comment for why it stays
+// separate from the merged timeline below it) — nothing here references it
+// or depositBypassesNotice any more.
 
 export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const queryClient = useQueryClient();
@@ -1842,76 +1801,17 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
       <TabPanel id="money" idPrefix="ticket-detail" active={visibleActiveTab === 'money'}>
           {sections.payment ? (
-            <section className="panel">
-              <div className="panel-header" style={{ alignItems: 'center' }}>
-                <h2>การชำระเงิน</h2>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <StatusBadge tone={paymentStageLabel(summary.paymentStage).tone}>
-                    {paymentStageLabel(summary.paymentStage).label}
-                  </StatusBadge>
-                  {summary.overdue && (
-                    <StatusBadge tone={overdueBadgeLabel(true).tone}>{overdueBadgeLabel(true).label}</StatusBadge>
-                  )}
-                </div>
-              </div>
-              <div style={{ padding: '0 18px 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-                {summary.paymentStatus && !depositBypassesNotice(summary.depositPolicy) ? (
-                  <PaymentSubstepChips currentCode={summary.paymentStatus} />
-                ) : null}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
-                  {[
-                    ['ยอดที่ต้องชำระ', summary.amountPayable],
-                    ['ชำระแล้ว', summary.amountPaid],
-                    ['คงเหลือ', summary.amountOutstanding],
-                  ].map(([label, value]) => (
-                    <div key={label} style={{ border: '1px solid var(--color-border-subtle)', borderRadius: 8, padding: '10px 12px', background: 'var(--color-surface-muted)' }}>
-                      <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 4 }}>{label}</div>
-                      <strong style={{ fontSize: 18, color: 'var(--color-text)' }}>{formatMoney(value ?? 0)}</strong>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', fontSize: 13, color: 'var(--color-text-muted)' }}>
-                  <span>วันวางบิล <strong style={{ color: 'var(--color-text-secondary)' }}>{formatThaiDate(summary.billingDate)}</strong></span>
-                  <span>ครบกำหนด <strong style={{ color: summary.overdue ? 'var(--color-danger)' : 'var(--color-text-secondary)' }}>{formatThaiDate(summary.dueDate)}</strong></span>
-                  {summary.nextFollowUpAt && <span>ติดตามครั้งถัดไป <strong style={{ color: 'var(--color-text-secondary)' }}>{formatThaiDate(summary.nextFollowUpAt)}</strong></span>}
-                </div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {can.recordPayment && (
-                    <button type="button" className="primary-button" disabled={actionLoading} onClick={openPaymentModal}>
-                      บันทึกรับชำระเงิน
-                    </button>
-                  )}
-                  {can.setBilling && (
-                    <button type="button" className="secondary-button" disabled={actionLoading} onClick={openBillingModal}>
-                      ตั้งค่าการวางบิล
-                    </button>
-                  )}
-                </div>
-                <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 10 }}>
-                  <h3 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700 }}>ประวัติรับชำระ</h3>
-                  {paymentsQuery.isLoading ? (
-                    <SkeletonText lines={2} />
-                  ) : paymentReceipts.length === 0 ? (
-                    <p style={{ margin: 0, fontSize: 13, color: 'var(--color-text-muted)' }}>ยังไม่มีรายการรับชำระ</p>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      {paymentReceipts.map((receipt) => (
-                        <div key={receipt.receiptId} style={{ display: 'grid', gridTemplateColumns: '110px 90px 1fr', gap: 10, alignItems: 'start', fontSize: 13 }}>
-                          <span style={{ color: 'var(--color-text-muted)' }}>{formatThaiDate(receipt.receivedAt)}</span>
-                          <strong>{receipt.kind}</strong>
-                          <span>
-                            {formatMoney(receipt.amount)}
-                            <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
-                              {receipt.recordedByName || '-'}{receipt.note ? ` · ${receipt.note}` : ''}
-                            </small>
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </section>
+            <DealMoneyTimeline
+              events={events}
+              paymentReceipts={paymentReceipts}
+              paymentsLoading={paymentsQuery.isLoading}
+              summary={summary}
+              canRecordPayment={can.recordPayment}
+              canSetBilling={can.setBilling}
+              actionLoading={actionLoading}
+              onRecordPayment={openPaymentModal}
+              onSetBilling={openBillingModal}
+            />
           ) : null}
 
           {/* "มัดจำ" (Phase 3 Slice S3 — see

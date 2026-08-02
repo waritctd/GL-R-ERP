@@ -61,8 +61,11 @@ export const EVENT_KIND_LABEL = {
 
 // Payment-track events get a success-toned dot, fulfillment-track events get
 // an info-toned dot — mirrors the two colour groups used by the sub-status
-// chips in DealStagePanel.
-const PAYMENT_TRACK_KINDS = new Set([
+// chips in DealStagePanel. Exported (Slice E) so DealMoneyTimeline.jsx can
+// filter `ticket.events` down to the payment track for its own timeline
+// without redeclaring this list — two copies drifting apart is exactly how
+// an event would silently stop appearing on one of the two surfaces.
+export const PAYMENT_TRACK_KINDS = new Set([
   'CUSTOMER_CONFIRMED', 'DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID',
   'AWAITING_FINAL_PAYMENT', 'FULLY_PAID', 'PAYMENT_RECORDED', 'BILLING_UPDATED',
 ]);
