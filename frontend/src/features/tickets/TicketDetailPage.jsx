@@ -505,7 +505,17 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       // list has to be re-read — otherwise the button only appears after the user
       // navigates away and back.
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.ticket(ticketId) });
+      // `queryKeys.ticket` never existed — queryKeys.js defines ticketDetail/
+      // ticketActions/ticketAttachments/… but no bare `ticket`. Calling it threw
+      // `TypeError: queryKeys.ticket is not a function` HERE, as the third
+      // statement: the two invalidations above had already run, so the file
+      // list and the action list refreshed and the upload looked fine, but the
+      // handler aborted before `showToast` below. react-query does not route an
+      // onSuccess throw to onError, and handleUploadAttachment's `catch {}`
+      // swallowed the rejected mutateAsync — so a successful upload reported
+      // NOTHING to the user, and the ticket detail (whose summary drives the
+      // invoiceOnFile close gate) was never refetched.
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
       showToast('success', `แนบไฟล์ ${file.name} แล้ว`);
     },
     onError: (err) => showToast('error', err.message || 'อัปโหลดไม่สำเร็จ'),
@@ -518,7 +528,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketAttachments(ticketId) });
       // Deleting the invoice re-locks the close confirmation — same reason as upload.
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.ticket(ticketId) });
+      // Same `queryKeys.ticket` TypeError as the upload handler above — see its
+      // comment. Deleting a file silently reported nothing either.
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
       showToast('success', 'ลบไฟล์แล้ว');
     },
     onError: (err) => showToast('error', err.message || 'ลบไม่สำเร็จ'),

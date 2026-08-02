@@ -52,6 +52,11 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       },
       attachments: {
         list: vi.fn(),
+        // upload/delete were previously unmocked because nothing exercised them.
+        // The "attachment upload reports back" guard below does — see its own
+        // comment for the TypeError it exists to catch.
+        upload: vi.fn(),
+        delete: vi.fn(),
         fileUrl: (id) => `#mock-file-${id}`,
       },
       // Commit 6: PricingRequestPanel (mounted below the items table),
@@ -211,6 +216,8 @@ describe('TicketDetailPage', () => {
       availableActions: [],
     });
     api.attachments.list.mockResolvedValue({ attachments: [] });
+    api.attachments.upload.mockResolvedValue({ attachment: { id: 9, fileName: 'po.pdf' } });
+    api.attachments.delete.mockResolvedValue({});
     api.tickets.listPayments.mockResolvedValue({ items: [] });
     api.tickets.listDeliveries.mockResolvedValue({ items: [] });
     api.tickets.comment.mockResolvedValue({ ticket: buildTicket() });
@@ -1910,6 +1917,42 @@ describe('TicketDetailPage', () => {
       // The generic attachment control (PO / signed docs) must survive — this is a
       // targeted removal, not a gutting of the panel.
       expect(container.querySelector('#ticket-attachment-file')).not.toBeNull();
+    });
+
+    /**
+     * Regression guard for a bug that shipped on main: `uploadAttachmentMutation`'s
+     * onSuccess called `queryKeys.ticket(ticketId)`, which does not exist —
+     * queryKeys.js defines ticketDetail/ticketActions/ticketAttachments/… but never a
+     * bare `ticket`. It was the THIRD statement, so the attachments and actions
+     * invalidations above it had already run and the upload looked like it worked,
+     * then `TypeError: queryKeys.ticket is not a function` aborted the handler before
+     * showToast. react-query does not route an onSuccess throw to onError, and
+     * handleUploadAttachment's own `catch {}` swallowed the rejected mutateAsync — so
+     * a SUCCESSFUL upload told the user nothing at all.
+     *
+     * Both assertions matter and neither alone is sufficient: the toast covers the
+     * silence, and the detail refetch covers the real damage — ticket.summary is what
+     * drives the invoiceOnFile close gate, so without it ฝ่ายบัญชี's close confirmation
+     * stays stale until the user navigates away and back.
+     */
+    it('reports back after an attachment upload, and refetches the ticket detail', async () => {
+      const showToast = vi.fn();
+      const { container } = renderTicketDetailPage(ceoUser, showToast);
+      fireEvent.click(await screen.findByRole('tab', { name: /เอกสาร/ }));
+
+      const input = container.querySelector('#ticket-attachment-file');
+      expect(input).not.toBeNull();
+      await waitFor(() => expect(api.tickets.get).toHaveBeenCalledTimes(1));
+
+      fireEvent.change(input, {
+        target: { files: [new File(['x'], 'po.pdf', { type: 'application/pdf' })] },
+      });
+
+      await waitFor(() => expect(api.attachments.upload).toHaveBeenCalledTimes(1));
+      // Silence on success is the user-visible half of the bug.
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'แนบไฟล์ po.pdf แล้ว'));
+      // …and the stale close gate is the half that actually costs money.
+      await waitFor(() => expect(api.tickets.get.mock.calls.length).toBeGreaterThan(1));
     });
   });
 
