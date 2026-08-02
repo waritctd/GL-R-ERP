@@ -198,7 +198,7 @@ describe('PayrollPage optimistic concurrency (issue #422 follow-up)', () => {
   it('a 428 (missing If-Match) is treated the same as a 409: persistent message shown, and further autosaves stop firing', async () => {
     api.payroll.getInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [], etag: 'ETAG-LOAD-1' });
     api.payroll.saveInputDraft.mockRejectedValue(
-      conflictError(428, 'ต้องแนบ If-Match เพื่อบันทึกร่างเงินเดือน กรุณาโหลดหน้าใหม่แล้วลองอีกครั้ง'));
+      conflictError(428, 'ไม่พบข้อมูลอ้างอิงสำหรับบันทึกร่างเงินเดือน กรุณาโหลดหน้าใหม่แล้วลองอีกครั้ง'));
 
     renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 

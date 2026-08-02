@@ -5639,7 +5639,9 @@ export const api = {
     async saveInputDraft(payload = {}, { ifMatch } = {}) {
       hasRole('hr');
       if (!ifMatch) {
-        fail('ต้องแนบ If-Match เพื่อบันทึกร่างเงินเดือน กรุณาโหลดหน้าใหม่แล้วลองอีกครั้ง', 428);
+        // Mirrors PayrollService#saveInputDraft's message verbatim (Opus review NIT-8: no header
+        // name leaked to HR).
+        fail('ไม่พบข้อมูลอ้างอิงสำหรับบันทึกร่างเงินเดือน กรุณาโหลดหน้าใหม่แล้วลองอีกครั้ง', 428);
       }
       const month = payload.payrollMonth ? `${payload.payrollMonth}`.slice(0, 7) + '-01' : null;
       const existing = month

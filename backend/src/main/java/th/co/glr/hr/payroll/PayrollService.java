@@ -299,8 +299,12 @@ public class PayrollService {
             ProcessPayrollRequest request, UserPrincipal actor, String ifMatch) {
         requireRole(actor, PAYROLL_EDIT_ROLES);
         if (ifMatch == null || ifMatch.isBlank()) {
+            // Opus review finding NIT-8: this message surfaces verbatim to HR (the frontend's
+            // catch does `error.message || fallback`), so it must read as a normal Thai UI message,
+            // not leak an HTTP header name -- matches the frontend's own fallback wording (see
+            // PayrollPage.jsx's saveDraft 428 branch) rather than naming "If-Match".
             throw new ApiException(HttpStatus.PRECONDITION_REQUIRED,
-                "ต้องแนบ If-Match เพื่อบันทึกร่างเงินเดือน กรุณาโหลดหน้าใหม่แล้วลองอีกครั้ง");
+                "ไม่พบข้อมูลอ้างอิงสำหรับบันทึกร่างเงินเดือน กรุณาโหลดหน้าใหม่แล้วลองอีกครั้ง");
         }
         LocalDate month = normalizeMonth(request.payrollMonth());
         payrollRepository.lockInputDraftMonth(month);

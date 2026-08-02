@@ -93,6 +93,13 @@ public class PayrollController {
      * through to the next PUT's {@code If-Match}). PUT now REQUIRES {@code If-Match}; a missing
      * header 428s rather than being silently allowed -- see PayrollService#saveInputDraft's javadoc
      * for why. Authz is unchanged on both: GET stays hasAnyRole('HR','CEO'), PUT stays hasRole('HR').
+     *
+     * <p>{@code Cache-Control: private, no-store} (Opus review finding NEW-4, decided rather than
+     * left open): an {@code ETag} is a cache validator, and this payload is HR-typed payroll
+     * figures -- adding a validator to a sensitive response with no explicit cache directive makes
+     * browser disk-caching of it materially more likely than it was before this endpoint had an
+     * ETag at all. No other endpoint in this codebase sets {@code Cache-Control} (grep confirms
+     * zero prior hits), so this is a new pattern, not a regression against an existing one.
      */
     @GetMapping("/input-draft")
     @PreAuthorize("hasAnyRole('HR','CEO')")
@@ -100,7 +107,10 @@ public class PayrollController {
             @RequestParam String payrollMonth, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         PayrollInputDraftDtos.PayrollInputDraftResponse response = payrollService.getInputDraft(parseMonth(payrollMonth), user);
-        return ResponseEntity.ok().eTag(response.etag()).body(response);
+        return ResponseEntity.ok()
+            .eTag(response.etag())
+            .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+            .body(response);
     }
 
     @PutMapping("/input-draft")
@@ -112,7 +122,10 @@ public class PayrollController {
         UserPrincipal user = sessions.requireUser(session);
         PayrollInputDraftDtos.PayrollInputDraftResponse response =
             payrollService.saveInputDraft(normalizedRequest(request), user, ifMatch);
-        return ResponseEntity.ok().eTag(response.etag()).body(response);
+        return ResponseEntity.ok()
+            .eTag(response.etag())
+            .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+            .body(response);
     }
 
     /**
