@@ -37,3 +37,9 @@ services:
         sync: false
       - key: APP_UPLOADS_DIR
         sync: false
+      # Used by both BotFxFetchService and BotHolidayFetchService (app.bot.api-token). Neither was
+      # previously declared here, so both fetchers have been silently no-op'ing in this environment
+      # -- app.bot.api-token defaults to blank and each service logs a WARN/INFO and returns rather
+      # than throwing, so there is no error, only an unset value and a quiet skip.
+      - key: BOT_API_TOKEN
+        sync: false

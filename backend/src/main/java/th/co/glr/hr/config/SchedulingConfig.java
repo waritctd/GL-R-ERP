@@ -6,8 +6,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * Enables Spring's {@code @Scheduled} background workers (factory-quote email outbox, quotation
- * expiry sweep, attendance daily recalc, BOT FX fetch) — but <b>only outside the {@code test}
- * profile</b>.
+ * expiry sweep, attendance daily recalc, BOT FX fetch, BOT holiday fetch) — but <b>only outside
+ * the {@code test} profile</b>.
  *
  * <p>Integration tests that boot a full {@code @SpringBootTest} context point it at the same shared
  * Testcontainers Postgres the non-Spring {@code AbstractPostgresIntegrationTest} tests use. Spring
