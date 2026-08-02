@@ -1295,6 +1295,10 @@ public class PayrollService {
             // survives a reload.
             enteredDaysWorked,
             employee.payType(),
+            // V123 (defect-2 fix): the uncapped SSO wage base the calculator already computed --
+            // see PayrollLineDto#ssoWageGross's own javadoc. NOT calculation.ssoWageBase(), which
+            // stays the capped figure tax/contribution math uses, unchanged.
+            calculation.ssoWageBaseRaw(),
             // Issue #376, D-376-1 fix: the EXACT figure this run resolved and fed to
             // PayrollCalculator as garnishmentRequested -- see PayrollLineDto#legalExecutionRequested's
             // own javadoc for why this must be carried out here rather than re-derived later.
