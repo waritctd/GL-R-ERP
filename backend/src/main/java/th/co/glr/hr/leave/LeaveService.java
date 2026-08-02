@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Predicate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
@@ -168,9 +169,16 @@ public class LeaveService {
         validateEmployee(employeeId);
         LeaveTypeDto leaveType = requireLeaveType(request.leaveTypeCode());
         validateDateRange(request.startDate(), request.endDate());
-        validateSubDayTimes(request);
+        // Schedule/holiday-aware working-day counting (2026-08-03): built ONCE per submission and
+        // shared by every LeaveDayMath call below (validateSubDayTimes, computeTotalDays,
+        // totalDaysByYear) -- see LeaveRepository#workingDayPredicate's javadoc for the fixed query
+        // cost (two queries, not one per day) and LeaveDayMath's javadoc for the six-day-department/
+        // holiday defects this closes.
+        Predicate<LocalDate> isWorkingDay =
+            leaveRepository.workingDayPredicate(employeeId, request.startDate(), request.endDate());
+        validateSubDayTimes(request, leaveType.dayCountBasis(), isWorkingDay);
 
-        BigDecimal totalDays = computeTotalDays(request, leaveType);
+        BigDecimal totalDays = computeTotalDays(request, leaveType, isWorkingDay);
         int quotaYear = request.startDate().getYear();
         boolean hasAttachment = attachment != null && !attachment.isEmpty();
         // Leave -> payroll unpaid-day deduction (2026-07-23); §5 leave-rules-as-data (V116) added the
@@ -191,8 +199,8 @@ public class LeaveService {
         // figures are computed INDEPENDENTLY against that year's own quota and paid_days_cap; see
         // LeaveQuotaYearSplit's Javadoc for the deliberate consequence of that design (a boundary-
         // straddling request can receive more total paid days than a same-year one would).
-        Map<Integer, BigDecimal> requestedDaysByYear =
-            LeaveDayMath.totalDaysByYear(request.startDate(), request.endDate(), totalDays, leaveType.dayCountBasis());
+        Map<Integer, BigDecimal> requestedDaysByYear = LeaveDayMath.totalDaysByYear(
+            request.startDate(), request.endDate(), totalDays, leaveType.dayCountBasis(), isWorkingDay);
         List<LeaveQuotaYearSplit> quotaYearSplits = new ArrayList<>();
         BigDecimal paidDays = BigDecimal.ZERO;
         BigDecimal unpaidDays = BigDecimal.ZERO;
@@ -433,8 +441,14 @@ public class LeaveService {
             .map(LeaveTypeDto::dayCountBasis)
             .orElse(LeaveDayCountBasis.WORKING_DAYS);
         List<LeaveQuotaYearSplit> quotaYearSplits = leaveRepository.findQuotaYearSplits(cancelled.id());
+        // Schedule/holiday-aware working-day counting (2026-08-03): same reasoning as #submit --
+        // the reversal must use the SAME per-employee working-day predicate that granted the
+        // request, or the recomputed unpaid-by-month figures would not match what was actually
+        // deducted (mirrors the basis decision in the comment above, one paragraph up).
+        Predicate<LocalDate> isWorkingDay = leaveRepository.workingDayPredicate(
+            cancelled.employeeId(), cancelled.startDate(), cancelled.endDate());
         Map<LocalDate, BigDecimal> unpaidByMonth = LeaveDayMath.unpaidWorkingDaysByMonthAcrossYears(
-            cancelled.startDate(), cancelled.endDate(), quotaYearSplits, basis);
+            cancelled.startDate(), cancelled.endDate(), quotaYearSplits, basis, isWorkingDay);
         if (unpaidByMonth.isEmpty()) {
             return;
         }
@@ -719,11 +733,21 @@ public class LeaveService {
         // §5.2 "not more than 3 consecutive days" (PERSONAL, pre-2567/pre-V120 wording -- superseded,
         // see the first-year total-days cap above) and any other type given a
         // max_consecutive_days cap. DECISION: "consecutive" is counted in CALENDAR days (end - start +
-        // 1 inclusive), not working days -- LeaveDayMath's Mon-Fri-only counting is explicitly out of
-        // scope for this branch (see CLAUDE.md), and a calendar-day span is the natural reading of "3
-        // days in a row" for a short request that, by definition, rarely crosses a weekend anyway. A
-        // sub-day request is always single-day (start_date = end_date, enforced by
-        // validateSubDayTimes), so this never conflicts with the sub-day feature.
+        // 1 inclusive), not working days -- a calendar-day span is the natural reading of "3 days in
+        // a row" for a short request that, by definition, rarely crosses a weekend anyway. A sub-day
+        // request is always single-day (start_date = end_date, enforced by validateSubDayTimes), so
+        // this never conflicts with the sub-day feature.
+        //
+        // RECONFIRMED, not merely carried over (2026-08-03): LeaveDayMath is now schedule/holiday-
+        // aware (see its javadoc), so switching this to true working days is technically possible in
+        // this branch -- but was deliberately NOT done here. This check is a request-SHAPE limit ("do
+        // not take more than N days in one go"), not a pay-eligibility count, and it is a MAXIMUM:
+        // switching to a working-day count would, if anything, LOOSEN it (a calendar span that
+        // crosses a weekend/holiday would newly fit under the same numeric cap, since those days
+        // would stop counting toward the limit) -- the opposite direction of the advance-notice
+        // decision below, but still an unrequested behaviour change with no business ask driving it.
+        // Left on calendar days; flagged as a separate, explicit follow-up decision if the business
+        // actually wants it.
         if (leaveType.maxConsecutiveDays() != null) {
             long spanDays = ChronoUnit.DAYS.between(startDate, endDate) + 1;
             if (BigDecimal.valueOf(spanDays).compareTo(leaveType.maxConsecutiveDays()) > 0) {
@@ -738,11 +762,23 @@ public class LeaveService {
 
         // §5 advance notice, now per-type (hr.leave_type.advance_notice_days) instead of the removed
         // global app.leave.advance-notice-days property. DECISION: counted in CALENDAR days, not
-        // working days -- same reasoning and same out-of-LeaveDayMath-scope boundary as the
-        // consecutive-days check above; this is an unchanged behaviour carried over from the original
-        // global-property version, which also compared plain calendar dates. A type with
-        // advanceNoticeDays == 0 (SICK, MATERNITY, MILITARY, LEAVE_WITHOUT_PAY as seeded) skips this
-        // check entirely, matching the old code's unconditional SICK exemption.
+        // working days; this is an unchanged behaviour carried over from the original global-property
+        // version, which also compared plain calendar dates. A type with advanceNoticeDays == 0
+        // (SICK, MATERNITY, MILITARY, LEAVE_WITHOUT_PAY as seeded) skips this check entirely, matching
+        // the old code's unconditional SICK exemption.
+        //
+        // RECONFIRMED, not merely carried over (2026-08-03): V116 called this calendar-day counting a
+        // deliberate STOPGAP specifically because working-day counting was not available yet ("§5.2 =
+        // 1 working day, §5.3 = 3 working days" in the source announcement). It is available now --
+        // LeaveDayMath is schedule/holiday-aware (see its javadoc) -- but this branch deliberately does
+        // NOT convert this check, for the opposite reason from the consecutive-days check above: this
+        // is a MINIMUM lead-time requirement, so switching to a true working-day count would TIGHTEN
+        // it whenever the gap between filing and the start date crosses a weekend/holiday (those days
+        // would stop counting toward the required notice, so a request that clears today's calendar-
+        // day check could newly be rejected). That is a real, employee-facing behaviour change with
+        // its own blast radius -- it belongs in its own reviewed change with its own tests, not folded
+        // silently into a branch whose stated purpose is the payroll deduction/day-count fix. Left on
+        // calendar days here; flagged as a separate, explicit follow-up decision.
         int noticeDays = Math.max(0, leaveType.advanceNoticeDays());
         if (noticeDays > 0) {
             LocalDate earliestAllowed = LocalDate.now(clock).plusDays(noticeDays);
@@ -843,8 +879,8 @@ public class LeaveService {
         }
     }
 
-    private BigDecimal workingDaysBetween(LocalDate startDate, LocalDate endDate) {
-        int days = LeaveDayMath.countWorkingDays(startDate, endDate);
+    private BigDecimal workingDaysBetween(LocalDate startDate, LocalDate endDate, Predicate<LocalDate> isWorkingDay) {
+        int days = LeaveDayMath.countWorkingDays(startDate, endDate, isWorkingDay);
         if (days <= 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน");
         }
@@ -861,13 +897,19 @@ public class LeaveService {
      * branch is basis-independent by construction: sub-day leave is always single-day (start_date ==
      * end_date, enforced by {@link #validateSubDayTimes}), so "which days count" never arises -- the
      * one date in question always counts, under either basis.
+     *
+     * <p>{@code isWorkingDay} (2026-08-03): the schedule/holiday-aware predicate built once in
+     * {@link #submit}, only read by the WORKING_DAYS branch below (via {@link #workingDaysBetween})
+     * -- the CALENDAR_DAYS (MATERNITY) branch never touches it, unchanged from before this predicate
+     * existed.
      */
-    private BigDecimal computeTotalDays(SubmitLeaveRequest request, LeaveTypeDto leaveType) {
+    private BigDecimal computeTotalDays(
+            SubmitLeaveRequest request, LeaveTypeDto leaveType, Predicate<LocalDate> isWorkingDay) {
         if (request.startTime() == null) {
             if (leaveType.dayCountBasis() == LeaveDayCountBasis.CALENDAR_DAYS) {
                 return BigDecimal.valueOf(LeaveDayMath.countCalendarDays(request.startDate(), request.endDate()));
             }
-            return workingDaysBetween(request.startDate(), request.endDate());
+            return workingDaysBetween(request.startDate(), request.endDate(), isWorkingDay);
         }
         long minutes = Duration.between(request.startTime(), request.endTime()).toMinutes();
         BigDecimal fraction = BigDecimal.valueOf(minutes)
@@ -882,8 +924,19 @@ public class LeaveService {
      * a clearer 400 before the DB constraint would ever fire. The weekday check matters: without it a
      * Saturday/Sunday half-day would be accepted (and could produce a payroll deduction for a
      * non-working day) while the identical whole-day request is rejected by workingDaysBetween.
+     *
+     * <p>Schedule/holiday-aware working-day counting (2026-08-03): the "must be a working day" check
+     * now uses the schedule/holiday-aware {@code isWorkingDay} predicate (a warehouse employee's
+     * Saturday sub-day request is now valid), and applies ONLY to {@code WORKING_DAYS}-basis types
+     * -- gated on {@code basis} so a CALENDAR_DAYS (MATERNITY) sub-day request is never rejected for
+     * landing on a non-working day, matching how CALENDAR_DAYS never filters days anywhere else in
+     * this class. Skipping this gate for CALENDAR_DAYS is a deliberate decision, not an oversight:
+     * without it, a sub-day MATERNITY request landing on a public holiday would go from "allowed"
+     * (today, holiday-blind) to "rejected" (this branch's holiday awareness applied everywhere) --
+     * exactly the "double-handling" MATERNITY must not receive, per LeaveDayCountBasis's javadoc.
      */
-    private void validateSubDayTimes(SubmitLeaveRequest request) {
+    private void validateSubDayTimes(
+            SubmitLeaveRequest request, LeaveDayCountBasis basis, Predicate<LocalDate> isWorkingDay) {
         LocalTime startTime = request.startTime();
         LocalTime endTime = request.endTime();
         if (startTime == null && endTime == null) {
@@ -895,7 +948,8 @@ public class LeaveService {
         if (!request.startDate().equals(request.endDate())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "การลาแบบระบุช่วงเวลาต้องเริ่มต้นและสิ้นสุดในวันเดียวกัน");
         }
-        if (LeaveDayMath.countWorkingDays(request.startDate(), request.startDate()) == 0) {
+        if (basis == LeaveDayCountBasis.WORKING_DAYS
+                && LeaveDayMath.countWorkingDays(request.startDate(), request.startDate(), isWorkingDay) == 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน");
         }
         if (!endTime.isAfter(startTime)) {
