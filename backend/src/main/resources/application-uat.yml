@@ -35,39 +35,38 @@ spring:
     # UAT DB takes the out-of-order path.
     out-of-order: true
 
-# Email transport — UAT sends over REAL authenticated SMTP (SmtpMailer) rather than the Resend HTTP
-# API it used to run on, so staging exercises the same transport an on-prem install will.
+# Email transport — UAT sends via the Resend HTTP API (ResendMailer), NOT SMTP.
 #
-# Only the two values that actually DIFFER from application.yml are set here. Everything else
-# (from, override-to, subject-prefix, smtp.port/username/password/starttls) is ALREADY declared in
-# application.yml bound to its own APP_MAIL_* env var, so re-declaring it here would be a silent
-# duplicate that drifts — set those on the Render dashboard, not in this file.
+# ⛔ DO NOT switch this to `smtp`. Render blocks outbound SMTP from this service, and it has now been
+# confirmed live TWICE — most recently 2026-08-02 on plan `starter` with real Gmail credentials:
 #
-# ⚠️ APP_MAIL_FROM must be set on the dashboard to the authenticated SMTP account. Gmail rewrites or
-# rejects a From the account does not own, and application.yml's default is Resend's sandbox sender
-# (onboarding@resend.dev) — wrong for any SMTP deployment. Deliberately NOT defaulted here: this
-# file is loaded whenever the uat profile is active, including while provider is still `resend`, so
-# a from: default here would break Resend sends (unverified domain -> 403) on the next code push,
-# before anyone touches the dashboard.
+#     MailConnectException: Couldn't connect to host, port: smtp.gmail.com, 587; timeout -1
+#     java.net.ConnectException: Connection timed out
 #
-# ⚠️ RENDER EGRESS: gl-r-erp-uat runs on Render (plan: starter), where outbound SMTP was previously
-# observed to fail (MailConnectException/timeout to smtp.gmail.com:587) — the original reason this
-# stack went to Resend at all. If sends time out, that block is the cause, not this config: try
-# APP_MAIL_SMTP_PORT=465 with APP_MAIL_SMTP_STARTTLS=false, else use a relay on a non-blocked port,
-# or set APP_MAIL_PROVIDER=resend to roll back. Nothing in this file can work around it.
+# That is a TCP connect timeout, not an auth failure: the socket never opens, so credentials are
+# never reached and no username/password/App Password can fix it. Ports 25, 465 and 587 are all
+# blocked, and Gmail offers no other submission port (no 2525), so there is no port to fall back to
+# — Gmail-over-SMTP from Render is not achievable by configuration. The alternatives, if this ever
+# needs revisiting: an SMTP relay that offers port 2525 (Brevo/SendGrid/Mailgun), the Gmail API over
+# HTTPS on 443 (needs OAuth2 and a new Mailer implementation), or moving the service off Render.
+#
+# This restriction is specific to the HOST, not to SmtpMailer, which is verified working (a local
+# Mailpit run captured a correct From/To/subject over a real SMTP conversation). The on-prem
+# deployment uses provider=smtp and is unaffected by any of the above.
+#
+# Pinning `resend` here rather than relying solely on the Render dashboard is deliberate: the
+# repo-wide default in application.yml is `log`, so a dashboard value that is deleted or mistyped
+# would silently downgrade UAT to sending nothing while every log line still reads "email sent".
+#
+# ⚠️ app.mail.from is deliberately NOT set here. Resend's account is not domain-verified, so it can
+# only send as its sandbox sender (application.yml's onboarding@resend.dev default) and only TO the
+# Resend account's own address — which is why APP_MAIL_OVERRIDE_TO must stay pointed at that
+# address. Setting APP_MAIL_FROM to anything else returns 403 domain-not-verified, and
+# NotificationEmailService swallows send failures, so it fails SILENTLY.
 #
 # ⚠️ APP_MAIL_OVERRIDE_TO redirects NOTIFICATION mail to one test inbox, but FactoryEmailService
 # does NOT honour it — factory-quote mail goes to sales.factory_config.email as stored. V911 seeds
-# those @uat.glr so nothing escapes; keep it that way. An unverified Resend account was a second
-# containment layer, and real SMTP removes it.
+# those @uat.glr so nothing escapes; keep it that way.
 app:
   mail:
-    # `smtp` selects SmtpMailer. NOTE: this default applies only when APP_MAIL_PROVIDER is UNSET —
-    # the Render dashboard still carries APP_MAIL_PROVIDER=resend from the old transport, and a
-    # dashboard value wins, so it must be changed to `smtp` there or this switch does nothing.
-    provider: ${APP_MAIL_PROVIDER:smtp}
-    smtp:
-      # application.yml defaults this to empty, so SmtpMailer refuses to start on a blank host —
-      # that guard is what stops a mis-set on-prem deploy from silently sending nowhere. UAT's
-      # relay is Gmail.
-      host: ${APP_MAIL_SMTP_HOST:smtp.gmail.com}
+    provider: ${APP_MAIL_PROVIDER:resend}

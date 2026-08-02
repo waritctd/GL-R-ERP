@@ -87,34 +87,31 @@ services:
         sync: false
       - key: APP_ATTENDANCE_AGENT_TOKEN
         sync: false
-      # Email transport = real authenticated SMTP (SmtpMailer), replacing the Resend HTTP API this
-      # stack used to run on. NOTE: the gl-r-erp (demo) service above sets no mail vars at all, so
-      # it stays on application.yml's `log` default — this is a UAT-only transport, not prod parity.
+      # Email transport = Resend HTTP API. NOTE: the gl-r-erp (demo) service above sets no mail vars
+      # at all, so it stays on application.yml's `log` default — mail here is UAT-only.
       #
-      # ⚠️ Render was previously observed to block outbound SMTP (25/465/587) on free/starter web
-      # services — MailConnectException/timeout to smtp.gmail.com:587 — which is why this was on
-      # Resend in the first place. If sends time out after this deploy, that egress block is the
-      # cause, not the config: try APP_MAIL_SMTP_PORT=465 + APP_MAIL_SMTP_STARTTLS=false, and
-      # failing that use a relay on a non-blocked port or revert APP_MAIL_PROVIDER to `resend`.
+      # ⛔ DO NOT set this to `smtp`. Render blocks outbound SMTP from this service — confirmed live
+      # twice, most recently 2026-08-02 on plan `starter` with real Gmail credentials:
+      #   MailConnectException: Couldn't connect to host, port: smtp.gmail.com, 587; timeout -1
+      # A TCP connect timeout, not an auth failure: ports 25/465/587 are all blocked and Gmail has no
+      # other submission port, so no credential or port change can make Gmail-over-SMTP work here.
+      # Alternatives if revisited: a relay offering port 2525 (Brevo/SendGrid/Mailgun), the Gmail API
+      # over HTTPS/443 (needs OAuth2 + a new Mailer), or moving off Render. On-prem is unaffected —
+      # it uses provider=smtp and has no such block.
       #
       # ⚠️ Render does NOT apply changed `value:` env vars from a plain code push, and IGNORES
-      # `sync: false` keys entirely on a blueprint update — so every key in this block is
-      # documentation of what an operator must set by hand on the dashboard, not provisioning.
-      # APP_MAIL_PROVIDER in particular still reads `resend` there and must be flipped to `smtp`
-      # (or deleted, letting application-uat.yml's `smtp` default apply), or nothing changes.
+      # `sync: false` keys entirely on a blueprint update — so every key here is documentation of
+      # what an operator sets by hand on the dashboard, not provisioning.
       - key: APP_MAIL_PROVIDER
-        value: smtp
-      # Credentials for the sending mailbox. Gmail requires an App Password (2-Step Verification
-      # on the account); its ordinary password is rejected with 535.
-      - key: APP_MAIL_SMTP_USERNAME
+        value: resend
+      - key: APP_MAIL_RESEND_API_KEY
         sync: false
-      - key: APP_MAIL_SMTP_PASSWORD
-        sync: false
-      # REQUIRED, not optional: application.yml defaults app.mail.from to Resend's sandbox sender
-      # (onboarding@resend.dev), which Gmail will rewrite or reject because the authenticated
-      # account does not own it. Set this to the APP_MAIL_SMTP_USERNAME address.
-      - key: APP_MAIL_FROM
-        sync: false
-      # APP_MAIL_SMTP_PORT/STARTTLS are left to application.yml's 587 + STARTTLS defaults.
+      # ⚠️ Do NOT set APP_MAIL_FROM. The Resend account is not domain-verified, so it may only send
+      # as the sandbox sender (application.yml's onboarding@resend.dev) and only TO the Resend
+      # account's own address — which is what APP_MAIL_OVERRIDE_TO above must stay pointed at. Any
+      # other From returns 403 domain-not-verified, and NotificationEmailService swallows send
+      # failures, so it fails SILENTLY. Revisit only once glr.co.th is verified in Resend.
+      #
+      # APP_MAIL_SMTP_* are unused on this service; delete any that were set during the SMTP attempt.
       - key: APP_UPLOADS_DIR
         sync: false
