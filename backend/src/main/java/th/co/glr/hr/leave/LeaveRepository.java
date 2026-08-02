@@ -3,27 +3,108 @@ package th.co.glr.hr.leave;
 import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.Collection;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.attendance.schedule.HolidayCalendar;
+import th.co.glr.hr.attendance.schedule.WorkSchedule;
+import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
 
 @Repository
 public class LeaveRepository {
-    private final NamedParameterJdbcTemplate jdbc;
+    // Legacy fallback (2026-08-03): the hardcoded Mon-Fri/no-holiday assumption LeaveDayMath used
+    // to carry everywhere, now scoped to ONLY the 1-arg constructor below -- see that constructor's
+    // javadoc. Built through the SAME WorkScheduleResolver/HolidayCalendar interfaces the real
+    // schedule/holiday-aware path uses, so #workingDayPredicate needs no legacy-vs-real branch.
+    private static final WorkSchedule LEGACY_MON_FRI_SCHEDULE = new WorkSchedule(
+        ZoneId.of("Asia/Bangkok"), LocalTime.of(8, 30), LocalTime.of(17, 30), 5,
+        EnumSet.of(DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY, DayOfWeek.THURSDAY, DayOfWeek.FRIDAY));
+    private static final WorkScheduleResolver LEGACY_SCHEDULE_RESOLVER =
+        (employeeId, divisionId, departmentId, workDate) -> LEGACY_MON_FRI_SCHEDULE;
+    private static final HolidayCalendar LEGACY_NO_HOLIDAYS = new HolidayCalendar() {
+        @Override
+        public boolean isHoliday(LocalDate date) {
+            return false;
+        }
 
+        @Override
+        public Set<LocalDate> holidaysBetween(LocalDate fromDate, LocalDate toDate) {
+            return Set.of();
+        }
+    };
+
+    private final NamedParameterJdbcTemplate jdbc;
+    private final WorkScheduleResolver scheduleResolver;
+    private final HolidayCalendar holidayCalendar;
+
+    /**
+     * Test-convenience overload (2026-08-03): defaults to {@link #LEGACY_SCHEDULE_RESOLVER}/
+     * {@link #LEGACY_NO_HOLIDAYS} -- Mon-Fri counts as working, no date is ever a holiday, exactly
+     * {@code LeaveDayMath}'s pre-schedule-aware behaviour. This exists ONLY so the ~30 payroll/leave
+     * integration tests that construct {@code new LeaveRepository(jdbc)} directly (they need SOME
+     * working repository to satisfy PayrollService/LeaveService's constructor, but do not exercise
+     * six-day-schedule or holiday day-counting) are not forced into an unrelated diff. Production
+     * wiring always goes through the schedule-aware constructor below via Spring DI (note the single
+     * {@code @Autowired} there) -- see CLAUDE.md's note on Spring only auto-selecting a constructor
+     * when exactly one candidate is annotated.
+     */
     public LeaveRepository(NamedParameterJdbcTemplate jdbc) {
+        this(jdbc, LEGACY_SCHEDULE_RESOLVER, LEGACY_NO_HOLIDAYS);
+    }
+
+    @Autowired
+    public LeaveRepository(NamedParameterJdbcTemplate jdbc, WorkScheduleResolver scheduleResolver,
+            HolidayCalendar holidayCalendar) {
         this.jdbc = jdbc;
+        this.scheduleResolver = scheduleResolver;
+        this.holidayCalendar = holidayCalendar;
+    }
+
+    /**
+     * Schedule/holiday-aware "is this date a working day for this employee" predicate (2026-08-03)
+     * -- see {@code LeaveDayMath}'s javadoc for the six-day-department and holiday defects this
+     * closes. {@code LeaveService#submit}/{@code #cancel} call this ONCE per request (not per day)
+     * to build the predicate every {@code LeaveDayMath} day-counting call for that request then
+     * shares. Costs exactly two queries regardless of the range's length: the employee's
+     * division/department (for schedule resolution) and the range's holidays, both batch reads --
+     * see {@link LeaveDayMath#workingDayPredicate} for why per-date schedule resolution beyond that
+     * is free (no further query).
+     */
+    public Predicate<LocalDate> workingDayPredicate(long employeeId, LocalDate fromDate, LocalDate toDate) {
+        EmployeeScheduleContext context = findScheduleContext(employeeId);
+        Set<LocalDate> holidays = holidayCalendar.holidaysBetween(fromDate, toDate);
+        return LeaveDayMath.workingDayPredicate(
+            scheduleResolver, employeeId, context.divisionId(), context.departmentId(), holidays);
+    }
+
+    private EmployeeScheduleContext findScheduleContext(long employeeId) {
+        List<EmployeeScheduleContext> rows = jdbc.query("""
+            SELECT division_id, department_id
+              FROM hr.employee
+             WHERE employee_id = :employeeId
+            """, Map.of("employeeId", employeeId),
+            (rs, rowNum) -> new EmployeeScheduleContext(
+                nullableLong(rs, "division_id"), nullableLong(rs, "department_id")));
+        return rows.isEmpty() ? new EmployeeScheduleContext(null, null) : rows.get(0);
+    }
+
+    private record EmployeeScheduleContext(Long divisionId, Long departmentId) {
     }
 
     public boolean employeeExists(long employeeId) {
@@ -349,18 +430,28 @@ public class LeaveRepository {
      * counted as consumed leave, breaking the {@code paidDays + unpaidDays == totalDays} invariant
      * this method's ranking logic depends on. For every WORKING_DAYS type (everything except
      * MATERNITY) this is byte-identical to the pre-V119 behaviour.
+     *
+     * <p>Schedule/holiday-aware working-day counting (2026-08-03): also joins {@code hr.employee}
+     * for {@code division_id}/{@code department_id} (schedule resolution) and batch-loads the
+     * MONTH's holidays ONCE via {@code holidayCalendar.holidaysBetween} -- not once per span, and
+     * definitely not once per day -- then builds one {@link LeaveDayMath#workingDayPredicate} per
+     * span from that employee's own division/department. A WORKING_DAYS-basis span for a
+     * {@code OPS_6D} (six-day) employee now correctly counts an unpaid Saturday inside it; a span
+     * overlapping a seeded {@code hr.holiday} row no longer counts that date at all, for any
+     * employee. MATERNITY (CALENDAR_DAYS) is unaffected -- see {@link LeaveDayCountBasis}.
      */
     public Map<Long, BigDecimal> findUnpaidLeaveDaysByEmployeeForMonth(LocalDate monthStart) {
         LocalDate monthEndInclusive = monthStart.plusMonths(1).minusDays(1);
         int year = monthStart.getYear();
         List<UnpaidLeaveSpan> spans = jdbc.query("""
             SELECT lr.employee_id, lr.start_date, lr.end_date, lrqy.paid_days, lrqy.total_days,
-                   lt.day_count_basis
+                   lt.day_count_basis, e.division_id, e.department_id
               FROM hr.leave_request lr
               JOIN hr.leave_request_quota_year lrqy
                 ON lrqy.leave_request_id = lr.leave_request_id
                AND lrqy.quota_year = :year
               JOIN hr.leave_type lt ON lt.leave_type_code = lr.leave_type_code
+              JOIN hr.employee e ON e.employee_id = lr.employee_id
              WHERE lr.status = 'APPROVED'
                AND lrqy.unpaid_days > 0
                AND lr.start_date <= :monthEndInclusive
@@ -376,8 +467,15 @@ public class LeaveRepository {
                 rs.getObject("end_date", LocalDate.class),
                 rs.getObject("paid_days", BigDecimal.class),
                 rs.getObject("total_days", BigDecimal.class),
-                LeaveDayCountBasis.valueOf(rs.getString("day_count_basis"))
+                LeaveDayCountBasis.valueOf(rs.getString("day_count_basis")),
+                nullableLong(rs, "division_id"),
+                nullableLong(rs, "department_id")
             ));
+
+        // One holiday read for the WHOLE month, shared by every span/employee below -- see this
+        // method's javadoc. A payroll month is at most 31 days, so this is one bounded query no
+        // matter how many employees have an unpaid span inside it.
+        Set<LocalDate> holidaysThisMonth = holidayCalendar.holidaysBetween(monthStart, monthEndInclusive);
 
         Map<Long, BigDecimal> byEmployee = new LinkedHashMap<>();
         for (UnpaidLeaveSpan span : spans) {
@@ -385,10 +483,13 @@ public class LeaveRepository {
             if (clipped == null) {
                 continue;
             }
+            Predicate<LocalDate> isWorkingDay = LeaveDayMath.workingDayPredicate(
+                scheduleResolver, span.employeeId(), span.divisionId(), span.departmentId(), holidaysThisMonth);
             // Sub-day leave (2026-07-25): reads the BigDecimal LeaveDayMath computes directly --
             // no more setScale(0, DOWN) floor, which used to discard a sub-day fraction entirely.
             BigDecimal unpaidInMonth = LeaveDayMath
-                .unpaidWorkingDaysByMonth(clipped[0], clipped[1], span.paidDays(), span.totalDays(), span.basis())
+                .unpaidWorkingDaysByMonth(
+                    clipped[0], clipped[1], span.paidDays(), span.totalDays(), span.basis(), isWorkingDay)
                 .get(monthStart);
             if (unpaidInMonth != null && unpaidInMonth.signum() > 0) {
                 byEmployee.merge(span.employeeId(), unpaidInMonth, BigDecimal::add);
@@ -511,7 +612,7 @@ public class LeaveRepository {
 
     private record UnpaidLeaveSpan(
         long employeeId, LocalDate startDate, LocalDate endDate, BigDecimal paidDays, BigDecimal totalDays,
-        LeaveDayCountBasis basis) {
+        LeaveDayCountBasis basis, Long divisionId, Long departmentId) {
     }
 
     public long create(

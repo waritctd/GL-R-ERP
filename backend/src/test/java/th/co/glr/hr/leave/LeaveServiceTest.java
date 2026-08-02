@@ -21,6 +21,7 @@ import java.time.ZoneId;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Predicate;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
@@ -43,6 +44,18 @@ class LeaveServiceTest {
     private final LeaveService leaveService = new LeaveService(
         leaveRepository, leaveAttachments, fileStorage, auditService, notificationService,
         Clock.fixed(FIXED_NOW, BUSINESS_ZONE));
+
+    {
+        // Schedule/holiday-aware working-day counting (2026-08-03): LeaveService now asks
+        // leaveRepository.workingDayPredicate(...) for a per-request "is this date a working day"
+        // predicate instead of assuming Mon-Fri itself -- see LeaveRepository/LeaveDayMath's javadoc.
+        // Default every test to the pre-existing Mon-Fri/no-holiday behaviour (LeaveDayMath's own
+        // legacy predicate) so the 30+ tests below that do not care about six-day-schedule or holiday
+        // nuances keep testing exactly what they tested before. Tests THAT do care (see the
+        // "schedule/holiday-aware" section near the bottom of this file) re-stub this per test.
+        when(leaveRepository.workingDayPredicate(anyLong(), any(), any()))
+            .thenReturn(LeaveDayMath::isWorkingDay);
+    }
 
     @Test
     void submitAutoApprovesWhenQuotaAndAdvanceNoticeAreSatisfied() {
@@ -1243,6 +1256,130 @@ class LeaveServiceTest {
             any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
             eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(paidDays.getValue()).isEqualByComparingTo("4.00");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Schedule/holiday-aware working-day counting (2026-08-03): LeaveService now builds its
+    // isWorkingDay predicate via leaveRepository.workingDayPredicate(...) instead of assuming
+    // Mon-Fri itself. These tests override this file's default (Mon-Fri/no-holiday) stub per test to
+    // prove the predicate genuinely drives #submit's day counts -- LeaveScheduleHolidayAwareIntegrationTest
+    // proves the same thing through the real repository/SQL, which these Mockito-level tests cannot.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void submitCountsASaturdayAsAWorkingDayWhenTheWorkingDayPredicateSaysSo() {
+        // Mon 2026-07-13 .. Sat 2026-07-18: simulates an OPS_6D (six-day) employee by stubbing a
+        // predicate that treats every day except Sunday as a working day.
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "LEAVE_WITHOUT_PAY", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-18"),
+            "Six-day schedule test");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("LEAVE_WITHOUT_PAY")).thenReturn(Optional.of(leaveWithoutPayType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("LEAVE_WITHOUT_PAY"), eq(2026), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.sumPaidDays(eq(10L), eq("LEAVE_WITHOUT_PAY"), eq(2026), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.workingDayPredicate(eq(10L), eq(request.startDate()), eq(request.endDate())))
+            .thenReturn(date -> date.getDayOfWeek() != java.time.DayOfWeek.SUNDAY);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(300L);
+        when(leaveRepository.findById(300L)).thenReturn(Optional.of(
+            requestDto(300L, 10L, "APPROVED", request.startDate(), request.endDate(), "0.00", "6.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+        ArgumentCaptor<BigDecimal> totalDays = ArgumentCaptor.forClass(BigDecimal.class);
+        ArgumentCaptor<BigDecimal> unpaidDays = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), totalDays.capture(), eq(BigDecimal.ZERO),
+            unpaidDays.capture(), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(totalDays.getValue()).as("Mon-Sat all count under the six-day predicate").isEqualByComparingTo("6.00");
+        assertThat(unpaidDays.getValue()).isEqualByComparingTo("6.00");
+    }
+
+    @Test
+    void submitExcludesASeededHolidayFromTheDayCountViaThePredicate() {
+        // Mon 2026-07-13 .. Tue 2026-07-14: simulates a seeded hr.holiday row on the Tuesday by
+        // stubbing a predicate that excludes that one date specifically -- Monday still counts,
+        // proving the exclusion is scoped to the one date, not "nothing counts".
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "LEAVE_WITHOUT_PAY", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"),
+            "Holiday-in-range test");
+        LocalDate seededHoliday = LocalDate.parse("2026-07-14");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("LEAVE_WITHOUT_PAY")).thenReturn(Optional.of(leaveWithoutPayType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("LEAVE_WITHOUT_PAY"), eq(2026), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.sumPaidDays(eq(10L), eq("LEAVE_WITHOUT_PAY"), eq(2026), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.workingDayPredicate(eq(10L), eq(request.startDate()), eq(request.endDate())))
+            .thenReturn(date -> !date.equals(seededHoliday));
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(301L);
+        when(leaveRepository.findById(301L)).thenReturn(Optional.of(
+            requestDto(301L, 10L, "APPROVED", request.startDate(), request.endDate(), "0.00", "1.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+        ArgumentCaptor<BigDecimal> totalDays = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), totalDays.capture(), eq(BigDecimal.ZERO),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(totalDays.getValue()).as("Monday counts, the holiday-stubbed Tuesday does not").isEqualByComparingTo("1.00");
+    }
+
+    @Test
+    void submitAllowsASubDayMaternityRequestOnADateThePredicateMarksNonWorkingButRejectsTheSameForAWorkingDaysType() {
+        // The double-handling guard, at the LeaveService/mock level (LeaveDayMathTest and
+        // LeaveScheduleHolidayAwareIntegrationTest cover the same guard at the pure-math and
+        // real-Postgres levels respectively): a predicate that marks the ONE date in range as
+        // non-working must reject a WORKING_DAYS sub-day request there, but must NOT reject the
+        // identical sub-day shape for a CALENDAR_DAYS (MATERNITY) type -- see
+        // LeaveService#validateSubDayTimes's basis gate.
+        LocalDate nonWorkingDate = LocalDate.parse("2026-07-13");
+        Predicate<LocalDate> alwaysNonWorking = date -> false;
+
+        SubmitLeaveRequest maternitySubDay = new SubmitLeaveRequest(
+            null, "MATERNITY", nonWorkingDate, nonWorkingDate, "Sub-day maternity",
+            LocalTime.of(8, 30), LocalTime.of(12, 30), null, null, null, null, null);
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("MATERNITY")).thenReturn(Optional.of(maternityType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("MATERNITY"), eq(2026), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.sumPaidDays(eq(10L), eq("MATERNITY"), eq(2026), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.workingDayPredicate(eq(10L), eq(nonWorkingDate), eq(nonWorkingDate)))
+            .thenReturn(alwaysNonWorking);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(maternitySubDay), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(302L);
+        when(leaveRepository.findById(302L)).thenReturn(Optional.of(
+            requestDto(302L, 10L, "APPROVED", nonWorkingDate, nonWorkingDate, "0.50", "0.00")));
+
+        LeaveRequestDto maternityResult = leaveService.submit(maternitySubDay, user("employee", 10L));
+        assertThat(maternityResult.status())
+            .as("CALENDAR_DAYS (MATERNITY) must not be rejected by the WORKING_DAYS-only gate")
+            .isEqualTo("APPROVED");
+
+        SubmitLeaveRequest vacationSubDay = new SubmitLeaveRequest(
+            null, "VACATION", nonWorkingDate, nonWorkingDate, "Sub-day vacation",
+            LocalTime.of(8, 30), LocalTime.of(12, 30), null, null, null, null, null);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.workingDayPredicate(eq(10L), eq(nonWorkingDate), eq(nonWorkingDate)))
+            .thenReturn(alwaysNonWorking);
+
+        assertThatThrownBy(() -> leaveService.submit(vacationSubDay, user("employee", 10L)))
+            .as("WORKING_DAYS (VACATION) on the SAME non-working date must still be rejected")
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.BAD_REQUEST);
     }
 
     private SubmitLeaveRequest validSubmit(Long employeeId) {
