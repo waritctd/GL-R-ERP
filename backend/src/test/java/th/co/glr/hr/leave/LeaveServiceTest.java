@@ -1112,7 +1112,7 @@ class LeaveServiceTest {
         // against real dates in LeaveTypeRuleIntegrationTest.
         LeaveTypeDto cappedType = new LeaveTypeDto("VACATION", "Vacation", "Vacation leave",
             new BigDecimal("10.00"), false, new BigDecimal("4.00"), 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null,
-            null, 0, null);
+            null, 0, null, false);
         // Mon 2026-07-13 .. Mon 2026-07-20: working days 13,14,15,16,17,20 = 6 working days.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-20"), "Capped leave test");
@@ -1147,7 +1147,7 @@ class LeaveServiceTest {
         // not bind, and the result must be identical to the uncapped (quota-only) behaviour.
         LeaveTypeDto cappedType = new LeaveTypeDto("VACATION", "Vacation", "Vacation leave",
             new BigDecimal("10.00"), false, new BigDecimal("9.00"), 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null,
-            null, 0, null);
+            null, 0, null, false);
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-20"), "Capped leave test");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -2195,7 +2195,7 @@ class LeaveServiceTest {
         // LeaveTypeDto with proratedFirstYear=true explicitly rather than making every existing
         // VACATION test in this class newly depend on a stubbed hire date.
         return new LeaveTypeDto("VACATION", "Vacation", "Vacation leave", new BigDecimal("6.00"), false,
-            null, 7, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null);
+            null, 7, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null, false);
     }
 
     // §5.1 SICK certificate + filing-window + no-certificate tolerance (V124): certificateFilingWindowDays=3,
@@ -2206,17 +2206,17 @@ class LeaveServiceTest {
     // use "no restriction" placeholders for fields not under test in THEIR tests).
     private LeaveTypeDto sickType() {
         return new LeaveTypeDto("SICK", "Sick", "Sick leave", new BigDecimal("30.00"), true,
-            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, 3, 3, null);
+            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, 3, 3, null, false);
     }
 
     private LeaveTypeDto leaveWithoutPayType() {
         return new LeaveTypeDto("LEAVE_WITHOUT_PAY", "Leave without pay", "Leave without pay", BigDecimal.ZERO, false,
-            BigDecimal.ZERO, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null);
+            BigDecimal.ZERO, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null, false);
     }
 
     private LeaveTypeDto ordinationType() {
         return new LeaveTypeDto("ORDINATION", "Ordination", "Ordination leave", new BigDecimal("60.00"), false,
-            new BigDecimal("15.00"), 0, 12, null, true, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null);
+            new BigDecimal("15.00"), 0, 12, null, true, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null, false);
     }
 
     // proratedFirstYear=false, maxConsecutiveDays=3.00 (deliberately the OLD pre-V120 shape -- see
@@ -2228,7 +2228,7 @@ class LeaveServiceTest {
     // null, firstYearMaxDays 3.00) is personalTypeProratedFirstYear() below.
     private LeaveTypeDto personalTypeWithMaxConsecutive() {
         return new LeaveTypeDto("PERSONAL", "Personal", "Personal leave", new BigDecimal("7.00"), false,
-            null, 0, 0, new BigDecimal("3.00"), false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null);
+            null, 0, 0, new BigDecimal("3.00"), false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null, false);
     }
 
     // §5.4 MATERNITY calendar-day counting (V119, 2026-08-02): the one fixture in this class with
@@ -2236,7 +2236,7 @@ class LeaveServiceTest {
     // the basis from the leave type, not a hardcoded assumption.
     private LeaveTypeDto maternityType() {
         return new LeaveTypeDto("MATERNITY", "Maternity", "Maternity leave", new BigDecimal("98.00"), true,
-            new BigDecimal("45.00"), 0, 0, null, false, LeaveDayCountBasis.CALENDAR_DAYS, false, null, null, 0, null);
+            new BigDecimal("45.00"), 0, 0, null, false, LeaveDayCountBasis.CALENDAR_DAYS, false, null, null, 0, null, false);
     }
 
     // §5.2/§5.3 pro-ration (V120, defect 1 fix). Real completed-months-of-service arithmetic against
@@ -2246,7 +2246,7 @@ class LeaveServiceTest {
 
     private LeaveTypeDto vacationTypeProratedFirstYear() {
         return new LeaveTypeDto("VACATION", "Vacation", "Vacation leave", new BigDecimal("6.00"), false,
-            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, true, null, null, 0, null);
+            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, true, null, null, 0, null, false);
     }
 
     // §5.2 first-year total-days cap (V120, defect 3 fix). maxConsecutiveDays=null (the OLD blanket
@@ -2256,7 +2256,7 @@ class LeaveServiceTest {
     // for its own, unrelated tests).
     private LeaveTypeDto personalTypeProratedFirstYear() {
         return new LeaveTypeDto("PERSONAL", "Personal", "Personal leave", new BigDecimal("7.00"), false,
-            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, true, new BigDecimal("3.00"), null, 0, null);
+            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, true, new BigDecimal("3.00"), null, 0, null, false);
     }
 
     // §5.2 wedding leave cap (V125): advanceNoticeDays=0 and proratedFirstYear=false so the wedding
@@ -2266,7 +2266,7 @@ class LeaveServiceTest {
     // ever govern SICK), kept only for record-shape completeness.
     private LeaveTypeDto personalTypeForWeddingCap() {
         return new LeaveTypeDto("PERSONAL", "Personal", "Personal leave", new BigDecimal("7.00"), false,
-            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null);
+            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null, false);
     }
 
     // §5.2 emergency-filing exception (V125): advanceNoticeDays=1 (the real seeded PERSONAL value,
@@ -2274,7 +2274,7 @@ class LeaveServiceTest {
     // real seeded value). proratedFirstYear=false so pro-ration/first-year-cap never interferes.
     private LeaveTypeDto personalTypeWithEmergencyTolerance() {
         return new LeaveTypeDto("PERSONAL", "Personal", "Personal leave", new BigDecimal("7.00"), false,
-            null, 1, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, 3);
+            null, 1, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, 3, false);
     }
 
     private LeaveRequestDto requestDto(long id, long employeeId, String status, LocalDate startDate, LocalDate endDate,

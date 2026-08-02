@@ -211,7 +211,7 @@ public class LeaveRepository {
         paid_days_cap, advance_notice_days, min_service_months, max_consecutive_days,
         once_per_employment, day_count_basis, prorated_first_year, first_year_max_days,
         certificate_filing_window_days, no_certificate_monthly_tolerance,
-        emergency_monthly_allowance
+        emergency_monthly_allowance, carries_forward
         """;
 
     public List<LeaveTypeDto> findLeaveTypes() {
@@ -545,6 +545,59 @@ public class LeaveRepository {
                 rs.getObject("quota_remaining_before", BigDecimal.class),
                 rs.getObject("quota_remaining_after", BigDecimal.class)
             ));
+    }
+
+    /**
+     * §5.3.5 VACATION carry-forward (V127): the persisted grant for (employeeId, leaveTypeCode,
+     * earnedYear), if {@link LeaveService#ensureCarryoverGrant} has already computed and memoized
+     * it -- {@code Optional.empty()} means "not computed yet" (either the year has not fully
+     * elapsed yet, or nothing has needed this figure yet), NOT "computed as zero". A computed-zero
+     * grant is still a present row (carried_days = 0.00).
+     */
+    public Optional<BigDecimal> findCarryover(long employeeId, String leaveTypeCode, int earnedYear) {
+        List<BigDecimal> rows = jdbc.query("""
+            SELECT carried_days
+              FROM hr.leave_carryover
+             WHERE employee_id = :employeeId
+               AND leave_type_code = :leaveTypeCode
+               AND earned_year = :earnedYear
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("leaveTypeCode", leaveTypeCode)
+            .addValue("earnedYear", earnedYear),
+            (rs, rowNum) -> rs.getObject("carried_days", BigDecimal.class));
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
+    }
+
+    /**
+     * §5.3.5 VACATION carry-forward (V127): memoizes a just-computed grant. {@code ON CONFLICT DO
+     * NOTHING} makes this race-safe against a concurrent call computing the same
+     * (employeeId, leaveTypeCode, earnedYear) grant at the same time -- whichever commits first
+     * wins, the loser's (identical, since both derive from the same finalized-year data) figure is
+     * simply discarded rather than erroring. See {@link LeaveService#ensureCarryoverGrant}.
+     */
+    public void insertCarryoverIfAbsent(
+            long employeeId, String leaveTypeCode, int earnedYear, int usableYear,
+            BigDecimal ownQuotaDays, BigDecimal usedDays, BigDecimal carriedInDays, BigDecimal carriedDays) {
+        jdbc.update("""
+            INSERT INTO hr.leave_carryover (
+                employee_id, leave_type_code, earned_year, usable_year,
+                own_quota_days, used_days, carried_in_days, carried_days
+            )
+            VALUES (
+                :employeeId, :leaveTypeCode, :earnedYear, :usableYear,
+                :ownQuotaDays, :usedDays, :carriedInDays, :carriedDays
+            )
+            ON CONFLICT (employee_id, leave_type_code, earned_year) DO NOTHING
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("leaveTypeCode", leaveTypeCode)
+            .addValue("earnedYear", earnedYear)
+            .addValue("usableYear", usableYear)
+            .addValue("ownQuotaDays", ownQuotaDays)
+            .addValue("usedDays", usedDays)
+            .addValue("carriedInDays", carriedInDays)
+            .addValue("carriedDays", carriedDays));
     }
 
     /**
@@ -1045,7 +1098,8 @@ public class LeaveRepository {
             rs.getObject("first_year_max_days", BigDecimal.class),
             rs.getObject("certificate_filing_window_days", Integer.class),
             rs.getInt("no_certificate_monthly_tolerance"),
-            rs.getObject("emergency_monthly_allowance", Integer.class)
+            rs.getObject("emergency_monthly_allowance", Integer.class),
+            rs.getBoolean("carries_forward")
         );
     }
 

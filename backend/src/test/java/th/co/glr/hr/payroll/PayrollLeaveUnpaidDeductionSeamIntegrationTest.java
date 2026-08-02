@@ -281,11 +281,42 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
     // class is about the leave->payroll seam (deduction/refund plumbing), not eligibility, so
     // hire_date is set far enough in the past (2015) that the floor is always a no-op here.
     private long insertEmployee(String code) {
-        return jdbc.queryForObject("""
+        long employeeId = jdbc.queryForObject("""
             INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active, hire_date)
             VALUES (:code, :code, 'ทดสอบ', :salary, TRUE, DATE '2015-01-01')
             RETURNING employee_id
             """, new MapSqlParameterSource().addValue("code", code).addValue("salary", SALARY), Long.class);
+        neutralizeVacationCarryForwardFrom2025(employeeId);
+        return employeeId;
+    }
+
+    /**
+     * §5.3.5 VACATION carry-forward (V127) interaction: the default 2015 hire date leaves 2025
+     * (fully elapsed by this class's fixed clock) reading as "0 of 6 used", which now legitimately
+     * carries 6.00 into 2026 -- correct new behaviour, but not what this class's pre-existing
+     * leave->payroll-seam assertions (written before carry-forward existed) are about. Neutralised
+     * by marking 2025's VACATION quota fully used, so LeaveService#ensureCarryoverGrant computes a
+     * real, correct ZERO carry-in for 2026.
+     */
+    private void neutralizeVacationCarryForwardFrom2025(long employeeId) {
+        Long leaveRequestId = jdbc.queryForObject("""
+            INSERT INTO hr.leave_request (
+                employee_id, leave_type_code, start_date, end_date, total_days, paid_days, unpaid_days,
+                quota_year, reason, status, quota_remaining_before, quota_remaining_after, requested_by_id
+            )
+            VALUES (
+                :employeeId, 'VACATION', '2025-01-06', '2025-01-13', 6.00, 6.00, 0.00,
+                2025, 'V127 fixture neutraliser', 'APPROVED', 6.00, 0.00, :employeeId
+            )
+            RETURNING leave_request_id
+            """, new MapSqlParameterSource("employeeId", employeeId), Long.class);
+        jdbc.update("""
+            INSERT INTO hr.leave_request_quota_year (
+                leave_request_id, quota_year, total_days, paid_days, unpaid_days,
+                quota_remaining_before, quota_remaining_after
+            )
+            VALUES (:leaveRequestId, 2025, 6.00, 6.00, 0.00, 6.00, 0.00)
+            """, new MapSqlParameterSource("leaveRequestId", leaveRequestId));
     }
 
     private void insertProcessedPayrollPeriod(LocalDate payrollMonth) {

@@ -83,6 +83,17 @@ public class LeaveService {
     // consecutive non-workdays (WEEKEND_DUTY's is the extreme case at 5) with room to spare -- see
     // #hasInterveningWorkday.
     private static final int CONTIGUOUS_CHECK_WINDOW_DAYS = 14;
+    // §5.3.5 VACATION carry-forward (V127): no grant is ever computed for an earned_year before
+    // this constant -- see #ensureCarryoverGrant. The governing announcement took effect 1 Oct
+    // 2567/2024, but this is deliberately 2025 (the first FULL calendar year it governs), not 2024
+    // (2567's own partial first year): computing a carry-out for 2024 would require deciding what
+    // "annual quota" means for a year the rule only covered for its last quarter -- an
+    // interpretation this migration does not make, per CLAUDE.md's "historical years must not be
+    // invented ... a wrong balance is worse than none." No hr.leave_carryover row is ever written
+    // for earned_year < 2025, and no employee's 2024 (or earlier) vacation usage ever grants
+    // anything into 2025 -- this is a deliberate NO-BACKFILL boundary, not an oversight; state it
+    // plainly when reporting this change.
+    private static final int CARRY_FORWARD_BASELINE_YEAR = 2025;
 
     private final LeaveRepository leaveRepository;
     private final LeaveAttachmentRepository leaveAttachments;
@@ -516,24 +527,129 @@ public class LeaveService {
         // (LocalDate.now(clock)), not the requested `year` -- the same "as of the reference date"
         // meaning #employeeAnnualQuota uses for a live submission (request.startDate()), just with
         // "today" standing in since a balance query has no request date of its own.
-        BigDecimal quota = employeeAnnualQuota(type, employeeId, LocalDate.now(clock));
+        BigDecimal annualQuota = employeeAnnualQuota(type, employeeId, LocalDate.now(clock));
+        // §5.3.5 VACATION carry-forward (V127): `year` (not "today") is the right key here -- a
+        // carry-in is scoped to a specific usable_year, not to "today's" calendar year, so a
+        // balance query for a past or future year must see THAT year's own carry-in.
+        BigDecimal carriedIn = carryInDays(employeeId, type, year);
+        BigDecimal quota = annualQuota.add(carriedIn);
         BigDecimal remaining = quota.subtract(approved).subtract(pending).max(BigDecimal.ZERO);
         return new LeaveBalanceDto(
             type.code(),
             type.nameTh(),
             type.nameEn(),
-            quota,
+            annualQuota,
             approved,
             pending,
             remaining,
-            type.requiresAttachment()
+            type.requiresAttachment(),
+            carriedIn
         );
     }
 
     private BigDecimal remainingDays(long employeeId, LeaveTypeDto leaveType, int quotaYear, LocalDate asOf) {
         BigDecimal used = leaveRepository.sumUsedDays(employeeId, leaveType.code(), quotaYear, ACTIVE_QUOTA_STATUSES);
-        BigDecimal quota = employeeAnnualQuota(leaveType, employeeId, asOf);
+        BigDecimal quota = employeeAnnualQuota(leaveType, employeeId, asOf)
+            .add(carryInDays(employeeId, leaveType, quotaYear));
         return quota.subtract(used).max(BigDecimal.ZERO);
+    }
+
+    /**
+     * §5.3.5 VACATION carry-forward (V127): the carry-in available for {@code leaveType} in
+     * {@code usableYear} -- always {@link BigDecimal#ZERO} when {@link
+     * LeaveTypeDto#carriesForward()} is FALSE (every type except VACATION; this is the ONLY gate
+     * -- see that field's Javadoc for why a column, not a hardcoded type-code check). Delegates to
+     * {@link #ensureCarryoverGrant} for {@code usableYear - 1} (the EARNED year whose leftover, if
+     * any, is what "carry-in for usableYear" means).
+     */
+    private BigDecimal carryInDays(long employeeId, LeaveTypeDto leaveType, int usableYear) {
+        if (!leaveType.carriesForward()) {
+            return BigDecimal.ZERO;
+        }
+        return ensureCarryoverGrant(employeeId, leaveType, usableYear - 1);
+    }
+
+    /**
+     * §5.3.5 VACATION carry-forward (V127): returns (computing and memoizing on first need) the
+     * grant {@code earnedYear} produces for {@code earnedYear + 1} -- i.e. {@code earnedYear}'s own
+     * unused quota, capped so it can never itself have been inflated by a still-live carry-in from
+     * {@code earnedYear - 1} (see the non-accumulation note below).
+     *
+     * <p><b>Availability gates, both fail CLOSED (return ZERO, write nothing):</b>
+     * <ul>
+     *   <li>{@code earnedYear < CARRY_FORWARD_BASELINE_YEAR}: no grant is ever computed this far
+     *       back -- see that constant's Javadoc. Recursion bottoms out here.</li>
+     *   <li>{@code earnedYear} has not fully elapsed yet ({@code LocalDate.now(clock).getYear() <=
+     *       earnedYear}): the year's final usage is not yet knowable (an employee could still take
+     *       more of that year's VACATION days before it ends), so nothing is computed OR persisted
+     *       -- a grant written too early would be too generous if more days are used afterward, and
+     *       there would be no cleanup job to correct it (see hr.leave_carryover's structural-expiry
+     *       design). Known edge case, stated plainly: an employee who files a VACATION request
+     *       dated in January of {@code earnedYear + 1} while the clock is still in December of
+     *       {@code earnedYear} (VACATION's 3-day advance notice allows this) will see zero carry-in
+     *       from a year that, calendar-wise, has already answered the question -- the carry-in
+     *       becomes visible once the clock itself crosses into {@code earnedYear + 1}, not before.
+     *       Not fixed here; it is the same fail-closed direction as every other gate in this class.
+     * </ul>
+     *
+     * <p><b>Consumption order (the decision with the largest effect on what an employee keeps):
+     * carry-IN is spent BEFORE the year's own quota.</b> This is the employee-favouring
+     * "use-it-or-lose-it" reading -- the pool that is about to expire unconditionally is drawn down
+     * first, preserving as much of the renewable annual quota as possible for the NEXT
+     * carry-forward. Consequence, worked: employee has a 6.00 own quota for {@code earnedYear} plus
+     * a 2.00 carry-in from {@code earnedYear - 1} (8.00 total available) and takes exactly 6.00
+     * days during {@code earnedYear}.
+     * <pre>
+     * carry-in-first (chosen):  2.00 carry-in exhausted first, then 4.00 of own quota ->
+     *                           2.00 of own quota left unused -> grants 2.00 into earnedYear+1.
+     * own-quota-first (rejected): 6.00 of own quota exhausted first, carry-in untouched (and lost,
+     *                           §5.3.5 forbids re-carrying it) -> 0.00 of own quota left unused ->
+     *                           grants 0.00 into earnedYear+1.
+     * </pre>
+     * The formula below computes this WITHOUT needing to track which specific request drew from
+     * which pool: the total unused pool ({@code ownQuota + carriedIn - used}) is, under
+     * carry-in-first consumption, exactly how much of OWN quota survives, up to a ceiling of
+     * {@code ownQuota} itself (once unused exceeds a full own quota, that means carry-in was barely
+     * touched -- but a grant can never exceed a full year's own entitlement regardless, per
+     * §5.3.5's non-accumulation clause):
+     * <pre>carryOut = min(ownQuota, max(0, ownQuota + carriedIn - used))</pre>
+     *
+     * <p><b>Pro-rated first year (V120) DOES carry forward.</b> §5.3.5 says "ปีใด" ("whatever
+     * year"), with no carve-out for a first, pro-rated year, and V120's own parenthetical extends
+     * pro-ration from the identical announcement sentence -- reading one half as carrying an
+     * unstated exception the other half does not state is not supported by the text. What it
+     * carries is the unused portion of THAT year's own (pro-rated, not flat-6) entitlement:
+     * {@code ownQuota} below is {@link #employeeAnnualQuota} evaluated at the EARNED year's own
+     * year-end (31 Dec), i.e. the employee's final, fully-accrued entitlement for that year --
+     * capturing the full pro-rated figure even though {@link #employeeAnnualQuota} would have
+     * returned a SMALLER number earlier in that same year (see that method's "quota GROWS as the
+     * year progresses" note). This is an INTERPRETATION, like V120's own, not restated company
+     * policy -- flag it as such when reporting this change.
+     *
+     * <p><b>Non-accumulation (§5.3.5 "...ได้ในปีต่อไปเท่านั้น"):</b> {@code carryOut} is bounded
+     * above by {@code ownQuota} (this method's own year), never by {@code ownQuota + carriedIn} --
+     * a carry-in that goes unused this year is simply gone, not re-carried. Enforced twice: here in
+     * Java (the {@code .min(ownQuota)}) AND structurally in the DB
+     * ({@code chk_lc_carried_days_bounded_by_own_quota}, V127).
+     */
+    private BigDecimal ensureCarryoverGrant(long employeeId, LeaveTypeDto leaveType, int earnedYear) {
+        if (earnedYear < CARRY_FORWARD_BASELINE_YEAR) {
+            return BigDecimal.ZERO;
+        }
+        Optional<BigDecimal> existing = leaveRepository.findCarryover(employeeId, leaveType.code(), earnedYear);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        if (LocalDate.now(clock).getYear() <= earnedYear) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal carriedIn = ensureCarryoverGrant(employeeId, leaveType, earnedYear - 1);
+        BigDecimal ownQuota = employeeAnnualQuota(leaveType, employeeId, LocalDate.of(earnedYear, 12, 31));
+        BigDecimal used = leaveRepository.sumUsedDays(employeeId, leaveType.code(), earnedYear, ACTIVE_QUOTA_STATUSES);
+        BigDecimal carryOut = ownQuota.add(carriedIn).subtract(used).max(BigDecimal.ZERO).min(ownQuota);
+        leaveRepository.insertCarryoverIfAbsent(
+            employeeId, leaveType.code(), earnedYear, earnedYear + 1, ownQuota, used, carriedIn, carryOut);
+        return carryOut;
     }
 
     /**
