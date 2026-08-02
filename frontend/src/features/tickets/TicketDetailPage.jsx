@@ -22,9 +22,11 @@ import {
   quotationStatusLabel,
 } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
+import { activePricingRequestsSummary } from '../pricingRequests/pricingRequestMeta.js';
 import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx';
 import { CancelDealModal } from './CancelDealModal.jsx';
 import { hasActivitySince, isReadyToAdvance, lastStageChangeAt, STAGE_ADVANCE_GATE_HINT } from './dealTrackingMeta.js';
+import { ContextSection, FieldRow } from './DealMetaFields.jsx';
 import { DealDepositPanel } from './DealDepositPanel.jsx';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
@@ -32,7 +34,6 @@ import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
-import { TicketContextPanel } from './TicketContextPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
 import {
   allowedTargetStages, canMarkLost, canSetStage, nextStage, PAYMENT_SUBSTEPS,
@@ -361,7 +362,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   // Comment
   const [commentText, setCommentText] = useState('');
-  const [contextCommentText, setContextCommentText] = useState('');
 
   // Confirmation dialogs (state-driven, replaces native browser confirm)
   const [confirm, setConfirm] = useState(null); // { kind: 'deleteAttachment', id, name } | { kind: 'cancelTicket' } | { kind: 'finalPayment' } | null
@@ -517,7 +517,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     setPaymentModal(false);
     setBillingModal(false);
     setCommentText('');
-    setContextCommentText('');
   }
 
   // Generic action mutation — a drop-in replacement for the old doAction(fn,
@@ -762,6 +761,20 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       quotations: sortedQuotations.filter((q) => (q.recipientType ?? 'UNSPECIFIED') === recipientType),
     }))
     .filter((group) => group.quotations.length > 0);
+
+  // Moved verbatim from the now-deleted TicketContextPanel.jsx (ticket-workspace
+  // IA rebuild, Slice B): who the deal's pricing request is currently assigned
+  // to, for the ภาพรวม tab's "ผู้เกี่ยวข้อง" section below. `canViewPricingRequests`
+  // is the same role-scoped readout the panel used — a viewer without pricing-
+  // request visibility gets 'ไม่แสดงในมุมมองนี้' rather than a widened peek at who
+  // owns it.
+  const pricingSummary = activePricingRequestsSummary(pricingRequests);
+  const latestPr = pricingSummary ? pricingSummary.requests[pricingSummary.requests.length - 1] : null;
+  const assignedImport = canViewPricingRequests
+    ? latestPr
+      ? latestPr.assignedImportName || 'ยังไม่มีผู้รับเรื่อง'
+      : 'ยังไม่มีคำขอราคา'
+    : 'ไม่แสดงในมุมมองนี้';
 
   // 'draft' included since V50: a lightweight lead-stage deal gets its product
   // items here, then submits into the price-request flow when it reaches the
@@ -1009,8 +1022,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   //    SENTENCE ("ส่งมอบและรับเงินครบแล้ว — ยืนยันเพื่อส่งให้ CEO ตรวจสอบปิดงาน")
   //    naming the precondition and the consequence, while the button is a
   //    terse verb ("ยืนยันพร้อมปิดงาน"). Nulling those threw away real
-  //    information — and the context rail can't stand in for it, since it is
-  //    collapsed by default below 1280px. They keep their line, prefix-free.
+  //    information, and — since the ticket-workspace IA rebuild Slice B
+  //    retired the context rail that used to carry this line as a fallback —
+  //    there is no other surface on the page left to say it. They keep
+  //    their line, prefix-free.
   //
   // `primaryAction` (not stickyPrimaryLabel) is the discriminator: it is set
   // only by that four-branch cascade, and it always wins over the resolver.
@@ -1021,15 +1036,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       : workState.waitingRoleLabel
         ? `รอ${workState.waitingRoleLabel}${blocker ? ` — ${blocker}` : ''}`
         : blocker;
-
-  // TicketContextPanel's own "ขั้นตอนถัดไป" section is a DIFFERENT surface from
-  // the sticky bar: it lives in the context rail, nowhere near the CTA button,
-  // so naming the action there is information rather than the duplication
-  // removed above. It therefore keeps the label the banner dropped, falling
-  // back to the same waiting/blocker line. Without this it would render its own
-  // "ไม่มีขั้นตอนถัดไปในสถานะนี้" empty fallback exactly when there IS something
-  // to do — the opposite of the truth.
-  const contextNextStepText = stickyPrimaryLabel ?? bannerText;
 
   // Overflow-menu / danger-zone availability — mirrors DealStagePanel's own
   // canEditStage/canLost/canHold/canDormant gates byte-for-byte (same
@@ -1227,11 +1233,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     await doAction(() => api.tickets.comment(ticketId, { message: commentText.trim() }), 'เพิ่มความคิดเห็นแล้ว');
   }
 
-  async function handleContextComment() {
-    if (!contextCommentText.trim()) return;
-    await doAction(() => api.tickets.comment(ticketId, { message: contextCommentText.trim() }), 'เพิ่มความคิดเห็นแล้ว');
-  }
-
   async function handleRecordPayment() {
     const amount = Number(paymentDraft.amount);
     if (!amount || amount <= 0) {
@@ -1341,13 +1342,19 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         </div>
       </div>
 
-      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-start">
+      {/* Ticket-workspace IA rebuild Slice B ("retire the context rail, one
+          comment composer"): this was a two-column grid (`xl:grid-cols-[minmax(0,1fr)_20rem]`)
+          with the sticky context rail as the second column — now a single
+          full-width stack, since the rail is gone and its four sections were
+          redistributed (see the overview TabPanel above and DealHistoryPanel
+          below) rather than replaced with a second column of anything else. */}
+      <div className="flex min-w-0 flex-col gap-4">
 
       {/* Deal pipeline (V50): the 14-stage journey with stage-gated doc actions.
           Generation buttons reuse the exact handlers/permissions of the action
           row; once a document exists (quotation / ใบแจ้งยอดมัดจำ) it stays
           reachable from here through the later stages too. */}
-      <div className="min-w-0 xl:col-start-1">
+      <div className="min-w-0">
       <DealStagePanel
         ref={dealStagePanelRef}
         user={user}
@@ -1411,8 +1418,38 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           `?tab=documents` deep link (account, or an import rep who isn't
           this ticket's assignee) falls back to ภาพรวม instead of
           highlighting a tab with no button and rendering nothing. */}
-      <div className="min-w-0 xl:col-start-1">
+      <div className="min-w-0">
       <TabPanel id="overview" idPrefix="ticket-detail" active={visibleActiveTab === 'overview'}>
+          {/* Ticket-workspace IA rebuild Slice B ("retire the context rail, one
+              comment composer"): วันสำคัญ / ผู้เกี่ยวข้อง moved here verbatim from
+              the now-deleted TicketContextPanel.jsx sticky rail — same fields,
+              same labels, same assignedImport role-scoped readout. This tab
+              becomes "ดีล" in Slice C; this slice only relocates content into
+              it, nothing is renamed. */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <section className="rounded-lg border border-border bg-surface p-4 shadow-sm">
+              <ContextSection title="วันสำคัญ" helper="Key dates" icon="calendar">
+                <dl className="m-0">
+                  <FieldRow label="ติดตามครั้งถัดไป" value={formatThaiDate(summary.nextFollowUpAt)} />
+                  <FieldRow label="ติดตามล่าสุด" value={formatThaiDate(summary.lastFollowUpAt)} />
+                  <FieldRow label="วันวางบิล" value={formatThaiDate(summary.billingDate)} />
+                  <FieldRow label="ครบกำหนดชำระ" value={formatThaiDate(summary.dueDate)} danger={summary.overdue} />
+                  <FieldRow label="ใบเสนอราคาหมดอายุ" value={formatThaiDate(latestQuotation?.validityDate)} />
+                </dl>
+              </ContextSection>
+            </section>
+            <section className="rounded-lg border border-border bg-surface p-4 shadow-sm">
+              <ContextSection title="ผู้เกี่ยวข้อง" helper="ทีมที่เกี่ยวข้อง" icon="users">
+                <dl className="m-0">
+                  <FieldRow label="เจ้าของดีล" value={summary.createdByName} />
+                  <FieldRow label="ผู้รับเรื่องคำขอราคา" value={assignedImport} />
+                  <FieldRow label="บัญชี" value={summary.closeConfirmedByName || 'ยังไม่ระบุ'} />
+                  <FieldRow label="ผู้ติดต่อ" value={summary.contactName} />
+                </dl>
+              </ContextSection>
+            </section>
+          </div>
+
           <section className="table-panel">
             <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h2>รายการสินค้า ({editMode ? editDraft.length : items.length} รายการ)</h2>
@@ -2196,26 +2233,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       </TabPanel>
       </div>
 
-      <div
-        data-testid="ticket-context-rail"
-        className="min-w-0 xl:sticky xl:top-[calc(var(--app-topbar-h)+var(--deal-header-h,18rem)+var(--space-4))] xl:col-start-2 xl:row-start-1 xl:row-span-4 xl:max-h-[calc(100vh-var(--app-topbar-h)-var(--deal-header-h,18rem)-var(--space-8)-var(--space-4))] xl:overflow-y-auto"
-      >
-        <TicketContextPanel
-          summary={summary}
-          pricingRequests={pricingRequests}
-          latestQuotation={latestQuotation}
-          events={events}
-          nextStepText={contextNextStepText}
-          canComment={can.comment}
-          commentText={contextCommentText}
-          onCommentTextChange={setContextCommentText}
-          onSubmitComment={handleContextComment}
-          commentSubmitting={actionLoading}
-          showCommentForm={visibleActiveTab !== 'activity'}
-          canViewPricingRequests={canViewPricingRequests}
-        />
-      </div>
-
       {/* "จัดการดีล" danger zone (ticket-detail IA rebuild Phase 1): เสียงาน /
           ยกเลิก moved off the working surface into a clearly-labelled,
           danger-toned section at the very bottom of the page — conventional
@@ -2224,7 +2241,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           modals), only demoted from sitting inline among the day-to-day
           pipeline controls. */}
       {(canLostDeal || can.cancel) ? (
-        <section className="rounded-xl border border-danger-border bg-danger-bg p-4 sm:p-5 xl:col-start-1" aria-labelledby="deal-danger-zone-heading">
+        <section className="rounded-xl border border-danger-border bg-danger-bg p-4 sm:p-5" aria-labelledby="deal-danger-zone-heading">
           <h2 id="deal-danger-zone-heading" className="m-0 text-sm font-extrabold text-danger-dark">จัดการดีล</h2>
           <p className="mt-1 text-xs text-danger-dark">การดำเนินการเหล่านี้ส่งผลต่อทั้งดีล และบางรายการย้อนกลับไม่ได้ — ใช้เมื่อจำเป็นเท่านั้น</p>
           <div className="mt-3 flex flex-wrap gap-2">

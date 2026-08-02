@@ -339,11 +339,13 @@ describe('TicketDetailPage', () => {
     expect(stickyChrome.className).toContain('top-[calc(var(--deal-scroll-pad-y)*-1)]');
     expect(within(stickyChrome).getByRole('tablist', { name: 'รายละเอียดดีล' })).not.toBeNull();
 
-    const rail = await screen.findByTestId('ticket-context-rail');
-    expect(rail.className).toContain('xl:top-[calc(var(--app-topbar-h)+var(--deal-header-h,18rem)+var(--space-4))]');
-    expect(rail.className).toContain('xl:max-h-[calc(100vh-var(--app-topbar-h)-var(--deal-header-h,18rem)-var(--space-8)-var(--space-4))]');
-    expect(rail.className).not.toContain('xl:top-[18rem]');
-    expect(rail.className).not.toContain('xl:max-h-[calc(100vh-19rem)]');
+    // Ticket-workspace IA rebuild Slice B: the sticky context rail (and its own
+    // measured `--deal-header-h` sticky-offset classes) is retired — there is
+    // no second column any more, so no `data-testid="ticket-context-rail"`
+    // element exists at all. `--deal-header-h` itself stays defined (index.css)
+    // and consumed by `styles.css`'s `scroll-padding-top` for mobile focus
+    // scrolling — see ticketWorkspaceLayout.test.js, unaffected by this.
+    expect(screen.queryByTestId('ticket-context-rail')).toBeNull();
   });
 
   it('renders a dash for มูลค่าดีล until a price exists', async () => {
@@ -359,7 +361,13 @@ describe('TicketDetailPage', () => {
     expect(within(chip).queryByText('฿0.00')).toBeNull();
   });
 
-  it('collapses the context panel below xl by default and expands to show mirrored next action, dates, people, and recent comments', async () => {
+  // Ticket-workspace IA rebuild Slice B ("retire the context rail, one comment
+  // composer"): วันสำคัญ / ผู้เกี่ยวข้อง moved here verbatim from the deleted
+  // TicketContextPanel.jsx sticky rail — same fields, same labels, same
+  // assignedImport role-scoped readout — now at the top of ภาพรวม instead of
+  // behind an always-visible sidebar (there is no more xl-collapse/mobile
+  // accordion to drive: the fields simply render whenever this tab is active).
+  it('renders วันสำคัญ and ผู้เกี่ยวข้อง fields at the top of the ภาพรวม tab', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
         summary: {
@@ -370,6 +378,10 @@ describe('TicketDetailPage', () => {
           dueDate: '2026-07-31',
           contactName: 'คุณอรุณ ติดต่อ',
         },
+        // A COMMENTED event on the ticket — planted specifically to prove the
+        // rail's old read-only "3 most recent comments" roll-up is genuinely
+        // gone (DealHistoryPanel already renders the full stream on กิจกรรม),
+        // not merely relocated: this message must NOT surface on ภาพรวม.
         events: [
           {
             id: 3,
@@ -384,49 +396,56 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage(salesOwnerUser);
 
-    const panel = await screen.findByRole('complementary', { name: 'บริบทดีล' });
-    expect(within(panel).queryByText('Key dates')).toBeNull();
-    fireEvent.click(within(panel).getByRole('button', { name: /บริบทดีล/ }));
-    // The old assertion checked the "ถึงคิวคุณ: สร้างคำขอราคา" banner text
-    // rendered twice (header + context rail); the header banner is gone now
-    // that a primary CTA exists (the button carries the message on its own
-    // label instead) — assert the sticky primary CTA itself is offering
-    // create_pcr, AND that the context rail's own "ขั้นตอนถัดไป" section still
-    // names that step rather than falling back to its "no next step" empty
-    // text, which is what it did when it was fed the header's now-null banner.
-    expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('create_pcr');
-    expect(within(panel).getByText('สร้างคำขอราคา')).not.toBeNull();
-    expect(within(panel).queryByText('ไม่มีขั้นตอนถัดไปในสถานะนี้')).toBeNull();
-    expect(within(panel).getByText('20 ก.ค. 2569')).not.toBeNull();
-    expect(within(panel).getByText('31 ก.ค. 2569')).not.toBeNull();
-    expect(within(panel).getByText('สมชาย ใจดี')).not.toBeNull();
-    expect(within(panel).getByText('ยังไม่มีคำขอราคา')).not.toBeNull();
-    expect(within(panel).getByText('คุณอรุณ ติดต่อ')).not.toBeNull();
-    expect(within(panel).getByText('บันทึกสำหรับบริบทดีล')).not.toBeNull();
+    const keyDatesHeading = await screen.findByRole('heading', { level: 2, name: /วันสำคัญ/ });
+    const keyDatesSection = keyDatesHeading.closest('section');
+    expect(within(keyDatesSection).getByText('20 ก.ค. 2569')).not.toBeNull();
+    expect(within(keyDatesSection).getByText('31 ก.ค. 2569')).not.toBeNull();
+
+    const peopleHeading = screen.getByRole('heading', { level: 2, name: /ผู้เกี่ยวข้อง/ });
+    const peopleSection = peopleHeading.closest('section');
+    // สมชาย ใจดี is also named in DealStateHeader's "สร้างโดย" line (always on
+    // screen) — assert presence in THIS section specifically, not page-wide
+    // uniqueness.
+    expect(within(peopleSection).getByText('สมชาย ใจดี')).not.toBeNull();
+    expect(within(peopleSection).getByText('ยังไม่มีคำขอราคา')).not.toBeNull();
+    expect(within(peopleSection).getByText('คุณอรุณ ติดต่อ')).not.toBeNull();
+
+    // Wrong-way-round: the deleted roll-up's content must be absent from the
+    // whole page while ภาพรวม is active, not just out of these two sections.
+    expect(screen.queryByText('บันทึกสำหรับบริบทดีล')).toBeNull();
   });
 
-  it('adds a context-panel comment through the existing ticket comment endpoint', async () => {
+  // The core defect this slice fixes: a comment composer that rendered from
+  // TWO different components depending on which tab was open (the context
+  // rail's own copy everywhere except กิจกรรม, DealHistoryPanel's copy on
+  // กิจกรรม). DealHistoryPanel is now the only composer in the codebase, and
+  // — because Tabs.jsx unmounts every inactive TabPanel — it is reachable
+  // from exactly the one tab it lives in. Checking both tabs (not just one)
+  // is what the mutation-check below actually exercises: reintroducing the
+  // old rail-shaped duplicate makes the ภาพรวม assertion (0) go red.
+  it('renders the comment composer exactly once, only inside the กิจกรรม tab', async () => {
     renderTicketDetailPage(salesOwnerUser);
+    await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
 
-    const panel = await screen.findByRole('complementary', { name: 'บริบทดีล' });
-    fireEvent.click(within(panel).getByRole('button', { name: /บริบทดีล/ }));
-    fireEvent.change(within(panel).getByPlaceholderText('เพิ่มความคิดเห็น…'), { target: { value: 'จดไว้จากแผงบริบท' } });
-    fireEvent.click(within(panel).getByRole('button', { name: 'ส่งความคิดเห็น' }));
+    // ภาพรวม is the default tab — wrong-way-round: no composer anywhere on
+    // the page while it's active (this is what used to fail: the rail's own
+    // copy rendered here).
+    expect(screen.queryAllByPlaceholderText('เพิ่มความคิดเห็น…')).toHaveLength(0);
+    expect(screen.queryAllByRole('button', { name: 'ส่งความคิดเห็น' })).toHaveLength(0);
 
-    await waitFor(() => expect(api.tickets.comment).toHaveBeenCalledWith(701, { message: 'จดไว้จากแผงบริบท' }));
+    await openTab(/กิจกรรม/);
+    expect(screen.getAllByPlaceholderText('เพิ่มความคิดเห็น…')).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'ส่งความคิดเห็น' })).toHaveLength(1);
   });
 
-  it('does not render a second comment control in the context panel on the activity tab', async () => {
+  it('posts a กิจกรรม-tab comment through the shared commentText/handleComment path', async () => {
     renderTicketDetailPage(salesOwnerUser);
 
     await openTab(/กิจกรรม/);
-    expect(screen.getByPlaceholderText('เพิ่มความคิดเห็น…')).not.toBeNull();
+    fireEvent.change(screen.getByPlaceholderText('เพิ่มความคิดเห็น…'), { target: { value: 'จดไว้จากแท็บกิจกรรม' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ส่งความคิดเห็น' }));
 
-    const panel = await screen.findByRole('complementary', { name: 'บริบทดีล' });
-    fireEvent.click(within(panel).getByRole('button', { name: /บริบทดีล/ }));
-
-    expect(within(panel).queryByPlaceholderText('เพิ่มความคิดเห็น…')).toBeNull();
-    expect(screen.getAllByRole('button', { name: 'ส่งความคิดเห็น' })).toHaveLength(1);
+    await waitFor(() => expect(api.tickets.comment).toHaveBeenCalledWith(701, { message: 'จดไว้จากแท็บกิจกรรม' }));
   });
 
   it('renders legacy quotation revisions read-only — no revise/mark-sent/mark-decision buttons', async () => {
@@ -971,9 +990,9 @@ describe('TicketDetailPage', () => {
   // nulled whenever a CTA exists: the four `can.*`-gated primaries carry a
   // DESCRIPTIVE sentence (NEXT_ACTION_STEPS) that their terse button label does
   // not repeat. Dropping those lines would delete the precondition and the
-  // consequence from the page — and the context rail cannot stand in for them,
-  // since it is collapsed by default below 1280px (TicketContextPanel's own
-  // useMediaQuery gate), which is most of the viewports this is read on.
+  // consequence from the page — and, since the ticket-workspace IA rebuild
+  // Slice B retired the context rail that used to carry this line as a
+  // fallback, there is no other surface left on the page to say it.
   describe('sticky header primary CTA — the can.* primaries KEEP their descriptive line (prefix-free)', () => {
     it('shows "ฝ่ายบัญชียืนยันแล้ว — ตรวจสอบและปิดงานได้เลย" next to the CEO\'s terse "ตรวจสอบและปิดงาน" button, with no ถึงคิวคุณ prefix', async () => {
       api.tickets.get.mockResolvedValue({
