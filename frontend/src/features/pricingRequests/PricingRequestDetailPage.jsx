@@ -631,7 +631,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
       <section className="table-panel">
         <div className="panel-header"><h2>รายการสินค้าและราคาตั้งต้น</h2></div>
-        <div className="flex flex-col gap-2 p-3">
+        <div className="flex flex-col gap-2 p-4">
           {(request.items ?? []).map((item) => (
             <div key={item.id} className="rounded-md border border-border bg-surface p-3">
               <div className="flex flex-wrap items-center gap-2">
@@ -664,7 +664,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
             </label>
           ) : null}
         </div>
-        <div className="flex flex-col gap-1 p-3 text-xs text-text-muted">
+        <div className="flex flex-col gap-1 p-4 text-xs text-text-muted">
           {pricingRequestAttachments.map((attachment) => (
             <div key={attachment.id} className="flex flex-wrap items-center gap-2">
               <a className="text-info underline" href={api.pricingRequests.attachmentUrl(attachment.id)} target="_blank" rel="noreferrer">
@@ -702,7 +702,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       {canRequestInformation(user, summary) ? (
         <section className="table-panel">
           <div className="panel-header"><h2>ขอข้อมูลจาก Sales</h2></div>
-          <div className="flex flex-wrap gap-2 p-3">
+          <div className="flex flex-wrap gap-2 p-4">
             <input className="form-input min-w-64" value={infoMessage} onChange={(e) => setInfoMessage(e.target.value)} placeholder="ข้อความถึง Sales" />
             <button type="button" className="secondary-button" disabled={!infoMessage || requestInfo.isPending} onClick={() => requestInfo.mutate()}>
               ส่งคำขอ
@@ -714,7 +714,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       {canRespondInformation(user, summary) ? (
         <section className="table-panel">
           <div className="panel-header"><h2>ตอบข้อมูลเพิ่มเติม</h2></div>
-          <div className="flex flex-wrap gap-2 p-3">
+          <div className="flex flex-wrap gap-2 p-4">
             <input className="form-input min-w-64" value={salesResponse} onChange={(e) => setSalesResponse(e.target.value)} placeholder="ข้อมูลเพิ่มเติม" />
             <button type="button" className="secondary-button" disabled={!salesResponse || respondInfo.isPending} onClick={() => respondInfo.mutate()}>
               ส่งข้อมูล
@@ -726,7 +726,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       {canCreateCustomerRevision ? (
         <section className="table-panel">
           <div className="panel-header"><h2>รอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า</h2></div>
-          <div className="flex flex-wrap gap-2 p-3">
+          <div className="flex flex-wrap gap-2 p-4">
             <button type="button" className="secondary-button" onClick={() => setRevisionModalOpen(true)}>
               สร้างรอบแก้ไข
             </button>
@@ -744,7 +744,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
               </button>
             ) : null}
           </div>
-          <div className="flex flex-col gap-3 p-3">
+          <div className="flex flex-col gap-3 p-4">
             {factoryQuotes.map((quote) => {
               const quoteStatus = factoryQuoteStatusLabel(quote.status);
               const emailDraft = emailDrafts[quote.id] ?? {
@@ -893,7 +893,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
             <h2>ต้นทุนนำเข้า</h2>
             {isImport(user) ? <button type="button" className="primary-button" onClick={() => createCosting.mutate()} data-testid="pcr-costing-create">สร้างร่างต้นทุน</button> : null}
           </div>
-          <div className="flex flex-col gap-3 p-3">
+          <div className="flex flex-col gap-3 p-4">
             {isImport(user) ? <input className="form-input" value={costingNote} onChange={(e) => setCostingNote(e.target.value)} placeholder="หมายเหตุต้นทุน" /> : null}
             {costings.map((costing) => (
               <div key={costing.id} className="rounded-md border border-border bg-surface p-3">
@@ -931,7 +931,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           <div className="panel-header">
             <h2>การพิจารณาราคาขายของ CEO</h2>
           </div>
-          <div className="flex flex-col gap-3 p-3">
+          <div className="flex flex-col gap-3 p-4">
             {!currentDecision && canStartCeoReview(user, summary) ? (
               <div className="flex flex-wrap items-center gap-2">
                 <label className="text-xs text-text-muted">
@@ -1075,7 +1075,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       {!canSeeRawPricingDecision(user) && canSeePricingDecisionSalesView(user, summary) && decisionSalesView ? (
         <section className="table-panel">
           <div className="panel-header"><h2>ราคาขายที่อนุมัติ</h2></div>
-          <div className="flex flex-col gap-2 p-3">
+          <div className="flex flex-col gap-2 p-4">
             {decisionSalesView.items.map((item) => (
               <div key={item.pricingRequestItemId} className="rounded-md border border-border bg-surface p-3 text-sm">
                 <strong>{[item.brand, item.model].filter(Boolean).join(' ') || item.productDescription || '-'}</strong>
@@ -1105,7 +1105,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
               })()
             ) : null}
           </div>
-          <div className="flex flex-col gap-3 p-3">
+          <div className="flex flex-col gap-3 p-4">
             {!currentCustomerQuotation && canCreateCustomerQuotation(user, summary) ? (
               <button type="button" className="primary-button self-start" onClick={() => createQuotation.mutate()} disabled={createQuotation.isPending}>
                 สร้างร่างใบเสนอราคาลูกค้า

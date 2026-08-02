@@ -123,7 +123,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
             : 'ยังไม่มีคำขอราคาสำหรับดีลนี้'}
         />
       ) : (
-        <div className="flex flex-col gap-2 p-3">
+        <div className="flex flex-col gap-2 p-4">
           {requests.map((pr) => {
             const status = pricingRequestStatusLabel(pr.status);
             const expanded = expandedId === pr.id;
