@@ -71,12 +71,15 @@ public class LeaveController {
             @RequestParam(value = "contactDistrict", required = false) String contactDistrict,
             @RequestParam(value = "contactProvince", required = false) String contactProvince,
             @RequestParam(value = "contactPhone", required = false) String contactPhone,
+            @RequestParam(value = "purposeCode", required = false) String purposeCode,
+            @RequestParam(value = "requestedAsEmergency", required = false) Boolean requestedAsEmergency,
             @RequestParam(value = "attachment", required = false) MultipartFile attachment,
             HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             employeeId, leaveTypeCode, startDate, endDate, reason,
-            startTime, endTime, contactHouseNo, contactSubdistrict, contactDistrict, contactProvince, contactPhone);
+            startTime, endTime, contactHouseNo, contactSubdistrict, contactDistrict, contactProvince, contactPhone,
+            purposeCode, requestedAsEmergency);
         return new LeaveDetailResponse(leaveService.submit(request, attachment, user));
     }
 

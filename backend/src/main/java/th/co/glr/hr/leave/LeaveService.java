@@ -49,6 +49,16 @@ public class LeaveService {
     // completed months of service out of a full 12 -- see #employeeAnnualQuota.
     private static final int FULL_SERVICE_MONTHS = 12;
     private static final BigDecimal HALF_DAY_INCREMENT = new BigDecimal("0.5");
+    // §5.2 leave purpose (V125): the five NAMED purposes plus OTHER, the open-ended catch-all for
+    // the announcement's trailing "เป็นต้น" ("etc.") -- see normalizePurposeCode's Javadoc.
+    private static final Set<String> KNOWN_PURPOSE_CODES = Set.of(
+        "DRIVING_LICENSE_OR_GOVERNMENT", "FAMILY_NECESSITY", "RELIGIOUS_PRACTICE",
+        "WEDDING", "FAMILY_FUNERAL", "OTHER");
+    private static final String WEDDING_PURPOSE_CODE = "WEDDING";
+    // §5.2 wedding leave cap ("ลาเข้าพิธีสมรส จัดงานสมรสของบุตรลาได้ไม่เกิน 3 วัน"). See the check
+    // itself in #autoRejectNote for why this is a hardcoded Java constant, not a hr.leave_type
+    // column, the same way SICK's certificate requirement and PERSONAL's probation gate are.
+    private static final BigDecimal WEDDING_LEAVE_MAX_DAYS = new BigDecimal("3.00");
 
     private final LeaveRepository leaveRepository;
     private final LeaveAttachmentRepository leaveAttachments;
@@ -177,6 +187,11 @@ public class LeaveService {
         Predicate<LocalDate> isWorkingDay =
             leaveRepository.workingDayPredicate(employeeId, request.startDate(), request.endDate());
         validateSubDayTimes(request, leaveType.dayCountBasis(), isWorkingDay);
+        // §5.2 leave purpose (V125): validated up front, same as leaveTypeCode -- see
+        // normalizePurposeCode's Javadoc for why this can never refuse a request for lacking a
+        // matching NAMED category (OTHER is always available).
+        String purposeCode = normalizePurposeCode(request.purposeCode());
+        boolean requestedAsEmergency = Boolean.TRUE.equals(request.requestedAsEmergency());
 
         BigDecimal totalDays = computeTotalDays(request, leaveType, isWorkingDay);
         int quotaYear = request.startDate().getYear();
@@ -190,7 +205,9 @@ public class LeaveService {
         // PayrollCalculator#unpaidLeaveDeduction). See autoRejectNote for the full list of remaining
         // auto-reject reasons. See docs/agent-handoffs for the HR/legal sign-off caveat the
         // quota-based split still needs before it drives a real payroll run.
-        String systemNote = autoRejectNote(leaveType, employeeId, request.startDate(), request.endDate(), hasAttachment, totalDays);
+        AutoRejectResult autoReject = autoRejectNote(leaveType, employeeId, request.startDate(), request.endDate(),
+            hasAttachment, totalDays, purposeCode, requestedAsEmergency);
+        String systemNote = autoReject.rejectionNote();
         LeaveStatus status = systemNote == null ? LeaveStatus.APPROVED : LeaveStatus.AUTO_REJECTED;
 
         // V118 cross-year quota fix (2026-08-02): a request's days are attributed per calendar year
@@ -296,6 +313,13 @@ public class LeaveService {
             // index on this table, this catch will need to inspect the constraint name (or a similar
             // discriminator) before it can keep assuming every DuplicateKeyException here means this.
             throw new ApiException(HttpStatus.CONFLICT, "การลาประเภทนี้ใช้สิทธิ์ได้เพียงครั้งเดียวตลอดระยะเวลาที่เป็นพนักงาน และมีคำขอที่ใช้สิทธิ์นี้ไปแล้ว");
+        }
+        // §5.2 emergency-filing exception (V125): a small follow-up UPDATE by id, same shape as
+        // #attachFile below -- kept OUT of #create's own parameter list so every pre-existing
+        // caller/test of LeaveRepository#create is unaffected by this addition (see
+        // LeaveRepository#markEmergencyFiling's Javadoc).
+        if (autoReject.emergencyFilingApplied()) {
+            leaveRepository.markEmergencyFiling(id);
         }
         // V118 cross-year quota fix: persist the per-year attribution now that the parent row exists
         // (leave_request_quota_year.leave_request_id is a FK to it). Same transaction as #create
@@ -721,19 +745,44 @@ public class LeaveService {
     }
 
     /**
-     * §5 leave-rules-as-data (V116, extended V120). Checks run in this order -- categorical
-     * eligibility first (once-per-employment, missing hire_date on a pro-rated type, minimum
-     * service, PERSONAL probation, the first-year total-days cap), then request-shape (max
-     * consecutive days), then document/timing checks (SICK certificate, advance notice) -- so the
-     * surfaced systemNote is always the most fundamental reason the request cannot be paid, not an
-     * incidental one. Only the first violation found is returned; see the individual checks below
-     * for what each one means and the decisions behind it.
+     * §5.2 emergency-filing exception (V125): the outcome of {@link #autoRejectNote} in the one case
+     * that needs to communicate more than a rejection message -- whether THIS request was approved
+     * specifically because it used the emergency tolerance (so {@link #submit} knows to record
+     * {@code emergency_filing = TRUE} via {@link LeaveRepository#markEmergencyFiling}). {@code
+     * rejectionNote == null} means approved; {@code emergencyFilingApplied} is only ever {@code true}
+     * on an approved outcome (never paired with a non-null rejectionNote).
      */
-    private String autoRejectNote(LeaveTypeDto leaveType, long employeeId, LocalDate startDate, LocalDate endDate, boolean hasAttachment, BigDecimal totalDays) {
+    private record AutoRejectResult(String rejectionNote, boolean emergencyFilingApplied) {
+        private static final AutoRejectResult APPROVED = new AutoRejectResult(null, false);
+
+        private static AutoRejectResult reject(String note) {
+            return new AutoRejectResult(note, false);
+        }
+    }
+
+    /**
+     * §5 leave-rules-as-data (V116, extended V120/V124/V125). Checks run in this order -- categorical
+     * eligibility first (once-per-employment, missing hire_date on a pro-rated type, minimum service,
+     * PERSONAL probation, the first-year total-days cap), then request-shape (wedding-leave cap, max
+     * consecutive days), then document/timing checks (SICK certificate, advance notice x
+     * emergency-filing exception) -- so the surfaced systemNote is always the most fundamental reason
+     * the request cannot be paid, not an incidental one. Only the first violation found is returned;
+     * see the individual checks below for what each one means and the decisions behind it.
+     *
+     * <p>ORDERING NOTE (V125): the wedding-leave cap and the SICK-certificate/notice checks are both
+     * PER-TYPE-CODE gates (PERSONAL and SICK respectively) that can never both apply to the same
+     * request -- a request is submitted under exactly one leave_type_code, so their relative order
+     * has no observable effect on any real submission. They stay in their pre-existing buckets
+     * (wedding cap alongside max-consecutive-days as a request-SHAPE limit; SICK-certificate and
+     * notice/emergency as document/timing checks, in that order) purely so each gate sits next to the
+     * other gates it is conceptually closest to, not because the order between them matters.
+     */
+    private AutoRejectResult autoRejectNote(LeaveTypeDto leaveType, long employeeId, LocalDate startDate, LocalDate endDate,
+            boolean hasAttachment, BigDecimal totalDays, String purposeCode, boolean requestedAsEmergency) {
         // §5.6 once-per-employment (ORDINATION today). Java-level check; ux_leave_once_per_employment
         // (V116) is the race-proof DB backstop -- see the DuplicateKeyException catch in #submit.
         if (leaveType.oncePerEmployment() && leaveRepository.hasOutstandingOrGrantedRequest(employeeId, leaveType.code())) {
-            return "This leave type may be used only once during your employment, and a claim for it already exists.";
+            return AutoRejectResult.reject("This leave type may be used only once during your employment, and a claim for it already exists.");
         }
 
         // §5.2/§5.3 pro-ration (V120): #employeeAnnualQuota cannot compute a quota without hire_date
@@ -745,8 +794,8 @@ public class LeaveService {
         // gate (which has its own, narrower NULL-hire_date check further down -- unreachable in
         // practice once this fires first, kept as a defensive fallback, not because it needs to run).
         if (leaveType.proratedFirstYear() && leaveRepository.findHireDate(employeeId).isEmpty()) {
-            return "Your hire date is not on file, so eligibility for " + leaveType.nameEn()
-                + " cannot be verified. Contact HR to record it before this leave type can be used.";
+            return AutoRejectResult.reject("Your hire date is not on file, so eligibility for " + leaveType.nameEn()
+                + " cannot be verified. Contact HR to record it before this leave type can be used.");
         }
 
         // §5.3 minimum SERVICE DURATION (months since hr.employee.hire_date). This is genuinely
@@ -759,13 +808,13 @@ public class LeaveService {
         if (leaveType.minServiceMonths() > 0) {
             Optional<LocalDate> hireDate = leaveRepository.findHireDate(employeeId);
             if (hireDate.isEmpty()) {
-                return "Your hire date is not on file, so eligibility for " + leaveType.nameEn()
-                    + " cannot be verified. Contact HR to record it before this leave type can be used.";
+                return AutoRejectResult.reject("Your hire date is not on file, so eligibility for " + leaveType.nameEn()
+                    + " cannot be verified. Contact HR to record it before this leave type can be used.");
             }
             long completedMonths = ChronoUnit.MONTHS.between(hireDate.get(), startDate);
             if (completedMonths < leaveType.minServiceMonths()) {
-                return leaveType.nameEn() + " requires at least " + leaveType.minServiceMonths()
-                    + " month(s) of completed service. Contact HR if this is an exception.";
+                return AutoRejectResult.reject(leaveType.nameEn() + " requires at least " + leaveType.minServiceMonths()
+                    + " month(s) of completed service. Contact HR if this is an exception.");
             }
         }
 
@@ -776,7 +825,7 @@ public class LeaveService {
         if ("PERSONAL".equals(leaveType.code())) {
             String note = personalProbationRejectionNote(employeeId, startDate);
             if (note != null) {
-                return note;
+                return AutoRejectResult.reject(note);
             }
         }
 
@@ -822,11 +871,39 @@ public class LeaveService {
                     BigDecimal usedThisYear = leaveRepository.sumUsedDays(
                         employeeId, leaveType.code(), startDate.getYear(), ACTIVE_QUOTA_STATUSES);
                     if (usedThisYear.add(totalDays).compareTo(effectiveCap) > 0) {
-                        return leaveType.nameEn() + " is limited to " + formatDays(effectiveCap)
+                        return AutoRejectResult.reject(leaveType.nameEn() + " is limited to " + formatDays(effectiveCap)
                             + " day(s) total per year during your first " + FULL_SERVICE_MONTHS
-                            + " months of service. Contact HR if this is an exception.";
+                            + " months of service. Contact HR if this is an exception.");
                     }
                 }
+            }
+        }
+
+        // §5.2 wedding leave cap (V125): "ลาเข้าพิธีสมรส จัดงานสมรสของบุตรลาได้ไม่เกิน 3 วัน" -- own
+        // marriage or a child's wedding, no more than 3 days. The ONLY per-PURPOSE limit §5.2 states
+        // -- do not extend this pattern to the other named purposes, none of which carry a stated
+        // cap.
+        //
+        // DECISION: a per-REQUEST calendar-day span cap (same mechanics as the generic
+        // maxConsecutiveDays check just below), not a cumulative per-year total across every
+        // WEDDING-purpose request -- a wedding is a discrete one-time occasion, unlike ลากิจ's
+        // everyday, repeatable use, and "ไม่เกิน 3 วัน" reads naturally as "this occasion may not
+        // exceed 3 days".
+        //
+        // DESIGN NOTE -- deliberately NOT a hr.leave_type column, unlike every OTHER §5 numeric rule
+        // in this method: those vary meaningfully BY TYPE (V116/V120/V124). This rule is scoped to a
+        // (type, purpose) PAIR -- PERSONAL + WEDDING specifically -- and no other purpose/type
+        // combination carries a stated cap; a leave_type column would either apply to every purpose
+        // of PERSONAL (wrong -- it would also cap FAMILY_NECESSITY/FAMILY_FUNERAL/etc.) or need a new
+        // type x purpose table built for exactly one number. Hardcoded here instead, the same
+        // precedent as the SICK-certificate check and the PERSONAL-probation gate above, both of
+        // which are likewise keyed off leaveType.code() in Java rather than a column, for the
+        // identical "does not generalize across every type" reason.
+        if ("PERSONAL".equals(leaveType.code()) && WEDDING_PURPOSE_CODE.equals(purposeCode)) {
+            long weddingSpanDays = ChronoUnit.DAYS.between(startDate, endDate) + 1;
+            if (BigDecimal.valueOf(weddingSpanDays).compareTo(WEDDING_LEAVE_MAX_DAYS) > 0) {
+                return AutoRejectResult.reject("Wedding leave (own marriage or a child's) may not exceed "
+                    + formatDays(WEDDING_LEAVE_MAX_DAYS) + " day(s) per request. Contact HR if this is an exception.");
             }
         }
 
@@ -851,15 +928,15 @@ public class LeaveService {
         if (leaveType.maxConsecutiveDays() != null) {
             long spanDays = ChronoUnit.DAYS.between(startDate, endDate) + 1;
             if (BigDecimal.valueOf(spanDays).compareTo(leaveType.maxConsecutiveDays()) > 0) {
-                return leaveType.nameEn() + " may not exceed " + formatDays(leaveType.maxConsecutiveDays())
-                    + " consecutive day(s) per request. Contact HR if this is an exception.";
+                return AutoRejectResult.reject(leaveType.nameEn() + " may not exceed " + formatDays(leaveType.maxConsecutiveDays())
+                    + " consecutive day(s) per request. Contact HR if this is an exception.");
             }
         }
 
         if ("SICK".equals(leaveType.code())) {
             String note = sickCertificateNote(leaveType, employeeId, startDate, hasAttachment);
             if (note != null) {
-                return note;
+                return AutoRejectResult.reject(note);
             }
         }
 
@@ -882,15 +959,64 @@ public class LeaveService {
         // its own blast radius -- it belongs in its own reviewed change with its own tests, not folded
         // silently into a branch whose stated purpose is the payroll deduction/day-count fix. Left on
         // calendar days here; flagged as a separate, explicit follow-up decision.
+        //
+        // §5.2 emergency-filing exception (V125), COMBINED notice x emergency decision table:
+        //
+        //   notice met?  | requestedAsEmergency? | monthly tolerance left? | outcome
+        //   -------------|------------------------|--------------------------|--------------------------------
+        //   yes           | (irrelevant)           | (irrelevant)             | proceeds normally (unaffected)
+        //   no            | no                     | n/a                      | AUTO_REJECTED (unchanged, pre-V125 behaviour)
+        //   no            | yes                    | yes (used < allowance)   | APPROVED via the exception; emergencyFilingApplied=true
+        //   no            | yes                    | no (used >= allowance)   | AUTO_REJECTED (tolerance-exhausted message, not the generic notice one)
+        //
+        // "โดยไม่หักเงิน" ("without deduction") is read here as: an emergency-approved request is not
+        // WORSE OFF than an on-time one -- it falls through to the SAME quota/paid-cap machinery every
+        // other approved request already goes through (#submit), not as an unconditional override of
+        // ordinary quota-exceeded unpaid splitting, which is an orthogonal, pre-existing rule. Only
+        // types carrying a non-null emergencyMonthlyAllowance (PERSONAL today) get this exception at
+        // all -- it composes with advanceNoticeDays generically (data-driven, not hardcoded to
+        // PERSONAL's code), unlike the wedding cap above.
+        //
+        // ISOLATION FROM V124's SICK no-certificate tolerance: this counter
+        // (LeaveRepository#countEmergencyFilings) reads hr.leave_request.emergency_filing, a column
+        // set ONLY by #markEmergencyFiling for THIS gate; V124's sickCertificateNote/
+        // countNoCertificateRequestsInMonth instead reads attachment_id IS NULL and is called only
+        // for SICK. The two counters share no column and are never invoked for the same
+        // leave_type_code in practice (emergencyMonthlyAllowance is non-null only for PERSONAL,
+        // noCertificateMonthlyTolerance meaningful only for SICK), so neither can consume the other's
+        // monthly allowance -- see LeaveTypeDto's class Javadoc for the same point stated at the data
+        // level.
+        //
+        // UNENFORCEABLE CONDITIONS, stated plainly (not silently assumed): §5.2 also requires the
+        // supervisor was told before the shift started, and that the leave form is filed with the
+        // supervisor on the first day back at work. Neither is representable in this schema -- there
+        // is no "supervisor was notified" event and no "filed on day N of absence" concept anywhere
+        // in hr.leave_request. This gate enforces only what it CAN verify (the requester's own
+        // declaration and the <=N/month count); the other two conditions are left to the reviewing
+        // manager/HR's judgement, same as every other manually-reviewed condition in this class (e.g.
+        // MILITARY's voluntary-vs-call-up distinction, V116's migration comment). An emergency-
+        // approved request is NOT proof the supervisor was actually notified in time -- do not read it
+        // that way.
         int noticeDays = Math.max(0, leaveType.advanceNoticeDays());
         if (noticeDays > 0) {
             LocalDate earliestAllowed = LocalDate.now(clock).plusDays(noticeDays);
             if (startDate.isBefore(earliestAllowed)) {
-                return "Leave requests must be submitted at least " + noticeDays
-                    + " day(s) before the start date. Contact your manager or HR for urgent leave.";
+                if (leaveType.emergencyMonthlyAllowance() != null && requestedAsEmergency) {
+                    int usedThisMonth = leaveRepository.countEmergencyFilings(
+                        employeeId, leaveType.code(), startDate, ACTIVE_QUOTA_STATUSES);
+                    if (usedThisMonth < leaveType.emergencyMonthlyAllowance()) {
+                        return new AutoRejectResult(null, true);
+                    }
+                    return AutoRejectResult.reject("Emergency leave without advance notice is limited to "
+                        + leaveType.emergencyMonthlyAllowance()
+                        + " occasion(s) per calendar month, and that allowance has already been used this month. "
+                        + "Contact your manager or HR.");
+                }
+                return AutoRejectResult.reject("Leave requests must be submitted at least " + noticeDays
+                    + " day(s) before the start date. Contact your manager or HR for urgent leave.");
             }
         }
-        return null;
+        return AutoRejectResult.APPROVED;
     }
 
     private void notifyAfterSubmit(LeaveRequestDto request, LeaveStatus status) {
@@ -966,6 +1092,32 @@ public class LeaveService {
         String code = value == null ? "" : value.trim().toUpperCase();
         return leaveRepository.findLeaveType(code)
             .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ประเภทการลาไม่ถูกต้อง"));
+    }
+
+    /**
+     * §5.2 leave purpose (V125). §5.2's text lists five illustrative purposes then ends with
+     * "เป็นต้น" ("etc.") -- explicitly NON-EXHAUSTIVE. This validates only that a supplied,
+     * non-blank code matches one of the five NAMED purposes or {@code OTHER} (the always-available
+     * catch-all for anything not on the list) -- it can therefore never refuse a legitimate ลากิจ
+     * request for lacking a matching category, only catch a malformed/misspelled code from the
+     * caller. Blank/null returns {@code null} (no purpose selected).
+     *
+     * <p>DECISION: purpose is OPTIONAL, for every leave type including PERSONAL. Every request
+     * submitted before V125 has none, and §5.2 never states that choosing a purpose category is a
+     * precondition for filing ลากิจ -- only that the wedding sub-rule caps a request IF that is the
+     * stated purpose (see {@link #autoRejectNote}'s wedding-cap check). Making this required would
+     * retroactively block every existing submit flow that never asked for it; a caller that does not
+     * care about the wedding cap (or is filing SICK/VACATION/etc.) can simply omit it.
+     */
+    private String normalizePurposeCode(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String normalized = value.trim().toUpperCase();
+        if (!KNOWN_PURPOSE_CODES.contains(normalized)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ประเภทเหตุผลการลาไม่ถูกต้อง");
+        }
+        return normalized;
     }
 
     /**

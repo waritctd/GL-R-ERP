@@ -301,11 +301,16 @@ db.leaveTypes = db.leaveTypes || [
   // 3-CONSECUTIVE-day rule for everyone is gone; the real 3-day figure is now a first-year-only
   // TOTAL annual cap (see LeaveService#autoRejectNote's Javadoc on the real backend). Not enforced
   // in mock mode, same "shape only" caveat as every other field here.
+  // emergencyMonthlyAllowance: 3 (V125) -- §5.2's emergency-filing exception ("อนุโลมให้ได้ไม่เกิน
+  // เดือนละ 3 ครั้ง โดยไม่หักเงิน"). SHAPE parity only, same caveat as every other field in this
+  // block: create() below does not implement the notice-bypass/monthly-tolerance decision at all
+  // (see the leave.create() comment further down) -- a late PERSONAL request is auto-rejected in
+  // mock mode exactly as it always was, regardless of purposeCode/requestedAsEmergency.
   {
     code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal leave', annualQuotaDays: 7, requiresAttachment: false,
     paidDaysCap: null, advanceNoticeDays: 1, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
     dayCountBasis: 'WORKING_DAYS', proratedFirstYear: true, firstYearMaxDays: 3,
-    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0,
+    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0, emergencyMonthlyAllowance: 3,
   },
   // certificateFilingWindowDays: 3 / noCertificateMonthlyTolerance: 3 (V124, §5.1) -- SHAPE parity
   // only, see the file-level note above this array: create() below does NOT enforce either of these.
@@ -313,7 +318,7 @@ db.leaveTypes = db.leaveTypes || [
     code: 'SICK', nameTh: 'ลาป่วย', nameEn: 'Sick leave', annualQuotaDays: 30, requiresAttachment: true,
     paidDaysCap: null, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
     dayCountBasis: 'WORKING_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
-    certificateFilingWindowDays: 3, noCertificateMonthlyTolerance: 3,
+    certificateFilingWindowDays: 3, noCertificateMonthlyTolerance: 3, emergencyMonthlyAllowance: null,
   },
   // minServiceMonths: 0 / proratedFirstYear: true (V120, defect 1 fix) -- V116's original
   // min_service_months=12 refused ALL vacation leave under a year of service outright, contradicting
@@ -323,13 +328,13 @@ db.leaveTypes = db.leaveTypes || [
     code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation leave', annualQuotaDays: 6, requiresAttachment: false,
     paidDaysCap: null, advanceNoticeDays: 3, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
     dayCountBasis: 'WORKING_DAYS', proratedFirstYear: true, firstYearMaxDays: null,
-    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0,
+    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0, emergencyMonthlyAllowance: null,
   },
   {
     code: 'MATERNITY', nameTh: 'ลาคลอดบุตร', nameEn: 'Maternity leave', annualQuotaDays: 98, requiresAttachment: true,
     paidDaysCap: 45, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
     dayCountBasis: 'CALENDAR_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
-    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0,
+    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0, emergencyMonthlyAllowance: null,
   },
   // annualQuotaDays: 366 (sentinel, not a real policy number) / paidDaysCap: 60 (V120, defect 2 fix)
   // -- V116 wrongly capped the LEAVE ITSELF at 60 days; §5.5 only caps the PAY. See
@@ -338,13 +343,13 @@ db.leaveTypes = db.leaveTypes || [
     code: 'MILITARY', nameTh: 'ลารับราชการทหาร', nameEn: 'Military service leave', annualQuotaDays: 366, requiresAttachment: true,
     paidDaysCap: 60, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
     dayCountBasis: 'WORKING_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
-    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0,
+    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0, emergencyMonthlyAllowance: null,
   },
   {
     code: 'ORDINATION', nameTh: 'ลาอุปสมบท', nameEn: 'Ordination leave', annualQuotaDays: 60, requiresAttachment: false,
     paidDaysCap: 15, advanceNoticeDays: 0, minServiceMonths: 12, maxConsecutiveDays: null, oncePerEmployment: true,
     dayCountBasis: 'WORKING_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
-    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0,
+    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0, emergencyMonthlyAllowance: null,
   },
 ];
 // leaveRequests/overtimeRequests/specialMoneyRequests are seeded by demoHr.js, wired
@@ -4183,6 +4188,15 @@ export const api = {
       // mirrors LeaveService#autoRejectNote's notice branch, in CALENDAR days, same as the real
       // service. minServiceMonths/maxConsecutiveDays/oncePerEmployment are NOT enforced here -- see
       // the db.leaveTypes comment above for why.
+      //
+      // §5.2 purpose/emergency-filing (V125): purposeCode is stored verbatim below for SHAPE parity
+      // (plain passthrough, not a computation -- safe to mirror). The wedding-leave 3-day cap and
+      // the emergency-filing monthly-tolerance exception are NOT implemented here, same "not
+      // reimplementing a per-request eligibility decision" stance as every other gap in this
+      // function: a late PERSONAL request is auto-rejected below exactly as it always was,
+      // regardless of purposeCode or requestedAsEmergency, and a WEDDING-purpose request longer than
+      // 3 days is NOT refused in mock mode. Do not read a mock-mode APPROVED as proof either rule
+      // was honoured -- test both against the real backend.
       const noticeDays = Math.max(0, Number(leaveType.advanceNoticeDays || 0));
       const noticeCutoff = new Date(Date.now() + noticeDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       const hasAttachment = Boolean(payload.attachmentFile);
@@ -4234,6 +4248,12 @@ export const api = {
         contactDistrict: pickContact(payload.contactDistrict, contactDefaults.contactDistrict),
         contactProvince: pickContact(payload.contactProvince, contactDefaults.contactProvince),
         contactPhone: pickContact(payload.contactPhone, contactDefaults.contactPhone),
+        // §5.2 purpose/emergency-filing (V125): purposeCode passthrough (shape parity only -- see
+        // the comment above). emergencyFiling is always false here -- the mock never grants the
+        // emergency exception, so it can never legitimately be true; a late request stays
+        // AUTO_REJECTED above regardless of requestedAsEmergency.
+        purposeCode: payload.purposeCode || null,
+        emergencyFiling: false,
       };
       request.employeeCode = employee.code;
       request.employeeName = employee.nameTh;

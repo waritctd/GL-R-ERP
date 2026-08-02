@@ -233,12 +233,12 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
             workingDaysEmployee, "LEAVE_WITHOUT_PAY",
             LocalDate.parse("2026-08-04"), LocalDate.parse("2026-08-04"),
             "sub-day on a holiday", LocalTime.of(8, 30), LocalTime.of(12, 30),
-            null, null, null, null, null);
+            null, null, null, null, null, null, null);
         SubmitLeaveRequest subDayOnHolidayMaternity = new SubmitLeaveRequest(
             maternityEmployee, "MATERNITY",
             LocalDate.parse("2026-08-04"), LocalDate.parse("2026-08-04"),
             "sub-day maternity on the same holiday", LocalTime.of(8, 30), LocalTime.of(12, 30),
-            null, null, null, null, null);
+            null, null, null, null, null, null, null);
 
         // WORKING_DAYS: the new schedule/holiday-aware gate in validateSubDayTimes correctly rejects
         // a sub-day request whose only date is a holiday -- there is no working day to take partial
