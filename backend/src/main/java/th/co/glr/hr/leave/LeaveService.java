@@ -995,13 +995,16 @@ public class LeaveService {
     }
 
     /**
-     * §5 leave-rules-as-data (V116, extended V120/V124/V125). Checks run in this order -- categorical
-     * eligibility first (once-per-employment, missing hire_date on a pro-rated type, minimum service,
-     * PERSONAL probation, the first-year total-days cap), then request-shape (wedding-leave cap, max
-     * consecutive days), then document/timing checks (SICK certificate, advance notice x
-     * emergency-filing exception) -- so the surfaced systemNote is always the most fundamental reason
-     * the request cannot be paid, not an incidental one. Only the first violation found is returned;
-     * see the individual checks below for what each one means and the decisions behind it.
+     * §5 leave-rules-as-data (V116, extended V120/V124/V125, relational rules 2026-08). Checks run in
+     * this order -- categorical eligibility first (once-per-employment, §5.3.4 post-resignation,
+     * missing hire_date on a pro-rated type, minimum service, PERSONAL probation, the first-year
+     * total-days cap), then request-shape (wedding-leave cap, max consecutive days, §5.3.3 contiguous
+     * VACATION/PERSONAL), then document/timing checks (SICK certificate, advance notice x
+     * emergency-filing exception), then finally the one gate that is not about the requester's own
+     * eligibility at all (§5.3.2 department coverage) -- so the surfaced systemNote is always the most
+     * fundamental reason the request cannot be paid, not an incidental one. Only the first violation
+     * found is returned; see the individual checks below for what each one means and the decisions
+     * behind it.
      *
      * <p>ORDERING NOTE (V125): the wedding-leave cap and the SICK-certificate/notice checks are both
      * PER-TYPE-CODE gates (PERSONAL and SICK respectively) that can never both apply to the same
@@ -1010,6 +1013,21 @@ public class LeaveService {
      * (wedding cap alongside max-consecutive-days as a request-SHAPE limit; SICK-certificate and
      * notice/emergency as document/timing checks, in that order) purely so each gate sits next to the
      * other gates it is conceptually closest to, not because the order between them matters.
+     *
+     * <p>ORDERING NOTE (relational rules, 2026-08): §5.3.4 (resignation) is CATEGORICAL -- like
+     * once-per-employment, it is a "not eligible for this type at all" gate, so it runs immediately
+     * after once-per-employment, ahead of every hire-date/tenure check (those still make sense to
+     * report even for a resigned employee, but resignation is the more fundamental reason). §5.3.3
+     * (contiguous) is REQUEST-SHAPE -- like max-consecutive-days, it is about the shape of this
+     * request relative to nearby ones, so it sits directly after max-consecutive-days; it is
+     * type-scoped (VACATION/PERSONAL only, via {@code CONTIGUOUS_LEAVE_PAIR}) and mutually exclusive
+     * with the wedding cap and SICK-certificate gates by leave_type_code, so its exact position
+     * relative to those two has no observable effect, same reasoning as V125's own ordering note
+     * above. §5.3.2 (department coverage) is neither categorical, request-shape, nor document/timing
+     * -- it is the ONE gate here that depends on OTHER employees' data rather than the requester's
+     * own, and it is type-AGNOSTIC (applies to every leave type, SICK included -- owner ruling), so it
+     * runs LAST, after every type-specific/requester-specific gate above (including all of V124/V125's)
+     * has had a chance to give a more specific reason first.
      */
     private AutoRejectResult autoRejectNote(LeaveTypeDto leaveType, long employeeId, LocalDate startDate, LocalDate endDate,
             boolean hasAttachment, BigDecimal totalDays, String purposeCode, boolean requestedAsEmergency) {
