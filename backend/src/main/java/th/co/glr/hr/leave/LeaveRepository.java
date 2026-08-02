@@ -128,7 +128,7 @@ public class LeaveRepository {
     private static final String LEAVE_TYPE_COLUMNS = """
         leave_type_code, name_th, name_en, annual_quota_days, requires_attachment,
         paid_days_cap, advance_notice_days, min_service_months, max_consecutive_days,
-        once_per_employment, day_count_basis
+        once_per_employment, day_count_basis, prorated_first_year, first_year_max_days
         """;
 
     public List<LeaveTypeDto> findLeaveTypes() {
@@ -729,7 +729,9 @@ public class LeaveRepository {
             rs.getInt("min_service_months"),
             rs.getObject("max_consecutive_days", BigDecimal.class),
             rs.getBoolean("once_per_employment"),
-            LeaveDayCountBasis.valueOf(rs.getString("day_count_basis"))
+            LeaveDayCountBasis.valueOf(rs.getString("day_count_basis")),
+            rs.getBoolean("prorated_first_year"),
+            rs.getObject("first_year_max_days", BigDecimal.class)
         );
     }
 

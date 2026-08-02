@@ -132,6 +132,39 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
+    void aNinetyDayMilitaryRequestIsAcceptedWithSixtyPaidAndThirtyUnpaidDays() {
+        // Defect 2 fix (V120): §5.5 caps only the PAY (60 days/year), not the leave itself -- V116
+        // wrongly seeded annual_quota_days=60 with no paid_days_cap at all, which capped the LEAVE
+        // at 60 days and refused anything past it. Fixed by moving the real 60-day limit onto
+        // paid_days_cap and raising annual_quota_days to a 366-day sentinel that can never itself
+        // bind (see V120's migration comment).
+        //
+        // MUTATION-CHECK NOTE: the paidDays/unpaidDays split (60/30) alone happens to come out
+        // IDENTICAL whether the 60-day limit lives on paid_days_cap (fixed) or on annual_quota_days
+        // (V116's defect) -- LeaveService#submit's approve-and-split design means both seedings
+        // bound the paid portion at 60 either way for THIS ONE request. What genuinely
+        // distinguishes them is quotaRemainingAfter: under the V116 seed the 90-day request would
+        // exhaust the (wrongly 60-day) "quota" down to 0 remaining; under the fix, 90 days consumed
+        // out of the 366-day sentinel leaves 276 remaining -- proving the leave itself was never
+        // actually capped. Asserting ONLY paidDays/unpaidDays here would be a vacuous regression
+        // guard for this specific defect (see CLAUDE.md's fixture-supplies-what-production-lacks
+        // trap) -- quotaRemainingAfter is the assertion that actually pins the fix.
+        long employeeId = insertEmployee("MIL-001", LocalDate.parse("2015-01-01"));
+
+        // Mon 2026-01-05 .. Fri 2026-05-08: exactly 90 working weekdays (verified independently of
+        // LeaveDayMath, same method as the MATERNITY test below).
+        LeaveRequestDto result = leaveService.submit(
+            submitRequest(employeeId, "MILITARY", "2026-01-05", "2026-05-08"),
+            employee(employeeId));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.totalDays()).isEqualByComparingTo("90.00");
+        assertThat(result.paidDays()).isEqualByComparingTo("60.00");
+        assertThat(result.unpaidDays()).isEqualByComparingTo("30.00");
+        assertThat(result.quotaRemainingAfter()).isEqualByComparingTo("276.00");
+    }
+
+    @Test
     void ordinationLeaveWithinTheFifteenDayPaidCapIsFullyPaid() {
         // Wrong-way-round complement to the maternity test: a SHORT ordination request (10 of the
         // 60-day quota, under the 15-day paid cap) must be entirely paid -- the cap must not bind
@@ -149,18 +182,39 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void vacationIsRefusedBelowTheTwelveMonthServiceFloor() {
-        // Hired 2026-06-01, requesting VACATION starting 2026-07-13: well under 12 months.
-        long employeeId = insertEmployee("VAC-NEW-001", LocalDate.parse("2026-06-01"));
+    void vacationQuotaIsProratedUnderOneYearOfServiceAndFullAfterOneYear() {
+        // Defect 1 fix (V120): §5.3's parenthetical grants a PRO-RATED quota to an employee under a
+        // year of service, not an outright refusal -- V116's original bug seeded
+        // min_service_months=12 as a hard eligibility floor, which is what this test used to assert
+        // (vacationIsRefusedBelowTheTwelveMonthServiceFloor, pre-V120). Both sides asserted on ONE
+        // test, same request shape, so it cannot pass by only ever constructing the easy (>1 year)
+        // case.
+        long underOneYear = insertEmployee("VAC-PRORATE-001", LocalDate.parse("2026-01-13")); // 6 months before the request below
+        long overOneYear = insertEmployee("VAC-PRORATE-002", LocalDate.parse("2015-01-01"));
 
-        LeaveRequestDto result = leaveService.submit(
-            submitRequest(employeeId, "VACATION", "2026-07-13", "2026-07-14"),
-            employee(employeeId));
+        // 6 completed months of service -> prorated quota = 6.00 * 6/12 = 3.00 (rounded to the
+        // nearest 0.5 day -- see LeaveService#employeeAnnualQuota's Javadoc for the formula and its
+        // interpretation caveat). Mon 2026-07-13 .. Thu 2026-07-16 is 4 working days: exactly 3 of
+        // them paid, 1 unpaid -- this pins the 3.00 prorated figure exactly (not zero, not the full
+        // 6.00 the pre-V120 gate would have refused outright, and not the 6.00 an under-pro-rated
+        // fix would have wrongly granted from day one).
+        LeaveRequestDto underOneYearResult = leaveService.submit(
+            submitRequest(underOneYear, "VACATION", "2026-07-13", "2026-07-16"),
+            employee(underOneYear));
+        assertThat(underOneYearResult.status()).isEqualTo("APPROVED");
+        assertThat(underOneYearResult.totalDays()).isEqualByComparingTo("4.00");
+        assertThat(underOneYearResult.paidDays()).isEqualByComparingTo("3.00");
+        assertThat(underOneYearResult.unpaidDays()).isEqualByComparingTo("1.00");
+        assertThat(underOneYearResult.quotaRemainingAfter()).isEqualByComparingTo("0.00");
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(result.systemNote()).contains("month(s) of completed service");
-        assertThat(result.paidDays()).isEqualByComparingTo("0.00");
-        assertThat(result.unpaidDays()).isEqualByComparingTo("0.00");
+        // Wrong-way-round complement, IDENTICAL request shape: an employee comfortably past a year
+        // of service gets the FULL 6.00-day quota, so all 4 working days are paid.
+        LeaveRequestDto overOneYearResult = leaveService.submit(
+            submitRequest(overOneYear, "VACATION", "2026-07-13", "2026-07-16"),
+            employee(overOneYear));
+        assertThat(overOneYearResult.status()).isEqualTo("APPROVED");
+        assertThat(overOneYearResult.paidDays()).isEqualByComparingTo("4.00");
+        assertThat(overOneYearResult.unpaidDays()).isEqualByComparingTo("0.00");
     }
 
     @Test
@@ -194,17 +248,25 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void personalLeaveIsRefusedWhenItSpansMoreThanThreeConsecutiveDays() {
+    void personalLeaveMayExceedThreeConsecutiveDaysOnceTheEmployeeHasClearedOneYearOfService() {
+        // Defect 3 fix (V120): the 2561-era blanket max_consecutive_days=3 rule this test USED to
+        // assert (personalLeaveIsRefusedWhenItSpansMoreThanThreeConsecutiveDays, pre-V120) applied to
+        // EVERY employee regardless of tenure. The current (2567) announcement text dropped
+        // "ติดต่อกัน" ("consecutive") and moved its 3-day figure INSIDE the under-one-year
+        // parenthesis -- an owner-ruled ANNUAL TOTAL ceiling for under-1-year employees only, not a
+        // per-request span limit for everyone (see LeaveService#autoRejectNote's first-year-max-days
+        // gate). PERSONAL's max_consecutive_days is now NULL (V120), so this exact 4-calendar-day
+        // span that used to be refused must now be approved for a >1-year employee, wrong-way-round
+        // proof the old rule is genuinely gone, not merely narrowed.
         long employeeId = insertEmployee("PERSONAL-LONG-001", LocalDate.parse("2015-01-01"));
 
-        // Mon 2026-07-13 .. Thu 2026-07-16: a 4-calendar-day span, one more than PERSONAL's 3-day
-        // cap (§5.2).
         LeaveRequestDto result = leaveService.submit(
-            submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-16"),
+            submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-16"), // Mon-Thu, 4 working days
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(result.systemNote()).contains("consecutive day(s)");
+        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.totalDays()).isEqualByComparingTo("4.00");
+        assertThat(result.paidDays()).isEqualByComparingTo("4.00");
     }
 
     @Test
@@ -218,6 +280,57 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(result.status()).isEqualTo("APPROVED");
         assertThat(result.totalDays()).isEqualByComparingTo("3.00");
         assertThat(result.paidDays()).isEqualByComparingTo("3.00");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // §5.2 PERSONAL first-year total-days cap (V120, defect 3). SEPARATE rule from pro-ration and
+    // from the probation gate above -- see LeaveService#autoRejectNote's Javadoc. Composes with
+    // pro-ration as effectiveCap = min(proratedQuota, firstYearMaxDays); both directions of that
+    // min() are proven below, plus the wrong-way-round proof above that the OLD blanket
+    // consecutive-day rule this replaces is genuinely gone for a >1-year employee.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void personalLeaveFirstYearCapIsBoundByTheProratedQuotaWhenItIsBelowThreeDays() {
+        // Hired 2026-05-13, probation_days=30 (ends 2026-06-12, comfortably before the requests
+        // below) -- isolates this test from the SEPARATE probation gate. 2 completed months of
+        // service by 2026-07-13 -> prorated quota = 7.00 * 2/12 = 1.1667, rounded to the nearest 0.5
+        // = 1.00 -- BELOW the flat 3-day ceiling, so the prorated figure is what actually binds
+        // (effectiveCap = min(1.00, 3.00) = 1.00), not the flat 3.
+        long employeeId = insertEmployee("PERS-CAP-LOW-001", LocalDate.parse("2026-05-13"), 30);
+
+        LeaveRequestDto allowed = leaveService.submit(
+            submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-13"), // 1 working day
+            employee(employeeId));
+        assertThat(allowed.status()).isEqualTo("APPROVED");
+        assertThat(allowed.paidDays()).isEqualByComparingTo("1.00");
+
+        LeaveRequestDto refused = leaveService.submit(
+            submitRequest(employeeId, "PERSONAL", "2026-07-20", "2026-07-21"), // 2 working days
+            employee(employeeId));
+        assertThat(refused.status()).isEqualTo("AUTO_REJECTED");
+        assertThat(refused.systemNote()).contains("day(s) total per year");
+    }
+
+    @Test
+    void personalLeaveFirstYearCapIsBoundByTheFlatThreeDaysWhenTheProratedQuotaIsAboveIt() {
+        // Hired 2025-10-13, probation_days=30 -- 9 completed months of service by 2026-07-13 ->
+        // prorated quota = 7.00 * 9/12 = 5.25, rounded to the nearest 0.5 = 5.50 -- ABOVE the flat
+        // 3-day ceiling, so the flat figure is what actually binds (effectiveCap = min(5.50, 3.00) =
+        // 3.00), the other side of the min() from the test above.
+        long employeeId = insertEmployee("PERS-CAP-HIGH-001", LocalDate.parse("2025-10-13"), 30);
+
+        LeaveRequestDto allowed = leaveService.submit(
+            submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-15"), // 3 working days
+            employee(employeeId));
+        assertThat(allowed.status()).isEqualTo("APPROVED");
+        assertThat(allowed.paidDays()).isEqualByComparingTo("3.00");
+
+        LeaveRequestDto refused = leaveService.submit(
+            submitRequest(employeeId, "PERSONAL", "2026-07-20", "2026-07-23"), // 4 working days
+            employee(employeeId));
+        assertThat(refused.status()).isEqualTo("AUTO_REJECTED");
+        assertThat(refused.systemNote()).contains("day(s) total per year");
     }
 
     @Test
@@ -313,8 +426,21 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void personalLeaveIsGrantedImmediatelyWhenProbationDaysIsZeroOnTheEmployee() {
         // Wrong-way-round complement: probation_days = 0 on the real employee row must mean
-        // eligible from the hire date itself, proven through the actual SQL read, not a mocked one.
-        long employeeId = insertEmployee("PERS-PROB-002", LocalDate.parse("2026-07-13"), 0);
+        // eligible from the hire date itself (no ADDITIONAL waiting period), proven through the
+        // actual SQL read, not a mocked one.
+        //
+        // V120 REVISION: this used to hire the employee on the EXACT request date (0 days of
+        // service at request time). That combination is no longer representable together with an
+        // APPROVED outcome now that PERSONAL is also prorated_first_year (V120, defect 1/3 fix) --
+        // 0 completed months of service prorates to a genuine 0.00-day quota by
+        // LeaveService#employeeAnnualQuota's own formula, which the NEW first-year-total-days cap
+        // gate (defect 3) would then correctly refuse, for a DIFFERENT reason than probation. Hiring
+        // 2 completed months before the request keeps this test isolated to the probation gate
+        // (still trivially passed -- probation_days=0 means probationEndsOn == hire date, which is
+        // always on/before any later request date) while giving pro-ration a non-zero (1.00-day)
+        // quota that comfortably covers the single-day request, so this test cannot be confused with
+        // the separate first-year-cap gate's own dedicated tests below.
+        long employeeId = insertEmployee("PERS-PROB-002", LocalDate.parse("2026-05-01"), 0);
 
         LeaveRequestDto result = leaveService.submit(
             submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-13"),
