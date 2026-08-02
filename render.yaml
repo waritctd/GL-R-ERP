@@ -37,3 +37,13 @@ services:
         sync: false
       - key: APP_UPLOADS_DIR
         sync: false
+      # BOT issues a separate key per API, and BOT's rate limit is 100 calls/hour PER TOKEN -- so
+      # BotFxFetchService (app.bot.fx-api-token) and BotHolidayFetchService
+      # (app.bot.holiday-api-token) each need their own key, with no fallback between them. Neither
+      # was previously declared here, so both fetchers have been silently no-op'ing in this
+      # environment -- each property defaults to blank and its service logs a WARN/INFO and returns
+      # rather than throwing, so there is no error, only an unset value and a quiet skip.
+      - key: BOT_FX_API_TOKEN
+        sync: false
+      - key: BOT_HOLIDAY_API_TOKEN
+        sync: false

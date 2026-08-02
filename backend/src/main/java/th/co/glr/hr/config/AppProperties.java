@@ -57,15 +57,36 @@ public class AppProperties {
         return payroll;
     }
 
+    /**
+     * BOT issues a <strong>separate API key per API</strong> — there is no shared credential. This
+     * class used to expose a single {@code apiToken} that both {@code BotFxFetchService} and {@code
+     * BotHolidayFetchService} read; that was wrong (one of the two was always sending a key invalid
+     * for the API it called) and the failure was invisible — a bad key 401s, the caller logs and
+     * returns, and the only symptom is silently stale data. Each fetcher now has its own property
+     * and its own env var, with <strong>no fallback between them</strong>: a missing key must be
+     * loudly absent (a WARN naming exactly which env var to set), never quietly substituted with the
+     * other API's key.
+     */
     public static class Bot {
-        private String apiToken = "";
+        private String holidayApiToken = "";
+        private String fxApiToken = "";
 
-        public String getApiToken() {
-            return apiToken;
+        /** {@code BOT_HOLIDAY_API_TOKEN} — Financial Institutions' Holidays API only. */
+        public String getHolidayApiToken() {
+            return holidayApiToken;
         }
 
-        public void setApiToken(String apiToken) {
-            this.apiToken = apiToken;
+        public void setHolidayApiToken(String holidayApiToken) {
+            this.holidayApiToken = holidayApiToken;
+        }
+
+        /** {@code BOT_FX_API_TOKEN} — Exchange Rate API only. */
+        public String getFxApiToken() {
+            return fxApiToken;
+        }
+
+        public void setFxApiToken(String fxApiToken) {
+            this.fxApiToken = fxApiToken;
         }
     }
 
