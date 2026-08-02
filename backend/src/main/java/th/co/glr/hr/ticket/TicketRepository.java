@@ -660,18 +660,30 @@ public class TicketRepository {
         }
     }
 
+    // Slice F (ticket-workspace IA programme): ราคาตั้ง on the deal's item rows. pp.price/currency/
+    // price_unit/sqm_per_piece resolve the SAME 4 inputs TicketCreateModal's catalog picker stashes
+    // as UI-only state on a not-yet-saved item (catalogPrice/catalogCurrency/catalogPriceUnit/
+    // sqmPerPiece) -- see TicketItemDto's own doc comment for why the field names match exactly.
+    //
+    // MUST be a LEFT JOIN. catalog_price_id is nullable by design in two independent ways (V110's
+    // own header): a "custom" line never had a catalog identity, and ON DELETE SET NULL clears it
+    // when a catalog price is retired. An INNER JOIN would silently drop both kinds of row out of
+    // the items list -- a line item vanishing from a deal, not merely a missing price.
     private List<TicketItemDto> findItemsByTicketId(long ticketId) {
         return jdbc.query("""
-            SELECT item_id, ticket_id, brand, model, color, texture, size, factory,
-                   qty, qty_sqm, unit_basis, raw_price, raw_currency, raw_unit,
-                   proposed_price, approved_price, currency, sort_order,
-                   calced_cost, calced_price, calc_config_version,
-                   manual_price, manual_override_reason,
-                   qty_delivered, qty_from_stock, stock_note,
-                   catalog_price_id, catalog_product_code
-              FROM sales.ticket_item
-             WHERE ticket_id = :id
-             ORDER BY sort_order, item_id
+            SELECT ti.item_id, ti.ticket_id, ti.brand, ti.model, ti.color, ti.texture, ti.size, ti.factory,
+                   ti.qty, ti.qty_sqm, ti.unit_basis, ti.raw_price, ti.raw_currency, ti.raw_unit,
+                   ti.proposed_price, ti.approved_price, ti.currency, ti.sort_order,
+                   ti.calced_cost, ti.calced_price, ti.calc_config_version,
+                   ti.manual_price, ti.manual_override_reason,
+                   ti.qty_delivered, ti.qty_from_stock, ti.stock_note,
+                   ti.catalog_price_id, ti.catalog_product_code,
+                   pp.price AS catalog_price, pp.currency AS catalog_currency,
+                   pp.price_unit AS catalog_price_unit, pp.sqm_per_piece AS catalog_sqm_per_piece
+              FROM sales.ticket_item ti
+              LEFT JOIN price_catalog.product_prices pp ON pp.price_id = ti.catalog_price_id
+             WHERE ti.ticket_id = :id
+             ORDER BY ti.sort_order, ti.item_id
             """,
             Map.of("id", ticketId),
             (rs, rowNum) -> {
@@ -707,7 +719,12 @@ public class TicketRepository {
                     rs.getBigDecimal("qty_from_stock"),
                     rs.getString("stock_note"),
                     catalogPriceId,
-                    rs.getString("catalog_product_code")
+                    rs.getString("catalog_product_code"),
+                    catalogPriceId != null ? "catalog" : "custom",
+                    rs.getBigDecimal("catalog_price"),
+                    rs.getString("catalog_currency"),
+                    rs.getString("catalog_price_unit"),
+                    rs.getBigDecimal("catalog_sqm_per_piece")
                 );
             });
     }

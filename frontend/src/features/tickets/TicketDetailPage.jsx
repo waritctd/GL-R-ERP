@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
@@ -18,6 +18,7 @@ import {
   quotationRecipientLabel,
 } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
+import { computeItemEstimateThb, formatThb } from './dealEstimatePricing.js';
 import { activePricingRequestsSummary } from '../pricingRequests/pricingRequestMeta.js';
 import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx';
 import { CancelDealModal } from './CancelDealModal.jsx';
@@ -25,6 +26,7 @@ import { hasActivitySince, isReadyToAdvance, lastStageChangeAt, STAGE_ADVANCE_GA
 import { ContextSection, FieldRow } from './DealMetaFields.jsx';
 import { DealAttachmentsPanel } from './DealAttachmentsPanel.jsx';
 import { DealDepositPanel } from './DealDepositPanel.jsx';
+import { DealDocumentRegister } from './DealDocumentRegister.jsx';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 import { DealLegacyQuotations } from './DealLegacyQuotations.jsx';
@@ -41,6 +43,23 @@ import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
 import { resolveWorkState } from './workState.js';
+
+// Thai copy for dealEstimatePricing.js's `reason` codes, mirroring TicketCreateModal.jsx's own
+// ESTIMATE_REASON_LABELS so the two ราคาตั้ง display sites read the same to a rep — copied rather
+// than imported because it is UI copy, not calculation (dealEstimatePricing.js itself stays
+// untouched; see that file's own doc comment for why the math must not be duplicated).
+const ESTIMATE_REASON_LABELS = {
+  UNSUPPORTED_UNIT: 'หน่วยราคานี้ยังไม่รองรับ',
+  MISSING_QUANTITY: 'ยังไม่ได้กรอกจำนวน/พื้นที่',
+  NO_FX_RATE: 'ยังไม่มีอัตราแลกเปลี่ยนสำหรับสกุลเงินนี้',
+  NO_CATALOG_PRICE: 'ยังไม่มีราคาแคตตาล็อก',
+  UNIT_BASIS_MISMATCH: 'หน่วยที่เลือกไม่ตรงกับหน่วยราคา',
+  NOT_CATALOG: 'ไม่ใช่รายการจากแคตตาล็อก',
+  NO_MARKUP: 'ยังไม่มีตัวคูณราคาจาก CEO',
+};
+function estimateReasonLabel(reason) {
+  return ESTIMATE_REASON_LABELS[reason] || 'ยังคำนวณไม่ได้';
+}
 
 // Ticket-detail IA rebuild Phase 1 (see
 // docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md
@@ -332,6 +351,34 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     enabled: !!ticketId,
   });
   const ticket = ticketQuery.data ?? null;
+
+  // ── Slice F: ราคาตั้ง on the deal's item rows — same FX/markup wiring as
+  // TicketCreateModal.jsx's own estimate inputs (see that file's comment for the full
+  // rationale). Both fetches degrade silently — retry: false, no showToast from an effect (this
+  // repo's useToast has an unstable identity, see CLAUDE.md) — and estimateReady requires BOTH to
+  // have actually succeeded with a usable multiplier. Never default markupMultiplier to 1: an
+  // un-marked-up supplier cost displayed as ราคาตั้ง is exactly the number
+  // dealEstimatePricing.js's header comment says must never appear on screen.
+  const fxRatesQuery = useQuery({
+    queryKey: queryKeys.fxRates(),
+    queryFn: () => api.fxRates.list().then((res) => res.fxRates ?? []),
+    retry: false,
+  });
+  const markupQuery = useQuery({
+    queryKey: queryKeys.dealEstimateMarkup(),
+    queryFn: () => api.dealEstimateMarkup.get().then((res) => res.dealEstimateMarkup ?? null),
+    retry: false,
+  });
+  const fxRatesByCurrency = useMemo(() => {
+    const map = { THB: 1 };
+    for (const rate of fxRatesQuery.data ?? []) {
+      if (rate?.currency) map[rate.currency] = Number(rate.rateToThb);
+    }
+    return map;
+  }, [fxRatesQuery.data]);
+  const markupMultiplier = markupQuery.data?.multiplier ?? null;
+  const estimateReady = fxRatesQuery.isSuccess && markupQuery.isSuccess && markupMultiplier != null;
+  const estimateContext = { fxRatesByCurrency, markupMultiplier };
   // FIX 2 (Opus review), rewritten for issue #389. Still an identity-aware gate rather than a
   // role-only one — the deal's participants (createdById/assignedToId) reach its documents
   // regardless of role — but the ROLE half is no longer this page's private invention: it mirrors
@@ -665,11 +712,15 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // ข้อ 10.1: Import sees only rawPrice + proposedPrice — NOT approvedPrice or CEO-set prices
   const showApproved = ROLE_PERMISSIONS.canApproveReject.includes(role) || ROLE_PERMISSIONS.canCreateTickets.includes(role);
   const showCalcBreakdown = ROLE_PERMISSIONS.canApproveReject.includes(role) && items.some((it) => it.calcedCost != null);
+  // ราคาตั้ง (Slice F) is deliberately NOT role-gated: it follows the catalog rule (owner ruling —
+  // catalog purchase prices are readable by any authenticated user, pinned by 4 tests), unlike
+  // ราคาที่เสนอ/ราคาที่อนุมัติ which stay behind showProposed/showApproved. It gets its own grid
+  // column, added ahead of whichever price columns the role sees.
   const itemsGridCols = showCalcBreakdown
-    ? 'minmax(0,1.4fr) minmax(0,1fr) minmax(0,0.5fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.9fr)'
+    ? 'minmax(0,1.4fr) minmax(0,1fr) minmax(0,0.5fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.9fr)'
     : showProposed
-      ? 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr) minmax(0,1.1fr)'
-      : 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr)';
+      ? 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr) minmax(0,1.1fr) minmax(0,1.1fr)'
+      : 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr) minmax(0,1.1fr)';
 
   const ps = summary.paymentStatus;
   const fs = summary.fulfillmentStatus;
@@ -1668,6 +1719,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                   <span>ยี่ห้อ / รุ่น</span>
                   <span>สี / เนื้อผิว</span>
                   <span>จำนวน</span>
+                  <span>ราคาตั้ง</span>
                   {showCalcBreakdown ? (
                     <>
                       <span>ราคาโรงงาน</span>
@@ -1702,6 +1754,21 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                         ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small style={{ display: 'block', color: 'var(--color-text-muted)' }}>{item.qty} แผ่น</small></>
                         : <>{item.qty} แผ่น{item.qtySqm != null && <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
                       }
+                    </span>
+                    <span data-label="ราคาตั้ง" style={{ fontSize: 12 }}>
+                      {!estimateReady ? (
+                        <span style={{ color: 'var(--color-text-muted)' }}>ยังคำนวณไม่ได้ (กำลังโหลดอัตราแลกเปลี่ยน/ตัวคูณ)</span>
+                      ) : (() => {
+                        const lineEstimate = computeItemEstimateThb(item, estimateContext);
+                        return lineEstimate.ok ? (
+                          <span>
+                            <strong>{formatThb(lineEstimate.unitThb)}</strong>
+                            <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>รวม {formatThb(lineEstimate.total)} บาท</small>
+                          </span>
+                        ) : (
+                          <span style={{ color: 'var(--color-text-muted)' }}>ยังคำนวณไม่ได้ ({estimateReasonLabel(lineEstimate.reason)})</span>
+                        );
+                      })()}
                     </span>
                     {showCalcBreakdown ? (
                       <>
@@ -1764,6 +1831,32 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       </TabPanel>
 
       <TabPanel id="documents" idPrefix="ticket-detail" active={visibleActiveTab === 'documents'}>
+          {/* Slice D ("the เอกสาร document register"): one read-only roll-up of
+              every document family — quotations (below, unchanged), the
+              deposit notice + remaining invoice, and formal attachments —
+              gated PER ROW FAMILY inside the component itself (this tab's own
+              `isVisible` is now `() => true`, per ticketDetailTabs.js's own
+              comment on this tab). `attachments`/`attachLoading` are the SAME
+              query this page already runs for the ประวัติ tab's
+              DealAttachmentsPanel (gated at that query's own `enabled` by
+              `canViewDocumentsTab`, so it never fires an extra request here,
+              and never fires at all for a viewer it would 403) — reused
+              rather than re-fetched, so the two roll-ups of the same data
+              can never drift. See DealDocumentRegister.jsx's own header
+              comment for the exact three gates and their backend citations. */}
+          <DealDocumentRegister
+            ticketId={ticketId}
+            user={user}
+            summary={summary}
+            sections={sections}
+            canViewPricingRequests={canViewPricingRequests}
+            canViewDocumentsTab={canViewDocumentsTab}
+            pricingRequests={pricingRequests}
+            legacyQuotations={sortedQuotations}
+            attachments={attachments}
+            attachLoading={attachLoading}
+          />
+
           {/* "เอกสาร" (formerly "ใบเสนอราคา", tab id renamed `quotations` →
               `documents` in Slice C2b — same content, same gate; this id
               previously belonged to the attachments tab, whose content moved

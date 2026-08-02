@@ -132,6 +132,12 @@ public class CommissionService {
             safeRequest.overpayment()
         );
         DealLinkage linkage = resolveDealLinkage(safeRequest);
+        // Commission-closed-month guard: computed and checked on the DERIVED, normalized
+        // first-of-month value that createCommissionRecord below actually writes -- not on the raw
+        // caller-supplied invoiceDate. Runs before any write (invoice row, file storage, attachment)
+        // so a refused submission leaves nothing behind.
+        LocalDate payrollMonth = saleCommissionPayrollMonth(safeRequest.invoiceDate());
+        requireCommissionPayrollMonthOpen(payrollMonth, safeRequest.invoiceDate());
 
         try {
             long invoiceId = commissions.createInvoice(safeRequest);
@@ -155,7 +161,7 @@ public class CommissionService {
                 safeRequest.sourceTicketId(),
                 salesRepId,
                 actor.id(),
-                saleCommissionPayrollMonth(safeRequest.invoiceDate()),
+                payrollMonth,
                 calculation,
                 linkage.payableSnapshot(),
                 linkage.mismatch()
@@ -243,6 +249,12 @@ public class CommissionService {
         // Re-checks CLOSED_PAID and computes the payable-amount cross-check snapshot — the exact
         // same gate submit() has always enforced. Never loosened for this trigger.
         DealLinkage linkage = resolveDealLinkage(request);
+        // Commission-closed-month guard: same guard and same placement rationale as submit() above
+        // -- computed on the DERIVED, normalized first-of-month value, checked before any write
+        // (invoice row, file storage, ticket attachment) so a refused create leaves nothing behind,
+        // including no spurious invoiceOnFile flip on the ticket.
+        LocalDate payrollMonth = saleCommissionPayrollMonth(request.invoiceDate());
+        requireCommissionPayrollMonthOpen(payrollMonth, request.invoiceDate());
 
         try {
             long invoiceId = commissions.createInvoice(request);
@@ -278,7 +290,7 @@ public class CommissionService {
                 ticketId,
                 salesRepId,
                 actor.id(),
-                saleCommissionPayrollMonth(request.invoiceDate()),
+                payrollMonth,
                 calculation,
                 linkage.payableSnapshot(),
                 linkage.mismatch()
@@ -398,6 +410,11 @@ public class CommissionService {
 
     private CommissionRecord managerApprove(long id, UserPrincipal actor, CommissionRecord existing) {
         requireManager(actor);
+        // Commission-closed-month guard (reviewer finding F3): a commission created while its
+        // payroll month was still open can still reach approval after that month closes underneath
+        // it -- the same seam OvertimeService guards at both its manager- and CEO-approval stages,
+        // not only at submit. Guards on the RECORD's own payrollMonth, not today's date.
+        requireCommissionPayrollMonthOpen(existing.payrollMonth());
         commissions.managerApprove(id, actor.id());
         CommissionRecord after = requireRecord(id);
         auditService.record(actor, "MANAGER_APPROVE_COMMISSION", "commission_record", id, existing, after);
@@ -407,6 +424,9 @@ public class CommissionService {
 
     private CommissionRecord ceoApprove(long id, UserPrincipal actor, CommissionRecord existing) {
         requireCeo(actor);
+        // Commission-closed-month guard (reviewer finding F3) -- same rationale as managerApprove
+        // above: guards the record's own payrollMonth, which may have closed while it waited here.
+        requireCommissionPayrollMonthOpen(existing.payrollMonth());
         commissions.ceoApprove(id, actor.id());
         CommissionRecord after = requireRecord(id);
         auditService.record(actor, "CEO_APPROVE_COMMISSION", "commission_record", id, existing, after);
@@ -454,10 +474,19 @@ public class CommissionService {
         if (commissions.hasActiveClawbackFor(id)) {
             throw new ApiException(HttpStatus.CONFLICT, "รายการค่าคอมมิชชั่นนี้มีการเรียกคืนที่ยังดำเนินการอยู่แล้ว");
         }
+        // Commission-closed-month guard (reviewer finding F2): createClawback is a fourth INSERT
+        // path into sales.commission_record, easy to miss because it always targets the CURRENT
+        // month, not a caller-supplied one. But the current month can itself already be PROCESSED
+        // (prod marked July 2026 PROCESSED on 23 Jul, mid-month) -- an unguarded clawback filed
+        // after that point would take a payroll_month that is already processed, so the negative
+        // row is never deducted and it silently reduces a processed month's tier base, the wrong
+        // direction financially (the rep keeps money that should have been clawed back).
+        LocalDate clawbackPayrollMonth = currentPayrollMonth();
+        requireCommissionPayrollMonthOpen(clawbackPayrollMonth);
         long clawbackId = commissions.createClawback(
             original,
             actor.id(),
-            currentPayrollMonth(),
+            clawbackPayrollMonth,
             request.reason().trim()
         );
         CommissionRecord clawback = requireRecord(clawbackId);
@@ -510,6 +539,9 @@ public class CommissionService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "รายการค่าคอมมิชชั่นประเภท MANAGER ต้องไม่ติดลบ");
         }
         LocalDate month = payrollMonth == null ? currentPayrollMonth() : payrollMonth(payrollMonth);
+        // Commission-closed-month guard: month here is already the normalized first-of-month value
+        // that commissions.createManualCommission below actually writes.
+        requireCommissionPayrollMonthOpen(month);
         boolean ceoCreated = CEO_ROLES.contains(actor.role());
         long commissionId = commissions.createManualCommission(
             kind,
@@ -951,6 +983,85 @@ public class CommissionService {
                 );
             }
         }
+    }
+
+    /**
+     * Refuses to write/advance a commission against a payroll month that can never be paid, for
+     * either of two distinct reasons -- the person seeing the error needs to tell them apart, so
+     * each gets its own Thai message. Mirrors {@code OvertimeService#requirePayrollMonthOpen}
+     * exactly (same two facts, same two repository checks, same posture) -- see that method's
+     * Javadoc for the full rationale on why a seed-covered month is never {@code PROCESSED} and
+     * therefore needs its own check.
+     *
+     * <p>Owner decision (commission-closed-month-guard plan): REFUSE (409), never roll forward.
+     * Rolling a commission's payroll month forward to the next open month would change which month
+     * it is attributed to -- that is commission ATTRIBUTION logic, which CLAUDE.md protects as
+     * business logic. This guard only ever blocks a write; it never changes where a commission
+     * lands. Not a commission math change: no tier, rate, band, weighting, {@code
+     * payrollReadySummary} figure, or the M+1 rule is touched here.
+     *
+     * <p>Call this on the already-normalized, first-of-month value that will actually be
+     * written/read -- never on a raw caller-supplied date. Guarding the raw input would let a
+     * mid-month date slip past a first-of-month comparison. Six call sites, all of which write or
+     * advance {@code sales.commission_record}: the four creation paths -- {@link
+     * #createManualCommission} (on the resolved {@code month}), {@link #submit}/{@link
+     * #createFromDeal} (on {@link #saleCommissionPayrollMonth(LocalDate)}'s M+1-derived result --
+     * use the {@link #requireCommissionPayrollMonthOpen(LocalDate, LocalDate)} overload there so
+     * the refusal names the invoice date too), and {@link #createClawback} (on {@code
+     * currentPayrollMonth()} -- a clawback filed after the current month is marked PROCESSED
+     * mid-month, as happened on prod 23 Jul 2026, must not silently land in it) -- plus the two
+     * approval stages, {@link #managerApprove(long, UserPrincipal, CommissionRecord)} and {@link
+     * #ceoApprove(long, UserPrincipal, CommissionRecord)} (on the existing record's {@code
+     * payrollMonth()}): a commission created while its month was open can still be approved after
+     * the month closes underneath it, exactly the seam {@code OvertimeService} already guards at
+     * both its manager- and CEO-approval stages.
+     */
+    private void requireCommissionPayrollMonthOpen(LocalDate payrollMonth) {
+        if (commissions.payrollMonthProcessed(payrollMonth)) {
+            throw new ApiException(
+                HttpStatus.CONFLICT,
+                "งวดเงินเดือน " + payrollMonthLabel(payrollMonth)
+                    + " ได้ประมวลผลไปแล้ว จึงไม่สามารถสร้างหรือพิจารณารายการค่าคอมมิชชั่นในงวดนี้ได้อีก"
+            );
+        }
+        if (commissions.payrollMonthSeedCovered(payrollMonth)) {
+            throw new ApiException(
+                HttpStatus.CONFLICT,
+                "งวดเงินเดือน " + payrollMonthLabel(payrollMonth)
+                    + " ถูกจ่ายนอกระบบไปแล้วและได้ยื่นแบบภาษีแล้ว จึงไม่สามารถสร้างหรือพิจารณารายการค่าคอมมิชชั่นในงวดนี้ได้"
+            );
+        }
+    }
+
+    /**
+     * SALE-path variant used only by {@link #submit} and {@link #createFromDeal}: {@code
+     * payrollMonth} there is DERIVED from {@code invoiceDate} via the M+1 rule ({@link
+     * #saleCommissionPayrollMonth(LocalDate)}), so naming only the derived month left the caller
+     * unable to tell why the date they typed produced that refusal (e.g. a 2026-05-15 invoice
+     * refused over payroll month 2026-06 -- reviewer finding F4). Names both the invoice date and
+     * the derived month; same two underlying checks and messages as the single-argument overload.
+     */
+    private void requireCommissionPayrollMonthOpen(LocalDate payrollMonth, LocalDate invoiceDate) {
+        if (commissions.payrollMonthProcessed(payrollMonth)) {
+            throw new ApiException(
+                HttpStatus.CONFLICT,
+                "ใบกำกับภาษีลงวันที่ " + invoiceDate + " ตกในงวดเงินเดือน " + payrollMonthLabel(payrollMonth)
+                    + " (ตามกฎ M+1) ซึ่งได้ประมวลผลไปแล้ว จึงไม่สามารถสร้างรายการค่าคอมมิชชั่นนี้ได้"
+            );
+        }
+        if (commissions.payrollMonthSeedCovered(payrollMonth)) {
+            throw new ApiException(
+                HttpStatus.CONFLICT,
+                "ใบกำกับภาษีลงวันที่ " + invoiceDate + " ตกในงวดเงินเดือน " + payrollMonthLabel(payrollMonth)
+                    + " (ตามกฎ M+1) ซึ่งถูกจ่ายนอกระบบไปแล้วและได้ยื่นแบบภาษีแล้ว จึงไม่สามารถสร้างรายการค่าคอมมิชชั่นนี้ได้"
+            );
+        }
+    }
+
+    /** {@code YYYY-MM}, zero-padded -- the inherited format (bare {@code getMonthValue()}) printed
+     * "2026-6" instead of "2026-06" for any month before October (reviewer finding F4). */
+    private String payrollMonthLabel(LocalDate payrollMonth) {
+        return String.format("%d-%02d", payrollMonth.getYear(), payrollMonth.getMonthValue());
     }
 
     private LocalDate payrollMonth(LocalDate date) {
