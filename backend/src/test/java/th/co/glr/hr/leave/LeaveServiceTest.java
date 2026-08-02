@@ -903,7 +903,7 @@ class LeaveServiceTest {
         // this Mockito-based class can't fake). The exact §5.4 MATERNITY 98/45/53 split is proven
         // against real dates in LeaveTypeRuleIntegrationTest.
         LeaveTypeDto cappedType = new LeaveTypeDto("VACATION", "Vacation", "Vacation leave",
-            new BigDecimal("10.00"), false, new BigDecimal("4.00"), 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS);
+            new BigDecimal("10.00"), false, new BigDecimal("4.00"), 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null);
         // Mon 2026-07-13 .. Mon 2026-07-20: working days 13,14,15,16,17,20 = 6 working days.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-20"), "Capped leave test");
@@ -937,7 +937,7 @@ class LeaveServiceTest {
         // Same fixture, but the cap (9) is larger than the 6 working days requested -- the cap must
         // not bind, and the result must be identical to the uncapped (quota-only) behaviour.
         LeaveTypeDto cappedType = new LeaveTypeDto("VACATION", "Vacation", "Vacation leave",
-            new BigDecimal("10.00"), false, new BigDecimal("9.00"), 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS);
+            new BigDecimal("10.00"), false, new BigDecimal("9.00"), 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null);
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-20"), "Capped leave test");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -1068,6 +1068,183 @@ class LeaveServiceTest {
         assertThat(unpaidDays.getValue()).isEqualByComparingTo("5.00");
     }
 
+    // §5.2/§5.3 pro-ration (V120, defect 1 fix). Isolates #employeeAnnualQuota's DECISION (which
+    // quota figure -- prorated vs full -- gets fed into the existing quota/paid-cap machinery) from
+    // real calendar math; LeaveTypeRuleIntegrationTest proves the same decision survives into real
+    // SQL/real dates.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void submitProratesVacationQuotaUnderOneYearOfServiceAndGrantsFullQuotaAfterOneYear() {
+        // Both sides on one fixture/method (same LeaveTypeDto), DIFFERENT request date ranges so
+        // each leaveRepository.create() invocation is unambiguously distinguishable to verify() --
+        // this cannot pass by only ever constructing the easy (>1 year) case.
+        LeaveTypeDto type = vacationTypeProratedFirstYear();
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(type));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+
+        // 6 completed months of service (hired exactly 6 months before the request) -> prorated
+        // quota = 6.00 * 6/12 = 3.00 -- captured via remainingAfter on a 1-day request (3.00 - 1.00 =
+        // 2.00) so the exact prorated figure is pinned, not merely "some non-zero, non-6 number".
+        SubmitLeaveRequest underOneYearRequest = new SubmitLeaveRequest(
+            null, "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"), "Family trip");
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2026-01-13")));
+        when(leaveRepository.create(eq(10L), eq(10L), eq(underOneYearRequest), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(200L);
+        when(leaveRepository.findById(200L)).thenReturn(Optional.of(
+            requestDto(200L, 10L, "APPROVED", underOneYearRequest.startDate(), underOneYearRequest.endDate(), "1.00", "0.00")));
+
+        LeaveRequestDto underOneYear = leaveService.submit(underOneYearRequest, user("employee", 10L));
+        assertThat(underOneYear.status()).isEqualTo("APPROVED");
+        ArgumentCaptor<BigDecimal> underOneYearRemainingAfter = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(underOneYearRequest), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class),
+            underOneYearRemainingAfter.capture(), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(underOneYearRemainingAfter.getValue()).isEqualByComparingTo("2.00");
+
+        // Wrong-way-round complement, identical fixture, DIFFERENT date range: hired well over a
+        // year before the request -> full 6.00-day quota -> remainingAfter = 6.00 - 1.00 = 5.00, NOT
+        // the 2.00 above.
+        SubmitLeaveRequest overOneYearRequest = new SubmitLeaveRequest(
+            null, "VACATION", LocalDate.parse("2026-07-20"), LocalDate.parse("2026-07-20"), "Family trip");
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
+        when(leaveRepository.create(eq(10L), eq(10L), eq(overOneYearRequest), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(201L);
+        when(leaveRepository.findById(201L)).thenReturn(Optional.of(
+            requestDto(201L, 10L, "APPROVED", overOneYearRequest.startDate(), overOneYearRequest.endDate(), "1.00", "0.00")));
+
+        LeaveRequestDto overOneYear = leaveService.submit(overOneYearRequest, user("employee", 10L));
+        assertThat(overOneYear.status()).isEqualTo("APPROVED");
+        ArgumentCaptor<BigDecimal> overOneYearRemainingAfter = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(overOneYearRequest), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class),
+            overOneYearRemainingAfter.capture(), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(overOneYearRemainingAfter.getValue()).isEqualByComparingTo("5.00");
+    }
+
+    @Test
+    void submitRejectsVacationWhenAProratedFirstYearEmployeeHasNoHireDateOnFile() {
+        // V120's dedicated proratedFirstYear/hire-date gate (autoRejectNote, runs before
+        // minServiceMonths -- VACATION's own min_service_months is 0 post-V120, so that older gate
+        // would never catch this): a missing hire_date must fail closed with an explanation, not
+        // silently flow into #employeeAnnualQuota and produce a confusing zero-quota approval.
+        LeaveTypeDto type = vacationTypeProratedFirstYear();
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "VACATION", weekdayAfterNotice(), weekdayAfterNotice(), "Family trip");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(type));
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.empty());
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(202L);
+        when(leaveRepository.findById(202L)).thenReturn(Optional.of(
+            requestDto(202L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("hire date is not on file"), eq(null), eq(null), eq(null), eq(null), eq(null));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // §5.2 first-year total-days cap (V120, defect 3 fix). Isolates the DECISION (effectiveCap =
+    // min(proratedQuota, firstYearMaxDays), enforced as an outright rejection) from real calendar
+    // math; LeaveTypeRuleIntegrationTest proves the same decision through the real repository.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void submitRejectsPersonalLeaveBeyondTheFirstYearCapAndAllowsExactlyAtIt() {
+        // Both sides on one fixture/method. Hired 6 months before the request -> prorated quota =
+        // 7.00 * 6/12 = 3.50 -- ABOVE the flat 3.00 firstYearMaxDays, so 3.00 is the binding
+        // effectiveCap (min(3.50, 3.00) = 3.00).
+        LeaveTypeDto type = personalTypeProratedFirstYear();
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(type));
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(weekdayAfterNotice().minusMonths(6)));
+        // findProbationDays deliberately unstubbed: 6 months (~183 days) safely clears the
+        // DEFAULT_PROBATION_DAYS=119 fallback, so the probation gate never binds here -- isolating
+        // this test to the first-year cap decision.
+        when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.sumPaidDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+
+        // Exactly at the cap: 3 working days, must be APPROVED and fully paid.
+        SubmitLeaveRequest atCap = new SubmitLeaveRequest(
+            null, "PERSONAL", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-15"), "Family matter");
+        when(leaveRepository.create(eq(10L), eq(10L), eq(atCap), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(210L);
+        when(leaveRepository.findById(210L)).thenReturn(Optional.of(
+            requestDto(210L, 10L, "APPROVED", atCap.startDate(), atCap.endDate(), "3.00", "0.00")));
+
+        LeaveRequestDto atCapResult = leaveService.submit(atCap, user("employee", 10L));
+        assertThat(atCapResult.status()).isEqualTo("APPROVED");
+        ArgumentCaptor<BigDecimal> paidDays = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(atCap), any(BigDecimal.class), paidDays.capture(),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(paidDays.getValue()).isEqualByComparingTo("3.00");
+
+        // One more than the cap: 4 working days (a DIFFERENT date range so this isn't also blocked
+        // by any other gate), must be refused outright -- NOT approved-with-a-partially-unpaid-split,
+        // unlike ordinary quota exceedance elsewhere in this class (see
+        // submissionApprovesWithPaidUnpaidSplitWhenQuotaIsInsufficient).
+        SubmitLeaveRequest overCap = new SubmitLeaveRequest(
+            null, "PERSONAL", LocalDate.parse("2026-07-20"), LocalDate.parse("2026-07-23"), "Family matter");
+        when(leaveRepository.create(eq(10L), eq(10L), eq(overCap), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(211L);
+        when(leaveRepository.findById(211L)).thenReturn(Optional.of(
+            requestDto(211L, 10L, "AUTO_REJECTED", overCap.startDate(), overCap.endDate(), "0.00", "0.00")));
+
+        LeaveRequestDto overCapResult = leaveService.submit(overCap, user("employee", 10L));
+        assertThat(overCapResult.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(overCap), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("day(s) total per year"), eq(null), eq(null), eq(null), eq(null), eq(null));
+    }
+
+    @Test
+    void submitDoesNotApplyTheFirstYearCapAfterOneYearOfService() {
+        // Wrong-way-round complement: an employee past 12 months of service is NOT subject to
+        // firstYearMaxDays at all (not "subject to it with an unlimited allowance") -- a 4-day
+        // request (over the flat 3, and over the old blanket max_consecutive_days=3 this replaces)
+        // must be approved in full, proving the gate is genuinely skipped, not merely satisfied.
+        LeaveTypeDto type = personalTypeProratedFirstYear();
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "PERSONAL", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-16"), "Family matter"); // 4 working days
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(type));
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.sumPaidDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(212L);
+        when(leaveRepository.findById(212L)).thenReturn(Optional.of(
+            requestDto(212L, 10L, "APPROVED", request.startDate(), request.endDate(), "4.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+        ArgumentCaptor<BigDecimal> paidDays = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), paidDays.capture(),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(paidDays.getValue()).isEqualByComparingTo("4.00");
+    }
+
     private SubmitLeaveRequest validSubmit(Long employeeId) {
         // Monday–Tuesday, 12 days after FIXED_NOW: 2 working days, well past the 7-day notice.
         return new SubmitLeaveRequest(
@@ -1098,28 +1275,41 @@ class LeaveServiceTest {
     // min-service=12; PERSONAL notice=1, min-service=4, max-consecutive=3; etc.) are covered by
     // LeaveTypeRuleIntegrationTest against the real V116-migrated schema.
     private LeaveTypeDto vacationType() {
+        // proratedFirstYear=false here (deliberate, same "no restriction on fields not under test"
+        // convention as every other field in this fixture): pro-ration is covered by its own
+        // dedicated fixture/tests below (vacationTypeProratedFirstYear,
+        // submitProratesVacationQuotaForAnEmployeeUnderOneYearOfService friends), which construct a
+        // LeaveTypeDto with proratedFirstYear=true explicitly rather than making every existing
+        // VACATION test in this class newly depend on a stubbed hire date.
         return new LeaveTypeDto("VACATION", "Vacation", "Vacation leave", new BigDecimal("6.00"), false,
-            null, 7, 0, null, false, LeaveDayCountBasis.WORKING_DAYS);
+            null, 7, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null);
     }
 
     private LeaveTypeDto sickType() {
         return new LeaveTypeDto("SICK", "Sick", "Sick leave", new BigDecimal("30.00"), true,
-            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS);
+            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null);
     }
 
     private LeaveTypeDto leaveWithoutPayType() {
         return new LeaveTypeDto("LEAVE_WITHOUT_PAY", "Leave without pay", "Leave without pay", BigDecimal.ZERO, false,
-            BigDecimal.ZERO, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS);
+            BigDecimal.ZERO, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null);
     }
 
     private LeaveTypeDto ordinationType() {
         return new LeaveTypeDto("ORDINATION", "Ordination", "Ordination leave", new BigDecimal("60.00"), false,
-            new BigDecimal("15.00"), 0, 12, null, true, LeaveDayCountBasis.WORKING_DAYS);
+            new BigDecimal("15.00"), 0, 12, null, true, LeaveDayCountBasis.WORKING_DAYS, false, null);
     }
 
+    // proratedFirstYear=false, maxConsecutiveDays=3.00 (deliberately the OLD pre-V120 shape -- see
+    // vacationType()'s identical note above): this fixture exists ONLY to exercise the generic
+    // max_consecutive_days mechanism itself (still a real, supported column -- just no longer
+    // populated for the real PERSONAL row post-V120), for
+    // submitRejects/AllowsARequestWithin/ExceedingTheMaxConsecutiveDaysCap and the probation tests
+    // below, none of which are about defect 3. The real post-V120 PERSONAL shape (maxConsecutiveDays
+    // null, firstYearMaxDays 3.00) is personalTypeProratedFirstYear() below.
     private LeaveTypeDto personalTypeWithMaxConsecutive() {
         return new LeaveTypeDto("PERSONAL", "Personal", "Personal leave", new BigDecimal("7.00"), false,
-            null, 0, 0, new BigDecimal("3.00"), false, LeaveDayCountBasis.WORKING_DAYS);
+            null, 0, 0, new BigDecimal("3.00"), false, LeaveDayCountBasis.WORKING_DAYS, false, null);
     }
 
     // §5.4 MATERNITY calendar-day counting (V119, 2026-08-02): the one fixture in this class with
@@ -1127,7 +1317,27 @@ class LeaveServiceTest {
     // the basis from the leave type, not a hardcoded assumption.
     private LeaveTypeDto maternityType() {
         return new LeaveTypeDto("MATERNITY", "Maternity", "Maternity leave", new BigDecimal("98.00"), true,
-            new BigDecimal("45.00"), 0, 0, null, false, LeaveDayCountBasis.CALENDAR_DAYS);
+            new BigDecimal("45.00"), 0, 0, null, false, LeaveDayCountBasis.CALENDAR_DAYS, false, null);
+    }
+
+    // §5.2/§5.3 pro-ration (V120, defect 1 fix). Real completed-months-of-service arithmetic against
+    // a real quota split (SICK/quota-exceeded-style scenarios) is proven against real dates in
+    // LeaveTypeRuleIntegrationTest; these Mockito-level tests isolate #employeeAnnualQuota's decision
+    // (which quota figure gets used) from the real calendar math LeaveDayMath performs elsewhere.
+
+    private LeaveTypeDto vacationTypeProratedFirstYear() {
+        return new LeaveTypeDto("VACATION", "Vacation", "Vacation leave", new BigDecimal("6.00"), false,
+            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, true, null);
+    }
+
+    // §5.2 first-year total-days cap (V120, defect 3 fix). maxConsecutiveDays=null (the OLD blanket
+    // 2561-era rule this replaces -- see V120's migration comment) and firstYearMaxDays=3.00 (the
+    // NEW tenure-scoped total, real seeded PERSONAL value) match the real post-V120 schema exactly,
+    // unlike personalTypeWithMaxConsecutive() above (which deliberately keeps the pre-defect-3 shape
+    // for its own, unrelated tests).
+    private LeaveTypeDto personalTypeProratedFirstYear() {
+        return new LeaveTypeDto("PERSONAL", "Personal", "Personal leave", new BigDecimal("7.00"), false,
+            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, true, new BigDecimal("3.00"));
     }
 
     private LeaveRequestDto requestDto(long id, long employeeId, String status, LocalDate startDate, LocalDate endDate,

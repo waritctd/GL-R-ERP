@@ -44,6 +44,10 @@ public class LeaveService {
     private static final LocalTime WORKDAY_START = LocalTime.of(8, 30);
     private static final LocalTime WORKDAY_END = LocalTime.of(17, 30);
     private static final BigDecimal FULL_DAY = new BigDecimal("1.00");
+    // §5.2/§5.3 pro-ration (V120, defect 1 fix): a first-year employee's quota is scaled by
+    // completed months of service out of a full 12 -- see #employeeAnnualQuota.
+    private static final int FULL_SERVICE_MONTHS = 12;
+    private static final BigDecimal HALF_DAY_INCREMENT = new BigDecimal("0.5");
 
     private final LeaveRepository leaveRepository;
     private final LeaveAttachmentRepository leaveAttachments;
@@ -178,7 +182,7 @@ public class LeaveService {
         // PayrollCalculator#unpaidLeaveDeduction). See autoRejectNote for the full list of remaining
         // auto-reject reasons. See docs/agent-handoffs for the HR/legal sign-off caveat the
         // quota-based split still needs before it drives a real payroll run.
-        String systemNote = autoRejectNote(leaveType, employeeId, request.startDate(), request.endDate(), hasAttachment);
+        String systemNote = autoRejectNote(leaveType, employeeId, request.startDate(), request.endDate(), hasAttachment, totalDays);
         LeaveStatus status = systemNote == null ? LeaveStatus.APPROVED : LeaveStatus.AUTO_REJECTED;
 
         // V118 cross-year quota fix (2026-08-02): a request's days are attributed per calendar year
@@ -195,7 +199,14 @@ public class LeaveService {
         for (Map.Entry<Integer, BigDecimal> entry : requestedDaysByYear.entrySet()) {
             int year = entry.getKey();
             BigDecimal daysInYear = entry.getValue();
-            BigDecimal remainingBeforeYear = remainingDays(employeeId, leaveType, year);
+            // §5.2/§5.3 pro-ration (V120): the quota itself may depend on the employee's completed
+            // service AS OF this request -- request.startDate() is used uniformly for every year in
+            // a cross-year split (VACATION/PERSONAL never span a year boundary in practice: VACATION
+            // has no max_consecutive_days cap but is a planned, short-notice-driven leave type in
+            // practice, and PERSONAL is hard-capped at 3 consecutive days), matching how the
+            // pre-existing min-service-months and PERSONAL-probation gates already evaluate tenure
+            // as of the request's start date, not "today".
+            BigDecimal remainingBeforeYear = remainingDays(employeeId, leaveType, year, request.startDate());
             BigDecimal paidDaysYear;
             BigDecimal unpaidDaysYear;
             BigDecimal remainingAfterYear;
@@ -236,7 +247,7 @@ public class LeaveService {
             .filter(split -> split.quotaYear() == quotaYear)
             .map(LeaveQuotaYearSplit::quotaRemainingBefore)
             .findFirst()
-            .orElseGet(() -> remainingDays(employeeId, leaveType, quotaYear));
+            .orElseGet(() -> remainingDays(employeeId, leaveType, quotaYear, request.startDate()));
         BigDecimal remainingAfter = quotaYearSplits.stream()
             .filter(split -> split.quotaYear() == quotaYear)
             .map(LeaveQuotaYearSplit::quotaRemainingAfter)
@@ -439,12 +450,17 @@ public class LeaveService {
     private LeaveBalanceDto balanceFor(long employeeId, int year, LeaveTypeDto type) {
         BigDecimal approved = leaveRepository.sumUsedDays(employeeId, type.code(), year, Set.of(LeaveStatus.APPROVED));
         BigDecimal pending = leaveRepository.sumUsedDays(employeeId, type.code(), year, Set.of(LeaveStatus.SUBMITTED));
-        BigDecimal remaining = type.annualQuotaDays().subtract(approved).subtract(pending).max(BigDecimal.ZERO);
+        // §5.2/§5.3 pro-ration (V120): a balance check reflects the employee's quota AS OF TODAY
+        // (LocalDate.now(clock)), not the requested `year` -- the same "as of the reference date"
+        // meaning #employeeAnnualQuota uses for a live submission (request.startDate()), just with
+        // "today" standing in since a balance query has no request date of its own.
+        BigDecimal quota = employeeAnnualQuota(type, employeeId, LocalDate.now(clock));
+        BigDecimal remaining = quota.subtract(approved).subtract(pending).max(BigDecimal.ZERO);
         return new LeaveBalanceDto(
             type.code(),
             type.nameTh(),
             type.nameEn(),
-            type.annualQuotaDays(),
+            quota,
             approved,
             pending,
             remaining,
@@ -452,9 +468,83 @@ public class LeaveService {
         );
     }
 
-    private BigDecimal remainingDays(long employeeId, LeaveTypeDto leaveType, int quotaYear) {
+    private BigDecimal remainingDays(long employeeId, LeaveTypeDto leaveType, int quotaYear, LocalDate asOf) {
         BigDecimal used = leaveRepository.sumUsedDays(employeeId, leaveType.code(), quotaYear, ACTIVE_QUOTA_STATUSES);
-        return leaveType.annualQuotaDays().subtract(used).max(BigDecimal.ZERO);
+        BigDecimal quota = employeeAnnualQuota(leaveType, employeeId, asOf);
+        return quota.subtract(used).max(BigDecimal.ZERO);
+    }
+
+    /**
+     * §5.2/§5.3 pro-ration for an employee's first year of service (V120, fix for defect 1). V116
+     * seeded VACATION.min_service_months=12 as an outright eligibility floor -- refusing ALL vacation
+     * leave to anyone under a year of service -- when the announcement's actual text grants a
+     * pro-rated entitlement instead: "...(กรณีอายุงานไม่ถึงหนึ่งปีให้ลาได้เป็นสัดส่วนตามอายุงาน)"
+     * ("in case service duration is under one year, leave is granted in proportion to service
+     * duration"), stated identically for PERSONAL in §5.2. Applies only when {@link
+     * LeaveTypeDto#proratedFirstYear()} is TRUE (VACATION, PERSONAL -- see V120's migration comment);
+     * every other type returns its flat {@link LeaveTypeDto#annualQuotaDays()} unchanged.
+     *
+     * <p><b>INTERPRETATION, not stated company policy (pending owner confirmation -- flag this when
+     * reporting the change, do not describe it as settled).</b> The announcement gives no formula,
+     * only "เป็นสัดส่วนตามอายุงาน" ("in proportion to service duration"). This method reads that as:
+     *
+     * <pre>quota × (completed months of service, capped at 12, ÷ 12)</pre>
+     *
+     * rounded to the NEAREST 0.5 DAY (HALF_UP) -- 0.5 is the natural increment since sub-day leave
+     * (V90) already makes the schema and UI support a half day; there is no reason to round to a
+     * whole day and reintroduce the exact "denies more than it should / grants more than it should"
+     * tension this fix exists to remove.
+     *
+     * <p><b>"Completed months of service" is measured as {@code hire_date} to {@code asOf}, capped at
+     * {@value #FULL_SERVICE_MONTHS}, DELIBERATELY NOT bounded to the calendar quota year.</b> An
+     * earlier draft of this method bounded the month-count to the calendar year being quoted (i.e.
+     * {@code max(hireDate, 1 Jan of quotaYear)} through {@code min(asOf, 31 Dec of quotaYear)}), which
+     * is wrong in both directions: it wrongly PRO-RATES a 10-year veteran's mid-year request (their
+     * service "within the year" only reaches 12 months at the 31 Dec mark, understating a request
+     * filed in July), and it wrongly grants a January-hired employee the FULL quota on day one (by 31
+     * Dec they will have covered 12 calendar-year months, even though they have not yet completed a
+     * single day of real tenure at the time of the request). Total tenure capped at 12, independent of
+     * which calendar year's bucket the quota is being computed for, is the only reading that gets both
+     * of those cases right and matches "อายุงานไม่ถึงหนึ่งปี" ("service duration under one year") at
+     * face value: it is about how long the employee has actually worked, not where "today" falls
+     * inside a calendar year.
+     *
+     * <p>Consequence, stated plainly: because {@code asOf} is the request's own start date (see the
+     * call sites), a first-year employee's quota GROWS as the calendar year progresses -- two
+     * VACATION requests filed months apart by the same not-yet-1-year employee can see a different
+     * quota figure, larger for the later one. This is the natural reading of an accruing, tenure-based
+     * entitlement (the employee has genuinely earned more by the later date), not a bug; flagged here
+     * so it is not "corrected" into a single fixed-at-submission-year number without knowing this was
+     * intentional.
+     *
+     * <p>A missing {@code hire_date} returns {@link BigDecimal#ZERO} rather than throwing -- the
+     * submission path never reaches this method with a missing hire date (see the dedicated
+     * proratedFirstYear/hire-date gate in {@link #autoRejectNote}, which fails the request closed
+     * first); {@link #balanceFor}, which has no equivalent gate, simply reports a zero quota for a
+     * balance display rather than crashing.
+     */
+    private BigDecimal employeeAnnualQuota(LeaveTypeDto leaveType, long employeeId, LocalDate asOf) {
+        if (!leaveType.proratedFirstYear()) {
+            return leaveType.annualQuotaDays();
+        }
+        Optional<LocalDate> hireDate = leaveRepository.findHireDate(employeeId);
+        if (hireDate.isEmpty() || !hireDate.get().isBefore(asOf)) {
+            return BigDecimal.ZERO;
+        }
+        long completedMonths = Math.min(FULL_SERVICE_MONTHS, ChronoUnit.MONTHS.between(hireDate.get(), asOf));
+        if (completedMonths >= FULL_SERVICE_MONTHS) {
+            return leaveType.annualQuotaDays();
+        }
+        BigDecimal fraction = BigDecimal.valueOf(completedMonths)
+            .divide(BigDecimal.valueOf(FULL_SERVICE_MONTHS), 6, RoundingMode.HALF_UP);
+        return roundToNearestHalfDay(leaveType.annualQuotaDays().multiply(fraction));
+    }
+
+    /** Rounds to the nearest 0.5, at NUMERIC(5,2) scale -- see {@link #employeeAnnualQuota}'s Javadoc. */
+    private BigDecimal roundToNearestHalfDay(BigDecimal value) {
+        return value.divide(HALF_DAY_INCREMENT, 0, RoundingMode.HALF_UP)
+            .multiply(HALF_DAY_INCREMENT)
+            .setScale(2, RoundingMode.HALF_UP);
     }
 
     /**
@@ -517,18 +607,32 @@ public class LeaveService {
     }
 
     /**
-     * §5 leave-rules-as-data (V116). Checks run in this order -- categorical eligibility first
-     * (once-per-employment, minimum service), then request-shape (max consecutive days), then
-     * document/timing checks (SICK certificate, advance notice) -- so the surfaced systemNote is
-     * always the most fundamental reason the request cannot be paid, not an incidental one. Only the
-     * first violation found is returned; see the individual checks below for what each one means and
-     * the decisions behind it.
+     * §5 leave-rules-as-data (V116, extended V120). Checks run in this order -- categorical
+     * eligibility first (once-per-employment, missing hire_date on a pro-rated type, minimum
+     * service, PERSONAL probation, the first-year total-days cap), then request-shape (max
+     * consecutive days), then document/timing checks (SICK certificate, advance notice) -- so the
+     * surfaced systemNote is always the most fundamental reason the request cannot be paid, not an
+     * incidental one. Only the first violation found is returned; see the individual checks below
+     * for what each one means and the decisions behind it.
      */
-    private String autoRejectNote(LeaveTypeDto leaveType, long employeeId, LocalDate startDate, LocalDate endDate, boolean hasAttachment) {
+    private String autoRejectNote(LeaveTypeDto leaveType, long employeeId, LocalDate startDate, LocalDate endDate, boolean hasAttachment, BigDecimal totalDays) {
         // §5.6 once-per-employment (ORDINATION today). Java-level check; ux_leave_once_per_employment
         // (V116) is the race-proof DB backstop -- see the DuplicateKeyException catch in #submit.
         if (leaveType.oncePerEmployment() && leaveRepository.hasOutstandingOrGrantedRequest(employeeId, leaveType.code())) {
             return "This leave type may be used only once during your employment, and a claim for it already exists.";
+        }
+
+        // §5.2/§5.3 pro-ration (V120): #employeeAnnualQuota cannot compute a quota without hire_date
+        // for a prorated_first_year type (VACATION, PERSONAL) -- fails CLOSED here, the same
+        // direction as every other eligibility gate in this method, rather than letting
+        // #employeeAnnualQuota silently return ZERO and produce a confusing all-unpaid approval with
+        // no explanation. Runs before minServiceMonths below (VACATION's own min_service_months is
+        // now 0 post-V120, so that check would never catch this) and before PERSONAL's probation
+        // gate (which has its own, narrower NULL-hire_date check further down -- unreachable in
+        // practice once this fires first, kept as a defensive fallback, not because it needs to run).
+        if (leaveType.proratedFirstYear() && leaveRepository.findHireDate(employeeId).isEmpty()) {
+            return "Your hire date is not on file, so eligibility for " + leaveType.nameEn()
+                + " cannot be verified. Contact HR to record it before this leave type can be used.";
         }
 
         // §5.3 minimum SERVICE DURATION (months since hr.employee.hire_date). This is genuinely
@@ -562,7 +666,58 @@ public class LeaveService {
             }
         }
 
-        // §5.2 "not more than 3 consecutive days" (PERSONAL) and any other type given a
+        // §5.2 first-year total-days cap (V120, defect 3). SEPARATE rule from pro-ration and from
+        // the probation gate above -- do not collapse the three. The 2567 text moved the "not more
+        // than 3 days" limit INSIDE the under-one-year parenthesis and dropped "ติดต่อกัน"
+        // ("consecutive"): "(กรณีอายุงานไม่ถึงหนึ่งปี ให้ลาเป็นสัดส่วนตามอายุงาน และไม่อนุญาตให้ลากิจ
+        // เกิน 3 วัน)" -- a TOTAL annual ceiling for under-1-year employees, not a per-request
+        // consecutive-day rule for everyone (the old 2561-era max_consecutive_days=3 blanket rule
+        // this replaces; see V120's migration comment for why max_consecutive_days is now NULL on
+        // PERSONAL instead). Owner-ruled reading (2026-08-02), not this branch's own interpretation.
+        //
+        // Expressed as data (leaveType.firstYearMaxDays(), NULL = no such cap) rather than hardcoded
+        // to PERSONAL's code, matching every other §5 rule on this table -- even though PERSONAL is
+        // the only row that carries a non-NULL value today.
+        //
+        // Effective cap = min(prorated annual quota, firstYearMaxDays) -- EXPLICITLY the smaller of
+        // the two constraints the announcement states together for a first-year employee, not
+        // firstYearMaxDays alone: a 2-month employee's prorated quota (~1.17 days) is already below
+        // 3 and binds on its own; a 9-month employee's prorated quota (5.25 days) would exceed 3
+        // without this gate, so the flat 3-day ceiling is what actually binds for them instead. Once
+        // completedMonths reaches FULL_SERVICE_MONTHS this gate does not apply AT ALL (not "applies
+        // with an unlimited cap") -- an employee past one year is governed by the ordinary
+        // quota/paid-cap machinery alone, the same as VACATION.
+        //
+        // Enforced as an outright REJECTION -- unlike ordinary quota exceedance elsewhere in this
+        // method, which approves-and-splits into paid/unpaid -- because "ไม่อนุญาต" ("not permitted")
+        // is categorically stronger than a pay-eligibility limit; this is the same reading V116 gave
+        // the now-removed consecutive-day cap. Compares against usedThisYear + totalDays (cumulative
+        // across every request this quota year, not just this single request's length), matching "3
+        // days ... in total".
+        if (leaveType.firstYearMaxDays() != null) {
+            Optional<LocalDate> hireDate = leaveRepository.findHireDate(employeeId);
+            // Presence already established by the proratedFirstYear gate above for every type this
+            // branch can reach today (firstYearMaxDays is only ever seeded alongside
+            // proratedFirstYear -- see V120's migration comment); re-checked rather than assumed,
+            // since nothing in the Java model itself enforces that the two columns travel together.
+            if (hireDate.isPresent()) {
+                long completedMonths = Math.min(FULL_SERVICE_MONTHS, ChronoUnit.MONTHS.between(hireDate.get(), startDate));
+                if (completedMonths < FULL_SERVICE_MONTHS) {
+                    BigDecimal proratedQuota = employeeAnnualQuota(leaveType, employeeId, startDate);
+                    BigDecimal effectiveCap = proratedQuota.min(leaveType.firstYearMaxDays());
+                    BigDecimal usedThisYear = leaveRepository.sumUsedDays(
+                        employeeId, leaveType.code(), startDate.getYear(), ACTIVE_QUOTA_STATUSES);
+                    if (usedThisYear.add(totalDays).compareTo(effectiveCap) > 0) {
+                        return leaveType.nameEn() + " is limited to " + formatDays(effectiveCap)
+                            + " day(s) total per year during your first " + FULL_SERVICE_MONTHS
+                            + " months of service. Contact HR if this is an exception.";
+                    }
+                }
+            }
+        }
+
+        // §5.2 "not more than 3 consecutive days" (PERSONAL, pre-2567/pre-V120 wording -- superseded,
+        // see the first-year total-days cap above) and any other type given a
         // max_consecutive_days cap. DECISION: "consecutive" is counted in CALENDAR days (end - start +
         // 1 inclusive), not working days -- LeaveDayMath's Mon-Fri-only counting is explicitly out of
         // scope for this branch (see CLAUDE.md), and a calendar-day span is the natural reading of "3

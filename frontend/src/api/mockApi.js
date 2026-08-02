@@ -250,19 +250,21 @@ db.taxAllowanceAttachments = db.taxAllowanceAttachments?.length
 db.deductionObligations = db.deductionObligations?.length
   ? db.deductionObligations : buildDemoDeductionObligations(db.employees);
 db.deductionObligationRemittances = db.deductionObligationRemittances || [];
-// §5 leave-rules-as-data (V116): paidDaysCap/advanceNoticeDays/minServiceMonths/
-// maxConsecutiveDays/oncePerEmployment mirror the new hr.leave_type columns for SHAPE parity only
-// (contract.test.js checks method surface + arity, not field-level DTO shape, but a leaveTypes()
-// response missing these fields would still be a lie about what the real endpoint returns). Per
-// CLAUDE.md ("mock authz/behaviour is NOT authoritative" -- and see the file-level note above on
-// mirroring a backend computation being the dangerous direction): the mock's create() flow below
-// does NOT enforce minServiceMonths, maxConsecutiveDays, or oncePerEmployment, and does not
-// replicate the paid_days_cap split -- those are real per-request eligibility/business-rule
-// decisions the mock has never modelled fully (it already predates the paid/unpaid quota-split
-// redesign; it still auto-rejects on insufficient quota outright rather than approving-with-split,
-// a PRE-EXISTING gap this migration does not attempt to fix). advanceNoticeDays IS read below
-// (mechanical 1:1 mirror of the column), since leaving the old hardcoded 7-day check in place would
-// have positively contradicted the real per-type values this migration introduces.
+// §5 leave-rules-as-data (V116, extended V119/V120): paidDaysCap/advanceNoticeDays/
+// minServiceMonths/maxConsecutiveDays/oncePerEmployment/dayCountBasis/proratedFirstYear/
+// firstYearMaxDays mirror the hr.leave_type columns for SHAPE parity only (contract.test.js checks
+// method surface + arity, not field-level DTO shape, but a leaveTypes() response missing these
+// fields would still be a lie about what the real endpoint returns). Per CLAUDE.md ("mock
+// authz/behaviour is NOT authoritative" -- and see the file-level note above on mirroring a backend
+// computation being the dangerous direction): the mock's create() flow below does NOT enforce
+// minServiceMonths, maxConsecutiveDays, oncePerEmployment, proratedFirstYear, or firstYearMaxDays,
+// and does not replicate the paid_days_cap split -- those are real per-request eligibility/
+// business-rule decisions the mock has never modelled fully (it already predates the paid/unpaid
+// quota-split redesign; it still auto-rejects on insufficient quota outright rather than
+// approving-with-split, a PRE-EXISTING gap this migration does not attempt to fix).
+// advanceNoticeDays IS read below (mechanical 1:1 mirror of the column), since leaving the old
+// hardcoded 7-day check in place would have positively contradicted the real per-type values this
+// migration introduces.
 //
 // dayCountBasis (V119, 2026-08-02): §5.4 MATERNITY calendar-day counting -- SHAPE parity only, same
 // as the rest of this block. create() below still ALWAYS calls workingDaysBetween() for a whole-day
@@ -282,35 +284,47 @@ db.leaveTypes = db.leaveTypes || [
   // replicate (see the file-level note above) -- db.employees has no probation_days field to
   // resolve it from, so leaving PERSONAL unrestricted here is the honest "not supported in mock
   // mode" option rather than inventing a different, wrong approximation.
+  //
+  // maxConsecutiveDays: null / firstYearMaxDays: 3 (V120, defect 3 fix) -- the old blanket
+  // 3-CONSECUTIVE-day rule for everyone is gone; the real 3-day figure is now a first-year-only
+  // TOTAL annual cap (see LeaveService#autoRejectNote's Javadoc on the real backend). Not enforced
+  // in mock mode, same "shape only" caveat as every other field here.
   {
     code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal leave', annualQuotaDays: 7, requiresAttachment: false,
-    paidDaysCap: null, advanceNoticeDays: 1, minServiceMonths: 0, maxConsecutiveDays: 3, oncePerEmployment: false,
-    dayCountBasis: 'WORKING_DAYS',
+    paidDaysCap: null, advanceNoticeDays: 1, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
+    dayCountBasis: 'WORKING_DAYS', proratedFirstYear: true, firstYearMaxDays: 3,
   },
   {
     code: 'SICK', nameTh: 'ลาป่วย', nameEn: 'Sick leave', annualQuotaDays: 30, requiresAttachment: true,
     paidDaysCap: null, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
-    dayCountBasis: 'WORKING_DAYS',
+    dayCountBasis: 'WORKING_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
   },
+  // minServiceMonths: 0 / proratedFirstYear: true (V120, defect 1 fix) -- V116's original
+  // min_service_months=12 refused ALL vacation leave under a year of service outright, contradicting
+  // §5.3's pro-rated entitlement; the real backend now scales the quota instead (see
+  // LeaveService#employeeAnnualQuota). Not enforced in mock mode.
   {
     code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation leave', annualQuotaDays: 6, requiresAttachment: false,
-    paidDaysCap: null, advanceNoticeDays: 3, minServiceMonths: 12, maxConsecutiveDays: null, oncePerEmployment: false,
-    dayCountBasis: 'WORKING_DAYS',
+    paidDaysCap: null, advanceNoticeDays: 3, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
+    dayCountBasis: 'WORKING_DAYS', proratedFirstYear: true, firstYearMaxDays: null,
   },
   {
     code: 'MATERNITY', nameTh: 'ลาคลอดบุตร', nameEn: 'Maternity leave', annualQuotaDays: 98, requiresAttachment: true,
     paidDaysCap: 45, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
-    dayCountBasis: 'CALENDAR_DAYS',
+    dayCountBasis: 'CALENDAR_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
   },
+  // annualQuotaDays: 366 (sentinel, not a real policy number) / paidDaysCap: 60 (V120, defect 2 fix)
+  // -- V116 wrongly capped the LEAVE ITSELF at 60 days; §5.5 only caps the PAY. See
+  // V120__leave_type_proration_and_military_cap_fix.sql for the full writeup.
   {
-    code: 'MILITARY', nameTh: 'ลารับราชการทหาร', nameEn: 'Military service leave', annualQuotaDays: 60, requiresAttachment: true,
-    paidDaysCap: null, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
-    dayCountBasis: 'WORKING_DAYS',
+    code: 'MILITARY', nameTh: 'ลารับราชการทหาร', nameEn: 'Military service leave', annualQuotaDays: 366, requiresAttachment: true,
+    paidDaysCap: 60, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
+    dayCountBasis: 'WORKING_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
   },
   {
     code: 'ORDINATION', nameTh: 'ลาอุปสมบท', nameEn: 'Ordination leave', annualQuotaDays: 60, requiresAttachment: false,
     paidDaysCap: 15, advanceNoticeDays: 0, minServiceMonths: 12, maxConsecutiveDays: null, oncePerEmployment: true,
-    dayCountBasis: 'WORKING_DAYS',
+    dayCountBasis: 'WORKING_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
   },
 ];
 // leaveRequests/overtimeRequests/specialMoneyRequests are seeded by demoHr.js, wired
