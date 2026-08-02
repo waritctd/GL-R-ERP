@@ -68,6 +68,16 @@ public class LeaveService {
         "VACATION", "PERSONAL",
         "PERSONAL", "VACATION"
     );
+    // §5.3.2: <i>"ไม่อนุญาตให้ลาพร้อมกันทั้งแผนก ต้องมีพนักงานที่มีอายุงานเกิน 1 ปี มาทำงานอย่างน้อย 1
+    // คน"</i> names neither a tenure-free reading nor a department-size floor -- BOTH are owner
+    // relaxations layered onto the literal text, not this branch's own interpretation:
+    //   1. the "&gt;1 year tenure" qualifier is dropped (owner ruling, see #departmentCoverageRejectionNote).
+    //   2. the gate only APPLIES when the department has at least this many ACTIVE employees
+    //      (owner ruling, 2026-08-03, given after CI showed the un-floored gate blocking realistic
+    //      2-person departments -- e.g. a warehouse pair where one is already off could never let the
+    //      other take SICK leave at all). Departments below this floor are EXEMPT ENTIRELY, not just
+    //      down to one person; do not "fix" this back to a 1-person floor or the literal text.
+    private static final int MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE = 3;
     // §5.3.3: how far past the new request's own dates to search for a same-employee request of the
     // paired type. 14 days comfortably bounds every seeded schedule's longest realistic run of
     // consecutive non-workdays (WEEKEND_DUTY's is the extreme case at 5) with room to spare -- see
@@ -917,15 +927,18 @@ public class LeaveService {
      * <p>Binds at DEPARTMENT level. A PENDING (SUBMITTED) request counts as absent, the same as an
      * APPROVED one -- first-come-first-served, so two colleagues are never both told "yes" for the
      * same day (see {@link LeaveRepository#findActiveLeaveSpans}'s SUBMITTED/APPROVED scope).
-     * Departments with exactly one active employee are EXEMPT -- otherwise that employee could never
-     * take any leave at all; see {@link LeaveRepository#findActiveDepartmentColleagues}'s Javadoc for
-     * how an empty colleague list already IS that exemption, with no separate headcount query.
+     * Departments with fewer than {@value #MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE} ACTIVE employees
+     * (requester included) are EXEMPT ENTIRELY -- see {@link #MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE}'s
+     * own comment for the owner ruling this floor implements and why. "Active" matches {@link
+     * LeaveRepository#findActiveDepartmentColleagues}'s {@code is_active = TRUE} filter -- a nominal
+     * headcount that includes long-inactive rows (production has departments on paper far larger than
+     * their real active count) would under-count how exposed the department genuinely is.
      *
      * <p>Applies to EVERY leave type, not just VACATION/PERSONAL -- the announcement's text has no
      * type qualifier here (contrast §5.3.3/§5.3.4, which both explicitly name their types), and this
-     * reading is now an owner-confirmed ruling: SICK included, one-employee-department exemption the
-     * only carve-out. This means even SICK leave -- typically unplanned/urgent -- can be blocked if
-     * approving it would leave the department empty; flagged in the PR body as a known risk.
+     * reading is an owner-confirmed ruling: SICK included, the department-size floor above the only
+     * carve-out. This means even SICK leave -- typically unplanned/urgent -- can be blocked if
+     * approving it would leave a &ge;3-person department empty; flagged in the PR body as a known risk.
      *
      * <p><b>Schedule-awareness (V115/V117/V121, via #470's {@link LeaveRepository#workingDayPredicate}):
      * </b> "at work" is evaluated per employee's own resolved schedule, not a hardcoded Mon-Fri
@@ -943,7 +956,11 @@ public class LeaveService {
      */
     private String departmentCoverageRejectionNote(long employeeId, LocalDate startDate, LocalDate endDate) {
         List<Long> colleagueIds = leaveRepository.findActiveDepartmentColleagues(employeeId);
-        if (colleagueIds.isEmpty()) {
+        // +1 for the requester, who is themselves an active member of the department but is
+        // deliberately excluded from findActiveDepartmentColleagues's own result -- see that
+        // method's Javadoc.
+        int departmentSize = colleagueIds.size() + 1;
+        if (departmentSize < MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE) {
             return null;
         }
         Predicate<LocalDate> ownWorkingDay = leaveRepository.workingDayPredicate(employeeId, startDate, endDate);

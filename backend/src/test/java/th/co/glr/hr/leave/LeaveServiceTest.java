@@ -1891,19 +1891,23 @@ class LeaveServiceTest {
 
     @Test
     void submitBlocksVacationWhenItWouldLeaveNoOneElseInTheDepartmentAtWork() {
-        // §5.3.2, first half of the vacuous-fixture pair: a colleague in the same department has a
-        // SUBMITTED (not yet approved) request covering the requester's first day -- proving a PENDING
-        // request blocks too, not only an APPROVED one. The default Mon-Fri/no-holiday
-        // workingDayPredicate stub already covers both the requester and the colleague here.
+        // §5.3.2, first half of the vacuous-fixture pair: a THREE-person department (requester +
+        // colleagues 20L/30L -- the gate only APPLIES at department size 3+, see
+        // MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE) where BOTH colleagues are on leave that day -- one
+        // SUBMITTED (not yet approved), one APPROVED, proving a PENDING request blocks too, not only
+        // an APPROVED one. The default Mon-Fri/no-holiday workingDayPredicate stub already covers the
+        // requester and both colleagues here.
         SubmitLeaveRequest request = validSubmit(null); // Mon 2026-07-13 .. Tue 2026-07-14
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
         when(leaveRepository.hasSubmittedResignation(10L)).thenReturn(false);
         when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
-        when(leaveRepository.findActiveDepartmentColleagues(10L)).thenReturn(List.of(20L));
-        when(leaveRepository.findActiveLeaveSpans(eq(List.of(20L)), eq(request.startDate()), eq(request.endDate())))
-            .thenReturn(List.of(new EmployeeLeaveSpan(20L, LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"))));
+        when(leaveRepository.findActiveDepartmentColleagues(10L)).thenReturn(List.of(20L, 30L));
+        when(leaveRepository.findActiveLeaveSpans(eq(List.of(20L, 30L)), eq(request.startDate()), eq(request.endDate())))
+            .thenReturn(List.of(
+                new EmployeeLeaveSpan(20L, LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13")),
+                new EmployeeLeaveSpan(30L, LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"))));
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
@@ -1922,18 +1926,21 @@ class LeaveServiceTest {
 
     @Test
     void submitAllowsVacationWhenAColleagueRemainsAtWork() {
-        // §5.3.2, wrong-way-round complement, THE SAME fixture (same department, same colleague, same
-        // requested dates) -- only the colleague's own leave state differs, proving this cannot pass
-        // by a fixture that never contains a colleague at all (the vacuous-fixture trap).
+        // §5.3.2, wrong-way-round complement, THE SAME fixture (same department, same two colleagues,
+        // same requested dates) -- only ONE colleague's leave state differs (20L still on leave, 30L
+        // now free), proving this cannot pass by a fixture that never contains a colleague at all (the
+        // vacuous-fixture trap) or by a fixture that happens to sit below the size-3 floor.
         SubmitLeaveRequest request = validSubmit(null);
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
         when(leaveRepository.hasSubmittedResignation(10L)).thenReturn(false);
         when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
-        when(leaveRepository.findActiveDepartmentColleagues(10L)).thenReturn(List.of(20L));
-        when(leaveRepository.findActiveLeaveSpans(eq(List.of(20L)), eq(request.startDate()), eq(request.endDate())))
-            .thenReturn(List.of()); // colleague has no leave at all -- still at work
+        when(leaveRepository.findActiveDepartmentColleagues(10L)).thenReturn(List.of(20L, 30L));
+        when(leaveRepository.findActiveLeaveSpans(eq(List.of(20L, 30L)), eq(request.startDate()), eq(request.endDate())))
+            .thenReturn(List.of(
+                new EmployeeLeaveSpan(20L, LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"))));
+            // 30L has no leave at all -- still at work.
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
             eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
@@ -1944,6 +1951,72 @@ class LeaveServiceTest {
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
         assertThat(result.status()).isEqualTo("APPROVED");
+    }
+
+    @Test
+    void submitAllowsVacationInATwoPersonDepartmentEvenWhenTheOnlyColleagueIsOnLeaveTheSameDay() {
+        // §5.3.2 department-size-floor boundary (owner ruling, 2026-08-03), first half: a
+        // TWO-person department (requester + 1 colleague, BELOW MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE
+        // = 3) is EXEMPT ENTIRELY -- even though the colleague is on leave the very same day, which
+        // would leave nobody else at work. This is the exact "warehouse pair, one already off"
+        // scenario the ruling exists for: the gate must not fire below the floor no matter what the
+        // one colleague is doing. See #submitBlocksVacationInAThreePersonDepartmentWhenItWouldEmptyIt
+        // for the wrong-way-round complement one department member larger.
+        SubmitLeaveRequest request = validSubmit(null);
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.hasSubmittedResignation(10L)).thenReturn(false);
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.findActiveDepartmentColleagues(10L)).thenReturn(List.of(20L));
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(340L);
+        when(leaveRepository.findById(340L)).thenReturn(Optional.of(
+            requestDto(340L, 10L, "APPROVED", request.startDate(), request.endDate(), "2.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+        // The exemption is a size short-circuit, not a lucky coverage check -- findActiveLeaveSpans
+        // (which would tell us whether 20L is on leave) must never even be consulted.
+        verify(leaveRepository, org.mockito.Mockito.never())
+            .findActiveLeaveSpans(any(Collection.class), any(LocalDate.class), any(LocalDate.class));
+    }
+
+    @Test
+    void submitBlocksVacationInAThreePersonDepartmentWhenItWouldEmptyIt() {
+        // §5.3.2 department-size-floor boundary, wrong-way-round complement: identical scenario (the
+        // requester's leave would leave the department's only other members on leave too) but with
+        // ONE MORE colleague -- department size 3, AT the floor -- and the gate fires. The two tests
+        // together pin the boundary from both sides on materially the same fixture: only department
+        // size crosses MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE, and the outcome flips exactly there.
+        SubmitLeaveRequest request = validSubmit(null);
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.hasSubmittedResignation(10L)).thenReturn(false);
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.findActiveDepartmentColleagues(10L)).thenReturn(List.of(20L, 30L));
+        when(leaveRepository.findActiveLeaveSpans(eq(List.of(20L, 30L)), eq(request.startDate()), eq(request.endDate())))
+            .thenReturn(List.of(
+                new EmployeeLeaveSpan(20L, request.startDate(), request.endDate()),
+                new EmployeeLeaveSpan(30L, request.startDate(), request.endDate())));
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(341L);
+        when(leaveRepository.findById(341L)).thenReturn(Optional.of(
+            requestDto(341L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("nobody else in your department"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -1977,13 +2050,15 @@ class LeaveServiceTest {
     @Test
     void submitBlocksSickLeaveWhenItWouldLeaveNoOneElseInTheDepartmentAtWorkEvenAfterClearingTheCertificateGate() {
         // Owner-ruled interaction (2026-08-03, arrived after §5.3.2 was first written): the
-        // department-coverage gate applies to SICK too, with no type carve-out. This proves the two
-        // gates genuinely compose -- a SICK request that clears #sickCertificateNote cleanly (no
-        // attachment, but comfortably under the monthly tolerance) is STILL refused by
-        // #departmentCoverageRejectionNote, which runs after it in #autoRejectNote. Neither gate's
-        // rejection message is swallowed by the other: this fixture never reaches the certificate
-        // rejection at all (occasionsUsed=0 < tolerance=3), so the ONLY message that can appear here
-        // is the department-coverage one.
+        // department-coverage gate applies to SICK too, with no type carve-out (only the department-
+        // size floor is a carve-out -- a THREE-person department is used here, deliberately AT the
+        // floor, so this test cannot pass merely because the department was too small for the gate to
+        // apply at all). This proves the two gates genuinely compose -- a SICK request that clears
+        // #sickCertificateNote cleanly (no attachment, but comfortably under the monthly tolerance) is
+        // STILL refused by #departmentCoverageRejectionNote, which runs after it in #autoRejectNote.
+        // Neither gate's rejection message is swallowed by the other: this fixture never reaches the
+        // certificate rejection at all (occasionsUsed=0 < tolerance=3), so the ONLY message that can
+        // appear here is the department-coverage one.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "SICK", weekdayAfterNotice(), weekdayAfterNotice(), "Fever"); // Monday
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -1993,9 +2068,11 @@ class LeaveServiceTest {
         when(leaveRepository.countNoCertificateRequestsInMonth(
                 eq(10L), eq("SICK"), any(LocalDate.class), any(LocalDate.class), any(Collection.class)))
             .thenReturn(0);
-        when(leaveRepository.findActiveDepartmentColleagues(10L)).thenReturn(List.of(20L));
-        when(leaveRepository.findActiveLeaveSpans(eq(List.of(20L)), eq(request.startDate()), eq(request.endDate())))
-            .thenReturn(List.of(new EmployeeLeaveSpan(20L, request.startDate(), request.endDate())));
+        when(leaveRepository.findActiveDepartmentColleagues(10L)).thenReturn(List.of(20L, 30L));
+        when(leaveRepository.findActiveLeaveSpans(eq(List.of(20L, 30L)), eq(request.startDate()), eq(request.endDate())))
+            .thenReturn(List.of(
+                new EmployeeLeaveSpan(20L, request.startDate(), request.endDate()),
+                new EmployeeLeaveSpan(30L, request.startDate(), request.endDate())));
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))

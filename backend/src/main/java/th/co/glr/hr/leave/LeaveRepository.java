@@ -344,10 +344,12 @@ public class LeaveRepository {
      * LeaveService#departmentCoverageRejectionNote}, which resolves each one's own working-day
      * predicate via {@link #workingDayPredicate} rather than this method carrying schedule columns.
      *
-     * <p>Returns an EMPTY list -- not an error -- both when {@code employeeId} has no
-     * {@code department_id} on file and when their department has no other active employee. Either
-     * way {@code LeaveService} reads that as "nothing to check against" -- the latter is exactly the
-     * announcement's own one-person-department exemption, so no separate headcount query exists.
+     * <p>Returns an EMPTY list -- not an error -- when {@code employeeId} has no {@code
+     * department_id} on file, or has no active colleagues at all. {@code LeaveService} derives the
+     * department's total active size directly from this list's length ({@code colleagueIds.size() +
+     * 1} for the requester themself, see {@code LeaveService#MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE})
+     * rather than issuing a separate headcount query -- so this one list answers both "who else is
+     * there" and "how many active people does this department have".
      */
     public List<Long> findActiveDepartmentColleagues(long employeeId) {
         return jdbc.query("""
