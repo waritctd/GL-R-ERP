@@ -285,6 +285,14 @@ db.deductionObligationRemittances = db.deductionObligationRemittances || [];
 // against the real backend, not VITE_USE_MOCKS=true. Note this is the SAFE divergence direction
 // (mock is now STRICTER than production, not more permissive -- CLAUDE.md's "more permissive than
 // prod" is the dangerous one).
+//
+// §5.3.2/§5.3.3/§5.3.4 relational rules (2026-08, backend-only): "whole department not absent at
+// once", "no PERSONAL/VACATION back to back", and "no VACATION/PERSONAL after a submitted
+// resignation" are pure LeaveService#submit gates with no DTO/method-surface change (systemNote is
+// already a free-text field), so contract.test.js needs no update. They are NOT modelled here --
+// each depends on OTHER employees' schedules/leave/hr.resignation rows, exactly the "real
+// per-request eligibility decision" category this block already declines to reimplement. Testing
+// them requires the real backend.
 db.leaveTypes = db.leaveTypes || [
   // PERSONAL quota fix (2026-07-25): seeded at 3, company rule (§5.2) grants 7 paid personal
   // days/year -- see V90__leave_subday_and_contact.sql for the backend-side correction.

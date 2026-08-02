@@ -1752,6 +1752,343 @@ class LeaveServiceTest {
             org.mockito.ArgumentMatchers.contains("at least 7"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
+    // §5.3 relational rules (2026-08): §5.3.2 department coverage, §5.3.3 contiguous PERSONAL/
+    // VACATION, §5.3.4 post-resignation. LeaveRelationalRulesIntegrationTest carries the real-Postgres
+    // proof (real hr.resignation, real hr.work_schedule*/hr.holiday, real hr.leave_request rows);
+    // these Mockito-level tests isolate each gate's DECISION from the real SQL.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void submitRejectsVacationWhenAResignationHasBeenSubmitted() {
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "VACATION", weekdayAfterNotice(), weekdayAfterNotice(), "Family trip");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.hasSubmittedResignation(10L)).thenReturn(true);
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(300L);
+        when(leaveRepository.findById(300L)).thenReturn(Optional.of(
+            requestDto(300L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("resignation has been submitted"), eq(null), eq(null), eq(null), eq(null), eq(null));
+        // Categorical gate, runs before hire-date-dependent gates -- findHireDate must never be reached.
+        verify(leaveRepository, org.mockito.Mockito.never()).findHireDate(anyLong());
+    }
+
+    @Test
+    void submitAllowsVacationWhenNoResignationHasBeenSubmitted() {
+        // Wrong-way-round complement, identical fixture: no hr.resignation row -> approved as normal.
+        SubmitLeaveRequest request = validSubmit(null);
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.hasSubmittedResignation(10L)).thenReturn(false);
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(301L);
+        when(leaveRepository.findById(301L)).thenReturn(Optional.of(
+            requestDto(301L, 10L, "APPROVED", request.startDate(), request.endDate(), "2.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+    }
+
+    @Test
+    void submitDoesNotCheckResignationForALeaveTypeOutsideTheGate() {
+        // SICK is not VACATION/PERSONAL -- hasSubmittedResignation must never even be called, proving
+        // the type gate short-circuits rather than merely happening to allow it in this fixture.
+        // V124: sickType() carries a real noCertificateMonthlyTolerance (3), so this must still force
+        // AUTO_REJECTED via #sickCertificateNote -- stub the occasion count at the tolerance itself so
+        // the certificate-less request is refused for an unrelated (SICK-specific) reason, isolating
+        // this test to the resignation-gate short-circuit it actually proves.
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "SICK", weekdayAfterNotice(), weekdayAfterNotice(), "Fever");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("SICK")).thenReturn(Optional.of(sickType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("SICK"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.countNoCertificateRequestsInMonth(
+                eq(10L), eq("SICK"), any(LocalDate.class), any(LocalDate.class), any(Collection.class)))
+            .thenReturn(3);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(303L);
+        when(leaveRepository.findById(303L)).thenReturn(Optional.of(
+            requestDto(303L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+
+        leaveService.submit(request, user("employee", 10L));
+
+        verify(leaveRepository, org.mockito.Mockito.never()).hasSubmittedResignation(anyLong());
+    }
+
+    @Test
+    void submitRejectsVacationContiguousWithAnExistingPersonalRequestAcrossAWeekend() {
+        // §5.3.3 "ติดต่อกัน across a non-working day" DECISION: a Friday PERSONAL request immediately
+        // followed by a Monday VACATION request, with an ordinary Sat/Sun weekend (no scheduled
+        // workday) between them, counts as CONTIGUOUS -- the weekend does not break the run. The
+        // default Mon-Fri/no-holiday workingDayPredicate stub (this file's instance initializer)
+        // already gives the right answer for both dates here, so no extra stub is needed.
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"), "Family trip"); // Monday
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.hasSubmittedResignation(10L)).thenReturn(false);
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.findActiveRequestsByType(eq(10L), eq("PERSONAL"), any(LocalDate.class), any(LocalDate.class)))
+            .thenReturn(List.of(new LeaveRequestSpan(LocalDate.parse("2026-07-10"), LocalDate.parse("2026-07-10")))); // Friday
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(310L);
+        when(leaveRepository.findById(310L)).thenReturn(Optional.of(
+            requestDto(310L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("immediately before or after"), eq(null), eq(null), eq(null), eq(null), eq(null));
+    }
+
+    @Test
+    void submitAllowsVacationWhenAPriorPersonalRequestHasAClearWorkingDayGap() {
+        // Wrong-way-round complement, same paired PERSONAL request: the new VACATION request instead
+        // starts a week later, with a genuine Mon-Fri working gap in between -- must be allowed.
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "VACATION", LocalDate.parse("2026-07-20"), LocalDate.parse("2026-07-20"), "Family trip");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.hasSubmittedResignation(10L)).thenReturn(false);
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.findActiveRequestsByType(eq(10L), eq("PERSONAL"), any(LocalDate.class), any(LocalDate.class)))
+            .thenReturn(List.of(new LeaveRequestSpan(LocalDate.parse("2026-07-10"), LocalDate.parse("2026-07-10"))));
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(311L);
+        when(leaveRepository.findById(311L)).thenReturn(Optional.of(
+            requestDto(311L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+    }
+
+    @Test
+    void submitBlocksVacationWhenItWouldLeaveNoOneElseInTheDepartmentAtWork() {
+        // §5.3.2, first half of the vacuous-fixture pair: a THREE-person department (requester +
+        // colleagues 20L/30L -- the gate only APPLIES at department size 3+, see
+        // MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE) where BOTH colleagues are on leave that day -- one
+        // SUBMITTED (not yet approved), one APPROVED, proving a PENDING request blocks too, not only
+        // an APPROVED one. The default Mon-Fri/no-holiday workingDayPredicate stub already covers the
+        // requester and both colleagues here.
+        SubmitLeaveRequest request = validSubmit(null); // Mon 2026-07-13 .. Tue 2026-07-14
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.hasSubmittedResignation(10L)).thenReturn(false);
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.findActiveDepartmentColleagues(10L)).thenReturn(List.of(20L, 30L));
+        when(leaveRepository.findActiveLeaveSpans(eq(List.of(20L, 30L)), eq(request.startDate()), eq(request.endDate())))
+            .thenReturn(List.of(
+                new EmployeeLeaveSpan(20L, LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13")),
+                new EmployeeLeaveSpan(30L, LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"))));
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(320L);
+        when(leaveRepository.findById(320L)).thenReturn(Optional.of(
+            requestDto(320L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("nobody else in your department"), eq(null), eq(null), eq(null), eq(null), eq(null));
+    }
+
+    @Test
+    void submitAllowsVacationWhenAColleagueRemainsAtWork() {
+        // §5.3.2, wrong-way-round complement, THE SAME fixture (same department, same two colleagues,
+        // same requested dates) -- only ONE colleague's leave state differs (20L still on leave, 30L
+        // now free), proving this cannot pass by a fixture that never contains a colleague at all (the
+        // vacuous-fixture trap) or by a fixture that happens to sit below the size-3 floor.
+        SubmitLeaveRequest request = validSubmit(null);
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.hasSubmittedResignation(10L)).thenReturn(false);
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.findActiveDepartmentColleagues(10L)).thenReturn(List.of(20L, 30L));
+        when(leaveRepository.findActiveLeaveSpans(eq(List.of(20L, 30L)), eq(request.startDate()), eq(request.endDate())))
+            .thenReturn(List.of(
+                new EmployeeLeaveSpan(20L, LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"))));
+            // 30L has no leave at all -- still at work.
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(321L);
+        when(leaveRepository.findById(321L)).thenReturn(Optional.of(
+            requestDto(321L, 10L, "APPROVED", request.startDate(), request.endDate(), "2.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+    }
+
+    @Test
+    void submitAllowsVacationInATwoPersonDepartmentEvenWhenTheOnlyColleagueIsOnLeaveTheSameDay() {
+        // §5.3.2 department-size-floor boundary (owner ruling, 2026-08-03), first half: a
+        // TWO-person department (requester + 1 colleague, BELOW MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE
+        // = 3) is EXEMPT ENTIRELY -- even though the colleague is on leave the very same day, which
+        // would leave nobody else at work. This is the exact "warehouse pair, one already off"
+        // scenario the ruling exists for: the gate must not fire below the floor no matter what the
+        // one colleague is doing. See #submitBlocksVacationInAThreePersonDepartmentWhenItWouldEmptyIt
+        // for the wrong-way-round complement one department member larger.
+        SubmitLeaveRequest request = validSubmit(null);
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.hasSubmittedResignation(10L)).thenReturn(false);
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.findActiveDepartmentColleagues(10L)).thenReturn(List.of(20L));
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(340L);
+        when(leaveRepository.findById(340L)).thenReturn(Optional.of(
+            requestDto(340L, 10L, "APPROVED", request.startDate(), request.endDate(), "2.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+        // The exemption is a size short-circuit, not a lucky coverage check -- findActiveLeaveSpans
+        // (which would tell us whether 20L is on leave) must never even be consulted.
+        verify(leaveRepository, org.mockito.Mockito.never())
+            .findActiveLeaveSpans(any(Collection.class), any(LocalDate.class), any(LocalDate.class));
+    }
+
+    @Test
+    void submitBlocksVacationInAThreePersonDepartmentWhenItWouldEmptyIt() {
+        // §5.3.2 department-size-floor boundary, wrong-way-round complement: identical scenario (the
+        // requester's leave would leave the department's only other members on leave too) but with
+        // ONE MORE colleague -- department size 3, AT the floor -- and the gate fires. The two tests
+        // together pin the boundary from both sides on materially the same fixture: only department
+        // size crosses MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE, and the outcome flips exactly there.
+        SubmitLeaveRequest request = validSubmit(null);
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.hasSubmittedResignation(10L)).thenReturn(false);
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.findActiveDepartmentColleagues(10L)).thenReturn(List.of(20L, 30L));
+        when(leaveRepository.findActiveLeaveSpans(eq(List.of(20L, 30L)), eq(request.startDate()), eq(request.endDate())))
+            .thenReturn(List.of(
+                new EmployeeLeaveSpan(20L, request.startDate(), request.endDate()),
+                new EmployeeLeaveSpan(30L, request.startDate(), request.endDate())));
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(341L);
+        when(leaveRepository.findById(341L)).thenReturn(Optional.of(
+            requestDto(341L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("nobody else in your department"), eq(null), eq(null), eq(null), eq(null), eq(null));
+    }
+
+    @Test
+    void submitAllowsVacationInAOnePersonDepartmentWithoutCheckingSchedules() {
+        // §5.3.2 one-person-department exemption: an empty colleague list must short-circuit BEFORE
+        // any further schedule lookup for the department-coverage gate -- proven here by asserting
+        // workingDayPredicate for the requester's own range was called exactly ONCE (submit()'s own
+        // unconditional day-counting call), not a second time by departmentCoverageRejectionNote's
+        // own-day check, which is exactly the empty-list short-circuit doing its job.
+        SubmitLeaveRequest request = validSubmit(null);
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.hasSubmittedResignation(10L)).thenReturn(false);
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.findActiveDepartmentColleagues(10L)).thenReturn(List.of());
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(322L);
+        when(leaveRepository.findById(322L)).thenReturn(Optional.of(
+            requestDto(322L, 10L, "APPROVED", request.startDate(), request.endDate(), "2.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+        verify(leaveRepository, org.mockito.Mockito.times(1))
+            .workingDayPredicate(eq(10L), eq(request.startDate()), eq(request.endDate()));
+    }
+
+    @Test
+    void submitBlocksSickLeaveWhenItWouldLeaveNoOneElseInTheDepartmentAtWorkEvenAfterClearingTheCertificateGate() {
+        // Owner-ruled interaction (2026-08-03, arrived after §5.3.2 was first written): the
+        // department-coverage gate applies to SICK too, with no type carve-out (only the department-
+        // size floor is a carve-out -- a THREE-person department is used here, deliberately AT the
+        // floor, so this test cannot pass merely because the department was too small for the gate to
+        // apply at all). This proves the two gates genuinely compose -- a SICK request that clears
+        // #sickCertificateNote cleanly (no attachment, but comfortably under the monthly tolerance) is
+        // STILL refused by #departmentCoverageRejectionNote, which runs after it in #autoRejectNote.
+        // Neither gate's rejection message is swallowed by the other: this fixture never reaches the
+        // certificate rejection at all (occasionsUsed=0 < tolerance=3), so the ONLY message that can
+        // appear here is the department-coverage one.
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "SICK", weekdayAfterNotice(), weekdayAfterNotice(), "Fever"); // Monday
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("SICK")).thenReturn(Optional.of(sickType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("SICK"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.countNoCertificateRequestsInMonth(
+                eq(10L), eq("SICK"), any(LocalDate.class), any(LocalDate.class), any(Collection.class)))
+            .thenReturn(0);
+        when(leaveRepository.findActiveDepartmentColleagues(10L)).thenReturn(List.of(20L, 30L));
+        when(leaveRepository.findActiveLeaveSpans(eq(List.of(20L, 30L)), eq(request.startDate()), eq(request.endDate())))
+            .thenReturn(List.of(
+                new EmployeeLeaveSpan(20L, request.startDate(), request.endDate()),
+                new EmployeeLeaveSpan(30L, request.startDate(), request.endDate())));
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(330L);
+        when(leaveRepository.findById(330L)).thenReturn(Optional.of(
+            requestDto(330L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("nobody else in your department"), eq(null), eq(null), eq(null), eq(null), eq(null));
+    }
+
     private SubmitLeaveRequest validSubmit(Long employeeId) {
         // Monday–Tuesday, 12 days after FIXED_NOW: 2 working days, well past the 7-day notice.
         return new SubmitLeaveRequest(
