@@ -888,6 +888,64 @@ function mockUnitBasisLabel(unitBasis) {
   }
 }
 
+// Branch fix (deposit-notice autofill): mirrors DepositNoticeService.itemsFromQuotation — the
+// single shared mapping used by both depositNotices.createDraft's new-chain item fallback below
+// and pricingRequests.createDepositNoticeFromQuotation, so the two paths can never drift apart.
+function mockDepositNoticeItemsFromQuotation(items) {
+  return items.map((item, idx) => ({
+    seq: item.seq ?? idx + 1,
+    description: item.description?.trim() || 'รายการสินค้า',
+    qty: item.requestedQuantity,
+    unit: mockUnitBasisLabel(item.requestedUnitBasis),
+    unitPrice: item.approvedUnitPrice,
+    discountLabel: item.salesDiscount > 0 ? `ส่วนลด ${item.salesDiscount} ต่อหน่วย` : null,
+    netUnitPrice: item.finalUnitPrice,
+  }));
+}
+
+// Branch fix: mirrors DepositNoticeService.pickQuotation — the latest ACCEPTED revision for
+// this ticket, or (if none has been accepted yet) the latest ISSUED one. mockCustomerQuotations
+// carries no guaranteed ordering, so sort ascending by (quotationRevisionNo, id) first — same
+// contract as CustomerQuotationRepository.findByTicket — then a single forward scan overwriting
+// "latest seen" per status is equivalent to sorting descending and taking the first match.
+function mockPickTicketQuotationForDepositNotice(ticketId) {
+  const candidates = mockCustomerQuotations
+    .filter((q) => q.ticketId === Number(ticketId) && q.pricingRequestId != null)
+    .sort((a, b) => (a.quotationRevisionNo - b.quotationRevisionNo) || (a.id - b.id));
+  let latestAccepted = null;
+  let latestIssued = null;
+  for (const q of candidates) {
+    if (q.docStatus === 'ACCEPTED') latestAccepted = q;
+    else if (q.docStatus === 'ISSUED') latestIssued = q;
+  }
+  return latestAccepted ?? latestIssued ?? null;
+}
+
+// Branch fix: mirrors DepositNoticeService.createDraft's header autofill — customerTaxId/
+// customerAddress/projectName were never populated for a deal created through the pricing-
+// request chain. A caller-supplied non-blank value always wins; ticket.customerId == null
+// safely leaves the customer-sourced fields blank.
+function mockDepositNoticeHeaderAutofill(ticket, payload) {
+  const blankToNull = (v) => (v == null || String(v).trim() === '' ? null : v);
+  let customerTaxId = blankToNull(payload.customerTaxId);
+  let customerAddress = blankToNull(payload.customerAddress);
+  let projectName = blankToNull(payload.projectName);
+  if ((customerTaxId == null || customerAddress == null) && ticket?.customerId != null) {
+    const customer = mockCustomers.find((c) => c.id === ticket.customerId);
+    if (customer) {
+      if (customerTaxId == null) customerTaxId = blankToNull(customer.taxId);
+      if (customerAddress == null) {
+        customerAddress = blankToNull([customer.address, customer.branch].filter(Boolean).join(' '));
+      }
+    }
+  }
+  if (projectName == null) {
+    const project = ticket?.projectId ? mockProjects.find((p) => p.id === ticket.projectId) : null;
+    projectName = blankToNull(project?.name ?? null);
+  }
+  return { customerTaxId, customerAddress, projectName };
+}
+
 /**
  * Step 8: mirrors OrderConfirmationService.reconcileTicketItems — sales.ticket_item.qty is set
  * once at ticket creation and never touched by the PricingRequest chain, so it can drift from
@@ -6115,13 +6173,28 @@ export const api = {
       requireActive(ticket);
       if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) fail('ดีลต้องได้รับการอนุมัติก่อน', 409);
 
-      // Auto-build items from approved ticket items
-      const items = payload.items?.length ? payload.items : ticket.items
+      // Legacy path: auto-build from approved ticket items (sales.ticket_item.approved_price —
+      // written only by the @Deprecated, routeless TicketService.approve).
+      const legacyItems = ticket.items
         .filter((it) => it.approvedPrice != null)
         .map((it, idx) => {
           const desc = [it.brand, it.model, it.color, it.texture, it.size].filter(Boolean).join(' ');
           return { seq: idx + 1, description: desc, qty: Number(it.qty), unit: 'แผ่น', unitPrice: Number(it.approvedPrice), discountLabel: null, netUnitPrice: Number(it.approvedPrice) };
         });
+      // Branch fix (deposit-notice autofill): every deal created through the pricing-request
+      // chain has approved_price = NULL on every ticket_item, so legacyItems above is always
+      // empty for it — mirrors DepositNoticeService.buildItemsFromRequest's own new-chain
+      // fallback to the ticket's own customer quotation (latest ACCEPTED, else latest ISSUED).
+      let items = payload.items?.length ? payload.items : legacyItems;
+      if (!items.length) {
+        const quotation = mockPickTicketQuotationForDepositNotice(ticketId);
+        if (quotation) items = mockDepositNoticeItemsFromQuotation(quotation.items);
+      }
+
+      // Branch fix: header autofill (mirrors DepositNoticeService.createDraft) — a caller-
+      // supplied non-blank value always wins; a ticket with no linked customer master row
+      // safely leaves customerTaxId/customerAddress blank.
+      const { customerTaxId, customerAddress, projectName } = mockDepositNoticeHeaderAutofill(ticket, payload);
 
       const notes = payload.notes ?? mockNoteTemplates.filter((t) => t.defaultSelected).map((t) => t.text);
       const nextVer = mockDepositNotices.filter((d) => d.ticketId === Number(ticketId)).length + 1;
@@ -6130,8 +6203,8 @@ export const api = {
         id: mockDocSeq++, ticketId: Number(ticketId), docType: 'DEPOSIT_NOTICE',
         version: nextVer, docNumber: null, issueDate: null, status: 'DRAFT',
         customerName: payload.customerName ?? ticket.customerName ?? '',
-        customerTaxId: payload.customerTaxId ?? '', customerAddress: payload.customerAddress ?? '',
-        projectName: payload.projectName ?? '', reference: payload.reference ?? '',
+        customerTaxId: customerTaxId ?? '', customerAddress: customerAddress ?? '',
+        projectName: projectName ?? '', reference: payload.reference ?? '',
         depositPercent: payload.depositPercent ?? 0.5, vatPercent: 0.07,
         notes, items, issuedByName: null, preparerName: 'จินตนา หาญมนตรี',
         hasPdf: false, hasXlsx: false,
@@ -7629,17 +7702,11 @@ export const api = {
         (q) => q.pricingRequestId === pr.id && q.docStatus === 'ACCEPTED');
       if (!accepted) fail('ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้', 409);
 
-      // Mirrors OrderConfirmationService.createDepositNoticeFromQuotation: items/amounts trace
-      // to the quotation, never to any sales.ticket_item row.
-      const items = accepted.items.map((item, idx) => ({
-        seq: item.seq ?? idx + 1,
-        description: item.description?.trim() || 'รายการสินค้า',
-        qty: item.requestedQuantity,
-        unit: mockUnitBasisLabel(item.requestedUnitBasis),
-        unitPrice: item.approvedUnitPrice,
-        discountLabel: item.salesDiscount > 0 ? `ส่วนลด ${item.salesDiscount} ต่อหน่วย` : null,
-        netUnitPrice: item.finalUnitPrice,
-      }));
+      // Mirrors OrderConfirmationService.createDepositNoticeFromQuotation, which delegates the
+      // mapping to DepositNoticeService.itemsFromQuotation (shared with depositNotices
+      // .createDraft's own new-chain fallback below) — items/amounts trace to the quotation,
+      // never to any sales.ticket_item row.
+      const items = mockDepositNoticeItemsFromQuotation(accepted.items);
 
       // Requires quotation_issued (one of DepositNoticeService.requireApprovedTicket's three
       // accepted statuses) — mirrors what confirmOrder above already left in place; calling this
@@ -7649,13 +7716,19 @@ export const api = {
         fail('สร้างใบแจ้งรับมัดจำได้เฉพาะดีลที่อนุมัติแล้วเท่านั้น', 409);
       }
 
+      // Branch fix: header autofill — this entry point never received an explicit customer/
+      // project from its caller, so it always sourced the header from the (blank) defaults
+      // below. Mirrors DepositNoticeService.createDraft, which this real endpoint delegates to.
+      const { customerTaxId, customerAddress, projectName } = mockDepositNoticeHeaderAutofill(ticket, {});
+
       const notes = mockNoteTemplates.filter((t) => t.defaultSelected).map((t) => t.text);
       const nextVer = mockDepositNotices.filter((d) => d.ticketId === pr.ticketId).length + 1;
       const doc = buildMockDoc({
         id: mockDocSeq++, ticketId: pr.ticketId, docType: 'DEPOSIT_NOTICE',
         version: nextVer, docNumber: null, issueDate: null, status: 'DRAFT',
-        customerName: ticket.customerName ?? '', customerTaxId: '', customerAddress: '',
-        projectName: '', reference: accepted.number,
+        customerName: ticket.customerName ?? '', customerTaxId: customerTaxId ?? '',
+        customerAddress: customerAddress ?? '',
+        projectName: projectName ?? '', reference: accepted.number,
         depositPercent: payload.depositPercent ?? 0.5, vatPercent: 0.07,
         notes, items, issuedByName: null, preparerName: 'จินตนา หาญมนตรี',
         hasPdf: false, hasXlsx: false,

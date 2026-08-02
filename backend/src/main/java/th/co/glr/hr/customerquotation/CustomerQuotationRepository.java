@@ -398,6 +398,43 @@ public class CustomerQuotationRepository {
         return result;
     }
 
+    /**
+     * All pricing-request-chain quotations issued against a given TICKET (as opposed to {@link
+     * #findByPricingRequest}'s single-pricing-request scope) — used by {@code
+     * DepositNoticeService}'s new-chain item fallback, which only knows the ticket id, not which
+     * pricing request produced the accepted quotation. {@code pricing_request_id IS NOT NULL}
+     * mirrors {@link #findById}'s own filter: only Step 4/5 quotations are ever returned, never a
+     * legacy ticket-item-driven one (which has no such column populated).
+     *
+     * <p><strong>Deliberately NOT ordered like {@link #findByPricingRequest} (bug found on
+     * review, fixed before merge):</strong> {@code quotation_revision_no} is a counter SCOPED TO
+     * ITS OWN pricing request (V74's migration comment says so explicitly — "a NEW counter,
+     * scoped to the pricing_request"), so it is only meaningful for comparing rows within one
+     * pricing request. This method is deliberately cross-pricing-request (one ticket can have
+     * multiple, per CLAUDE.md's "1 Deal → 0..N Pricing Requests"), so two rows returned here can
+     * carry the SAME or a reversed {@code quotation_revision_no} while belonging to entirely
+     * different chains — e.g. an older pricing request revised twice (revision_no 2) vs a newer,
+     * independent pricing request on its first quotation (revision_no 1). Ordering by
+     * {@code (quotation_revision_no, quotation_id)} would then put the OLDER row last, and a
+     * caller picking "the latest" by scanning forward would silently select a superseded
+     * quotation's items/prices for a customer financial document. {@code quotation_id} is a
+     * single, monotonically increasing sequence across every pricing request on the ticket — the
+     * only creation-order signal that is actually comparable across chains — so this orders by
+     * it ALONE.
+     */
+    public List<CustomerQuotationDto> findByTicket(long ticketId) {
+        List<Long> ids = jdbc.query("""
+            SELECT quotation_id FROM sales.quotation
+             WHERE ticket_id = :id AND pricing_request_id IS NOT NULL
+             ORDER BY quotation_id
+            """, Map.of("id", ticketId), (rs, rowNum) -> rs.getLong("quotation_id"));
+        List<CustomerQuotationDto> result = new ArrayList<>();
+        for (Long id : ids) {
+            findById(id).ifPresent(result::add);
+        }
+        return result;
+    }
+
     private List<CustomerQuotationItemDto> findItems(long quotationId) {
         return jdbc.query("""
             SELECT qi.quotation_item_id, qi.seq, qi.pricing_request_item_id, qi.pricing_decision_item_id,

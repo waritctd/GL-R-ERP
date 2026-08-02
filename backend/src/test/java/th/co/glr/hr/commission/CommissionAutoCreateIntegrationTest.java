@@ -184,7 +184,7 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
 
         DepositNoticeRepository depositNoticeRepository = new DepositNoticeRepository(jdbc);
         depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets, notificationRepository,
-            new DepositNoticeRenderer(), new RemainingInvoiceRenderer());
+            new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers, quotationRepository);
 
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, notificationRepository);

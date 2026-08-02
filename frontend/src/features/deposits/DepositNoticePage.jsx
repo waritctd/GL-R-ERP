@@ -242,8 +242,31 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   }
 
   const createDraftMutation = useMutation({
-    mutationFn: () => {
+    // Prefer the pricing-request-chain endpoint (createDepositNoticeFromQuotation) when this
+    // deal has a pricing request whose customer quotation was accepted — that route sources
+    // items from the accepted quotation and (per DepositNoticeService.createDraft, which it
+    // delegates to) autofills the header from the customer master + ticket project. Resolving
+    // "does this deal have an accepted quotation" only needs listForTicket's own summary shape
+    // (status === QUOTATION_ACCEPTED is set exactly when the customer accepts — see
+    // OrderConfirmationService's own Javadoc), so no extra round trip to the quotation list is
+    // needed. A failure ANYWHERE in this resolution step (network error, permission edge case,
+    // no pricing requests at all) degrades to today's ticket-level route — it must never break
+    // the button.
+    mutationFn: async () => {
       const defaultNotes = noteTemplates.filter((t) => t.defaultSelected).map((t) => t.text);
+      let acceptedPricingRequestId = null;
+      try {
+        const { items: pricingRequests } = await api.pricingRequests.listForTicket(ticketId);
+        acceptedPricingRequestId = (pricingRequests ?? [])
+          .find((pr) => pr.status === 'QUOTATION_ACCEPTED')?.id ?? null;
+      } catch {
+        acceptedPricingRequestId = null;
+      }
+      if (acceptedPricingRequestId != null) {
+        return api.pricingRequests.createDepositNoticeFromQuotation(acceptedPricingRequestId, {
+          depositPercent: 0.5,
+        });
+      }
       return api.depositNotices.createDraft(ticketId, {
         notes: defaultNotes,
         depositPercent: 0.5,

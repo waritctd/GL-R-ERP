@@ -1,7 +1,6 @@
 package th.co.glr.hr.orderconfirmation;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -12,7 +11,6 @@ import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationDto;
-import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationItemDto;
 import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.deposit.DepositNoticeDto;
@@ -322,7 +320,9 @@ public class OrderConfirmationService {
 
     /** ticket_item.unit_basis's own CHECK constraint (V37) only allows PIECE/SQM — a narrower set
      * than UnitBasis's four canonical PER_SQM/PER_PIECE/PER_BOX/PER_LINEAR_M codes. Display-only
-     * mapping, duplicated rather than shared, matching this class's own unitLabel precedent. */
+     * mapping, kept separate from {@link DepositNoticeService#unitLabel} (this branch's shared
+     * quotation-item mapping) since the two map onto entirely different target vocabularies
+     * (ticket_item's own two-value CHECK constraint vs. a human-readable Thai unit label). */
     private String mapUnitBasisToTicketItem(String unitBasis) {
         return UnitBasis.PER_SQM.equals(unitBasis) ? "SQM" : "PIECE";
     }
@@ -335,14 +335,23 @@ public class OrderConfirmationService {
      * Builds a deposit-notice DRAFT from the pricing request's own ACCEPTED customer quotation —
      * items and amounts trace to {@code sales.quotation}/{@code quotation_item} (Step 4/5's
      * aggregate), never to any {@code sales.ticket_item} row. Calls the EXISTING {@link
-     * DepositNoticeService#createDraft} unmodified: because {@code buildItemsFromRequest} inside
-     * that method already returns the caller-supplied items verbatim whenever they are non-empty
-     * (skipping its own legacy ticket_item auto-population entirely), and because {@link
-     * #confirmOrder} already left {@code ticket.status = quotation_issued} — one of {@code
-     * requireApprovedTicket}'s three already-accepted values — no change to {@code
-     * DepositNoticeService} itself was needed. Verified by the "traces to the quotation, NOT to
-     * any sales.ticket_item row" assertions inside {@code OrderConfirmationIntegrationTest
+     * DepositNoticeService#createDraft}: {@code buildItemsFromRequest} inside that method already
+     * returns the caller-supplied items verbatim whenever they are non-empty (skipping its own
+     * ticket-chain auto-population entirely), and {@link #confirmOrder} already left {@code
+     * ticket.status = quotation_issued} — one of {@code requireApprovedTicket}'s three
+     * already-accepted values. Verified by the "traces to the quotation, NOT to any
+     * sales.ticket_item row" assertions inside {@code OrderConfirmationIntegrationTest
      * .fullChain_quotationAcceptedThroughDepositPaid_composesWithoutShortcuts}.
+     *
+     * <p><strong>Post-diagnosis update:</strong> {@code DepositNoticeService.createDraft} itself
+     * DID need a fix — every deal created purely through this chain reaches this method with
+     * {@code ticket_item.approved_price} still NULL on every line (that column is written only by
+     * the {@code @Deprecated}, routeless {@code TicketService.approve}), and the header fields
+     * ({@code customerTaxId}/{@code customerAddress}/{@code projectName}) were never autofilled at
+     * all. This call site is unaffected by that fix (it always supplies non-empty {@code items}
+     * itself, and leaves the header fields {@code null} for {@code createDraft} to autofill from
+     * the ticket's own customer/project, same as the ticket-level route) — see {@code
+     * DepositNoticeService.createDraft}'s own comments for what changed and why.
      */
     @Transactional
     public DepositNoticeDto createDepositNoticeFromQuotation(long pricingRequestId,
@@ -357,17 +366,9 @@ public class OrderConfirmationService {
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT,
                 "ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้"));
 
-        List<DepositNoticeItemRequest> items = new ArrayList<>();
-        for (CustomerQuotationItemDto item : accepted.items()) {
-            String description = item.description() != null && !item.description().isBlank()
-                ? item.description() : "รายการสินค้า";
-            BigDecimal discount = item.salesDiscount();
-            String discountLabel = discount != null && discount.signum() > 0
-                ? "ส่วนลด " + discount.stripTrailingZeros().toPlainString() + " ต่อหน่วย" : null;
-            items.add(new DepositNoticeItemRequest(
-                item.seq(), description, item.requestedQuantity(), unitLabel(item.requestedUnitBasis()),
-                item.approvedUnitPrice(), discountLabel, item.finalUnitPrice()));
-        }
+        // Mapping itself now lives on DepositNoticeService (this branch's fix), shared with that
+        // class's own new-chain item fallback in buildItemsFromRequest — see its Javadoc.
+        List<DepositNoticeItemRequest> items = DepositNoticeService.itemsFromQuotation(accepted.items());
 
         DepositNoticeDraftRequest draftRequest = new DepositNoticeDraftRequest(
             null, null, null, null, accepted.number(),
@@ -378,17 +379,6 @@ public class OrderConfirmationService {
             PricingRequestEventKind.DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION, summary.status(), summary.status(),
             "สร้างร่างใบแจ้งยอดเงินรับมัดจำจากใบเสนอราคา " + accepted.number(), null);
         return draft;
-    }
-
-    private String unitLabel(String unitBasis) {
-        if (unitBasis == null) return "หน่วย";
-        return switch (unitBasis) {
-            case UnitBasis.PER_SQM -> "ตร.ม.";
-            case UnitBasis.PER_PIECE -> "แผ่น";
-            case UnitBasis.PER_BOX -> "กล่อง";
-            case UnitBasis.PER_LINEAR_M -> "เมตร";
-            default -> unitBasis;
-        };
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

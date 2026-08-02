@@ -143,7 +143,7 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
             new QuotationRenderer(), notifications);
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets, notifications,
-            new DepositNoticeRenderer(), new RemainingInvoiceRenderer());
+            new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers, quotationRepository);
 
         procurementService = new ProcurementService(new ProcurementRepository(jdbc), pricingRequests, tickets, notifications);
 
