@@ -901,7 +901,7 @@ describe('TicketDetailPage', () => {
     expect(api.tickets.editItems.mock.calls[0][1].items.map((it) => it.qty)).toEqual([3, 2]);
   });
 
-  it('revise form: the confirm button is disabled on a blank reason (pre-existing guard, unchanged) and submits once filled', async () => {
+  it('revise form: opens as a modal, the confirm button is disabled on a blank reason (pre-existing guard, unchanged), and submits once filled', async () => {
     // can.revise has no hasAction() gate — only status + role + isOwner — so
     // no availableActions entry is needed for this button to appear.
     api.tickets.get.mockResolvedValueOnce({
@@ -920,7 +920,11 @@ describe('TicketDetailPage', () => {
     // (ticket-detail IA rebuild Phase 1) — open the menu, then its item.
     fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: /ขอแก้ไข/ }));
-    const confirmButton = await screen.findByRole('button', { name: 'ยืนยันขอแก้ไข' });
+
+    // Slice C2a: the form is now a real Modal (role="dialog", aria-modal),
+    // not an inline page section — this is the headline change for this test.
+    const dialog = await screen.findByRole('dialog', { name: 'ขอแก้ไข' });
+    const confirmButton = await within(dialog).findByRole('button', { name: 'ยืนยันขอแก้ไข' });
 
     // The button's disabled={actionLoading || !reviseReason.trim()} guard
     // (unchanged by this slice) makes the inline-error branch in its onClick
@@ -939,6 +943,45 @@ describe('TicketDetailPage', () => {
     fireEvent.click(confirmButton);
     await waitFor(() => expect(api.tickets.revision).toHaveBeenCalledWith(701, { scope: 'QTY_OR_NOTE', reason: 'ลูกค้าขอเปลี่ยนจำนวน' }));
     expect(screen.queryByRole('alert')).toBeNull();
+    // Success closes the modal (resetActionDrafts sets showReviseForm false),
+    // same as every other action modal on this page.
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ขอแก้ไข' })).toBeNull());
+  });
+
+  // The actual defect this slice fixes: opening ขอแก้ไข from the header's "⋯"
+  // overflow menu (which sits outside every tab) used to force a tab switch
+  // to "ภาพรวม" via runOnTab('overview', …) before scrolling to the inline
+  // form — silently moving the viewer off whatever tab they were looking at.
+  // Now that the form is a modal, handleOpenRevise no longer touches the
+  // active tab at all. A test that only checks the form/modal appears cannot
+  // see this regression — it must assert the URL's ?tab= is unchanged.
+  it('opening ขอแก้ไข from the overflow menu does NOT change the active tab', async () => {
+    api.tickets.get.mockResolvedValue({
+      ticket: buildTicket({ summary: { status: 'approved', createdById: 1 } }),
+    });
+    api.tickets.actions.mockResolvedValue({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'approved',
+      },
+      availableActions: [],
+    });
+
+    renderTicketDetailPageAtRoute(['/tickets/701?tab=money'], salesOwnerUser);
+
+    const moneyTab = await screen.findByRole('tab', { name: /^การเงิน/ });
+    await waitFor(() => expect(moneyTab.getAttribute('aria-selected')).toBe('true'));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /ขอแก้ไข/ }));
+
+    // The modal opened…
+    await screen.findByRole('dialog', { name: 'ขอแก้ไข' });
+    // …but the URL's ?tab= and the tab's aria-selected state are untouched.
+    expect(screen.getByTestId('location-probe').textContent).toContain('tab=money');
+    expect(moneyTab.getAttribute('aria-selected')).toBe('true');
+    // Wrong-way-round: the tab this used to force a switch TO is not the one
+    // now selected.
+    expect(screen.getByRole('tab', { name: /^ภาพรวม/ }).getAttribute('aria-selected')).not.toBe('true');
   });
 
   // Ticket-detail IA rebuild Phase 1 clutter follow-up (FIX 1): CREATE_PCR
