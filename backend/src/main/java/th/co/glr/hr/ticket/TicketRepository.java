@@ -387,7 +387,9 @@ public class TicketRepository {
                 .addValue("manualOverrideReason", item.manualOverrideReason())
                 .addValue("qtyDelivered", item.qtyDelivered())
                 .addValue("qtyFromStock", item.qtyFromStock())
-                .addValue("stockNote", item.stockNote());
+                .addValue("stockNote", item.stockNote())
+                .addValue("catalogPriceId", item.catalogPriceId())
+                .addValue("catalogProductCode", item.catalogProductCode());
         }
         jdbc.batchUpdate("""
             INSERT INTO sales.ticket_item
@@ -395,12 +397,14 @@ public class TicketRepository {
                  qty, qty_sqm, unit_basis, raw_price, raw_currency, raw_unit,
                  proposed_price, approved_price, currency, sort_order,
                  calced_cost, calced_price, calc_config_version,
-                 manual_price, manual_override_reason, qty_delivered, qty_from_stock, stock_note)
+                 manual_price, manual_override_reason, qty_delivered, qty_from_stock, stock_note,
+                 catalog_price_id, catalog_product_code)
             VALUES (:ticketId, :brand, :model, :color, :texture, :size, :factory,
                     :qty, :qtySqm, :unitBasis, :rawPrice, :rawCurrency, :rawUnit,
                     :proposedPrice, :approvedPrice, :currency, :sortOrder,
                     :calcedCost, :calcedPrice, :calcConfigVersion,
-                    :manualPrice, :manualOverrideReason, :qtyDelivered, :qtyFromStock, :stockNote)
+                    :manualPrice, :manualOverrideReason, :qtyDelivered, :qtyFromStock, :stockNote,
+                    :catalogPriceId, :catalogProductCode)
             """, batch);
     }
 
@@ -663,7 +667,8 @@ public class TicketRepository {
                    proposed_price, approved_price, currency, sort_order,
                    calced_cost, calced_price, calc_config_version,
                    manual_price, manual_override_reason,
-                   qty_delivered, qty_from_stock, stock_note
+                   qty_delivered, qty_from_stock, stock_note,
+                   catalog_price_id, catalog_product_code
               FROM sales.ticket_item
              WHERE ticket_id = :id
              ORDER BY sort_order, item_id
@@ -672,6 +677,8 @@ public class TicketRepository {
             (rs, rowNum) -> {
                 int calcConfigVersionRaw = rs.getInt("calc_config_version");
                 Integer calcConfigVersion = rs.wasNull() ? null : calcConfigVersionRaw;
+                long catalogPriceIdRaw = rs.getLong("catalog_price_id");
+                Long catalogPriceId = rs.wasNull() ? null : catalogPriceIdRaw;
                 return new TicketItemDto(
                     rs.getLong("item_id"),
                     rs.getLong("ticket_id"),
@@ -698,7 +705,9 @@ public class TicketRepository {
                     rs.getString("manual_override_reason"),
                     rs.getBigDecimal("qty_delivered"),
                     rs.getBigDecimal("qty_from_stock"),
-                    rs.getString("stock_note")
+                    rs.getString("stock_note"),
+                    catalogPriceId,
+                    rs.getString("catalog_product_code")
                 );
             });
     }
@@ -830,16 +839,18 @@ public class TicketRepository {
                 .addValue("rawUnit", item.rawUnit())
                 .addValue("proposedPrice", item.proposedPrice())
                 .addValue("currency", currency)
-                .addValue("sortOrder", i);
+                .addValue("sortOrder", i)
+                .addValue("catalogPriceId", item.catalogPriceId())
+                .addValue("catalogProductCode", item.catalogProductCode());
         }
         jdbc.batchUpdate("""
             INSERT INTO sales.ticket_item
                 (ticket_id, brand, model, color, texture, size, factory,
                  qty, qty_sqm, unit_basis, raw_price, raw_currency, raw_unit,
-                 proposed_price, currency, sort_order)
+                 proposed_price, currency, sort_order, catalog_price_id, catalog_product_code)
             VALUES (:ticketId, :brand, :model, :color, :texture, :size, :factory,
                     :qty, :qtySqm, :unitBasis, :rawPrice, :rawCurrency, :rawUnit,
-                    :proposedPrice, :currency, :sortOrder)
+                    :proposedPrice, :currency, :sortOrder, :catalogPriceId, :catalogProductCode)
             """, batch);
     }
 

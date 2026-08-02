@@ -46,11 +46,15 @@ function quantityForTicketItem(ticketItem) {
   return ticketItem?.qty ?? 1;
 }
 
-function emptyItemFromTicketItem(ticketItem) {
+function emptyItemFromTicketItem(ticketItem, deliveryLocationSeed = '') {
   return {
     sourceTicketItemId: ticketItem?.id ?? null,
-    productId: null,
-    catalogProductCode: '',
+    // V110: seed the catalog link the deal-creation catalog picker already resolved (see
+    // TicketCreateModal.jsx's applyCatalogItem), so this row doesn't need a re-search — the
+    // whole point of this fix. Null for a hand-typed ("custom") deal line, or a line created
+    // before V110 existed; findSingleFuzzyCatalogMatch below is the fallback for that case.
+    productId: ticketItem?.catalogPriceId ?? null,
+    catalogProductCode: ticketItem?.catalogProductCode ?? '',
     catalogBasePrice: null,
     catalogCurrency: '',
     brand: ticketItem?.brand ?? '',
@@ -65,8 +69,15 @@ function emptyItemFromTicketItem(ticketItem) {
     requestedUnitBasis: unitBasisForTicketItem(ticketItem),
     quantityType: 'ESTIMATE',
     targetDeliveryDate: '',
-    deliveryLocation: '',
+    // Seeded from the deal's own project (create mode only — see the modal's
+    // dealDeliveryLocationSeed) rather than left blank like the rest of this row's fields, which
+    // have no deal-level equivalent to seed from.
+    deliveryLocation: deliveryLocationSeed,
     specialRequirement: '',
+    // Fuzzy catalog fallback provenance (V110 follow-up) — true only when
+    // findSingleFuzzyCatalogMatch auto-applied a match with no user action, so the UI can badge
+    // it as "unconfirmed" rather than a real user pick.
+    catalogAutoApplied: false,
   };
 }
 
@@ -94,6 +105,102 @@ function itemFromExisting(item) {
     targetDeliveryDate: item?.targetDeliveryDate ?? '',
     deliveryLocation: item?.deliveryLocation ?? '',
     specialRequirement: item?.specialRequirement ?? '',
+    // Edit/revision seed from a PERSISTED request, never from the fuzzy catalog fallback —
+    // always false here.
+    catalogAutoApplied: false,
+  };
+}
+
+// Mirrors TicketSummaryDto's designerName/ownerName/buyerName/contactName/customerName — the
+// deal's own recipient-shaped fields, the closest available identity for each ผู้รับ chip.
+// Falls through recipientType-specific name -> contact -> customer, so the field is never left
+// blank as long as the deal has ANY name recorded on it. CREATE MODE ONLY — never consulted for
+// edit/revision (both seed recipientLabel from the persisted request instead, see the modal's
+// seedsFromExisting guard around every call site below).
+function recipientLabelForDeal(deal, recipientType) {
+  if (!deal) return '';
+  const byType = {
+    DESIGNER: deal.designerName,
+    OWNER: deal.ownerName,
+    BUYER: deal.buyerName,
+  }[recipientType];
+  return byType || deal.contactName || deal.customerName || '';
+}
+
+function normalizeForCatalogMatch(value) {
+  return String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+// How many candidates the fuzzy fallback asks for. Deliberately larger than the number a row
+// could plausibly match: GET /catalog/prices is `ORDER BY f.name, pp.collection, pp.product_code
+// LIMIT :limit` (CatalogRepository) — ALPHABETICAL BY FACTORY, not by relevance — so a small
+// limit does not return "the 5 best candidates", it returns the alphabetically-first factories
+// and hides the rest. See FUZZY_MATCH_LIMIT's use below for why a FULL page is treated as
+// ambiguous rather than as a candidate set.
+const FUZZY_MATCH_LIMIT = 50;
+
+// Fuzzy fallback (V110 follow-up) for deal lines created before the catalog link existed (no
+// ticketItem.catalogPriceId to seed productId from): auto-applies ONLY when the search returns
+// EXACTLY ONE candidate that agrees with this row on every descriptive field the row actually
+// has. Zero or ambiguous results are left alone — the row just falls back to the normal manual
+// catalog search, exactly as it did before this fallback existed. A wrong auto-match would feed
+// a wrong base price into costing, so it is never silent — see the catalogAutoApplied badge
+// rendered on the row below.
+//
+// The predicate deliberately covers factory/color/texture as well as model/size. Matching on
+// model+size alone was not enough: deriveItemFromCatalogProduct OVERWRITES brand/factory/color/
+// texture from the chosen product, so a candidate agreeing on model+size but differing on
+// factory would silently rewrite the deal line's factory (and point productId at that other
+// factory's price). Each field is only enforced when the ROW has a value for it — a blank field
+// on the row is "unknown", not "must be blank on the product".
+function findSingleFuzzyCatalogMatch(candidates, item) {
+  const list = candidates ?? [];
+  // A full page means the server truncated: because the ordering is alphabetical rather than
+  // relevance-ranked, matches beyond the cut are invisible here, so "exactly one match" would be
+  // an artifact of truncation rather than evidence of uniqueness. Ambiguity is UNKNOWN, not
+  // absent — decline to guess and leave the row for a manual search.
+  if (list.length >= FUZZY_MATCH_LIMIT) return null;
+  const agreesOn = (rowValue, productValue) => {
+    const row = normalizeForCatalogMatch(rowValue);
+    if (!row) return true; // row has no opinion on this field
+    return row === normalizeForCatalogMatch(productValue);
+  };
+  const matches = list.filter((product) => (
+    agreesOn(item.model, product.collection || product.productName)
+    && agreesOn(item.size, product.sizeRaw)
+    && agreesOn(item.factory, product.factoryName)
+    && agreesOn(item.color, product.color)
+    && agreesOn(item.texture, product.surface)
+  ));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+// Pure product-application logic shared by applyCatalogItem (a real user pick) and the fuzzy
+// catalog fallback effect (an automatic best-guess) — same fields, same brand-fallback rule,
+// different only in who calls it and whether catalogAutoApplied ends up true afterward.
+function deriveItemFromCatalogProduct(item, product) {
+  // Mirrors PricingRequestRepository.snapshotCatalogSelections: catalog_brand =
+  // COALESCE(pri.brand, pp.grade) — an already-typed brand wins, otherwise the catalog's
+  // own grade fills in. Brand is deliberately NOT the factory name (that belongs in the
+  // separate `factory` field below) — picking a catalog product used to overwrite brand
+  // with product.factoryName, which was wrong (review finding).
+  const brand = item.brand?.trim() ? item.brand : (product.grade ?? '');
+  const requestedUnitBasis = unitBasisForPriceUnit(product.priceUnit, item.requestedUnitBasis);
+  return {
+    ...item,
+    productId: product.priceId ?? null,
+    catalogProductCode: product.productCode ?? '',
+    catalogBasePrice: product.price ?? null,
+    catalogCurrency: product.currency ?? '',
+    brand,
+    model: product.collection ?? product.productName ?? product.productCode ?? item.model ?? '',
+    productDescription: product.productName ?? product.productCode ?? item.productDescription ?? '',
+    color: product.color ?? '',
+    texture: product.surface ?? '',
+    size: product.sizeRaw ?? '',
+    factory: product.factoryName ?? '',
+    requestedUnitBasis,
+    requestedUnit: unitBasisLabel(requestedUnitBasis),
   };
 }
 
@@ -145,7 +252,7 @@ function generateClientRequestId() {
 }
 
 export function PricingRequestCreateModal({
-  ticketItems = [], onClose, onCreated, createFn, submitFn,
+  ticketItems = [], deal = null, onClose, onCreated, createFn, submitFn,
   mode = 'create', initialValue = null, updateFn, createRevisionFn,
 }) {
   const isEdit = mode === 'edit';
@@ -155,22 +262,105 @@ export function PricingRequestCreateModal({
   // ticket_item rows instead.
   const seedsFromExisting = isEdit || isRevision;
   const initialSummary = initialValue?.summary ?? null;
+  // Fix for "ทุกอย่างควร autofill ตามข้อมูลขั้นตอนนั้น": deal-derived seeds, CREATE MODE ONLY —
+  // edit/revision seed every field from the PERSISTED request above and must never have `deal`
+  // leak into them, so this is gated the same way seedsFromExisting gates itemFromExisting vs.
+  // emptyItemFromTicketItem just above.
+  const dealDeliveryLocationSeed = !seedsFromExisting ? (deal?.projectName ?? '') : '';
   const [recipientType, setRecipientType] = useState(() => initialSummary?.recipientType ?? 'DESIGNER');
-  const [recipientLabel, setRecipientLabel] = useState(() => initialSummary?.recipientLabel ?? '');
+  const [recipientLabel, setRecipientLabel] = useState(() => (
+    seedsFromExisting
+      ? (initialSummary?.recipientLabel ?? '')
+      : recipientLabelForDeal(deal, initialSummary?.recipientType ?? 'DESIGNER')
+  ));
+  // Tracks whether the user has hand-edited ผู้รับ's free-text label — once true, switching the
+  // ผู้รับ chip must never overwrite what they typed (see the effect below). Stays false forever
+  // in edit/revision mode since nothing ever writes recipientLabel from `deal` there.
+  const [recipientLabelTouched, setRecipientLabelTouched] = useState(false);
   const [requiredDate, setRequiredDate] = useState(() => initialSummary?.requiredDate ?? '');
   const [customerTargetPrice, setCustomerTargetPrice] = useState(() => (
     initialSummary?.customerTargetPrice != null ? String(initialSummary.customerTargetPrice) : ''
   ));
   const [targetCurrency, setTargetCurrency] = useState(() => initialSummary?.targetCurrency ?? 'THB');
-  const [note, setNote] = useState(() => initialSummary?.note ?? '');
+  const [note, setNote] = useState(() => (
+    seedsFromExisting ? (initialSummary?.note ?? '') : (deal?.note ?? '')
+  ));
   const [revisionReason, setRevisionReason] = useState('');
   const [clientRequestId] = useState(() => generateClientRequestId());
   const [items, setItems] = useState(() => {
     if (seedsFromExisting) {
       return initialValue?.items?.length ? initialValue.items.map(itemFromExisting) : [emptyItemFromTicketItem(null)];
     }
-    return ticketItems.length ? ticketItems.map(emptyItemFromTicketItem) : [emptyItemFromTicketItem(null)];
+    return ticketItems.length
+      ? ticketItems.map((ticketItem) => emptyItemFromTicketItem(ticketItem, dealDeliveryLocationSeed))
+      : [emptyItemFromTicketItem(null, dealDeliveryLocationSeed)];
   });
+
+  // Re-fills recipientLabel from the deal whenever the ผู้รับ chip changes — create mode only,
+  // and only until the user types over it. Also runs once on mount, harmlessly recomputing the
+  // same value the useState initializer above already seeded. deal/seedsFromExisting/
+  // recipientLabelTouched are read here, not depended on: this must re-run ONLY when the user
+  // switches the ผู้รับ chip, never merely because `deal` re-rendered with the same identity.
+  useEffect(() => {
+    if (seedsFromExisting || recipientLabelTouched) return;
+    setRecipientLabel(recipientLabelForDeal(deal, recipientType));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recipientType]);
+
+  // Fuzzy catalog fallback (V110 follow-up, create mode only) for deal lines created before
+  // ticket_item.catalog_price_id existed: a row with a model but no productId gets ONE
+  // best-effort catalog search, auto-applying only an unambiguous single match (see
+  // findSingleFuzzyCatalogMatch). Rows processed one at a time (sequential await, not
+  // Promise.all) so opening a many-line deal never fires a burst of concurrent requests.
+  // Runs once on mount only — `items` is read fresh via the functional setItems update inside,
+  // never captured stale, so it is deliberately absent from the dependency array below.
+  useEffect(() => {
+    if (seedsFromExisting) return;
+    let cancelled = false;
+    (async () => {
+      for (let index = 0; index < items.length; index++) {
+        if (cancelled) return;
+        const item = items[index];
+        if (item.productId != null || !item.model?.trim()) continue;
+        let res;
+        try {
+          res = await api.catalog.prices(item.model, undefined, FUZZY_MATCH_LIMIT);
+        } catch {
+          continue;
+        }
+        if (cancelled) return;
+        const match = findSingleFuzzyCatalogMatch(res?.items, item);
+        if (!match) continue;
+        setItems((cur) => cur.map((row, i) => {
+          // Identify the target row by sourceTicketItemId, NOT by array index. These searches
+          // run sequentially, so the in-flight window across a many-line deal is seconds long,
+          // and removeItem() re-indexes every row after the one deleted — keying on `index`
+          // would land this match on whatever row shifted into that slot, silently overwriting
+          // a DIFFERENT product's fields (and badging the wrong row as auto-matched). Every row
+          // this effect can touch is a seeded deal line, so it always has a sourceTicketItemId;
+          // the index comparison is only the fallback for a row without one.
+          const isTarget = item.sourceTicketItemId != null
+            ? row.sourceTicketItemId === item.sourceTicketItemId
+            : i === index;
+          // Re-check productId at apply time, not just at fetch time — the user may have picked
+          // a product manually while this request was in flight.
+          if (!isTarget || row.productId != null) return row;
+          // The match was computed from the row as it looked when the search STARTED. Applying it
+          // to the row as it looks NOW would overwrite whatever the user typed in between: this
+          // effect holds the window open for seconds across a many-line deal, and a user fixing
+          // row 4's model/size by hand clears nothing the guard above can see (productId is
+          // already null on exactly the rows this effect targets). So re-confirm the row still
+          // describes the product that was searched for, and drop the match if it has moved on.
+          const describesSameProduct = normalizeForCatalogMatch(row.model) === normalizeForCatalogMatch(item.model)
+            && normalizeForCatalogMatch(row.size) === normalizeForCatalogMatch(item.size);
+          if (!describesSameProduct) return row;
+          return { ...deriveItemFromCatalogProduct(row, match), catalogAutoApplied: true };
+        }));
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [error, setError] = useState('');
   // Informational (non-error) banner — currently only used by the create-mode
   // duplicate-draft guard below, to tell the user a retry is reusing the
@@ -252,6 +442,9 @@ export function PricingRequestCreateModal({
         next.catalogProductCode = '';
         next.catalogBasePrice = null;
         next.catalogCurrency = '';
+        // A hand-edit invalidates a fuzzy-matched link exactly like a real catalog pick — it no
+        // longer describes an unconfirmed auto-match, it describes whatever the user just typed.
+        next.catalogAutoApplied = false;
       }
       return next;
     }));
@@ -275,7 +468,10 @@ export function PricingRequestCreateModal({
   }
 
   function addItem() {
-    setItems((cur) => [...cur, emptyItemFromTicketItem(null)]);
+    // A row added later via "เพิ่มรายการ" gets the same deal-derived deliveryLocation seed as
+    // the rows this modal opened with (create mode only — dealDeliveryLocationSeed is already ''
+    // in edit/revision, see its own definition above).
+    setItems((cur) => [...cur, emptyItemFromTicketItem(null, dealDeliveryLocationSeed)]);
   }
 
   function removeItem(index) {
@@ -299,32 +495,10 @@ export function PricingRequestCreateModal({
   }
 
   function applyCatalogItem(index, product) {
-    setItems((cur) => cur.map((item, i) => {
-      if (i !== index) return item;
-      // Mirrors PricingRequestRepository.snapshotCatalogSelections: catalog_brand =
-      // COALESCE(pri.brand, pp.grade) — an already-typed brand wins, otherwise the catalog's
-      // own grade fills in. Brand is deliberately NOT the factory name (that belongs in the
-      // separate `factory` field below) — picking a catalog product used to overwrite brand
-      // with product.factoryName, which was wrong (review finding).
-      const brand = item.brand?.trim() ? item.brand : (product.grade ?? '');
-      const requestedUnitBasis = unitBasisForPriceUnit(product.priceUnit, item.requestedUnitBasis);
-      return {
-        ...item,
-        productId: product.priceId ?? null,
-        catalogProductCode: product.productCode ?? '',
-        catalogBasePrice: product.price ?? null,
-        catalogCurrency: product.currency ?? '',
-        brand,
-        model: product.collection ?? product.productName ?? product.productCode ?? item.model ?? '',
-        productDescription: product.productName ?? product.productCode ?? item.productDescription ?? '',
-        color: product.color ?? '',
-        texture: product.surface ?? '',
-        size: product.sizeRaw ?? '',
-        factory: product.factoryName ?? '',
-        requestedUnitBasis,
-        requestedUnit: unitBasisLabel(requestedUnitBasis),
-      };
-    }));
+    setItems((cur) => cur.map((item, i) => (
+      // A real user pick always wins over — and clears — any unconfirmed auto-match.
+      i === index ? { ...deriveItemFromCatalogProduct(item, product), catalogAutoApplied: false } : item
+    )));
     setCatalogQuery((cur) => ({
       ...cur,
       [index]: [product.productCode, product.collection, product.productName].filter(Boolean).join(' · '),
@@ -586,7 +760,11 @@ export function PricingRequestCreateModal({
 
         <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
           ชื่อผู้รับ / บริษัท *
-          <input value={recipientLabel} onChange={(e) => setRecipientLabel(e.target.value)} placeholder="เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ" />
+          <input
+            value={recipientLabel}
+            onChange={(e) => { setRecipientLabel(e.target.value); setRecipientLabelTouched(true); }}
+            placeholder="เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ"
+          />
         </label>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -669,6 +847,12 @@ export function PricingRequestCreateModal({
                   {item.productId ? (
                     <p className="mt-1 text-2xs font-bold text-info">
                       Catalog #{item.productId}{item.catalogBasePrice != null ? ` · ${Number(item.catalogBasePrice).toLocaleString('th-TH')} ${item.catalogCurrency}` : ''}
+                    </p>
+                  ) : null}
+                  {item.catalogAutoApplied ? (
+                    <p role="status" className="mt-1 flex items-center gap-1 text-2xs font-bold text-warning-dark">
+                      <Icon name="triangleAlert" size={12} />
+                      จับคู่สินค้าจาก Catalog ให้อัตโนมัติ — โปรดตรวจสอบก่อนใช้งาน (ไม่ใช่การเลือกที่ยืนยันแล้ว)
                     </p>
                   ) : null}
                 </div>

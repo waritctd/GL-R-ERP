@@ -3528,6 +3528,11 @@ export const api = {
           qty: item.qty, qtySqm: item.qtySqm ?? null,
           proposedPrice: null, approvedPrice: null,
           currency: item.currency || 'THB', sortOrder: i,
+          // Fix for "สร้างคำขอราคาไม่ควรต้องกรอกหาจาก catalog ซ้ำ" (V110): the catalog product
+          // picked in TicketCreateModal's catalog picker, so PricingRequestCreateModal.
+          // emptyItemFromTicketItem can seed productId/catalogProductCode without re-searching.
+          catalogPriceId: item.catalogPriceId ?? null,
+          catalogProductCode: item.catalogProductCode ?? null,
         })),
         events: [{ id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: now }],
         quotation: null,
@@ -3574,6 +3579,15 @@ export const api = {
         proposedPrice: ticket.items[i]?.proposedPrice ?? null,
         id: ticket.items[i]?.id ?? ticket.id * 100 + i,
         ticketId: ticket.id, sortOrder: i,
+        // Fix for "สร้างคำขอราคาไม่ควรต้องกรอกหาจาก catalog ซ้ำ" (V110): request wins OUTRIGHT,
+        // same as brand/model above. This deliberately does NOT fall back to the prior row when
+        // the request omits the field: TicketService.mergeEditedItemsPreservingPricing passes
+        // `r.catalogPriceId()` straight through, so on the real backend an omitted field
+        // deserializes to null and CLEARS the stored link. A mock that preserved it instead
+        // would be more forgiving than production — the one direction CLAUDE.md calls dangerous,
+        // because you only discover it in prod.
+        catalogPriceId: item.catalogPriceId ?? null,
+        catalogProductCode: item.catalogProductCode ?? null,
       }));
       ticket.hasEdits = true;
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -5804,10 +5818,17 @@ export const api = {
         : mockCatalog.slice(0, 30);
       return delay({ items: results });
     },
-    async prices(q, factoryId) {
+    // `limit` was previously accepted by hrApi but silently DROPPED here, so the mock always
+    // returned up to 50 rows regardless of what the caller asked for — a divergence that hid
+    // truncation behaviour entirely from mock-driven verification (it is exactly what made
+    // PricingRequestCreateModal's fuzzy catalog fallback look safe under mocks while the real
+    // `LIMIT :limit` could hand it a truncated, factory-alphabetical slice). Now honoured, and
+    // ordered the same way CatalogRepository orders: f.name, then collection, then productCode.
+    async prices(q, factoryId, limit) {
       requireSession();
       const lower = (q ?? '').toLowerCase();
       const fid = factoryId ? Number(factoryId) : null;
+      const cap = Number(limit) > 0 ? Number(limit) : 50;
       let results = mockProductPrices.filter((p) => {
         if (fid && p.factoryId !== fid) return false;
         if (!lower) return true;
@@ -5820,7 +5841,12 @@ export const api = {
           (p.factoryName   ?? '').toLowerCase().includes(lower)
         );
       });
-      return delay({ items: results.slice(0, 50) });
+      results = [...results].sort((a, b) => (
+        (a.factoryName ?? '').localeCompare(b.factoryName ?? '')
+        || (a.collection ?? '').localeCompare(b.collection ?? '')
+        || (a.productCode ?? '').localeCompare(b.productCode ?? '')
+      ));
+      return delay({ items: results.slice(0, cap) });
     },
     // addProduct/updateProduct/deleteProduct are ceo/import only (#205), mirroring
     // CatalogController.requireCatalogEditor. The reads above are open by decision;

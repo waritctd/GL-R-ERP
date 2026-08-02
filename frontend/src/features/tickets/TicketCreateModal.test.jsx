@@ -211,6 +211,8 @@ describe('TicketCreateModal validation', () => {
         unitBasis: 'PIECE',
         qty: 5,
         qtySqm: null,
+        catalogPriceId: null,
+        catalogProductCode: null,
       }],
     });
   });
@@ -269,5 +271,141 @@ describe('TicketCreateModal validation', () => {
     submitForm();
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit.mock.calls[0][0].items).toEqual([]);
+  });
+});
+
+// V110 fix: the catalog product picked here used to be discarded entirely (ticket_item had no
+// column for it), forcing PricingRequestCreateModal to re-search the same product. It is now
+// persisted as catalogPriceId/catalogProductCode. Picking a catalog product also used to write
+// the FACTORY name into ยี่ห้อ (brand) — a real bug, fixed here to match
+// PricingRequestCreateModal.applyCatalogItem's already-correct rule.
+describe('TicketCreateModal catalog picker (V110 catalog link + brand mapping fix)', () => {
+  function mockCatalogProduct(overrides = {}) {
+    return {
+      priceId: 501,
+      productCode: 'CT-100',
+      factoryName: 'Cotto Factory',
+      grade: 'Cotto',
+      collection: 'Stone Series',
+      color: 'ขาว',
+      surface: 'ด้าน',
+      sizeRaw: '60x60',
+      price: 250,
+      currency: 'THB',
+      ...overrides,
+    };
+  }
+
+  // Opens the item editor for a fresh row and types into the brand field to trigger the
+  // (debounced, real-timer) catalog search — mirrors the actual user flow, not a shortcut around
+  // it, since the brand-mapping bug lives inside applyCatalogItem, reached only via a real pick.
+  async function addItemAndSearchBrand(query) {
+    goToSection('รายการสินค้า');
+    fireEvent.click(screen.getByRole('button', { name: /ค้นหาสินค้า/ }));
+    const brandInput = await screen.findByPlaceholderText('เช่น SCG, Cotto, Panaria');
+    fireEvent.change(brandInput, { target: { value: query } });
+    return brandInput;
+  }
+
+  it('fills brand from the catalog grade (not the factory name), and carries catalogPriceId/catalogProductCode into the submit payload', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    api.catalog.prices.mockResolvedValue({ items: [mockCatalogProduct()] });
+    render(<TicketCreateModal onClose={() => {}} onSubmit={onSubmit} />);
+
+    await selectCustomerAndProject();
+    const brandInput = await addItemAndSearchBrand('Cotto');
+
+    // <strong>{cat.factoryName}</strong> is a leaf element whose OWN text is exactly the factory
+    // name, unlike the row's other text (collection/size/price share a div with the " — "
+    // separator) — the one reliably unique target to click without a test id on this legacy
+    // hand-rolled dropdown.
+    const factoryNameInDropdown = await screen.findByText('Cotto Factory');
+    fireEvent.mouseDown(factoryNameInDropdown.parentElement);
+
+    await waitFor(() => expect(brandInput.value).toBe('Cotto'));
+    // The bug this fixes: brand must NOT become the factory name.
+    expect(brandInput.value).not.toBe('Cotto Factory');
+    expect(screen.getByPlaceholderText('เช่น SCG Ceramics').value).toBe('Cotto Factory');
+
+    submitForm();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].items[0]).toMatchObject({
+      brand: 'Cotto',
+      model: 'Stone Series',
+      color: 'ขาว',
+      texture: 'ด้าน',
+      size: '60x60',
+      factory: 'Cotto Factory',
+      catalogPriceId: 501,
+      catalogProductCode: 'CT-100',
+    });
+  });
+
+  it('keeps an already-typed brand instead of overwriting it with the catalog grade', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    api.catalog.prices.mockResolvedValue({ items: [mockCatalogProduct()] });
+    render(<TicketCreateModal onClose={() => {}} onSubmit={onSubmit} />);
+
+    await selectCustomerAndProject();
+    goToSection('รายการสินค้า');
+    fireEvent.click(screen.getByRole('button', { name: /ค้นหาสินค้า/ }));
+    const modelInput = await screen.findByPlaceholderText('เช่น Stone, Elegance, L-Trim…');
+    // Type a brand FIRST (deliberately, before searching by model) — this is the case the
+    // fallback rule exists for.
+    fireEvent.change(screen.getByPlaceholderText('เช่น SCG, Cotto, Panaria'), { target: { value: 'MyOwnBrand' } });
+    fireEvent.change(modelInput, { target: { value: 'Stone' } });
+
+    const factoryNameInDropdown = await screen.findByText('Cotto Factory');
+    fireEvent.mouseDown(factoryNameInDropdown.parentElement);
+
+    await waitFor(() => expect(modelInput.value).toBe('Stone Series'));
+    expect(screen.getByPlaceholderText('เช่น SCG, Cotto, Panaria').value).toBe('MyOwnBrand');
+  });
+
+  // ยี่ห้อ doubles as the catalog search box on THIS form (unlike PricingRequestCreateModal,
+  // which has a dedicated one). So a partial query left in it after a pick from the ยี่ห้อ
+  // dropdown is a QUERY, not a deliberate brand — keeping it would leave junk in the field and
+  // fail this fix's intent just as writing the factory name did. The grade must win here; the
+  // "already-typed brand wins" rule applies only to the รุ่น path (covered by the test above).
+  it('replaces a partial ยี่ห้อ search query with the catalog grade when picking from the ยี่ห้อ dropdown', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    api.catalog.prices.mockResolvedValue({ items: [mockCatalogProduct()] });
+    render(<TicketCreateModal onClose={() => {}} onSubmit={onSubmit} />);
+
+    await selectCustomerAndProject();
+    // "Cot" is a prefix query, deliberately NOT equal to the product's grade ("Cotto") — so
+    // this asserts the grade actually won, rather than the query coincidentally matching it.
+    const brandInput = await addItemAndSearchBrand('Cot');
+    const factoryNameInDropdown = await screen.findByText('Cotto Factory');
+    fireEvent.mouseDown(factoryNameInDropdown.parentElement);
+
+    await waitFor(() => expect(brandInput.value).toBe('Cotto'));
+    expect(brandInput.value).not.toBe('Cot');
+    expect(brandInput.value).not.toBe('Cotto Factory');
+  });
+
+  it('clears the catalog link when the user hand-edits a field after a catalog pick', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    api.catalog.prices.mockResolvedValue({ items: [mockCatalogProduct()] });
+    render(<TicketCreateModal onClose={() => {}} onSubmit={onSubmit} />);
+
+    await selectCustomerAndProject();
+    const brandInput = await addItemAndSearchBrand('Cotto');
+    const factoryNameInDropdown = await screen.findByText('Cotto Factory');
+    fireEvent.mouseDown(factoryNameInDropdown.parentElement);
+    await waitFor(() => expect(brandInput.value).toBe('Cotto'));
+
+    // Hand-edit color after the pick — the link no longer reliably describes this row.
+    fireEvent.change(screen.getByPlaceholderText('เช่น ขาว, เทา, ครีม'), { target: { value: 'เทาเข้ม' } });
+
+    submitForm();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].items[0]).toMatchObject({
+      color: 'เทาเข้ม',
+      catalogPriceId: null,
+      catalogProductCode: null,
+    });
   });
 });

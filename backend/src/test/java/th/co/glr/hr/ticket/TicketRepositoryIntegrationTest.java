@@ -58,6 +58,115 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             .containsExactlyInAnyOrder("Toyota", "Honda");
     }
 
+    // ── V110: catalog link (catalog_price_id/catalog_product_code) round-trip ─────────────────
+    // Fix for "สร้างคำขอราคาไม่ควรต้องกรอกหาจาก catalog ซ้ำ": the catalog product picked when a
+    // deal line is created must survive into ticket_item and read back out, through BOTH the
+    // create path (insertItems) and an items edit (replaceItemsPreservingPricing) — a mocked
+    // repository would happily "pass" this while the real FK/columns do something else, so this
+    // needs a real Postgres round-trip, not a Mockito stub.
+
+    @Test
+    void createTicket_persistsCatalogLinkAndReadsItBack() {
+        long priceId = insertCatalogProduct("Cotto Factory", "TH", "CT-100",
+            new BigDecimal("250.00"), "THB", "per_piece");
+
+        long ticketId = tickets.create(sampleTicket(
+            itemWithCatalogLink("Cotto", "Stone Series", "White", "Matte", "60x60", priceId, "CT-100")),
+            tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
+        assertThat(persisted.catalogPriceId()).isEqualTo(priceId);
+        assertThat(persisted.catalogProductCode()).isEqualTo("CT-100");
+    }
+
+    @Test
+    void createTicket_customLineHasNoCatalogLink() {
+        // A hand-typed ("custom") line has no catalog link — must stay valid (nullable columns),
+        // not merely "happens to work because the FK is absent".
+        long ticketId = tickets.create(sampleTicket(
+            item("Custom", "Line", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
+        assertThat(persisted.catalogPriceId()).isNull();
+        assertThat(persisted.catalogProductCode()).isNull();
+    }
+
+    @Test
+    void editItems_roundTripsCatalogLinkThroughReplaceItemsPreservingPricing() {
+        // replaceItemsPreservingPricing is what TicketService.editItems actually calls (see
+        // mergeEditedItemsPreservingPricing) — exercising it directly here proves the SQL this
+        // task changed, without needing to stand up TicketService's full collaborator graph.
+        long priceId = insertCatalogProduct("Cotto Factory", "TH", "CT-200",
+            new BigDecimal("300.00"), "THB", "per_piece");
+        long ticketId = tickets.create(sampleTicket(
+            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+        TicketItemDto existing = tickets.findById(ticketId).orElseThrow().items().get(0);
+        assertThat(existing.catalogPriceId()).isNull(); // sanity: started with no link
+
+        TicketItemDto edited = new TicketItemDto(
+            existing.id(), ticketId, "Cotto", "Stone Series", "White", "Matte", "60x60", "Cotto Factory",
+            new BigDecimal("10"), null, null, null, null,
+            existing.proposedPrice(), existing.approvedPrice(), existing.currency(), 0,
+            existing.calcedCost(), existing.calcedPrice(), existing.calcConfigVersion(), "PIECE",
+            existing.manualPrice(), existing.manualOverrideReason(),
+            existing.qtyDelivered(), existing.qtyFromStock(), existing.stockNote(),
+            priceId, "CT-200");
+
+        tickets.replaceItemsPreservingPricing(ticketId, List.of(edited));
+
+        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
+        assertThat(persisted.brand()).isEqualTo("Cotto");
+        assertThat(persisted.catalogPriceId()).isEqualTo(priceId);
+        assertThat(persisted.catalogProductCode()).isEqualTo("CT-200");
+    }
+
+    @Test
+    void editItems_clearingTheLinkPersistsAsNull() {
+        // Mirrors the frontend's own invalidation rule (TicketCreateModal.jsx's updateItem): once
+        // a descriptive field is hand-edited, the catalog link is cleared, not left stale — an
+        // edit that sends null must actually overwrite a previously-linked row, not silently keep
+        // the old value.
+        long priceId = insertCatalogProduct("Cotto Factory", "TH", "CT-300",
+            new BigDecimal("400.00"), "THB", "per_piece");
+        long ticketId = tickets.create(sampleTicket(
+            itemWithCatalogLink("Cotto", "Stone Series", "White", "Matte", "60x60", priceId, "CT-300")),
+            tickets.nextTicketCode(), actorId, "พนักงานขาย");
+        TicketItemDto existing = tickets.findById(ticketId).orElseThrow().items().get(0);
+        assertThat(existing.catalogPriceId()).isEqualTo(priceId); // sanity: started linked
+
+        TicketItemDto edited = new TicketItemDto(
+            existing.id(), ticketId, "Cotto (edited by hand)", "Stone Series", "White", "Matte", "60x60", "Cotto Factory",
+            existing.qty(), existing.qtySqm(), null, null, null,
+            existing.proposedPrice(), existing.approvedPrice(), existing.currency(), 0,
+            existing.calcedCost(), existing.calcedPrice(), existing.calcConfigVersion(), "PIECE",
+            existing.manualPrice(), existing.manualOverrideReason(),
+            existing.qtyDelivered(), existing.qtyFromStock(), existing.stockNote(),
+            null, null);
+
+        tickets.replaceItemsPreservingPricing(ticketId, List.of(edited));
+
+        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
+        assertThat(persisted.catalogPriceId()).isNull();
+        assertThat(persisted.catalogProductCode()).isNull();
+    }
+
+    @Test
+    void catalogPriceId_rejectsAnIdThatDoesNotExistInPriceCatalog() {
+        long ticketId = tickets.create(sampleTicket(
+            item("Custom", "Line", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+        TicketItemDto existing = tickets.findById(ticketId).orElseThrow().items().get(0);
+
+        TicketItemDto edited = new TicketItemDto(
+            existing.id(), ticketId, "Custom", "Line", "White", "Matte", "L", null,
+            existing.qty(), null, null, null, null, null, null, "THB", 0,
+            null, null, null, "PIECE", null, null,
+            BigDecimal.ZERO, BigDecimal.ZERO, null,
+            999_999_999L, "NOPE"); // no such price_catalog.product_prices row
+
+        assertThatThrownBy(() -> tickets.replaceItemsPreservingPricing(ticketId, List.of(edited)))
+            .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
     @Test
     void summariesPaginateWhileCountReflectsTheWholeMatch() {
         for (int i = 0; i < 3; i++) {
@@ -284,5 +393,12 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketItemRequest item(String brand, String model, String color, String texture, String size) {
         return new TicketItemRequest(brand, model, color, texture, size, null,
             new BigDecimal("1"), null, null, null, null, null, null, "THB");
+    }
+
+    private TicketItemRequest itemWithCatalogLink(String brand, String model, String color, String texture,
+                                                  String size, Long catalogPriceId, String catalogProductCode) {
+        return new TicketItemRequest(brand, model, color, texture, size, null,
+            new BigDecimal("1"), null, null, null, null, null, null, "THB",
+            catalogPriceId, catalogProductCode);
     }
 }
