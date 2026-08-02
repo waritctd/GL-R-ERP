@@ -621,6 +621,106 @@ public class LeaveService {
     }
 
     /**
+     * §5.1 SICK certificate + filing-window + no-certificate tolerance (V124). Replaces the old
+     * "SICK requires an attachment, full stop" rule with the combined reading of the announcement's
+     * single sentence:
+     *
+     * <pre>
+     * (ต้องมีใบรับรองแพทย์ และยื่นใบลาภายใน 3 วันทำการ) ได้ไม่เกิน 30 วันต่อปี โดยได้รับค่าจ้างตามปกติ
+     * หากลาป่วยเกิน 30 วันจะไม่มีสิทธิได้รับค่าจ้าง สำหรับกรณีป่วยเพียงเล็กน้อยไม่ได้ไปพบแพทย์ บริษัท
+     * อนุโลมให้ลาได้ไม่เกินเดือนละ 3 ครั้ง และต้องแจ้งให้หัวหน้างานทราบก่อนเวลาเริ่มงานในวันนั้น
+     * </pre>
+     *
+     * <p><b>COMBINED DECISION TABLE</b> (certificate presence x filing-on-time x monthly tolerance):
+     *
+     * <pre>
+     * | has cert | filed within window | occasions used this month | outcome                     |
+     * |----------|----------------------|----------------------------|------------------------------|
+     * | yes      | yes                  | n/a                        | ALLOW                        |
+     * | yes      | no                   | n/a                        | REJECT -- late certificate   |
+     * | no       | n/a                  | < tolerance (1st-3rd)      | ALLOW -- minor-illness exception |
+     * | no       | n/a                  | >= tolerance (4th+)        | REJECT -- needs a certificate |
+     * </pre>
+     *
+     * <p><b>The interaction the task exists to get right:</b> the filing-window clause is
+     * grammatically part of the CERTIFICATE sentence, not the tolerance sentence -- so a
+     * certificate-less request is judged ONLY against the monthly occasion count, NEVER against the
+     * 3-working-day window. A certificate-less request filed long after its own start date is still
+     * ALLOWED if the employee has not used all of this month's occasions -- the tolerance path is a
+     * genuine substitute for the WHOLE certificate-plus-deadline requirement, not merely a substitute
+     * for possessing the physical document while remaining bound by its deadline.
+     * (INTERPRETATION, pending owner confirmation -- same caveat as every other §5 reading in this
+     * class.)
+     *
+     * <p>A LATE-FILED certificate does NOT fall back to the no-certificate tolerance path even when
+     * occasions remain this month -- the announcement's exception is explicitly for "ป่วยเพียงเล็กน้อย
+     * ไม่ได้ไปพบแพทย์" (minor illness, no doctor visit). An employee who DID see a doctor and holds a
+     * real certificate is not that case merely because they filed late, and letting a late
+     * certificate "downgrade" into the tolerance bucket would let genuine, proven illness bypass the
+     * filing deadline the announcement states for exactly that case.
+     *
+     * <p><b>Filing-window reference date:</b> the announcement names no explicit reference event.
+     * This reads "ยื่นใบลาภายใน 3 วันทำการ" (file the leave form within 3 working days) as 3 working
+     * days from the leave's own {@code startDate} -- {@code hr.leave_request} has no separate "date
+     * of illness" field (see V124's migration comment), so start_date is the only available proxy.
+     * "Now" is {@link #clock}'s {@code LocalDate.now(clock)} AT SUBMISSION, the same reference point
+     * the advance-notice check two branches below already uses -- not {@code hr.leave_request
+     * .requested_at}, which is not yet known until after {@link #submit}'s {@code INSERT}.
+     *
+     * <p><b>Working-day counting caveat:</b> {@link LeaveDayMath#addWorkingDays} counts Mon-Fri only,
+     * with no holiday calendar -- a known, PRE-EXISTING, separately-owned defect (see CLAUDE.md and
+     * {@link LeaveDayMath}'s class Javadoc). NOT fixed here. Unlike {@code advanceNoticeDays}
+     * elsewhere in this file (deliberately CALENDAR-day, to sidestep this exact dependency), the
+     * filing window is genuinely working-day per the announcement's own "วันทำการ" wording and
+     * cannot avoid it.
+     *
+     * <p><b>Occasion counting:</b> an "occasion" (ครั้ง) is a REQUEST, not a day -- matches the
+     * announcement's own "ครั้ง" wording (as opposed to "วัน" used everywhere else in §5.1). A
+     * request's occasion month is its {@code startDate}'s calendar month, the same start_date-only
+     * precedent {@code quotaYear} already uses (see {@link #submit}). Only certificate-less ({@code
+     * attachment_id IS NULL}) SICK requests in {@link #ACTIVE_QUOTA_STATUSES} count -- a CANCELLED
+     * occasion releases its slot (the employee never actually took uncertified leave that month),
+     * matching the once-per-employment guard's identical cancel-releases-the-claim precedent (V116).
+     * The count is computed fresh from {@code hr.leave_request} on every call (see {@link
+     * LeaveRepository#countNoCertificateRequestsInMonth}) -- a rolling allowance, never a stored
+     * counter that could drift.
+     *
+     * @return a rejection message, or {@code null} if the SICK-specific rule is satisfied (other
+     *     gates in {@link #autoRejectNote} may still apply).
+     */
+    private String sickCertificateNote(LeaveTypeDto leaveType, long employeeId, LocalDate startDate, boolean hasAttachment) {
+        if (hasAttachment) {
+            Integer filingWindowDays = leaveType.certificateFilingWindowDays();
+            if (filingWindowDays == null) {
+                return null;
+            }
+            LocalDate deadline = LeaveDayMath.addWorkingDays(startDate, filingWindowDays);
+            LocalDate today = LocalDate.now(clock);
+            if (today.isAfter(deadline)) {
+                return "Medical certificate must be filed within " + filingWindowDays
+                    + " working day(s) of the leave start date (by " + deadline
+                    + "). Contact HR if this is an exception.";
+            }
+            return null;
+        }
+
+        int tolerance = leaveType.noCertificateMonthlyTolerance();
+        if (tolerance <= 0) {
+            return "Sick leave requires a medical certificate attachment. Attach the certificate or contact HR for help.";
+        }
+        LocalDate monthStart = startDate.withDayOfMonth(1);
+        LocalDate monthEndInclusive = monthStart.plusMonths(1).minusDays(1);
+        int occasionsUsed = leaveRepository.countNoCertificateRequestsInMonth(
+            employeeId, leaveType.code(), monthStart, monthEndInclusive, ACTIVE_QUOTA_STATUSES);
+        if (occasionsUsed >= tolerance) {
+            return "Sick leave without a medical certificate is limited to " + tolerance
+                + " occasion(s) per calendar month; that allowance has already been used this month. "
+                + "Attach a certificate or contact HR for help.";
+        }
+        return null;
+    }
+
+    /**
      * §5 leave-rules-as-data (V116, extended V120). Checks run in this order -- categorical
      * eligibility first (once-per-employment, missing hire_date on a pro-rated type, minimum
      * service, PERSONAL probation, the first-year total-days cap), then request-shape (max
@@ -756,8 +856,11 @@ public class LeaveService {
             }
         }
 
-        if ("SICK".equals(leaveType.code()) && !hasAttachment) {
-            return "Sick leave requires a medical certificate attachment. Attach the certificate or contact HR for help.";
+        if ("SICK".equals(leaveType.code())) {
+            String note = sickCertificateNote(leaveType, employeeId, startDate, hasAttachment);
+            if (note != null) {
+                return note;
+            }
         }
 
         // §5 advance notice, now per-type (hr.leave_type.advance_notice_days) instead of the removed

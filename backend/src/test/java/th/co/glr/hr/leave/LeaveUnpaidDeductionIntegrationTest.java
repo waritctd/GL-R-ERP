@@ -13,6 +13,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -160,7 +161,16 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     @Test
-    void sickLeaveBeyondQuotaStillAutoRejectsWithoutACertificate() {
+    void sickLeaveBeyondQuotaWithNoCertificateIsApprovedButFullyUnpaidUntilTheMonthlyToleranceRunsOut() {
+        // V124 (§5.1): a certificate-less SICK request is no longer an unconditional auto-reject --
+        // it is tolerated up to 3 occasions per calendar month, independent of quota state. This test
+        // used to pin the OLD "certificate rule fires regardless of quota" behaviour
+        // (sickLeaveBeyondQuotaStillAutoRejectsWithoutACertificate, pre-V124: quota-exhausted +
+        // no-certificate => outright AUTO_REJECTED, 0 days). That premise is gone -- quota exhaustion
+        // and the certificate rule are now genuinely independent: quota exhaustion still drives an
+        // APPROVED-but-fully-UNPAID split (the ordinary quota machinery, untouched by this migration),
+        // while the certificate rule now separately gates on the MONTHLY OCCASION COUNT, not on
+        // quota availability at all.
         long employeeId = insertEmployee("SICK-30PLUS");
         // Exhaust the 30-day SICK quota first, WITH a certificate each time so the fill-up itself is
         // approved.
@@ -172,17 +182,31 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(fillUp.status()).isEqualTo("APPROVED");
         assertThat(fillUp.paidDays()).isEqualByComparingTo("30.00");
 
-        // A further SICK request with quota fully exhausted (remaining 0) and NO certificate: the
-        // certificate rule must still fire and auto-reject -- it does not get silently waived just
-        // because the request would have been entirely unpaid anyway.
-        LeaveRequestDto beyondQuotaNoAttachment = leaveService.submit(
-            submitRequest(employeeId, "SICK", "2026-08-24", "2026-08-24"),
-            employee(employeeId));
+        // Occasions 1-3 this month (August), quota fully exhausted (remaining 0): each is APPROVED
+        // (money-moving: the OLD code auto-rejected every one of these, 0 pay) but entirely UNPAID
+        // (the ordinary quota-exceeded split, unrelated to the certificate rule).
+        LeaveRequestDto firstOccasion = leaveService.submit(
+            submitRequest(employeeId, "SICK", "2026-08-24", "2026-08-24"), employee(employeeId)); // Mon
+        LeaveRequestDto secondOccasion = leaveService.submit(
+            submitRequest(employeeId, "SICK", "2026-08-25", "2026-08-25"), employee(employeeId)); // Tue
+        LeaveRequestDto thirdOccasion = leaveService.submit(
+            submitRequest(employeeId, "SICK", "2026-08-26", "2026-08-26"), employee(employeeId)); // Wed
+        for (LeaveRequestDto occasion : List.of(firstOccasion, secondOccasion, thirdOccasion)) {
+            assertThat(occasion.status()).isEqualTo("APPROVED");
+            assertThat(occasion.paidDays()).isEqualByComparingTo("0.00");
+            assertThat(occasion.unpaidDays()).isEqualByComparingTo("1.00");
+        }
 
-        assertThat(beyondQuotaNoAttachment.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(beyondQuotaNoAttachment.systemNote()).contains("medical certificate");
-        assertThat(beyondQuotaNoAttachment.paidDays()).isEqualByComparingTo("0.00");
-        assertThat(beyondQuotaNoAttachment.unpaidDays()).isEqualByComparingTo("0.00");
+        // The 4th certificate-less occasion this SAME month: the monthly tolerance (not quota) is
+        // what now binds -- AUTO_REJECTED, exactly the old outright-rejection shape (0/0), but for
+        // the tolerance reason, not merely "quota is 0".
+        LeaveRequestDto fourthOccasion = leaveService.submit(
+            submitRequest(employeeId, "SICK", "2026-08-27", "2026-08-27"), employee(employeeId)); // Thu
+
+        assertThat(fourthOccasion.status()).isEqualTo("AUTO_REJECTED");
+        assertThat(fourthOccasion.systemNote()).contains("3 occasion(s) per calendar month");
+        assertThat(fourthOccasion.paidDays()).isEqualByComparingTo("0.00");
+        assertThat(fourthOccasion.unpaidDays()).isEqualByComparingTo("0.00");
     }
 
     @Test

@@ -209,7 +209,8 @@ public class LeaveRepository {
     private static final String LEAVE_TYPE_COLUMNS = """
         leave_type_code, name_th, name_en, annual_quota_days, requires_attachment,
         paid_days_cap, advance_notice_days, min_service_months, max_consecutive_days,
-        once_per_employment, day_count_basis, prorated_first_year, first_year_max_days
+        once_per_employment, day_count_basis, prorated_first_year, first_year_max_days,
+        certificate_filing_window_days, no_certificate_monthly_tolerance
         """;
 
     public List<LeaveTypeDto> findLeaveTypes() {
@@ -344,6 +345,36 @@ public class LeaveRepository {
             .addValue("statuses", statuses.stream().map(LeaveStatus::name).toList()),
             BigDecimal.class);
         return value == null ? BigDecimal.ZERO : value;
+    }
+
+    /**
+     * §5.1 SICK no-certificate monthly tolerance (V124): counts EXISTING certificate-less
+     * ({@code attachment_id IS NULL}) requests of this type, in the given status set, whose {@code
+     * start_date} falls within {@code [monthStart, monthEndInclusive]} -- the SAME start_date-only
+     * month attribution {@code quota_year} already uses (see {@link LeaveService#submit}). Counts
+     * REQUESTS (occasions), not days -- see {@link LeaveService#sickCertificateNote}'s Javadoc for
+     * why. Does NOT include the request currently being submitted (it does not exist yet at the time
+     * this is called, since {@link LeaveService#submit} evaluates {@code autoRejectNote} before
+     * {@link #create}).
+     */
+    public int countNoCertificateRequestsInMonth(long employeeId, String leaveTypeCode,
+            LocalDate monthStart, LocalDate monthEndInclusive, Collection<LeaveStatus> statuses) {
+        Integer value = jdbc.queryForObject("""
+            SELECT count(*)
+              FROM hr.leave_request
+             WHERE employee_id = :employeeId
+               AND leave_type_code = :leaveTypeCode
+               AND attachment_id IS NULL
+               AND start_date BETWEEN :monthStart AND :monthEndInclusive
+               AND status IN (:statuses)
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("leaveTypeCode", leaveTypeCode)
+            .addValue("monthStart", monthStart)
+            .addValue("monthEndInclusive", monthEndInclusive)
+            .addValue("statuses", statuses.stream().map(LeaveStatus::name).toList()),
+            Integer.class);
+        return value == null ? 0 : value;
     }
 
     /**
@@ -832,7 +863,9 @@ public class LeaveRepository {
             rs.getBoolean("once_per_employment"),
             LeaveDayCountBasis.valueOf(rs.getString("day_count_basis")),
             rs.getBoolean("prorated_first_year"),
-            rs.getObject("first_year_max_days", BigDecimal.class)
+            rs.getObject("first_year_max_days", BigDecimal.class),
+            rs.getObject("certificate_filing_window_days", Integer.class),
+            rs.getInt("no_certificate_monthly_tolerance")
         );
     }
 

@@ -86,9 +86,10 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         // weekend days included -- must count 7 for MATERNITY (every day) but only 5 for SICK
         // (Mon-Fri only).
         //
-        // The SICK side is submitted without an attachment, so it AUTO_REJECTs on the medical-
-        // certificate gate -- irrelevant here, since totalDays is computed BEFORE the auto-reject
-        // gates run and stored unconditionally on every submission (LeaveService#submit).
+        // The SICK side is submitted without an attachment. V124 (§5.1): this is now the employee's
+        // FIRST certificate-less occasion this month, tolerated (seeded 3/month), so it is APPROVED
+        // -- irrelevant either way to what this test proves, since totalDays is computed BEFORE the
+        // auto-reject gates run and stored unconditionally on every submission (LeaveService#submit).
         long maternityEmployeeId = insertEmployee("MAT-CAL-001", LocalDate.parse("2015-01-01"));
         long sickEmployeeId = insertEmployee("SICK-CAL-001", LocalDate.parse("2015-01-01"));
 
@@ -101,7 +102,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThat(maternityResult.status()).isEqualTo("APPROVED");
         assertThat(maternityResult.totalDays()).isEqualByComparingTo("7.00");
-        assertThat(sickResult.status()).isEqualTo("AUTO_REJECTED");
+        assertThat(sickResult.status()).isEqualTo("APPROVED");
         assertThat(sickResult.totalDays()).isEqualByComparingTo("5.00");
         // The critical negative assertion: the two must NOT be equal on this identical date range.
         assertThat(sickResult.totalDays()).isNotEqualByComparingTo(maternityResult.totalDays());
