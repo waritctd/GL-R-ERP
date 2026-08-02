@@ -108,15 +108,40 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   await expect(pcrModal).toHaveCount(0);
   await expect(page.getByText('รอฝ่ายนำเข้ารับเรื่อง').first()).toBeVisible();
 
+  // The demo seed (demoSales.js) now seeds several other SUBMITTED pricing
+  // requests, so the shared /pricing-requests queue this test visits next is
+  // no longer single-row. Capture THIS deal's own PCR code here, from its
+  // per-deal panel (scoped by ticketId — this ticket has exactly one PCR, the
+  // one just created, regardless of how much seed data exists elsewhere), so
+  // every subsequent step in the import/CEO phases can be pinned to this
+  // exact request instead of "whichever PCR row comes first".
+  const pcrPanel = page.locator('section').filter({ has: page.getByRole('heading', { name: 'คำขอราคา', exact: true }) });
+  const createdPcrCode = (await pcrPanel.locator('code').first().textContent()).trim();
+  expect(createdPcrCode).toMatch(/^PCR-2026-\d+$/);
+
   // ── import: pickup -> factory quote -> costing ──────────────────────
   await switchRole(page, 'import');
   await spaGoto(page, '/pricing-requests');
-  const pcrLink = page.getByRole('link', { name: /^PCR-2026-\d+$/ });
+  // Match the exact code captured above, not the generic /^PCR-2026-\d+$/
+  // pattern — the seed now puts several SUBMITTED requests in this queue, so
+  // the generic pattern resolves to multiple rows (strict-mode violation).
+  // Using .first() here would silently drive a SEEDED request through the
+  // rest of this chain instead of the one this test created, which would
+  // make the test pass while proving nothing about what it claims to.
+  const pcrLink = page.getByRole('link', { name: createdPcrCode, exact: true });
   await expect(pcrLink).toBeVisible();
   const pcrHref = await pcrLink.getAttribute('href');
-  await page.getByTestId('pcr-queue-pickup').click();
-  await expect(page.getByTestId('pcr-queue-pickup')).toHaveCount(0);
+  // Scope the pickup click to this request's own row — data-testid
+  // "pcr-queue-pickup" is repeated once per pickable row now that the queue
+  // is multi-row, so an unscoped click could pick up any of them.
+  const pcrRow = page.getByRole('row').filter({ has: pcrLink });
+  await pcrRow.getByTestId('pcr-queue-pickup').click();
+  await expect(pcrLink).toHaveCount(0);
   await spaGoto(page, pcrHref);
+  // Confirm this is genuinely the request just created, not a seeded one
+  // that happened to sort next to it: the detail page's <h1> is
+  // summary.requestCode (PricingRequestDetailPage.jsx, PageHeader `title`).
+  await expect(page.getByRole('heading', { level: 1, name: createdPcrCode })).toBeVisible();
 
   await expect(page.getByText('ฝ่ายนำเข้าตรวจคำขอราคา').first()).toBeVisible();
   await page.getByTestId('pcr-generate-drafts').click();
