@@ -77,15 +77,34 @@ services:
         sync: false
       - key: APP_ATTENDANCE_AGENT_TOKEN
         sync: false
-      # Email transport = Resend HTTP API (Render blocks outbound SMTP 25/465/587 on free/starter web
-      # services — confirmed live: MailConnectException/timeout to smtp.gmail.com:587). On-prem uses
-      # provider=smtp instead (see th.co.glr.hr.mail.Mailer). Set the real key in the Render dashboard.
+      # Email transport = real authenticated SMTP (SmtpMailer), replacing the Resend HTTP API this
+      # stack used to run on. NOTE: the gl-r-erp (demo) service above sets no mail vars at all, so
+      # it stays on application.yml's `log` default — this is a UAT-only transport, not prod parity.
+      #
+      # ⚠️ Render was previously observed to block outbound SMTP (25/465/587) on free/starter web
+      # services — MailConnectException/timeout to smtp.gmail.com:587 — which is why this was on
+      # Resend in the first place. If sends time out after this deploy, that egress block is the
+      # cause, not the config: try APP_MAIL_SMTP_PORT=465 + APP_MAIL_SMTP_STARTTLS=false, and
+      # failing that use a relay on a non-blocked port or revert APP_MAIL_PROVIDER to `resend`.
+      #
+      # ⚠️ Render does NOT apply changed `value:` env vars from a plain code push, and IGNORES
+      # `sync: false` keys entirely on a blueprint update — so every key in this block is
+      # documentation of what an operator must set by hand on the dashboard, not provisioning.
+      # APP_MAIL_PROVIDER in particular still reads `resend` there and must be flipped to `smtp`
+      # (or deleted, letting application-uat.yml's `smtp` default apply), or nothing changes.
       - key: APP_MAIL_PROVIDER
-        value: resend
-      - key: APP_MAIL_RESEND_API_KEY
+        value: smtp
+      # Credentials for the sending mailbox. Gmail requires an App Password (2-Step Verification
+      # on the account); its ordinary password is rejected with 535.
+      - key: APP_MAIL_SMTP_USERNAME
         sync: false
-      # APP_MAIL_FROM defaults to Resend's sandbox sender (onboarding@resend.dev), which can only
-      # send to the Resend account's own verified email until a real domain is verified with Resend
-      # — fine for this UAT test, revisit once a company domain (e.g. glr.co.th) is verified.
+      - key: APP_MAIL_SMTP_PASSWORD
+        sync: false
+      # REQUIRED, not optional: application.yml defaults app.mail.from to Resend's sandbox sender
+      # (onboarding@resend.dev), which Gmail will rewrite or reject because the authenticated
+      # account does not own it. Set this to the APP_MAIL_SMTP_USERNAME address.
+      - key: APP_MAIL_FROM
+        sync: false
+      # APP_MAIL_SMTP_PORT/STARTTLS are left to application.yml's 587 + STARTTLS defaults.
       - key: APP_UPLOADS_DIR
         sync: false
