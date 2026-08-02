@@ -65,6 +65,12 @@ import {
   STOCK_BONUS_DEFAULTS,
   INCENTIVE_STOCK_BONUS_EFFECTIVE_MONTH,
 } from '../features/commissions/commissionCalc.js';
+// Payroll/commission seed data (chore/mock-demo-seed-state-matrix) — the genuinely
+// fake-able stores only (see demoPayroll.js's own header for what's deliberately excluded).
+import {
+  buildDemoCommissions, buildDemoTaxAllowanceDeclarations, buildDemoTaxAllowanceAttachments,
+  buildDemoDeductionObligations, buildDemoPayrollInputDrafts,
+} from '../data/demoPayroll.js';
 
 const db = createDemoDatabase();
 
@@ -180,7 +186,10 @@ if (creditDemoTicket) {
     creditDemoTicket.items[0].stockNote = 'พร้อมส่งจากสต็อก';
   }
 }
-db.commissions = db.commissions || [];
+// Commission state matrix (chore/mock-demo-seed-state-matrix) — was `db.commissions ||
+// []` here, permanently empty: the old demoData.js `commissionRecords` export used a
+// mismatched key/shape and was never actually wired to this store. See demoPayroll.js.
+db.commissions = db.commissions?.length ? db.commissions : buildDemoCommissions();
 // Payroll input draft (2026-07-30): unlike preview/process below, saving a draft performs no
 // payroll/tax calculation at all -- it is a raw store of whatever HR typed -- so, unlike those,
 // it CAN be faked genuinely here rather than throwing "not supported in mock mode". Keyed on
@@ -188,6 +197,14 @@ db.commissions = db.commissions || [];
 // uniqueness. Each stored row also carries a `version` (issue #422 follow-up, optimistic
 // concurrency) -- see computeDraftETag below for why.
 db.payrollInputDrafts = db.payrollInputDrafts || new Map();
+if (db.payrollInputDrafts.size === 0) {
+  for (const { employeeId, payrollMonth, input } of buildDemoPayrollInputDrafts(db.employees)) {
+    // `version: 0` matches what saveDraft writes for a brand-new row (priorVersion -1 + 1), so a
+    // seeded draft is shaped exactly like a saved one and computeDraftEtag below sees a real
+    // version rather than falling through its `?? 0`.
+    db.payrollInputDrafts.set(`${employeeId}-${payrollMonth}`, { payrollMonth, input, version: 0 });
+  }
+}
 
 // Optimistic concurrency (issue #422 follow-up): mirrors PayrollDraftETag.compute in spirit (fold
 // every row's (employeeId, version) into one token that changes if ANY row's version changes, or a
@@ -217,18 +234,21 @@ function computeDraftEtag(rows) {
 // it CAN be faked genuinely here, same reasoning as payrollInputDrafts. applyTaxAllowanceDeclaration
 // is the exception: it promotes into hr.employee_tax_allowance and changes real withholding, so
 // mock mode surfaces "not supported" for that one call, same as saveTaxAllowances.
-db.taxAllowanceDeclarations = db.taxAllowanceDeclarations || [];
+db.taxAllowanceDeclarations = db.taxAllowanceDeclarations?.length
+  ? db.taxAllowanceDeclarations : buildDemoTaxAllowanceDeclarations(db.employees);
 // Evidence attachments (decision #5, 2026-08-01): genuinely fake-able (file metadata + access
 // scoping, no tax math) -- unlike applyTaxAllowanceDeclaration/estimateMyTaxAllowanceDeclaration,
 // which are NOT.
-db.taxAllowanceAttachments = db.taxAllowanceAttachments || [];
+db.taxAllowanceAttachments = db.taxAllowanceAttachments?.length
+  ? db.taxAllowanceAttachments : buildDemoTaxAllowanceAttachments();
 // Deduction obligation tracking (issue #373): the record + status transitions themselves perform
 // no payroll/tax calculation -- they only track an instruction and its lifecycle -- so, like
 // taxAllowanceDeclarations above, this CAN be faked genuinely here. The remittance ledger is the
 // exception: real remittance rows are only ever written by PayrollService#process (mocked as
 // "not supported"), so db.deductionObligationRemittances stays permanently empty in mock mode and
 // every progress read reports zero paid-to-date -- that is the honest mock answer, not a bug.
-db.deductionObligations = db.deductionObligations || [];
+db.deductionObligations = db.deductionObligations?.length
+  ? db.deductionObligations : buildDemoDeductionObligations(db.employees);
 db.deductionObligationRemittances = db.deductionObligationRemittances || [];
 db.leaveTypes = db.leaveTypes || [
   // PERSONAL quota fix (2026-07-25): seeded at 3, company rule (§5.2) grants 7 paid personal
@@ -237,274 +257,20 @@ db.leaveTypes = db.leaveTypes || [
   { code: 'SICK', nameTh: 'ลาป่วย', nameEn: 'Sick leave', annualQuotaDays: 30, requiresAttachment: true },
   { code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation leave', annualQuotaDays: 6, requiresAttachment: false },
 ];
+// leaveRequests/overtimeRequests/specialMoneyRequests are seeded by demoHr.js, wired
+// through createDemoDatabase()'s return (chore/mock-demo-seed-state-matrix). db.leaveRequests
+// and db.overtimeRequests were already non-empty here (createDemoDatabase() returned both), so
+// their `if (db.X.length === 0) {...}` seed blocks that used to sit at this exact spot were
+// genuinely dead code (never reachable) and have been deleted. db.specialMoneyRequests was
+// DIFFERENT (review fix, 2026-08-02): createDemoDatabase() never returned it — confirm with
+// `git show HEAD:frontend/src/data/demoData.js | grep specialMoneyRequests` on the parent
+// commit — so `db.specialMoneyRequests` was `undefined` here, `undefined.length === 0` was
+// true, and that block WAS live: it was the sole source of the 5 special-money rows before
+// this branch. Those exact 5 rows are preserved verbatim in demoHr.js, so there is no
+// functional regression — only the earlier "all three were dead code" claim was wrong.
 db.leaveRequests = db.leaveRequests || [];
-if (db.leaveRequests.length === 0) {
-  const now = new Date().toISOString();
-  db.leaveRequests = [
-    {
-      id: 1,
-      employeeId: db.employees[8].id,
-      leaveTypeCode: 'VACATION',
-      startDate: '2026-07-13',
-      endDate: '2026-07-14',
-      totalDays: 2,
-      quotaYear: 2026,
-      reason: 'Family trip',
-      attachmentId: null,
-      attachmentFileName: null,
-      status: 'APPROVED',
-      quotaRemainingBefore: 6,
-      quotaRemainingAfter: 4,
-      systemNote: null,
-      requestedById: db.employees[8].id,
-      requestedByName: db.employees[8].nameTh,
-      requestedAt: now,
-      reviewedById: null,
-      reviewedByName: null,
-      reviewedAt: null,
-      reviewerNote: null,
-      cancelledAt: null,
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      id: 2,
-      employeeId: db.employees[12].id,
-      leaveTypeCode: 'SICK',
-      startDate: '2026-06-18',
-      endDate: '2026-06-18',
-      totalDays: 1,
-      quotaYear: 2026,
-      reason: 'Medical appointment',
-      attachmentId: 2,
-      attachmentFileName: 'medical-certificate.pdf',
-      status: 'APPROVED',
-      quotaRemainingBefore: 30,
-      quotaRemainingAfter: 29,
-      systemNote: null,
-      requestedById: db.employees[12].id,
-      requestedByName: db.employees[12].nameTh,
-      requestedAt: now,
-      reviewedById: db.employees[20].id,
-      reviewedByName: db.employees[20].nameTh,
-      reviewedAt: now,
-      reviewerNote: null,
-      cancelledAt: null,
-      createdAt: now,
-      updatedAt: now,
-    },
-  ];
-}
 db.overtimeRequests = db.overtimeRequests || [];
-if (db.overtimeRequests.length === 0) {
-  const now = new Date().toISOString();
-  db.overtimeRequests = [
-    {
-      id: 1,
-      employeeId: db.employees[8].id,
-      workDate: '2026-07-04',
-      plannedStartAt: '2026-07-04T18:00:00+07:00',
-      plannedEndAt: '2026-07-04T20:00:00+07:00',
-      plannedMinutes: 120,
-      dayType: 'WORKDAY',
-      reason: 'ปิดยอดสิ้นเดือน',
-      status: 'SUBMITTED',
-      actualMinutes: null,
-      payableMinutes: null,
-      calculationNote: null,
-      requestedById: db.employees[8].id,
-      requestedByName: db.employees[8].nameTh,
-      requestedAt: now,
-      reviewedById: null,
-      reviewedByName: null,
-      reviewedAt: null,
-      reviewerNote: null,
-      cancelledAt: null,
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      id: 2,
-      employeeId: db.employees[12].id,
-      workDate: '2026-06-28',
-      plannedStartAt: '2026-06-28T09:00:00+07:00',
-      plannedEndAt: '2026-06-28T13:00:00+07:00',
-      plannedMinutes: 240,
-      dayType: 'HOLIDAY',
-      reason: 'งานติดตั้งนอกสถานที่',
-      status: 'APPROVED',
-      actualMinutes: 240,
-      payableMinutes: 720,
-      calculationNote: null,
-      requestedById: db.employees[12].id,
-      requestedByName: db.employees[12].nameTh,
-      requestedAt: now,
-      reviewedById: db.employees[20].id,
-      reviewedByName: db.employees[20].nameTh,
-      reviewedAt: now,
-      reviewerNote: null,
-      cancelledAt: null,
-      createdAt: now,
-      updatedAt: now,
-    },
-  ];
-}
 db.specialMoneyRequests = db.specialMoneyRequests || [];
-if (db.specialMoneyRequests.length === 0) {
-  const now = new Date().toISOString();
-  db.specialMoneyRequests = [
-    {
-      id: 1,
-      employeeId: db.employees[8].id,
-      requestType: 'MEDICAL',
-      eventDate: '2026-06-20',
-      eventEndDate: null,
-      receiptDate: '2026-06-20',
-      quantity: 1,
-      requestedAmount: 1200,
-      approvedAmount: null,
-      payrollBucket: 'NON_TAXABLE',
-      policyVersion: 1,
-      reason: 'ค่ารักษาพยาบาลตรวจสุขภาพประจำปี',
-      detail: {},
-      status: 'SUBMITTED',
-      payrollMonth: null,
-      capOverrideReason: null,
-      requestedById: db.employees[8].id,
-      requestedAt: now,
-      managerApprovedBy: null,
-      managerApprovedAt: null,
-      ceoApprovedBy: null,
-      ceoApprovedAt: null,
-      reviewedById: null,
-      reviewedAt: null,
-      reviewerNote: null,
-      cancelledAt: null,
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      id: 2,
-      employeeId: db.employees[12].id,
-      requestType: 'TRAVEL_PER_DIEM',
-      eventDate: '2026-07-10',
-      eventEndDate: '2026-07-12',
-      receiptDate: null,
-      quantity: 3,
-      requestedAmount: 1200,
-      approvedAmount: null,
-      payrollBucket: 'PER_DIEM',
-      policyVersion: 1,
-      reason: 'เดินทางส่งของลูกค้าต่างจังหวัด',
-      detail: { destination: 'DOMESTIC', province: 'เชียงใหม่', role: 'driver' },
-      status: 'MANAGER_APPROVED',
-      payrollMonth: null,
-      capOverrideReason: null,
-      requestedById: db.employees[12].id,
-      requestedAt: now,
-      managerApprovedBy: db.employees[20].id,
-      managerApprovedAt: now,
-      ceoApprovedBy: null,
-      ceoApprovedAt: null,
-      reviewedById: db.employees[20].id,
-      reviewedAt: now,
-      reviewerNote: null,
-      cancelledAt: null,
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      id: 3,
-      employeeId: db.employees[3].id,
-      requestType: 'AID_WEDDING',
-      eventDate: '2026-05-15',
-      eventEndDate: null,
-      receiptDate: null,
-      quantity: 1,
-      requestedAmount: 5000,
-      approvedAmount: 5000,
-      payrollBucket: 'AID',
-      policyVersion: 1,
-      reason: 'เงินช่วยเหลืองานแต่งงาน',
-      detail: {},
-      status: 'APPROVED',
-      payrollMonth: '2026-06-01',
-      capOverrideReason: null,
-      requestedById: db.employees[3].id,
-      requestedAt: now,
-      managerApprovedBy: db.employees[20].id,
-      managerApprovedAt: now,
-      ceoApprovedBy: db.employees[0].id,
-      ceoApprovedAt: now,
-      reviewedById: db.employees[0].id,
-      reviewedAt: now,
-      reviewerNote: null,
-      cancelledAt: null,
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      id: 4,
-      employeeId: db.employees[8].id,
-      requestType: 'UNIFORM_ANNUAL',
-      eventDate: '2026-06-05',
-      eventEndDate: null,
-      receiptDate: '2026-05-28',
-      quantity: 2,
-      requestedAmount: 4000,
-      approvedAmount: null,
-      payrollBucket: 'NON_TAXABLE',
-      policyVersion: 1,
-      reason: 'ชุดฟอร์มประจำปี ตัดใหม่จำนวน 2 ชิ้น',
-      detail: { uniformMode: 'SELF_BUY', shirtCount: '3', trouserCount: '2' },
-      status: 'REJECTED',
-      payrollMonth: null,
-      capOverrideReason: null,
-      requestedById: db.employees[8].id,
-      requestedAt: now,
-      managerApprovedBy: null,
-      managerApprovedAt: null,
-      ceoApprovedBy: null,
-      ceoApprovedAt: null,
-      reviewedById: db.employees[20].id,
-      reviewedAt: now,
-      reviewerNote: 'จำนวนชิ้นเกินเพดานต่อปี กรุณาส่งคำขอใหม่ให้ตรงเพดาน',
-      cancelledAt: null,
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      id: 5,
-      employeeId: db.employees[12].id,
-      requestType: 'TRAINING',
-      eventDate: '2026-06-01',
-      eventEndDate: null,
-      receiptDate: null,
-      quantity: 1,
-      requestedAmount: 2500,
-      approvedAmount: null,
-      payrollBucket: 'NON_TAXABLE',
-      policyVersion: 1,
-      reason: 'อบรมหลักสูตรความปลอดภัยในการขับขี่',
-      detail: {},
-      status: 'CANCELLED',
-      payrollMonth: null,
-      capOverrideReason: null,
-      requestedById: db.employees[12].id,
-      requestedAt: now,
-      managerApprovedBy: null,
-      managerApprovedAt: null,
-      ceoApprovedBy: null,
-      ceoApprovedAt: null,
-      reviewedById: null,
-      reviewedAt: null,
-      reviewerNote: null,
-      cancelledAt: now,
-      createdAt: now,
-      updatedAt: now,
-    },
-  ];
-}
 let sessionUser = null;
 
 // ── Mock in-memory document store ─────────────────────────────────────────────
@@ -814,6 +580,50 @@ let mockCustomerQuotationItemSeq = 1;
 const mockFactoryPurchaseOrders = [];
 let mockFactoryPurchaseOrderSeq = 1;
 let mockFactoryPurchaseOrderItemSeq = 1;
+
+// Sales/CRM state-matrix seed (chore/mock-demo-seed-state-matrix): this whole aggregate
+// (mockPricingRequests through mockFactoryPurchaseOrders, plus mockDealActivities and
+// mockAttachments above) starts completely empty every session — demoSales.js is the only
+// source of rows for it. Every counter below is advanced past the highest seeded id so the
+// first user-created row after boot can never collide with one of these.
+{
+  const salesSeed = db.salesSeed;
+  mockAttachments.push(...salesSeed.attachments);
+  mockAttachSeq = salesSeed.nextSeq.attach;
+  mockDealActivities.push(...salesSeed.dealActivities);
+  mockDealActivitySeq = salesSeed.nextSeq.dealActivity;
+  mockDepositNotices.push(...salesSeed.depositNotices);
+  mockDocSeq = salesSeed.nextSeq.doc;
+  mockDocNumberSeq = salesSeed.nextSeq.docNumber;
+  mockPricingRequests.push(...salesSeed.pricingRequests);
+  mockPricingRequestSeq = salesSeed.nextSeq.pricingRequest;
+  mockPricingRequestItemSeq = salesSeed.nextSeq.pricingRequestItem;
+  mockPricingRequestEventSeq = salesSeed.nextSeq.pricingRequestEvent;
+  mockPricingRequestAttachmentSeq = salesSeed.nextSeq.pricingRequestAttachment;
+  mockFactoryQuotes.push(...salesSeed.factoryQuotes);
+  mockFactoryQuoteSeq = salesSeed.nextSeq.factoryQuote;
+  mockFactoryQuoteItemSeq = salesSeed.nextSeq.factoryQuoteItem;
+  mockPricingCostings.push(...salesSeed.pricingCostings);
+  mockPricingCostingSeq = salesSeed.nextSeq.pricingCosting;
+  mockPricingDecisions.push(...salesSeed.pricingDecisions);
+  mockPricingDecisionSeq = salesSeed.nextSeq.pricingDecision;
+  mockPricingDecisionItemSeq = salesSeed.nextSeq.pricingDecisionItem;
+  mockCustomerQuotations.push(...salesSeed.customerQuotations);
+  mockCustomerQuotationSeq = salesSeed.nextSeq.customerQuotation;
+  mockCustomerQuotationItemSeq = salesSeed.nextSeq.customerQuotationItem;
+  mockFactoryPurchaseOrders.push(...salesSeed.factoryPurchaseOrders);
+  mockFactoryPurchaseOrderSeq = salesSeed.nextSeq.factoryPurchaseOrder;
+  mockFactoryPurchaseOrderItemSeq = salesSeed.nextSeq.factoryPurchaseOrderItem;
+  // Deal-tracking readiness gate (dealIsReadyToAdvance) needs `ticket.nextFollowUpAt` set —
+  // not part of the ticket's own literal object in demoSales.js since it's normally written
+  // by tickets.setBilling, not ticket creation.
+  for (const { ticketId, nextFollowUpAt } of salesSeed.followUpOverrides) {
+    const ticket = db.tickets.find((t) => t.id === ticketId);
+    if (ticket) ticket.nextFollowUpAt = nextFollowUpAt;
+  }
+  delete db.salesSeed;
+}
+
 const PRICING_REQUEST_VIEWER_ROLES = ['sales', 'import', 'ceo', 'sales_manager'];
 const PRICING_REQUEST_RECIPIENT_VALUES = PRICING_REQUEST_RECIPIENT_OPTIONS.map((o) => o.code);
 const PRICING_REQUEST_QUANTITY_TYPE_VALUES = PRICING_REQUEST_QUANTITY_TYPE_OPTIONS.map((o) => o.code);
@@ -3198,6 +3008,33 @@ const DEMO_ROLE_EMAIL = {
   employee:      'demo.employee@demo.invalid',
   account:       'demo.import@demo.invalid', // no dedicated account demo
 };
+
+/**
+ * Ascending comparator that mirrors PostgreSQL's default `ORDER BY <col> ASC`.
+ *
+ * The point is NULL placement: PostgreSQL sorts NULLs **last** on an ascending sort (the explicit
+ * `NULLS LAST` written on some of CatalogRepository's sort columns is that default spelled out).
+ * Coercing a null to '' — which this file used to do — sorts it FIRST instead, so a mock that
+ * truncates to `LIMIT :n` would keep a different set of rows than the real query. That is the
+ * issue #434 failure shape: same limit, different order, so truncation drops different rows and
+ * mock-driven verification never sees the real one. An empty string is NOT null in PostgreSQL, so
+ * only null/undefined count as missing here.
+ */
+function pgAsc(a, b) {
+  const aMissing = a === null || a === undefined;
+  const bMissing = b === null || b === undefined;
+  if (aMissing || bMissing) return aMissing === bMissing ? 0 : (aMissing ? 1 : -1);
+  return String(a).localeCompare(String(b));
+}
+
+// Row caps that are HARDCODED in the Java repositories — no caller-supplied limit reaches them,
+// so the mock must apply the same constant or it hands callers a larger set than production ever
+// would. See CatalogRepository.search, CustomerRepository.search, NotificationRepository.
+const CATALOG_SEARCH_LIMIT = 30;
+const CUSTOMER_SEARCH_LIMIT = 30;
+// CatalogController clamps the caller's ?limit to [1, 200] and defaults it to 50.
+const CATALOG_PRICES_DEFAULT_LIMIT = 50;
+const CATALOG_PRICES_MAX_LIMIT = 200;
 
 // Try a real backend fetch (credentials included) and return the Blob, or null on failure.
 async function tryBackendBlob(url) {
@@ -5925,6 +5762,12 @@ export const api = {
   // covers the supplier purchase price. #388's actual fix is on factoryConfigs /
   // fxRates / priceCalcConfigs below.
   catalog: {
+    // Ordering + truncation mirror CatalogRepository.search: `ORDER BY brand, collection, color
+    // LIMIT 30`. The 30 is HARDCODED in the Java (no caller-supplied limit exists on this
+    // endpoint), and it applies to *every* call — including a non-blank query. This mock used to
+    // slice 30 only on the blank-query branch and return the full unsorted match set otherwise,
+    // i.e. it was systematically MORE forgiving than production exactly where a caller might
+    // reason about "how many matches came back" (issue #434, same shape as the `prices` bug).
     async search(q) {
       requireSession();
       const lower = (q ?? '').toLowerCase();
@@ -5934,8 +5777,11 @@ export const api = {
             c.collection.toLowerCase().includes(lower) ||
             c.color.toLowerCase().includes(lower) ||
             (c.factory ?? '').toLowerCase().includes(lower))
-        : mockCatalog.slice(0, 30);
-      return delay({ items: results });
+        : [...mockCatalog];
+      const ordered = [...results].sort((a, b) => (
+        pgAsc(a.brand, b.brand) || pgAsc(a.collection, b.collection) || pgAsc(a.color, b.color)
+      ));
+      return delay({ items: ordered.slice(0, CATALOG_SEARCH_LIMIT) });
     },
     // `limit` was previously accepted by hrApi but silently DROPPED here, so the mock always
     // returned up to 50 rows regardless of what the caller asked for — a divergence that hid
@@ -5947,7 +5793,11 @@ export const api = {
       requireSession();
       const lower = (q ?? '').toLowerCase();
       const fid = factoryId ? Number(factoryId) : null;
-      const cap = Number(limit) > 0 ? Number(limit) : 50;
+      // Mirrors CatalogController: default 50, then clamped to [1, 200]. Without the upper clamp
+      // the mock would happily honour ?limit=5000 and return 5000 rows where production caps at
+      // 200 — the "mock is more forgiving" direction again (issue #434).
+      const requested = Number(limit) > 0 ? Number(limit) : CATALOG_PRICES_DEFAULT_LIMIT;
+      const cap = Math.min(Math.max(Math.trunc(requested), 1), CATALOG_PRICES_MAX_LIMIT);
       let results = mockProductPrices.filter((p) => {
         if (fid && p.factoryId !== fid) return false;
         if (!lower) return true;
@@ -5960,10 +5810,13 @@ export const api = {
           (p.factoryName   ?? '').toLowerCase().includes(lower)
         );
       });
+      // `ORDER BY f.name, pp.collection NULLS LAST, pp.product_code NULLS LAST` — pgAsc keeps a
+      // null AFTER every present value, which coercing to '' did not: '' sorts first, so a
+      // null-collection row used to survive truncation that the real query would have dropped.
       results = [...results].sort((a, b) => (
-        (a.factoryName ?? '').localeCompare(b.factoryName ?? '')
-        || (a.collection ?? '').localeCompare(b.collection ?? '')
-        || (a.productCode ?? '').localeCompare(b.productCode ?? '')
+        pgAsc(a.factoryName, b.factoryName)
+        || pgAsc(a.collection, b.collection)
+        || pgAsc(a.productCode, b.productCode)
       ));
       return delay({ items: results.slice(0, cap) });
     },
@@ -6177,10 +6030,15 @@ export const api = {
       requireAttachmentTicketAccess(ticketId);
       return delay({ attachments: structuredClone(mockAttachments.filter((a) => a.ticketId === Number(ticketId))) });
     },
-    async upload(ticketId, file, attachType) {
+    // `quotationId` was accepted by hrApi (it is sent as a multipart field when truthy) but
+    // DROPPED here, with the stored record hardcoding `quotationId: null` — so no mock-driven run
+    // could ever produce a quotation-scoped attachment, and any caller branching on that field
+    // silently took the "unscoped" path forever (issue #434, third shape). Now threaded through.
+    async upload(ticketId, file, attachType, quotationId) {
       const { user } = requireAttachmentTicketAccess(ticketId, { write: true });
       const attachment = {
-        id: mockAttachSeq++, ticketId: Number(ticketId), quotationId: null,
+        id: mockAttachSeq++, ticketId: Number(ticketId),
+        quotationId: quotationId ? Number(quotationId) : null,
         fileName: file?.name ?? 'file.pdf',
         attachType: (attachType ?? 'OTHER').toUpperCase(),
         mimeType: file?.type ?? 'application/pdf',
@@ -6214,13 +6072,18 @@ export const api = {
       mockCustomers.push(customer);
       return delay({ customer });
     },
+    // Ordering + truncation mirror CustomerRepository.search: `ORDER BY name LIMIT 30`, with the
+    // 30 hardcoded in the Java (no caller-supplied limit). This mock previously returned every
+    // match in insertion order — unbounded and unsorted — so a caller counting results, or
+    // reading "the first customer", saw something production would never return (issue #434).
     async search(q) {
       requireSession();
       const lower = (q ?? '').toLowerCase();
       const results = lower
         ? mockCustomers.filter((c) => c.name.toLowerCase().includes(lower) || (c.taxId ?? '').includes(lower))
-        : mockCustomers;
-      return delay({ customers: results });
+        : [...mockCustomers];
+      const ordered = [...results].sort((a, b) => pgAsc(a.name, b.name));
+      return delay({ customers: ordered.slice(0, CUSTOMER_SEARCH_LIMIT) });
     },
     async contacts(customerId) {
       requireSession();
