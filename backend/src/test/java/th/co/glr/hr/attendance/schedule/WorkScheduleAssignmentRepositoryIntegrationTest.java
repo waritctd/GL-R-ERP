@@ -137,6 +137,52 @@ class WorkScheduleAssignmentRepositoryIntegrationTest extends AbstractPostgresIn
             .isTrue();
     }
 
+    /**
+     * V117: {@code requires_check_out} must survive the join/{@code array_agg} round trip this
+     * repository does, and the DEPARTMENT-beats-DIVISION precedence already proven above must
+     * correctly separate ทีมขาย (field sales, scan-in-only) from Sales Support (back-office, both
+     * scans required) even though both departments sit under the same ฝ่ายขาย division.
+     *
+     * <p>Real production {@code source_code}s ('SA', 'SATM', 'SALES', 'SALES2') are not present in a
+     * fresh test database — V117's own seed INSERTs are no-ops here for the same reason V115's are
+     * (see this class's own javadoc) — so this test builds the identical SHAPE V117 seeds
+     * (DIVISION -&gt; SALES_5D, one DEPARTMENT overridden back to SALES_5D, a sibling DEPARTMENT left
+     * on OFFICE_5D) against synthetic test codes, proving the mechanism V117 relies on rather than
+     * the production data itself.
+     *
+     * <p>Assert BOTH sides on ONE fixture (CLAUDE.md's testing rule): the ทีมขาย employee resolves
+     * SALES_5D and the Sales Support employee — same division, same date — resolves OFFICE_5D. A
+     * one-sided assertion would also pass if DEPARTMENT precedence were broken and everyone in the
+     * division just inherited SALES_5D.
+     */
+    @Test
+    void teamSalesDepartmentResolvesSalesScheduleWhileSalesSupportDepartmentStaysOnOffice() {
+        wire();
+        long salesDivision = insertDivision("SAX", "ฝ่ายขาย (test)");
+        long salesTeamDept = insertDepartment("SATMX", "ทีมขาย (test)", salesDivision);
+        long salesSupportDept = insertDepartment("SALESX", "ฝ่ายสนับสนุนการขาย (test)", salesDivision);
+
+        // Mirrors V117's shape: DIVISION -> SALES_5D, ทีมขาย DEPARTMENT overridden to SALES_5D,
+        // Sales Support DEPARTMENT deliberately left on OFFICE_5D.
+        assignDivision(salesDivision, "SALES_5D", LocalDate.of(2024, 10, 1), null);
+        assignDepartment(salesTeamDept, "SALES_5D", LocalDate.of(2024, 10, 1), null);
+        assignDepartment(salesSupportDept, "OFFICE_5D", LocalDate.of(2024, 10, 1), null);
+
+        long teamEmployee = insertEmployee("SATMX-1", salesDivision, salesTeamDept);
+        long supportEmployee = insertEmployee("SALESX-1", salesDivision, salesSupportDept);
+
+        WorkSchedule teamSchedule = resolver.resolve(teamEmployee, salesDivision, salesTeamDept, WEDNESDAY);
+        WorkSchedule supportSchedule =
+            resolver.resolve(supportEmployee, salesDivision, salesSupportDept, WEDNESDAY);
+
+        assertThat(teamSchedule.requiresCheckOut())
+            .as("SALES_5D's requires_check_out = FALSE persisted and survived the join/array_agg round trip")
+            .isFalse();
+        assertThat(supportSchedule.requiresCheckOut())
+            .as("Sales Support's DEPARTMENT row still outranks the DIVISION SALES_5D row -> requires_check_out stays TRUE")
+            .isTrue();
+    }
+
     // --- helpers --------------------------------------------------------------------------------
 
     private long insertDivision(String code, String name) {

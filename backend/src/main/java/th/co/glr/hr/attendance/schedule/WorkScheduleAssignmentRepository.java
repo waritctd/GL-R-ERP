@@ -61,13 +61,13 @@ public class WorkScheduleAssignmentRepository {
         List<ScheduleAssignment> assignments = new ArrayList<>();
         jdbc.query("""
             SELECT a.scope_type, a.scope_id, a.effective_from, a.effective_to,
-                   s.work_start, s.work_end, s.grace_minutes,
+                   s.work_start, s.work_end, s.grace_minutes, s.requires_check_out,
                    array_agg(d.day_of_week ORDER BY d.day_of_week) AS days
               FROM hr.work_schedule_assignment a
               JOIN hr.work_schedule s ON s.work_schedule_id = a.work_schedule_id
               LEFT JOIN hr.work_schedule_day d ON d.work_schedule_id = s.work_schedule_id
              GROUP BY a.assignment_id, a.scope_type, a.scope_id, a.effective_from, a.effective_to,
-                      s.work_start, s.work_end, s.grace_minutes
+                      s.work_start, s.work_end, s.grace_minutes, s.requires_check_out
              ORDER BY a.effective_from DESC, a.assignment_id DESC
             """, new MapSqlParameterSource(), rs -> {
             WorkSchedule schedule = new WorkSchedule(
@@ -75,7 +75,8 @@ public class WorkScheduleAssignmentRepository {
                 rs.getObject("work_start", LocalTime.class),
                 rs.getObject("work_end", LocalTime.class),
                 rs.getInt("grace_minutes"),
-                workdaysOf(rs.getArray("days"))
+                workdaysOf(rs.getArray("days")),
+                rs.getBoolean("requires_check_out")
             );
             assignments.add(new ScheduleAssignment(
                 ScopeType.valueOf(rs.getString("scope_type")),
