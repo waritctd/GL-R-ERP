@@ -47,7 +47,13 @@ export function TicketContextPanel({
   pricingRequests = [],
   latestQuotation = null,
   events = [],
-  bannerText = null,
+  // The next step this viewer owns, in words. Deliberately NOT the header's
+  // `bannerText` any more: that line is now null whenever a primary CTA exists
+  // (the button next to it already said the same thing), and reusing it here —
+  // a surface with no button of its own — made this section claim "no next
+  // step" precisely when there was one. The parent passes the CTA's own label
+  // instead, falling back to the waiting/blocker line.
+  nextStepText = null,
   canComment = false,
   commentText = '',
   onCommentTextChange,
@@ -83,7 +89,7 @@ export function TicketContextPanel({
     <div className="flex flex-col gap-5">
       <ContextSection title="ขั้นตอนถัดไป" helper="Next action" icon="chevronRight">
         <p className="m-0 rounded-md border border-info-border bg-info-bg px-3 py-2 text-sm font-bold text-info">
-          {bannerText || 'ไม่มีขั้นตอนถัดไปในสถานะนี้'}
+          {nextStepText || 'ไม่มีขั้นตอนถัดไปในสถานะนี้'}
         </p>
       </ContextSection>
 
