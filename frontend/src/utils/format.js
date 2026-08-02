@@ -500,6 +500,11 @@ export function attendanceStatusLabel(status) {
     MISSING_CHECK_IN: { label: 'ขาดสแกนเข้า', tone: 'warning' },
     MISSING_CHECK_OUT: { label: 'ขาดสแกนออก', tone: 'warning' },
     NON_WORKDAY: { label: 'วันหยุด', tone: 'neutral' },
+    // Distinct from NON_WORKDAY: a company holiday (นักขัตฤกษ์) carries a different pay meaning
+    // for a rostered ฝ่ายขาย shift (OT-eligible) than an ordinary Saturday does (not) — see
+    // AttendanceDayFlag#HOLIDAY on the backend. Same neutral tone as NON_WORKDAY: neither is a
+    // problem to flag, just a different reason there is nothing to report.
+    HOLIDAY: { label: 'วันหยุดนักขัตฤกษ์', tone: 'neutral' },
     NO_RECORD: { label: '-', tone: 'neutral' },
   };
   return map[status] ?? { label: status || '-', tone: 'neutral' };
@@ -541,7 +546,9 @@ export function attendanceFlagLabels(day) {
     // would set an expectation payroll will not meet.
     labels.push({ key: 'WORKED_LATE_UNAPPROVED', label: 'ออกช้า', tone: 'neutral' });
   }
-  if (flags.includes('NON_WORKDAY')) {
+  if (flags.includes('HOLIDAY')) {
+    labels.push({ key: 'HOLIDAY', label: 'วันหยุดนักขัตฤกษ์', tone: 'neutral' });
+  } else if (flags.includes('NON_WORKDAY')) {
     labels.push({ key: 'NON_WORKDAY', label: 'วันหยุด', tone: 'neutral' });
   }
   return labels;

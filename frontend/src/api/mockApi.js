@@ -250,12 +250,68 @@ db.taxAllowanceAttachments = db.taxAllowanceAttachments?.length
 db.deductionObligations = db.deductionObligations?.length
   ? db.deductionObligations : buildDemoDeductionObligations(db.employees);
 db.deductionObligationRemittances = db.deductionObligationRemittances || [];
+// §5 leave-rules-as-data (V116): paidDaysCap/advanceNoticeDays/minServiceMonths/
+// maxConsecutiveDays/oncePerEmployment mirror the new hr.leave_type columns for SHAPE parity only
+// (contract.test.js checks method surface + arity, not field-level DTO shape, but a leaveTypes()
+// response missing these fields would still be a lie about what the real endpoint returns). Per
+// CLAUDE.md ("mock authz/behaviour is NOT authoritative" -- and see the file-level note above on
+// mirroring a backend computation being the dangerous direction): the mock's create() flow below
+// does NOT enforce minServiceMonths, maxConsecutiveDays, or oncePerEmployment, and does not
+// replicate the paid_days_cap split -- those are real per-request eligibility/business-rule
+// decisions the mock has never modelled fully (it already predates the paid/unpaid quota-split
+// redesign; it still auto-rejects on insufficient quota outright rather than approving-with-split,
+// a PRE-EXISTING gap this migration does not attempt to fix). advanceNoticeDays IS read below
+// (mechanical 1:1 mirror of the column), since leaving the old hardcoded 7-day check in place would
+// have positively contradicted the real per-type values this migration introduces.
+//
+// dayCountBasis (V119, 2026-08-02): §5.4 MATERNITY calendar-day counting -- SHAPE parity only, same
+// as the rest of this block. create() below still ALWAYS calls workingDaysBetween() for a whole-day
+// request regardless of this field (see workingDaysBetween's own call site) -- switching MATERNITY
+// to calendar-day counting is exactly the kind of business-rule computation this mock deliberately
+// does not reimplement (see the file-level note on why: a shared algorithmic error would be
+// invisible on both sides). Anyone testing the §5.4 calendar-day behaviour itself must do so against
+// the real backend, not VITE_USE_MOCKS=true.
 db.leaveTypes = db.leaveTypes || [
   // PERSONAL quota fix (2026-07-25): seeded at 3, company rule (§5.2) grants 7 paid personal
   // days/year -- see V90__leave_subday_and_contact.sql for the backend-side correction.
-  { code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal leave', annualQuotaDays: 7, requiresAttachment: false },
-  { code: 'SICK', nameTh: 'ลาป่วย', nameEn: 'Sick leave', annualQuotaDays: 30, requiresAttachment: true },
-  { code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation leave', annualQuotaDays: 6, requiresAttachment: false },
+  //
+  // minServiceMonths: 0 (review fix, V116) -- PERSONAL's real eligibility floor is "passed
+  // probation" (hire_date + hr.employee.probation_days, falling back to
+  // SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS=119 when NULL), NOT a fixed months-of-
+  // service number. That per-employee resolution is one of the things this mock does not
+  // replicate (see the file-level note above) -- db.employees has no probation_days field to
+  // resolve it from, so leaving PERSONAL unrestricted here is the honest "not supported in mock
+  // mode" option rather than inventing a different, wrong approximation.
+  {
+    code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal leave', annualQuotaDays: 7, requiresAttachment: false,
+    paidDaysCap: null, advanceNoticeDays: 1, minServiceMonths: 0, maxConsecutiveDays: 3, oncePerEmployment: false,
+    dayCountBasis: 'WORKING_DAYS',
+  },
+  {
+    code: 'SICK', nameTh: 'ลาป่วย', nameEn: 'Sick leave', annualQuotaDays: 30, requiresAttachment: true,
+    paidDaysCap: null, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
+    dayCountBasis: 'WORKING_DAYS',
+  },
+  {
+    code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation leave', annualQuotaDays: 6, requiresAttachment: false,
+    paidDaysCap: null, advanceNoticeDays: 3, minServiceMonths: 12, maxConsecutiveDays: null, oncePerEmployment: false,
+    dayCountBasis: 'WORKING_DAYS',
+  },
+  {
+    code: 'MATERNITY', nameTh: 'ลาคลอดบุตร', nameEn: 'Maternity leave', annualQuotaDays: 98, requiresAttachment: true,
+    paidDaysCap: 45, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
+    dayCountBasis: 'CALENDAR_DAYS',
+  },
+  {
+    code: 'MILITARY', nameTh: 'ลารับราชการทหาร', nameEn: 'Military service leave', annualQuotaDays: 60, requiresAttachment: true,
+    paidDaysCap: null, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
+    dayCountBasis: 'WORKING_DAYS',
+  },
+  {
+    code: 'ORDINATION', nameTh: 'ลาอุปสมบท', nameEn: 'Ordination leave', annualQuotaDays: 60, requiresAttachment: false,
+    paidDaysCap: 15, advanceNoticeDays: 0, minServiceMonths: 12, maxConsecutiveDays: null, oncePerEmployment: true,
+    dayCountBasis: 'WORKING_DAYS',
+  },
 ];
 // leaveRequests/overtimeRequests/specialMoneyRequests are seeded by demoHr.js, wired
 // through createDemoDatabase()'s return (chore/mock-demo-seed-state-matrix). db.leaveRequests
@@ -2659,11 +2715,21 @@ function leaveTypeByCode(code) {
   return type;
 }
 
+// V118 cross-year quota fix (2026-08-02): mirrors LeaveService#validateDateRange -- the
+// "start/end must fall in the same calendar year" rejection is gone, matching the real backend (a
+// 98-day MATERNITY request starting after roughly mid-September no longer 400s). NOT mirrored here:
+// the real per-calendar-year quota/paid-cap split (hr.leave_request_quota_year, LeaveQuotaYearSplit)
+// -- this mock predates that redesign already (see the db.leaveTypes comment above: it still
+// auto-rejects on insufficient quota outright rather than approving-with-split, a pre-existing,
+// documented gap this migration does not attempt to close). create() below still keys
+// leaveUsedDays/quotaAvailable off a single quotaYear (the start year only), so a cross-year request
+// in mock mode is checked against just that one year's remaining quota, not the true per-year split
+// -- "not supported in mock mode" for the multi-year figure, same honesty option already taken for
+// the paid-cap gap.
 function workingDaysBetween(startDate, endDate) {
   const start = new Date(`${startDate}T00:00:00`);
   const end = new Date(`${endDate}T00:00:00`);
   if (end < start) fail('วันที่สิ้นสุดการลาต้องไม่มาก่อนวันที่เริ่มต้น', 400);
-  if (startDate.slice(0, 4) !== endDate.slice(0, 4)) fail('คำขอลาต้องไม่คร่อมปีโควตา', 400);
   let days = 0;
   const cursor = new Date(start);
   while (cursor <= end) {
@@ -4078,15 +4144,21 @@ export const api = {
       const remainingBefore = Math.max(0, leaveType.annualQuotaDays - used);
       const quotaAvailable = remainingBefore >= totalDays;
       const today = new Date().toISOString().slice(0, 10);
-      const sevenDaysAhead = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      // §5 leave-rules-as-data (V116): per-type advanceNoticeDays (mechanical 1:1 mirror of the new
+      // hr.leave_type column), replacing the old hardcoded 7-day-for-everyone-but-SICK check --
+      // mirrors LeaveService#autoRejectNote's notice branch, in CALENDAR days, same as the real
+      // service. minServiceMonths/maxConsecutiveDays/oncePerEmployment are NOT enforced here -- see
+      // the db.leaveTypes comment above for why.
+      const noticeDays = Math.max(0, Number(leaveType.advanceNoticeDays || 0));
+      const noticeCutoff = new Date(Date.now() + noticeDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       const hasAttachment = Boolean(payload.attachmentFile);
       let systemNote = null;
       if (!quotaAvailable) {
         systemNote = `โควตาคงเหลือ ${remainingBefore} วัน ไม่พอสำหรับคำขอ ${totalDays} วัน กรุณาติดต่อ HR เพื่อปรับโควตาหรือดำเนินการลาไม่รับค่าจ้าง`;
       } else if (leaveType.code === 'SICK' && !hasAttachment) {
         systemNote = 'ลาป่วยต้องแนบใบรับรองแพทย์ กรุณาแนบเอกสารหรือติดต่อ HR';
-      } else if (leaveType.code !== 'SICK' && payload.startDate < sevenDaysAhead && payload.startDate >= today) {
-        systemNote = 'ต้องยื่นคำขอลาล่วงหน้าอย่างน้อย 7 วัน กรุณาติดต่อหัวหน้าหรือ HR หากเป็นเหตุเร่งด่วน';
+      } else if (noticeDays > 0 && payload.startDate < noticeCutoff && payload.startDate >= today) {
+        systemNote = `ต้องยื่นคำขอลาล่วงหน้าอย่างน้อย ${noticeDays} วัน กรุณาติดต่อหัวหน้าหรือ HR หากเป็นเหตุเร่งด่วน`;
       }
       const status = systemNote ? 'AUTO_REJECTED' : 'APPROVED';
       const remainingAfter = status === 'APPROVED' ? remainingBefore - totalDays : remainingBefore;

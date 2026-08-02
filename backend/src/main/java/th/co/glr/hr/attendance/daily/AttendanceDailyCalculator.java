@@ -33,6 +33,18 @@ import th.co.glr.hr.attendance.schedule.WorkSchedule;
  * time would fabricate late/early minutes, which under Thai Labour Protection Act §76 is precisely
  * the failure mode to avoid — those figures are reporting-only and must never become a deduction.
  *
+ * <h2>ฝ่ายขาย may scan in only (V117)</h2>
+ * §4 of the governing announcement exempts sales from the check-out half of the requirement
+ * ("ฝ่ายขาย อนุญาตให้ทาบบัตรเข้างานอย่างเดียวได้"). When {@link WorkSchedule#requiresCheckOut()} is
+ * {@code false} and only a morning punch exists, that is a complete, compliant day — never
+ * {@link AttendanceDayFlag#MISSING_CHECK_OUT} — but the missing-scan-is-never-imputed rule above
+ * still applies in full: {@code earlyLeaveMinutes} stays 0 (there is nothing to measure against) and
+ * {@code totalMinutes} stays {@code null} (unknown, not zero). Check-in is still mandatory for
+ * everyone, sales included, so a lone afternoon punch is still {@link AttendanceDayFlag#MISSING_CHECK_IN}
+ * regardless of {@code requiresCheckOut}, and lateness is still evaluated normally from the check-in.
+ * A sales employee who does scan out is unaffected: the ordinary two-punch path applies unchanged,
+ * including early-leave.
+ *
  * <h2>Known non-goals</h2>
  * Mid-day punches (lunch, moving between sites) are counted but not modelled — there is no break or
  * shift concept in the schema to model them against. Night shifts that wrap past midnight are not
@@ -52,6 +64,11 @@ public class AttendanceDailyCalculator {
      * @param schedule                the schedule in force for this employee on this date
      * @param approvedOvertimeMinutes minutes from APPROVED overtime requests only — a
      *                                MANAGER_APPROVED request must contribute 0
+     * @param holiday                 resolved by the caller (a {@code HolidayCalendar} lookup),
+     *                                never derived here — keeps this method free of the database.
+     *                                A holiday beats the schedule's own workday check: late/early
+     *                                are not evaluated on a holiday even if the schedule would
+     *                                otherwise call the date a workday. See {@link AttendanceDayFlag#HOLIDAY}.
      * @throws IllegalArgumentException if {@code punches} is empty; punchless days are never
      *                                  materialised (absence is derived at read time, and
      *                                  {@code site_code} is NOT NULL so there would be no site to
@@ -62,7 +79,8 @@ public class AttendanceDailyCalculator {
             LocalDate workDate,
             List<PunchRecord> punches,
             WorkSchedule schedule,
-            int approvedOvertimeMinutes) {
+            int approvedOvertimeMinutes,
+            boolean holiday) {
         if (punches == null || punches.isEmpty()) {
             throw new IllegalArgumentException(
                 "A day with no punches is never stored; absence is derived at read time");
@@ -72,7 +90,9 @@ public class AttendanceDailyCalculator {
             .sorted(Comparator.comparing(PunchRecord::punchTime).thenComparingLong(PunchRecord::punchId))
             .toList();
 
-        boolean workday = schedule.isWorkday(workDate);
+        // A holiday is not a workday, regardless of what the schedule says about this weekday —
+        // see AttendanceDayFlag#HOLIDAY for why that is kept distinct from an ordinary NON_WORKDAY.
+        boolean workday = schedule.isWorkday(workDate) && !holiday;
         Set<AttendanceDayFlag> flags = EnumSet.noneOf(AttendanceDayFlag.class);
 
         PunchRecord checkInPunch;
@@ -80,10 +100,13 @@ public class AttendanceDailyCalculator {
         if (ordered.size() == 1) {
             PunchRecord lone = ordered.get(0);
             if (isBeforeOrAtMidpoint(lone, schedule)) {
-                // Arrived and never scanned out.
+                // Arrived and never scanned out. Compliant as-is for a schedule that does not
+                // require a check-out (V117, ฝ่ายขาย) — see this class's javadoc.
                 checkInPunch = lone;
                 checkOutPunch = null;
-                flags.add(AttendanceDayFlag.MISSING_CHECK_OUT);
+                if (schedule.requiresCheckOut()) {
+                    flags.add(AttendanceDayFlag.MISSING_CHECK_OUT);
+                }
             } else {
                 // Scanned out having never scanned in. Treating this as an arrival instead would
                 // report someone as turning up at 17:25 and manufacture ~530 late minutes.
@@ -114,6 +137,11 @@ public class AttendanceDailyCalculator {
                     flags.add(AttendanceDayFlag.EARLY_LEAVE);
                 }
             }
+        } else if (holiday) {
+            // Rostered นักขัตฤกษ์ duty (e.g. ฝ่ายขาย) is still eligible for OT pay via the normal
+            // overtime_request approval flow — this flag only says the day was not an ordinary
+            // workday for late/early purposes, it does not gate approvedOvertimeMinutes below.
+            flags.add(AttendanceDayFlag.HOLIDAY);
         } else {
             // People do come in at weekends. Record the punches; penalise nothing.
             flags.add(AttendanceDayFlag.NON_WORKDAY);
@@ -146,7 +174,7 @@ public class AttendanceDailyCalculator {
             // Rows only exist for days that have punches, so a stored row is never an absence.
             // DashboardRepository counts is_absent = FALSE as "present"; keep that true.
             false,
-            statusOf(workday, checkIn, checkOut, lateMinutes),
+            statusOf(holiday, workday, checkIn, checkOut, lateMinutes, schedule.requiresCheckOut()),
             flags
         );
     }
@@ -163,14 +191,24 @@ public class AttendanceDailyCalculator {
     }
 
     private static AttendanceDayStatus statusOf(
-            boolean workday, OffsetDateTime checkIn, OffsetDateTime checkOut, int lateMinutes) {
+            boolean holiday, boolean workday, OffsetDateTime checkIn, OffsetDateTime checkOut,
+            int lateMinutes, boolean requiresCheckOut) {
+        // Checked before the plain !workday branch so a holiday is never reported as an ordinary
+        // NON_WORKDAY — see AttendanceDayFlag#HOLIDAY for why the two carry different pay meaning.
+        if (holiday) {
+            return AttendanceDayStatus.HOLIDAY;
+        }
         if (!workday) {
             return AttendanceDayStatus.NON_WORKDAY;
         }
         if (checkIn == null) {
             return AttendanceDayStatus.MISSING_CHECK_IN;
         }
-        if (checkOut == null) {
+        // A lone check-in is only a compliance problem when this schedule requires a check-out
+        // (V117: ฝ่ายขาย does not). Otherwise fall through to the same LATE/PRESENT headline a
+        // two-punch day gets — a check-in-only sales day is a complete, compliant day, not merely
+        // "missing something we chose to ignore".
+        if (checkOut == null && requiresCheckOut) {
             return AttendanceDayStatus.MISSING_CHECK_OUT;
         }
         return lateMinutes > 0 ? AttendanceDayStatus.LATE : AttendanceDayStatus.PRESENT;

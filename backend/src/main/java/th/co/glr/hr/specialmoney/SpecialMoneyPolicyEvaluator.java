@@ -26,8 +26,14 @@ public class SpecialMoneyPolicyEvaluator {
      * of service, no severance is owed) -- it says nothing about when an employee is "confirmed".
      * This company treats 119 days since hire as "probation passed" absent an explicit confirm
      * date; do not cite this as a legal requirement.
+     *
+     * <p>Public (not package-private) so {@code LeaveService}'s §5.2 PERSONAL-leave
+     * "passed probation" gate (V116) can reference this exact constant instead of duplicating the
+     * literal 119 -- the two eligibility rules resolve "passed probation" identically on purpose,
+     * and referencing the same constant is what actually prevents them drifting apart, not just a
+     * comment saying they should stay in sync.
      */
-    static final int DEFAULT_PROBATION_DAYS = 119;
+    public static final int DEFAULT_PROBATION_DAYS = 119;
 
     static final String SALES_SUPPORT_DEPT_KEY = "sales_support_department_code";
     static final int PREPROBATION_KIT_MIN_TENURE_DAYS = 7;
