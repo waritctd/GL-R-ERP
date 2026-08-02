@@ -2752,6 +2752,15 @@ function dashboardPending(user, ticketSummary) {
   const profileRequests = isHr || employeeSelf
     ? db.profileRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'pending').length
     : 0;
+  // OT and leave share one gate and one predicate in DashboardRepository
+  // (`pendingVisibility` gives both `isHr || manager || employeeSelf`, and both
+  // countOvertime/countLeave match `status = 'SUBMITTED'` only). MANAGER_APPROVED
+  // is deliberately NOT counted: it is awaiting the CEO, not the viewer, and the
+  // Java query excludes it — counting it here would make the mock read higher
+  // than production.
+  const overtime = isHr || manager || employeeSelf
+    ? db.overtimeRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'SUBMITTED').length
+    : 0;
   const leave = isHr || manager || employeeSelf
     ? db.leaveRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'SUBMITTED').length
     : 0;
@@ -2766,11 +2775,12 @@ function dashboardPending(user, ticketSummary) {
   return {
     scope: employeeScope.label,
     profileRequests,
-    overtime: 0,
+    overtime,
     leave,
     commissions,
     tickets,
-    total: profileRequests + leave + commissions + tickets,
+    // Same addends as PendingApprovalsSummaryDto.of — overtime included.
+    total: profileRequests + overtime + leave + commissions + tickets,
   };
 }
 
