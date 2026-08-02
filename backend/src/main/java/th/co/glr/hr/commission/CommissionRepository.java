@@ -95,6 +95,49 @@ public class CommissionRepository {
         }
     }
 
+    /**
+     * True once payroll has been run for the month. Commission payroll derives what a rep is owed
+     * by {@code payroll_month} ({@code CommissionService#computeRepPayrollCommissions}), and a
+     * processed period is written once (see {@code hr.payroll_period}) -- so a commission that
+     * lands in a processed month is approved and then never paid, silently distorting {@code
+     * payrollReadySummary} for that month. Mirrors {@code OvertimeRepository#payrollMonthProcessed}
+     * exactly (same table, same condition) so the two guards cannot drift apart -- copy-paste is
+     * deliberate here, not an oversight.
+     */
+    public boolean payrollMonthProcessed(LocalDate payrollMonth) {
+        Boolean processed = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                  FROM hr.payroll_period
+                 WHERE payroll_month = :payrollMonth
+                   AND status = 'PROCESSED'
+            )
+            """, Map.of("payrollMonth", payrollMonth), Boolean.class);
+        return Boolean.TRUE.equals(processed);
+    }
+
+    /**
+     * True when {@code payrollMonth} was already paid outside the ERP and is covered by {@code
+     * hr.payroll_year_to_date_seed} (V114) -- distinct from {@link #payrollMonthProcessed}, which
+     * is true only once THIS system has run payroll for the month. A seed-covered month is never
+     * {@code PROCESSED} here (the guard trigger on {@code hr.payroll_period} refuses that, to avoid
+     * double-counting year-to-date withholding), so checking {@link #payrollMonthProcessed} alone
+     * would report such a month as open and let a commission be filed into it -- money that would
+     * then never be paid by anything. Mirrors {@code OvertimeRepository#payrollMonthSeedCovered}
+     * exactly.
+     */
+    public boolean payrollMonthSeedCovered(LocalDate payrollMonth) {
+        Boolean covered = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                  FROM hr.payroll_seed_coverage c
+                 WHERE c.tax_year = EXTRACT(YEAR FROM :payrollMonth)::smallint
+                   AND :payrollMonth <= c.covers_through
+            )
+            """, Map.of("payrollMonth", payrollMonth), Boolean.class);
+        return Boolean.TRUE.equals(covered);
+    }
+
     public List<TierConfig> findTiers() {
         return jdbc.query("""
             SELECT tier_number, lower_bound, upper_bound, rate_percent, is_high_roller
