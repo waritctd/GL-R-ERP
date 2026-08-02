@@ -50,6 +50,27 @@ public class OvertimeRepository {
         return Boolean.TRUE.equals(processed);
     }
 
+    /**
+     * True when {@code payrollMonth} was already paid outside the ERP and is covered by
+     * {@code hr.payroll_year_to_date_seed} (V114) -- distinct from {@link
+     * #payrollMonthProcessed}, which is true only once THIS system has run payroll for the month.
+     * A seed-covered month is never {@code PROCESSED} here (the guard trigger on {@code
+     * hr.payroll_period} refuses that, to avoid double-counting year-to-date withholding), so
+     * without this check {@code payrollMonthProcessed} alone would report such a month as open and
+     * let overtime be filed into it -- money that would then never be paid by anything.
+     */
+    public boolean payrollMonthSeedCovered(LocalDate payrollMonth) {
+        Boolean covered = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                  FROM hr.payroll_seed_coverage c
+                 WHERE c.tax_year = EXTRACT(YEAR FROM :payrollMonth)::smallint
+                   AND :payrollMonth <= c.covers_through
+            )
+            """, Map.of("payrollMonth", payrollMonth), Boolean.class);
+        return Boolean.TRUE.equals(covered);
+    }
+
     public Optional<OvertimeEmployeeAccess> findEmployeeAccess(long employeeId) {
         return jdbc.query("""
             SELECT employee_id, reports_to_employee_id, division_id, is_active
