@@ -52,3 +52,5 @@ API wrapper lives in `src/api/` and maps to:
 - `GET /api/profile-requests`
 - `POST /api/profile-requests`
 - `PATCH /api/profile-requests/[id]`
+
+<!-- throwaway: verifying #435 gate behaviour on a frontend-only diff -->
