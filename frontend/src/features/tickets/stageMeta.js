@@ -161,5 +161,8 @@ export const PAYMENT_SUBSTEPS = [
 // features/pricingRequests/pricingRequestMeta.js. It was briefly a single
 // progress-chip strip keyed off "the deal's most recent PricingRequest"
 // (highest id), but that reduction was itself a bug (review-remediation plan,
-// Fix 3): DealStagePanel's PricingRequestSummaryStrip now renders every
-// non-CANCELLED request instead of picking one "latest".
+// Fix 3): a PricingRequestSummaryStrip on DealStagePanel rendered every
+// non-CANCELLED request instead of picking one "latest". Slice A "chip diet"
+// later removed that strip outright (DealStagePanel.jsx's own doc comment) —
+// PricingRequestPanel's own per-request list (never reduced to one) already
+// covers the same ground.
