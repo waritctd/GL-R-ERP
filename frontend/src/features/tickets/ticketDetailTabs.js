@@ -3,11 +3,17 @@
 // docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md,
 // grouped by SYSTEM OBJECT. Slice C2b regroups those into SIX tabs grouped by
 // JOB instead — ดีล · สินค้าและราคา · เอกสาร · การเงิน · จัดซื้อ-ส่งมอบ · ประวัติ,
-// the owner-approved target. This slice is a pure relocation: every predicate
-// below is byte-identical to its pre-Slice-C2b counterpart, only moved to
-// wherever its content now lives (a tab-level `isVisible`, or — where a
-// section merged into an unconditional tab — an inner render condition inside
-// TicketDetailPage.jsx). Nothing here widens or narrows who can see what.
+// the owner-approved target. Slice C2b itself was a pure relocation: every
+// predicate was byte-identical to its pre-Slice-C2b counterpart, only moved
+// to wherever its content now lived (a tab-level `isVisible`, or — where a
+// section merged into an unconditional tab — an inner render condition
+// inside TicketDetailPage.jsx). Slice D ("the เอกสาร document register") is
+// the first change here that DOES widen who can see a tab BUTTON: `documents`
+// moves from a role+section gate to `() => true` (see that entry below) —
+// an owner-authorised change, stated and evidenced in this branch's PR body,
+// not a side effect. It never widens who can see any given ROW inside that
+// tab; see DealDocumentRegister.jsx's own header comment for the three
+// per-row-family gates that now do that job instead.
 //
 // Each tab is ROLE-projection ONLY: `isVisible(role, sections)` decides
 // whether the tab BUTTON appears at all, never whether its content is dimmed
@@ -34,46 +40,54 @@
 //     (`pricing_accountCannotReadAPricingRequest`,
 //     `quotation_accountCannotListCustomerQuotations`). TicketDetailPage
 //     already carried this exact extra filter before Phase 2 (its own
-//     `canViewPricingRequests` local) — this module names the same 4 roles
-//     so the tab model doesn't drift from what the page already enforces.
+//     `canViewPricingRequests` local).
 //
-//     Post-Slice-C2b, only the ใบเสนอราคา half of this filter is still a
-//     TAB-level gate (now on `documents`, unchanged). The ราคา half is no
-//     longer a tab gate at all — PricingRequestPanel merged into `items`
-//     (an unconditionally-visible tab), so that predicate now lives as an
-//     INNER render condition inside TicketDetailPage.jsx, combining the same
-//     `canViewPricingRequests` local with `sections.pricingRequest` — see
-//     that file's own comment at the render site and the `items` entry
-//     below.
+//     Post-Slice-D, NEITHER half of this filter is a TAB-level gate any
+//     more. The ราคา half moved to an INNER condition inside `items` back in
+//     Slice C2b (unchanged, see below); Slice D moves the ใบเสนอราคา half the
+//     same way — `documents` itself is now `() => true` (see that entry
+//     below), and this exact 4-role filter lives on as `canViewQuotations`
+//     inside DealDocumentRegister.jsx (and, unchanged, around
+//     DealQuotationPanel/DealLegacyQuotations at their own TicketDetailPage.jsx
+//     render sites) — combining the same `canViewPricingRequests` local with
+//     `sections.dealQuotation`/`sections.quotation`.
 //
-// One KNOWN GAP, reported rather than silently patched (per this branch's
+// One KNOWN GAP, preserved rather than silently patched (per this branch's
 // brief: "tell me in your report rather than inventing one"): `import` is
-// NOT shown the เอกสาร tab here (formerly ใบเสนอราคา — Slice C2b only
-// renamed/relocated the predicate, it is unchanged), because
-// `visibleSections('import')` already sets both `dealQuotation` and
-// `quotation` to `false` — but `quotation_salesManagerCeoImportCanAllList`
-// proves the real `CustomerQuotationService` grants `import` VIEW access,
-// and the IA spec's own Quotations-tab row lists "import(view)". Fixing this
-// would mean either editing salesViewScope.js's role logic (out of bounds
-// for this branch — see CLAUDE.md's authorization-change rule) or rendering
-// a tab with a role filter that contradicts the content gate the rest of the
-// page already uses for the exact same sections, which would produce a
-// visible-but-empty tab — worse than today. So `import` continues to not see
-// this tab, UNCHANGED from its pre-Phase-2, pre-Slice-C2b behaviour (not a
-// new regression) — flagged here as a follow-up for whoever next touches
-// salesViewScope.js's import branch.
+// shown ZERO quotation rows inside the เอกสาร tab's register (formerly: not
+// shown the whole tab at all — Slice D only widened the TAB, this specific
+// row-level predicate is unchanged), because `visibleSections('import')`
+// already sets both `dealQuotation` and `quotation` to `false` — but
+// `quotation_salesManagerCeoImportCanAllList` proves the real
+// `CustomerQuotationService` grants `import` VIEW access, and the IA spec's
+// own Quotations-tab row lists "import(view)". Fixing this would mean either
+// editing salesViewScope.js's role logic (out of bounds for this branch —
+// see CLAUDE.md's authorization-change rule) or widening
+// DealDocumentRegister.jsx's own quotation-row gate to contradict the
+// content gate the rest of the page already uses for the exact same
+// sections, which would hand an import assignee the approved customer
+// price — worse than today. So `import` continues to see no quotation rows,
+// UNCHANGED from its pre-Phase-2, pre-Slice-C2b, pre-Slice-D behaviour (not
+// a new regression) — flagged here as a follow-up for whoever next touches
+// salesViewScope.js's import branch. It DOES now reach the เอกสาร tab itself
+// once it is this deal's assignee, for the attachments roll-up only — see
+// DealDocumentRegister.jsx's own header comment.
 
 import { visibleSections } from './salesViewScope.js';
 
 // PricingRequestService.VIEWER_ROLES and CustomerQuotationService.VIEW_ROLES
 // are two different Java constants, but for this deal's viewer set they
-// resolve to the same 4 roles — both exclude `account` — see
-// TicketIaAuthzMatrixIntegrationTest: pricing_salesImportCeoSalesManagerCanAllReadIt
-// / quotation_salesManagerCeoImportCanAllList (and their sibling
-// account/hr/employee/non-owner-sales refusal tests). Same literal role list
-// as TicketDetailPage's own (unchanged) `canViewPricingRequests`.
-const PRICING_AND_QUOTATION_ROLES = new Set(['sales', 'import', 'ceo', 'sales_manager']);
-
+// resolve to the same 4 roles (sales/import/ceo/sales_manager) — both
+// exclude `account` — see TicketIaAuthzMatrixIntegrationTest:
+// pricing_salesImportCeoSalesManagerCanAllReadIt /
+// quotation_salesManagerCeoImportCanAllList (and their sibling
+// account/hr/employee/non-owner-sales refusal tests). No tab-level gate in
+// THIS module needs that literal role set any more (Slice D moved the last
+// one, `documents`, to an unconditional `() => true` — see below), so it is
+// not declared here; TicketDetailPage.jsx's own `canViewPricingRequests`
+// local remains the one place that names it, passed down as a prop to
+// DealDocumentRegister.jsx and used directly around
+// DealQuotationPanel/DealLegacyQuotations.
 export const TICKET_DETAIL_TABS = [
   {
     id: 'deal',
@@ -118,26 +132,39 @@ export const TICKET_DETAIL_TABS = [
   {
     id: 'documents',
     label: 'เอกสาร',
-    helper: 'เอกสารลูกค้า',
-    // quotation_accountCannotListCustomerQuotations / quotation_hrCannotListCustomerQuotations /
-    // quotation_employeeCannotListCustomerQuotations /
-    // quotation_nonOwnerSalesRepCannotListAnotherRepsCustomerQuotations /
-    // quotation_salesManagerCeoImportCanAllList
+    helper: 'เอกสารของดีล',
+    // Slice D ("the เอกสาร document register") widens this tab from a single
+    // role+section gate to `() => true` — the same unconditional shape as
+    // `deal`/`items`/`history` above — because its content is no longer just
+    // the quotation chain: DealDocumentRegister.jsx now also rolls up the
+    // deposit notice, the remaining invoice, and formal attachments here,
+    // and those three families are governed by THREE DIFFERENT real backend
+    // gates that do not coincide with the old quotation-only predicate
+    // (`Boolean(sections.dealQuotation || sections.quotation) &&
+    // PRICING_AND_QUOTATION_ROLES.has(role)`, still enforced, just moved).
+    // A single tab-level gate can express at most one of those three
+    // questions — per this branch's brief, "gate PER ROW TYPE, not with one
+    // tab gate" — so, exactly like `history`'s own `canViewDocumentsTab`
+    // split, ALL real gating now lives INSIDE DealDocumentRegister.jsx
+    // (TicketDetailPage.jsx's own render site) and inside the still-present
+    // `sections.dealQuotation && canViewPricingRequests` condition around
+    // DealQuotationPanel/DealLegacyQuotations, both unchanged verbatim.
     //
-    // The role filter is load-bearing for `account` here (see this file's
-    // header) — `sections.dealQuotation`/`sections.quotation` alone are NOT
-    // enough, since salesViewScope.js keeps both `true` for that role.
-    //
-    // Content: DealQuotationPanel + DealLegacyQuotations, moved verbatim
-    // from the old `quotations` tab (same gate, same content, only the id/
-    // label changed). This id previously belonged to the attachments tab —
-    // that tab's own `() => true` gate + its per-instance
-    // `canViewDocumentsTab` filter both moved to `history` below, unchanged.
-    // Reusing the `documents` id for different content is intentional (see
-    // this slice's brief) — DealAttachmentsPanel is NOT part of this tab.
-    isVisible: (role, sections) => (
-      Boolean(sections.dealQuotation || sections.quotation) && PRICING_AND_QUOTATION_ROLES.has(role)
-    ),
+    // Concretely, this tab now appears for every role that reaches this
+    // page at all (hr/employee/non-owner-sales already 403 upstream at the
+    // ticket fetch, so they never reach this component regardless) — most
+    // visibly for `account` (the intended, owner-authorised widening: it is
+    // asked to confirm money against exactly the deposit-notice/attachment
+    // rows this register lists — ROLE_PERMISSIONS.canViewTicketDocuments
+    // already includes it) and for `import` (which previously never saw
+    // this tab at all — salesViewScope.js hides both `dealQuotation` and
+    // `quotation` from it — but as this deal's assignee now legitimately
+    // reaches the attachments roll-up, per TicketAccessPolicy.canViewDocuments's
+    // participant-regardless-of-role grant). Neither gains a single
+    // quotation or deposit-notice/remaining-invoice row they could not see
+    // before — see DealDocumentRegister.jsx's own header comment for the
+    // exact per-row-family predicates and their backend citations.
+    isVisible: () => true,
   },
   {
     id: 'money',

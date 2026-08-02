@@ -506,16 +506,23 @@ describe('TicketDetailPage', () => {
     renderTicketDetailPage();
     await openTab(/เอกสาร/);
 
-    expect(await screen.findByText('ผู้ออกแบบ')).not.toBeNull();
-    expect(screen.getByText('เจ้าของ')).not.toBeNull();
-    expect(screen.getByText('QT-2026-0901')).not.toBeNull();
-    expect(screen.getByText('QT-2026-0902')).not.toBeNull();
-    expect(screen.queryByRole('button', { name: 'ส่งแล้ว' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'รับแล้ว' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'ปฏิเสธ' })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Revise/ })).toBeNull();
+    // Scoped to DealLegacyQuotations' own panel (not `screen` globally):
+    // Slice D's DealDocumentRegister now ALSO lists these same legacy rows
+    // in its own roll-up, in the same tab — see DealDocumentRegister's own
+    // header comment ("a register is an index, not a replacement for the
+    // panel it indexes") — so an unscoped query now matches twice.
+    const legacyHeading = await screen.findByRole('heading', { level: 2, name: 'ใบเสนอราคา (เอกสารเดิม)' });
+    const legacy = within(legacyHeading.closest('section'));
+    expect(legacy.getByText('ผู้ออกแบบ')).not.toBeNull();
+    expect(legacy.getByText('เจ้าของ')).not.toBeNull();
+    expect(legacy.getByText('QT-2026-0901')).not.toBeNull();
+    expect(legacy.getByText('QT-2026-0902')).not.toBeNull();
+    expect(legacy.queryByRole('button', { name: 'ส่งแล้ว' })).toBeNull();
+    expect(legacy.queryByRole('button', { name: 'รับแล้ว' })).toBeNull();
+    expect(legacy.queryByRole('button', { name: 'ปฏิเสธ' })).toBeNull();
+    expect(legacy.queryByRole('button', { name: /Revise/ })).toBeNull();
     // Download stays — legacy quotations remain reachable, just read-only.
-    expect(screen.getAllByRole('button', { name: /PDF/ }).length).toBeGreaterThan(0);
+    expect(legacy.getAllByRole('button', { name: /PDF/ }).length).toBeGreaterThan(0);
   });
 
   it('renders payment totals, overdue badge, and hides record payment without the action', async () => {
@@ -1718,18 +1725,25 @@ describe('TicketDetailPage', () => {
       ));
     });
 
-    it('import (no business in the customer quotation) never sees the section — nor even the "เอกสาร" tab itself', async () => {
+    it('import (no business in the customer quotation) never sees the section — Slice D still widens the "เอกสาร" tab itself', async () => {
       api.pricingRequests.listForTicket.mockResolvedValue({ items: [approvedPr] });
 
       renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
 
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
-      // Pre-existing gap, unchanged by this branch (see ticketDetailTabs.js's
-      // own "KNOWN GAP" doc comment): salesViewScope.js hides BOTH
-      // dealQuotation and quotation from import outright, so the whole tab
-      // is absent — not just this one section within it.
-      expect(screen.queryByRole('tab', { name: /เอกสาร/ })).toBeNull();
+      // Slice D ("the เอกสาร document register") makes this tab
+      // role-unconditional (see ticketDetailTabs.js's own comment on this
+      // tab) so a non-assignee import rep now sees the TAB — but this
+      // pre-existing gap is otherwise unchanged (see ticketDetailTabs.js's
+      // "KNOWN GAP" doc comment): salesViewScope.js still hides BOTH
+      // dealQuotation and quotation from import outright, so neither
+      // DealQuotationPanel's own section nor a single quotation row inside
+      // DealDocumentRegister ever appears for it.
+      expect(await screen.findByRole('tab', { name: /เอกสาร/ })).not.toBeNull();
+      await openTab(/เอกสาร/);
       expect(screen.queryByRole('heading', { level: 2, name: 'ราคาและใบเสนอราคา' })).toBeNull();
+      expect(screen.queryByTestId('register-quotations')).toBeNull();
+      expect(api.pricingRequests.listCustomerQuotations).not.toHaveBeenCalled();
     });
   });
 
@@ -1971,18 +1985,20 @@ describe('TicketDetailPage', () => {
   // own unit tests for the pure function — these prove the page actually
   // wires it in, per-role, end to end).
   describe('tab visibility per role', () => {
-    // KNOWN GAP (see ticketDetailTabs.js's own doc comment, unchanged by
-    // Slice C2b): salesViewScope.js hides both dealQuotation and quotation
-    // from import, so "เอกสาร" (formerly "ใบเสนอราคา", same predicate) stays
-    // hidden. "ประวัติ" (formerly "กิจกรรม") is role-unconditional — import
-    // keeps it too, even though the follow-up feed inside it stays gated.
-    it('import never gets "การเงิน" or "เอกสาร", but keeps "สินค้าและราคา", "จัดซื้อ-ส่งมอบ", and "ประวัติ"', async () => {
+    // Slice D ("the เอกสาร document register") makes "เอกสาร" role-
+    // unconditional, same shape as "ประวัติ" — import now sees the TAB (it
+    // may reach an attachments roll-up once it is this deal's assignee), but
+    // the KNOWN GAP this file's own doc comment still documents is
+    // unchanged: salesViewScope.js hides both dealQuotation and quotation
+    // from import, so it reaches zero quotation rows inside that tab. See
+    // DealDocumentRegister.test.jsx for that content-level proof.
+    it('import never gets "การเงิน", but now gets "เอกสาร" too (Slice D) — keeps "สินค้าและราคา", "จัดซื้อ-ส่งมอบ", and "ประวัติ"', async () => {
       renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
 
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
       // ledger_importCannotReadThePaymentLedger
       expect(screen.queryByRole('tab', { name: /การเงิน/ })).toBeNull();
-      expect(screen.queryByRole('tab', { name: /เอกสาร/ })).toBeNull();
+      expect(await screen.findByRole('tab', { name: /เอกสาร/ })).not.toBeNull();
       expect(await screen.findByRole('tab', { name: /สินค้าและราคา/ })).not.toBeNull();
       expect(screen.getByRole('tab', { name: /จัดซื้อ-ส่งมอบ/ })).not.toBeNull();
       expect(screen.getByRole('tab', { name: /ประวัติ/ })).not.toBeNull();
@@ -1992,13 +2008,16 @@ describe('TicketDetailPage', () => {
     // into "สินค้าและราคา" (unconditionally visible) as an inner condition,
     // so account keeps this tab too now (see the content-level test in the
     // "role -> reachable-content projection" describe block below for proof
-    // it still cannot reach the panel inside it).
-    it('account never gets "เอกสาร", but keeps "สินค้าและราคา", "การเงิน", "จัดซื้อ-ส่งมอบ", and "ประวัติ"', async () => {
+    // it still cannot reach the panel inside it). Slice D additionally
+    // widens "เอกสาร" itself to account — the intended, owner-authorised
+    // change (account confirms money against the deposit-notice/attachment
+    // rows the register now lists) — even though it still cannot reach a
+    // single quotation row inside it (quotation_accountCannotListCustomerQuotations).
+    it('account now gets "เอกสาร" too (Slice D) — keeps "สินค้าและราคา", "การเงิน", "จัดซื้อ-ส่งมอบ", and "ประวัติ"', async () => {
       renderTicketDetailPage(accountUser);
 
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
-      // quotation_accountCannotListCustomerQuotations
-      expect(screen.queryByRole('tab', { name: /เอกสาร/ })).toBeNull();
+      expect(await screen.findByRole('tab', { name: /เอกสาร/ })).not.toBeNull();
       expect(await screen.findByRole('tab', { name: /สินค้าและราคา/ })).not.toBeNull();
       expect(await screen.findByRole('tab', { name: /การเงิน/ })).not.toBeNull();
       expect(screen.getByRole('tab', { name: /จัดซื้อ-ส่งมอบ/ })).not.toBeNull();
@@ -2031,6 +2050,18 @@ describe('TicketDetailPage', () => {
       await openTab(/สินค้าและราคา/);
       expect(screen.queryByRole('heading', { name: 'คำขอราคา' })).toBeNull();
       expect(api.pricingRequests.listForTicket).not.toHaveBeenCalled();
+    });
+
+    // Slice D: account now reaches the "เอกสาร" TAB (see "tab visibility per
+    // role" above) but this is the content-level proof it still cannot
+    // reach a single quotation ROW inside it — quotation_accountCannot
+    // ListCustomerQuotations, unchanged.
+    it('account reaches "เอกสาร" but still zero quotation rows inside DealDocumentRegister', async () => {
+      renderTicketDetailPage(accountUser);
+      await openTab(/เอกสาร/);
+      expect(await screen.findByTestId('deal-document-register')).not.toBeNull();
+      expect(screen.queryByTestId('register-quotations')).toBeNull();
+      expect(api.pricingRequests.listCustomerQuotations).not.toHaveBeenCalled();
     });
 
     it('import still cannot reach payment content (the "การเงิน" tab predicate is unchanged)', async () => {
@@ -2213,9 +2244,12 @@ describe('TicketDetailPage', () => {
     });
 
     it('falls back to ดีล when ?tab= names a tab this role cannot see', async () => {
-      // account cannot see "documents" (quotation_accountCannotListCustomerQuotations) —
-      // resolveTicketDetailTab must fall back rather than render nothing/crash.
-      renderTicketDetailPageAtRoute(['/tickets/701?tab=documents'], accountUser);
+      // Slice D widened "documents" to role-unconditional (account can see it
+      // now — see ticketDetailTabs.js), so this case moves to "money": import
+      // still cannot see it (ledger_importCannotReadThePaymentLedger /
+      // depositNotice_import...Refused) — resolveTicketDetailTab must fall
+      // back rather than render nothing/crash.
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=money'], { id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
 
       const dealTab = await screen.findByRole('tab', { name: /^ดีล/ });
       await waitFor(() => expect(dealTab.getAttribute('aria-selected')).toBe('true'));
