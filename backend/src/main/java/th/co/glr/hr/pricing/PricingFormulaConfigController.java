@@ -4,12 +4,16 @@ import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -17,7 +21,10 @@ import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingClearanceFeeDto;
+import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingDutyRateDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingFormulaConfigDto;
+import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingFreightRateDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigRequests.ClearanceFeeRequest;
 import th.co.glr.hr.pricing.PricingFormulaConfigRequests.CreatePricingFormulaConfigRequest;
 import th.co.glr.hr.pricing.PricingFormulaConfigRequests.DutyRateRequest;
@@ -33,6 +40,14 @@ import th.co.glr.hr.pricing.PricingFormulaConfigRequests.FreightRateRequest;
  * gate mirrors that endpoint's existing precedent (issue #388): {@code ceo}/{@code import} may read
  * this cost-model config, everyone else is denied, since it is itself the margin policy (freight,
  * duty, clearance amounts, and the margin/buffer constants). Writes stay CEO-only.
+ *
+ * <p>Endpoints:
+ * <ul>
+ *   <li>{@code GET  /api/pricing-formula-config} -- read the current version. {ceo, import}
+ *   <li>{@code POST /api/pricing-formula-config} -- replace the whole config with a new version. {ceo}
+ *   <li>{@code POST /api/pricing-formula-config/freight-rates} -- add one freight row (#436). {ceo}
+ *   <li>{@code DELETE /api/pricing-formula-config/freight-rates/{id}} -- remove one freight row (#436). {ceo}
+ * </ul>
  */
 @RestController
 @RequestMapping("/api/pricing-formula-config")
@@ -52,9 +67,7 @@ public class PricingFormulaConfigController {
     Map<String, PricingFormulaConfigDto> get(HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         requireCostingRole(user);
-        PricingFormulaConfigDto dto = formulaConfigs.findCurrent()
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบสูตรคำนวณราคาขาย"));
-        return Map.of("formulaConfig", dto);
+        return Map.of("formulaConfig", requireCurrentConfig());
     }
 
     @PostMapping
@@ -67,6 +80,194 @@ public class PricingFormulaConfigController {
         validate(request);
         PricingFormulaConfigDto result = formulaConfigs.createNewVersion(request, user.id());
         return Map.of("formulaConfig", result);
+    }
+
+    // ============================================================================================
+    // Freight-row add / remove (issue #436).
+    //
+    // Before this, the freight matrix was editable in AMOUNT ONLY through the whole-config POST
+    // above: the CEO could change a number in an existing row but had no way to add a row or drop
+    // one, so V109's six deliberately-blank cells were unfillable and a new origin country needed a
+    // Flyway migration -- a developer and a deploy for what is a business-data edit. That defeats
+    // the point of putting the formula in config at all.
+    //
+    // These two endpoints are strictly additive: they do not change the whole-config POST, its
+    // request shape, or its validation. They keep V109's versioning model intact -- neither one
+    // UPDATEs or DELETEs a stored row. Each derives the full freight list from the CURRENT version,
+    // applies the single add/remove, and writes a complete NEW version through the same
+    // createNewVersion() path, so the previous generation stays on disk for audit exactly as before.
+    //
+    // Write gate is unchanged in shape: {ceo} only, same requireCeoRole() as the POST above.
+    // ============================================================================================
+
+    /**
+     * Adds one freight row and stores the result as a new config version. The added row goes
+     * through EXACTLY the same {@link #validate} pass as the whole-config POST -- band ordering and
+     * the country-level overlap check -- against the full resulting matrix, not just against
+     * itself. A row that would overlap an existing one is a 400, never a silent save.
+     */
+    @PostMapping("/freight-rates")
+    Map<String, PricingFormulaConfigDto> addFreightRate(
+        @Valid @RequestBody FreightRateRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        requireCeoRole(user);
+
+        PricingFormulaConfigDto current = requireCurrentConfig();
+        List<FreightRateRequest> freightRates = toFreightRequests(current.freightRates());
+        freightRates.add(request);
+
+        CreatePricingFormulaConfigRequest full = withFreightRates(current, freightRates);
+        validate(full);
+        return Map.of("formulaConfig", formulaConfigs.createNewVersion(full, user.id()));
+    }
+
+    /**
+     * Removes one freight row (identified by its id in the CURRENT version) and stores the result
+     * as a new config version.
+     *
+     * <p>The id must belong to the current version: passing a historical version's row id is a 404,
+     * not a silent no-op. Old versions are audit records and stay untouched.
+     */
+    @DeleteMapping("/freight-rates/{freightRateId}")
+    Map<String, PricingFormulaConfigDto> deleteFreightRate(
+        @PathVariable("freightRateId") long freightRateId,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        requireCeoRole(user);
+
+        PricingFormulaConfigDto current = requireCurrentConfig();
+        PricingFreightRateDto target = current.freightRates().stream()
+            .filter(rate -> rate.freightRateId() == freightRateId)
+            .findFirst()
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบค่าขนส่งที่ต้องการลบในสูตรปัจจุบัน"));
+
+        // The request record forbids an empty freight list (@NotEmpty), and a config with no
+        // freight matrix at all can price nothing. Enforce it here too, since this path builds the
+        // request programmatically and so never passes through bean validation.
+        if (current.freightRates().size() == 1) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องมีค่าขนส่งอย่างน้อย 1 รายการ");
+        }
+        validateRemovalLeavesNoInteriorGap(current.freightRates(), target);
+
+        List<FreightRateRequest> freightRates = toFreightRequests(current.freightRates().stream()
+            .filter(rate -> rate.freightRateId() != freightRateId)
+            .toList());
+
+        CreatePricingFormulaConfigRequest full = withFreightRates(current, freightRates);
+        validate(full);
+        return Map.of("formulaConfig", formulaConfigs.createNewVersion(full, user.id()));
+    }
+
+    /**
+     * "Deleting a row must not open a gap that makes a real order unpriceable" (#436).
+     *
+     * <p>Every deletion removes coverage, so the rule cannot be "no order may become unpriceable" --
+     * that would forbid deleting anything. The distinction that matters is between TRIMMING the
+     * matrix and PUNCHING A HOLE in it:
+     *
+     * <ul>
+     *   <li>Trimming an edge band is how the V109 seed is already shaped. Italy [12,17)mm stops at
+     *       801 sqm and Italy [17,21)mm stops at 451 sqm -- those are the deliberately-blank cells,
+     *       and every existing hole in the seed is a trailing one. An order past the top of a
+     *       ladder fails loudly in the engine, which is the intended behaviour.
+     *   <li>Removing a MIDDLE band is always a mistake. Orders on either side of the hole still
+     *       price fine, so nothing looks broken until one order lands in the hole -- exactly the
+     *       silent-mis-coverage failure V109's contiguity convention exists to prevent.
+     * </ul>
+     *
+     * <p>So a row is deletable only if it sits at an EDGE of its ladder. Two ladders apply:
+     * quantity bands within a (country, thickness-band) group, and -- when the row is the last one
+     * left in its thickness band, so deleting it empties that band -- thickness bands within the
+     * country.
+     *
+     * <p>Deliberately NOT applied to the whole-config POST. That endpoint already accepts
+     * non-contiguous ladders (its own tests save [1,100) alongside [101,450), which leaves a
+     * [100,101) hole), and retro-tightening it would reject configs that save today. This is a
+     * constraint on the new single-row delete only; widening it to the bulk path is a separate,
+     * larger decision about existing data.
+     */
+    private void validateRemovalLeavesNoInteriorGap(List<PricingFreightRateDto> all, PricingFreightRateDto target) {
+        List<PricingFreightRateDto> sameThicknessBand = all.stream()
+            .filter(rate -> rate.originCountry().equals(target.originCountry()))
+            .filter(rate -> rate.thicknessMinMm().compareTo(target.thicknessMinMm()) == 0)
+            .filter(rate -> rate.thicknessMaxMm().compareTo(target.thicknessMaxMm()) == 0)
+            .sorted(Comparator.comparing(PricingFreightRateDto::qtyMinSqm))
+            .toList();
+
+        if (sameThicknessBand.size() > 1) {
+            // Compare by id, not by value: two rows can share a qtyMinSqm only if they overlap,
+            // which validate() already rejects, but an id comparison cannot be fooled either way.
+            long lowestId = sameThicknessBand.get(0).freightRateId();
+            long highestId = sameThicknessBand.get(sameThicknessBand.size() - 1).freightRateId();
+            if (target.freightRateId() != lowestId && target.freightRateId() != highestId) {
+                throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "ลบไม่ได้: จะทำให้ช่วงจำนวน (ตร.ม.) ขาดตอนตรงกลาง — " + target.originCountry()
+                        + " หนา " + target.thicknessMinMm() + "-" + target.thicknessMaxMm() + " มม. ช่วง "
+                        + target.qtyMinSqm() + "-" + (target.qtyMaxSqm() == null ? "ไม่จำกัด" : target.qtyMaxSqm())
+                        + " ตร.ม. ลบได้เฉพาะช่วงบนสุดหรือล่างสุด");
+            }
+            return;
+        }
+
+        // The row is the last one in its thickness band, so removing it empties that band. Apply
+        // the same edge-only rule one level up, across the country's thickness ladder.
+        TreeSet<BigDecimal> thicknessMins = new TreeSet<>();
+        for (PricingFreightRateDto rate : all) {
+            if (rate.originCountry().equals(target.originCountry())) {
+                thicknessMins.add(rate.thicknessMinMm());
+            }
+        }
+        if (thicknessMins.size() > 1
+            && thicknessMins.first().compareTo(target.thicknessMinMm()) != 0
+            && thicknessMins.last().compareTo(target.thicknessMinMm()) != 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ลบไม่ได้: จะทำให้ช่วงความหนาขาดตอนตรงกลาง — " + target.originCountry()
+                    + " หนา " + target.thicknessMinMm() + "-" + target.thicknessMaxMm()
+                    + " มม. ลบได้เฉพาะช่วงความหนาบนสุดหรือล่างสุด");
+        }
+    }
+
+    /** Current config or 404 -- the add/remove endpoints amend a version, they cannot create one. */
+    private PricingFormulaConfigDto requireCurrentConfig() {
+        return formulaConfigs.findCurrent()
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบสูตรคำนวณราคาขาย"));
+    }
+
+    private List<FreightRateRequest> toFreightRequests(List<PricingFreightRateDto> rates) {
+        List<FreightRateRequest> requests = new ArrayList<>();
+        for (PricingFreightRateDto rate : rates) {
+            requests.add(new FreightRateRequest(rate.originCountry(), rate.thicknessMinMm(),
+                rate.thicknessMaxMm(), rate.qtyMinSqm(), rate.qtyMaxSqm(), rate.amountThb()));
+        }
+        return requests;
+    }
+
+    /**
+     * Rebuilds the whole-config request from the current version, swapping in a new freight list.
+     * Every other field -- the buffers, the margin, the duty rates, the clearance fees, and
+     * effectiveFrom -- is carried across verbatim: adding or removing a freight row amends the
+     * current policy, it does not re-date it or reset anything else.
+     */
+    private CreatePricingFormulaConfigRequest withFreightRates(
+        PricingFormulaConfigDto current,
+        List<FreightRateRequest> freightRates
+    ) {
+        List<DutyRateRequest> dutyRates = new ArrayList<>();
+        for (PricingDutyRateDto duty : current.dutyRates()) {
+            dutyRates.add(new DutyRateRequest(duty.productType(), duty.productLabel(), duty.dutyPct()));
+        }
+        List<ClearanceFeeRequest> clearanceFees = new ArrayList<>();
+        for (PricingClearanceFeeDto clearance : current.clearanceFees()) {
+            clearanceFees.add(new ClearanceFeeRequest(clearance.qtyMinSqm(), clearance.qtyMaxSqm(), clearance.amountThb()));
+        }
+        return new CreatePricingFormulaConfigRequest(
+            current.insuranceValueFactor(), current.insuranceRate(), current.insuranceBuffer(),
+            current.costBuffer(), current.sellingBuffer(), current.defaultMarginPct(),
+            current.sellingPriceRoundUpTo(), current.effectiveFrom(),
+            freightRates, dutyRates, clearanceFees);
     }
 
     /**
