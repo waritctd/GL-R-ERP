@@ -223,6 +223,11 @@ export const api = {
     list: () => apiRequest(API_ROUTES.priceCalcConfigs.list),
     update: (payload) => apiRequest(API_ROUTES.priceCalcConfigs.update, { method: 'POST', body: payload }),
   },
+  // BRANCH 1 of the sales pricing-formula redesign (config storage + CEO editing UI only).
+  pricingFormulaConfig: {
+    get: () => apiRequest(API_ROUTES.pricingFormulaConfig.get),
+    update: (payload) => apiRequest(API_ROUTES.pricingFormulaConfig.update, { method: 'POST', body: payload }),
+  },
   attachments: {
     list: (ticketId) => apiRequest(API_ROUTES.attachments.list(ticketId)),
     upload: async (ticketId, file, attachType, quotationId) => {

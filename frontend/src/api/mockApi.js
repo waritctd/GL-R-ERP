@@ -538,6 +538,135 @@ const mockPriceCalcConfigs = [
 ];
 let mockPriceConfigSeq = mockPriceCalcConfigs.length + 1;
 
+// BRANCH 1 of the sales pricing-formula redesign (config storage + CEO editing UI only). Mirrors
+// V109__pricing_formula_config.sql's seed data exactly -- see that migration's comment for the
+// formula this config parameterizes and why deliberately-blank sheet cells are ABSENT rows here,
+// never a zero-amount row. One parent object owns three child arrays; a new version always
+// replaces the whole object (never mutates children of an existing version in place).
+//
+// BAND CONVENTION: freight thickness/qty bands and clearance qty bands are HALF-OPEN [min, max) --
+// min inclusive, max EXCLUSIVE, null max = +infinity. Bands are contiguous (band N's max == band
+// N+1's min) so every quantity/thickness value, including fractional sqm/mm, falls in exactly one
+// band. See V109's BAND CONVENTION comment for the full rationale.
+let mockFormulaFreightRateSeq = 1;
+let mockFormulaDutyRateSeq = 1;
+let mockFormulaClearanceFeeSeq = 1;
+let mockFormulaConfigSeq = 1;
+
+function formulaFreightRow(originCountry, thicknessMinMm, thicknessMaxMm, qtyMinSqm, qtyMaxSqm, amountThb) {
+  return { freightRateId: mockFormulaFreightRateSeq++, originCountry, thicknessMinMm, thicknessMaxMm, qtyMinSqm, qtyMaxSqm, amountThb };
+}
+function formulaDutyRow(productType, productLabel, dutyPct) {
+  return { dutyRateId: mockFormulaDutyRateSeq++, productType, productLabel, dutyPct };
+}
+function formulaClearanceRow(qtyMinSqm, qtyMaxSqm, amountThb) {
+  return { clearanceFeeId: mockFormulaClearanceFeeSeq++, qtyMinSqm, qtyMaxSqm, amountThb };
+}
+
+function buildSeedFormulaConfig() {
+  return {
+    formulaConfigId: mockFormulaConfigSeq++,
+    version: 1,
+    insuranceValueFactor: 1.15,
+    insuranceRate: 0.0045,
+    insuranceBuffer: 1.07,
+    costBuffer: 1.07,
+    sellingBuffer: 1.07,
+    defaultMarginPct: 0.2,
+    sellingPriceRoundUpTo: 10,
+    isCurrent: true,
+    effectiveFrom: '2026-01-01',
+    updatedAt: new Date().toISOString(),
+    freightRates: [
+      // Italy: thickness [3,8) mm
+      formulaFreightRow('Italy', 3, 8, 1, 101, 80000),
+      formulaFreightRow('Italy', 3, 8, 101, 451, 90000),
+      formulaFreightRow('Italy', 3, 8, 451, 801, 100000),
+      formulaFreightRow('Italy', 3, 8, 801, null, 100000),
+      // Italy: thickness [8,12) mm
+      formulaFreightRow('Italy', 8, 12, 1, 101, 50000),
+      formulaFreightRow('Italy', 8, 12, 101, 451, 80000),
+      formulaFreightRow('Italy', 8, 12, 451, 801, 90000),
+      formulaFreightRow('Italy', 8, 12, 801, null, 100000),
+      // Italy: thickness [12,17) mm (band4 blank in sheet -- no row)
+      formulaFreightRow('Italy', 12, 17, 1, 101, 50000),
+      formulaFreightRow('Italy', 12, 17, 101, 451, 90000),
+      formulaFreightRow('Italy', 12, 17, 451, 801, 100000),
+      // Italy: thickness [17,21) mm (band3/band4 blank in sheet -- no rows)
+      formulaFreightRow('Italy', 17, 21, 1, 101, 60000),
+      formulaFreightRow('Italy', 17, 21, 101, 451, 100000),
+
+      // Spain: identical values to Italy (the sheet groups them; separate rows let the CEO
+      // diverge them later without a schema change).
+      formulaFreightRow('Spain', 3, 8, 1, 101, 80000),
+      formulaFreightRow('Spain', 3, 8, 101, 451, 90000),
+      formulaFreightRow('Spain', 3, 8, 451, 801, 100000),
+      formulaFreightRow('Spain', 3, 8, 801, null, 100000),
+      formulaFreightRow('Spain', 8, 12, 1, 101, 50000),
+      formulaFreightRow('Spain', 8, 12, 101, 451, 80000),
+      formulaFreightRow('Spain', 8, 12, 451, 801, 90000),
+      formulaFreightRow('Spain', 8, 12, 801, null, 100000),
+      formulaFreightRow('Spain', 12, 17, 1, 101, 50000),
+      formulaFreightRow('Spain', 12, 17, 101, 451, 90000),
+      formulaFreightRow('Spain', 12, 17, 451, 801, 100000),
+      formulaFreightRow('Spain', 17, 21, 1, 101, 60000),
+      formulaFreightRow('Spain', 17, 21, 101, 451, 100000),
+
+      // China
+      formulaFreightRow('China', 3, 8, 1, 101, 60000),
+      formulaFreightRow('China', 3, 8, 101, 451, 60000),
+      formulaFreightRow('China', 3, 8, 451, 801, 50000),
+      formulaFreightRow('China', 3, 8, 801, null, 50000),
+      formulaFreightRow('China', 8, 12, 1, 101, 30000),
+      formulaFreightRow('China', 8, 12, 101, 451, 50000),
+      formulaFreightRow('China', 8, 12, 451, 801, 70000),
+      formulaFreightRow('China', 8, 12, 801, null, 50000),
+      formulaFreightRow('China', 12, 17, 1, 101, 30000),
+      formulaFreightRow('China', 12, 17, 101, 451, 50000),
+      formulaFreightRow('China', 12, 17, 451, 801, 70000),
+      // China 12-17 band4 (801+) is blank in the sheet -- no row.
+      formulaFreightRow('China', 17, 21, 1, 101, 40000),
+      formulaFreightRow('China', 17, 21, 101, 451, 50000),
+      // China 17-21 band3/band4 are blank in the sheet -- no rows.
+    ],
+    dutyRates: [
+      // ก็อกน้ำ 20% / ยาแนว 10% are on the CEO's sheet but confirmed OUT OF SCOPE for this
+      // flow -- deliberately not seeded.
+      formulaDutyRow('TILE', 'กระเบื้อง', 0.30),
+      formulaDutyRow('GLASS_MOSAIC', 'โมเสคแก้ว', 0.10),
+    ],
+    clearanceFees: [
+      formulaClearanceRow(1, 101, 8000),
+      formulaClearanceRow(101, 451, 12000),
+      formulaClearanceRow(451, 801, 15000),
+      formulaClearanceRow(801, null, 20000),
+    ],
+  };
+}
+
+// All versions ever created, oldest first -- mirrors the "never UPDATE/DELETE an old version's
+// rows" rule: createNewVersion below always pushes a brand-new object, never mutates an existing
+// one in place.
+const mockPricingFormulaConfigVersions = [buildSeedFormulaConfig()];
+
+function currentFormulaConfig() {
+  return mockPricingFormulaConfigVersions.find((c) => c.isCurrent);
+}
+
+// Mirrors PricingFormulaConfigRepository's deterministic ORDER BY: freight by
+// (origin_country, thickness_min_mm, qty_min_sqm), duty by product_type, clearance by qty_min_sqm.
+function sortedFormulaConfig(config) {
+  return {
+    ...config,
+    freightRates: [...config.freightRates].sort((a, b) =>
+      a.originCountry.localeCompare(b.originCountry)
+      || a.thicknessMinMm - b.thicknessMinMm
+      || a.qtyMinSqm - b.qtyMinSqm),
+    dutyRates: [...config.dutyRates].sort((a, b) => a.productType.localeCompare(b.productType)),
+    clearanceFees: [...config.clearanceFees].sort((a, b) => a.qtyMinSqm - b.qtyMinSqm),
+  };
+}
+
 // R5: Attachments
 const mockAttachments = [];
 let mockAttachSeq = 1;
@@ -5829,6 +5958,47 @@ export const api = {
       };
       mockPriceCalcConfigs.push(newCfg);
       return delay({ config: structuredClone(newCfg) });
+    },
+  },
+
+  // BRANCH 1 of the sales pricing-formula redesign (config storage + CEO editing UI only).
+  // Mirrors PricingFormulaConfigController + PricingFormulaConfigRepository (pricing/) -- a NEW
+  // endpoint, distinct from priceCalcConfigs above (which keeps serving the separate catalog
+  // price calculator, untouched). get() mirrors READ_ROLES = ceo/import (same #388-style
+  // rationale: this config IS the margin policy). update stays CEO-only.
+  pricingFormulaConfig: {
+    async get() {
+      hasRole('ceo', 'import');
+      const current = currentFormulaConfig();
+      if (!current) fail('ไม่พบสูตรคำนวณราคาขาย', 404);
+      return delay({ formulaConfig: sortedFormulaConfig(current) });
+    },
+    async update(payload) {
+      hasRole('ceo');
+      const maxVersion = Math.max(0, ...mockPricingFormulaConfigVersions.map((c) => c.version));
+      mockPricingFormulaConfigVersions.forEach((c) => { c.isCurrent = false; });
+      const newConfig = {
+        formulaConfigId: mockFormulaConfigSeq++,
+        version: maxVersion + 1,
+        insuranceValueFactor: Number(payload.insuranceValueFactor),
+        insuranceRate: Number(payload.insuranceRate),
+        insuranceBuffer: Number(payload.insuranceBuffer),
+        costBuffer: Number(payload.costBuffer),
+        sellingBuffer: Number(payload.sellingBuffer),
+        defaultMarginPct: Number(payload.defaultMarginPct),
+        sellingPriceRoundUpTo: Number(payload.sellingPriceRoundUpTo),
+        isCurrent: true,
+        effectiveFrom: payload.effectiveFrom ?? new Date().toISOString().slice(0, 10),
+        updatedAt: new Date().toISOString(),
+        freightRates: (payload.freightRates ?? []).map((r) => formulaFreightRow(
+          r.originCountry, Number(r.thicknessMinMm), Number(r.thicknessMaxMm),
+          Number(r.qtyMinSqm), r.qtyMaxSqm == null ? null : Number(r.qtyMaxSqm), Number(r.amountThb))),
+        dutyRates: (payload.dutyRates ?? []).map((r) => formulaDutyRow(r.productType, r.productLabel, Number(r.dutyPct))),
+        clearanceFees: (payload.clearanceFees ?? []).map((r) => formulaClearanceRow(
+          Number(r.qtyMinSqm), r.qtyMaxSqm == null ? null : Number(r.qtyMaxSqm), Number(r.amountThb))),
+      };
+      mockPricingFormulaConfigVersions.push(newConfig);
+      return delay({ formulaConfig: sortedFormulaConfig(newConfig) });
     },
   },
 
