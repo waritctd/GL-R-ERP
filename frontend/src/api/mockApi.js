@@ -185,8 +185,32 @@ db.commissions = db.commissions || [];
 // payroll/tax calculation at all -- it is a raw store of whatever HR typed -- so, unlike those,
 // it CAN be faked genuinely here rather than throwing "not supported in mock mode". Keyed on
 // `${employeeId}-${payrollMonth}`, mirroring hr.payroll_input_draft's (employee_id, payroll_month)
-// uniqueness.
+// uniqueness. Each stored row also carries a `version` (issue #422 follow-up, optimistic
+// concurrency) -- see computeDraftETag below for why.
 db.payrollInputDrafts = db.payrollInputDrafts || new Map();
+
+// Optimistic concurrency (issue #422 follow-up): mirrors PayrollDraftETag.compute in spirit (fold
+// every row's (employeeId, version) into one token that changes if ANY row's version changes, or a
+// row is added/removed) but NOT byte-for-byte, and NOT the real material -- the mock has no reason
+// to reproduce the real SHA-256 algorithm, only the same observable behaviour, since a mock token
+// is never compared against a real backend token. `rows` must already be the month's rows; ordering
+// is forced here (unlike the real repository, which orders via SQL) so the token is stable across
+// two reads of the same content regardless of Map iteration order.
+//
+// Honesty note (Opus review NIT-7): unlike the real PayrollDraftETag, this deliberately omits
+// draftId -- the real one needs it to break an ABA collision across a delete-and-reinsert cycle
+// (process() clearing a month's drafts, then a fresh save landing back at version 0). That cycle
+// is UNREACHABLE here: this mock's `process()` always throws "not supported in mock mode" and
+// never touches `db.payrollInputDrafts` (see that method's own comment), so no mock-mode draft row
+// is ever deleted-and-reinserted in the first place. "Same observable behaviour" is true for every
+// path this mock can actually reach, not a claim that the ABA fix itself is mirrored.
+function computeDraftEtag(rows) {
+  if (!rows.length) return 'empty-v1';
+  return [...rows]
+    .sort((a, b) => Number(a.input.employeeId) - Number(b.input.employeeId))
+    .map((row) => `${row.input.employeeId}:${row.version ?? 0}`)
+    .join('|');
+}
 // Tax-allowance DECLARATION workflow (PR A, 2026-08-01): unlike getTaxAllowances/saveTaxAllowances
 // above, the workflow itself (submit/withdraw/approve/reject/on-behalf) performs no tax
 // calculation -- it only moves a row between PENDING/APPROVED/REJECTED/SUPERSEDED/WITHDRAWN -- so
@@ -5595,20 +5619,40 @@ export const api = {
     // preview/process/exportFile above -- saving a draft performs no payroll/tax calculation at
     // all (it is a raw store of whatever HR typed), so it can be faked correctly rather than
     // fabricating financial figures. Same view/edit split as the rest of this namespace.
+    //
+    // Optimistic concurrency (issue #422 follow-up): genuinely enforced here, not just shaped --
+    // saveInputDraft requires `ifMatch` and compares it against computeDraftEtag(existing rows)
+    // exactly like the real PayrollService#saveInputDraft compares against PayrollDraftETag, so
+    // the conflict path (428 missing header, 409 stale token) is exercisable under
+    // VITE_USE_MOCKS=true: call getInputDraft to read the current etag, save once (which advances
+    // it), then attempt a second save with the FIRST etag -- that reproduces a real 409 without any
+    // special test-only hook, because this mock's own state genuinely moved on, same as the real
+    // table would.
     async getInputDraft(params = {}) {
       hasRole('hr', 'ceo');
       const month = params.payrollMonth ? `${params.payrollMonth}-01` : null;
       const drafts = month
         ? [...db.payrollInputDrafts.values()].filter((row) => row.payrollMonth === month)
         : [];
-      return delay({ payrollMonth: month, drafts: drafts.map((row) => row.input) });
+      return delay({ payrollMonth: month, drafts: drafts.map((row) => row.input), etag: computeDraftEtag(drafts) });
     },
-    async saveInputDraft(payload = {}) {
+    async saveInputDraft(payload = {}, { ifMatch } = {}) {
       hasRole('hr');
+      if (!ifMatch) {
+        fail('ต้องแนบ If-Match เพื่อบันทึกร่างเงินเดือน กรุณาโหลดหน้าใหม่แล้วลองอีกครั้ง', 428);
+      }
       const month = payload.payrollMonth ? `${payload.payrollMonth}`.slice(0, 7) + '-01' : null;
+      const existing = month
+        ? [...db.payrollInputDrafts.values()].filter((row) => row.payrollMonth === month)
+        : [];
+      if (ifMatch !== computeDraftEtag(existing)) {
+        fail('มีผู้ใช้อื่นบันทึกร่างเงินเดือนของงวดนี้ไปแล้ว กรุณาโหลดข้อมูลใหม่ก่อนบันทึกอีกครั้ง', 409);
+      }
       (payload.inputs || []).forEach((input) => {
         if (input?.employeeId == null || !month) return;
-        db.payrollInputDrafts.set(`${input.employeeId}-${month}`, { payrollMonth: month, input });
+        const key = `${input.employeeId}-${month}`;
+        const priorVersion = db.payrollInputDrafts.get(key)?.version ?? -1;
+        db.payrollInputDrafts.set(key, { payrollMonth: month, input, version: priorVersion + 1 });
       });
       return this.getInputDraft({ payrollMonth: month ? month.slice(0, 7) : null });
     },

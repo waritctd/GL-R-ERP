@@ -227,6 +227,16 @@ public class PayrollService {
         // hr.payroll_line, so any leftover hr.payroll_input_draft rows for it are superseded --
         // clear them in the same transaction so a stale draft can never resurrect over the
         // processed values on a later reload (see #getInputDraft's precedence rule).
+        //
+        // Optimistic concurrency (issue #422 follow-up): process() is a second writer of the same
+        // draft set saveInputDraft's lock protects, so it takes the same month-scoped advisory
+        // lock before clearing -- otherwise a concurrent saveInputDraft could read-compare-write
+        // between this delete and the transaction's commit, silently resurrecting a draft row for
+        // a month that just got processed. The clear itself is unconditional either way (as
+        // before this change): once processed, no If-Match token is honoured for the month again
+        // -- the next saveInputDraft call sees an empty draft set (PayrollDraftETag.EMPTY) and any
+        // pre-process token it holds is refused as stale, exactly like any other conflict.
+        payrollRepository.lockInputDraftMonth(month);
         payrollRepository.deleteInputDrafts(month);
         auditPayrollAccess("PROCESS_PAYROLL", actor, period,
             "base_salary,gross_earnings,deductions,net_pay");
@@ -241,11 +251,30 @@ public class PayrollService {
      * brand-new run (a month with no processed/void period yet, {@code status == PREVIEW && id ==
      * null}) so a draft can never shadow real persisted values from an already-touched period --
      * see PayrollPage.jsx's {@code load()}/{@code applyPeriod} for that precedence rule.
+     *
+     * <p>Optimistic concurrency (issue #422 follow-up): also returns the month-level ETag ({@link
+     * PayrollDraftETag}) the client must thread back as {@code If-Match} on the next {@link
+     * #saveInputDraft}. A plain snapshot, not locked -- this is advisory information for the
+     * client, not the enforcement point (the enforcement point is {@link #saveInputDraft}'s locked
+     * compare-then-write) -- but it MUST still come from a single read, not two.
+     *
+     * <p><b>Opus review finding F2, corrected:</b> this used to call {@link
+     * PayrollRepository#findInputDrafts} and {@link PayrollRepository#findInputDraftVersions} as
+     * two separate, unsynchronized round trips. Under READ COMMITTED, each takes its own snapshot,
+     * so a writer committing in the gap produces a hazard in the UNSAFE direction: the figures read
+     * can reflect the OLD state while the version read reflects the NEW (legitimately current)
+     * state, handing the caller old data paired with a token that is not stale -- a caller who
+     * edits from that view and saves passes the {@code If-Match} compare cleanly and silently
+     * clobbers the write that happened in the gap. Reading both from {@link
+     * PayrollRepository#findInputDraftRows} in ONE statement makes that gap impossible.
      */
     public PayrollInputDraftDtos.PayrollInputDraftResponse getInputDraft(LocalDate payrollMonth, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
         LocalDate month = normalizeMonth(payrollMonth);
-        return new PayrollInputDraftDtos.PayrollInputDraftResponse(month, payrollRepository.findInputDrafts(month));
+        List<PayrollRepository.DraftRow> rows = payrollRepository.findInputDraftRows(month);
+        List<PayrollEmployeeInputRequest> drafts = rows.stream().map(PayrollRepository.DraftRow::input).toList();
+        String etag = PayrollDraftETag.compute(rows.stream().map(PayrollRepository.DraftRow::version).toList());
+        return new PayrollInputDraftDtos.PayrollInputDraftResponse(month, drafts, etag);
     }
 
     /**
@@ -254,13 +283,74 @@ public class PayrollService {
      * performed here, and this never touches {@code hr.payroll_line} or any payroll math. See
      * {@link #getInputDraft} for the read side and {@link #process} for how a draft is superseded
      * once the month is actually processed.
+     *
+     * <p>Optimistic concurrency (issue #422 follow-up): {@code ifMatch} is now REQUIRED -- a
+     * deliberate API contract change, not a side effect (see the PR body). A missing header is
+     * refused with 428 rather than silently allowed, because a headerless write is exactly the
+     * hole this closes: two HR users on the same month previously overwrote each other with no
+     * conflict signal at all. The lock-then-compare-then-write below is what makes the check real
+     * rather than decorative -- {@link PayrollRepository#lockInputDraftMonth} is held for the rest
+     * of this transaction, so a second concurrent call blocks until the first commits (or rolls
+     * back) and then re-reads the version set THAT call actually left behind, not a stale one read
+     * before the lock was acquired.
      */
     @Transactional
-    public PayrollInputDraftDtos.PayrollInputDraftResponse saveInputDraft(ProcessPayrollRequest request, UserPrincipal actor) {
+    public PayrollInputDraftDtos.PayrollInputDraftResponse saveInputDraft(
+            ProcessPayrollRequest request, UserPrincipal actor, String ifMatch) {
         requireRole(actor, PAYROLL_EDIT_ROLES);
+        if (ifMatch == null || ifMatch.isBlank()) {
+            throw new ApiException(HttpStatus.PRECONDITION_REQUIRED,
+                "ต้องแนบ If-Match เพื่อบันทึกร่างเงินเดือน กรุณาโหลดหน้าใหม่แล้วลองอีกครั้ง");
+        }
         LocalDate month = normalizeMonth(request.payrollMonth());
+        payrollRepository.lockInputDraftMonth(month);
+        String currentETag = PayrollDraftETag.compute(payrollRepository.findInputDraftVersions(month));
+        if (!currentETag.equals(normalizeETagToken(ifMatch))) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "มีผู้ใช้อื่นบันทึกร่างเงินเดือนของงวดนี้ไปแล้ว กรุณาโหลดข้อมูลใหม่ก่อนบันทึกอีกครั้ง");
+        }
         payrollRepository.saveInputDrafts(month, safeInputs(request.inputs()), actor.employeeId());
-        return new PayrollInputDraftDtos.PayrollInputDraftResponse(month, payrollRepository.findInputDrafts(month));
+        // One read for the response, same as #getInputDraft -- not a correctness requirement here
+        // (the advisory lock already rules out a concurrent writer for the rest of this
+        // transaction, so two separate reads would still agree), just consistent with the pattern
+        // and one fewer round trip.
+        List<PayrollRepository.DraftRow> rows = payrollRepository.findInputDraftRows(month);
+        List<PayrollEmployeeInputRequest> drafts = rows.stream().map(PayrollRepository.DraftRow::input).toList();
+        String newETag = PayrollDraftETag.compute(rows.stream().map(PayrollRepository.DraftRow::version).toList());
+        return new PayrollInputDraftDtos.PayrollInputDraftResponse(month, drafts, newETag);
+    }
+
+    /**
+     * Accepts the token exactly as {@link #getInputDraft} returned it in the response body (the
+     * shape the frontend actually threads through), but tolerates the RFC 7232 quoted-string form
+     * (and a leading weak-validator {@code W/}) too, since that is what the {@code ETag} response
+     * header carries and a caller copying that header value verbatim should not be punished for
+     * following the HTTP-correct form instead of the body field.
+     *
+     * <p><b>Known divergence from RFC 9110 §13.1.1 (Opus review finding F12/NEW-2), recorded
+     * rather than fixed</b>: a real {@code If-Match} header can be the wildcard {@code *} (meaning
+     * "any current representation is fine") or a comma-separated list of multiple entity-tags. This
+     * method does neither: {@code *} is compared as the four-character literal string {@code "*"},
+     * which will never equal a real SHA-256 hex token, so it always 409s instead of the RFC's
+     * "succeed if any representation exists." A multi-valued header (either one physical {@code
+     * If-Match} line with comma-separated tags, OR repeated {@code If-Match} headers -- Spring's
+     * {@code @RequestHeader(String)} binding joins repeated headers of the same name with {@code
+     * ", "} before this method ever sees the value) is likewise compared as one joined string
+     * against the single current token and always fails to match, so it also always 409s. Both
+     * failure modes are CLOSED (refuse a write that RFC semantics might have allowed), never OPEN
+     * (never accept a write that should have been refused) -- this is documentation debt, not a
+     * defect, and is acceptable because the only real caller is this repo's own frontend, which
+     * never sends either form.
+     */
+    private String normalizeETagToken(String raw) {
+        String value = raw.trim();
+        if (value.startsWith("W/")) {
+            value = value.substring(2);
+        }
+        if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
+            value = value.substring(1, value.length() - 1);
+        }
+        return value;
     }
 
     /**
