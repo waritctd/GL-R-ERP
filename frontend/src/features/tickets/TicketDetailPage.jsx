@@ -99,8 +99,8 @@ function scrollToSection(id) {
   const el = typeof document !== 'undefined' ? document.getElementById(id) : null;
   if (!el) return;
   // jsdom (Vitest) doesn't implement scrollIntoView — guarded so the same
-  // jump helper used by the revise-form effect and the sticky primary CTA
-  // doesn't throw under test, only under a real browser's absence of it.
+  // jump helper used by the sticky primary CTA doesn't throw under test,
+  // only under a real browser's absence of it.
   el.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   el.focus?.({ preventScroll: true });
 }
@@ -281,8 +281,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const [reviseReason, setReviseReason] = useState('');
 
   // UX-03 (slice 5a + 5b): inline field-level validation for the payment /
-  // delivery modals, plus (5b) the revise inline form and the edit-items
-  // quantities. One shared dict, keyed per-form/per-row so a stale error can
+  // delivery modals, plus (5b) the revise form (a modal since Slice C2a) and
+  // the edit-items quantities. One shared dict, keyed per-form/per-row so a stale error can
   // never bleed into another: 'payment.amount' | 'revise.reason' |
   // 'editItems.qty.<rowIndex>' (per-row — see the edit-items save handler).
   // ('quotation.*'/'reject.reason'/'override.<itemId>' were retired along
@@ -447,18 +447,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   useEffect(() => {
     if (ticketQuery.error) showToast('error', ticketQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
   }, [ticketQuery.error, showToast]);
-
-  // The revise form (see the "can.revise && showReviseForm" section further
-  // down) opens ~400px below where its overflow-menu trigger lives — unlike
-  // every other overflow item, which opens a modal in place. Without this,
-  // opening it was a silent no-op from the viewer's vantage point (nothing
-  // visibly happened until they scrolled to look for it), which is exactly
-  // the "the control that matters is off-screen" problem this rebuild
-  // exists to fix. Runs after the section actually mounts (the effect fires
-  // on the render where showReviseForm just became true).
-  useEffect(() => {
-    if (showReviseForm) scrollToSection('revise-form');
-  }, [showReviseForm]);
 
   const attachmentsQuery = useQuery({
     queryKey: queryKeys.ticketAttachments(ticketId),
@@ -1099,12 +1087,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   function handleOpenHold() { dealStagePanelRef.current?.openHold(); }
   function handleOpenDormant() { dealStagePanelRef.current?.openDormant(); }
   function handleOpenAdvance() { dealStagePanelRef.current?.openAdvance(); }
-  // The revise-form section now lives inside the "ภาพรวม" tab (alongside the
-  // items it revises) — this trigger fires from the header's "⋯" overflow
-  // menu, which sits outside every tab, so it must switch there first (see
-  // runOnTab's own doc comment) or the section it's trying to reveal may not
-  // be mounted yet.
-  function handleOpenRevise() { runOnTab('overview', () => { setShowReviseForm(true); clearFieldError('revise.reason'); }); }
+  // ขอแก้ไข (Revise) opens as a modal (Slice C2a) — it no longer lives inside
+  // a tab, so unlike handleOpenAdvance/handleOpenEditStage's siblings this
+  // needs no runOnTab wrapper to switch tabs first; a plain flag flip is
+  // enough regardless of which tab is active when the overflow item fires.
+  function handleOpenRevise() { setShowReviseForm(true); clearFieldError('revise.reason'); }
 
   // react-hooks/refs (react-hooks v7's Compiler-oriented ruleset — see this
   // file's neighbouring `set-state-in-effect: 'off'` in eslint.config.js for
@@ -1777,77 +1764,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             </section>
           )}
 
-          {/* ขอแก้ไข (Revise) now triggers from the header overflow menu (see
-              overflowItems above) rather than a button in the panel above — but
-              the form itself still needs somewhere to render once opened, and
-              hasActions no longer accounts for can.revise, so this stays its own
-              independent block instead of nesting inside that section. */}
-          {can.revise && showReviseForm && (
-            <section id="revise-form" tabIndex={-1} className="panel scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none" style={{ background: 'var(--color-surface-muted)' }}>
-              <div className="panel-header">
-                <h2>ขอแก้ไข</h2>
-              </div>
-              <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, paddingTop: 12 }}>ประเภทการแก้ไข</div>
-                  {[
-                    { value: 'QTY_OR_NOTE',  label: 'แก้จำนวน / หมายเหตุ / % มัดจำ', sub: 'ไม่ต้องอนุมัติใหม่ — ออกเอกสารรอบแก้ไขใหม่ได้เลย' },
-                    { value: 'PRICE_CHANGE', label: 'แก้ราคา / ส่วนลดต่อหน่วย',       sub: 'CEO ต้องอนุมัติใหม่' },
-                    { value: 'NEW_ITEM',     label: 'เพิ่มสินค้าใหม่',                sub: 'ฝ่ายนำเข้าตั้งราคา → CEO อนุมัติ' },
-                  ].map((opt) => (
-                    // eslint-disable-next-line jsx-a11y/label-has-associated-control -- label nests the radio control; its text is the dynamic opt.label
-                    <label key={opt.value} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer', fontSize: 13 }}>
-                      <input type="radio" name="reviseScope" value={opt.value}
-                        checked={reviseScope === opt.value}
-                        onChange={() => setReviseScope(opt.value)}
-                        style={{ marginTop: 2, flexShrink: 0, width: 16, height: 16, accentColor: 'var(--color-info-dot)', cursor: 'pointer' }} />
-                      <span>
-                        <strong>{opt.label}</strong>
-                        <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)' }}>{opt.sub}</span>
-                      </span>
-                    </label>
-                  ))}
-                  <label style={{ fontSize: 13, fontWeight: 600 }}>
-                    เหตุผลการแก้ไข *
-                    <textarea rows={2}
-                      id="revise-reason"
-                      ref={(el) => { fieldRefs.current['revise.reason'] = el; }}
-                      value={reviseReason}
-                      onChange={(e) => { setReviseReason(e.target.value); clearFieldError('revise.reason'); }}
-                      placeholder="ระบุเหตุผล…" style={{ marginTop: 4 }}
-                      aria-invalid={fieldErrors['revise.reason'] ? true : undefined}
-                      aria-describedby={fieldErrors['revise.reason'] ? fieldErrorId('revise-reason') : undefined}
-                    />
-                    {fieldErrors['revise.reason'] ? (
-                      <p id={fieldErrorId('revise-reason')} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
-                        {fieldErrors['revise.reason']}
-                      </p>
-                    ) : null}
-                  </label>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    {/* This button is already disabled={!reviseReason.trim()} (unchanged
-                        below), so the guard inside onClick is defensive/unreachable
-                        through the UI — wired for consistency with the other 3 forms
-                        in this slice, not because a user can trigger it here. */}
-                    <button type="button" className="primary-button" disabled={actionLoading || !reviseReason.trim()}
-                      onClick={() => {
-                        if (!reviseReason.trim()) {
-                          setFieldError('revise.reason', 'กรุณาระบุเหตุผล');
-                          focusFirstInvalid('revise.reason');
-                          return;
-                        }
-                        clearFieldError('revise.reason');
-                        doAction(() => api.tickets.revision(ticketId, { scope: reviseScope, reason: reviseReason.trim() }), 'ส่งคำขอแก้ไขแล้ว');
-                      }}>
-                      ยืนยันขอแก้ไข
-                    </button>
-                    <button type="button" className="secondary-button" disabled={actionLoading}
-                      onClick={() => { setShowReviseForm(false); setReviseReason(''); clearFieldError('revise.reason'); }}>
-                      ยกเลิก
-                    </button>
-                  </div>
-                </div>
-            </section>
-          )}
       </TabPanel>
 
       <TabPanel id="pricing" idPrefix="ticket-detail" active={visibleActiveTab === 'pricing'}>
@@ -2241,6 +2157,83 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                   onChange={(e) => setBillingDraft((draft) => ({ ...draft, nextFollowUpAt: e.target.value }))} />
               </label>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ขอแก้ไข (Revise) — Slice C2a: converted from an inline "ภาพรวม" tab
+          section into a modal, same pattern as paymentModal/billingModal
+          above. The old inline version opened ~400px below its overflow-menu
+          trigger and forced a tab switch (runOnTab('overview', …)) plus a
+          scroll-into-view just to reveal itself — disorienting, and it also
+          meant a menu item outside every tab silently changed which tab was
+          active. A modal has no tab to switch to, so handleOpenRevise is now
+          a plain flag flip (see its own doc comment). */}
+      {can.revise && showReviseForm && (
+        <Modal
+          title="ขอแก้ไข"
+          onClose={() => { setShowReviseForm(false); setReviseReason(''); clearFieldError('revise.reason'); }}
+          footer={(
+            <>
+              <button type="button" className="secondary-button" disabled={actionLoading}
+                onClick={() => { setShowReviseForm(false); setReviseReason(''); clearFieldError('revise.reason'); }}>
+                ยกเลิก
+              </button>
+              {/* This button is already disabled={!reviseReason.trim()} (unchanged
+                  below), so the guard inside onClick is defensive/unreachable
+                  through the UI — wired for consistency with the other 3 forms
+                  in this slice, not because a user can trigger it here. */}
+              <button type="button" className="primary-button" disabled={actionLoading || !reviseReason.trim()}
+                onClick={() => {
+                  if (!reviseReason.trim()) {
+                    setFieldError('revise.reason', 'กรุณาระบุเหตุผล');
+                    focusFirstInvalid('revise.reason');
+                    return;
+                  }
+                  clearFieldError('revise.reason');
+                  doAction(() => api.tickets.revision(ticketId, { scope: reviseScope, reason: reviseReason.trim() }), 'ส่งคำขอแก้ไขแล้ว');
+                }}>
+                ยืนยันขอแก้ไข
+              </button>
+            </>
+          )}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>ประเภทการแก้ไข</div>
+            {[
+              { value: 'QTY_OR_NOTE',  label: 'แก้จำนวน / หมายเหตุ / % มัดจำ', sub: 'ไม่ต้องอนุมัติใหม่ — ออกเอกสารรอบแก้ไขใหม่ได้เลย' },
+              { value: 'PRICE_CHANGE', label: 'แก้ราคา / ส่วนลดต่อหน่วย',       sub: 'CEO ต้องอนุมัติใหม่' },
+              { value: 'NEW_ITEM',     label: 'เพิ่มสินค้าใหม่',                sub: 'ฝ่ายนำเข้าตั้งราคา → CEO อนุมัติ' },
+            ].map((opt) => (
+              // eslint-disable-next-line jsx-a11y/label-has-associated-control -- label nests the radio control; its text is the dynamic opt.label
+              <label key={opt.value} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer', fontSize: 13 }}>
+                <input type="radio" name="reviseScope" value={opt.value}
+                  checked={reviseScope === opt.value}
+                  onChange={() => setReviseScope(opt.value)}
+                  style={{ marginTop: 2, flexShrink: 0, width: 16, height: 16, accentColor: 'var(--color-info-dot)', cursor: 'pointer' }} />
+                <span>
+                  <strong>{opt.label}</strong>
+                  <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)' }}>{opt.sub}</span>
+                </span>
+              </label>
+            ))}
+            <label style={{ fontSize: 13, fontWeight: 600 }}>
+              เหตุผลการแก้ไข *
+              <textarea rows={2}
+                id="revise-reason"
+                ref={(el) => { fieldRefs.current['revise.reason'] = el; }}
+                value={reviseReason}
+                onChange={(e) => { setReviseReason(e.target.value); clearFieldError('revise.reason'); }}
+                placeholder="ระบุเหตุผล…" style={{ marginTop: 4 }}
+                aria-invalid={fieldErrors['revise.reason'] ? true : undefined}
+                aria-describedby={fieldErrors['revise.reason'] ? fieldErrorId('revise-reason') : undefined}
+              />
+              {fieldErrors['revise.reason'] ? (
+                <p id={fieldErrorId('revise-reason')} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                  {fieldErrors['revise.reason']}
+                </p>
+              ) : null}
+            </label>
           </div>
         </Modal>
       )}
