@@ -92,7 +92,9 @@ app:
     payroll-cutoff-day: ${APP_SPECIAL_MONEY_PAYROLL_CUTOFF_DAY:25}
   uploads-dir: ${APP_UPLOADS_DIR:./uploads}
   bot:
-    api-token: ${BOT_API_TOKEN:}
+    # BOT issues a separate key per API -- no fallback between them, see AppProperties.Bot's javadoc.
+    holiday-api-token: ${BOT_HOLIDAY_API_TOKEN:}
+    fx-api-token: ${BOT_FX_API_TOKEN:}
   factory-quote-dispatch:
     # Background outbox worker for factory quote request emails (V67). send() only enqueues a
     # PENDING row; FactoryQuoteEmailDispatchWorker sends and finalizes it out-of-band so an app

@@ -2,6 +2,9 @@ package th.co.glr.hr.attendance.schedule;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.Year;
 import java.time.ZoneId;
@@ -10,22 +13,25 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import th.co.glr.hr.attendance.schedule.HolidayRepository.BankHoliday;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 
 /**
  * Fills {@code hr.holiday} (V115, seeded with zero rows) from the Bank of Thailand's "Financial
  * Institutions' Holidays" list, mirroring {@code th.co.glr.hr.pricing.BotFxFetchService}'s
  * structure: {@link RestClient}, a Bangkok-zoned {@link Scheduled} cron, the token from {@link
- * AppProperties.Bot#getApiToken()} ({@code BOT_API_TOKEN}), an {@code Authorization} header, and
- * failures logged and swallowed rather than thrown so one bad fetch never takes anything else
- * down with it.
+ * AppProperties.Bot#getHolidayApiToken()} ({@code BOT_HOLIDAY_API_TOKEN}), an {@code Authorization}
+ * header, and failures logged and swallowed rather than thrown so one bad fetch never takes
+ * anything else down with it. BOT issues a separate key per API — {@code BOT_HOLIDAY_API_TOKEN} is
+ * <strong>not</strong> the same token {@code BotFxFetchService} uses ({@code BOT_FX_API_TOKEN}),
+ * and there is deliberately no fallback between the two; see {@code AppProperties.Bot}'s javadoc.
  *
  * <p><strong>Why this is the right source at all</strong> — governing company announcement
  * ประกาศ "วันเวลาทำงาน และการหยุดงาน" (1 Oct 2567) §3: company holidays <em>are</em> the commercial
@@ -39,25 +45,41 @@ import th.co.glr.hr.config.AppProperties;
  * owns and reads via {@link DbHolidayCalendar}. Sharing a BOT host and a code shape with the FX
  * fetcher does not make this a pricing concern.
  *
- * <p><strong>Response shape is unconfirmed.</strong> The legacy BOT API portal
- * ({@code apiportal.bot.or.th} / {@code apigw1.bot.or.th}) was discontinued 31 Dec 2025; the live
- * host is {@code gateway.api.bot.or.th} (the same host {@code BotFxFetchService} already uses).
- * Unauthenticated probing found {@code https://gateway.api.bot.or.th/financial-institutions-holidays/?year=YYYY}
- * returns 401 (exists, needs a token) while several other guessed paths 404. No authenticated
- * payload has been seen. BOT's published field names for this dataset are {@code HolidayWeekDay},
- * {@code HolidayWeekDayThai}, {@code Date}, {@code DateThai}, {@code HolidayDescription} and
- * {@code HolidayDescriptionThai} — but the envelope wrapping the list of entries is a guess, so
- * {@link #findHolidayArray} searches the whole response tree for the first array of objects that
- * carries a recognisable date field, instead of hardcoding one assumed nesting (as {@code
- * BotFxFetchService} can, because its shape has been observed). If the real payload does not match
- * — different field names, a date format {@link #parseDate} does not try, or no array at all — this
- * degrades to "zero entries parsed", which is exactly the same code path as a genuinely empty
- * response: touches no rows in {@code hr.holiday}, never a thrown exception, never a write with a
- * wrong or missing value. Unlike a genuinely empty response, this case is logged at WARN with the
- * response's field names (never values — see {@link #describeShape}) precisely so that "shape
- * changed" is distinguishable from "BOT has nothing published yet" on the first live run, rather
- * than both looking like silence. Confirming and hardening this parser against a real authenticated
- * payload once a token is available is a known follow-up, not something this branch can close out.
+ * <p><strong>Endpoint and shape are confirmed against BOT's published OpenAPI spec</strong> (the
+ * owner supplied it directly — this is no longer inference from unauthenticated probing). The
+ * legacy BOT API portal ({@code apiportal.bot.or.th} / {@code apigw1.bot.or.th}) was discontinued
+ * 31 Dec 2025; the live host is {@code gateway.api.bot.or.th} (the same host {@code
+ * BotFxFetchService} already uses). The security scheme is labelled {@code X-IBM-Client-Id} in the
+ * spec, but its definition is {@code {"type":"apiKey","name":"Authorization","in":"header"}} — in
+ * OpenAPI, {@code name} is the actual header, so the real header is {@code Authorization}, exactly
+ * as {@code BotFxFetchService} sends it. Do not add an {@code X-IBM-Client-Id} header; the label is
+ * misleading, not a second requirement. {@code year} (format {@code YYYY}) is a required query
+ * parameter.
+ *
+ * <p>The response is a <strong>bare top-level JSON array</strong> — not an envelope like the FX
+ * API's {@code result.data.data_detail} — of objects with string fields {@code HolidayWeekDay},
+ * {@code HolidayWeekDayThai}, {@code Date} (ISO {@code yyyy-MM-dd}), {@code DateThai} (Buddhist-era
+ * {@code dd/MM/yy}), {@code HolidayDescription} and {@code HolidayDescriptionThai}. {@link
+ * #parseHolidays} matches this exactly: a non-array top level, or an element missing {@code Date}
+ * or both description fields, does not match and is skipped rather than coerced — no tree-searching
+ * fallback. An earlier version of this class searched the whole response tree for anything that
+ * looked like a holiday list, as a hedge for when nobody could see a real payload; now that the
+ * shape is confirmed, that hedge is deleted deliberately, because it could latch onto an unrelated
+ * array in a differently-shaped response and misparse it as holidays. A shape that does not match
+ * now fails to match, full stop, rather than possibly matching something wrong.
+ *
+ * <p>{@code DateThai} and {@code HolidayWeekDay}/{@code HolidayWeekDayThai} are read by nobody
+ * here. {@code Date} is unambiguous (ISO, Gregorian); {@code DateThai} is Buddhist-era and would
+ * need a calendar conversion this class does not implement — if a future need for it appears, treat
+ * that conversion as a deliberate addition, not something to bolt on quietly.
+ *
+ * <p>If a live response nonetheless does not match this shape — BOT changes the contract, or the
+ * spec turns out to have an error the owner didn't catch — {@link #parseHolidays} degrades to "zero
+ * entries parsed", the same code path as a genuinely empty year: touches no rows in {@code
+ * hr.holiday}, never a thrown exception, never a write with a wrong or missing value. That case is
+ * logged at WARN with the response's field names (never values — see {@link #describeShape}) so
+ * "shape changed" is distinguishable from "BOT has nothing published yet" on the day this first
+ * runs live, rather than both looking like silence.
  */
 @Service
 public class BotHolidayFetchService {
@@ -66,29 +88,60 @@ public class BotHolidayFetchService {
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
     private static final String BOT_HOLIDAY_URL = "https://gateway.api.bot.or.th/financial-institutions-holidays/";
 
-    /** Candidate date formats, tried in order, since the real payload's format is unconfirmed. */
-    private static final List<DateTimeFormatter> DATE_FORMATS = List.of(
-        DateTimeFormatter.ISO_LOCAL_DATE,        // 2026-01-01
-        DateTimeFormatter.ofPattern("yyyyMMdd"),  // 20260101
-        DateTimeFormatter.ofPattern("dd/MM/yyyy") // 01/01/2026
-    );
-
-    /** Field names, tried case-insensitively, that might carry the Gregorian holiday date. */
-    private static final List<String> DATE_FIELDS = List.of("Date", "HolidayDate");
-    private static final List<String> NAME_TH_FIELDS = List.of("HolidayDescriptionThai", "HolidayDescriptionTh");
-    private static final List<String> NAME_EN_FIELDS = List.of("HolidayDescription", "HolidayDescriptionEn");
+    /**
+     * Minimum interval between {@link #fetchNow()} (the manual-trigger path — {@code
+     * HolidayController}) attempts. BOT enforces a budget of <strong>100 calls/hour per token</strong>,
+     * and — per the owner, confirmed 2026-08 — <strong>every BOT API gets its own key, and every
+     * environment gets its own key per API</strong>: this fetcher's {@code BOT_HOLIDAY_API_TOKEN} is
+     * distinct from {@code BotFxFetchService}'s {@code BOT_FX_API_TOKEN}, and each is set separately
+     * per environment (see {@code AppProperties.Bot}'s javadoc — two earlier drafts of this comment
+     * claimed a token was shared, first across environments and then across APIs within one
+     * environment; neither is true, and this fetcher's 100/hour is now entirely its own, unaffected
+     * by anything the FX fetcher does). Scheduled load never threatens that on its own: this fetcher
+     * makes at most 2 calls/month. The actual risk is {@code POST /api/holidays/fetch} itself, which
+     * has no throttle of its own: a double-submit, a frontend retry loop, or someone hammering a
+     * refresh button is the only realistic way to burn this token's 100/hour. Ten minutes bounds a
+     * single instance to at most 6 manual attempts/hour, comfortably inside that ceiling even stacked
+     * on top of the scheduled calls.
+     *
+     * <p><strong>What this guarantees and what it does not</strong>: this is in-memory,
+     * per-JVM-instance state, not a distributed limiter — N running instances allow N times this
+     * rate, and a restart forgets the cooldown entirely. That is accepted and deliberate: it is a
+     * sane-use guard against an accidental hot loop from a single browser tab or process, not a hard
+     * cap enforceable across a fleet. If this repo ever runs multiple backend instances behind a
+     * load balancer, revisit whether that gap actually matters before reaching for a shared store —
+     * do not "fix" this into a table pre-emptively.
+     */
+    static final Duration MANUAL_FETCH_COOLDOWN = Duration.ofMinutes(10);
 
     private final HolidayRepository holidays;
     private final AppProperties props;
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
+    private final Clock clock;
+
+    /** When {@link #fetchNow()} last attempted a fetch, for {@link #MANUAL_FETCH_COOLDOWN}. Never
+     * touched by {@link #scheduledFetch()} — see that method's javadoc for why. */
+    private volatile Instant lastManualFetchAttemptAt;
 
     public BotHolidayFetchService(HolidayRepository holidays, AppProperties props,
                                    RestClient.Builder restClientBuilder, ObjectMapper objectMapper) {
+        this(holidays, props, restClientBuilder, objectMapper, Clock.system(BANGKOK));
+    }
+
+    /**
+     * Test-only seam: lets {@code BotHolidayFetchServiceTest} inject a fixed {@link Clock} so
+     * {@link #MANUAL_FETCH_COOLDOWN} assertions are deterministic instead of racing the real wall
+     * clock. Mirrors the {@code DashboardService(repository, Clock)} pattern already used in this
+     * codebase rather than introducing a {@code Clock} bean nothing else needs.
+     */
+    BotHolidayFetchService(HolidayRepository holidays, AppProperties props,
+                            RestClient.Builder restClientBuilder, ObjectMapper objectMapper, Clock clock) {
         this.holidays     = holidays;
         this.props        = props;
         this.restClient   = restClientBuilder.build();
         this.objectMapper = objectMapper;
+        this.clock        = clock;
     }
 
     /**
@@ -101,29 +154,61 @@ public class BotHolidayFetchService {
      * BOT typically publishes next year's list late in Q4 — before that, the request predictably
      * 404s/empties, which {@link #fetchYear} already treats as "no data yet", not an error, so the
      * extra Q4 attempts are harmless and cheap.
+     *
+     * <p>Calls {@link #runFetch()} <strong>directly, not {@link #fetchNow()}</strong>, and therefore
+     * never checks or updates {@link #MANUAL_FETCH_COOLDOWN}. That cooldown exists solely to bound a
+     * human hammering the manual-trigger endpoint; a monthly cron tick could never approach the
+     * 100/hour budget on its own, and routing it through the same guarded method would risk a
+     * scheduled run silently doing nothing because a manual click happened minutes earlier — exactly
+     * the "cooldown swallows the cron" failure this split is designed to make structurally
+     * impossible rather than something a future edit could reintroduce by accident.
      */
     @Scheduled(cron = "0 0 3 1 * *", zone = "Asia/Bangkok")
     public void scheduledFetch() {
-        fetchNow();
+        runFetch();
+    }
+
+    /**
+     * Manual-trigger entry point for {@code HolidayController} — see that controller for the role
+     * gate. Enforces {@link #MANUAL_FETCH_COOLDOWN}: a call within the cooldown of the previous
+     * manual attempt throws a 429 {@link ApiException} <strong>without making any BOT call</strong>,
+     * rather than silently returning an empty result that would read as "fetch happened, no
+     * holidays" to a caller. The cooldown clock starts on the attempt itself (before the token check
+     * or any network call), so a misconfigured/blank token cannot be used to bypass it by retrying
+     * in a loop.
+     */
+    public List<FetchOutcome> fetchNow() {
+        Instant now = clock.instant();
+        Instant previous = lastManualFetchAttemptAt;
+        if (previous != null) {
+            Duration sinceLast = Duration.between(previous, now);
+            if (sinceLast.compareTo(MANUAL_FETCH_COOLDOWN) < 0) {
+                long secondsLeft = Math.max(1, MANUAL_FETCH_COOLDOWN.minus(sinceLast).toSeconds());
+                throw new ApiException(HttpStatus.TOO_MANY_REQUESTS,
+                    "รอสักครู่ก่อนเรียกดึงข้อมูลวันหยุดจากธนาคารแห่งประเทศไทยอีกครั้ง (ประมาณ "
+                        + secondsLeft + " วินาที)");
+            }
+        }
+        lastManualFetchAttemptAt = now;
+        return runFetch();
     }
 
     /**
      * Fetches the current year, and next year once it is Q4, reconciling each year independently.
-     * Exposed (not just {@code private}) so an admin-triggered manual refresh
-     * ({@code HolidayController}) can call the exact same logic on demand instead of waiting for the
-     * cron — see that controller for the role gate.
+     * The shared core both {@link #scheduledFetch()} and {@link #fetchNow()} delegate to <em>after</em>
+     * their own, different, gating decisions — this method itself has no rate-limiting logic.
      */
-    public List<FetchOutcome> fetchNow() {
-        String token = props.getBot().getApiToken();
+    private List<FetchOutcome> runFetch() {
+        String token = props.getBot().getHolidayApiToken();
         if (token == null || token.isBlank()) {
-            log.warn("BOT_API_TOKEN not configured — skipping holiday auto-fetch");
+            log.warn("BOT_HOLIDAY_API_TOKEN not configured — skipping holiday auto-fetch");
             return List.of();
         }
 
         List<FetchOutcome> outcomes = new ArrayList<>();
-        int currentYear = Year.now(BANGKOK).getValue();
+        int currentYear = Year.now(clock).getValue();
         outcomes.add(fetchYear(currentYear, token));
-        if (LocalDate.now(BANGKOK).getMonthValue() >= 10) {
+        if (LocalDate.now(clock).getMonthValue() >= 10) {
             outcomes.add(fetchYear(currentYear + 1, token));
         }
         return outcomes;
@@ -171,11 +256,11 @@ public class BotHolidayFetchService {
     }
 
     /**
-     * Defensively parses a BOT holiday-list response of unconfirmed shape. Searches the whole
-     * response tree for the first JSON array whose elements are objects carrying a recognisable
-     * date field, then maps each element via {@link #toHoliday}, skipping (not throwing on) any
-     * element that does not parse into a valid, year-matching holiday. Malformed/non-JSON input,
-     * or a response with no such array, yields an empty list rather than an exception.
+     * Strictly parses a BOT holiday-list response against the confirmed OpenAPI schema: a bare
+     * top-level JSON array of objects. Maps each element via {@link #toHoliday}, skipping (not
+     * throwing on) any element that does not parse into a valid, year-matching holiday. A
+     * non-array top level, malformed/non-JSON input, or an empty array all yield an empty list
+     * rather than an exception — this method never throws.
      */
     List<BankHoliday> parseHolidays(String json, int year) {
         if (json == null || json.isBlank()) {
@@ -188,14 +273,15 @@ public class BotHolidayFetchService {
             log.warn("BOT holiday fetch: response for {} was not valid JSON — {}", year, e.getMessage());
             return List.of();
         }
-
-        JsonNode array = findHolidayArray(root);
-        if (array == null) {
+        if (!root.isArray()) {
+            // The documented shape is a bare top-level array. Anything else — an envelope, an
+            // error object, a bare string — does not match it, deliberately: see the class javadoc
+            // on why this no longer falls back to searching the tree for something array-shaped.
             return List.of();
         }
 
         List<BankHoliday> result = new ArrayList<>();
-        for (JsonNode entry : array) {
+        for (JsonNode entry : root) {
             BankHoliday holiday = toHoliday(entry, year);
             if (holiday != null) {
                 result.add(holiday);
@@ -204,39 +290,16 @@ public class BotHolidayFetchService {
         return result;
     }
 
-    /** Depth-first search for the first array-of-objects node that looks like a holiday list. */
-    private JsonNode findHolidayArray(JsonNode node) {
-        if (node == null) {
-            return null;
-        }
-        if (node.isArray() && !node.isEmpty() && looksLikeHolidayArray(node)) {
-            return node;
-        }
-        Iterator<JsonNode> children = node.elements();
-        while (children.hasNext()) {
-            JsonNode found = findHolidayArray(children.next());
-            if (found != null) {
-                return found;
-            }
-        }
-        return null;
-    }
-
-    private boolean looksLikeHolidayArray(JsonNode array) {
-        JsonNode first = array.get(0);
-        return first != null && first.isObject() && findField(first, DATE_FIELDS) != null;
-    }
-
     private BankHoliday toHoliday(JsonNode entry, int year) {
         if (entry == null || !entry.isObject()) {
             return null;
         }
-        JsonNode dateNode = findField(entry, DATE_FIELDS);
-        LocalDate date = dateNode == null ? null : parseDate(dateNode.asText(null));
+        JsonNode dateNode = entry.get("Date");
+        LocalDate date = (dateNode == null || dateNode.isNull()) ? null : parseDate(dateNode.asText(null));
         if (date == null) {
             // Field names only, never the node itself: an unrecognised 200 payload may carry
             // arbitrary content, and this line is the one place a whole entry could reach the log.
-            log.warn("BOT holiday fetch: skipping entry with no parseable date; entry fields were {}",
+            log.warn("BOT holiday fetch: skipping entry with no parseable Date; entry fields were {}",
                 fieldNames(entry));
             return null;
         }
@@ -245,8 +308,11 @@ public class BotHolidayFetchService {
             return null;
         }
 
-        String nameTh = textOrNull(findField(entry, NAME_TH_FIELDS));
-        String nameEn = textOrNull(findField(entry, NAME_EN_FIELDS));
+        // HolidayWeekDay/HolidayWeekDayThai/DateThai are deliberately not read — DateThai is
+        // Buddhist-era and would need a calendar conversion this class does not implement; Date is
+        // unambiguous and sufficient. See the class javadoc.
+        String nameTh = textOrNull(entry.get("HolidayDescriptionThai"));
+        String nameEn = textOrNull(entry.get("HolidayDescription"));
         String name = (nameTh != null && !nameTh.isBlank()) ? nameTh : nameEn;
         if (name == null || name.isBlank()) {
             log.warn("BOT holiday fetch: skipping entry dated {} with no description", date);
@@ -255,43 +321,20 @@ public class BotHolidayFetchService {
         return new BankHoliday(date, name);
     }
 
-    private static JsonNode findField(JsonNode node, List<String> candidates) {
-        for (String candidate : candidates) {
-            JsonNode direct = node.get(candidate);
-            if (direct != null && !direct.isNull()) {
-                return direct;
-            }
-        }
-        // Case-insensitive fallback, since the confirmed field names above are a documented guess.
-        Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
-        while (fields.hasNext()) {
-            Map.Entry<String, JsonNode> field = fields.next();
-            for (String candidate : candidates) {
-                if (field.getKey().equalsIgnoreCase(candidate) && !field.getValue().isNull()) {
-                    return field.getValue();
-                }
-            }
-        }
-        return null;
-    }
-
     private static String textOrNull(JsonNode node) {
-        return node == null ? null : node.asText(null);
+        return (node == null || node.isNull()) ? null : node.asText(null);
     }
 
+    /** {@code Date} is documented as ISO {@code yyyy-MM-dd} — no format guessing needed. */
     private static LocalDate parseDate(String raw) {
         if (raw == null || raw.isBlank()) {
             return null;
         }
-        String trimmed = raw.trim();
-        for (DateTimeFormatter format : DATE_FORMATS) {
-            try {
-                return LocalDate.parse(trimmed, format);
-            } catch (DateTimeParseException ignored) {
-                // try the next candidate format
-            }
+        try {
+            return LocalDate.parse(raw.trim(), DateTimeFormatter.ISO_LOCAL_DATE);
+        } catch (DateTimeParseException e) {
+            return null;
         }
-        return null;
     }
 
     /**

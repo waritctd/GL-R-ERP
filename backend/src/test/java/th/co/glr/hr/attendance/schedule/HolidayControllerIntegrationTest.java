@@ -25,11 +25,12 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * real service — CLAUDE.md "Permission changes must ship evidence", because {@code
  * POST /api/holidays/fetch} is a brand-new authorization rule.
  *
- * <p>{@code AppProperties} is constructed with no {@code BOT_API_TOKEN} (its default is blank),
- * exactly as the "no TEST_DB_URL/no Docker" note in this repo's CLAUDE.md requires tests to avoid
- * any real network call: with a blank token, {@link BotHolidayFetchService#fetchNow()} returns
- * immediately without ever constructing an HTTP request (mirrors {@code BotFxFetchService}'s own
- * guard). That means this test exercises the real {@link HolidayController} → real {@link
+ * <p>{@code AppProperties} is constructed with no {@code BOT_HOLIDAY_API_TOKEN} (its default is
+ * blank), exactly as the "no TEST_DB_URL/no Docker" note in this repo's CLAUDE.md requires tests to
+ * avoid any real network call: with a blank token, {@link BotHolidayFetchService#fetchNow()}
+ * returns immediately without ever constructing an HTTP request (mirrors {@code BotFxFetchService}'s
+ * own guard, which reads the separate {@code BOT_FX_API_TOKEN} — see {@code AppProperties.Bot}).
+ * That means this test exercises the real {@link HolidayController} → real {@link
  * BotHolidayFetchService} role-gate path with zero network traffic and zero writes to {@code
  * hr.holiday} — exactly what is needed to prove the gate itself, without needing a live BOT
  * payload this branch cannot obtain.
@@ -45,7 +46,7 @@ class HolidayControllerIntegrationTest extends AbstractPostgresIntegrationTest {
     void wireRealCollaborators() {
         BotHolidayFetchService fetchService = new BotHolidayFetchService(
             new HolidayRepository(jdbc),
-            new AppProperties(), // BOT_API_TOKEN unset -> blank -> no network call, see class javadoc
+            new AppProperties(), // BOT_HOLIDAY_API_TOKEN unset -> blank -> no network call, see class javadoc
             RestClient.builder(),
             new ObjectMapper().registerModule(new JavaTimeModule()));
         controller = new HolidayController(fetchService, new SessionContext());

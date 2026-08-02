@@ -24,6 +24,12 @@ import th.co.glr.hr.auth.UserPrincipal;
  * real-Postgres integration test through this exact controller
  * ({@code HolidayControllerIntegrationTest}) proving the wrong roles get 403 — see CLAUDE.md
  * "Permission changes must ship evidence".
+ *
+ * <p>{@link BotHolidayFetchService#fetchNow()} — not this controller — enforces a minimum interval
+ * between attempts (this fetcher's own {@code BOT_HOLIDAY_API_TOKEN} budget of 100 calls/hour — a
+ * key distinct per BOT API and per environment, not shared with {@code BotFxFetchService}) and
+ * throws a 429 {@link th.co.glr.hr.common.ApiException} rather than silently returning an empty
+ * result when called too soon; see that method's javadoc.
  */
 @RestController
 @RequestMapping("/api/holidays")
