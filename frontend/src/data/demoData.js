@@ -1,3 +1,9 @@
+import {
+  buildDemoLeaveRequests, buildDemoOvertimeRequests, buildDemoSpecialMoneyRequests,
+  buildDemoProfileRequests, buildDemoNotifications,
+} from './demoHr.js';
+import { buildDemoSalesSeed } from './demoSales.js';
+
 export const divisions = [
   { id: 'SAL', th: 'ขายและการตลาด', en: 'Sales & Marketing' },
   { id: 'WHL', th: 'คลังสินค้าและจัดส่ง', en: 'Warehouse & Logistics' },
@@ -234,6 +240,11 @@ export function createDemoDatabase() {
     // sales tickets. Real role derivation: division AC-ฝ่ายบัญชี → 'account'
     // (DivisionAccessPolicy), gates mirror TicketService.ACCOUNT_ROLES.
     { id: 11, email: 'account@glr.co.th', password: 'demo1234', name: 'คุณบัญชี การเงิน', role: 'account', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
+    // Second sales rep (chore/mock-demo-seed-state-matrix): with a single sales
+    // user, per-rep scoping and DRAFT-pricing-request privacy (owning rep +
+    // CEO/sales_manager only) are never observable locally. Owns tickets
+    // 16-18 and their own DRAFT/SUBMITTED pricing requests — see demoSales.js.
+    { id: 12, email: 'sales2@glr.co.th', password: 'demo1234', name: 'คุณอรุณี ขายเก่ง', role: 'sales', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
   ];
 
   const tickets = [
@@ -587,108 +598,25 @@ export function createDemoDatabase() {
     },
   ];
 
-  const notifications = [
-    { id: 1, userId: 8, ticketId: 2, ticketCode: 'PR-2026-0002', type: 'PRICE_PROPOSED', message: 'Ticket PR-2026-0002 มีราคาเสนอรอการอนุมัติ', read: false, createdAt: iso(2026, 6, 18) + 'T14:00:00Z' },
-    { id: 2, userId: 6, ticketId: 1, ticketCode: 'PR-2026-0001', type: 'APPROVED', message: 'Ticket PR-2026-0001 ได้รับการอนุมัติราคาแล้ว — กด Generate ใบเสนอราคาได้เลย', read: false, createdAt: iso(2026, 6, 18) + 'T10:00:00Z' },
-    { id: 3, userId: 7, ticketId: 4, ticketCode: 'PR-2026-0004', type: 'SUBMITTED', message: 'Ticket PR-2026-0004 รอการรับเรื่อง', read: false, createdAt: iso(2026, 6, 18) + 'T07:30:00Z' },
-    { id: 4, userId: 7, ticketId: 3, ticketCode: 'PR-2026-0003', type: 'PICKED_UP', message: 'Ticket PR-2026-0003 ถูกมอบหมายให้คุณแล้ว', read: true, createdAt: iso(2026, 6, 18) + 'T08:30:00Z' },
-  ];
+  // Sales/CRM PricingRequest chain state matrix (chore/mock-demo-seed-state-matrix) —
+  // demoSales.js owns tickets 16-18 (rep2's deals + the deal hosting the "extra" downstream
+  // states) plus every PricingRequest/FactoryQuote/PricingCosting/PricingDecision/
+  // CustomerQuotation/DepositNotice/FactoryPurchaseOrder/DealActivity/attachment row. Only
+  // its tickets merge into `tickets` here; the rest is exposed via `salesSeed` below for
+  // mockApi.js to push into its own module-level stores (those live in mockApi.js, not `db`).
+  const salesSeed = buildDemoSalesSeed();
+  tickets.push(...salesSeed.tickets);
 
-  const profileRequests = [
-    { id: 101, employeeId: employees[8].id, fieldKey: 'phone', fieldLabel: 'เบอร์โทรศัพท์', oldValue: employees[8].phone, newValue: '089-555-2210', requestedBy: employees[8].nameTh, requestedAt: iso(2026, 6, 9), status: 'pending' },
-    { id: 102, employeeId: employees[12].id, fieldKey: 'email', fieldLabel: 'อีเมล', oldValue: employees[12].email, newValue: 'w.new@glr.co.th', requestedBy: employees[12].nameTh, requestedAt: iso(2026, 6, 8), status: 'pending' },
-    { id: 103, employeeId: employees[5].id, fieldKey: 'address', fieldLabel: 'ที่อยู่ปัจจุบัน', oldValue: employees[5].currentAddress.line1, newValue: '88/12 ซอยอ่อนนุช 17 เขตสวนหลวง กทม. 10250', requestedBy: employees[5].nameTh, requestedAt: iso(2026, 6, 7), status: 'pending' },
-    { id: 104, employeeId: employees[19].id, fieldKey: 'emergency', fieldLabel: 'ผู้ติดต่อฉุกเฉิน', oldValue: `${employees[19].emergencyContact.name} · ${employees[19].emergencyContact.phone}`, newValue: 'คุณมานพ แสงทอง · 086-441-9920', requestedBy: employees[19].nameTh, requestedAt: iso(2026, 6, 5), status: 'pending' },
-    { id: 105, employeeId: employees[2].id, fieldKey: 'phone', fieldLabel: 'เบอร์โทรศัพท์', oldValue: employees[2].phone, newValue: '081-902-3344', requestedBy: employees[2].nameTh, requestedAt: iso(2026, 6, 2), status: 'approved' },
-  ];
-
-  // ════════════════════════════════════════════════════════════════════════════════
-  // HR: Leave Requests (comprehensive coverage of all statuses and leave types)
-  // ════════════════════════════════════════════════════════════════════════════════
-  const leaveRequests = [
-    // SUBMITTED (pending HR review)
-    {
-      id: 1, employeeId: employees[8].id, employeeCode: employees[8].code, employeeName: employees[8].nameTh,
-      leaveTypeCode: 'VACATION', leaveTypeName: 'วันลาพักร้อน',
-      startDate: iso(2026, 8, 10), endDate: iso(2026, 8, 13), totalDays: 4,
-      reason: 'พักผ่อนประจำปี', status: 'SUBMITTED',
-      quotaYear: 2026, quotaRemaining: 8,
-      requestedById: employees[8].id, requestedByName: employees[8].nameTh, requestedAt: iso(2026, 7, 20),
-      reviewedById: null, reviewedByName: null, reviewedAt: null,
-    },
-    // APPROVED
-    {
-      id: 2, employeeId: employees[12].id, employeeCode: employees[12].code, employeeName: employees[12].nameTh,
-      leaveTypeCode: 'SICK', leaveTypeName: 'ลาป่วย',
-      startDate: iso(2026, 7, 22), endDate: iso(2026, 7, 23), totalDays: 2,
-      reason: 'ไข้หวัด', status: 'APPROVED',
-      quotaYear: 2026, quotaRemaining: 9,
-      requestedById: employees[12].id, requestedByName: employees[12].nameTh, requestedAt: iso(2026, 7, 20),
-      reviewedById: users[0].employeeId, reviewedByName: 'คุณบัญชี', reviewedAt: iso(2026, 7, 21),
-    },
-    {
-      id: 3, employeeId: employees[5].id, employeeCode: employees[5].code, employeeName: employees[5].nameTh,
-      leaveTypeCode: 'PERSONAL', leaveTypeName: 'ลาพิเศษด่วน',
-      startDate: iso(2026, 7, 28), endDate: iso(2026, 7, 28), totalDays: 1,
-      reason: 'งานส่วนตัวเร่งด่วน', status: 'APPROVED',
-      quotaYear: 2026, quotaRemaining: 2,
-      requestedById: employees[5].id, requestedByName: employees[5].nameTh, requestedAt: iso(2026, 7, 21),
-      reviewedById: users[0].employeeId, reviewedByName: 'คุณบัญชี', reviewedAt: iso(2026, 7, 21),
-    },
-    // REJECTED
-    {
-      id: 4, employeeId: employees[18].id, employeeCode: employees[18].code, employeeName: employees[18].nameTh,
-      leaveTypeCode: 'VACATION', leaveTypeName: 'วันลาพักร้อน',
-      startDate: iso(2026, 8, 5), endDate: iso(2026, 8, 9), totalDays: 5,
-      reason: 'วันหยุดส่วนตัว', status: 'REJECTED',
-      quotaYear: 2026, quotaRemaining: 6,
-      requestedById: employees[18].id, requestedByName: employees[18].nameTh, requestedAt: iso(2026, 7, 15),
-      reviewedById: users[0].employeeId, reviewedByName: 'คุณบัญชี', reviewedAt: iso(2026, 7, 15),
-      rejectReason: 'มีกิจกรรมสำคัญในช่วงนี้',
-    },
-  ];
-
-  // ════════════════════════════════════════════════════════════════════════════════
-  // HR: Overtime Requests (pending approval, approved, rejected)
-  // ════════════════════════════════════════════════════════════════════════════════
-  const overtimeRequests = [
-    // SUBMITTED (pending manager approval)
-    {
-      id: 1, employeeId: employees[8].id, employeeCode: employees[8].code, employeeName: employees[8].nameTh,
-      workDate: iso(2026, 7, 22), plannedMinutes: 120,
-      reason: 'เร่งปิดงานปลายเดือน', status: 'SUBMITTED',
-      payrollMonth: iso(2026, 7, 1),
-      requestedById: employees[8].id, requestedByName: employees[8].nameTh, requestedAt: iso(2026, 7, 20),
-      reviewedById: null, reviewedByName: null, reviewedAt: null,
-    },
-    // APPROVED (by manager, no CEO approval yet)
-    {
-      id: 2, employeeId: employees[2].id, employeeCode: employees[2].code, employeeName: employees[2].nameTh,
-      workDate: iso(2026, 7, 18), plannedMinutes: 180, actualMinutes: 185,
-      reason: 'ค้นหาไฟฟ้าที่ติดขัด', status: 'APPROVED',
-      payrollMonth: iso(2026, 7, 1),
-      requestedById: employees[2].id, requestedByName: employees[2].nameTh, requestedAt: iso(2026, 7, 16),
-      reviewedById: employees[0].id, reviewedByName: employees[0].nameTh, reviewedAt: iso(2026, 7, 17),
-    },
-    {
-      id: 3, employeeId: employees[15].id, employeeCode: employees[15].code, employeeName: employees[15].nameTh,
-      workDate: iso(2026, 7, 20), plannedMinutes: 90, actualMinutes: 90,
-      reason: 'ช่วยทำประเมินผล', status: 'APPROVED',
-      payrollMonth: iso(2026, 7, 1),
-      requestedById: employees[15].id, requestedByName: employees[15].nameTh, requestedAt: iso(2026, 7, 18),
-      reviewedById: employees[0].id, reviewedByName: employees[0].nameTh, reviewedAt: iso(2026, 7, 18),
-    },
-    // REJECTED
-    {
-      id: 4, employeeId: employees[22].id, employeeCode: employees[22].code, employeeName: employees[22].nameTh,
-      workDate: iso(2026, 7, 19), plannedMinutes: 240,
-      reason: 'ขับรถส่งสินค้า', status: 'REJECTED',
-      payrollMonth: iso(2026, 7, 1),
-      requestedById: employees[22].id, requestedByName: employees[22].nameTh, requestedAt: iso(2026, 7, 17),
-      reviewedById: employees[0].id, reviewedByName: employees[0].nameTh, reviewedAt: iso(2026, 7, 17),
-      rejectReason: 'ไม่มีความจำเป็น',
-    },
-  ];
+  // notifications/profileRequests/leaveRequests/overtimeRequests/specialMoneyRequests now
+  // live in demoHr.js as a full state matrix (chore/mock-demo-seed-state-matrix) — this
+  // replaces both the old handful of rows here AND the now-permanently-unreachable
+  // `if (db.leaveRequests.length === 0) {...}` blocks that used to sit in mockApi.js (dead
+  // code, since this array was never actually empty by the time those blocks ran).
+  const notifications = buildDemoNotifications();
+  const profileRequests = buildDemoProfileRequests(employees);
+  const leaveRequests = buildDemoLeaveRequests(employees);
+  const overtimeRequests = buildDemoOvertimeRequests(employees);
+  const specialMoneyRequests = buildDemoSpecialMoneyRequests(employees);
 
   // ════════════════════════════════════════════════════════════════════════════════
   // Attendance: Daily punch records (for multiple employees over several days)
@@ -726,50 +654,14 @@ export function createDemoDatabase() {
     }
   }
 
-  // ════════════════════════════════════════════════════════════════════════════════
-  // Sales/CRM: Commission Records (various stages)
-  // ════════════════════════════════════════════════════════════════════════════════
-  const commissionRecords = [
-    // SUBMITTED (pending sales manager approval)
-    {
-      id: 1, invoiceNumber: 'INV-2026-07001', invoiceDate: iso(2026, 7, 14),
-      grossAmount: 125000, netAmount: 125000,
-      salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี',
-      ticketId: 1, ticketCode: 'PR-2026-0001',
-      status: 'SUBMITTED',
-      payrollMonth: iso(2026, 7, 1),
-      receivedDate: iso(2026, 7, 18),
-      submittedById: 6, submittedByName: 'คุณสมหมาย ขายดี', submittedAt: iso(2026, 7, 19),
-      approvedById: null, approvedByName: null, approvedAt: null,
-      commissionBase: 125000, commissionAmount: 3750, // 3%
-    },
-    // APPROVED (by sales manager, no CEO processing yet)
-    {
-      id: 2, invoiceNumber: 'INV-2026-07002', invoiceDate: iso(2026, 7, 10),
-      grossAmount: 280000, netAmount: 280000,
-      salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี',
-      ticketId: 14, ticketCode: 'PR-2026-0014',
-      status: 'APPROVED',
-      payrollMonth: iso(2026, 6, 1),
-      receivedDate: iso(2026, 7, 12),
-      submittedById: 6, submittedByName: 'คุณสมหมาย ขายดี', submittedAt: iso(2026, 7, 13),
-      approvedById: 9, approvedByName: 'คุณมณี ผู้จัดการฝ่ายขาย', approvedAt: iso(2026, 7, 15),
-      commissionBase: 280000, commissionAmount: 9100, // 3.25% tier
-    },
-    // PROCESSED (in payroll)
-    {
-      id: 3, invoiceNumber: 'INV-2026-06001', invoiceDate: iso(2026, 6, 25),
-      grossAmount: 95000, netAmount: 95000,
-      salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี',
-      ticketId: 6, ticketCode: 'PR-2026-0006',
-      status: 'PROCESSED',
-      payrollMonth: iso(2026, 6, 1),
-      receivedDate: iso(2026, 6, 28),
-      submittedById: 6, submittedByName: 'คุณสมหมาย ขายดี', submittedAt: iso(2026, 6, 29),
-      approvedById: 9, approvedByName: 'คุณมณี ผู้จัดการฝ่ายขาย', approvedAt: iso(2026, 7, 1),
-      commissionBase: 95000, commissionAmount: 2850, // 3%
-    },
-  ];
+  // NOTE: this file used to export a `commissionRecords` array here, but it was never
+  // actually wired to the real store (`db.commissions`, seeded in mockApi.js from
+  // demoPayroll.js's `buildDemoCommissions()`) — the key mismatch (`commissionRecords` vs
+  // `commissions`) meant it silently seeded nothing and `db.commissions` was always `[]`.
+  // Removed rather than fixed in place: its shape (flat `invoiceNumber`, `netAmount`,
+  // `commissionBase`, a `PROCESSED` status that doesn't exist) doesn't match what the real
+  // commission handlers read/write (nested `invoiceDetails`, no `PROCESSED` status — see
+  // demoPayroll.js for the correct shape and the full status/kind matrix).
 
   // ════════════════════════════════════════════════════════════════════════════════
   // Projects (context for deal pipeline)
@@ -883,7 +775,10 @@ export function createDemoDatabase() {
 
   return {
     employees, users, profileRequests, tickets, notifications,
-    leaveRequests, overtimeRequests, attendanceRecords,
-    commissionRecords, projects, customers, products
+    leaveRequests, overtimeRequests, specialMoneyRequests, attendanceRecords,
+    projects, customers, products,
+    // Sales-chain seed rows for mockApi.js's own module-level stores (mockPricingRequests
+    // etc. aren't part of `db` — see mockApi.js's wiring near those declarations).
+    salesSeed,
   };
 }
