@@ -465,8 +465,20 @@ export const api = {
     // hr.payroll_line. GET is HR+CEO (view), PUT is HR-only (edit) -- same split as the rest of
     // this namespace. `payload` is the same { payrollMonth, inputs } shape as preview/process.
     // Mirrors PayrollController#getInputDraft / #putInputDraft.
+    //
+    // Optimistic concurrency (issue #422 follow-up, deliberate API contract change): getInputDraft's
+    // response now carries a month-level `etag` (PayrollService#getInputDraft/PayrollDraftETag) --
+    // the caller threads it straight through as `ifMatch` on the next saveInputDraft call, which
+    // sends it as the `If-Match` header. saveInputDraft's backend counterpart now REQUIRES this
+    // header (428 if absent, 409 if it no longer matches the server's current version) -- see
+    // PayrollService#saveInputDraft's javadoc for the full lock-then-compare-then-write sequence.
     getInputDraft: (params) => apiRequest(withQuery(API_ROUTES.payroll.inputDraft, params)),
-    saveInputDraft: (payload) => apiRequest(API_ROUTES.payroll.inputDraft, { method: 'PUT', body: payload }),
+    saveInputDraft: (payload, { ifMatch } = {}) =>
+      apiRequest(API_ROUTES.payroll.inputDraft, {
+        method: 'PUT',
+        body: payload,
+        headers: ifMatch ? { 'If-Match': ifMatch } : {},
+      }),
     // Deduction obligation tracking (issue #373): กยศ / กรมบังคับคดี obligation record + remittance
     // ledger. Mirrors DeductionObligationController. Self-service /me is read-only -- there is
     // deliberately no employee-facing mutation call anywhere in this group (decision 4: the dispute

@@ -12,6 +12,7 @@ import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.context.ActiveProfiles;
@@ -99,13 +100,48 @@ class PayrollInputDraftAuthorizationIntegrationTest {
             .andExpect(status().isUnauthorized());
     }
 
+    /**
+     * Optimistic concurrency (issue #422 follow-up): PUT now REQUIRES {@code If-Match} (428
+     * without it -- see {@code missingIfMatchIsRejectedWith428} below), so the positive case must
+     * GET first to obtain the month's current ETag and thread it through, exactly like the real
+     * frontend does. This also makes the test a genuine round-trip proof of the threading, not
+     * just of the role gate.
+     *
+     * <p>No etag-changed assertion here deliberately: {@code EMPTY_SAVE_BODY} submits zero
+     * employee inputs, so {@code saveInputDrafts} upserts nothing and the month's draft set (and
+     * therefore its token) is unchanged either side of this call -- a real, content-bearing save
+     * changing the token IS covered, thoroughly, by {@code PayrollDraftOptimisticConcurrencyIntegrationTest}.
+     * This class's job is the role gate and the threading, not draft content.
+     */
     @Test
     void hrCanSaveTheDraft() throws Exception {
+        MockHttpSession hrSession = sessionFor("hr");
+        String getResponse = mvc.perform(get("/api/payroll/input-draft?payrollMonth=2026-08").session(hrSession))
+            .andExpect(status().isOk())
+            .andReturn().getResponse().getContentAsString();
+        String etag = extractEtag(getResponse);
+
+        mvc.perform(put("/api/payroll/input-draft")
+                .session(hrSession)
+                .header(HttpHeaders.IF_MATCH, etag)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(EMPTY_SAVE_BODY))
+            .andExpect(status().isOk());
+    }
+
+    /**
+     * Optimistic concurrency (issue #422 follow-up): a missing {@code If-Match} is refused with
+     * 428, never silently allowed -- that headerless write is exactly the hole this feature
+     * closes (see PayrollService#saveInputDraft's javadoc). Distinct from the role-gate tests
+     * below: HR *is* authorized here, and is refused anyway, on a purely precondition ground.
+     */
+    @Test
+    void missingIfMatchIsRejectedWith428() throws Exception {
         mvc.perform(put("/api/payroll/input-draft")
                 .session(sessionFor("hr"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(EMPTY_SAVE_BODY))
-            .andExpect(status().isOk());
+            .andExpect(status().is(428));
     }
 
     @Test
@@ -140,5 +176,17 @@ class PayrollInputDraftAuthorizationIntegrationTest {
         session.setAttribute(SessionContext.SESSION_USER_KEY,
             new UserPrincipal(1L, role + "@glr.co.th", role, role, 1L, true, LocalDate.now(), false, null, false));
         return session;
+    }
+
+    // Cheap, dependency-free extraction (this file has no Jackson ObjectMapper wired) --
+    // {"payrollMonth":"...","drafts":[...],"etag":"<hex>"} -- same pattern as
+    // SecurityAuthorizationIntegrationTest#extractAttachmentId.
+    private String extractEtag(String json) {
+        java.util.regex.Matcher matcher =
+            java.util.regex.Pattern.compile("\"etag\":\"([^\"]+)\"").matcher(json);
+        if (!matcher.find()) {
+            throw new IllegalStateException("no etag field in response: " + json);
+        }
+        return matcher.group(1);
     }
 }

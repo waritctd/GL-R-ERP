@@ -759,10 +759,37 @@ export function PayrollPage({ user, showToast }) {
   const [payDate, setPayDate] = useState(`${thisMonth}-26`);
   const [draftDirty, setDraftDirty] = useState(false);
   const [draftSaving, setDraftSaving] = useState(false);
+  // Optimistic concurrency (issue #422 follow-up): 'conflict' is a new terminal status alongside
+  // the existing 'saved'/'dirty'/'saving'/'error' -- reached only on a 409 from PUT /input-draft,
+  // and cleared only by the explicit "โหลดข้อมูลใหม่" action below (never by the retry machinery,
+  // which would just 409 again against the same stale token). See draftConflictRef's own comment
+  // for why the synchronous gate lives in a ref, not this state value.
   const [draftSaveStatus, setDraftSaveStatus] = useState('saved');
+  // The Thai message from the 409 response, shown in the persistent conflict banner below (unlike
+  // the transient toast, which auto-dismisses after 3.2s -- see useToast.js -- and is therefore
+  // not sufficient on its own for "another user saved this month's draft," which HR must not miss).
+  const [draftConflictMessage, setDraftConflictMessage] = useState(null);
   const adjustmentsRef = useRef({});
   const draftDirtyRef = useRef(false);
   const draftVersionRef = useRef(0);
+  // Optimistic concurrency (issue #422 follow-up): the month-level ETag saveDraft() must thread
+  // through as If-Match on the NEXT save. Deliberately a ref updated on a strict allowlist, not
+  // whenever a fresh value is available -- see the "data arrived" effect below for why a
+  // background poll must never refresh this while the form is dirty: doing so would silently
+  // adopt another user's concurrent save as "the version I started from," defeating the entire
+  // conflict check the next time HR saves. Updated only: (a) the month-change effect, reset to
+  // null; (b) the "data arrived" effect, ONLY when the form is clean; (c) on saveDraft()'s own
+  // successful response, unconditionally (that response IS the new server truth); (d) explicitly
+  // after a successful process() (which clears the server's draft rows out from under whatever
+  // token was current). Never mutated on a 409 -- see draftConflictRef.
+  const draftEtagRef = useRef(null);
+  // Synchronous companion to draftSaveStatus === 'conflict': saveDraft()'s own `finally` block
+  // decides whether to auto-retry a few lines below, and reading React state there would see the
+  // PREVIOUS render's value (setDraftSaveStatus('conflict') hasn't flushed yet at that point in
+  // the same synchronous call), which would let the auto-retry chain hammer the backend with the
+  // same doomed-to-409 token on every subsequent keystroke. This ref is set the instant the 409 is
+  // caught, in time for that same function invocation's `finally` to see it.
+  const draftConflictRef = useRef(false);
   const queryClient = useQueryClient();
 
   const selectedLine = useMemo(
@@ -897,14 +924,24 @@ export function PayrollPage({ user, showToast }) {
       // load, not only a fresh PREVIEW run -- see canSaveDraft's own comment for the full
       // reasoning. Same resilience as suggestedInputs above -- a draft is a convenience restore
       // only and must never block payroll from loading.
+      //
+      // Optimistic concurrency (issue #422 follow-up): draftEtag is the month-level token this
+      // page must thread back as If-Match on the next save -- see draftEtagRef's own comment for
+      // exactly when it is (and is not) applied from a query resolution. `null` here (the fetch
+      // itself failed) is a real, defined value distinct from `undefined` (a cache seed that never
+      // carried draft info at all, e.g. preview()'s) -- the "data arrived" effect treats them
+      // differently.
       let draftByEmployee = {};
+      let draftEtag = null;
       try {
         const draftResponse = await api.payroll.getInputDraft?.({ payrollMonth: month });
         draftByEmployee = indexSuggestionsByEmployee(draftResponse?.drafts);
+        draftEtag = draftResponse?.etag ?? null;
       } catch {
         draftByEmployee = {};
+        draftEtag = null;
       }
-      return { period: nextPeriod, suggestionsByEmployee, draftByEmployee };
+      return { period: nextPeriod, suggestionsByEmployee, draftByEmployee, draftEtag };
     },
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
@@ -962,13 +999,59 @@ export function PayrollPage({ user, showToast }) {
   // mid-keystroke.
   useEffect(() => {
     if (!payrollQuery.data) return;
-    const { period: nextPeriod, suggestionsByEmployee: nextSuggestions, draftByEmployee } = payrollQuery.data;
+    // Regression fix (issue #422 follow-up, caught by PayrollPage.test.jsx "allows clearing
+    // zero/default amounts and sends them as zeroes" while wiring the ETag work): preview()/
+    // process() both call applyPeriod(response.period) directly (applyUatDefaults=false -- see
+    // their own definitions) AND seed that identical response into the query cache via
+    // queryClient.setQueryData, purely so the next 60s background poll diffs against fresh data
+    // instead of the stale pre-action one. That cache write ALSO makes payrollQuery.data change,
+    // which re-runs this very effect a second time for the SAME result. Previously this went
+    // unnoticed only because react-query's structural-sharing bail-out (replaceEqualDeep)
+    // sometimes treated the reseeded shape as unchanged and skipped notifying subscribers at all
+    // -- an accident of cache-content equality, not a real guarantee: it silently stopped holding
+    // the moment either seed's shape or values changed for any unrelated reason (this task's
+    // `draftEtag` addition being one such reason). The effect must instead be correct regardless
+    // of whether react-query happens to re-fire: `applyUatDefaults` now travels WITH the data
+    // (defaulted to `true` below for an ordinary fetch -- the pre-existing first-load/poll
+    // convenience) and preview()/process() explicitly seed `applyUatDefaults: false`, so a
+    // redundant re-run derives `adjustments` with EXACTLY the same inputs the direct call already
+    // used and produces an identical result -- true idempotence, not merely a race that happened
+    // not to lose.
+    const {
+      period: nextPeriod,
+      suggestionsByEmployee: nextSuggestions,
+      draftByEmployee,
+      draftEtag,
+      applyUatDefaults = true,
+    } = payrollQuery.data;
     setSuggestionsByEmployee(nextSuggestions);
     if (draftDirtyRef.current) {
+      // Optimistic concurrency (issue #422 follow-up): draftEtagRef is DELIBERATELY left alone
+      // here -- see its own comment above. Adopting a fresher token while HR is mid-edit would let
+      // the next save silently match a version that already contains someone ELSE's change,
+      // which is precisely the lost-update this whole feature exists to prevent.
       setPeriod(nextPeriod);
       return;
     }
-    applyPeriod(nextPeriod, { applyUatDefaults: true, suggestionsByEmployee: nextSuggestions, draftByEmployee });
+    applyPeriod(nextPeriod, { applyUatDefaults, suggestionsByEmployee: nextSuggestions, draftByEmployee });
+    // `undefined` (not `null`) means this data came from a manual cache seed that never carried
+    // draft info (preview()'s setQueryData) -- leave the last known-good token alone. `null` means
+    // a real query resolution whose draft fetch itself failed; adopting it is the safe default
+    // (the next save 428s with a clear "reload" message instead of risking a wrong/stale token).
+    if (draftEtag !== undefined) {
+      draftEtagRef.current = draftEtag;
+    }
+    // Regression fix (Opus review, NEW-1): this clean path had adopted a fresh server token (just
+    // above) without ever clearing draftConflictRef -- the ONLY other place that ref goes back to
+    // false is a save success, reloadAfterDraftConflict, a month change, or a process() success.
+    // Reachable sequence: a 409/428 sets draftConflictRef=true on a CLEAN form (that branch never
+    // touches draftDirtyRef, so the form stays clean); the next ordinary poll/focus refetch then
+    // takes THIS branch, adopts a good token, and clears the banner (draftSaveStatus -> 'saved')
+    // -- but draftConflictRef stayed stuck true, so autosaveDraft's `|| draftConflictRef.current`
+    // guard returns early FOREVER after that, with no banner and no toast to explain why nothing
+    // is saving. Exactly the silent-autosave-failure class issue #422/PR #426 exists to eliminate.
+    // A fresh, adopted token means whatever conflict existed genuinely IS resolved here.
+    draftConflictRef.current = false;
     setDraftSaveStatus('saved');
   }, [payrollQuery.data]);
 
@@ -1017,7 +1100,13 @@ export function PayrollPage({ user, showToast }) {
     setDraftDirty(false);
     setDraftSaving(false);
     setDraftSaveStatus('saved');
+    setDraftConflictMessage(null);
     draftVersionRef.current = 0;
+    // Optimistic concurrency (issue #422 follow-up): a new month visit starts with no known token
+    // (the incoming month's own query resolution below supplies one); any conflict from the
+    // OUTGOING month is unrelated to the incoming one.
+    draftEtagRef.current = null;
+    draftConflictRef.current = false;
     return () => {
       if (draftDirtyRef.current && canSaveDraftRef.current) {
         // Fire-and-forget: switching months (or navigating away) must not block on this, and
@@ -1025,7 +1114,14 @@ export function PayrollPage({ user, showToast }) {
         // swallowed deliberately -- the beforeunload guard below is the backstop for the case
         // that actually matters (closing the tab with unsaved work); a failed background flush on
         // ordinary month navigation just means the next autosave-on-blur picks it up again.
-        void api.payroll.saveInputDraft(draftPayload()).catch(() => {});
+        //
+        // Optimistic concurrency (issue #422 follow-up): If-Match is now REQUIRED by the backend
+        // -- threading draftEtagRef.current here (the outgoing month's last known token, still
+        // intact at this point; the reset above belongs to the render that already committed)
+        // keeps this flush a normal conditional save instead of a guaranteed 428. If it has
+        // already gone stale (another session saved first), this 409s and is swallowed exactly
+        // like any other flush failure -- there is nothing left on screen to tell.
+        void api.payroll.saveInputDraft(draftPayload(), { ifMatch: draftEtagRef.current }).catch(() => {});
       }
     };
     // draftPayload is deliberately NOT a dependency: it is a new function every render (not
@@ -1072,13 +1168,19 @@ export function PayrollPage({ user, showToast }) {
       // poll (60s) diffs against this fresh value instead of the stale pre-preview one -- without
       // this, the UI would flash back to the old figures for up to a minute before the poll caught
       // up. suggestionsByEmployee/draftByEmployee are reset to {} to match applyPeriod's own
-      // defaults above (preview does not re-consult either) -- if the background "data arrived"
-      // effect re-runs off this seed, it recomputes the identical adjustments applyPeriod just
-      // set, so this is idempotent, not a second, possibly-different apply.
+      // defaults above (preview does not re-consult either). `applyUatDefaults: false` matches
+      // the DIRECT applyPeriod(response.period) call two lines up (which uses its own default of
+      // `false`) -- see the "data arrived" effect's own comment for why this seed must mirror the
+      // direct call's exact inputs, not just its output, for a redundant re-run to be genuinely
+      // idempotent rather than a race that happened not to lose. `draftEtag: draftEtagRef.current`
+      // is likewise the honest current value -- preview() never touches server-side drafts, so the
+      // token genuinely has not changed.
       queryClient.setQueryData(queryKeys.payrollCurrent(month), {
         period: response.period,
         suggestionsByEmployee: {},
         draftByEmployee: {},
+        draftEtag: draftEtagRef.current,
+        applyUatDefaults: false,
       });
       showToast('success', 'คำนวณตัวอย่างเงินเดือนแล้ว');
     } catch (error) {
@@ -1116,10 +1218,16 @@ export function PayrollPage({ user, showToast }) {
       return;
     }
     const versionAtStart = draftVersionRef.current;
+    // Optimistic concurrency (issue #422 follow-up): the token this exact attempt is conditioned
+    // on, captured now rather than read again after the await -- see draftEtagRef's own comment
+    // for why nothing else may refresh it while dirty, but a SUBSEQUENT saveDraft() call
+    // overlapping this one (e.g. the auto-retry chain in `finally` below, or the explicit button
+    // racing a blur) reads draftEtagRef.current fresh at ITS OWN call time, same as draftPayload().
+    const ifMatchAtStart = draftEtagRef.current;
     setDraftSaving(true);
     setDraftSaveStatus('saving');
     try {
-      await api.payroll.saveInputDraft(draftPayloadValue);
+      const response = await api.payroll.saveInputDraft(draftPayloadValue, { ifMatch: ifMatchAtStart });
       // P2 fix (issue #422, adversarial review; round 2 corrected the guard from a month-VALUE
       // comparison to a visit-TOKEN comparison): if HR has since moved on from this exact visit
       // (a genuine month change, OR a round trip back to the same month -- July -> June -> July
@@ -1130,8 +1238,21 @@ export function PayrollPage({ user, showToast }) {
       // visit's clean badge to "รอบันทึกอัตโนมัติ"/"บันทึกอัตโนมัติไม่สำเร็จ" for work that visit
       // never touched). The A4 month-change flush already accounts for the outgoing visit's own
       // final state when HR left it; this stale resolution has nothing further to contribute to
-      // what's on screen now, so it is a no-op here.
+      // what's on screen now, so it is a no-op here. Deliberately also skips the etag update below
+      // -- draftEtagRef now belongs to whatever month HR is actually looking at, and this response
+      // is for the one they left.
       if (monthVisitTokenRef.current !== visitTokenAtStart) return;
+      // The server just wrote successfully -- its returned ETag is unconditionally the new truth
+      // for this month, regardless of whether draftVersionRef drifted further during the await
+      // (that drift is a SEPARATE "is there more to save" concern, handled by the branch below).
+      // Opus review finding F11: optional-chained -- apiRequest (client.js) returns `null` outright
+      // for a 204 response, and `response.etag` on `null` would throw a TypeError INSIDE this try
+      // block, getting caught by the catch below and reporting a write that actually SUCCEEDED as
+      // a failure (with the stale token left in place). This endpoint always returns 200 with a
+      // body today, but nothing about the shared `apiRequest` helper guarantees that stays true.
+      draftEtagRef.current = response?.etag;
+      draftConflictRef.current = false;
+      setDraftConflictMessage(null);
       if (draftVersionRef.current === versionAtStart) {
         draftDirtyRef.current = false;
         setDraftDirty(false);
@@ -1143,6 +1264,32 @@ export function PayrollPage({ user, showToast }) {
     } catch (error) {
       // Same cross-visit guard as the success path above.
       if (monthVisitTokenRef.current !== visitTokenAtStart) return;
+      // Optimistic concurrency (issue #422 follow-up): a 409 means another user (or another tab)
+      // saved this month's draft first. Per the owner's explicit requirement, HR's typed values
+      // must NOT be discarded and the form must stay dirty -- unlike every other failure branch
+      // here, this one deliberately does not touch draftDirtyRef/setDraftDirty, and it does NOT
+      // refresh draftEtagRef (the stale token stays stale on purpose, so a blind retry keeps
+      // refusing instead of guessing). draftSaveStatus === 'conflict' is a new terminal state,
+      // distinct from 'error', with its own persistent banner (below, near the badge) -- the
+      // existing badge/toast machinery was built for a transient failure with an implicit retry,
+      // not "someone else's data is now sitting on the server and yours would clobber it."
+      //
+      // Opus review finding F8: 428 (missing If-Match -- can happen if draftEtagRef never got a
+      // real token, e.g. the initial GET itself failed) gets the SAME treatment as 409, not just
+      // the generic error branch below. Without this, a 428 leaves draftConflictRef untouched, so
+      // the `finally` retry chain AND every subsequent blur's autosaveDraft keep re-firing the
+      // identical headerless PUT -- a request storm of doomed retries that can never succeed
+      // without HR reloading, since draftEtagRef.current stays null either way.
+      if (error?.status === 409 || error?.status === 428) {
+        draftConflictRef.current = true;
+        setDraftSaveStatus('conflict');
+        const fallbackMessage = error?.status === 428
+          ? 'ไม่พบข้อมูลอ้างอิงสำหรับบันทึกร่าง กรุณาโหลดหน้าใหม่แล้วลองอีกครั้ง'
+          : 'มีผู้ใช้อื่นบันทึกร่างเงินเดือนของงวดนี้ไปแล้ว กรุณาโหลดข้อมูลใหม่ก่อนบันทึกอีกครั้ง';
+        setDraftConflictMessage(error.message || fallbackMessage);
+        showToast('error', error.message || fallbackMessage);
+        return;
+      }
       setDraftSaveStatus('error');
       // A3 fix (issue #422): a failed autosave used to be swallowed entirely (`if (!quiet)` also
       // guarded the ERROR toast, not just the success one) -- a 400/403/409 surfaced only as a
@@ -1154,6 +1301,10 @@ export function PayrollPage({ user, showToast }) {
       if (
         monthVisitTokenRef.current === visitTokenAtStart
         && draftDirtyRef.current && draftVersionRef.current !== versionAtStart && canSaveDraft
+        // Optimistic concurrency (issue #422 follow-up): never auto-chain a retry against a token
+        // already known to be stale -- without this, every further keystroke would fire another
+        // doomed PUT (and another 409 toast) until HR explicitly reloads.
+        && !draftConflictRef.current
       ) {
         void saveDraft({ quiet: true });
       }
@@ -1161,8 +1312,27 @@ export function PayrollPage({ user, showToast }) {
   }
 
   function autosaveDraft() {
-    if (!canSaveDraft || !draftDirtyRef.current || draftSaving) return;
+    // draftConflictRef.current: see saveDraft's own comment -- do not let the silent blur-autosave
+    // spam repeated 409s once a conflict is showing. The explicit บันทึกร่าง button is NOT gated
+    // the same way; HR may still choose to retry it (it will 409 again, harmlessly) or use the
+    // conflict banner's "โหลดข้อมูลใหม่" action below.
+    if (!canSaveDraft || !draftDirtyRef.current || draftSaving || draftConflictRef.current) return;
     saveDraft({ quiet: true });
+  }
+
+  // Optimistic concurrency (issue #422 follow-up): the conflict banner's explicit resolution --
+  // HR chose to look at the other user's version rather than keep fighting a stale token. This is
+  // the ONE place a background/automatic action is allowed to discard HR's own unsaved typing,
+  // because it is not automatic: HR clicked it, after being told exactly why their save was
+  // refused. Clearing draftDirtyRef BEFORE refetching lets the ordinary "data arrived" effect
+  // apply the fresh server state the normal way, instead of duplicating applyPeriod's logic here.
+  async function reloadAfterDraftConflict() {
+    draftDirtyRef.current = false;
+    setDraftDirty(false);
+    draftConflictRef.current = false;
+    setDraftSaveStatus('saved');
+    setDraftConflictMessage(null);
+    await payrollQuery.refetch();
   }
 
   // Issue #422 owner decision (one button, not two): the existing preview command doubles as the
@@ -1176,9 +1346,25 @@ export function PayrollPage({ user, showToast }) {
   // third condition verbatim: "if the draft PUT fails, still surface the error and still run the
   // preview (read-only, useful on its own) -- but the toast must say the draft did not save."
   // saveDraft's own error toast already says exactly that; nothing extra is needed here.
+  //
+  // Opus review finding F4: that "unconditionally" was too unconditional. preview() calls
+  // applyPeriod(response.period) DIRECTLY, bypassing the dirty-guard the "data arrived" effect
+  // otherwise respects, and its own payload() filters inputs by hasPayrollInput -- unlike
+  // draftPayload(), which submits every touched employee unfiltered specifically so a
+  // started-but-unfinished row (e.g. a garnishment type picked with no amount yet) is not lost.
+  // Running preview() after a 409/428 therefore painted a period built from a payload that had
+  // ALREADY silently dropped that unfinished row, wiping it from the form even though the promise
+  // in this function's own comment ("HR's typed values must NOT be discarded") was upheld inside
+  // saveDraft() itself. Skip preview() outright when the draft save hit a conflict -- the banner
+  // already tells HR what happened and what to do; there is nothing useful preview() can safely
+  // show without repeating the same clobber.
   async function saveDraftAndPreview() {
     setSaving(true);
     await saveDraft({ quiet: false });
+    if (draftConflictRef.current) {
+      setSaving(false);
+      return;
+    }
     await preview(); // preview() owns `saving` for the rest of this action, incl. the final reset.
   }
 
@@ -1197,18 +1383,44 @@ export function PayrollPage({ user, showToast }) {
     try {
       const response = await api.payroll.process(payload());
       applyPeriod(response.period);
+      // Optimistic concurrency (issue #422 follow-up): process() clears the server's draft rows
+      // out from under whatever token draftEtagRef was holding, so the token itself is now stale
+      // too, not just the local adjustments. Re-fetch it explicitly rather than assuming the
+      // well-defined empty-set token's literal value here -- that value is PayrollDraftETag's to
+      // define, not this page's to duplicate. Best-effort: if this fails, draftEtagRef falls back
+      // to null, and the next save attempt gets a clean 428 asking HR to reload, rather than a
+      // wrong/stale token risking a silent bad match. Fetched BEFORE the cache seed below so the
+      // seed can carry the correct value in one shot -- see preview()'s own comment for why the
+      // seed's shape must match the queryFn's natural shape at all (structural-sharing parity),
+      // not just why the token itself matters.
+      let freshDraftEtag = null;
+      try {
+        const freshDraft = await api.payroll.getInputDraft({ payrollMonth: month });
+        freshDraftEtag = freshDraft?.etag ?? null;
+      } catch {
+        freshDraftEtag = null;
+      }
+      draftEtagRef.current = freshDraftEtag;
       // B1 fix (issue #422): same cache-seed as preview() above, same reasoning -- keeps the next
       // background poll from flashing back to the pre-process figures for up to a minute.
+      // `applyUatDefaults: false` matches applyPeriod(response.period)'s own default two lines up
+      // -- see preview()'s identical seed for why this must mirror the direct call's inputs, not
+      // just rely on `status` already being 'PROCESSED' (true today, but this keeps the seed
+      // correct on its own terms rather than by coincidence of a status this code doesn't check).
       queryClient.setQueryData(queryKeys.payrollCurrent(month), {
         period: response.period,
         suggestionsByEmployee: {},
         draftByEmployee: {},
+        draftEtag: freshDraftEtag,
+        applyUatDefaults: false,
       });
       // The backend clears hr.payroll_input_draft for this month once processed (see
       // PayrollService#process) -- there is nothing left to save a draft over now.
       draftDirtyRef.current = false;
       setDraftDirty(false);
       setDraftSaveStatus('saved');
+      draftConflictRef.current = false;
+      setDraftConflictMessage(null);
       showToast('success', 'ประมวลผลเงินเดือนเรียบร้อย');
       setConfirmProcess(false);
     } catch (error) {
@@ -1375,13 +1587,18 @@ export function PayrollPage({ user, showToast }) {
       disabledReason: disabledBecauseBusy || (!hasSavedPeriod ? needsSavedPeriod : null),
     }] : []),
   ];
-  const draftStatusLabel = draftSaveStatus === 'error'
-    ? 'บันทึกอัตโนมัติไม่สำเร็จ'
-    : draftSaving
-      ? 'กำลังบันทึก…'
-      : draftDirty
-        ? 'รอบันทึกอัตโนมัติ'
-        : 'บันทึกแล้ว';
+  // Optimistic concurrency (issue #422 follow-up): 'conflict' takes priority over every other
+  // status -- it is the one state where "keep waiting/retrying" is actively wrong (the token is
+  // known-stale until HR explicitly reloads via the banner below).
+  const draftStatusLabel = draftSaveStatus === 'conflict'
+    ? 'มีการบันทึกที่ขัดแย้งกัน'
+    : draftSaveStatus === 'error'
+      ? 'บันทึกอัตโนมัติไม่สำเร็จ'
+      : draftSaving
+        ? 'กำลังบันทึก…'
+        : draftDirty
+          ? 'รอบันทึกอัตโนมัติ'
+          : 'บันทึกแล้ว';
   const taxAndSsoTotal = Number(period?.totalWithholdingTax || 0) + Number(period?.totalSocialSecurity || 0);
   const payrollSummaryItems = [
     { key: 'status', label: 'สถานะรอบ', value: status.label, helper: period?.status === 'PREVIEW' ? 'ยังไม่ปิดรอบ' : 'สถานะเงินเดือน' },
@@ -1422,7 +1639,7 @@ export function PayrollPage({ user, showToast }) {
                 role="status"
                 className={cn(
                   'inline-flex items-center rounded-sm border px-2 py-1 text-xs font-extrabold',
-                  draftSaveStatus === 'error'
+                  draftSaveStatus === 'conflict' || draftSaveStatus === 'error'
                     ? 'border-danger-border bg-danger-bg text-danger'
                     : draftDirty || draftSaving
                       ? 'border-warning-border bg-warning-bg-soft text-warning'
@@ -1435,6 +1652,28 @@ export function PayrollPage({ user, showToast }) {
           </div>
         )}
       />
+
+      {/* Optimistic concurrency (issue #422 follow-up): the persistent conflict message the plan
+          requires -- unlike the header badge above (a small, easy-to-miss status word) and the
+          global toast (auto-dismisses after 3.2s, see useToast.js), this banner stays on screen
+          until HR explicitly acts, because "another user saved this month's draft" is exactly the
+          kind of thing a transient notification is wrong for: HR's own typed values are still
+          sitting in the form, unsaved, and must not be quietly abandoned. */}
+      {canSaveDraft && draftSaveStatus === 'conflict' && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-danger-border bg-danger-bg px-4 py-3 text-sm font-bold text-danger"
+        >
+          <span>
+            {draftConflictMessage
+              || 'มีผู้ใช้อื่นบันทึกร่างเงินเดือนของงวดนี้ไปแล้ว ข้อมูลที่คุณพิมพ์ไว้ยังไม่ได้บันทึกและยังอยู่ในฟอร์ม กรุณาโหลดข้อมูลใหม่ก่อนบันทึกอีกครั้ง'}
+          </span>
+          <Button type="button" variant="secondary" onClick={reloadAfterDraftConflict}>
+            <Icon name="refresh" />
+            โหลดข้อมูลใหม่
+          </Button>
+        </div>
+      )}
 
       {/* Issue #394 fix: a bare "-" in all four tiles read as broken UI, not "no
           data yet". `loading` now drives CompactStatRow's own skeleton state
