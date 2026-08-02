@@ -30,6 +30,11 @@ public record LeaveRequestDto(
     Long attachmentId,
     String attachmentFileName,
     String status,
+    // V118 cross-year quota fix (2026-08-02): for a request that spans a calendar-year boundary
+    // (e.g. a long MATERNITY request), these two figures reflect ONLY quotaYear (the request's START
+    // year) -- see hr.leave_request's V118 column comments. The full per-year breakdown is not
+    // exposed on this DTO; it lives in hr.leave_request_quota_year (LeaveRepository#findQuotaYearSplits).
+    // Unchanged meaning for the common (same-year) case, which is still the vast majority of requests.
     BigDecimal quotaRemainingBefore,
     BigDecimal quotaRemainingAfter,
     String systemNote,

@@ -374,21 +374,81 @@ class LeaveServiceTest {
     }
 
     @Test
-    void leaveRequestsCannotSpanQuotaYears() {
+    void leaveRequestsCanNowSpanQuotaYears() {
+        // V118 cross-year quota fix (2026-08-02): this used to 400 (leaveRequestsCannotSpanQuotaYears,
+        // pre-V118). A request spanning 31 Dec/1 Jan is now approved -- each year's days consume that
+        // year's OWN quota, stubbed here as fully available in both years. The exact per-year
+        // paid/unpaid split against real dates is proven in LeaveTypeRuleIntegrationTest and
+        // LeaveUnpaidDeductionIntegrationTest (real calendar math this Mockito-based class can't
+        // fake); this test only proves the request is no longer rejected outright, and that BOTH
+        // years' sumUsedDays/sumPaidDays get consulted (not just the start year).
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null,
             "VACATION",
             LocalDate.parse("2026-12-31"),
-            LocalDate.parse("2027-01-02"),
+            LocalDate.parse("2027-01-04"),
             "Year-end trip"
         );
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2027), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(110L);
+        when(leaveRepository.findById(110L)).thenReturn(Optional.of(
+            requestDto(110L, 10L, "APPROVED", request.startDate(), request.endDate(), "2.00", "0.00")));
 
-        assertThatThrownBy(() -> leaveService.submit(request, user("employee", 10L)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.BAD_REQUEST);
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+        // Both years must have been consulted, proving the request's days were genuinely attributed
+        // per year, not just against the start year the way the pre-fix single-quotaYear model did.
+        verify(leaveRepository).sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class));
+        verify(leaveRepository).sumUsedDays(eq(10L), eq("VACATION"), eq(2027), any(Collection.class));
+        // The per-year attribution itself must have been persisted, one row per year touched.
+        ArgumentCaptor<List<LeaveQuotaYearSplit>> splitsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(leaveRepository).insertQuotaYearSplits(eq(110L), splitsCaptor.capture());
+        List<LeaveQuotaYearSplit> splits = splitsCaptor.getValue();
+        assertThat(splits).extracting(LeaveQuotaYearSplit::quotaYear).containsExactly(2026, 2027);
+    }
+
+    @Test
+    void aCrossYearRequestThatIsAutoRejectedStillRecordsAQuotaYearSplitPerYearWithNothingConsumed() {
+        // Wrong-way-round complement: even when the gate rejects (e.g. insufficient advance notice),
+        // the per-year attribution rows must still be written -- with paidDays=unpaidDays=0 for every
+        // year touched, exactly mirroring how the parent row's own paidDays/unpaidDays stay 0 for an
+        // AUTO_REJECTED request today. A cross-year AUTO_REJECTED request that silently skipped
+        // writing a quota-year row for one of its years would leave that year's attribution
+        // permanently missing -- a data-integrity gap, not just a cosmetic one.
+        //
+        // Uses SICK (not VACATION) so autoRejectNote fires for a simple, unrelated reason (missing
+        // medical certificate) rather than needing the cross-year date itself to trigger a gate.
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("SICK")).thenReturn(Optional.of(sickType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("SICK"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.sumUsedDays(eq(10L), eq("SICK"), eq(2027), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        SubmitLeaveRequest sickRequest = new SubmitLeaveRequest(
+            null, "SICK", LocalDate.parse("2026-12-31"), LocalDate.parse("2027-01-04"), "Year-end illness");
+        when(leaveRepository.create(eq(10L), eq(10L), eq(sickRequest), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(2026),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(111L);
+        when(leaveRepository.findById(111L)).thenReturn(Optional.of(
+            requestDto(111L, 10L, "AUTO_REJECTED", sickRequest.startDate(), sickRequest.endDate(), "0.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(sickRequest, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        ArgumentCaptor<List<LeaveQuotaYearSplit>> splitsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(leaveRepository).insertQuotaYearSplits(eq(111L), splitsCaptor.capture());
+        List<LeaveQuotaYearSplit> splits = splitsCaptor.getValue();
+        assertThat(splits).extracting(LeaveQuotaYearSplit::quotaYear).containsExactly(2026, 2027);
+        assertThat(splits).allSatisfy(split -> {
+            assertThat(split.paidDays()).isEqualByComparingTo(BigDecimal.ZERO);
+            assertThat(split.unpaidDays()).isEqualByComparingTo(BigDecimal.ZERO);
+        });
     }
 
     @Test
@@ -401,6 +461,12 @@ class LeaveServiceTest {
         LeaveRequestDto approved = requestDto(80L, 10L, "APPROVED", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), "1.00", "1.00");
         when(leaveRepository.findById(80L)).thenReturn(Optional.of(approved));
         when(leaveRepository.cancel(80L, 20L, null)).thenReturn(1);
+        // V118 cross-year quota fix: recordPayrollCorrectionIfNeeded now reads the per-year
+        // attribution (not the parent's aggregate paidDays/totalDays) via findQuotaYearSplits --
+        // single year here, carrying the same paid/total figures the parent DTO above does.
+        when(leaveRepository.findQuotaYearSplits(80L)).thenReturn(List.of(
+            new LeaveQuotaYearSplit(2026, new BigDecimal("2.00"), new BigDecimal("1.00"), new BigDecimal("1.00"),
+                BigDecimal.ZERO, BigDecimal.ZERO)));
         when(leaveRepository.findProcessedPayrollMonths(any(Collection.class)))
             .thenReturn(java.util.Set.of(LocalDate.parse("2026-07-01")));
         UserPrincipal hr = user("hr", 20L);

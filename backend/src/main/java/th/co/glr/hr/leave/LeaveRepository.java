@@ -210,14 +210,24 @@ public class LeaveRepository {
         return Boolean.TRUE.equals(exists);
     }
 
+    /**
+     * V118 cross-year quota fix (2026-08-02): reads from {@code hr.leave_request_quota_year}, NOT the
+     * parent's own {@code total_days}/{@code quota_year} -- a request's days may now be attributed to
+     * more than one calendar year (§5.4 MATERNITY), so quota consumption for a given year must sum
+     * only the days that year's own child row records, not a whole multi-year request's total just
+     * because it happens to touch this year at all. For every pre-V118 (necessarily single-year)
+     * request this is byte-identical to the old parent-column query, since V118's backfill gave each
+     * one exactly one child row carrying its own total_days.
+     */
     public BigDecimal sumUsedDays(long employeeId, String leaveTypeCode, int quotaYear, Collection<LeaveStatus> statuses) {
         BigDecimal value = jdbc.queryForObject("""
-            SELECT COALESCE(sum(total_days), 0)::numeric(5,2)
-              FROM hr.leave_request
-             WHERE employee_id = :employeeId
-               AND leave_type_code = :leaveTypeCode
-               AND quota_year = :quotaYear
-               AND status IN (:statuses)
+            SELECT COALESCE(sum(lrqy.total_days), 0)::numeric(5,2)
+              FROM hr.leave_request_quota_year lrqy
+              JOIN hr.leave_request lr ON lr.leave_request_id = lrqy.leave_request_id
+             WHERE lr.employee_id = :employeeId
+               AND lr.leave_type_code = :leaveTypeCode
+               AND lrqy.quota_year = :quotaYear
+               AND lr.status IN (:statuses)
             """, new MapSqlParameterSource()
             .addValue("employeeId", employeeId)
             .addValue("leaveTypeCode", leaveTypeCode)
@@ -232,15 +242,20 @@ public class LeaveRepository {
      * {@code total_days} -- see {@link #sumUsedDays}) already granted/pending this quota year, for
      * types whose paid allowance is capped independently of the quota itself (e.g. MATERNITY: 98-day
      * quota, 45-day paid cap). See LeaveService#submit.
+     *
+     * <p>V118 cross-year quota fix: same per-year child-table read as {@link #sumUsedDays} above, and
+     * for the same reason -- a capped type's paid allowance is also a per-calendar-year concept (see
+     * {@link LeaveQuotaYearSplit}'s Javadoc for the "per-year-independent cap" design decision).
      */
     public BigDecimal sumPaidDays(long employeeId, String leaveTypeCode, int quotaYear, Collection<LeaveStatus> statuses) {
         BigDecimal value = jdbc.queryForObject("""
-            SELECT COALESCE(sum(paid_days), 0)::numeric(5,2)
-              FROM hr.leave_request
-             WHERE employee_id = :employeeId
-               AND leave_type_code = :leaveTypeCode
-               AND quota_year = :quotaYear
-               AND status IN (:statuses)
+            SELECT COALESCE(sum(lrqy.paid_days), 0)::numeric(5,2)
+              FROM hr.leave_request_quota_year lrqy
+              JOIN hr.leave_request lr ON lr.leave_request_id = lrqy.leave_request_id
+             WHERE lr.employee_id = :employeeId
+               AND lr.leave_type_code = :leaveTypeCode
+               AND lrqy.quota_year = :quotaYear
+               AND lr.status IN (:statuses)
             """, new MapSqlParameterSource()
             .addValue("employeeId", employeeId)
             .addValue("leaveTypeCode", leaveTypeCode)
@@ -251,6 +266,59 @@ public class LeaveRepository {
     }
 
     /**
+     * V118 cross-year quota fix: persists the per-calendar-year attribution {@code LeaveService#submit}
+     * computed for a just-created leave request -- one row per year in {@code splits}, always at
+     * least one (every request touches at least its own start year). Called in the same transaction
+     * as {@link #create}, right after it returns the new id.
+     */
+    public void insertQuotaYearSplits(long leaveRequestId, List<LeaveQuotaYearSplit> splits) {
+        for (LeaveQuotaYearSplit split : splits) {
+            jdbc.update("""
+                INSERT INTO hr.leave_request_quota_year (
+                    leave_request_id, quota_year, total_days, paid_days, unpaid_days,
+                    quota_remaining_before, quota_remaining_after
+                )
+                VALUES (
+                    :leaveRequestId, :quotaYear, :totalDays, :paidDays, :unpaidDays,
+                    :quotaRemainingBefore, :quotaRemainingAfter
+                )
+                """, new MapSqlParameterSource()
+                .addValue("leaveRequestId", leaveRequestId)
+                .addValue("quotaYear", split.quotaYear())
+                .addValue("totalDays", split.totalDays())
+                .addValue("paidDays", split.paidDays())
+                .addValue("unpaidDays", split.unpaidDays())
+                .addValue("quotaRemainingBefore", split.quotaRemainingBefore())
+                .addValue("quotaRemainingAfter", split.quotaRemainingAfter()));
+        }
+    }
+
+    /**
+     * V118 cross-year quota fix: reads back a leave request's per-year attribution -- used by {@code
+     * LeaveService#cancel}'s cancel-after-close reversal ({@code recordPayrollCorrectionIfNeeded}),
+     * which needs each year's own (paidDays, totalDays) to correctly re-derive which calendar months
+     * were unpaid via {@link LeaveDayMath#unpaidWorkingDaysByMonthAcrossYears}. Ordered by quota_year
+     * so the earliest (start) year is always first.
+     */
+    public List<LeaveQuotaYearSplit> findQuotaYearSplits(long leaveRequestId) {
+        return jdbc.query("""
+            SELECT quota_year, total_days, paid_days, unpaid_days,
+                   quota_remaining_before, quota_remaining_after
+              FROM hr.leave_request_quota_year
+             WHERE leave_request_id = :leaveRequestId
+             ORDER BY quota_year
+            """, Map.of("leaveRequestId", leaveRequestId),
+            (rs, rowNum) -> new LeaveQuotaYearSplit(
+                rs.getInt("quota_year"),
+                rs.getObject("total_days", BigDecimal.class),
+                rs.getObject("paid_days", BigDecimal.class),
+                rs.getObject("unpaid_days", BigDecimal.class),
+                rs.getObject("quota_remaining_before", BigDecimal.class),
+                rs.getObject("quota_remaining_after", BigDecimal.class)
+            ));
+    }
+
+    /**
      * Leave -&gt; payroll unpaid-day deduction (2026-07-23): per employee, the unpaid WORKING days of
      * APPROVED leave that fall inside payroll month {@code monthStart} (a first-of-month date). Reads
      * every APPROVED, unpaid-day-bearing request whose date range overlaps the month, then attributes
@@ -258,20 +326,36 @@ public class LeaveRepository {
      * two calendar months splits correctly -- only the unpaid working days that actually fall in this
      * month count here, not the request's full unpaid_days total. Consumed by {@code
      * PayrollService#suggestedInputs} (additive; never touches {@code preview()}/{@code process()}).
+     *
+     * <p>V118 cross-year quota fix: reads {@code paid_days}/{@code total_days} from the
+     * {@code hr.leave_request_quota_year} row for {@code year(monthStart)} specifically -- NOT the
+     * parent's aggregate columns -- and clips the date range to that same calendar year before
+     * handing it to {@link LeaveDayMath#unpaidWorkingDaysByMonth}. A payroll month always belongs to
+     * exactly one calendar year, so this year's own child row is always sufficient (an unpaid day in
+     * month M can only ever come from year(M)'s own attribution -- see {@link
+     * LeaveQuotaYearSplit}'s Javadoc on why paid-day consumption resets at a year boundary, which is
+     * exactly why the PARENT's aggregate paid_days/total_days can no longer be used here). For every
+     * pre-V118 (necessarily single-year) request this is byte-identical to the old behaviour, since
+     * the year-clip is a no-op when the whole range already sits inside one year.
      */
     public Map<Long, BigDecimal> findUnpaidLeaveDaysByEmployeeForMonth(LocalDate monthStart) {
         LocalDate monthEndInclusive = monthStart.plusMonths(1).minusDays(1);
+        int year = monthStart.getYear();
         List<UnpaidLeaveSpan> spans = jdbc.query("""
-            SELECT employee_id, start_date, end_date, paid_days, total_days
-              FROM hr.leave_request
-             WHERE status = 'APPROVED'
-               AND unpaid_days > 0
-               AND start_date <= :monthEndInclusive
-               AND end_date >= :monthStart
+            SELECT lr.employee_id, lr.start_date, lr.end_date, lrqy.paid_days, lrqy.total_days
+              FROM hr.leave_request lr
+              JOIN hr.leave_request_quota_year lrqy
+                ON lrqy.leave_request_id = lr.leave_request_id
+               AND lrqy.quota_year = :year
+             WHERE lr.status = 'APPROVED'
+               AND lrqy.unpaid_days > 0
+               AND lr.start_date <= :monthEndInclusive
+               AND lr.end_date >= :monthStart
             """,
             new MapSqlParameterSource()
                 .addValue("monthStart", monthStart)
-                .addValue("monthEndInclusive", monthEndInclusive),
+                .addValue("monthEndInclusive", monthEndInclusive)
+                .addValue("year", year),
             (rs, rowNum) -> new UnpaidLeaveSpan(
                 rs.getLong("employee_id"),
                 rs.getObject("start_date", LocalDate.class),
@@ -282,10 +366,14 @@ public class LeaveRepository {
 
         Map<Long, BigDecimal> byEmployee = new LinkedHashMap<>();
         for (UnpaidLeaveSpan span : spans) {
+            LocalDate[] clipped = LeaveDayMath.clipToYear(span.startDate(), span.endDate(), year);
+            if (clipped == null) {
+                continue;
+            }
             // Sub-day leave (2026-07-25): reads the BigDecimal LeaveDayMath computes directly --
             // no more setScale(0, DOWN) floor, which used to discard a sub-day fraction entirely.
             BigDecimal unpaidInMonth = LeaveDayMath
-                .unpaidWorkingDaysByMonth(span.startDate(), span.endDate(), span.paidDays(), span.totalDays())
+                .unpaidWorkingDaysByMonth(clipped[0], clipped[1], span.paidDays(), span.totalDays())
                 .get(monthStart);
             if (unpaidInMonth != null && unpaidInMonth.signum() > 0) {
                 byEmployee.merge(span.employeeId(), unpaidInMonth, BigDecimal::add);
