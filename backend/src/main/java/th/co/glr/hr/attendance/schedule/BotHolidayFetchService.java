@@ -234,7 +234,10 @@ public class BotHolidayFetchService {
         JsonNode dateNode = findField(entry, DATE_FIELDS);
         LocalDate date = dateNode == null ? null : parseDate(dateNode.asText(null));
         if (date == null) {
-            log.warn("BOT holiday fetch: skipping entry with no parseable date: {}", entry);
+            // Field names only, never the node itself: an unrecognised 200 payload may carry
+            // arbitrary content, and this line is the one place a whole entry could reach the log.
+            log.warn("BOT holiday fetch: skipping entry with no parseable date; entry fields were {}",
+                fieldNames(entry));
             return null;
         }
         if (date.getYear() != year) {
