@@ -65,6 +65,33 @@ class OvertimeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(repository.payrollMonthProcessed(LocalDate.parse("2026-05-01"))).isFalse();
     }
 
+    // V114: a fresh test database is migrated with NO hr.payroll_seed_coverage row (the guarded
+    // insert in V114 only fires when hr.payroll_year_to_date_seed already has a 2026 row, and this
+    // schema has none) — the UAT shape from the plan's fact 3, proven directly against the real
+    // migrated schema rather than assumed.
+    @Test
+    void payrollMonthSeedCoveredIsFalseWhenNoCoverageRowExists() {
+        assertThat(repository.payrollMonthSeedCovered(LocalDate.parse("2026-03-01"))).isFalse();
+    }
+
+    @Test
+    void payrollMonthSeedCoveredIsTrueThroughCoveredMonthAndFalseJustAfter() {
+        insertCoverage(2026, "2026-06-01");
+
+        assertThat(repository.payrollMonthSeedCovered(LocalDate.parse("2026-01-01"))).isTrue();
+        assertThat(repository.payrollMonthSeedCovered(LocalDate.parse("2026-06-01"))).isTrue();
+        // The cutoff is inclusive of June and must not leak into July.
+        assertThat(repository.payrollMonthSeedCovered(LocalDate.parse("2026-07-01"))).isFalse();
+    }
+
+    @Test
+    void payrollMonthSeedCoveredDoesNotLeakAcrossTaxYears() {
+        insertCoverage(2026, "2026-06-01");
+
+        // Same month-of-year, different tax_year -- must not match a 2026-only coverage row.
+        assertThat(repository.payrollMonthSeedCovered(LocalDate.parse("2027-03-01"))).isFalse();
+    }
+
     @Test
     void findSalaryBasisAsOfPicksTheLatestHistoryRowOnOrBeforeTheWorkDateAndIgnoresLaterOnes() {
         long employeeId = insertEmployeeWithSalary("OT-010", new BigDecimal("30000.00"));
@@ -160,5 +187,12 @@ class OvertimeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest 
                 :status
             )
             """, Map.of("payrollMonth", payrollMonth, "status", status));
+    }
+
+    private void insertCoverage(int taxYear, String coversThrough) {
+        jdbc.update("""
+            INSERT INTO hr.payroll_seed_coverage (tax_year, covers_through, note)
+            VALUES (:taxYear, CAST(:coversThrough AS DATE), 'test coverage')
+            """, Map.of("taxYear", taxYear, "coversThrough", coversThrough));
     }
 }
