@@ -210,7 +210,8 @@ public class LeaveRepository {
         leave_type_code, name_th, name_en, annual_quota_days, requires_attachment,
         paid_days_cap, advance_notice_days, min_service_months, max_consecutive_days,
         once_per_employment, day_count_basis, prorated_first_year, first_year_max_days,
-        certificate_filing_window_days, no_certificate_monthly_tolerance
+        certificate_filing_window_days, no_certificate_monthly_tolerance,
+        emergency_monthly_allowance
         """;
 
     public List<LeaveTypeDto> findLeaveTypes() {
@@ -669,14 +670,16 @@ public class LeaveRepository {
                 total_days, paid_days, unpaid_days,
                 quota_year, reason, status, quota_remaining_before,
                 quota_remaining_after, system_note, requested_by_id,
-                contact_house_no, contact_subdistrict, contact_district, contact_province, contact_phone
+                contact_house_no, contact_subdistrict, contact_district, contact_province, contact_phone,
+                purpose_code
             )
             VALUES (
                 :employeeId, :leaveTypeCode, :startDate, :endDate, :startTime, :endTime,
                 :totalDays, :paidDays, :unpaidDays,
                 :quotaYear, :reason, :status, :quotaRemainingBefore,
                 :quotaRemainingAfter, :systemNote, :requestedById,
-                :contactHouseNo, :contactSubdistrict, :contactDistrict, :contactProvince, :contactPhone
+                :contactHouseNo, :contactSubdistrict, :contactDistrict, :contactProvince, :contactPhone,
+                :purposeCode
             )
             RETURNING leave_request_id
             """, new MapSqlParameterSource()
@@ -700,8 +703,66 @@ public class LeaveRepository {
             .addValue("contactSubdistrict", contactSubdistrict)
             .addValue("contactDistrict", contactDistrict)
             .addValue("contactProvince", contactProvince)
-            .addValue("contactPhone", contactPhone), Long.class);
+            .addValue("contactPhone", contactPhone)
+            // §5.2 leave purpose (V125): same trim/uppercase normalization as leaveTypeCode above --
+            // the whitelist check itself already ran in LeaveService#normalizePurposeCode before this
+            // was ever called, so no re-validation happens here (matches leaveTypeCode's own split of
+            // concerns: Java validates, the repository just persists the normalized form).
+            .addValue("purposeCode", request.purposeCode() == null || request.purposeCode().isBlank()
+                ? null : request.purposeCode().trim().toUpperCase()),
+            Long.class);
         return id == null ? 0 : id;
+    }
+
+    /**
+     * §5.2 emergency-filing exception (V125): marks a just-created request as having been approved
+     * via the emergency tolerance rather than by meeting its type's ordinary advance notice. Called
+     * conditionally after {@link #create}, in the same transaction -- mirrors {@link #attachFile}'s
+     * shape (a small follow-up UPDATE by id, kept OUT of {@link #create}'s own parameter list so
+     * every existing caller/test of that method is unaffected by this addition).
+     */
+    public int markEmergencyFiling(long leaveRequestId) {
+        return jdbc.update("""
+            UPDATE hr.leave_request
+               SET emergency_filing = TRUE,
+                   updated_at = now()
+             WHERE leave_request_id = :leaveRequestId
+            """, new MapSqlParameterSource().addValue("leaveRequestId", leaveRequestId));
+    }
+
+    /**
+     * §5.2 emergency-filing exception (V125): rolling monthly count of this employee's PRIOR
+     * requests of {@code leaveTypeCode} that were themselves approved via the emergency exception
+     * ({@code emergency_filing = TRUE}), for the calendar month containing {@code requestStartDate}
+     * -- see LeaveService#autoRejectNote for how a NEW request's own eligibility for the exception is
+     * bounded by this count. A plain COUNT over existing rows, never a separately-maintained counter
+     * -- see V125's migration comment for why.
+     *
+     * <p>Scoped to {@code statuses} the same way {@link #sumUsedDays} is scoped to
+     * ACTIVE_QUOTA_STATUSES (SUBMITTED/APPROVED): a CANCELLED emergency filing releases its slot for
+     * the month, mirroring {@code ux_leave_once_per_employment}'s identical "cancelling releases the
+     * claim" precedent (V116).
+     */
+    public int countEmergencyFilings(long employeeId, String leaveTypeCode, LocalDate requestStartDate, Collection<LeaveStatus> statuses) {
+        LocalDate monthStart = requestStartDate.withDayOfMonth(1);
+        LocalDate monthStartNext = monthStart.plusMonths(1);
+        Integer count = jdbc.queryForObject("""
+            SELECT COUNT(*)
+              FROM hr.leave_request
+             WHERE employee_id = :employeeId
+               AND leave_type_code = :leaveTypeCode
+               AND emergency_filing = TRUE
+               AND status IN (:statuses)
+               AND start_date >= :monthStart
+               AND start_date < :monthStartNext
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("leaveTypeCode", leaveTypeCode)
+            .addValue("statuses", statuses.stream().map(LeaveStatus::name).toList())
+            .addValue("monthStart", monthStart)
+            .addValue("monthStartNext", monthStartNext),
+            Integer.class);
+        return count == null ? 0 : count;
     }
 
     public int attachFile(long leaveRequestId, long attachmentId) {
@@ -838,7 +899,9 @@ public class LeaveRepository {
                    lr.contact_subdistrict,
                    lr.contact_district,
                    lr.contact_province,
-                   lr.contact_phone
+                   lr.contact_phone,
+                   lr.purpose_code,
+                   lr.emergency_filing
               FROM hr.leave_request lr
               JOIN hr.employee e ON e.employee_id = lr.employee_id
               JOIN hr.leave_type lt ON lt.leave_type_code = lr.leave_type_code
@@ -865,7 +928,8 @@ public class LeaveRepository {
             rs.getBoolean("prorated_first_year"),
             rs.getObject("first_year_max_days", BigDecimal.class),
             rs.getObject("certificate_filing_window_days", Integer.class),
-            rs.getInt("no_certificate_monthly_tolerance")
+            rs.getInt("no_certificate_monthly_tolerance"),
+            rs.getObject("emergency_monthly_allowance", Integer.class)
         );
     }
 
@@ -909,7 +973,9 @@ public class LeaveRepository {
             rs.getString("contact_subdistrict"),
             rs.getString("contact_district"),
             rs.getString("contact_province"),
-            rs.getString("contact_phone")
+            rs.getString("contact_phone"),
+            rs.getString("purpose_code"),
+            rs.getBoolean("emergency_filing")
         );
     }
 

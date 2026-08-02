@@ -132,6 +132,10 @@ describe('LeavePage form validation', () => {
       contactDistrict: null,
       contactProvince: null,
       contactPhone: null,
+      // §5.2 purpose/emergency-filing (V125): only meaningful for PERSONAL -- a VACATION submit
+      // always normalizes both to null/false regardless of form state.
+      purposeCode: null,
+      requestedAsEmergency: null,
       attachmentFile: null,
     });
   });

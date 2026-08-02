@@ -405,6 +405,117 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────
+    // §5.2 leave purpose + wedding cap (V125). Real-Postgres coverage of purpose_code's CHECK
+    // constraint and the wedding-leave cap enforcement in LeaveService#autoRejectNote -- the SQL
+    // (chk_leave_request_purpose_code) is exactly what LeaveServiceTest's Mockito-level companion
+    // cannot reach.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void weddingLeaveIsAllowedAtExactlyThreeDaysAndRefusedAtFour() {
+        long employeeId = insertEmployee("WEDDING-001", LocalDate.parse("2015-01-01"));
+
+        LeaveRequestDto atCap = leaveService.submit(
+            submitRequestWithPurpose(employeeId, "PERSONAL", "2026-07-13", "2026-07-15", "WEDDING"),
+            employee(employeeId));
+        assertThat(atCap.status()).isEqualTo("APPROVED");
+        assertThat(atCap.paidDays()).isEqualByComparingTo("3.00");
+        assertThat(atCap.purposeCode()).isEqualTo("WEDDING");
+
+        LeaveRequestDto overCap = leaveService.submit(
+            submitRequestWithPurpose(employeeId, "PERSONAL", "2026-07-20", "2026-07-23", "WEDDING"),
+            employee(employeeId));
+        assertThat(overCap.status()).isEqualTo("AUTO_REJECTED");
+        assertThat(overCap.systemNote()).contains("Wedding leave");
+    }
+
+    @Test
+    void anOtherPurposePersonalLeaveRequestIsNotCappedAtThreeDays() {
+        // §5.2 non-exhaustive list ("เป็นต้น"/"etc."): the wedding cap must not leak onto every
+        // purpose -- the identical 4-day span the test above refuses under WEDDING must be approved
+        // in full under OTHER.
+        long employeeId = insertEmployee("OTHERPURPOSE-001", LocalDate.parse("2015-01-01"));
+
+        LeaveRequestDto result = leaveService.submit(
+            submitRequestWithPurpose(employeeId, "PERSONAL", "2026-07-20", "2026-07-23", "OTHER"),
+            employee(employeeId));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.purposeCode()).isEqualTo("OTHER");
+    }
+
+    @Test
+    void theDatabaseItselfRefusesAPurposeCodeThatIsNotInTheAllowedList() {
+        // Real-DB companion to LeaveServiceTest's Java-level normalizePurposeCode validation:
+        // chk_leave_request_purpose_code is a REAL, independent backstop -- proven by calling
+        // LeaveRepository#create directly, bypassing LeaveService#normalizePurposeCode entirely (the
+        // same "call the repository directly" technique
+        // theDatabaseItselfRefusesASecondLiveOrdinationClaimEvenBypassingTheJavaCheck above uses for
+        // ux_leave_once_per_employment). If this constraint were ever dropped or its list narrowed,
+        // this is the test that would catch it.
+        long employeeId = insertEmployee("BADPURPOSE-001", LocalDate.parse("2015-01-01"));
+        SubmitLeaveRequest request = submitRequestWithPurpose(
+            employeeId, "PERSONAL", "2026-07-13", "2026-07-13", "NOT_A_REAL_PURPOSE");
+
+        assertThatThrownBy(() -> leaveRepository.create(
+            employeeId, employeeId, request, new BigDecimal("1.00"), new BigDecimal("1.00"), BigDecimal.ZERO,
+            2026, LeaveStatus.APPROVED, new BigDecimal("7.00"), new BigDecimal("6.00"), null,
+            null, null, null, null, null))
+            .isInstanceOf(DataAccessException.class);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // §5.2 emergency-filing exception (V125). Real-Postgres coverage of the rolling monthly COUNT
+    // (LeaveRepository#countEmergencyFilings) -- the one thing LeaveServiceTest's Mockito-level
+    // companion cannot prove: that the count is computed from real hr.leave_request rows and
+    // genuinely resets across a real calendar-month boundary, not from a shared/global counter.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void emergencyPersonalLeaveIsApprovedAndPaidForTheFirstThreeOccasionsThisMonthAndRefusedForTheFourth() {
+        // FIXED_NOW is Wed 2026-07-01 09:00; PERSONAL requires 1 day of notice, so any date before
+        // 2026-07-02 is late. Four distinct Mondays in June 2026 (all before that cutoff, all in the
+        // SAME calendar month) stand in for four occasions of the same emergency-filing month.
+        long employeeId = insertEmployee("EMERGENCY-001", LocalDate.parse("2015-01-01"));
+
+        for (String date : new String[] {"2026-06-01", "2026-06-08", "2026-06-15"}) {
+            LeaveRequestDto result = leaveService.submit(submitRequestAsEmergency(employeeId, date), employee(employeeId));
+            assertThat(result.status()).isEqualTo("APPROVED");
+            // "โดยไม่หักเงิน" ("without deduction"): a genuine emergency filing within the tolerance
+            // is fully PAID, not split into an unpaid portion because it arrived late.
+            assertThat(result.paidDays()).isEqualByComparingTo("1.00");
+            assertThat(result.unpaidDays()).isEqualByComparingTo("0.00");
+        }
+
+        LeaveRequestDto fourth = leaveService.submit(
+            submitRequestAsEmergency(employeeId, "2026-06-22"), employee(employeeId));
+        assertThat(fourth.status()).isEqualTo("AUTO_REJECTED");
+        assertThat(fourth.systemNote()).contains("occasion(s) per calendar month");
+    }
+
+    @Test
+    void emergencyPersonalLeaveToleranceResetsAcrossACalendarMonthBoundary() {
+        // Wrong-way-round complement to the test above: three occasions in June fully use up June's
+        // allowance for this employee; a LATE May request (a different calendar month, also before
+        // the 2026-07-02 notice cutoff) must still be approved -- proving
+        // countEmergencyFilings' start_date >= monthStart AND start_date < monthStartNext bounds are
+        // real, not an accidental global/lifetime count.
+        long employeeId = insertEmployee("EMERGENCY-002", LocalDate.parse("2015-01-01"));
+        for (String date : new String[] {"2026-06-01", "2026-06-08", "2026-06-15"}) {
+            LeaveRequestDto result = leaveService.submit(submitRequestAsEmergency(employeeId, date), employee(employeeId));
+            assertThat(result.status()).isEqualTo("APPROVED");
+        }
+        // June is now fully used -- regression pin that the SAME-month 4th occasion is still refused.
+        LeaveRequestDto juneFourth = leaveService.submit(
+            submitRequestAsEmergency(employeeId, "2026-06-22"), employee(employeeId));
+        assertThat(juneFourth.status()).isEqualTo("AUTO_REJECTED");
+
+        LeaveRequestDto mayFirst = leaveService.submit(
+            submitRequestAsEmergency(employeeId, "2026-05-04"), employee(employeeId));
+        assertThat(mayFirst.status()).isEqualTo("APPROVED");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
     // §5.2 PERSONAL "passed probation" gate (review fix, V116). Real-DB proof that
     // LeaveRepository#findProbationDays' NULL-column mapping and LeaveService's
     // hire_date+probation_days arithmetic hold through the actual repository -- Mockito can fake
@@ -499,6 +610,20 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private SubmitLeaveRequest submitRequest(long employeeId, String leaveTypeCode, String startDate, String endDate) {
         return new SubmitLeaveRequest(employeeId, leaveTypeCode, LocalDate.parse(startDate), LocalDate.parse(endDate), "Integration test leave");
+    }
+
+    // §5.2 leave purpose (V125).
+    private SubmitLeaveRequest submitRequestWithPurpose(
+            long employeeId, String leaveTypeCode, String startDate, String endDate, String purposeCode) {
+        return new SubmitLeaveRequest(employeeId, leaveTypeCode, LocalDate.parse(startDate), LocalDate.parse(endDate),
+            "Integration test leave", null, null, null, null, null, null, null, purposeCode, null);
+    }
+
+    // §5.2 emergency-filing exception (V125): single-day PERSONAL request declared as an emergency.
+    private SubmitLeaveRequest submitRequestAsEmergency(long employeeId, String date) {
+        LocalDate parsed = LocalDate.parse(date);
+        return new SubmitLeaveRequest(employeeId, "PERSONAL", parsed, parsed,
+            "Integration test emergency leave", null, null, null, null, null, null, null, null, true);
     }
 
     private UserPrincipal employee(long employeeId) {

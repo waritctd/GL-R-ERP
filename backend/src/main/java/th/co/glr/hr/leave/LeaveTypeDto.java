@@ -33,6 +33,26 @@ import java.math.BigDecimal;
  * today's behaviour for every type except SICK). See {@link LeaveService#sickCertificateNote} for
  * the combined decision table and V124's migration comment for the seeded SICK values (3 / 3) and
  * the interpretation caveats.
+ *
+ * <p>{@code emergencyMonthlyAllowance} (V125): §5.2's emergency-filing exception -- the number of
+ * times PER CALENDAR MONTH a request of this type may bypass {@code advanceNoticeDays} under
+ * "อนุโลมให้ได้ไม่เกินเดือนละ 3 ครั้ง โดยไม่หักเงิน" ("...allowed up to 3 times a month, without
+ * deduction"). {@code null} = no such exception (every type except PERSONAL, seeded at 3). See
+ * {@link LeaveService#autoRejectNote} for the combined notice x emergency decision table.
+ *
+ * <p><b>{@code noCertificateMonthlyTolerance} (V124, SICK) and {@code emergencyMonthlyAllowance}
+ * (V125, PERSONAL) are BOTH "&lt;=N per calendar month" counters over {@code hr.leave_request}, but
+ * they count DIFFERENT things through DIFFERENT columns</b> -- {@code no_certificate_monthly_tolerance}
+ * counts certificate-less SICK requests via {@code LeaveRepository#countNoCertificateRequestsInMonth}
+ * (keyed off {@code attachment_id IS NULL}); {@code emergency_monthly_allowance} counts emergency
+ * ลากิจ filings via {@code LeaveRepository#countEmergencyFilings} (keyed off the dedicated
+ * {@code emergency_filing} boolean column, set only by {@code LeaveRepository#markEmergencyFiling}).
+ * The two queries share no column and cannot contaminate each other, even though both happen to be
+ * seeded at 3 and both read as "3 times a month" in the announcement text -- see each repository
+ * method's Javadoc. A shared/generic "monthly tolerance" counter was deliberately NOT used for both:
+ * the two rules trigger on unrelated conditions (a missing attachment vs. a missed notice deadline),
+ * and conflating them into one counter would let one rule's occasions silently consume the other's
+ * allowance.
  */
 public record LeaveTypeDto(
     String code,
@@ -49,6 +69,7 @@ public record LeaveTypeDto(
     boolean proratedFirstYear,
     BigDecimal firstYearMaxDays,
     Integer certificateFilingWindowDays,
-    int noCertificateMonthlyTolerance
+    int noCertificateMonthlyTolerance,
+    Integer emergencyMonthlyAllowance
 ) {
 }

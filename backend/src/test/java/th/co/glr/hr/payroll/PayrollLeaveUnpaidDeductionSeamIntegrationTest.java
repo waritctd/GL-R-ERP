@@ -192,7 +192,7 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
 
         LeaveRequestDto leave = leaveService.submit(
             new SubmitLeaveRequest(employeeId, "LEAVE_WITHOUT_PAY", monday, monday, "Half-day errand",
-                LocalTime.of(8, 30), LocalTime.of(12, 30), null, null, null, null, null),
+                LocalTime.of(8, 30), LocalTime.of(12, 30), null, null, null, null, null, null, null),
             employee(employeeId));
         assertThat(leave.totalDays()).isEqualByComparingTo("0.50");
         assertThat(leave.unpaidDays()).isEqualByComparingTo("0.50");

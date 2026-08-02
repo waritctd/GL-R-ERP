@@ -382,6 +382,8 @@ class LeaveServiceTest {
             null,
             null,
             null,
+            null,
+            null,
             null
         );
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -423,6 +425,8 @@ class LeaveServiceTest {
             "Weekend errand",
             LocalTime.of(8, 30),
             LocalTime.of(12, 30),
+            null,
+            null,
             null,
             null,
             null,
@@ -1039,7 +1043,7 @@ class LeaveServiceTest {
         // against real dates in LeaveTypeRuleIntegrationTest.
         LeaveTypeDto cappedType = new LeaveTypeDto("VACATION", "Vacation", "Vacation leave",
             new BigDecimal("10.00"), false, new BigDecimal("4.00"), 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null,
-            null, 0);
+            null, 0, null);
         // Mon 2026-07-13 .. Mon 2026-07-20: working days 13,14,15,16,17,20 = 6 working days.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-20"), "Capped leave test");
@@ -1074,7 +1078,7 @@ class LeaveServiceTest {
         // not bind, and the result must be identical to the uncapped (quota-only) behaviour.
         LeaveTypeDto cappedType = new LeaveTypeDto("VACATION", "Vacation", "Vacation leave",
             new BigDecimal("10.00"), false, new BigDecimal("9.00"), 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null,
-            null, 0);
+            null, 0, null);
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-20"), "Capped leave test");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -1471,7 +1475,7 @@ class LeaveServiceTest {
 
         SubmitLeaveRequest maternitySubDay = new SubmitLeaveRequest(
             null, "MATERNITY", nonWorkingDate, nonWorkingDate, "Sub-day maternity",
-            LocalTime.of(8, 30), LocalTime.of(12, 30), null, null, null, null, null);
+            LocalTime.of(8, 30), LocalTime.of(12, 30), null, null, null, null, null, null, null);
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("MATERNITY")).thenReturn(Optional.of(maternityType()));
         when(leaveRepository.sumUsedDays(eq(10L), eq("MATERNITY"), eq(2026), any(Collection.class)))
@@ -1494,7 +1498,7 @@ class LeaveServiceTest {
 
         SubmitLeaveRequest vacationSubDay = new SubmitLeaveRequest(
             null, "VACATION", nonWorkingDate, nonWorkingDate, "Sub-day vacation",
-            LocalTime.of(8, 30), LocalTime.of(12, 30), null, null, null, null, null);
+            LocalTime.of(8, 30), LocalTime.of(12, 30), null, null, null, null, null, null, null);
         when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
         when(leaveRepository.workingDayPredicate(eq(10L), eq(nonWorkingDate), eq(nonWorkingDate)))
             .thenReturn(alwaysNonWorking);
@@ -1504,6 +1508,248 @@ class LeaveServiceTest {
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    // §5.2 leave purpose + wedding cap (V125). Isolates the DECISION from real calendar math;
+    // LeaveTypeRuleIntegrationTest proves the same decision (plus the purpose_code CHECK constraint)
+    // through the real repository/SQL.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void submitAllowsWeddingLeaveAtExactlyThreeDaysAndRejectsFourDays() {
+        // Both sides on one fixture: 3 calendar days (Mon-Wed) allowed, 4 (Mon-Thu, a different date
+        // range so this isn't blocked by any other gate) rejected -- proves the cap binds at "> 3",
+        // not some looser boundary, and that the reject case is not vacuous (an otherwise-identical
+        // request one day shorter, same fixture, passes).
+        LeaveTypeDto type = personalTypeForWeddingCap();
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(type));
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.sumPaidDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+
+        SubmitLeaveRequest atCap = new SubmitLeaveRequest(
+            null, "PERSONAL", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-15"), "Own wedding",
+            null, null, null, null, null, null, null, "WEDDING", null);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(atCap), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(300L);
+        when(leaveRepository.findById(300L)).thenReturn(Optional.of(
+            requestDto(300L, 10L, "APPROVED", atCap.startDate(), atCap.endDate(), "3.00", "0.00")));
+
+        LeaveRequestDto atCapResult = leaveService.submit(atCap, user("employee", 10L));
+        assertThat(atCapResult.status()).isEqualTo("APPROVED");
+
+        SubmitLeaveRequest overCap = new SubmitLeaveRequest(
+            null, "PERSONAL", LocalDate.parse("2026-07-20"), LocalDate.parse("2026-07-23"), "Own wedding",
+            null, null, null, null, null, null, null, "WEDDING", null);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(overCap), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(301L);
+        when(leaveRepository.findById(301L)).thenReturn(Optional.of(
+            requestDto(301L, 10L, "AUTO_REJECTED", overCap.startDate(), overCap.endDate(), "0.00", "0.00")));
+
+        LeaveRequestDto overCapResult = leaveService.submit(overCap, user("employee", 10L));
+        assertThat(overCapResult.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(overCap), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("Wedding leave"), eq(null), eq(null), eq(null), eq(null), eq(null));
+    }
+
+    @Test
+    void submitDoesNotCapAnOtherPurposePersonalLeaveRequestAtThreeDays() {
+        // §5.2 is explicitly non-exhaustive ("เป็นต้น"/"etc."): the wedding cap must not leak onto
+        // every purpose -- a 4-day OTHER-purpose request (same span the wedding case above rejects)
+        // must be approved in full.
+        LeaveTypeDto type = personalTypeForWeddingCap();
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "PERSONAL", LocalDate.parse("2026-07-20"), LocalDate.parse("2026-07-23"), "Family business",
+            null, null, null, null, null, null, null, "OTHER", null);
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(type));
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.sumPaidDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(302L);
+        when(leaveRepository.findById(302L)).thenReturn(Optional.of(
+            requestDto(302L, 10L, "APPROVED", request.startDate(), request.endDate(), "4.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+    }
+
+    @Test
+    void submitRejectsAPurposeCodeThatIsNeitherANamedPurposeNorOther() {
+        // Vacuous-fixture guard for normalizePurposeCode's whitelist: a genuinely malformed code (not
+        // one of the five named purposes, and not the OTHER escape valve) must still be rejected --
+        // otherwise the "OTHER accepts anything" test above would be trivially true because nothing
+        // was ever validated at all.
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "PERSONAL", weekdayAfterNotice(), weekdayAfterNotice(), "Family matter",
+            null, null, null, null, null, null, null, "NOT_A_REAL_PURPOSE", null);
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(personalTypeForWeddingCap()));
+
+        assertThatThrownBy(() -> leaveService.submit(request, user("employee", 10L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // §5.2 emergency-filing exception (V125). The combined notice x emergency decision table lives
+    // as a comment on LeaveService#autoRejectNote; these tests isolate the DECISION (which branch is
+    // taken, and whether emergency_filing gets recorded) from real calendar math -- the real rolling
+    // monthly COUNT-over-rows arithmetic is proven against real dates/real Postgres in
+    // LeaveTypeRuleIntegrationTest (Mockito can fake any countEmergencyFilings() return value, but
+    // not whether the underlying SQL genuinely resets at a month boundary).
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void submitApprovesEmergencyPersonalLeaveForEachOccasionUpToTheMonthlyAllowance() {
+        // Occasions 1, 2 and 3 this month (usedThisMonth 0, 1, 2 -- STRICTLY LESS than the 3-occasion
+        // allowance) must each be approved AND recorded as an emergency filing. FIXED_NOW is Wed
+        // 2026-07-01 09:00; PERSONAL's 1-day notice makes any date before 2026-07-02 late -- three
+        // distinct Mondays in June 2026 stand in for three different occasions the same calendar
+        // month, each independently stubbed via countEmergencyFilings (a Mockito test cannot derive
+        // this count from real accumulating state; see the class comment above).
+        LeaveTypeDto type = personalTypeWithEmergencyTolerance();
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(type));
+        // Every PERSONAL submission runs the probation-passed gate regardless of what this test is
+        // about (review fix, V116) -- stub a hire date far enough in the past that it never binds.
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.sumPaidDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+
+        LocalDate[] dates = { LocalDate.parse("2026-06-01"), LocalDate.parse("2026-06-08"), LocalDate.parse("2026-06-15") };
+        long[] ids = { 310L, 311L, 312L };
+        for (int occasion = 0; occasion < dates.length; occasion++) {
+            LocalDate date = dates[occasion];
+            long id = ids[occasion];
+            SubmitLeaveRequest request = new SubmitLeaveRequest(
+                null, "PERSONAL", date, date, "Family emergency",
+                null, null, null, null, null, null, null, null, true);
+            when(leaveRepository.countEmergencyFilings(eq(10L), eq("PERSONAL"), eq(date), any(Collection.class)))
+                .thenReturn(occasion);
+            when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+                any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+                eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+                .thenReturn(id);
+            when(leaveRepository.findById(id)).thenReturn(Optional.of(
+                requestDto(id, 10L, "APPROVED", date, date, "1.00", "0.00")));
+
+            LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+            assertThat(result.status()).isEqualTo("APPROVED");
+            verify(leaveRepository).markEmergencyFiling(id);
+        }
+    }
+
+    @Test
+    void submitRejectsEmergencyPersonalLeaveOnceTheMonthlyAllowanceIsFullyUsed() {
+        // Wrong-way-round complement, same fixture: the would-be 4th occasion (usedThisMonth=3, the
+        // allowance already fully consumed) is refused outright with the tolerance-exhausted
+        // message, and markEmergencyFiling is never reached -- pinning the boundary at "< allowance",
+        // not "<= allowance".
+        LeaveTypeDto type = personalTypeWithEmergencyTolerance();
+        LocalDate date = LocalDate.parse("2026-06-22");
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "PERSONAL", date, date, "Family emergency",
+            null, null, null, null, null, null, null, null, true);
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(type));
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
+        // remainingDays() (and so sumUsedDays()) still runs even for an AUTO_REJECTED outcome -- the
+        // per-year quota-split rows are recorded (with nothing consumed) regardless of status; see
+        // aCrossYearRequestThatIsAutoRejectedStillRecordsAQuotaYearSplitPerYearWithNothingConsumed.
+        when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.countEmergencyFilings(eq(10L), eq("PERSONAL"), eq(date), any(Collection.class)))
+            .thenReturn(3);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(313L);
+        when(leaveRepository.findById(313L)).thenReturn(Optional.of(
+            requestDto(313L, 10L, "AUTO_REJECTED", date, date, "0.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository, org.mockito.Mockito.never()).markEmergencyFiling(anyLong());
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("occasion(s) per calendar month"), eq(null), eq(null), eq(null), eq(null), eq(null));
+    }
+
+    @Test
+    void submitRejectsLatePersonalLeaveWithTheGenericNoticeMessageWhenNotRequestedAsEmergency() {
+        // Pin: a late request that never DECLARES itself an emergency gets the ORIGINAL, unchanged
+        // notice-rejection message -- proving the exception is opt-in, and that
+        // countEmergencyFilings is never even consulted when it isn't needed.
+        LeaveTypeDto type = personalTypeWithEmergencyTolerance();
+        LocalDate date = LocalDate.parse("2026-06-01");
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "PERSONAL", date, date, "Family matter");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(type));
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
+        // remainingDays() (and so sumUsedDays()) still runs even for an AUTO_REJECTED outcome -- see
+        // the identical stub note in submitRejectsEmergencyPersonalLeaveOnceTheMonthlyAllowanceIsFullyUsed.
+        when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(314L);
+        when(leaveRepository.findById(314L)).thenReturn(Optional.of(
+            requestDto(314L, 10L, "AUTO_REJECTED", date, date, "0.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository, org.mockito.Mockito.never())
+            .countEmergencyFilings(anyLong(), any(String.class), any(LocalDate.class), any(Collection.class));
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("at least 1 day(s)"), eq(null), eq(null), eq(null), eq(null), eq(null));
+    }
+
+    @Test
+    void submitDoesNotApplyTheEmergencyExceptionToALeaveTypeWithNoEmergencyAllowance() {
+        // Pin: no other leave type's behaviour changes. VACATION carries no
+        // emergencyMonthlyAllowance (vacationType() fixture) -- a late VACATION request declared
+        // "emergency" must still be refused by the ordinary notice gate, unchanged, exactly as it
+        // was before V125.
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "VACATION", weekdayWithinNotice(), weekdayWithinNotice(), "Urgent errand",
+            null, null, null, null, null, null, null, null, true);
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(315L);
+        when(leaveRepository.findById(315L)).thenReturn(Optional.of(
+            requestDto(315L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository, org.mockito.Mockito.never())
+            .countEmergencyFilings(anyLong(), any(String.class), any(LocalDate.class), any(Collection.class));
+        verify(leaveRepository, org.mockito.Mockito.never()).markEmergencyFiling(anyLong());
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("at least 7"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     private SubmitLeaveRequest validSubmit(Long employeeId) {
@@ -1543,7 +1789,7 @@ class LeaveServiceTest {
         // LeaveTypeDto with proratedFirstYear=true explicitly rather than making every existing
         // VACATION test in this class newly depend on a stubbed hire date.
         return new LeaveTypeDto("VACATION", "Vacation", "Vacation leave", new BigDecimal("6.00"), false,
-            null, 7, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0);
+            null, 7, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null);
     }
 
     // §5.1 SICK certificate + filing-window + no-certificate tolerance (V124): certificateFilingWindowDays=3,
@@ -1554,17 +1800,17 @@ class LeaveServiceTest {
     // use "no restriction" placeholders for fields not under test in THEIR tests).
     private LeaveTypeDto sickType() {
         return new LeaveTypeDto("SICK", "Sick", "Sick leave", new BigDecimal("30.00"), true,
-            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, 3, 3);
+            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, 3, 3, null);
     }
 
     private LeaveTypeDto leaveWithoutPayType() {
         return new LeaveTypeDto("LEAVE_WITHOUT_PAY", "Leave without pay", "Leave without pay", BigDecimal.ZERO, false,
-            BigDecimal.ZERO, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0);
+            BigDecimal.ZERO, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null);
     }
 
     private LeaveTypeDto ordinationType() {
         return new LeaveTypeDto("ORDINATION", "Ordination", "Ordination leave", new BigDecimal("60.00"), false,
-            new BigDecimal("15.00"), 0, 12, null, true, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0);
+            new BigDecimal("15.00"), 0, 12, null, true, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null);
     }
 
     // proratedFirstYear=false, maxConsecutiveDays=3.00 (deliberately the OLD pre-V120 shape -- see
@@ -1576,7 +1822,7 @@ class LeaveServiceTest {
     // null, firstYearMaxDays 3.00) is personalTypeProratedFirstYear() below.
     private LeaveTypeDto personalTypeWithMaxConsecutive() {
         return new LeaveTypeDto("PERSONAL", "Personal", "Personal leave", new BigDecimal("7.00"), false,
-            null, 0, 0, new BigDecimal("3.00"), false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0);
+            null, 0, 0, new BigDecimal("3.00"), false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null);
     }
 
     // §5.4 MATERNITY calendar-day counting (V119, 2026-08-02): the one fixture in this class with
@@ -1584,7 +1830,7 @@ class LeaveServiceTest {
     // the basis from the leave type, not a hardcoded assumption.
     private LeaveTypeDto maternityType() {
         return new LeaveTypeDto("MATERNITY", "Maternity", "Maternity leave", new BigDecimal("98.00"), true,
-            new BigDecimal("45.00"), 0, 0, null, false, LeaveDayCountBasis.CALENDAR_DAYS, false, null, null, 0);
+            new BigDecimal("45.00"), 0, 0, null, false, LeaveDayCountBasis.CALENDAR_DAYS, false, null, null, 0, null);
     }
 
     // §5.2/§5.3 pro-ration (V120, defect 1 fix). Real completed-months-of-service arithmetic against
@@ -1594,7 +1840,7 @@ class LeaveServiceTest {
 
     private LeaveTypeDto vacationTypeProratedFirstYear() {
         return new LeaveTypeDto("VACATION", "Vacation", "Vacation leave", new BigDecimal("6.00"), false,
-            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, true, null, null, 0);
+            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, true, null, null, 0, null);
     }
 
     // §5.2 first-year total-days cap (V120, defect 3 fix). maxConsecutiveDays=null (the OLD blanket
@@ -1604,7 +1850,25 @@ class LeaveServiceTest {
     // for its own, unrelated tests).
     private LeaveTypeDto personalTypeProratedFirstYear() {
         return new LeaveTypeDto("PERSONAL", "Personal", "Personal leave", new BigDecimal("7.00"), false,
-            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, true, new BigDecimal("3.00"), null, 0);
+            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, true, new BigDecimal("3.00"), null, 0, null);
+    }
+
+    // §5.2 wedding leave cap (V125): advanceNoticeDays=0 and proratedFirstYear=false so the wedding
+    // check is isolated from the notice gate and the pro-ration/first-year-cap gates -- none of
+    // which this fixture's tests are about. certificateFilingWindowDays/noCertificateMonthlyTolerance
+    // (V124) stay at "no restriction" (null/0) -- irrelevant to a PERSONAL fixture (those two only
+    // ever govern SICK), kept only for record-shape completeness.
+    private LeaveTypeDto personalTypeForWeddingCap() {
+        return new LeaveTypeDto("PERSONAL", "Personal", "Personal leave", new BigDecimal("7.00"), false,
+            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null);
+    }
+
+    // §5.2 emergency-filing exception (V125): advanceNoticeDays=1 (the real seeded PERSONAL value,
+    // matching weekdayWithinNotice()/weekdayAfterNotice() below) and emergencyMonthlyAllowance=3 (the
+    // real seeded value). proratedFirstYear=false so pro-ration/first-year-cap never interferes.
+    private LeaveTypeDto personalTypeWithEmergencyTolerance() {
+        return new LeaveTypeDto("PERSONAL", "Personal", "Personal leave", new BigDecimal("7.00"), false,
+            null, 1, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, 3);
     }
 
     private LeaveRequestDto requestDto(long id, long employeeId, String status, LocalDate startDate, LocalDate endDate,
@@ -1653,7 +1917,12 @@ class LeaveServiceTest {
             null,
             null,
             null,
-            null
+            null,
+            // §5.2 purpose/emergency-filing (V125): no test in this class asserts on these via the
+            // helper, so they stay null/false -- tests that need a specific value construct their
+            // own LeaveRequestDto or assert on the AutoRejectResult-driven repository calls instead.
+            null,
+            false
         );
     }
 

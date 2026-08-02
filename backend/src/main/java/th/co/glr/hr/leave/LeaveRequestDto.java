@@ -56,6 +56,12 @@ public record LeaveRequestDto(
     String contactSubdistrict,
     String contactDistrict,
     String contactProvince,
-    String contactPhone
+    String contactPhone,
+    // §5.2 leave purpose (V125): self-declared, optional -- see LeaveService#normalizePurposeCode.
+    String purposeCode,
+    // §5.2 emergency-filing exception (V125): TRUE if this request was approved via the monthly
+    // emergency tolerance rather than by meeting its type's ordinary advance notice -- see
+    // LeaveService#autoRejectNote and hr.leave_request.emergency_filing's migration comment.
+    boolean emergencyFiling
 ) {
 }

@@ -54,6 +54,19 @@ function yearFrom(dateString) {
   return Number((dateString || todayIso()).slice(0, 4));
 }
 
+// §5.2 leave purpose (V125): the five NAMED purposes plus OTHER, the always-available catch-all for
+// the announcement's trailing "เป็นต้น" ("etc.") -- mirrors LeaveService's KNOWN_PURPOSE_CODES.
+// Purpose is optional (see LeaveService#normalizePurposeCode's Javadoc) and only meaningful for
+// PERSONAL (ลากิจ) today, so this select is only shown for that leave type below.
+const LEAVE_PURPOSE_OPTIONS = [
+  { value: 'DRIVING_LICENSE_OR_GOVERNMENT', label: 'ทำใบขับขี่ / ติดต่องานราชการ' },
+  { value: 'FAMILY_NECESSITY', label: 'กิจธุระอันจำเป็นของครอบครัว' },
+  { value: 'RELIGIOUS_PRACTICE', label: 'ปฏิบัติธรรมทางศาสนาตามธรรมเนียมปฏิบัติ' },
+  { value: 'WEDDING', label: 'พิธีสมรส (ของตนเองหรือบุตร) — ลาได้ไม่เกิน 3 วัน' },
+  { value: 'FAMILY_FUNERAL', label: 'งานศพของบุคคลในครอบครัว' },
+  { value: 'OTHER', label: 'อื่นๆ' },
+];
+
 function defaultForm(employeeId = '', leaveTypeCode = 'VACATION') {
   const date = todayIso();
   return {
@@ -73,6 +86,12 @@ function defaultForm(employeeId = '', leaveTypeCode = 'VACATION') {
     contactDistrict: '',
     contactProvince: '',
     contactPhone: '',
+    // §5.2 purpose/emergency-filing (V125). purposeCode is free-standing (only shown/meaningful for
+    // PERSONAL -- see the leaveTypeCode select below). requestedAsEmergency declares this late
+    // filing should be considered under the <=3/month "โดยไม่หักเงิน" tolerance instead of being
+    // auto-rejected for missing the 1-day notice.
+    purposeCode: '',
+    requestedAsEmergency: false,
   };
 }
 
@@ -94,6 +113,9 @@ function createLeaveFormSchema({ requireEmployeeId, minStartDate }) {
     contactDistrict: z.string().optional(),
     contactProvince: z.string().optional(),
     contactPhone: z.string().optional(),
+    // §5.2 purpose/emergency-filing (V125): both optional -- see defaultForm's comment.
+    purposeCode: z.string().optional(),
+    requestedAsEmergency: z.boolean().optional(),
   }).superRefine((data, context) => {
     if (requireEmployeeId && !data.employeeId) {
       context.addIssue({
@@ -473,6 +495,11 @@ export function LeavePage({ user, currentEmployee, showToast }) {
       contactDistrict: values.contactDistrict?.trim() || null,
       contactProvince: values.contactProvince?.trim() || null,
       contactPhone: values.contactPhone?.trim() || null,
+      // §5.2 purpose/emergency-filing (V125): only meaningful for PERSONAL -- the form only shows
+      // these fields for that leave type (see the JSX below), but this guard also protects against
+      // a stale value surviving a leaveTypeCode switch within the same form session.
+      purposeCode: values.leaveTypeCode === 'PERSONAL' && values.purposeCode ? values.purposeCode : null,
+      requestedAsEmergency: values.leaveTypeCode === 'PERSONAL' ? Boolean(values.requestedAsEmergency) : null,
       attachmentFile: preparedAttachment,
     });
   }
@@ -658,6 +685,31 @@ export function LeavePage({ user, currentEmployee, showToast }) {
               <small>คงเหลือ {formatDays(selectedBalance.remainingDays)} จากสิทธิ์ {formatDays(selectedBalance.annualQuotaDays)}</small>
             ) : null}
           </FormField>
+
+          {/* §5.2 leave purpose + emergency-filing exception (V125): only meaningful for PERSONAL
+              (ลากิจ) -- see LeaveTypeDto's Javadoc. Purpose is optional; selecting "พิธีสมรส" caps
+              the request at 3 days server-side. The emergency checkbox is the requester's own
+              declaration that a late filing should be considered under the <=3/month "โดยไม่หักเงิน"
+              tolerance instead of being auto-rejected outright for missing the 1-day notice. */}
+          {formLeaveTypeCode === 'PERSONAL' ? (
+            <>
+              <FormField label="เหตุผลการลากิจ (ถ้ามี)" htmlFor="leave-purpose-code">
+                <select id="leave-purpose-code" {...register('purposeCode')}>
+                  <option value="">-- ไม่ระบุ --</option>
+                  {LEAVE_PURPOSE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </FormField>
+              <div className={formGridSpan2}>
+                <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+                  <input type="checkbox" className="h-4 w-4 shrink-0" {...register('requestedAsEmergency')} />
+                  ลากิจฉุกเฉิน (แจ้งหัวหน้างานก่อนเริ่มงานแล้ว และจะยื่นใบลาในวันแรกที่กลับมาทำงาน) — ใช้ได้ไม่เกิน 3 ครั้ง/เดือน โดยไม่หักเงิน
+                </label>
+              </div>
+            </>
+          ) : null}
+
           <FormField
             label="วันที่เริ่ม"
             htmlFor="leave-start-date"
