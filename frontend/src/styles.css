@@ -869,6 +869,21 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
+/* `.panel-header` carries no inset of its own — inside `.panel` it borrows that
+   panel's 20px padding. `.table-panel` has none (its tables are meant to run
+   edge to edge), so the same header rendered flush against the card border:
+   "คำขอราคา" measured 1px from the left edge.
+
+   16px, not the 18px `.table-head`/`.data-row` use: every panel this rule
+   actually reaches has a `p-4` body, not a table — the table-topped ones
+   (TicketDetailPage's items, CeoSettingsPage) all set their own inline
+   `padding: 14px 18px`, which still wins here. Matching the body keeps the
+   heading on the same left edge as the content under it. Horizontal only —
+   the header's own `min-height: 44px` already clears the top edge. */
+.table-panel > .panel-header {
+  padding-inline: 16px;
+}
+
 .bar-list,
 .request-feed,
 .action-list,
