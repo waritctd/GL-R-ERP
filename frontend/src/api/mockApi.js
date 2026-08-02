@@ -319,6 +319,7 @@ db.leaveTypes = db.leaveTypes || [
     paidDaysCap: null, advanceNoticeDays: 1, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
     dayCountBasis: 'WORKING_DAYS', proratedFirstYear: true, firstYearMaxDays: 3,
     certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0, emergencyMonthlyAllowance: 3,
+    carriesForward: false,
   },
   // certificateFilingWindowDays: 3 / noCertificateMonthlyTolerance: 3 (V124, §5.1) -- SHAPE parity
   // only, see the file-level note above this array: create() below does NOT enforce either of these.
@@ -327,22 +328,32 @@ db.leaveTypes = db.leaveTypes || [
     paidDaysCap: null, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
     dayCountBasis: 'WORKING_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
     certificateFilingWindowDays: 3, noCertificateMonthlyTolerance: 3, emergencyMonthlyAllowance: null,
+    carriesForward: false,
   },
   // minServiceMonths: 0 / proratedFirstYear: true (V120, defect 1 fix) -- V116's original
   // min_service_months=12 refused ALL vacation leave under a year of service outright, contradicting
   // §5.3's pro-rated entitlement; the real backend now scales the quota instead (see
   // LeaveService#employeeAnnualQuota). Not enforced in mock mode.
+  //
+  // carriesForward: true (V127, §5.3.5) -- SHAPE parity only, same caveat as every other field in
+  // this block. The mock's leaveBalance() below always reports carriedInDays: 0 -- computing the
+  // real grant needs hr.leave_carryover's year-end memoization (LeaveService#ensureCarryoverGrant),
+  // a genuine business computation this mock deliberately does not reimplement (see the file-level
+  // note: a shared algorithmic error in a mirrored computation is invisible on both sides). Anyone
+  // testing carry-forward itself must do so against the real backend, not VITE_USE_MOCKS=true.
   {
     code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation leave', annualQuotaDays: 6, requiresAttachment: false,
     paidDaysCap: null, advanceNoticeDays: 3, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
     dayCountBasis: 'WORKING_DAYS', proratedFirstYear: true, firstYearMaxDays: null,
     certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0, emergencyMonthlyAllowance: null,
+    carriesForward: true,
   },
   {
     code: 'MATERNITY', nameTh: 'ลาคลอดบุตร', nameEn: 'Maternity leave', annualQuotaDays: 98, requiresAttachment: true,
     paidDaysCap: 45, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
     dayCountBasis: 'CALENDAR_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
     certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0, emergencyMonthlyAllowance: null,
+    carriesForward: false,
   },
   // annualQuotaDays: 366 (sentinel, not a real policy number) / paidDaysCap: 60 (V120, defect 2 fix)
   // -- V116 wrongly capped the LEAVE ITSELF at 60 days; §5.5 only caps the PAY. See
@@ -352,12 +363,14 @@ db.leaveTypes = db.leaveTypes || [
     paidDaysCap: 60, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
     dayCountBasis: 'WORKING_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
     certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0, emergencyMonthlyAllowance: null,
+    carriesForward: false,
   },
   {
     code: 'ORDINATION', nameTh: 'ลาอุปสมบท', nameEn: 'Ordination leave', annualQuotaDays: 60, requiresAttachment: false,
     paidDaysCap: 15, advanceNoticeDays: 0, minServiceMonths: 12, maxConsecutiveDays: null, oncePerEmployment: true,
     dayCountBasis: 'WORKING_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
     certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0, emergencyMonthlyAllowance: null,
+    carriesForward: false,
   },
 ];
 // leaveRequests/overtimeRequests/specialMoneyRequests are seeded by demoHr.js, wired
@@ -2825,6 +2838,11 @@ function leaveUsedDays(employeeId, leaveTypeCode, quotaYear, statuses) {
 function leaveBalance(employeeId, type, quotaYear) {
   const approvedDays = leaveUsedDays(employeeId, type.code, quotaYear, ['APPROVED']);
   const pendingDays = leaveUsedDays(employeeId, type.code, quotaYear, ['SUBMITTED']);
+  // §5.3.5 VACATION carry-forward (V127): carriedInDays is SHAPE parity only, always 0 in mock
+  // mode -- see the db.leaveTypes carriesForward comment above for why (the real grant needs
+  // hr.leave_carryover's year-end memoization, a business computation this mock does not
+  // reimplement). remainingDays below is therefore also always the un-boosted figure in mock mode,
+  // never reflecting a real carry-in even for VACATION.
   return {
     leaveTypeCode: type.code,
     leaveTypeNameTh: type.nameTh,
@@ -2834,6 +2852,7 @@ function leaveBalance(employeeId, type, quotaYear) {
     pendingDays,
     remainingDays: Math.max(0, Number(type.annualQuotaDays || 0) - approvedDays - pendingDays),
     requiresAttachment: type.requiresAttachment,
+    carriedInDays: 0,
   };
 }
 

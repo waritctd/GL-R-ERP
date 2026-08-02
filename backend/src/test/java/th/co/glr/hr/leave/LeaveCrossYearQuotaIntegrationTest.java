@@ -363,11 +363,45 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
     // ORDINATION=12) for every test in this class -- none of them are ABOUT eligibility, they are
     // about quota attribution once a request is already eligible.
     private long insertEmployee(String code) {
-        return jdbc.queryForObject("""
+        long employeeId = jdbc.queryForObject("""
             INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active, hire_date)
             VALUES (:code, :code, 'ทดสอบ', 30000, TRUE, DATE '2015-01-01')
             RETURNING employee_id
             """, new MapSqlParameterSource("code", code), Long.class);
+        neutralizeVacationCarryForwardFrom2025(employeeId);
+        return employeeId;
+    }
+
+    /**
+     * §5.3.5 VACATION carry-forward (V127) interaction: every fixture in this class is hired 2015,
+     * so an otherwise-untouched 2025 (fully elapsed by this class's fixed 2026-07-01 clock) reads as
+     * "0 of 6 used" and legitimately carries 6.00 into 2026 -- correct new behaviour, but not what
+     * THIS class's pre-existing 2026/2027 cross-year assertions (written before carry-forward
+     * existed) are about. Seeded directly as a legacy-style row (mirrors
+     * backfillSqlReproducesTheParentRowsFiguresExactlyForALegacySingleYearRow's own direct-insert
+     * pattern below) marking 2025's VACATION quota fully used, so {@code
+     * LeaveService#ensureCarryoverGrant} computes a real, correct ZERO carry-in for 2025 -> 2026,
+     * restoring this class's original flat-6.00 assumption without touching any of its assertions.
+     */
+    private void neutralizeVacationCarryForwardFrom2025(long employeeId) {
+        Long leaveRequestId = jdbc.queryForObject("""
+            INSERT INTO hr.leave_request (
+                employee_id, leave_type_code, start_date, end_date, total_days, paid_days, unpaid_days,
+                quota_year, reason, status, quota_remaining_before, quota_remaining_after, requested_by_id
+            )
+            VALUES (
+                :employeeId, 'VACATION', '2025-01-06', '2025-01-13', 6.00, 6.00, 0.00,
+                2025, 'V127 fixture neutraliser', 'APPROVED', 6.00, 0.00, :employeeId
+            )
+            RETURNING leave_request_id
+            """, new MapSqlParameterSource("employeeId", employeeId), Long.class);
+        jdbc.update("""
+            INSERT INTO hr.leave_request_quota_year (
+                leave_request_id, quota_year, total_days, paid_days, unpaid_days,
+                quota_remaining_before, quota_remaining_after
+            )
+            VALUES (:leaveRequestId, 2025, 6.00, 6.00, 0.00, 6.00, 0.00)
+            """, new MapSqlParameterSource("leaveRequestId", leaveRequestId));
     }
 
     private void insertProcessedPayrollPeriod(LocalDate payrollMonth) {

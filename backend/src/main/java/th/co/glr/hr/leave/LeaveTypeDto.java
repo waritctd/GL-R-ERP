@@ -53,6 +53,11 @@ import java.math.BigDecimal;
  * the two rules trigger on unrelated conditions (a missing attachment vs. a missed notice deadline),
  * and conflating them into one counter would let one rule's occasions silently consume the other's
  * allowance.
+ *
+ * <p>{@code carriesForward} (V127): §5.3.5 -- unused quota of this type may carry into the
+ * immediately following year (and expire there, un-accumulating, if still unused). Seeded TRUE for
+ * VACATION only; every other type is FALSE. See {@link LeaveService#ensureCarryoverGrant} for the
+ * computation and {@code hr.leave_carryover} for the persisted grant this column gates.
  */
 public record LeaveTypeDto(
     String code,
@@ -70,6 +75,7 @@ public record LeaveTypeDto(
     BigDecimal firstYearMaxDays,
     Integer certificateFilingWindowDays,
     int noCertificateMonthlyTolerance,
-    Integer emergencyMonthlyAllowance
+    Integer emergencyMonthlyAllowance,
+    boolean carriesForward
 ) {
 }
