@@ -19,7 +19,6 @@ import {
   overdueBadgeLabel,
   paymentStageLabel,
   quotationRecipientLabel,
-  quotationStatusLabel,
 } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import { activePricingRequestsSummary } from '../pricingRequests/pricingRequestMeta.js';
@@ -27,9 +26,11 @@ import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx'
 import { CancelDealModal } from './CancelDealModal.jsx';
 import { hasActivitySince, isReadyToAdvance, lastStageChangeAt, STAGE_ADVANCE_GATE_HINT } from './dealTrackingMeta.js';
 import { ContextSection, FieldRow } from './DealMetaFields.jsx';
+import { DealAttachmentsPanel } from './DealAttachmentsPanel.jsx';
 import { DealDepositPanel } from './DealDepositPanel.jsx';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
+import { DealLegacyQuotations } from './DealLegacyQuotations.jsx';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
@@ -113,19 +114,9 @@ function scrollToSection(id) {
 
 const TERMINAL = ['closed', 'cancelled'];
 
-// Quotation revision docStatus (DRAFT / ISSUED / SUPERSEDED) mapped onto the same
-// success/info/neutral tokens StatusBadge uses, instead of one-off hex per state.
-// Previously SUPERSEDED text used Ink Faint (#94a3b8), below the DESIGN.md Ink Muted
-// contrast floor on a light background — this switches it to --color-icon-muted.
-function docStatusColors(docStatus) {
-  if (docStatus === 'SUPERSEDED') {
-    return { background: 'var(--color-surface-subtle)', color: 'var(--color-icon-muted)' };
-  }
-  if (docStatus === 'ISSUED') {
-    return { background: 'var(--color-success-bg)', color: 'var(--color-success-dark)' };
-  }
-  return { background: 'var(--color-info-bg)', color: 'var(--color-info)' };
-}
+// docStatusColors (quotation revision docStatus -> StatusBadge-matching
+// tokens) moved into DealLegacyQuotations.jsx (ia-extract Slice C1) — it had
+// exactly one caller and that caller moved with it.
 
 // Slice A "chip diet": moved out of DealStagePanel (see its own doc comment)
 // into the money tab's own payment section — the one place on the page that
@@ -1888,68 +1879,16 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           ) : null}
           {/* Legacy ticket-native quotation rows (region 12's "docs") join the
               PCR-based quotation tail above, in this same tab — see
-              TICKET_INFORMATION_ARCHITECTURE.md's ใบเสนอราคา row. */}
-          {sections.quotation && quotationGroups.length > 0 ? (
-            <section className="panel">
-              <div className="panel-header">
-                <h2>ใบเสนอราคา (เอกสารเดิม)</h2>
-              </div>
-              {/* Ticket-native quotation generate/mark-sent/accepted/rejected is retired
-                  (Phase 2 Slice S1/S2 — see docs/agent-handoffs/104): these rows predate the
-                  PricingRequest/CustomerQuotation redesign (pricing_request_id IS NULL) and
-                  stay visible read-only/download-only so the 3 legacy deals' history isn't
-                  stranded. New quotations live in DealQuotationPanel above. */}
-              {quotationGroups.map((group) => (
-                <div key={group.recipientType} style={{ borderTop: '1px solid var(--color-surface-subtle)' }}>
-                  <div style={{ padding: '12px 18px 6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                    <h3 style={{ margin: 0, fontSize: 14 }}>{group.label}</h3>
-                  </div>
-                  {group.quotations.map((q) => {
-                    const status = quotationStatusLabel(q.docStatus);
-                    return (
-                      <div key={q.id} style={{ padding: '10px 18px', borderTop: '1px solid var(--color-surface-subtle)', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                        <div style={{ flexShrink: 0, marginTop: 2 }}>
-                          <span style={{
-                            fontSize: 11, fontWeight: 700, borderRadius: 4, padding: '2px 7px',
-                            ...docStatusColors(q.docStatus),
-                          }}>ครั้งที่ {q.quotationVersion}</span>
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                            <span style={{ fontWeight: 600, fontSize: 13 }}>{q.number}</span>
-                            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-                            {q.recipientLabel && <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{q.recipientLabel}</span>}
-                          </div>
-                          <div style={{ fontSize: 12, color: 'var(--color-icon-muted)', marginTop: 2 }}>
-                            ยอดรวม {formatMoney(q.totalAmount)} · ออกโดย {q.issuedByName} · ออก {formatThaiDate(q.issuedAt)}
-                            {q.sentAt ? ` · ส่ง ${formatThaiDate(q.sentAt)}` : ''}
-                            {q.acceptedAt ? ` · รับ ${formatThaiDate(q.acceptedAt)}` : ''}
-                            {q.validityDate ? ` · ใช้ได้ถึง ${formatThaiDate(q.validityDate)}` : ''}
-                          </div>
-                          {(q.paymentTerms || q.leadTime || q.deliveryTerms) && (
-                            <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 4 }}>
-                              {[q.paymentTerms && `ชำระเงิน: ${q.paymentTerms}`, q.leadTime && `ระยะเวลาส่งมอบ: ${q.leadTime}`, q.deliveryTerms && `ส่งมอบ: ${q.deliveryTerms}`].filter(Boolean).join(' · ')}
-                            </div>
-                          )}
-                        </div>
-                        <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                          <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
-                            disabled={downloadingQuotationKey === `${q.id}-xlsx`}
-                            onClick={() => handleDownloadQuotation(q.id, q.number, 'xlsx')}>
-                            <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-xlsx` ? 'กำลังดาวน์โหลด…' : 'Excel'}
-                          </button>
-                          <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
-                            disabled={downloadingQuotationKey === `${q.id}-pdf`}
-                            onClick={() => handleDownloadQuotation(q.id, q.number, 'pdf')}>
-                            <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-pdf` ? 'กำลังดาวน์โหลด…' : 'PDF'}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
-            </section>
+              TICKET_INFORMATION_ARCHITECTURE.md's ใบเสนอราคา row. Extracted to
+              DealLegacyQuotations.jsx (ia-extract Slice C1); it returns null
+              itself when quotationGroups is empty, matching the
+              `quotationGroups.length > 0` half of this gate exactly. */}
+          {sections.quotation ? (
+            <DealLegacyQuotations
+              quotationGroups={quotationGroups}
+              downloadingQuotationKey={downloadingQuotationKey}
+              handleDownloadQuotation={handleDownloadQuotation}
+            />
           ) : null}
       </TabPanel>
 
@@ -2075,104 +2014,24 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       </TabPanel>
 
       <TabPanel id="documents" idPrefix="ticket-detail" active={visibleActiveTab === 'documents'}>
-          {/* R5: Attachments */}
-          <section className="panel">
-            <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2>ไฟล์แนบ (PO / ใบเซ็น)</h2>
-              {/* No แนบใบกำกับภาษี control here, deliberately (2026-07-30 owner
-                  decision). The closing tax invoice is ฝ่ายบัญชี's to record, and
-                  the ONLY supported path is CommissionService.createFromDeal
-                  (POST /api/commissions/from-deal, CREATE_FROM_DEAL_ROLES =
-                  account-only), reached from this page's own sticky CTA
-                  "บันทึกใบกำกับ + ออกค่าคอม" -> /commissions?ticketId=NN
-                  (accountActions.js). That one upload dual-writes the file as an
-                  AttachType.INVOICE ticket attachment, so it satisfies the close
-                  gate's invoiceOnFile check AND creates the deal owner's
-                  commission in the same transaction.
-
-                  A second invoice path here would satisfy the close gate WITHOUT
-                  creating the commission — the sales rep would silently lose it.
-                  That is why this is not simply re-gated to a role the backend
-                  permits: the control that used to live here was gated isAccount
-                  and 403'd for real, and only ever looked functional because
-                  mockApi.js had no authz on attachments at all.
-
-                  Issue #389 fixed the OTHER half of that gate — account can now
-                  READ every deal document (it is asked to confirm money against
-                  them) and hr can no longer read any — but the WRITE side was
-                  left deliberately narrow for exactly the reason above:
-                  TicketAccessPolicy.canManageDocuments is participant OR
-                  sales_manager/ceo, never account. Pinned by
-                  AttachmentTicketAccessIntegrationTest
-                  .accountCannotUploadADocument_theTaxInvoiceKeepsExactlyOneEntryPoint.
-                  Do not reintroduce it — the frontend regression guard is
-                  TicketDetailPage.test.jsx, "offers NO ใบกำกับภาษี upload
-                  control in เอกสาร". */}
-              {!TERMINAL.includes(st) && canManageDocuments && (
-                <label className="cursor-pointer max-[720px]:w-full" htmlFor="ticket-attachment-file">
-                  <input
-                    id="ticket-attachment-file"
-                    type="file"
-                    // See FileUploadField: styles.css now loads into @layer legacy
-                    // (before Tailwind's utilities layer), so these utilities win
-                    // over the legacy global `input` rules without `!` overrides.
-                    className="sr-only h-px min-h-0 w-px border-0 p-0"
-                    onChange={handleUploadAttachment}
-                    accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
-                  />
-                  <span
-                    className="secondary-button max-[720px]:min-h-11 max-[720px]:w-full"
-                    style={{ fontSize: 12, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                  >
-                    <Icon name="upload" size={13} />
-                    {uploadingFile ? 'กำลังอัปโหลด…' : 'แนบไฟล์ (PDF/JPG/PNG/Excel)'}
-                  </span>
-                </label>
-              )}
-            </div>
-            {attachLoading ? (
-              <div
-                style={{ padding: '8px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}
-                aria-busy="true"
-                aria-label="กำลังโหลดไฟล์แนบ"
-              >
-                {[0, 1, 2].map((i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'var(--color-surface-muted)', borderRadius: 6, border: '1px solid var(--color-border-subtle)' }}>
-                    <Skeleton width={13} height={13} radius="var(--radius-sm)" />
-                    <Skeleton width="50%" height={13} />
-                    <Skeleton width={40} height={16} radius="var(--radius-pill)" />
-                  </div>
-                ))}
-              </div>
-            ) : attachments.length === 0 ? (
-              <div style={{ padding: '4px 18px 14px' }}>
-                <EmptyState icon="paperclip" title="ยังไม่มีไฟล์แนบ" description="แนบ PO หรือใบเซ็นได้ด้วยปุ่มด้านบน" />
-              </div>
-            ) : (
-              <div style={{ padding: '8px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {attachments.map((att) => (
-                  <div key={att.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'var(--color-surface-muted)', borderRadius: 6, border: '1px solid var(--color-border-subtle)' }}>
-                    <Icon name="paperclip" size={13} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
-                    <span style={{ flex: 1, fontSize: 13, color: 'var(--color-text)', wordBreak: 'break-all' }}>{att.fileName}</span>
-                    <span style={{ fontSize: 11, color: 'var(--color-text-muted)', whiteSpace: 'nowrap', background: 'var(--color-surface-subtle)', padding: '1px 6px', borderRadius: 99 }}>
-                      {att.attachType}
-                    </span>
-                    <a href={api.attachments.fileUrl(att.id)} target="_blank" rel="noreferrer"
-                      style={{ fontSize: 12, color: 'var(--color-link)', textDecoration: 'none', whiteSpace: 'nowrap' }}>
-                      ดูไฟล์
-                    </a>
-                    {!TERMINAL.includes(st) && (canManageDocuments || att.uploadedBy === user.id) && (
-                      <button type="button" className="icon-button"
-                        style={{ color: 'var(--color-danger)', flexShrink: 0 }}
-                        onClick={() => handleDeleteAttachment(att.id, att.fileName)}>
-                        <Icon name="close" size={13} />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
+          {/* R5: Attachments. Extracted to DealAttachmentsPanel.jsx
+              (ia-extract Slice C1) — the long "why no ใบกำกับภาษี control
+              here" comment lives there now, verbatim, since it explains that
+              panel's own JSX. `canUpload`/`notTerminal` are computed here
+              (instead of handing the raw `st`/TERMINAL pair down) so the
+              child only ever sees clean booleans; they reproduce the
+              original `!TERMINAL.includes(st) && ...` guards exactly. */}
+          <DealAttachmentsPanel
+            attachments={attachments}
+            attachLoading={attachLoading}
+            canManageDocuments={canManageDocuments}
+            uploadingFile={uploadingFile}
+            onUploadAttachment={handleUploadAttachment}
+            onDeleteAttachment={handleDeleteAttachment}
+            canUpload={!TERMINAL.includes(st) && canManageDocuments}
+            notTerminal={!TERMINAL.includes(st)}
+            user={user}
+          />
       </TabPanel>
 
       <TabPanel id="activity" idPrefix="ticket-detail" active={visibleActiveTab === 'activity'}>
