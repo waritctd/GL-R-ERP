@@ -10,7 +10,6 @@ public class AppProperties {
     private final Attendance attendance = new Attendance();
     private final LoginRateLimit loginRateLimit = new LoginRateLimit();
     private final Auth auth = new Auth();
-    private final Leave leave = new Leave();
     private final Overtime overtime = new Overtime();
     private final SpecialMoney specialMoney = new SpecialMoney();
     private final Bot bot = new Bot();
@@ -32,10 +31,6 @@ public class AppProperties {
 
     public Auth getAuth() {
         return auth;
-    }
-
-    public Leave getLeave() {
-        return leave;
     }
 
     public Overtime getOvertime() {
@@ -202,18 +197,6 @@ public class AppProperties {
 
         public void setBackfillOnStartup(boolean backfillOnStartup) {
             this.backfillOnStartup = backfillOnStartup;
-        }
-    }
-
-    public static class Leave {
-        private int advanceNoticeDays = 7;
-
-        public int getAdvanceNoticeDays() {
-            return advanceNoticeDays;
-        }
-
-        public void setAdvanceNoticeDays(int advanceNoticeDays) {
-            this.advanceNoticeDays = advanceNoticeDays;
         }
     }
 
