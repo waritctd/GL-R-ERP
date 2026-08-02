@@ -29,9 +29,10 @@ class WorkScheduleAssignmentRepositoryIntegrationTest extends AbstractPostgresIn
     private TieredWorkScheduleResolver resolver;
 
     private void wire() {
-        repository = new WorkScheduleAssignmentRepository(jdbc, new AppProperties());
+        AppProperties properties = new AppProperties();
+        repository = new WorkScheduleAssignmentRepository(jdbc, properties);
         resolver = new TieredWorkScheduleResolver(
-            repository, new CompanyWideWorkScheduleResolver(new AppProperties()));
+            repository, new CompanyWideWorkScheduleResolver(properties), properties);
     }
 
     /**

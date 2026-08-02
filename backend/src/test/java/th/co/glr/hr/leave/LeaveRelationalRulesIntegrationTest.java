@@ -55,7 +55,8 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
         AppProperties appProperties = new AppProperties();
         WorkScheduleResolver scheduleResolver = new TieredWorkScheduleResolver(
             new WorkScheduleAssignmentRepository(jdbc, appProperties),
-            new CompanyWideWorkScheduleResolver(appProperties));
+            new CompanyWideWorkScheduleResolver(appProperties),
+            appProperties);
         HolidayCalendar holidayCalendar = new DbHolidayCalendar(jdbc);
         // Schedule/holiday-aware constructor (2026-08-03, #470) -- leaveRepository.workingDayPredicate
         // is what LeaveService now asks for "is this employee at work on this date", the same

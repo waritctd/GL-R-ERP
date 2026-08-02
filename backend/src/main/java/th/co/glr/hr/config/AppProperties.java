@@ -150,6 +150,17 @@ public class AppProperties {
         private List<String> workdays = new ArrayList<>(
             List.of("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY")
         );
+        /**
+         * How long {@code TieredWorkScheduleResolver} may serve a cached copy of
+         * {@code hr.work_schedule_assignment} before reloading it from the database. Assignments are
+         * edited by hand-written SQL today (there is deliberately no admin CRUD UI in this branch —
+         * see {@code WorkScheduleAssignmentRepository}'s javadoc), so a TTL is the only mechanism
+         * that reliably makes such a change take effect without an application restart: an explicit
+         * invalidation hook only helps callers that go through the app, and today none do. Five
+         * minutes balances staleness (acceptable for an HR-edited config table that changes rarely)
+         * against reload cost (the assignment table is small, so even a full reload is cheap).
+         */
+        private long assignmentCacheTtlMs = 300_000;
 
         public String getZone() {
             return zone;
@@ -189,6 +200,14 @@ public class AppProperties {
 
         public void setWorkdays(List<String> workdays) {
             this.workdays = workdays;
+        }
+
+        public long getAssignmentCacheTtlMs() {
+            return assignmentCacheTtlMs;
+        }
+
+        public void setAssignmentCacheTtlMs(long assignmentCacheTtlMs) {
+            this.assignmentCacheTtlMs = assignmentCacheTtlMs;
         }
     }
 
