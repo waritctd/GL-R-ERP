@@ -606,6 +606,43 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(result.systemNote()).contains("hire date is not on file");
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // confirm_date resolution (owner ruling, 2026-08-03). Real-DB proof that
+    // LeaveRepository#findConfirmDate's NULL-column mapping (confirm_date is nullable -- a naive
+    // mapper NPEs on it, the same trap findProbationDays already documents) and
+    // SpecialMoneyPolicyEvaluator#hasPassedProbation's day-after arithmetic hold through the actual
+    // repository, not just a faked Optional in LeaveServiceTest. Both directions pinned on the SAME
+    // employee row so the boundary is proven from both sides, not just the passing one.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void personalLeaveIsRefusedOnConfirmDateItselfEvenThoughHireDatePlusProbationDaysWouldAllowIt() {
+        // Hired long ago with a short probation_days -- hire_date+probation_days alone would APPROVE
+        // this, but confirm_date is authoritative and the request date IS confirm_date.
+        long employeeId = insertEmployeeWithConfirmDate(
+            "PERS-CONF-001", LocalDate.parse("2015-01-01"), 30, LocalDate.parse("2026-07-13"));
+
+        LeaveRequestDto result = leaveService.submit(
+            submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-13"),
+            employee(employeeId));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        assertThat(result.systemNote()).contains("passed probation");
+    }
+
+    @Test
+    void personalLeaveIsGrantedTheDayAfterConfirmDate() {
+        // SAME confirm_date, ONE DAY LATER request -- the other side of the same boundary.
+        long employeeId = insertEmployeeWithConfirmDate(
+            "PERS-CONF-002", LocalDate.parse("2015-01-01"), 30, LocalDate.parse("2026-07-13"));
+
+        LeaveRequestDto result = leaveService.submit(
+            submitRequest(employeeId, "PERSONAL", "2026-07-14", "2026-07-14"),
+            employee(employeeId));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+    }
+
     // --- helpers ------------------------------------------------------------
 
     private SubmitLeaveRequest submitRequest(long employeeId, String leaveTypeCode, String startDate, String endDate) {
@@ -653,6 +690,27 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             .addValue("code", code)
             .addValue("hireDate", hireDate)
             .addValue("probationDays", probationDays),
+            Long.class);
+    }
+
+    /**
+     * confirm_date is genuinely nullable on hr.employee (V1) -- exercises
+     * LeaveRepository#findConfirmDate's real NULL-column mapping the same way {@link
+     * #insertEmployee(String, LocalDate, Integer)} does for probation_days.
+     */
+    private long insertEmployeeWithConfirmDate(
+            String code, LocalDate hireDate, Integer probationDays, LocalDate confirmDate) {
+        return jdbc.queryForObject("""
+            INSERT INTO hr.employee
+                (employee_code, first_name_th, last_name_th, current_salary, is_active,
+                 hire_date, probation_days, confirm_date)
+            VALUES (:code, :code, 'ทดสอบ', 30000, TRUE, :hireDate, :probationDays, :confirmDate)
+            RETURNING employee_id
+            """, new MapSqlParameterSource()
+            .addValue("code", code)
+            .addValue("hireDate", hireDate)
+            .addValue("probationDays", probationDays)
+            .addValue("confirmDate", confirmDate),
             Long.class);
     }
 

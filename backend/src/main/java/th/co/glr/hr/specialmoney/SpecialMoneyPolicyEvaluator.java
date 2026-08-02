@@ -27,6 +27,10 @@ public class SpecialMoneyPolicyEvaluator {
      * This company treats 119 days since hire as "probation passed" absent an explicit confirm
      * date; do not cite this as a legal requirement.
      *
+     * <p>NOT the company norm: real production {@code hr.employee.probation_days} is populated for
+     * almost every active row and is mostly {@code 90}. This 119-day figure only ever applies to
+     * the rare row where {@code probation_days} itself is NULL -- see {@link #hasPassedProbation}.
+     *
      * <p>Public (not package-private) so {@code LeaveService}'s §5.2 PERSONAL-leave
      * "passed probation" gate (V116) can reference this exact constant instead of duplicating the
      * literal 119 -- the two eligibility rules resolve "passed probation" identically on purpose,
@@ -34,6 +38,40 @@ public class SpecialMoneyPolicyEvaluator {
      * comment saying they should stay in sync.
      */
     public static final int DEFAULT_PROBATION_DAYS = 119;
+
+    /**
+     * Single definition of "has this employee passed probation", shared by {@code LeaveService}'s
+     * §5.2 PERSONAL-leave gate and this evaluator's own {@link #evaluateStandardProbationEligibility}
+     * -- putting the resolution here (rather than two copies agreeing by convention) is what
+     * actually prevents the two rules drifting apart the way {@link #DEFAULT_PROBATION_DAYS} being
+     * shared already prevented the fallback constant from drifting.
+     *
+     * <p>Owner ruling (2026-08-03): HR's recorded {@code hr.employee.confirm_date}, when present, is
+     * authoritative -- read it rather than re-deriving probation from {@code hire_date +
+     * probation_days}. The employee becomes eligible the day AFTER {@code confirm_date}: verified
+     * against production, {@code confirm_date} counts the hire date as day 1, while the computed
+     * {@code hire_date + probationDays} form below counts it as day 0, so the two disagree by
+     * exactly one day if {@code confirm_date} itself were treated as already-passed. When {@code
+     * confirm_date} is NULL, falls back to {@code hire_date + probationDays}, where {@code
+     * probationDays} defaults to {@link #DEFAULT_PROBATION_DAYS} only when NULL on the employee row.
+     *
+     * <p>Fails closed (returns {@code false}) when both {@code confirmDate} and {@code hireDate} are
+     * NULL -- the caller must treat that as "cannot verify", never as passed.
+     *
+     * @param asOf the date probation status is evaluated as of -- the request's start/event date for
+     *     leave, or the submission date for special-money aid; not necessarily the clock's "today".
+     */
+    public static boolean hasPassedProbation(
+            LocalDate hireDate, Integer probationDays, LocalDate confirmDate, LocalDate asOf) {
+        if (confirmDate != null) {
+            return asOf.isAfter(confirmDate);
+        }
+        if (hireDate == null) {
+            return false;
+        }
+        int days = probationDays != null ? probationDays : DEFAULT_PROBATION_DAYS;
+        return !hireDate.plusDays(days).isAfter(asOf);
+    }
 
     static final String SALES_SUPPORT_DEPT_KEY = "sales_support_department_code";
     static final int PREPROBATION_KIT_MIN_TENURE_DAYS = 7;
@@ -83,16 +121,8 @@ public class SpecialMoneyPolicyEvaluator {
     // ---------------------------------------------------------------------
 
     private void evaluateStandardProbationEligibility(EmployeeEligibilitySnapshot employee, List<String> violations) {
-        boolean passedProbation;
-        if (employee.confirmDate() != null) {
-            passedProbation = !employee.confirmDate().isAfter(employee.today());
-        } else {
-            int probationDays =
-                employee.probationDays() != null ? employee.probationDays() : DEFAULT_PROBATION_DAYS;
-            passedProbation =
-                employee.hireDate() != null
-                    && !employee.hireDate().plusDays(probationDays).isAfter(employee.today());
-        }
+        boolean passedProbation = hasPassedProbation(
+            employee.hireDate(), employee.probationDays(), employee.confirmDate(), employee.today());
         if (!passedProbation) {
             violations.add("พนักงานยังไม่พ้นทดลองงาน");
         }

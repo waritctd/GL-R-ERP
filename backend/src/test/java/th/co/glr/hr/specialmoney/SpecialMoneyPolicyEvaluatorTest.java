@@ -152,6 +152,92 @@ class SpecialMoneyPolicyEvaluatorTest {
         assertThat(kitDecision.violations()).isEmpty();
     }
 
+    // ---------------------------------------------------------------------
+    // Shared probation resolution (owner ruling, 2026-08-03): confirm_date, when present, is
+    // authoritative and the employee is eligible the day AFTER it -- NOT on confirm_date itself.
+    // Both sides pinned on the SAME fixture so a boundary bug (e.g. reverting to "eligible on
+    // confirm_date") cannot pass silently on only one direction.
+    // ---------------------------------------------------------------------
+
+    @Test
+    void confirmDateBoundaryIsNotEligibleOnConfirmDateButEligibleTheDayAfter() {
+        LocalDate confirmDate = TODAY.minusDays(10);
+
+        EmployeeEligibilitySnapshot onConfirmDate =
+            new EmployeeEligibilitySnapshot(2L, TODAY.minusYears(1), confirmDate, null, "010", true, confirmDate);
+        EmployeeEligibilitySnapshot dayAfterConfirmDate =
+            new EmployeeEligibilitySnapshot(
+                2L, TODAY.minusYears(1), confirmDate, null, "010", true, confirmDate.plusDays(1));
+
+        PolicyDecision onConfirmDateDecision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.MEDICAL,
+                new SubmitSpecialMoneyRequest(
+                    2L, confirmDate, null, confirmDate, BigDecimal.ONE, bd(500), "clinic visit", Map.of()),
+                onConfirmDate,
+                noUsage(),
+                amounts(Map.of()),
+                EXCLUDED_PROVINCES);
+        assertThat(onConfirmDateDecision.violations()).anyMatch(v -> v.contains("ยังไม่พ้นทดลองงาน"));
+
+        PolicyDecision dayAfterDecision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.MEDICAL,
+                new SubmitSpecialMoneyRequest(
+                    2L, confirmDate.plusDays(1), null, confirmDate.plusDays(1), BigDecimal.ONE, bd(500),
+                    "clinic visit", Map.of()),
+                dayAfterConfirmDate,
+                noUsage(),
+                amounts(Map.of()),
+                EXCLUDED_PROVINCES);
+        assertThat(dayAfterDecision.violations()).noneMatch(v -> v.contains("ยังไม่พ้นทดลองงาน"));
+    }
+
+    @Test
+    void hasPassedProbationPrefersConfirmDateOverHireDatePlusProbationDays() {
+        LocalDate confirmDate = LocalDate.of(2026, 6, 1);
+
+        // confirm_date wins even though hire_date + probation_days would say otherwise.
+        assertThat(SpecialMoneyPolicyEvaluator.hasPassedProbation(
+            LocalDate.of(2026, 5, 20), 90, confirmDate, confirmDate))
+            .as("not eligible ON confirm_date itself")
+            .isFalse();
+        assertThat(SpecialMoneyPolicyEvaluator.hasPassedProbation(
+            LocalDate.of(2026, 5, 20), 90, confirmDate, confirmDate.plusDays(1)))
+            .as("eligible the day AFTER confirm_date")
+            .isTrue();
+    }
+
+    @Test
+    void hasPassedProbationFallsBackToHireDatePlusProbationDaysWhenConfirmDateIsNull() {
+        LocalDate hireDate = LocalDate.of(2026, 1, 1);
+
+        assertThat(SpecialMoneyPolicyEvaluator.hasPassedProbation(
+            hireDate, 90, null, hireDate.plusDays(89)))
+            .as("one day short of the per-employee probation_days")
+            .isFalse();
+        assertThat(SpecialMoneyPolicyEvaluator.hasPassedProbation(
+            hireDate, 90, null, hireDate.plusDays(90)))
+            .isTrue();
+    }
+
+    @Test
+    void hasPassedProbationFallsBackToTheDefaultProbationDaysWhenBothConfirmDateAndProbationDaysAreNull() {
+        LocalDate hireDate = LocalDate.of(2026, 1, 1);
+
+        assertThat(SpecialMoneyPolicyEvaluator.hasPassedProbation(
+            hireDate, null, null, hireDate.plusDays(SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS - 1)))
+            .isFalse();
+        assertThat(SpecialMoneyPolicyEvaluator.hasPassedProbation(
+            hireDate, null, null, hireDate.plusDays(SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS)))
+            .isTrue();
+    }
+
+    @Test
+    void hasPassedProbationFailsClosedWhenHireDateAndConfirmDateAreBothNull() {
+        assertThat(SpecialMoneyPolicyEvaluator.hasPassedProbation(null, 90, null, TODAY)).isFalse();
+    }
+
     /**
      * hr.department.source_code is a VARCHAR(10) and is not guaranteed to be numeric, so the gate
      * compares strings. An earlier implementation parsed both sides as BigDecimal, which silently
