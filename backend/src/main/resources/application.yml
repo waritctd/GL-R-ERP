@@ -67,8 +67,9 @@ app:
       zone: ${APP_ATTENDANCE_ZONE:Asia/Bangkok}
       work-start: ${APP_ATTENDANCE_WORK_START:08:30}
       work-end: ${APP_ATTENDANCE_WORK_END:17:30}
-      # Threshold, not allowance: at 5 minutes, 08:34 is 0 late but 08:40 is 10 late (from 08:30).
-      grace-minutes: ${APP_ATTENDANCE_GRACE_MINUTES:5}
+      # Threshold, not allowance: at 15 minutes, 08:44 is 0 late but 08:46 is 16 late (from 08:30).
+      # Owner ruling 2026-08-02 (V121__org_normalize_approvers_and_schedules.sql), was 5.
+      grace-minutes: ${APP_ATTENDANCE_GRACE_MINUTES:15}
       workdays: ${APP_ATTENDANCE_WORKDAYS:MONDAY,TUESDAY,WEDNESDAY,THURSDAY,FRIDAY}
     daily:
       recalc-enabled: ${APP_ATTENDANCE_RECALC_ENABLED:true}

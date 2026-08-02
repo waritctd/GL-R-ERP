@@ -139,10 +139,14 @@ public class AppProperties {
         private String workEnd = "17:30";
         /**
          * Minutes after {@code workStart} before a check-in counts as late. This is a
-         * <strong>threshold, not an allowance</strong>: with a 5-minute grace, arriving 08:34 is 0
-         * late minutes, but arriving 08:40 is <em>10</em> late minutes measured from 08:30 — not 4.
+         * <strong>threshold, not an allowance</strong>: with a 15-minute grace, arriving 08:44 is 0
+         * late minutes, but arriving 08:46 is <em>16</em> late minutes measured from 08:30 — not 1.
+         * Owner ruling 2026-08-02 (V121__org_normalize_approvers_and_schedules.sql) raised this from
+         * 5 to 15 to match hr.work_schedule.grace_minutes for every seeded schedule, so an employee
+         * with no {@code hr.work_schedule_assignment} row (falling through to this default) gets the
+         * same grace as an assigned one.
          */
-        private int graceMinutes = 5;
+        private int graceMinutes = 15;
         private List<String> workdays = new ArrayList<>(
             List.of("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY")
         );
