@@ -31,5 +31,15 @@ public enum AttendanceDayFlag {
      */
     WORKED_LATE_UNAPPROVED,
     /** The date falls outside the configured workdays; late/early are not evaluated. */
-    NON_WORKDAY
+    NON_WORKDAY,
+    /**
+     * The date is a company holiday (นักขัตฤกษ์ or other {@code hr.holiday} row), regardless of
+     * what the employee's {@code WorkSchedule} would otherwise say. Late/early are not evaluated,
+     * exactly as {@link #NON_WORKDAY} behaves — but kept as a distinct flag/status rather than
+     * folded into {@code NON_WORKDAY}: a rostered นักขัตฤกษ์ shift by ฝ่ายขาย is OT-eligible (the
+     * company pays overtime for those shifts specifically), while an ordinary Saturday scan by an
+     * office worker on {@code NON_WORKDAY} is not. Collapsing the two would erase that difference
+     * for anyone reading the daily table or building a payroll-adjacent report off it.
+     */
+    HOLIDAY
 }

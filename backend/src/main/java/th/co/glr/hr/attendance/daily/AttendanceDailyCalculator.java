@@ -52,6 +52,11 @@ public class AttendanceDailyCalculator {
      * @param schedule                the schedule in force for this employee on this date
      * @param approvedOvertimeMinutes minutes from APPROVED overtime requests only — a
      *                                MANAGER_APPROVED request must contribute 0
+     * @param holiday                 resolved by the caller (a {@code HolidayCalendar} lookup),
+     *                                never derived here — keeps this method free of the database.
+     *                                A holiday beats the schedule's own workday check: late/early
+     *                                are not evaluated on a holiday even if the schedule would
+     *                                otherwise call the date a workday. See {@link AttendanceDayFlag#HOLIDAY}.
      * @throws IllegalArgumentException if {@code punches} is empty; punchless days are never
      *                                  materialised (absence is derived at read time, and
      *                                  {@code site_code} is NOT NULL so there would be no site to
@@ -62,7 +67,8 @@ public class AttendanceDailyCalculator {
             LocalDate workDate,
             List<PunchRecord> punches,
             WorkSchedule schedule,
-            int approvedOvertimeMinutes) {
+            int approvedOvertimeMinutes,
+            boolean holiday) {
         if (punches == null || punches.isEmpty()) {
             throw new IllegalArgumentException(
                 "A day with no punches is never stored; absence is derived at read time");
@@ -72,7 +78,9 @@ public class AttendanceDailyCalculator {
             .sorted(Comparator.comparing(PunchRecord::punchTime).thenComparingLong(PunchRecord::punchId))
             .toList();
 
-        boolean workday = schedule.isWorkday(workDate);
+        // A holiday is not a workday, regardless of what the schedule says about this weekday —
+        // see AttendanceDayFlag#HOLIDAY for why that is kept distinct from an ordinary NON_WORKDAY.
+        boolean workday = schedule.isWorkday(workDate) && !holiday;
         Set<AttendanceDayFlag> flags = EnumSet.noneOf(AttendanceDayFlag.class);
 
         PunchRecord checkInPunch;
@@ -114,6 +122,11 @@ public class AttendanceDailyCalculator {
                     flags.add(AttendanceDayFlag.EARLY_LEAVE);
                 }
             }
+        } else if (holiday) {
+            // Rostered นักขัตฤกษ์ duty (e.g. ฝ่ายขาย) is still eligible for OT pay via the normal
+            // overtime_request approval flow — this flag only says the day was not an ordinary
+            // workday for late/early purposes, it does not gate approvedOvertimeMinutes below.
+            flags.add(AttendanceDayFlag.HOLIDAY);
         } else {
             // People do come in at weekends. Record the punches; penalise nothing.
             flags.add(AttendanceDayFlag.NON_WORKDAY);
@@ -146,7 +159,7 @@ public class AttendanceDailyCalculator {
             // Rows only exist for days that have punches, so a stored row is never an absence.
             // DashboardRepository counts is_absent = FALSE as "present"; keep that true.
             false,
-            statusOf(workday, checkIn, checkOut, lateMinutes),
+            statusOf(holiday, workday, checkIn, checkOut, lateMinutes),
             flags
         );
     }
@@ -163,7 +176,13 @@ public class AttendanceDailyCalculator {
     }
 
     private static AttendanceDayStatus statusOf(
-            boolean workday, OffsetDateTime checkIn, OffsetDateTime checkOut, int lateMinutes) {
+            boolean holiday, boolean workday, OffsetDateTime checkIn, OffsetDateTime checkOut,
+            int lateMinutes) {
+        // Checked before the plain !workday branch so a holiday is never reported as an ordinary
+        // NON_WORKDAY — see AttendanceDayFlag#HOLIDAY for why the two carry different pay meaning.
+        if (holiday) {
+            return AttendanceDayStatus.HOLIDAY;
+        }
         if (!workday) {
             return AttendanceDayStatus.NON_WORKDAY;
         }

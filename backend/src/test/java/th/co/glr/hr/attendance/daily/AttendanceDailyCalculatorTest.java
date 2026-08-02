@@ -46,7 +46,7 @@ class AttendanceDailyCalculatorTest {
     }
 
     private AttendanceDailyRecord calculate(List<PunchRecord> punches) {
-        return calculator.calculate(7L, WEDNESDAY, punches, SCHEDULE, 0);
+        return calculator.calculate(7L, WEDNESDAY, punches, SCHEDULE, 0, false);
     }
 
     @Test
@@ -195,7 +195,8 @@ class AttendanceDailyCalculatorTest {
             SATURDAY,
             List.of(punch(1, SATURDAY, 10, 15), punch(2, SATURDAY, 14, 0)),
             SCHEDULE,
-            0
+            0,
+            false
         );
 
         assertThat(record.lateMinutes()).isZero();
@@ -205,6 +206,42 @@ class AttendanceDailyCalculatorTest {
         assertThat(record.punchCount()).isEqualTo(2);
     }
 
+    /** Holiday beats workday: a weekday that is also a company holiday evaluates no late/early. */
+    @Test
+    void holidayBeatsWorkday() {
+        AttendanceDailyRecord record = calculator.calculate(
+            7L,
+            WEDNESDAY,
+            List.of(punch(1, WEDNESDAY, 8, 40), punch(2, WEDNESDAY, 17, 35)),
+            SCHEDULE,
+            0,
+            true
+        );
+
+        assertThat(record.status()).isEqualTo(AttendanceDayStatus.HOLIDAY);
+        assertThat(record.flags()).contains(AttendanceDayFlag.HOLIDAY);
+        assertThat(record.flags()).doesNotContain(AttendanceDayFlag.NON_WORKDAY, AttendanceDayFlag.LATE);
+        assertThat(record.lateMinutes()).isZero();
+        assertThat(record.earlyLeaveMinutes()).isZero();
+    }
+
+    /** Distinct from NON_WORKDAY: a holiday that falls on what would already be a non-workday is still HOLIDAY. */
+    @Test
+    void holidayOnANonWorkdayIsStillHolidayNotNonWorkday() {
+        AttendanceDailyRecord record = calculator.calculate(
+            7L,
+            SATURDAY,
+            List.of(punch(1, SATURDAY, 9, 0), punch(2, SATURDAY, 17, 0)),
+            SCHEDULE,
+            0,
+            true
+        );
+
+        assertThat(record.status()).isEqualTo(AttendanceDayStatus.HOLIDAY);
+        assertThat(record.flags()).contains(AttendanceDayFlag.HOLIDAY);
+        assertThat(record.flags()).doesNotContain(AttendanceDayFlag.NON_WORKDAY);
+    }
+
     @Test
     void approvedOvertimeIsFlaggedAndStored() {
         AttendanceDailyRecord record = calculator.calculate(
@@ -212,7 +249,8 @@ class AttendanceDailyCalculatorTest {
             WEDNESDAY,
             List.of(punch(1, WEDNESDAY, 8, 20), punch(2, WEDNESDAY, 19, 0)),
             SCHEDULE,
-            90
+            90,
+            false
         );
 
         assertThat(record.overtimeMinutes()).isEqualTo(90);
@@ -273,7 +311,7 @@ class AttendanceDailyCalculatorTest {
     void overtimeMinutesNeverGoNegative() {
         AttendanceDailyRecord record = calculator.calculate(
             7L, WEDNESDAY, List.of(punch(1, WEDNESDAY, 8, 20), punch(2, WEDNESDAY, 17, 35)),
-            SCHEDULE, -30
+            SCHEDULE, -30, false
         );
 
         assertThat(record.overtimeMinutes()).isZero();

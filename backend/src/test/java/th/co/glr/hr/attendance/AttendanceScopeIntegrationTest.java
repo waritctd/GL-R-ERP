@@ -18,6 +18,7 @@ import th.co.glr.hr.attendance.daily.AttendanceDailyRepository;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
 import th.co.glr.hr.attendance.daily.AttendanceEmployeeOption;
 import th.co.glr.hr.attendance.schedule.CompanyWideWorkScheduleResolver;
+import th.co.glr.hr.attendance.schedule.DbHolidayCalendar;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
@@ -56,7 +57,8 @@ class AttendanceScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         dailyService = new AttendanceDailyService(
             dailyRepository,
             new AttendanceDailyCalculator(),
-            new CompanyWideWorkScheduleResolver(properties));
+            new CompanyWideWorkScheduleResolver(properties),
+            new DbHolidayCalendar(jdbc));
         service = new AttendanceService(
             new AttendanceRepository(jdbc, new ObjectMapper()),
             new AttendanceDatParser(),

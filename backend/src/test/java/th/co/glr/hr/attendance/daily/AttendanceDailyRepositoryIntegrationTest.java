@@ -87,7 +87,7 @@ class AttendanceDailyRepositoryIntegrationTest extends AbstractPostgresIntegrati
         }
         return repository.upsertAll(List.of(calculator.calculate(
             employeeId, date, punches, SCHEDULE,
-            repository.findApprovedOvertimeMinutes(employeeId, date))));
+            repository.findApprovedOvertimeMinutes(employeeId, date), false)));
     }
 
     /**
@@ -313,7 +313,7 @@ class AttendanceDailyRepositoryIntegrationTest extends AbstractPostgresIntegrati
         List<AttendanceDailyRecord> records = byDay.entrySet().stream()
             .map(entry -> calculator.calculate(
                 entry.getKey().employeeId(), entry.getKey().workDate(),
-                entry.getValue(), SCHEDULE, 0))
+                entry.getValue(), SCHEDULE, 0, false))
             .toList();
 
         assertThat(repository.upsertAll(records)).isEqualTo(employees * days);
