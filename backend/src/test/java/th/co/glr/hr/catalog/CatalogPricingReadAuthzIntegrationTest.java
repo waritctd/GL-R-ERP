@@ -2,6 +2,7 @@ package th.co.glr.hr.catalog;
 
 import static org.mockito.Mockito.mock;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -56,13 +57,16 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  *   <li>{@code GET /api/catalog} → <b>open</b> to any authenticated user, per #205
  *       (2026-07-16).</li>
  *   <li>{@code GET /api/catalog/prices} → <b>open</b> to any authenticated user, per the owner's
- *       2026-08-01 ruling closing #388: #205's "browsable" covers the supplier purchase price.
- *       Both open endpoints are PINNED open here — an accepted business exposure recorded as a
- *       decision, so the next audit argues with the decision instead of re-filing the issue.</li>
- *   <li>{@code GET /api/price-calc-configs}, {@code GET /api/fx-rates},
- *       {@code GET /api/factory-configs} → ceo/import ({@code RAW_COSTING_ROLES}). These three are
- *       the whole of #388's fix: no decision ever covered them, and supplier price being open is
- *       not the same as the margin policy being open.</li>
+ *       2026-08-01 ruling closing #388: #205's "browsable" covers the supplier purchase price.</li>
+ *   <li>{@code GET /api/fx-rates} → {@code ceo}/{@code import}/<b>{@code sales}</b>, per the
+ *       owner's 2026-08-02 ruling (see {@code FxRateController.READ_ROLES}): an FX rate only
+ *       converts a number already visible via the open catalog-prices read, and reveals nothing
+ *       about landed cost or margin on its own — but the ruling was "should only be to sale", so
+ *       this is one role wider than #388, NOT open to every authenticated session.</li>
+ *   <li>{@code GET /api/price-calc-configs}, {@code GET /api/factory-configs} → ceo/import
+ *       ({@code RAW_COSTING_ROLES}), unchanged. The FX widening is deliberately narrower than
+ *       #388's catalog ruling: it does not extend to the margin policy or the supplier
+ *       directory.</li>
  * </ul>
  */
 class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
@@ -169,12 +173,54 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
         }
     }
 
+    /**
+     * PINS THE OWNER'S RULING OF 2026-08-02 (see {@code FxRateController.READ_ROLES}): the FX read
+     * widened from {@code RAW_COSTING_ROLES} by exactly one role, to {@code sales}, so the
+     * deal-create modal's estimate can convert a catalog price to THB for a plain rep. Asserted
+     * against a real row in real Postgres, exactly like the two #388 "stays open" pins above — a
+     * failure here means someone re-narrowed the gate; reopen the ruling with the product owner
+     * rather than editing this test.
+     */
     @Test
-    void nonCostingRolesCannotReadFxRates() throws Exception {
-        for (String role : NON_COSTING_ROLES) {
+    void salesCanReadFxRatesPerOwnerRuling20260802() throws Exception {
+        fxMvc.perform(get("/api/fx-rates").session(sessionFor("sales")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.fxRates[?(@.currency == 'XTS')].rateToThb").exists());
+    }
+
+    /**
+     * THE OTHER HALF OF THE SAME RULING, and the half that actually catches a regression. The
+     * ruling was "should only be to sale" — it did NOT open the rate to every authenticated
+     * session. Without this case the suite stays green with the gate wide open, which is precisely
+     * the failure mode a read-gate widening has: you find out in production.
+     *
+     * <p>{@code sales_manager} is in this list on purpose. It browses the deal pipeline but cannot
+     * create a deal ({@code canCreateTickets} is {@code ['sales']}, and {@code TicketService.create}
+     * gates on {@code Set.of("sales")}), so it never reaches the modal that needs the rate. Adding
+     * it here would be widening beyond what the owner authorised.
+     */
+    @Test
+    void everyRoleOutsideTheRulingIsStillRefusedTheFxRead() throws Exception {
+        for (String role : List.of("employee", "warehouse", "qc", "hr", "sales_manager", "account")) {
             fxMvc.perform(get("/api/fx-rates").session(sessionFor(role)))
                 .andExpect(status().isForbidden());
         }
+    }
+
+    /**
+     * The read widening is deliberately narrow: it must not leak into the write. A plain
+     * {@code sales} session — now able to GET the same rate — must still be refused the real
+     * {@code PUT}, through the real repository.
+     */
+    @Test
+    void salesCannotWriteFxRatesDespiteTheReadWidening() throws Exception {
+        fxMvc.perform(put("/api/fx-rates/EUR")
+                .session(sessionFor("sales"))
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("""
+                    {"rateToThb": 38.5, "effectiveDate": "2026-08-02"}
+                    """))
+            .andExpect(status().isForbidden());
     }
 
     @Test

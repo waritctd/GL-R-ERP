@@ -133,6 +133,12 @@ export const API_ROUTES = {
     get: '/api/pricing-formula-config',
     update: '/api/pricing-formula-config',
   },
+  // V112 — deal-create modal's ราคาตั้ง (ประมาณการ) display multiplier. NOT priceCalcConfigs:
+  // see DealEstimateMarkupController's javadoc for why this is a separate, openly-readable table.
+  dealEstimateMarkup: {
+    get: '/api/deal-estimate-markup',
+    update: '/api/deal-estimate-markup',
+  },
   attachments: {
     list: (ticketId) => `/api/tickets/${ticketId}/attachments`,
     upload: (ticketId) => `/api/tickets/${ticketId}/attachments`,

@@ -21,6 +21,10 @@ vi.mock('../../api/index.js', () => ({
       get: vi.fn(),
       update: vi.fn(),
     },
+    dealEstimateMarkup: {
+      get: vi.fn(),
+      update: vi.fn(),
+    },
   },
 }));
 
@@ -89,6 +93,12 @@ describe('CeoSettingsPage', () => {
     api.priceCalcConfigs.update.mockResolvedValue({});
     api.pricingFormulaConfig.get.mockResolvedValue({ formulaConfig: sampleFormulaConfig() });
     api.pricingFormulaConfig.update.mockResolvedValue({ formulaConfig: { ...sampleFormulaConfig(), version: 2 } });
+    api.dealEstimateMarkup.get.mockResolvedValue({
+      dealEstimateMarkup: { multiplier: 2, updatedAt: '2026-08-02T00:00:00Z', updatedBy: null },
+    });
+    api.dealEstimateMarkup.update.mockResolvedValue({
+      dealEstimateMarkup: { multiplier: 2.5, updatedAt: '2026-08-02T00:00:00Z', updatedBy: 1 },
+    });
   });
 
   it('renders fx rates from a mocked api.fxRates.list', async () => {
@@ -291,5 +301,81 @@ describe('CeoSettingsPage', () => {
         ],
       });
     });
+  });
+
+  // V112 — deal-create modal's ราคาตั้ง display multiplier, deliberately its own section/store
+  // separate from priceCalcConfigs above (see DealEstimateMarkupController's javadoc).
+  it('renders the deal-estimate markup from a mocked api.dealEstimateMarkup.get', async () => {
+    renderCeoSettingsPage();
+
+    expect(await screen.findByText('× 2.00')).not.toBeNull();
+    expect(api.dealEstimateMarkup.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('saves an edited markup and invalidates/refetches it', async () => {
+    const showToast = vi.fn();
+    renderCeoSettingsPage(showToast);
+
+    await screen.findByText('× 2.00');
+    fireEvent.click(screen.getByRole('button', { name: 'แก้ไขตัวคูณ' }));
+
+    const input = screen.getByDisplayValue('2');
+    fireEvent.change(input, { target: { value: '2.5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(api.dealEstimateMarkup.update).toHaveBeenCalledWith({ multiplier: 2.5 }));
+    await waitFor(() => expect(api.dealEstimateMarkup.get).toHaveBeenCalledTimes(2));
+    expect(showToast).toHaveBeenCalledWith('success', 'อัปเดตตัวคูณราคาตั้งแล้ว');
+  });
+
+  it('rejects a zero/blank markup inline and does not call dealEstimateMarkup.update', async () => {
+    renderCeoSettingsPage();
+
+    await screen.findByText('× 2.00');
+    fireEvent.click(screen.getByRole('button', { name: 'แก้ไขตัวคูณ' }));
+
+    const input = screen.getByDisplayValue('2');
+    fireEvent.change(input, { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+    const error = await screen.findByText('กรุณากรอกตัวคูณที่ถูกต้อง (0.001 - 999.999)');
+    expect(error.getAttribute('role')).toBe('alert');
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(api.dealEstimateMarkup.update).not.toHaveBeenCalled();
+  });
+
+  // D6 regression: V112's column is `NUMERIC(6,3) CHECK (multiplier > 0)`, which overflows at
+  // 1000 and rounds 0.0001 away to 0.000 (still tripping the CHECK) — either used to sail past
+  // this inline check and reach the backend as a raw Postgres error surfaced in a toast.
+  it('D6: rejects a markup that would overflow NUMERIC(6,3) (>= 1000)', async () => {
+    renderCeoSettingsPage();
+
+    await screen.findByText('× 2.00');
+    fireEvent.click(screen.getByRole('button', { name: 'แก้ไขตัวคูณ' }));
+
+    const input = screen.getByDisplayValue('2');
+    fireEvent.change(input, { target: { value: '1000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+    const error = await screen.findByText('กรุณากรอกตัวคูณที่ถูกต้อง (0.001 - 999.999)');
+    expect(error.getAttribute('role')).toBe('alert');
+    expect(api.dealEstimateMarkup.update).not.toHaveBeenCalled();
+  });
+
+  // D6 regression: a value below the smallest representable NUMERIC(6,3) step (0.0001 rounds to
+  // 0.000, which trips `CHECK (multiplier > 0)`) must also be rejected client-side.
+  it('D6: rejects a markup that would round to 0.000 under NUMERIC(6,3) (0.0001)', async () => {
+    renderCeoSettingsPage();
+
+    await screen.findByText('× 2.00');
+    fireEvent.click(screen.getByRole('button', { name: 'แก้ไขตัวคูณ' }));
+
+    const input = screen.getByDisplayValue('2');
+    fireEvent.change(input, { target: { value: '0.0001' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+    const error = await screen.findByText('กรุณากรอกตัวคูณที่ถูกต้อง (0.001 - 999.999)');
+    expect(error.getAttribute('role')).toBe('alert');
+    expect(api.dealEstimateMarkup.update).not.toHaveBeenCalled();
   });
 });

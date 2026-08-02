@@ -22,14 +22,30 @@ public class FxRateController {
     private static final Set<String> CEO_ROLES = Set.of("ceo");
 
     /**
-     * Read gate, issue #388. An FX rate is a pricing INPUT: it is what turns a factory's
-     * foreign-currency quote into a THB landed cost. Published on its own it is not secret, but
-     * paired with {@code /api/catalog/prices} and {@code /api/price-calc-configs} — both of which
-     * were equally ungated — it completes the cost→price reconstruction. Reading it therefore
-     * follows the raw-costing audience, {@code PricingCostingService.RAW_COSTING_ROLES}
-     * ({@code import}, {@code ceo}), rather than every authenticated session. Writes stay CEO-only.
+     * Read gate, owner ruling 2026-08-02 — widened from issue #388's {@code ceo}/{@code import}
+     * gate by exactly one role, to {@code sales}. NOT opened to every authenticated session: the
+     * owner's words were "should only be to sale", and this set is the whole of that ruling.
+     *
+     * <p>The trigger was the deal-create modal's "ราคาตั้ง (ประมาณการ)" estimate (V112,
+     * {@link DealEstimateMarkupController}): a rep who picks a catalog item needs the FX rate to
+     * convert its price to THB, and every catalog row is EUR or USD — there are no THB rows at
+     * all — so gating the rate to the costing audience blocked the feature for the one role it
+     * exists for. {@code sales} is sufficient and necessary: {@code ROLE_PERMISSIONS.canCreateTickets}
+     * is {@code ['sales']} and {@code TicketService.create} gates on {@code Set.of("sales")}, so no
+     * other role can open that modal — {@code sales_manager} and {@code ceo} browse the pipeline but
+     * cannot create a deal.
+     *
+     * <p>The reasoning is deliberately narrower than #388's: an FX rate only converts a number that
+     * is ALREADY visible to this caller — {@code /api/catalog/prices} is open to any authenticated
+     * user per the 2026-08-01 ruling that closed #388 — and on its own reveals nothing about landed
+     * cost or margin. It does NOT relax {@link PriceCalcConfigController}, whose {@code marginPct},
+     * {@code importDutyPct} and landed-cost components stay gated to {@code RAW_COSTING_ROLES}
+     * exactly as #388 decided; this rate alone cannot reconstruct that policy. Writes stay CEO-only.
+     *
+     * <p>If a test pinning this set fails, someone has re-narrowed or re-widened the gate: reopen
+     * the ruling with the owner rather than editing the test to match the code.
      */
-    private static final Set<String> READ_ROLES = Set.of("ceo", "import");
+    private static final Set<String> READ_ROLES = Set.of("ceo", "import", "sales");
 
     private final FxRateRepository fxRates;
     private final SessionContext sessions;
@@ -39,10 +55,11 @@ public class FxRateController {
         this.sessions = sessions;
     }
 
+    /** Read is gated to {@link #READ_ROLES} — see that field for the ruling and its scope. */
     @GetMapping
     Map<String, List<FxRateDto>> list(HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        requireCostingRole(user);
+        requireReadRole(user);
         return Map.of("fxRates", fxRates.findAll());
     }
 
@@ -68,9 +85,9 @@ public class FxRateController {
         }
     }
 
-    private void requireCostingRole(UserPrincipal user) {
+    private void requireReadRole(UserPrincipal user) {
         if (!READ_ROLES.contains(user.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะ CEO และฝ่ายจัดซื้อต่างประเทศเท่านั้น");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะ CEO ฝ่ายจัดซื้อต่างประเทศ และฝ่ายขายเท่านั้น");
         }
     }
 }
