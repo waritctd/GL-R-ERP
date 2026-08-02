@@ -25,6 +25,7 @@ import { hasActivitySince, isReadyToAdvance, lastStageChangeAt, STAGE_ADVANCE_GA
 import { ContextSection, FieldRow } from './DealMetaFields.jsx';
 import { DealAttachmentsPanel } from './DealAttachmentsPanel.jsx';
 import { DealDepositPanel } from './DealDepositPanel.jsx';
+import { DealDocumentRegister } from './DealDocumentRegister.jsx';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 import { DealLegacyQuotations } from './DealLegacyQuotations.jsx';
@@ -1764,6 +1765,32 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       </TabPanel>
 
       <TabPanel id="documents" idPrefix="ticket-detail" active={visibleActiveTab === 'documents'}>
+          {/* Slice D ("the เอกสาร document register"): one read-only roll-up of
+              every document family — quotations (below, unchanged), the
+              deposit notice + remaining invoice, and formal attachments —
+              gated PER ROW FAMILY inside the component itself (this tab's own
+              `isVisible` is now `() => true`, per ticketDetailTabs.js's own
+              comment on this tab). `attachments`/`attachLoading` are the SAME
+              query this page already runs for the ประวัติ tab's
+              DealAttachmentsPanel (gated at that query's own `enabled` by
+              `canViewDocumentsTab`, so it never fires an extra request here,
+              and never fires at all for a viewer it would 403) — reused
+              rather than re-fetched, so the two roll-ups of the same data
+              can never drift. See DealDocumentRegister.jsx's own header
+              comment for the exact three gates and their backend citations. */}
+          <DealDocumentRegister
+            ticketId={ticketId}
+            user={user}
+            summary={summary}
+            sections={sections}
+            canViewPricingRequests={canViewPricingRequests}
+            canViewDocumentsTab={canViewDocumentsTab}
+            pricingRequests={pricingRequests}
+            legacyQuotations={sortedQuotations}
+            attachments={attachments}
+            attachLoading={attachLoading}
+          />
+
           {/* "เอกสาร" (formerly "ใบเสนอราคา", tab id renamed `quotations` →
               `documents` in Slice C2b — same content, same gate; this id
               previously belonged to the attachments tab, whose content moved

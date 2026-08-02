@@ -15,37 +15,41 @@ describe('visibleTicketDetailTabIds', () => {
     expect(visibleTicketDetailTabIds('sales_manager')).toEqual(visibleTicketDetailTabIds('sales'));
   });
 
-  // quotation_accountCannotListCustomerQuotations — account keeps the tabs
-  // salesViewScope.js leaves it (deal/items/money/fulfilment/history) but
-  // loses เอกสาร (formerly the ใบเสนอราคา tab; the predicate is unchanged,
-  // only relocated). PricingRequestPanel's own gate is no longer a tab-level
-  // one either — it is now an INNER condition inside `items` — so account
-  // still cannot reach pricing-request content, just via a different
-  // mechanism (see TicketDetailPage.test.jsx's role-projection-in-effect
-  // test, which asserts the CONTENT set is unchanged even though the tab
-  // count changed).
-  it('account loses documents (ใบเสนอราคา content) — keeps deal/items/money/fulfilment/history', () => {
+  // Slice D ("the เอกสาร document register") widens `documents` to
+  // `() => true` — account now sees the TAB (it is the intended,
+  // owner-authorised widening: account confirms money against the
+  // deposit-notice/attachment rows the register now lists) even though it
+  // still cannot reach a single quotation ROW inside it — see
+  // DealDocumentRegister's own per-row gates and
+  // TicketDetailPage.test.jsx's content-level proof.
+  it('account sees every one of the 6 tabs (documents included, since Slice D)', () => {
     const tabs = visibleTicketDetailTabIds('account');
-    expect(tabs).toEqual(['deal', 'items', 'money', 'fulfilment', 'history']);
+    expect(tabs).toEqual(['deal', 'items', 'documents', 'money', 'fulfilment', 'history']);
   });
 
   // ledger_importCannotReadThePaymentLedger / depositNotice_import...Refused —
-  // import loses money. It also loses documents today (see
-  // ticketDetailTabs.js's own "KNOWN GAP" doc comment) even though the real
-  // CustomerQuotationService would allow it — pinned here as the CURRENT
-  // (pre- and post-Slice-C2b unchanged) behaviour, not asserted as correct.
-  it('import loses money and documents — keeps deal/items/fulfilment/history', () => {
+  // import still loses money. It now sees the `documents` TAB too (Slice D's
+  // `() => true` widening), but — per the KNOWN GAP this file's own header
+  // still documents — reaches zero quotation rows inside it, and (per
+  // DepositNoticeService#requireTicketViewer) zero deposit-notice/
+  // remaining-invoice rows either; only an attachments roll-up appears, and
+  // only once import is this deal's assignee. See
+  // DealDocumentRegister.test.jsx for that content-level proof.
+  it('import loses money but now sees documents too (Slice D widening) — keeps deal/items/documents/fulfilment/history', () => {
     const tabs = visibleTicketDetailTabIds('import');
-    expect(tabs).toEqual(['deal', 'items', 'fulfilment', 'history']);
+    expect(tabs).toEqual(['deal', 'items', 'documents', 'fulfilment', 'history']);
   });
 
   // deliveries_hrCannotReadDeliveries / overview_hrCannotReadTheTicket — hr
   // never actually reaches this page (route-gated) but the function must not
   // leak a section-gated tab to an unknown role if it somehow did. `history`
-  // joins `deal`/`items` as a third role-unconditional tab.
-  it('an unknown/unreachable role (hr, employee) only gets the three ungated tabs', () => {
-    expect(visibleTicketDetailTabIds('hr')).toEqual(['deal', 'items', 'history']);
-    expect(visibleTicketDetailTabIds('employee')).toEqual(['deal', 'items', 'history']);
+  // and (since Slice D) `documents` join `deal`/`items` as role-unconditional
+  // tabs — hr/employee never reach this component in practice (the ticket
+  // fetch itself 403s them upstream), so this only pins that the FUNCTION
+  // itself degrades safely if it somehow were called for one.
+  it('an unknown/unreachable role (hr, employee) only gets the four ungated tabs', () => {
+    expect(visibleTicketDetailTabIds('hr')).toEqual(['deal', 'items', 'documents', 'history']);
+    expect(visibleTicketDetailTabIds('employee')).toEqual(['deal', 'items', 'documents', 'history']);
   });
 
   it('every tab id in the visibility list is a real TICKET_DETAIL_TABS id, in the table\'s declared order', () => {
@@ -63,7 +67,10 @@ describe('TICKET_DETAIL_TABS display copy', () => {
     expect(TICKET_DETAIL_TABS.map(({ helper }) => helper)).toEqual([
       'ข้อมูลดีล',
       'รายการและราคา',
-      'เอกสารลูกค้า',
+      // Slice D: was "เอกสารลูกค้า" (customer documents) — the tab now also
+      // rolls up the deposit notice, remaining invoice, and internal
+      // attachments (PO/other), not just customer-facing quotations.
+      'เอกสารของดีล',
       'ยอดชำระ',
       'นำเข้าและจัดส่ง',
       'กิจกรรมและไฟล์แนบ',
@@ -82,7 +89,11 @@ describe('resolveTicketDetailTab', () => {
 
   it('falls back to deal for a tab the role may NOT see', () => {
     expect(resolveTicketDetailTab('money', 'import')).toBe(DEFAULT_TICKET_DETAIL_TAB_ID);
-    expect(resolveTicketDetailTab('documents', 'account')).toBe(DEFAULT_TICKET_DETAIL_TAB_ID);
+  });
+
+  it('keeps "documents" for account and import too — Slice D made the tab role-unconditional', () => {
+    expect(resolveTicketDetailTab('documents', 'account')).toBe('documents');
+    expect(resolveTicketDetailTab('documents', 'import')).toBe('documents');
   });
 
   it('falls back to deal for an absent or unknown tab id', () => {
