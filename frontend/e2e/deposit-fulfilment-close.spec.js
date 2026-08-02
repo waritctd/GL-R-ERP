@@ -30,9 +30,11 @@ import { loginAs, switchRole, spaGoto } from './helpers/auth.js';
 //
 // The invoice-gated tail of this test was scoped out with a `test.fixme()` on
 // the phase-2 branch because it drove `#ticket-invoice-file` — a ticket-page
-// upload control gated `isAccount`, while `AttachmentController
-// .requireTicketAccess` grants only participants OR {hr, sales_manager, ceo},
-// so it 403'd against the real service. The diagnosis then was "the close's
+// upload control gated `isAccount`, while AttachmentController's gate granted
+// only participants OR {hr, sales_manager, ceo}, so it 403'd against the real
+// service. (Issue #389 rebuilt that gate — account now READS every deal
+// document — but the WRITE side is still participant OR sales_manager/ceo,
+// never account, so the reasoning below is unchanged.) The diagnosis then was "the close's
 // INVOICE precondition is unreachable in production". That was wrong: it IS
 // reachable, just not there. `CommissionService.createFromDeal` (account-only)
 // dual-writes the INVOICE ticket attachment alongside the commission, so the
@@ -92,8 +94,8 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   // entry point (see the createFromDeal step near the end of this test).
   const ticketId = ticketPath.split('/').pop();
 
-  await page.getByRole('button', { name: 'สร้างใบขอราคา' }).click();
-  const pcrModal = page.getByRole('dialog', { name: 'สร้างใบขอราคา' });
+  await page.getByRole('button', { name: 'สร้างคำขอราคา' }).click();
+  const pcrModal = page.getByRole('dialog', { name: 'สร้างคำขอราคา' });
   await expect(pcrModal).toBeVisible();
   await pcrModal.getByPlaceholder('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ').fill('คุณทดสอบ ผู้รับ');
   // Same catalog pick as pcr-chain.spec.js (REFIN / "Corner", priceId 5,
@@ -102,24 +104,49 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   await pcrModal.getByLabel('ค้นหา Catalog').fill('Corner');
   await pcrModal.getByRole('button', { name: /REFIN/ }).click();
   await expect(pcrModal.getByText('Catalog #5')).toBeVisible();
-  await pcrModal.getByRole('button', { name: 'ส่งให้ Import' }).click();
+  await pcrModal.getByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' }).click();
   await expect(pcrModal).toHaveCount(0);
-  await expect(page.getByText('รอ Import รับเรื่อง').first()).toBeVisible();
+  await expect(page.getByText('รอฝ่ายนำเข้ารับเรื่อง').first()).toBeVisible();
+
+  // The demo seed (demoSales.js) now seeds several other SUBMITTED pricing
+  // requests, so the shared /pricing-requests queue this test visits next is
+  // no longer single-row. Capture THIS deal's own PCR code here, from its
+  // per-deal panel (scoped by ticketId — this ticket has exactly one PCR, the
+  // one just created, regardless of how much seed data exists elsewhere), so
+  // every subsequent step in the import/CEO phases can be pinned to this
+  // exact request instead of "whichever PCR row comes first".
+  const pcrPanel = page.locator('section').filter({ has: page.getByRole('heading', { name: 'คำขอราคา', exact: true }) });
+  const createdPcrCode = (await pcrPanel.locator('code').first().textContent()).trim();
+  expect(createdPcrCode).toMatch(/^PCR-2026-\d+$/);
 
   // ── import: pickup -> factory quote -> costing ──────────────────────
   await switchRole(page, 'import');
   await spaGoto(page, '/pricing-requests');
-  const pcrLink = page.getByRole('link', { name: /^PCR-2026-\d+$/ });
+  // Match the exact code captured above, not the generic /^PCR-2026-\d+$/
+  // pattern — the seed now puts several SUBMITTED requests in this queue, so
+  // the generic pattern resolves to multiple rows (strict-mode violation).
+  // Using .first() here would silently drive a SEEDED request through the
+  // rest of this chain instead of the one this test created, which would
+  // make the test pass while proving nothing about what it claims to.
+  const pcrLink = page.getByRole('link', { name: createdPcrCode, exact: true });
   await expect(pcrLink).toBeVisible();
   const pcrHref = await pcrLink.getAttribute('href');
-  await page.getByTestId('pcr-queue-pickup').click();
-  await expect(page.getByTestId('pcr-queue-pickup')).toHaveCount(0);
+  // Scope the pickup click to this request's own row — data-testid
+  // "pcr-queue-pickup" is repeated once per pickable row now that the queue
+  // is multi-row, so an unscoped click could pick up any of them.
+  const pcrRow = page.getByRole('row').filter({ has: pcrLink });
+  await pcrRow.getByTestId('pcr-queue-pickup').click();
+  await expect(pcrLink).toHaveCount(0);
   await spaGoto(page, pcrHref);
+  // Confirm this is genuinely the request just created, not a seeded one
+  // that happened to sort next to it: the detail page's <h1> is
+  // summary.requestCode (PricingRequestDetailPage.jsx, PageHeader `title`).
+  await expect(page.getByRole('heading', { level: 1, name: createdPcrCode })).toBeVisible();
 
-  await expect(page.getByText('Import ตรวจคำขอราคา').first()).toBeVisible();
+  await expect(page.getByText('ฝ่ายนำเข้าตรวจคำขอราคา').first()).toBeVisible();
   await page.getByTestId('pcr-generate-drafts').click();
   await expect(page.getByText('REFIN').first()).toBeVisible();
-  await page.getByPlaceholder('Raw price').fill('100');
+  await page.getByPlaceholder('ราคาโรงงาน').fill('100');
   await page.getByTestId('pcr-quote-save-response').click();
   await expect(page.getByTestId('pcr-quote-ready')).toBeVisible();
   await page.getByTestId('pcr-quote-ready').click();
@@ -129,8 +156,8 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   await page.getByTestId('pcr-costing-recalculate').click();
   await expect(page.getByTestId('pcr-costing-submit')).toBeEnabled();
   await page.getByTestId('pcr-costing-submit').click();
-  await page.getByRole('dialog', { name: 'Submit costing to CEO' })
-    .getByRole('button', { name: 'Submit to CEO' }).click();
+  await page.getByRole('dialog', { name: 'ส่งต้นทุนให้ CEO ตรวจ' })
+    .getByRole('button', { name: 'ส่งให้ CEO ตรวจ' }).click();
   await expect(page.getByText('ส่งให้ CEO ตรวจแล้ว').first()).toBeVisible();
 
   // ── ceo: start review -> set minimum selling price -> approve ───────
@@ -150,10 +177,11 @@ test('deposit paid -> fulfilment -> three-party close -> CLOSED_PAID', async ({ 
   // ── sales: issue + accept the customer quotation, confirm the order ─
   await switchRole(page, 'sales');
   await spaGoto(page, ticketPath);
-  // Ticket-detail IA rebuild Phase 2 (FIX 5, Opus review): DealQuotationPanel
-  // now lives inside the "ใบเสนอราคา" tab — a fresh navigation always lands
-  // on ภาพรวม, so this locator found nothing until the tab was opened.
-  await page.getByRole('tab', { name: 'ใบเสนอราคา' }).click();
+  // DealQuotationPanel lives inside a tab — a fresh navigation lands on the
+  // default tab, so this locator finds nothing until that tab is opened.
+  // Slice C2b renamed it: the quotation panel's home is now "เอกสาร" (it was
+  // "ใบเสนอราคา"), and the default landing tab is now "ดีล" (it was "ภาพรวม").
+  await page.getByRole('tab', { name: 'เอกสาร' }).click();
   const quotationPanel = page.getByTestId('deal-quotation-panel');
   await expect(quotationPanel).toBeVisible();
   await quotationPanel.getByTestId('deal-quotation-create').click();

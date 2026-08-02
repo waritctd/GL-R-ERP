@@ -10,7 +10,7 @@ import { Panel, PageStack } from '../../components/common/Layout.jsx';
 import { SkeletonCard, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
-import { formatMoney, formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
+import { formatMoney, formatThaiDate, greetingName, ticketStatusLabel } from '../../utils/format.js';
 import { accountMoneyBucket, nextAccountAction } from '../tickets/accountActions.js';
 
 // Money-pulse bucket meta — order matches the plan's five-across layout:
@@ -152,7 +152,7 @@ export function AccountOverview({ user, employee, showToast }) {
   return (
     <PageStack>
       <PageHeader
-        title={`สวัสดี คุณ${firstName}`}
+        title={`สวัสดี ${greetingName(firstName)}`}
         subtitle={`ภาพรวมการเงิน · ${today} — เงินที่ต้องรับ / ยืนยัน / ปิดงาน`}
       />
 

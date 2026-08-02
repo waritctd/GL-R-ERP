@@ -363,12 +363,21 @@ function buildSalesView(overrides = {}) {
 function renderDetailPage({
   user = importUser,
   request = buildRequest(),
+  detailError = null,
+  detailPromise = null,
   factoryQuotes = [],
   costings = [],
   attachments = [],
   showToast = vi.fn(),
+  routeId = request?.summary?.id ?? 501,
 } = {}) {
-  api.pricingRequests.get.mockResolvedValue({ pricingRequest: request });
+  if (detailPromise) {
+    api.pricingRequests.get.mockReturnValue(detailPromise);
+  } else if (detailError) {
+    api.pricingRequests.get.mockRejectedValue(detailError);
+  } else {
+    api.pricingRequests.get.mockResolvedValue({ pricingRequest: request });
+  }
   api.pricingRequests.listFactoryQuotes.mockResolvedValue({ items: factoryQuotes });
   api.pricingRequests.listCostings.mockResolvedValue({ items: costings });
   api.pricingRequests.listAttachments.mockResolvedValue({ items: attachments });
@@ -379,7 +388,7 @@ function renderDetailPage({
 
   const utils = render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[`/pricing-requests/${request.summary.id}`]}>
+      <MemoryRouter initialEntries={[`/pricing-requests/${routeId}`]}>
         <Routes>
           <Route path="/pricing-requests/:id" element={<PricingRequestDetailPage user={user} showToast={showToast} />} />
         </Routes>
@@ -398,6 +407,65 @@ beforeEach(() => {
   setApiDefaults();
 });
 
+describe('PricingRequestDetailPage unavailable states', () => {
+  it('renders a contextual loading state while the detail is pending', async () => {
+    renderDetailPage({
+      detailPromise: new Promise(() => {}),
+      routeId: 501,
+    });
+
+    expect((await screen.findByRole('status')).textContent).toContain('กำลังโหลดคำขอราคา');
+    expect(screen.getByText('กำลังดึงรายละเอียดสินค้า ผู้รับ และสถานะล่าสุด')).toBeTruthy();
+  });
+
+  it('renders a recoverable error state and retries the existing query', async () => {
+    const error = new Error('โหลดคำขอราคาไม่สำเร็จ');
+    renderDetailPage({ detailError: error, routeId: 501 });
+
+    expect((await screen.findByRole('alert')).textContent).toContain('โหลดคำขอราคาไม่สำเร็จ');
+
+    api.pricingRequests.get.mockResolvedValueOnce({ pricingRequest: buildRequest() });
+    fireEvent.click(screen.getByRole('button', { name: /ลองใหม่/ }));
+
+    await waitForLoaded();
+    expect(api.pricingRequests.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders a not-found state for an existing 404 outcome without offering retry', async () => {
+    const error = Object.assign(new Error('ไม่พบคำขอราคานี้'), { status: 404 });
+    renderDetailPage({ detailError: error, routeId: 9999 });
+
+    expect(await screen.findByText('ไม่พบคำขอราคานี้')).toBeTruthy();
+    expect(screen.getByText('ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'กลับไปที่คิวคำขอราคา' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /ลองใหม่/ })).toBeNull();
+  });
+
+  it('renders a safe denied state for an existing 403 outcome without exposing record detail', async () => {
+    const error = Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 });
+    renderDetailPage({ detailError: error, routeId: 501 });
+
+    expect(await screen.findByText('ยังเปิดคำขอราคานี้ไม่ได้')).toBeTruthy();
+    expect(screen.getByText('ระบบไม่เปิดเผยรายละเอียดของคำขอราคาที่คุณไม่มีสิทธิ์เข้าถึง')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'กลับไปที่คิวคำขอราคา' })).toBeTruthy();
+    expect(screen.queryByText('ไม่มีสิทธิ์เข้าถึงรายการนี้')).toBeNull();
+    expect(screen.queryByRole('button', { name: /ลองใหม่/ })).toBeNull();
+  });
+
+  it('uses a safe back action for sales users who cannot open the pricing-request queue', async () => {
+    renderDetailPage({
+      user: salesOwner,
+      request: null,
+      routeId: 501,
+    });
+
+    expect(await screen.findByText('ไม่พบคำขอราคานี้')).toBeTruthy();
+    expect(screen.getByText('ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'กลับ' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'กลับไปที่คิวคำขอราคา' })).toBeNull();
+  });
+});
+
 describe('PricingRequestDetailPage role-scoped raw quote/costing visibility (UI-level only — see file header)', () => {
   it('does not render or fetch Factory Quotes / Costing sections for sales, so sales cannot trigger any raw factory-quote or costing action', async () => {
     renderDetailPage({
@@ -407,10 +475,10 @@ describe('PricingRequestDetailPage role-scoped raw quote/costing visibility (UI-
     });
     await waitForLoaded();
 
-    expect(screen.queryByText('Factory Quotes')).toBeNull();
-    expect(screen.queryByText('Costing')).toBeNull();
+    expect(screen.queryByText('ราคาโรงงาน')).toBeNull();
+    expect(screen.queryByText('ต้นทุนนำเข้า')).toBeNull();
     expect(screen.queryByRole('button', { name: 'สร้างร่างอีเมล' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'สร้าง draft' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'สร้างร่างต้นทุน' })).toBeNull();
     // The raw-data queries are gated (`enabled: canSeeRaw(user)`), not just hidden in the DOM —
     // sales never even fetches factory-quote/costing detail.
     await waitFor(() => expect(api.pricingRequests.listFactoryQuotes).not.toHaveBeenCalled());
@@ -425,8 +493,8 @@ describe('PricingRequestDetailPage role-scoped raw quote/costing visibility (UI-
     });
     await waitForLoaded();
 
-    expect(screen.queryByText('Factory Quotes')).toBeNull();
-    expect(screen.queryByText('Costing')).toBeNull();
+    expect(screen.queryByText('ราคาโรงงาน')).toBeNull();
+    expect(screen.queryByText('ต้นทุนนำเข้า')).toBeNull();
     expect(screen.queryByText(/50.*THB/)).toBeNull();
     await waitFor(() => expect(api.pricingRequests.listFactoryQuotes).not.toHaveBeenCalled());
     expect(api.pricingRequests.listCostings).not.toHaveBeenCalled();
@@ -441,23 +509,23 @@ describe('PricingRequestDetailPage role-scoped raw quote/costing visibility (UI-
     await waitForLoaded();
 
     // Raw data IS visible to CEO.
-    expect(await screen.findByText('Factory Quotes')).not.toBeNull();
-    expect(screen.getByText('Costing')).not.toBeNull();
+    expect(await screen.findByText('ราคาโรงงาน')).not.toBeNull();
+    expect(screen.getByText('ต้นทุนนำเข้า')).not.toBeNull();
     expect(screen.getByText('SCG Ceramics')).not.toBeNull();
     expect(screen.getByText('COST-2026-0001')).not.toBeNull();
 
     // But every mutating control is Import-only (isImport(user)) and must be absent for CEO.
     expect(screen.queryByRole('button', { name: 'สร้างร่างอีเมล' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'สร้าง draft' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'สร้างร่างต้นทุน' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'ส่ง' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'ส่งอีกครั้ง' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'พร้อม costing' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'พร้อมคำนวณต้นทุน' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'เจรจา' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'คำนวณใหม่' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Submit to CEO' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ส่งให้ CEO ตรวจ' })).toBeNull();
     // No editable email-draft or response-entry form fields either.
-    expect(screen.queryByPlaceholderText('Factory email recipient')).toBeNull();
-    expect(screen.queryByPlaceholderText('Raw price')).toBeNull();
+    expect(screen.queryByPlaceholderText('อีเมลโรงงาน')).toBeNull();
+    expect(screen.queryByPlaceholderText('ราคาโรงงาน')).toBeNull();
   });
 });
 
@@ -468,9 +536,9 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    const toInput = screen.getByPlaceholderText('Factory email recipient');
-    const subjectInput = screen.getByPlaceholderText('Subject');
-    const bodyInput = screen.getByPlaceholderText('Email body');
+    const toInput = screen.getByPlaceholderText('อีเมลโรงงาน');
+    const subjectInput = screen.getByPlaceholderText('หัวข้ออีเมล');
+    const bodyInput = screen.getByPlaceholderText('เนื้อหาอีเมล');
 
     fireEvent.change(toInput, { target: { value: 'purchasing@scg-factory.example' } });
     fireEvent.change(subjectInput, { target: { value: 'ขอราคาใหม่ SCG A1' } });
@@ -529,12 +597,12 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    const priceInput = screen.getByPlaceholderText('Raw price');
+    const priceInput = screen.getByPlaceholderText('ราคาโรงงาน');
     fireEvent.change(priceInput, { target: { value: '55.5' } });
-    const refInput = screen.getByPlaceholderText('Ref');
+    const refInput = screen.getByPlaceholderText('เลขอ้างอิงใบเสนอราคา');
     fireEvent.change(refInput, { target: { value: 'QT-9001' } });
 
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก response/revision' }));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกคำตอบ/รอบแก้ไข' }));
 
     await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
       quote.id,
@@ -560,12 +628,12 @@ describe('PricingRequestDetailPage Import costing workflow', () => {
       expect.any(Object),
     ));
 
-    const submitButton = screen.getByRole('button', { name: 'Submit to CEO' });
+    const submitButton = screen.getByRole('button', { name: 'ส่งให้ CEO ตรวจ' });
     expect(submitButton.disabled).toBe(false);
     fireEvent.click(submitButton);
 
-    const dialog = await screen.findByRole('dialog', { name: 'Submit costing to CEO' });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Submit to CEO' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ส่งต้นทุนให้ CEO ตรวจ' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ส่งให้ CEO ตรวจ' }));
 
     await waitFor(() => expect(api.pricingRequests.submitCosting).toHaveBeenCalledWith(
       costing.id,
@@ -573,13 +641,13 @@ describe('PricingRequestDetailPage Import costing workflow', () => {
     ));
   });
 
-  it('disables "Submit to CEO" while the costing is stale — a factory revision must be recalculated first', async () => {
+  it('disables "ส่งให้ CEO ตรวจ" while the costing is stale — a factory revision must be recalculated first', async () => {
     const costing = buildCosting({ status: 'CALCULATED', stale: true });
     renderDetailPage({ user: importUser, costings: [costing] });
     await waitForLoaded();
     await screen.findByText('COST-2026-0001');
 
-    expect(screen.getByRole('button', { name: 'Submit to CEO' }).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'ส่งให้ CEO ตรวจ' }).disabled).toBe(true);
     expect(api.pricingRequests.submitCosting).not.toHaveBeenCalled();
   });
 });
@@ -590,11 +658,11 @@ describe('PricingRequestDetailPage customer-change revision editing', () => {
     renderDetailPage({ user: salesOwner, request });
     await waitForLoaded(request);
 
-    fireEvent.click(screen.getByRole('button', { name: 'สร้าง revision' }));
+    fireEvent.click(screen.getByRole('button', { name: 'สร้างรอบแก้ไข' }));
 
     // mode="revision" seeds every field from the CURRENT request, same as edit mode
     // (PricingRequestCreateModal, COMMIT 5 finding 3) — not an unchanged blank clone.
-    const dialog = await screen.findByRole('dialog', { name: 'สร้าง Customer Change Revision' });
+    const dialog = await screen.findByRole('dialog', { name: 'สร้างรอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า' });
     expect(within(dialog).getByDisplayValue('ผู้ออกแบบ ก.')).not.toBeNull();
     expect(within(dialog).getByDisplayValue('กระเบื้องพื้น SCG A1')).not.toBeNull();
 
@@ -602,7 +670,7 @@ describe('PricingRequestDetailPage customer-change revision editing', () => {
     fireEvent.change(reasonInput, { target: { value: 'ลูกค้าเปลี่ยนจำนวน' } });
     fireEvent.change(within(dialog).getByDisplayValue('20'), { target: { value: '30' } });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /สร้าง revision/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /สร้างรอบแก้ไข/ }));
 
     await waitFor(() => expect(api.pricingRequests.createCustomerChangeRevision).toHaveBeenCalledWith(
       request.summary.id,
@@ -618,7 +686,7 @@ describe('PricingRequestDetailPage customer-change revision editing', () => {
     renderDetailPage({ user: salesOwner, request });
     await waitForLoaded(request);
 
-    expect(screen.queryByRole('button', { name: 'สร้าง revision' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'สร้างรอบแก้ไข' })).toBeNull();
   });
 });
 
@@ -721,7 +789,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     await waitForLoaded(request);
     await screen.findByText('PCD-2026-0001');
 
-    const marginInput = screen.getByPlaceholderText('Margin (0.20 = 20%)');
+    const marginInput = screen.getByPlaceholderText('อัตรากำไร เช่น 0.20 = 20%');
     fireEvent.change(marginInput, { target: { value: '0.35' } });
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกการเปลี่ยนแปลง' }));
 
@@ -768,7 +836,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     await waitForLoaded(request);
     await screen.findByText('PCD-2026-0001');
 
-    fireEvent.click(screen.getByRole('button', { name: 'ตีกลับให้ Import แก้ไข' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' }));
     const dialog = await screen.findByRole('dialog');
     const reasonInput = within(dialog).getByLabelText('เหตุผลที่ตีกลับ');
     fireEvent.change(reasonInput, { target: { value: 'ราคาต้นทุนคลาดเคลื่อน' } });
@@ -787,9 +855,9 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     await waitForLoaded(request);
 
     expect(await screen.findByText('PCD-2026-0001')).not.toBeNull();
-    expect(screen.queryByPlaceholderText('Margin (0.20 = 20%)')).toBeNull();
+    expect(screen.queryByPlaceholderText('อัตรากำไร เช่น 0.20 = 20%')).toBeNull();
     expect(screen.queryByRole('button', { name: 'อนุมัติราคาขาย' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'ตีกลับให้ Import แก้ไข' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).toBeNull();
   });
 
   it('shows Sales the approved selling price via the sales-view projection, with no cost/margin figure anywhere on the page', async () => {
@@ -804,7 +872,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     // ...but the underlying frozen cost (60 THB) never appears anywhere — the sales-view DTO
     // this page renders structurally has no cost/margin field at all (design correction 2).
     expect(screen.queryByText(/ต้นทุน/)).toBeNull();
-    expect(screen.queryByText(/Margin/)).toBeNull();
+    expect(screen.queryByText(/อัตรากำไร/)).toBeNull();
   });
 
   it('does not fetch the sales-view projection for a non-owning sales rep', async () => {
@@ -853,8 +921,8 @@ describe('PricingRequestDetailPage mobile layout', () => {
     // Item identity renders brand+model ("SCG A1") ahead of productDescription per the
     // component's own fallback chain (catalogBrand/brand + catalogModel/model first).
     expect(screen.getByText('SCG A1')).not.toBeNull();
-    expect(await screen.findByText('Factory Quotes')).not.toBeNull();
-    expect(screen.getByText('Costing')).not.toBeNull();
+    expect(await screen.findByText('ราคาโรงงาน')).not.toBeNull();
+    expect(screen.getByText('ต้นทุนนำเข้า')).not.toBeNull();
   });
 });
 
@@ -951,18 +1019,18 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
     expect(screen.queryByRole('button', { name: 'ออกใบเสนอราคา' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'ยกเลิกร่าง' })).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Preview PDF' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ดูตัวอย่าง PDF' }));
     await waitFor(() => expect(api.pricingRequests.downloadCustomerQuotationPdf).toHaveBeenCalledWith(quotation.id));
   });
 
-  it('offers "สร้าง Revision ใหม่" only once ISSUED, to the owner', async () => {
+  it('offers "สร้างรอบแก้ไขใหม่" only once ISSUED, to the owner', async () => {
     const issued = buildCustomerQuotation({ docStatus: 'ISSUED' });
     api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [issued] });
     renderDetailPage({ user: salesOwner });
     await waitForLoaded();
     await screen.findByText(issued.number);
 
-    const revisionButton = await screen.findByRole('button', { name: 'สร้าง Revision ใหม่' });
+    const revisionButton = await screen.findByRole('button', { name: 'สร้างรอบแก้ไขใหม่' });
     fireEvent.click(revisionButton);
 
     await waitFor(() => expect(api.pricingRequests.createCustomerQuotationRevision).toHaveBeenCalledWith(
@@ -1022,18 +1090,18 @@ describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revi
     await screen.findByText(revisionRequested.number);
 
     // Commercial-only: reuses createRevision, now reachable from REVISION_REQUESTED too.
-    const commercialButton = await screen.findByRole('button', { name: 'แก้ไขเชิงพาณิชย์เท่านั้น (ราคา/เงื่อนไข)' });
+    const commercialButton = await screen.findByRole('button', { name: 'สร้างรอบแก้ไขราคา/เงื่อนไข' });
     fireEvent.click(commercialButton);
     await waitFor(() => expect(api.pricingRequests.createCustomerQuotationRevision).toHaveBeenCalledWith(
       revisionRequested.id,
       expect.objectContaining({ clientRequestId: expect.any(String) }),
     ));
 
-    // Cost-affecting: opens the existing Customer Change Revision modal (mode="revision") — no
+    // Cost-affecting: opens the existing customer-change revision modal (mode="revision") — no
     // second modal built for this. Matched via the modal's own dialog role/title (distinct from
-    // the always-present static "Customer Change Revision" section heading elsewhere on the page).
-    fireEvent.click(screen.getByRole('button', { name: 'มีการเปลี่ยนแปลงสินค้า/จำนวน/โรงงาน (Customer Change Revision)' }));
-    expect(await screen.findByRole('dialog', { name: 'สร้าง Customer Change Revision' })).not.toBeNull();
+    // the always-present static customer-change section heading elsewhere on the page).
+    fireEvent.click(screen.getByRole('button', { name: 'สร้างรอบแก้ไขสินค้า/จำนวน/โรงงาน' }));
+    expect(await screen.findByRole('dialog', { name: 'สร้างรอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า' })).not.toBeNull();
   });
 });
 

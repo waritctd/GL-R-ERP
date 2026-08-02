@@ -86,7 +86,7 @@ public class LeaveService {
         LocalDate effectiveTo = toDate == null ? today.plusMonths(1) : toDate;
         LocalDate effectiveFrom = fromDate == null ? today.withDayOfMonth(1) : fromDate;
         if (effectiveTo.isBefore(effectiveFrom)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "toDate must be on or after fromDate");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่สิ้นสุดต้องไม่มาก่อนวันที่เริ่มต้น");
         }
 
         Long employeeId = requestedEmployeeId;
@@ -94,7 +94,7 @@ public class LeaveService {
         if (!canViewAll(user)) {
             managerEmployeeId = requireEmployeeId(user);
             if (requestedEmployeeId != null && !canAccessEmployee(managerEmployeeId, requestedEmployeeId)) {
-                throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+                throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
             }
         }
 
@@ -120,7 +120,7 @@ public class LeaveService {
         long actorEmployeeId = requireEmployeeId(user);
         long employeeId = requestedEmployeeId == null ? actorEmployeeId : requestedEmployeeId;
         if (!canViewAll(user) && !canAccessEmployee(actorEmployeeId, employeeId)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         validateEmployee(employeeId);
         int year = requestedYear == null ? LocalDate.now(clock).getYear() : requestedYear;
@@ -138,11 +138,11 @@ public class LeaveService {
         long actorEmployeeId = requireEmployeeId(user);
         long employeeId = requestedEmployeeId == null ? actorEmployeeId : requestedEmployeeId;
         if (!canViewAll(user) && !canAccessEmployee(actorEmployeeId, employeeId)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         validateEmployee(employeeId);
         return leaveRepository.findContactDefaults(employeeId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Employee not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบข้อมูลพนักงาน"));
     }
 
     @Transactional
@@ -234,7 +234,7 @@ public class LeaveService {
         requireStatus(existing, LeaveStatus.SUBMITTED);
         int updated = leaveRepository.approve(id, actorEmployeeId, note(request));
         if (updated != 1) {
-            throw new ApiException(HttpStatus.CONFLICT, "Leave request has already been reviewed");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอลานี้ได้รับการพิจารณาไปแล้ว");
         }
         LeaveRequestDto after = requireRequest(id);
         auditService.record(user, "APPROVE_LEAVE_REQUEST", "leave_request", id, existing, after);
@@ -257,7 +257,7 @@ public class LeaveService {
         requireStatus(existing, LeaveStatus.SUBMITTED);
         int updated = leaveRepository.reject(id, actorEmployeeId, note(request));
         if (updated != 1) {
-            throw new ApiException(HttpStatus.CONFLICT, "Leave request has already been reviewed");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอลานี้ได้รับการพิจารณาไปแล้ว");
         }
         LeaveRequestDto after = requireRequest(id);
         auditService.record(user, "REJECT_LEAVE_REQUEST", "leave_request", id, existing, after);
@@ -278,18 +278,18 @@ public class LeaveService {
         Long actorEmployeeId = requireEmployeeId(user);
         boolean reviewer = canReviewEmployee(existing.employeeId(), actorEmployeeId, user);
         if (!reviewer && existing.employeeId() != actorEmployeeId) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (!reviewer && !"SUBMITTED".equals(existing.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Only submitted leave requests can be cancelled by employees");
+            throw new ApiException(HttpStatus.CONFLICT, "พนักงานยกเลิกได้เฉพาะคำขอลาที่ยังไม่ได้รับการพิจารณาเท่านั้น");
         }
         if (!"SUBMITTED".equals(existing.status()) && !"APPROVED".equals(existing.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Only active leave requests can be cancelled");
+            throw new ApiException(HttpStatus.CONFLICT, "ยกเลิกได้เฉพาะคำขอลาที่ยังอยู่ระหว่างพิจารณาเท่านั้น");
         }
 
         int updated = leaveRepository.cancel(id, reviewer ? actorEmployeeId : null, note(request));
         if (updated != 1) {
-            throw new ApiException(HttpStatus.CONFLICT, "Leave request can no longer be cancelled");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอลานี้ไม่สามารถยกเลิกได้แล้ว");
         }
         // Cancel-after-close reversal: uses `existing` (the pre-cancel snapshot), not the freshly
         // cancelled row -- it still carries the paidDays/unpaidDays that were actually granted.
@@ -419,48 +419,48 @@ public class LeaveService {
         long targetEmployeeId = requestedEmployeeId == null ? actorEmployeeId : requestedEmployeeId;
         if (targetEmployeeId != actorEmployeeId
                 && !canReviewEmployee(targetEmployeeId, actorEmployeeId, user)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Employees can only request leave for themselves or eligible reports");
+            throw new ApiException(HttpStatus.FORBIDDEN, "พนักงานสามารถขอลาให้ตนเองหรือผู้ใต้บังคับบัญชาที่มีสิทธิ์เท่านั้น");
         }
         return targetEmployeeId;
     }
 
     private void validateEmployee(long employeeId) {
         if (!leaveRepository.employeeExists(employeeId)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Employee not found");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบข้อมูลพนักงาน");
         }
     }
 
     private void validateSubmitRequest(SubmitLeaveRequest request) {
         if (request == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Leave request is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุคำขอลา");
         }
         if (request.startDate() == null || request.endDate() == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Leave dates are required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุวันที่ลา");
         }
         if (request.reason() == null || request.reason().isBlank()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Leave reason is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเหตุผลการลา");
         }
     }
 
     private LeaveTypeDto requireLeaveType(String value) {
         String code = value == null ? "" : value.trim().toUpperCase();
         return leaveRepository.findLeaveType(code)
-            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "Invalid leave type"));
+            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ประเภทการลาไม่ถูกต้อง"));
     }
 
     private void validateDateRange(LocalDate startDate, LocalDate endDate) {
         if (endDate.isBefore(startDate)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Leave end date must be on or after start date");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่สิ้นสุดการลาต้องไม่มาก่อนวันที่เริ่มต้น");
         }
         if (startDate.getYear() != endDate.getYear()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Leave requests cannot span quota years");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "คำขอลาต้องไม่คร่อมปีโควตา");
         }
     }
 
     private BigDecimal workingDaysBetween(LocalDate startDate, LocalDate endDate) {
         int days = LeaveDayMath.countWorkingDays(startDate, endDate);
         if (days <= 0) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Leave range must include at least one weekday");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน");
         }
         return BigDecimal.valueOf(days);
     }
@@ -497,20 +497,20 @@ public class LeaveService {
             return;
         }
         if (startTime == null || endTime == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Both start time and end time are required for sub-day leave");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "การลาแบบระบุช่วงเวลาต้องระบุเวลาเริ่มต้นและเวลาสิ้นสุด");
         }
         if (!request.startDate().equals(request.endDate())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Sub-day leave must start and end on the same date");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "การลาแบบระบุช่วงเวลาต้องเริ่มต้นและสิ้นสุดในวันเดียวกัน");
         }
         if (LeaveDayMath.countWorkingDays(request.startDate(), request.startDate()) == 0) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Leave range must include at least one weekday");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน");
         }
         if (!endTime.isAfter(startTime)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Leave end time must be after start time");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เวลาสิ้นสุดการลาต้องอยู่หลังเวลาเริ่มต้น");
         }
         if (startTime.isBefore(WORKDAY_START) || startTime.isAfter(WORKDAY_END)
                 || endTime.isBefore(WORKDAY_START) || endTime.isAfter(WORKDAY_END)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Leave times must be within working hours (08:30-17:30)");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เวลาลาต้องอยู่ในช่วงเวลาทำงาน (08:30-17:30)");
         }
     }
 
@@ -539,7 +539,7 @@ public class LeaveService {
 
     private void requireReviewer(long employeeId, long actorEmployeeId, UserPrincipal user) {
         if (!canReviewEmployee(employeeId, actorEmployeeId, user)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Only HR or the employee's direct manager can review leave");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะฝ่ายบุคคลหรือหัวหน้างานโดยตรงของพนักงานเท่านั้นที่สามารถพิจารณาคำขอลาได้");
         }
     }
 
@@ -561,12 +561,12 @@ public class LeaveService {
 
     private LeaveRequestDto requireRequest(long id) {
         return leaveRepository.findById(id)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Leave request not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอลานี้"));
     }
 
     private void requireStatus(LeaveRequestDto request, LeaveStatus status) {
         if (!status.name().equals(request.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Leave request has already been reviewed");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอลานี้ได้รับการพิจารณาไปแล้ว");
         }
     }
 
@@ -580,7 +580,7 @@ public class LeaveService {
 
     private Long requireEmployeeId(UserPrincipal user) {
         if (user.employeeId() == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "User is not linked to an employee");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล");
         }
         return user.employeeId();
     }
@@ -592,7 +592,7 @@ public class LeaveService {
         try {
             return LeaveStatus.valueOf(value.trim().toUpperCase());
         } catch (IllegalArgumentException exception) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Invalid leave status");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "สถานะการลาไม่ถูกต้อง");
         }
     }
 

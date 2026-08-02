@@ -10,7 +10,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
-import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
+import { formatThaiDate, fulfilmentStatusLabel, greetingName } from '../../utils/format.js';
 import { nextFulfilmentActionCode, nextImportAction } from '../tickets/importActions.js';
 
 /**
@@ -50,7 +50,7 @@ const IN_TRANSIT_STATUSES = ['IR_SENT', 'SHIPPING', 'CUSTOMS_CLEARANCE'];
 // conveyor's left-to-right order and the worklist's tie-break sort.
 const STAGE_BUCKETS = [
   { key: 'pricing', label: 'ตั้งราคา', tone: 'amber' },
-  { key: 'procurement', label: 'จัดซื้อ/IR', tone: 'blue' },
+  { key: 'procurement', label: 'จัดซื้อ/นำเข้า', tone: 'blue' },
   { key: 'shipping', label: 'ขนส่ง', tone: 'blue' },
   { key: 'goodsReceived', label: 'รับเข้าคลัง', tone: 'teal' },
   { key: 'delivery', label: 'ส่งมอบ', tone: 'indigo' },
@@ -205,7 +205,7 @@ export function ImportOverview({ user, employee }) {
   const pricingQueueCount = pricingRequests.filter((pr) => pr.status === 'SUBMITTED').length;
   const procurementQueueCount = tickets.filter((t) => nextFulfilmentActionCode(t) != null).length;
 
-  const greeting = `สวัสดี, คุณ${employee?.nickName || employee?.nameTh || user?.name || ''}`;
+  const greeting = `สวัสดี, ${greetingName(employee?.nickName || employee?.nameTh || user?.name)}`;
 
   return (
     <PageStack>
@@ -241,7 +241,7 @@ export function ImportOverview({ user, employee }) {
         className="!p-0 overflow-hidden"
       >
         {loading ? (
-          <p className="px-4 py-6 text-sm text-text-muted">กำลังโหลด...</p>
+          <p className="px-4 py-6 text-sm text-text-muted">กำลังโหลดงานของฝ่ายนำเข้า…</p>
         ) : filteredRows.length === 0 ? (
           <EmptyState
             icon="check"
@@ -267,7 +267,7 @@ export function ImportOverview({ user, employee }) {
             >
               <span className="flex items-center gap-2 text-sm font-bold text-text">
                 <Icon name="clipboard" size={16} className="text-text-muted" />
-                คิวใบขอราคา
+                คิวคำขอราคา
               </span>
               <span className="flex items-center gap-2">
                 <StatusBadge tone={pricingQueueCount > 0 ? 'warning' : 'neutral'}>{pricingQueueCount}</StatusBadge>

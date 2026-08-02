@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -28,10 +28,30 @@ function timeAgo(iso) {
   return `${Math.floor(diff / 86400)} วันที่แล้ว`;
 }
 
-export function NotificationBell({ onNavigate }) {
+export function NotificationBell({
+  onNavigate,
+  open: controlledOpen,
+  onOpenChange,
+}) {
   const queryClient = useQueryClient();
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const ref = useRef(null);
+  const triggerRef = useRef(null);
+  const panelRef = useRef(null);
+  const itemRefs = useRef([]);
+  const panelId = 'notification-panel';
+  const open = controlledOpen ?? uncontrolledOpen;
+
+  const setOpen = useCallback((nextOpen) => {
+    const resolvedOpen = typeof nextOpen === 'function' ? nextOpen(open) : nextOpen;
+    if (controlledOpen === undefined) setUncontrolledOpen(resolvedOpen);
+    onOpenChange?.(resolvedOpen);
+  }, [controlledOpen, onOpenChange, open]);
+
+  const closeAndRestore = useCallback(() => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }, [setOpen]);
 
   // Polling moves from a manual setInterval to refetchInterval — same 30s
   // cadence, but the cache now lives at queryKeys.notifications() so any
@@ -53,17 +73,57 @@ export function NotificationBell({ onNavigate }) {
 
   const markAllReadMutation = useMutation({
     mutationFn: (ids) => Promise.all(ids.map((id) => api.notifications.markRead(id))),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.notifications() }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
+      closeAndRestore();
+    },
   });
 
   useEffect(() => {
     if (!open) return;
-    function handleClick(e) {
+    itemRefs.current.filter(Boolean)[0]?.focus();
+
+    function handlePointer(e) {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false);
     }
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [open]);
+
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeAndRestore();
+        return;
+      }
+
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+
+      const items = itemRefs.current.filter(Boolean);
+      if (items.length === 0) return;
+      event.preventDefault();
+
+      if (event.key === 'Home') {
+        items[0].focus();
+        return;
+      }
+      if (event.key === 'End') {
+        items[items.length - 1].focus();
+        return;
+      }
+
+      const currentIndex = items.indexOf(document.activeElement);
+      const delta = event.key === 'ArrowDown' ? 1 : -1;
+      const nextIndex = currentIndex === -1
+        ? (delta === 1 ? 0 : items.length - 1)
+        : (currentIndex + delta + items.length) % items.length;
+      items[nextIndex].focus();
+    }
+
+    document.addEventListener('mousedown', handlePointer);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointer);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [closeAndRestore, open, setOpen]);
 
   function handleClick(item) {
     if (!item.read) {
@@ -80,15 +140,22 @@ export function NotificationBell({ onNavigate }) {
   }
 
   const unreadCount = items.filter((n) => !n.read).length;
+  const triggerLabel = unreadCount > 0
+    ? `การแจ้งเตือน ${unreadCount} รายการใหม่`
+    : 'การแจ้งเตือน';
 
   return (
     <div ref={ref} className="relative">
       <button
+        ref={triggerRef}
         type="button"
         className="icon-button relative"
         onClick={() => setOpen((v) => !v)}
         title="การแจ้งเตือน"
-        aria-label="การแจ้งเตือน"
+        aria-label={triggerLabel}
+        aria-haspopup="dialog"
+        aria-controls={open ? panelId : undefined}
+        aria-expanded={open}
       >
         <Icon name="bell" />
         {unreadCount > 0 && (
@@ -99,11 +166,19 @@ export function NotificationBell({ onNavigate }) {
       </button>
 
       {open && (
-        <div className="absolute top-[calc(100%+8px)] right-0 w-[340px] bg-surface border border-border-subtle rounded-[12px] shadow-[0_8px_24px_rgba(0,0,0,0.12)] z-[200] overflow-hidden">
+        <div
+          id={panelId}
+          ref={panelRef}
+          role="dialog"
+          aria-label="การแจ้งเตือน"
+          className="absolute top-[calc(100%+12px)] right-0 z-[200] w-[min(340px,calc(100vw-32px))] max-w-[calc(100vw-32px)] overflow-hidden rounded-md border border-border-subtle bg-surface shadow-[0_8px_24px_rgba(0,0,0,0.12)] max-[720px]:fixed max-[720px]:top-[74px] max-[720px]:right-4 max-[720px]:left-4 max-[720px]:w-auto max-[720px]:max-w-none"
+          tabIndex={-1}
+        >
           <div className="flex items-center justify-between py-3 px-4 border-b border-border">
             <strong className="text-md">การแจ้งเตือน</strong>
             {unreadCount > 0 && (
               <button
+                ref={(node) => { itemRefs.current[0] = node; }}
                 type="button"
                 onClick={markAllRead}
                 className="!text-xs text-info bg-transparent border-0 cursor-pointer p-0"
@@ -118,7 +193,7 @@ export function NotificationBell({ onNavigate }) {
               <div className="py-7 px-4 text-center text-text-muted text-sm">
                 ไม่มีการแจ้งเตือน
               </div>
-            ) : items.map((item) => {
+            ) : items.map((item, index) => {
               // Literal hex (not var(--color-text-muted)): same alpha-concat
               // constraint as TYPE_ICON above. Kept in sync with the token's
               // new value (fix/ui-contrast-tokens).
@@ -126,6 +201,7 @@ export function NotificationBell({ onNavigate }) {
               return (
                 <button
                   key={item.id}
+                  ref={(node) => { itemRefs.current[index + 1] = node; }}
                   type="button"
                   onClick={() => handleClick(item)}
                   className={`w-full flex gap-3 items-start py-3 px-4 border-0 cursor-pointer text-left border-b border-surface-subtle transition-[background] duration-100 ${item.read ? 'bg-surface' : 'bg-info-row-active'}`}

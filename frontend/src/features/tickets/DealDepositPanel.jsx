@@ -252,7 +252,7 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
               {summary?.depositPolicyReason ? ` (${summary.depositPolicyReason})` : ''}
             </p>
           ) : depositNoticesQuery.isLoading ? (
-            <p className="text-sm text-text-muted">กำลังโหลด...</p>
+            <p className="text-sm text-text-muted">กำลังโหลดใบแจ้งยอดมัดจำ…</p>
           ) : doc ? (
             <>
               <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
@@ -266,15 +266,15 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
               <div className="flex flex-wrap gap-2">
                 <button type="button" className="secondary-button" disabled={previewMutation.isPending}
                   onClick={() => previewMutation.mutate()}>
-                  {previewMutation.isPending ? 'กำลังโหลด...' : 'ตัวอย่าง'}
+                  {previewMutation.isPending ? 'กำลังโหลดตัวอย่าง…' : 'ตัวอย่าง'}
                 </button>
                 {doc.status === 'ISSUED' ? (
                   <>
                     <button type="button" className="secondary-button" disabled={downloadingFormat === 'pdf'} onClick={() => handleDownload('pdf')}>
-                      {downloadingFormat === 'pdf' ? 'กำลังดาวน์โหลด...' : 'PDF'}
+                      {downloadingFormat === 'pdf' ? 'กำลังดาวน์โหลด…' : 'PDF'}
                     </button>
                     <button type="button" className="secondary-button" disabled={downloadingFormat === 'xlsx'} onClick={() => handleDownload('xlsx')}>
-                      {downloadingFormat === 'xlsx' ? 'กำลังดาวน์โหลด...' : 'Excel'}
+                      {downloadingFormat === 'xlsx' ? 'กำลังดาวน์โหลด…' : 'Excel'}
                     </button>
                   </>
                 ) : canManageThisNotice ? (

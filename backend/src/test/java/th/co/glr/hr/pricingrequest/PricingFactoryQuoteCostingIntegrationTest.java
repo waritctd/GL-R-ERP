@@ -587,7 +587,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             "IMPORT_REVIEWING", "AWAITING_FACTORY_RESPONSE", "Factory request sent to Factory A",
             "{\"dispatchId\":" + dispatchId + "}");
         notificationRepository.notifyByRoleForPricingRequest("ceo", pricingRequestId, "FACTORY_EMAIL_SENT",
-            "ใบขอราคา ทดสอบ ส่งคำขอโรงงาน Factory A");
+            "คำขอราคา ทดสอบ ส่งคำขอโรงงาน Factory A");
         assertThat(dispatchFinalizedAt(dispatchId)).isNull();
 
         FactoryQuoteDto finalized = factoryQuoteService.finalizeDispatch(dispatchId);

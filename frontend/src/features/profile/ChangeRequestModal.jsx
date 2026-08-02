@@ -23,6 +23,14 @@ export function ChangeRequestModal({ requestField, onClose, onSubmit }) {
     reValidateMode: 'onChange',
   });
 
+  const currentValue = requestField.oldValue || '-';
+  const newValueId = 'change-request-new-value';
+  const newValueHelpId = `${newValueId}-help`;
+  const newValueErrorId = fieldErrorId(newValueId);
+  const newValueDescribedBy = errors.newValue
+    ? `${newValueErrorId} ${newValueHelpId}`
+    : newValueHelpId;
+
   function submit(values) {
     onSubmit({ ...requestField, newValue: values.newValue });
   }
@@ -30,7 +38,7 @@ export function ChangeRequestModal({ requestField, onClose, onSubmit }) {
   return (
     <Modal
       title={`ขอแก้ไข${requestField.fieldLabel}`}
-      subtitle="ส่งให้ HR ตรวจสอบ"
+      subtitle="ตรวจสอบค่าเดิม แล้วกรอกค่าใหม่ที่จะส่งให้ HR"
       onClose={onClose}
       footer={(
         <>
@@ -43,19 +51,31 @@ export function ChangeRequestModal({ requestField, onClose, onSubmit }) {
       )}
     >
       <FormGrid as="form" single id="change-request-form" onSubmit={handleSubmit(submit)} noValidate>
-        <label>
-          ค่าเดิม
-          <input value={requestField.oldValue} readOnly />
-        </label>
-        <FormField label="ค่าใหม่" htmlFor="change-request-new-value" error={errors.newValue?.message} required>
+        <div
+          className="rounded-md border border-border bg-surface-muted p-3"
+          aria-labelledby="change-request-current-label"
+        >
+          <span id="change-request-current-label" className="block text-xs font-bold text-text-muted">
+            ข้อมูลปัจจุบัน
+          </span>
+          <strong className="mt-1 block text-sm text-text">{requestField.fieldLabel}</strong>
+          <span className="mt-1 block whitespace-pre-wrap text-sm text-text-secondary">{currentValue}</span>
+        </div>
+        <FormField
+          label={`ค่าใหม่ของ${requestField.fieldLabel}`}
+          htmlFor={newValueId}
+          error={errors.newValue?.message}
+          required
+        >
           <textarea
-            id="change-request-new-value"
+            id={newValueId}
             rows="3"
             {...register('newValue')}
             aria-invalid={Boolean(errors.newValue)}
-            aria-describedby={errors.newValue ? fieldErrorId('change-request-new-value') : undefined}
+            aria-describedby={newValueDescribedBy}
             required
           />
+          <small id={newValueHelpId}>กรอกเฉพาะค่าใหม่ที่จะให้ HR ตรวจสอบ</small>
         </FormField>
       </FormGrid>
     </Modal>

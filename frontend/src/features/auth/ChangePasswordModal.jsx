@@ -226,7 +226,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
           )}
           <Button type="submit" form="change-password-form" disabled={loading || hasValidationError}>
             <Icon name="check" />
-            {loading ? 'กำลังบันทึก...' : 'บันทึกรหัสผ่าน'}
+            {loading ? 'กำลังบันทึก…' : 'บันทึกรหัสผ่าน'}
           </Button>
         </footer>
       </section>

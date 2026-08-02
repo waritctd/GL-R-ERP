@@ -59,7 +59,7 @@ describe('ProcurementFulfilmentPage', () => {
     // D-002 already has fulfillmentStatus GOODS_RECEIVED, so its next action
     // is recordDelivery, not markGoodsReceived.
     expect(within(section).getByRole('button', { name: 'บันทึกส่งมอบ' })).toBeTruthy();
-    expect(within(section).getByRole('button', { name: 'ออก IR' })).toBeTruthy();
+    expect(within(section).getByRole('button', { name: 'ออกคำขอนำเข้า' })).toBeTruthy();
   });
 
   it('reuses ProcurementListPage wholesale as section 2', async () => {

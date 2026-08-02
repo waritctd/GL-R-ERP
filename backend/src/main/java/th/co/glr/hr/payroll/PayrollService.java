@@ -29,6 +29,8 @@ import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.leave.LeaveRepository;
+import th.co.glr.hr.payroll.obligation.DeductionObligationKind;
+import th.co.glr.hr.payroll.obligation.DeductionObligationService;
 import th.co.glr.hr.payroll.export.KBankPctExporter;
 import th.co.glr.hr.payroll.export.PayrollDetailExporter;
 import th.co.glr.hr.payroll.export.PayrollDetailIdentityDto;
@@ -74,6 +76,10 @@ public class PayrollService {
     private final SsoExporter ssoExporter;
     private final PayrollDetailExporter payrollDetailExporter;
     private final AppProperties appProperties;
+    // Deduction obligation tracking (issue #373): resolves the obligation-derived monthly amount
+    // during #calculateLine, and records the remittance ledger during #process. See that class's
+    // own javadoc for the full split between its read-only and side-effecting hooks.
+    private final DeductionObligationService deductionObligationService;
 
     public PayrollService(
         PayrollRepository payrollRepository,
@@ -86,7 +92,8 @@ public class PayrollService {
         Pnd1Exporter pnd1Exporter,
         SsoExporter ssoExporter,
         PayrollDetailExporter payrollDetailExporter,
-        AppProperties appProperties
+        AppProperties appProperties,
+        DeductionObligationService deductionObligationService
     ) {
         this.payrollRepository = payrollRepository;
         this.payrollCalculator = payrollCalculator;
@@ -99,6 +106,7 @@ public class PayrollService {
         this.ssoExporter = ssoExporter;
         this.payrollDetailExporter = payrollDetailExporter;
         this.appProperties = appProperties;
+        this.deductionObligationService = deductionObligationService;
     }
 
     public PayrollPeriodDto currentOrPreview(LocalDate payrollMonth, UserPrincipal actor) {
@@ -188,12 +196,47 @@ public class PayrollService {
         // LeaveRepository#resolvePendingCorrections for exactly how that stays consistent with the
         // read (same WHERE-shape, same transaction) and idempotent across re-processing this month.
         leaveRepository.resolvePendingCorrections(periodId);
+        // Deduction obligation tracking (issue #373): record what was ACTUALLY deducted this period
+        // (post every other cap) against each employee's driving obligation, then re-derive
+        // ACTIVE/COMPLETED from the recomputed cumulative total. Idempotent per (obligation,
+        // payrollMonth) -- see DeductionObligationRepository#upsertRemittance -- so reprocessing
+        // this same month self-corrects instead of double-counting, the same guarantee
+        // saveProcessedPeriod's own delete-then-insert already gives hr.payroll_line. Deliberately
+        // NEVER called from #preview, which must stay side-effect-free.
+        deductionObligationService.recordRemittances(month, periodId, preview.lines());
+        // Deduction shortfall tracking (issue #376, generalising #373's requested/actual/shortfall
+        // triple): the ONLY currently-supported deduction that can come out lower than what was
+        // requested is LEGAL_EXECUTION_GARNISHMENT, via the ALREADY-enforced ป.วิ.พ. ม.302 cap (see
+        // DeductionObligationService#recordGarnishmentShortfalls's own javadoc for why every other
+        // deduction never has anything to record). Pure record-keeping -- changes no persisted
+        // amount, reads figures that are already computed above.
+        //
+        // D-376-1 fix (Opus review): "requested" comes from preview.lines() itself
+        // (PayrollLineDto#legalExecutionRequested), NEVER by calling #resolveMonthlyAmount again here.
+        // A second call after #recordRemittances (above) has already possibly flipped an obligation's
+        // ACTIVE/COMPLETED status is unsafe -- #findDrivingObligation's ORDER BY (status='ACTIVE') DESC
+        // can then resolve a DIFFERENT obligation than the one #calculateLine actually used, fabricating
+        // a "requested" figure the court order never asked for (reviewer's probe: two LEGAL_EXECUTION
+        // obligations, one completing this very run, produced a ฿4,900 phantom shortfall against a
+        // ฿100 court order that was satisfied in full). Reading it off the line instead makes that
+        // re-derivation impossible by construction.
+        deductionObligationService.recordGarnishmentShortfalls(month, periodId, preview.lines());
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Payroll period was not saved"));
         // Payroll input draft (2026-07-30): this month's real values are now committed to
         // hr.payroll_line, so any leftover hr.payroll_input_draft rows for it are superseded --
         // clear them in the same transaction so a stale draft can never resurrect over the
         // processed values on a later reload (see #getInputDraft's precedence rule).
+        //
+        // Optimistic concurrency (issue #422 follow-up): process() is a second writer of the same
+        // draft set saveInputDraft's lock protects, so it takes the same month-scoped advisory
+        // lock before clearing -- otherwise a concurrent saveInputDraft could read-compare-write
+        // between this delete and the transaction's commit, silently resurrecting a draft row for
+        // a month that just got processed. The clear itself is unconditional either way (as
+        // before this change): once processed, no If-Match token is honoured for the month again
+        // -- the next saveInputDraft call sees an empty draft set (PayrollDraftETag.EMPTY) and any
+        // pre-process token it holds is refused as stale, exactly like any other conflict.
+        payrollRepository.lockInputDraftMonth(month);
         payrollRepository.deleteInputDrafts(month);
         auditPayrollAccess("PROCESS_PAYROLL", actor, period,
             "base_salary,gross_earnings,deductions,net_pay");
@@ -208,11 +251,30 @@ public class PayrollService {
      * brand-new run (a month with no processed/void period yet, {@code status == PREVIEW && id ==
      * null}) so a draft can never shadow real persisted values from an already-touched period --
      * see PayrollPage.jsx's {@code load()}/{@code applyPeriod} for that precedence rule.
+     *
+     * <p>Optimistic concurrency (issue #422 follow-up): also returns the month-level ETag ({@link
+     * PayrollDraftETag}) the client must thread back as {@code If-Match} on the next {@link
+     * #saveInputDraft}. A plain snapshot, not locked -- this is advisory information for the
+     * client, not the enforcement point (the enforcement point is {@link #saveInputDraft}'s locked
+     * compare-then-write) -- but it MUST still come from a single read, not two.
+     *
+     * <p><b>Opus review finding F2, corrected:</b> this used to call {@link
+     * PayrollRepository#findInputDrafts} and {@link PayrollRepository#findInputDraftVersions} as
+     * two separate, unsynchronized round trips. Under READ COMMITTED, each takes its own snapshot,
+     * so a writer committing in the gap produces a hazard in the UNSAFE direction: the figures read
+     * can reflect the OLD state while the version read reflects the NEW (legitimately current)
+     * state, handing the caller old data paired with a token that is not stale -- a caller who
+     * edits from that view and saves passes the {@code If-Match} compare cleanly and silently
+     * clobbers the write that happened in the gap. Reading both from {@link
+     * PayrollRepository#findInputDraftRows} in ONE statement makes that gap impossible.
      */
     public PayrollInputDraftDtos.PayrollInputDraftResponse getInputDraft(LocalDate payrollMonth, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
         LocalDate month = normalizeMonth(payrollMonth);
-        return new PayrollInputDraftDtos.PayrollInputDraftResponse(month, payrollRepository.findInputDrafts(month));
+        List<PayrollRepository.DraftRow> rows = payrollRepository.findInputDraftRows(month);
+        List<PayrollEmployeeInputRequest> drafts = rows.stream().map(PayrollRepository.DraftRow::input).toList();
+        String etag = PayrollDraftETag.compute(rows.stream().map(PayrollRepository.DraftRow::version).toList());
+        return new PayrollInputDraftDtos.PayrollInputDraftResponse(month, drafts, etag);
     }
 
     /**
@@ -221,13 +283,78 @@ public class PayrollService {
      * performed here, and this never touches {@code hr.payroll_line} or any payroll math. See
      * {@link #getInputDraft} for the read side and {@link #process} for how a draft is superseded
      * once the month is actually processed.
+     *
+     * <p>Optimistic concurrency (issue #422 follow-up): {@code ifMatch} is now REQUIRED -- a
+     * deliberate API contract change, not a side effect (see the PR body). A missing header is
+     * refused with 428 rather than silently allowed, because a headerless write is exactly the
+     * hole this closes: two HR users on the same month previously overwrote each other with no
+     * conflict signal at all. The lock-then-compare-then-write below is what makes the check real
+     * rather than decorative -- {@link PayrollRepository#lockInputDraftMonth} is held for the rest
+     * of this transaction, so a second concurrent call blocks until the first commits (or rolls
+     * back) and then re-reads the version set THAT call actually left behind, not a stale one read
+     * before the lock was acquired.
      */
     @Transactional
-    public PayrollInputDraftDtos.PayrollInputDraftResponse saveInputDraft(ProcessPayrollRequest request, UserPrincipal actor) {
+    public PayrollInputDraftDtos.PayrollInputDraftResponse saveInputDraft(
+            ProcessPayrollRequest request, UserPrincipal actor, String ifMatch) {
         requireRole(actor, PAYROLL_EDIT_ROLES);
+        if (ifMatch == null || ifMatch.isBlank()) {
+            // Opus review finding NIT-8: this message surfaces verbatim to HR (the frontend's
+            // catch does `error.message || fallback`), so it must read as a normal Thai UI message,
+            // not leak an HTTP header name -- matches the frontend's own fallback wording (see
+            // PayrollPage.jsx's saveDraft 428 branch) rather than naming "If-Match".
+            throw new ApiException(HttpStatus.PRECONDITION_REQUIRED,
+                "ไม่พบข้อมูลอ้างอิงสำหรับบันทึกร่างเงินเดือน กรุณาโหลดหน้าใหม่แล้วลองอีกครั้ง");
+        }
         LocalDate month = normalizeMonth(request.payrollMonth());
+        payrollRepository.lockInputDraftMonth(month);
+        String currentETag = PayrollDraftETag.compute(payrollRepository.findInputDraftVersions(month));
+        if (!currentETag.equals(normalizeETagToken(ifMatch))) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "มีผู้ใช้อื่นบันทึกร่างเงินเดือนของงวดนี้ไปแล้ว กรุณาโหลดข้อมูลใหม่ก่อนบันทึกอีกครั้ง");
+        }
         payrollRepository.saveInputDrafts(month, safeInputs(request.inputs()), actor.employeeId());
-        return new PayrollInputDraftDtos.PayrollInputDraftResponse(month, payrollRepository.findInputDrafts(month));
+        // One read for the response, same as #getInputDraft -- not a correctness requirement here
+        // (the advisory lock already rules out a concurrent writer for the rest of this
+        // transaction, so two separate reads would still agree), just consistent with the pattern
+        // and one fewer round trip.
+        List<PayrollRepository.DraftRow> rows = payrollRepository.findInputDraftRows(month);
+        List<PayrollEmployeeInputRequest> drafts = rows.stream().map(PayrollRepository.DraftRow::input).toList();
+        String newETag = PayrollDraftETag.compute(rows.stream().map(PayrollRepository.DraftRow::version).toList());
+        return new PayrollInputDraftDtos.PayrollInputDraftResponse(month, drafts, newETag);
+    }
+
+    /**
+     * Accepts the token exactly as {@link #getInputDraft} returned it in the response body (the
+     * shape the frontend actually threads through), but tolerates the RFC 7232 quoted-string form
+     * (and a leading weak-validator {@code W/}) too, since that is what the {@code ETag} response
+     * header carries and a caller copying that header value verbatim should not be punished for
+     * following the HTTP-correct form instead of the body field.
+     *
+     * <p><b>Known divergence from RFC 9110 §13.1.1 (Opus review finding F12/NEW-2), recorded
+     * rather than fixed</b>: a real {@code If-Match} header can be the wildcard {@code *} (meaning
+     * "any current representation is fine") or a comma-separated list of multiple entity-tags. This
+     * method does neither: {@code *} is compared as the four-character literal string {@code "*"},
+     * which will never equal a real SHA-256 hex token, so it always 409s instead of the RFC's
+     * "succeed if any representation exists." A multi-valued header (either one physical {@code
+     * If-Match} line with comma-separated tags, OR repeated {@code If-Match} headers -- Spring's
+     * {@code @RequestHeader(String)} binding joins repeated headers of the same name with {@code
+     * ", "} before this method ever sees the value) is likewise compared as one joined string
+     * against the single current token and always fails to match, so it also always 409s. Both
+     * failure modes are CLOSED (refuse a write that RFC semantics might have allowed), never OPEN
+     * (never accept a write that should have been refused) -- this is documentation debt, not a
+     * defect, and is acceptable because the only real caller is this repo's own frontend, which
+     * never sends either form.
+     */
+    private String normalizeETagToken(String raw) {
+        String value = raw.trim();
+        if (value.startsWith("W/")) {
+            value = value.substring(2);
+        }
+        if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
+            value = value.substring(1, value.length() - 1);
+        }
+        return value;
     }
 
     /**
@@ -289,7 +416,7 @@ public class PayrollService {
     public PayrollExportFile export(PayrollExportKind kind, long periodId, LocalDate effectiveDate, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงวดเงินเดือนนี้"));
         LocalDate payrollMonth = period.payrollMonth();
         LocalDate payDate = resolveEffectiveDate(effectiveDate, payrollMonth);
         AppProperties.Employer employer = appProperties.getPayroll().getEmployer();
@@ -322,7 +449,7 @@ public class PayrollService {
                 content = buildDetailContent(detailPeriod);
                 auditFields = DETAIL_EXPORT_AUDIT_FIELDS;
             }
-            default -> throw new ApiException(HttpStatus.BAD_REQUEST, "Unsupported export kind");
+            default -> throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับประเภทไฟล์ส่งออกนี้");
         }
         auditPayrollAccess("EXPORT_PAYROLL_" + kind.name(), actor, period, auditFields);
         return new PayrollExportFile(kind, kind.fileName(payDate), content);
@@ -459,7 +586,7 @@ public class PayrollService {
     public byte[] bulkPayslipZip(long periodId, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงวดเงินเดือนนี้"));
         if (!"PROCESSED".equals(period.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "งวดนี้ยังไม่ได้ประมวลผล ไม่สามารถดาวน์โหลดสลิปเงินเดือนทั้งหมดได้");
@@ -499,11 +626,11 @@ public class PayrollService {
     public byte[] payslipPdf(long periodId, long lineId, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงวดเงินเดือนนี้"));
         PayrollLineDto line = period.lines().stream()
             .filter(item -> item.id() != null && item.id() == lineId)
             .findFirst()
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll line not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการเงินเดือนนี้"));
         byte[] pdf = payslipRenderer.toPdf(line, period);
         auditPayrollLineAccess("VIEW_PAYSLIP_PDF", actor, period, line,
             "earnings,sso,tax,deductions,net_pay,bank_account");
@@ -513,19 +640,130 @@ public class PayrollService {
 
     public byte[] ownPayslipPdf(long periodId, UserPrincipal actor) {
         if (actor == null || actor.employeeId() == null) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payroll period not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงวดเงินเดือนนี้"));
         PayrollLineDto line = period.lines().stream()
             .filter(item -> item.employeeId() == actor.employeeId())
             .findFirst()
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Payslip not found for this payroll period"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบสลิปเงินเดือนสำหรับงวดนี้"));
         byte[] pdf = payslipRenderer.toPdf(line, period);
         auditPayrollLineAccess("VIEW_OWN_PAYSLIP_PDF", actor, period, line,
             "earnings,sso,tax,deductions,net_pay,bank_account");
         auditService.record(actor, "VIEW_OWN_PAYSLIP_PDF", "payroll_line", line.id(), null, auditPayload(period, line));
         return pdf;
+    }
+
+    private static final String ALLOWANCE_ESTIMATE_DISCLAIMER =
+        "ค่าประมาณการนี้คำนวณจากข้อมูลปัจจุบัน (ยอดสะสม โบนัส คอมมิชชั่น ณ วันที่ประมาณการ) "
+            + "ตัวเลขจริงเมื่อประมวลผลเงินเดือนอาจเปลี่ยนแปลงได้";
+
+    /**
+     * Tax-allowance declaration plan, decision #4 ("estimated 'what this saves me'"). Runs the REAL
+     * calculator TWICE for a single employee/month — baseline (the employee's current standing
+     * declaration, exactly what {@link #preview} would resolve via {@code
+     * findTaxAllowancesByEmployee}) vs proposed (the declaration under review, not yet applied) —
+     * and reports the withholding-tax delta. Reuses the EXACT collaborators {@link #preview}
+     * assembles for every other employee ({@code findActiveEmployees} filtered to one, {@code
+     * findYearToDateByEmployee}, {@link #treatmentsFor}, {@link #ssoInclusionFor}, {@code
+     * findApprovedOvertimePayByEmployee}, {@link #commissionPayByEmployee}) so there is no second
+     * calculation path to silently disagree with a real run.
+     *
+     * <p>{@code employeeId} is supplied by the CALLER (the controller/service boundary resolves it
+     * from {@code actor.employeeId()} — see {@code TaxAllowanceDeclarationService#estimateOwn} —
+     * never from an HTTP parameter; there is no employeeId field on the estimate endpoint's request
+     * body at all). This method still requires {@code actor} to be a real authenticated employee, the
+     * same shape of guard {@link #ownPayslipPdf} uses, so it can never be called with no actor.
+     *
+     * <p>{@code input} is deliberately {@code null} for both calculations: an estimate has no
+     * per-run HR-typed corrections to layer on, only the standing declaration (baseline) or the
+     * declaration under review (proposed) — see {@link #mergeAllowances}, which returns its {@code
+     * stored} argument completely unchanged when {@code input == null}. This is exactly what makes
+     * the anti-drift pinning test hold: applying the proposed declaration and then previewing the
+     * same month for real also calls {@code calculateLine} with {@code input == null} for an
+     * employee nobody typed a per-run correction for, so the two paths merge allowances identically.
+     *
+     * <p>leaveRefundDays is fixed at zero here — deliberately narrower than {@link #preview}'s own
+     * {@code leaveRepository.findRefundableUnpaidDaysByEmployee} lookup, which needs an
+     * {@code existingPeriodId} an estimate has no reason to resolve. An estimate is advisory, not a
+     * persisted figure, and a cancel-after-close leave refund is edge-case enough that omitting it
+     * here (never silently reintroducing it wrong) is the safer choice.
+     */
+    public PayrollAllowanceEstimateResult estimateAllowanceEffect(
+        long employeeId, int taxYear, int effectiveMonth,
+        PayrollTaxAllowanceInput proposedAllowances, UserPrincipal actor
+    ) {
+        if (actor == null || actor.employeeId() == null) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        LocalDate payrollMonth = LocalDate.of(taxYear, effectiveMonth, 1);
+
+        List<PayrollEmployeeSnapshot> employees = payrollRepository.findActiveEmployees();
+        PayrollEmployeeSnapshot employee = employees.stream()
+            .filter(candidate -> candidate.employeeId() == employeeId)
+            .findFirst()
+            .orElse(null);
+        if (employee == null) {
+            return unavailableAllowanceEstimate(taxYear, effectiveMonth,
+                "ไม่พบข้อมูลพนักงานที่พร้อมประมวลผลเงินเดือนสำหรับการประมาณการนี้");
+        }
+        // Failure mode (b): a daily-rate employee has no daysWorked outside a real run, so
+        // grossSalaryComponent would compute to ฿0 (see #calculateLine's dailyRatePay branch) — not
+        // a meaningful estimate. Reported honestly rather than showing a fabricated ฿0 saving.
+        if (employee.dailyRatePay()) {
+            return unavailableAllowanceEstimate(taxYear, effectiveMonth,
+                "พนักงานรายวันยังไม่มีจำนวนวันทำงานของงวดนี้ ระบบจึงไม่สามารถประมาณการผลของค่าลดหย่อนต่อภาษีได้ล่วงหน้า "
+                    + "ตัวเลขจะปรากฏเมื่อฝ่ายบุคคลประมวลผลเงินเดือนจริงและระบุจำนวนวันทำงานแล้ว");
+        }
+
+        Map<Long, BigDecimal> overtimeByEmployee = payrollRepository.findApprovedOvertimePayByEmployee(payrollMonth);
+        Map<Long, BigDecimal> commissionByEmployee = commissionPayByEmployee(payrollMonth);
+        Map<Long, PayrollYearToDate> yearToDateByEmployee = payrollRepository.findYearToDateByEmployee(payrollMonth);
+        Map<Long, PayrollTaxAllowanceInput> storedAllowancesByEmployee =
+            payrollRepository.findTaxAllowancesByEmployee(payrollMonth);
+        Map<Long, Map<PayrollComponent, PayrollTaxTreatment>> treatmentsByEmployee =
+            payrollRepository.findComponentTaxTreatmentsByEmployee(taxYear);
+        Map<Long, Map<PayrollComponent, Boolean>> ssoInclusionByEmployee =
+            payrollRepository.findComponentSsoInclusionByEmployee(taxYear);
+
+        BigDecimal overtimePay = overtimeByEmployee.getOrDefault(employeeId, BigDecimal.ZERO);
+        BigDecimal commissionPay = commissionByEmployee.getOrDefault(employeeId, BigDecimal.ZERO);
+        PayrollYearToDate yearToDate = yearToDateByEmployee.getOrDefault(employeeId, PayrollYearToDate.empty());
+        Map<PayrollComponent, PayrollTaxTreatment> treatments = treatmentsFor(employeeId, treatmentsByEmployee,
+            hasBeenOnboardedForPayroll(employeeId, ssoInclusionByEmployee));
+        Map<PayrollComponent, Boolean> ssoInclusion = ssoInclusionFor(employeeId, ssoInclusionByEmployee);
+        PayrollTaxAllowanceInput baselineAllowances = storedAllowancesByEmployee.get(employeeId);
+
+        try {
+            PayrollLineDto baselineLine = calculateLine(employee, null, overtimePay, commissionPay, yearToDate,
+                baselineAllowances, BigDecimal.ZERO, payrollMonth, treatments, ssoInclusion);
+            PayrollLineDto proposedLine = calculateLine(employee, null, overtimePay, commissionPay, yearToDate,
+                proposedAllowances, BigDecimal.ZERO, payrollMonth, treatments, ssoInclusion);
+            return new PayrollAllowanceEstimateResult(
+                true, null, taxYear, effectiveMonth,
+                baselineLine.withholdingTax(), proposedLine.withholdingTax(),
+                baselineLine.withholdingTax().subtract(proposedLine.withholdingTax()),
+                baselineLine.taxAllowanceTotal(), proposedLine.taxAllowanceTotal(),
+                ALLOWANCE_ESTIMATE_DISCLAIMER);
+        } catch (ApiException e) {
+            // Failure mode (a): calculateClassified 409s (CONFLICT) when a non-zero non-SALARY
+            // component has no stored tax treatment anywhere for this employee/year. Caught here and
+            // reported honestly -- never synthesize a treatment just to force an estimate out. Any
+            // OTHER status (there is none today, but defensively) is a genuine error, not an
+            // unavailability, and must propagate.
+            if (e.getStatus() == HttpStatus.CONFLICT) {
+                return unavailableAllowanceEstimate(taxYear, effectiveMonth,
+                    "มีรายรับบางประเภทที่ยังไม่ได้กำหนดประเภทภาษีสำหรับพนักงานคนนี้ "
+                        + "ฝ่ายบุคคลต้องกำหนดประเภทภาษีให้ครบก่อนจึงจะประมาณการภาษีได้ (" + e.getMessage() + ")");
+            }
+            throw e;
+        }
+    }
+
+    private PayrollAllowanceEstimateResult unavailableAllowanceEstimate(int taxYear, int effectiveMonth, String reason) {
+        return new PayrollAllowanceEstimateResult(
+            false, reason, taxYear, effectiveMonth, null, null, null, null, null, null);
     }
 
     private PayrollPeriodDto preview(LocalDate payrollMonth, List<PayrollEmployeeInputRequest> inputs, UserPrincipal actor) {
@@ -921,6 +1159,20 @@ public class PayrollService {
         componentAmounts.put(PayrollComponent.NON_TAXABLE_INCOME,
             input == null ? BigDecimal.ZERO : safe(input.nonTaxableIncome()).add(safe(input.perDiemExempt())));
 
+        // Deduction obligation tracking (issue #373, AUTHORISED PAYROLL BUSINESS-LOGIC CHANGE --
+        // see the PR body). When this employee has a driving hr.deduction_obligation row for a
+        // kind, its instructed monthly amount -- clamped to the remaining instructed total, and
+        // auto-stopped at 0 once that total is reached unless HR has recorded an explicit override
+        // -- REPLACES whatever HR typed this run for that field. An employee with no obligation on
+        // file for a kind falls back to the HR-typed figure exactly as before this change (legacy
+        // behaviour is unaffected). See DeductionObligationService#resolveMonthlyAmount.
+        BigDecimal resolvedStudentLoanDeduction = deductionObligationService.resolveMonthlyAmount(
+            employee.employeeId(), DeductionObligationKind.STUDENT_LOAN, payrollMonth,
+            input == null ? null : input.studentLoanDeduction());
+        BigDecimal resolvedLegalExecutionRequested = deductionObligationService.resolveMonthlyAmount(
+            employee.employeeId(), DeductionObligationKind.LEGAL_EXECUTION, payrollMonth,
+            input == null ? null : safe(input.legalExecutionDeduction()));
+
         PayrollClassifiedCalculation calculation = payrollCalculator.calculateClassified(new PayrollClassifiedCalculationInput(
             employee.employeeId(),
             employee.employeeCode() + " " + employee.employeeName(),
@@ -929,14 +1181,14 @@ public class PayrollService {
             componentSsoInclusion,
             input == null ? BigDecimal.ZERO : input.unpaidLeaveDays(),
             leaveRefundDays == null ? BigDecimal.ZERO : leaveRefundDays,
-            input == null ? BigDecimal.ZERO : input.studentLoanDeduction(),
+            resolvedStudentLoanDeduction,
             input == null ? BigDecimal.ZERO : input.otherPretaxDeduction(),
             input == null ? BigDecimal.ZERO : input.otherPostTaxDeductions(),
             // หักตามใบเตือน (handoff section 6): POST-TAX only now.
             input == null ? BigDecimal.ZERO : input.warningLetterDeduction(),
             customerReturnDeduction,
             customerReturnAlreadyEarned,
-            input == null ? BigDecimal.ZERO : safe(input.legalExecutionDeduction()),
+            resolvedLegalExecutionRequested,
             input == null ? null : input.garnishmentType(),
             mergeAllowances(storedAllowances, input),
             yearToDate,
@@ -1042,7 +1294,11 @@ public class PayrollService {
             // the frontend can gate the days-worked input to daily-rate employees and the value
             // survives a reload.
             enteredDaysWorked,
-            employee.payType()
+            employee.payType(),
+            // Issue #376, D-376-1 fix: the EXACT figure this run resolved and fed to
+            // PayrollCalculator as garnishmentRequested -- see PayrollLineDto#legalExecutionRequested's
+            // own javadoc for why this must be carried out here rather than re-derived later.
+            resolvedLegalExecutionRequested
         );
     }
 
@@ -1366,14 +1622,14 @@ public class PayrollService {
 
     private LocalDate normalizeMonth(LocalDate payrollMonth) {
         if (payrollMonth == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "payrollMonth is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุงวดเงินเดือน");
         }
         return payrollMonth.withDayOfMonth(1);
     }
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
         if (actor == null || !allowed.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 

@@ -177,4 +177,37 @@ public final class TaxAllowanceDeclarationDtos {
     ) {}
 
     public record TaxAllowanceCapsResponse(int taxYear, List<TaxAllowanceCapEntry> caps) {}
+
+    // ---- Evidence attachments (hr.file_attachment, domain='tax_allowance_declaration') --------
+    //
+    // Reuses the generic hr.file_attachment table V33 created (see that migration's own
+    // idx_file_attachment_domain_owner index, and V105's header comment noting it was left ready
+    // for exactly this) rather than a dedicated table, since a declaration already has the single
+    // surrogate BIGINT id (declaration_id) file_attachment.owner_id needs.
+
+    /**
+     * One evidence file. {@code deletedAt} is surfaced (not hidden) so HR's attachment list stays
+     * an honest audit trail of what was ever uploaded — mirrors {@code
+     * FactoryQuoteAttachmentDto}'s own tombstone visibility. A tombstoned file is never
+     * downloadable (see {@code TaxAllowanceDeclarationService#getAttachmentForDownload}) even
+     * though its row (and the file on disk) survive.
+     */
+    public record TaxAllowanceAttachmentDto(
+        long attachmentId,
+        long declarationId,
+        String fileName,
+        String mimeType,
+        Long fileSize,
+        Long uploadedBy,
+        OffsetDateTime uploadedAt,
+        OffsetDateTime deletedAt,
+        Long deletedBy,
+        String deleteReason
+    ) {}
+
+    /** Resolved (attachment metadata, file path) pair — the download gate has already run by the time this exists. */
+    public record TaxAllowanceAttachmentDownload(TaxAllowanceAttachmentDto attachment, String filePath) {}
+
+    /** Optional tombstone reason for {@code DELETE /tax-allowance-attachments/{id}}. */
+    public record TaxAllowanceTombstoneRequest(String reason) {}
 }

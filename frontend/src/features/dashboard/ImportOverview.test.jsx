@@ -83,7 +83,7 @@ describe('ImportOverview', () => {
 
     expect(pulseCount('เกินกำหนด')).toBe('1'); // D-002 only
     expect(pulseCount('ตั้งราคา')).toBe('2'); // both pricing-request rows
-    expect(pulseCount('จัดซื้อ/IR')).toBe('2'); // D-001 (issue) + D-002 (send)
+    expect(pulseCount('จัดซื้อ/นำเข้า')).toBe('2'); // D-001 (issue) + D-002 (send)
     expect(pulseCount('ขนส่ง')).toBe('1'); // D-003 (markShipping pending)
     expect(pulseCount('รับเข้าคลัง')).toBe('1'); // D-004 (markGoodsReceived pending)
     expect(pulseCount('ส่งมอบ')).toBe('1'); // D-005 (recordDelivery pending)
@@ -115,8 +115,8 @@ describe('ImportOverview', () => {
       return within(row).getByRole('button').textContent;
     }
 
-    expect(ctaFor('บริษัท A')).toBe('ออก IR');
-    expect(ctaFor('บริษัท B')).toBe('ส่ง IR');
+    expect(ctaFor('บริษัท A')).toBe('ออกคำขอนำเข้า');
+    expect(ctaFor('บริษัท B')).toBe('ส่งคำขอนำเข้าแล้ว');
     expect(ctaFor('บริษัท C')).toBe('บันทึกออกเดินทาง');
     expect(ctaFor('บริษัท D')).toBe('ยืนยันรับเข้าคลัง');
     expect(ctaFor('บริษัท E')).toBe('บันทึกส่งมอบ');

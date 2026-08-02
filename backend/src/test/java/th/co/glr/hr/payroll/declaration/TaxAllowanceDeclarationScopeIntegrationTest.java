@@ -11,11 +11,13 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
+import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.payroll.PayrollRepository;
+import th.co.glr.hr.payroll.PayrollService;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceApplyRequest;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationDto;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationRegisterResponse;
@@ -61,7 +63,12 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
             // this scope test — a mock is enough here.
             mock(EmployeeRepository.class),
             new TaxAllowanceCapCatalog(),
-            mock(AuditService.class));
+            mock(AuditService.class),
+            // Evidence upload/estimate are not exercised by this scope test (that is
+            // TaxAllowanceAttachmentScopeIntegrationTest's and the estimate tests' job) — mocks are
+            // enough here.
+            mock(FileStorageService.class),
+            mock(PayrollService.class));
 
         employeeA = seedEmployee("TAD-A");
         employeeB = seedEmployee("TAD-B");

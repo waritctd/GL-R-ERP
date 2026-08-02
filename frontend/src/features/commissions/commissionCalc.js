@@ -106,3 +106,53 @@ export function tierBreakdown(monthlyCommissionableBase, tiers = COMMISSION_TIER
 export function progressiveCommission(monthlyCommissionableBase, tiers = COMMISSION_TIERS) {
   return tierBreakdown(monthlyCommissionableBase, tiers).total;
 }
+
+// ── Issue #405: auto-computed INCENTIVE ladder (ข้อ 12) + STOCK_BONUS ──
+// Mirrors CommissionCalculator#monthlyIncentive / #stockSaleBonus + IncentiveTierConfig /
+// StockBonusConfig exactly, effective 2026-08-01 (see
+// V108__commission_incentive_and_stock_bonus_config.sql). The backend config is CEO-revisable
+// without a deploy (sales.commission_incentive_tier / sales.stock_bonus_config); these constants
+// are the mock/display mirror of the SEEDED generation, not a live config read — per CLAUDE.md,
+// this is business logic being mirrored, not authz.
+
+// Flat monthly incentive, highest threshold reached wins — NOT cumulative, NOT pro-rated. No
+// 80,000 row -- the workbook's second row is superseded and must not exist.
+export const INCENTIVE_LADDER = [
+  { tierNumber: 1, thresholdBase: 3000000, incentiveAmount: 15000 },
+  { tierNumber: 2, thresholdBase: 4000000, incentiveAmount: 25000 },
+  { tierNumber: 3, thresholdBase: 6000000, incentiveAmount: 50000 },
+  { tierNumber: 4, thresholdBase: 8000000, incentiveAmount: 65000 },
+];
+
+// Mirrors the V108 seed row — ships config-gated OFF (enabled: false); the CEO flips one DB row
+// to enable, no deploy needed.
+export const STOCK_BONUS_DEFAULTS = { enabled: false, blockAmount: 100000, bonusPerBlock: 1000 };
+
+// The generation's effective date — a payroll month before this must compute byte-identically to
+// before this feature shipped (zero incentive, zero stock bonus). "YYYY-MM" lexicographic
+// comparison against commissionMonth()'s own "YYYY-MM" slice works because both are zero-padded.
+export const INCENTIVE_STOCK_BONUS_EFFECTIVE_MONTH = '2026-08';
+
+// Mirrors CommissionCalculator#monthlyIncentive: ZERO when the ladder is empty, the base is
+// null/<=0, or the base is below every threshold. Highest threshold reached wins. Comparison uses
+// the full-precision base (no pre-rounding), same discipline as progressiveCommission's own base.
+export function monthlyIncentive(monthlyTierBaseValue, ladder = INCENTIVE_LADDER) {
+  const base = Number(monthlyTierBaseValue || 0);
+  if (base <= 0 || !ladder || ladder.length === 0) return 0;
+  let winner = null;
+  for (const tierConfig of ladder) {
+    if (base < tierConfig.thresholdBase) continue;
+    if (!winner || tierConfig.thresholdBase > winner.thresholdBase) winner = tierConfig;
+  }
+  return winner ? round2(winner.incentiveAmount) : 0;
+}
+
+// Mirrors CommissionCalculator#stockSaleBonus: STEPPED (floor division into whole blocks), not a
+// percentage — a partial block earns nothing (e.g. ฿250,000 at a ฿100,000 block pays ฿2,000, not
+// ฿2,500). ZERO when config is null/disabled/receipts <= 0.
+export function stockSaleBonus(stockReceipts, config = STOCK_BONUS_DEFAULTS) {
+  const receipts = Number(stockReceipts || 0);
+  if (!config || !config.enabled || receipts <= 0) return 0;
+  const blocks = Math.floor(receipts / config.blockAmount);
+  return round2(blocks * config.bonusPerBlock);
+}

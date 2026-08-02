@@ -48,9 +48,9 @@ export const EVENT_KIND_LABEL = {
   CUSTOMER_CONFIRMED:     'ลูกค้ายืนยันคำสั่งซื้อ',
   DEPOSIT_NOTICE_ISSUED:  'ออกใบแจ้งมัดจำ',
   DEPOSIT_PAID:           'รับมัดจำแล้ว',
-  IR_ISSUED:              'ออก Import Request (IR)',
-  IR_SENT:                'ส่ง IR แล้ว',
-  SHIPPING:               'สินค้าออกเดินทาง (Shipping)',
+  IR_ISSUED:              'ออกคำขอนำเข้า (IR)',
+  IR_SENT:                'ส่งคำขอนำเข้าแล้ว',
+  SHIPPING:               'สินค้าออกเดินทาง',
   GOODS_RECEIVED:         'รับสินค้าแล้ว',
   STOCK_RESERVED:         'จองสินค้าจากสต็อก',
   DELIVERY_RECORDED:      'บันทึกการส่งสินค้า',
@@ -61,8 +61,11 @@ export const EVENT_KIND_LABEL = {
 
 // Payment-track events get a success-toned dot, fulfillment-track events get
 // an info-toned dot — mirrors the two colour groups used by the sub-status
-// chips in DealStagePanel.
-const PAYMENT_TRACK_KINDS = new Set([
+// chips in DealStagePanel. Exported (Slice E) so DealMoneyTimeline.jsx can
+// filter `ticket.events` down to the payment track for its own timeline
+// without redeclaring this list — two copies drifting apart is exactly how
+// an event would silently stop appearing on one of the two surfaces.
+export const PAYMENT_TRACK_KINDS = new Set([
   'CUSTOMER_CONFIRMED', 'DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID',
   'AWAITING_FINAL_PAYMENT', 'FULLY_PAID', 'PAYMENT_RECORDED', 'BILLING_UPDATED',
 ]);
@@ -297,7 +300,7 @@ export function DealHistoryPanel({
             rows={2}
             value={commentText}
             onChange={(e) => onCommentTextChange?.(e.target.value)}
-            placeholder="เพิ่มความคิดเห็น..."
+            placeholder="เพิ่มความคิดเห็น…"
             style={{ resize: 'vertical' }}
           />
           <button

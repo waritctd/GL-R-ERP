@@ -95,6 +95,49 @@ public class CommissionRepository {
         }
     }
 
+    /**
+     * True once payroll has been run for the month. Commission payroll derives what a rep is owed
+     * by {@code payroll_month} ({@code CommissionService#computeRepPayrollCommissions}), and a
+     * processed period is written once (see {@code hr.payroll_period}) -- so a commission that
+     * lands in a processed month is approved and then never paid, silently distorting {@code
+     * payrollReadySummary} for that month. Mirrors {@code OvertimeRepository#payrollMonthProcessed}
+     * exactly (same table, same condition) so the two guards cannot drift apart -- copy-paste is
+     * deliberate here, not an oversight.
+     */
+    public boolean payrollMonthProcessed(LocalDate payrollMonth) {
+        Boolean processed = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                  FROM hr.payroll_period
+                 WHERE payroll_month = :payrollMonth
+                   AND status = 'PROCESSED'
+            )
+            """, Map.of("payrollMonth", payrollMonth), Boolean.class);
+        return Boolean.TRUE.equals(processed);
+    }
+
+    /**
+     * True when {@code payrollMonth} was already paid outside the ERP and is covered by {@code
+     * hr.payroll_year_to_date_seed} (V114) -- distinct from {@link #payrollMonthProcessed}, which
+     * is true only once THIS system has run payroll for the month. A seed-covered month is never
+     * {@code PROCESSED} here (the guard trigger on {@code hr.payroll_period} refuses that, to avoid
+     * double-counting year-to-date withholding), so checking {@link #payrollMonthProcessed} alone
+     * would report such a month as open and let a commission be filed into it -- money that would
+     * then never be paid by anything. Mirrors {@code OvertimeRepository#payrollMonthSeedCovered}
+     * exactly.
+     */
+    public boolean payrollMonthSeedCovered(LocalDate payrollMonth) {
+        Boolean covered = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                  FROM hr.payroll_seed_coverage c
+                 WHERE c.tax_year = EXTRACT(YEAR FROM :payrollMonth)::smallint
+                   AND :payrollMonth <= c.covers_through
+            )
+            """, Map.of("payrollMonth", payrollMonth), Boolean.class);
+        return Boolean.TRUE.equals(covered);
+    }
+
     public List<TierConfig> findTiers() {
         return jdbc.query("""
             SELECT tier_number, lower_bound, upper_bound, rate_percent, is_high_roller
@@ -151,6 +194,113 @@ public class CommissionRepository {
              WHERE sales_rep_id = :salesRepId
                AND payroll_month = :payrollMonth
                AND status NOT IN ('VOID', 'REJECTED')
+            """,
+            new MapSqlParameterSource()
+                .addValue("salesRepId", salesRepId)
+                .addValue("payrollMonth", payrollMonth),
+            BigDecimal.class);
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    /**
+     * Issue #405: the INCENTIVE ladder generation active for {@code payrollMonth} — the latest
+     * {@code effective_from} that is &le; the month, mirroring {@link #findTiers}'s config-driven
+     * pattern (see {@code V108__commission_incentive_and_stock_bonus_config.sql}). No matching
+     * generation (e.g. a month before 2026-08-01, or before anything is ever seeded) returns an
+     * empty list, which {@link CommissionCalculator#monthlyIncentive} treats as ZERO — this
+     * generation-selection rule is what keeps every payroll month before the effective date
+     * computing byte-identically to before this migration.
+     */
+    public List<IncentiveTierConfig> findIncentiveTiers(LocalDate payrollMonth) {
+        return jdbc.query("""
+            SELECT tier_number, threshold_base, incentive_amount, effective_from
+              FROM sales.commission_incentive_tier
+             WHERE effective_from = (
+                 SELECT MAX(effective_from)
+                   FROM sales.commission_incentive_tier
+                  WHERE effective_from <= :payrollMonth
+             )
+             ORDER BY tier_number
+            """,
+            Map.of("payrollMonth", payrollMonth),
+            (rs, rowNum) -> new IncentiveTierConfig(
+                rs.getInt("tier_number"),
+                rs.getBigDecimal("threshold_base"),
+                rs.getBigDecimal("incentive_amount"),
+                rs.getObject("effective_from", LocalDate.class)
+            ));
+    }
+
+    /**
+     * Issue #405: the STOCK_BONUS config generation active for {@code payrollMonth} — same
+     * generation-selection rule as {@link #findIncentiveTiers}. Empty when no generation has an
+     * {@code effective_from} &le; the month; the caller ({@link CommissionService}) treats that
+     * the same as {@link StockBonusConfig#disabled()}.
+     */
+    public Optional<StockBonusConfig> findStockBonusConfig(LocalDate payrollMonth) {
+        List<StockBonusConfig> rows = jdbc.query("""
+            SELECT enabled, effective_from, block_amount, bonus_per_block
+              FROM sales.stock_bonus_config
+             WHERE effective_from = (
+                 SELECT MAX(effective_from)
+                   FROM sales.stock_bonus_config
+                  WHERE effective_from <= :payrollMonth
+             )
+            """,
+            Map.of("payrollMonth", payrollMonth),
+            (rs, rowNum) -> new StockBonusConfig(
+                rs.getBoolean("enabled"),
+                rs.getObject("effective_from", LocalDate.class),
+                rs.getBigDecimal("block_amount"),
+                rs.getBigDecimal("bonus_per_block")
+            ));
+        return rows.stream().findFirst();
+    }
+
+    /**
+     * Issue #405: STOCK_BONUS's per-rep-per-month "stock receipts" input — {@code
+     * SUM(actual_received &times; stockShare(ticket))}, where {@code stockShare(ticket) =
+     * SUM(ticket_item.qty_from_stock) / SUM(ticket_item.qty)} for the record's {@code
+     * source_ticket_id} (0 when that ticket's items sum to 0 qty). Records with {@code
+     * source_ticket_id IS NULL} (every manual kind, including manual STOCK_BONUS/INCENTIVE
+     * entries) contribute 0 through the LEFT JOIN's {@code COALESCE}.
+     *
+     * <p><b>Review fix (2026-08-02):</b> this mirrors {@link #findApprovedRecordsByMonth}'s
+     * {@code status = 'APPROVED'} filter — the same records {@link CommissionService
+     * #computeRepPayrollCommissions}'s tier-base aggregation is built from — NOT {@link
+     * #sumActiveWeightedActualReceived}'s broader {@code NOT IN ('VOID','REJECTED')} (which also
+     * admits SUBMITTED/MANAGER_APPROVED and feeds {@code simulate()}, a live preview endpoint,
+     * not the payroll path). An earlier version of this method used the broader filter; an
+     * independent review proved with a real-DB probe that it let a still-SUBMITTED receipt (never
+     * approved by anyone) contribute to a paid stock bonus — unapproved money must never reach a
+     * payroll figure, the same invariant {@code CommissionDocumentationInvariantIntegrationTest}
+     * pins for {@link CommissionService#payrollCommissionTotalsByEmployee}. A CLAWBACK's negative
+     * {@code actual_received} still reduces the stock receipts exactly like it reduces the tier
+     * base, because a CLAWBACK is itself created {@code APPROVED} ({@link #createClawback}) — the
+     * APPROVED-only filter does not need a VOID/REJECTED exclusion to get that right.
+     *
+     * <p>V54's warning applies here too: {@code qty_from_stock} is a manual staff declaration for
+     * that deal only, not a real warehouse reservation ledger.
+     *
+     * <p>Known deviation (stated in the PR, not hidden here): the written rule is per DELIVERY;
+     * there is no invoice-to-delivery FK, so this computes per TICKET, per month instead — a deal
+     * shipped as three separate ฿80,000 stock deliveries pays a bonus here that a strict
+     * per-delivery reading would not. Exactly why STOCK_BONUS ships config-gated OFF ({@link
+     * StockBonusConfig#disabled()}).
+     */
+    public BigDecimal sumActiveStockActualReceived(long salesRepId, LocalDate payrollMonth) {
+        BigDecimal value = jdbc.queryForObject("""
+            SELECT COALESCE(SUM(cr.actual_received * COALESCE(share.stock_share, 0)), 0)
+              FROM sales.commission_record cr
+              LEFT JOIN (
+                  SELECT ticket_id,
+                         CASE WHEN SUM(qty) = 0 THEN 0 ELSE SUM(qty_from_stock) / SUM(qty) END AS stock_share
+                    FROM sales.ticket_item
+                   GROUP BY ticket_id
+              ) share ON share.ticket_id = cr.source_ticket_id
+             WHERE cr.sales_rep_id = :salesRepId
+               AND cr.payroll_month = :payrollMonth
+               AND cr.status = 'APPROVED'
             """,
             new MapSqlParameterSource()
                 .addValue("salesRepId", salesRepId)

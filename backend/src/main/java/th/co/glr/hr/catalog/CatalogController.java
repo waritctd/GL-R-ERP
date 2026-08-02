@@ -37,12 +37,52 @@ public class CatalogController {
         return user;
     }
 
+    /**
+     * Catalog browsing. Open to any authenticated user <strong>by product decision</strong> — issue
+     * #205 (closed, product owner, 2026-07-16): "The catalog stays browsable by any logged-in user,
+     * but its add/edit/delete actions are restricted to ceo/import."
+     *
+     * <p>{@link CatalogDto} is (catalogId, brand, collection, color, surface, size, factory,
+     * sqmPerPiece) — no price field at all, so the response carries no cost data.
+     *
+     * <p>Do not "harden" this into line with {@code ROLE_PERMISSIONS.canViewCatalog} without
+     * reopening #205 with the product owner first. That frontend list is a UX choice about which
+     * roles get the catalog SCREENS; it is deliberately narrower than this API and is not a security
+     * boundary. {@code CatalogControllerTest.searchStaysOpenToAnyAuthenticatedRole_perIssue205} and
+     * {@code CatalogPricingReadAuthzIntegrationTest.catalogBrowsingStaysOpenPerIssue205} pin the
+     * decision so a tightening sweep has to argue with it rather than reverse it silently.
+     */
     @GetMapping
     Map<String, List<CatalogDto>> search(@RequestParam(required = false) String q, HttpSession session) {
         sessions.requireUser(session);
         return Map.of("items", catalog.search(q));
     }
 
+    /**
+     * The factory PURCHASE price list. Open to any authenticated user <strong>by product
+     * decision</strong> — the product owner ruled on 2026-08-01, resolving issue #388, that #205's
+     * "browsable by any logged-in user" extends to the supplier purchase price this endpoint
+     * returns.
+     *
+     * <p>State the consequence plainly, because it is the point of this comment: {@link
+     * ProductPriceDto} carries {@code factoryName}, {@code price} and {@code currency}, up to 200
+     * rows a call, and <strong>any authenticated user — including {@code employee}, {@code
+     * warehouse} and {@code qc}, the roles {@code DivisionAccessPolicy} hands ordinary staff — may
+     * read the company's factory purchase prices.</strong> That is an accepted business exposure,
+     * not a safe or low-risk one: it is the cost side of the cost→price model, and an authenticated
+     * account is the only thing standing in front of it. It is recorded here as a decision so it is
+     * reviewable, and #388 was closed on that basis rather than by adding a gate.
+     *
+     * <p>What #388 <em>did</em> gate is the rest of the cost model, which no decision covered:
+     * {@code PriceCalcConfigController} (marginPct/importDutyPct), {@code FxRateController} and
+     * {@code FactoryConfigController} are ceo/import. Supplier price being open is not the same as
+     * the margin policy being open.
+     *
+     * <p>Do not add a role gate here without reopening the ruling with the product owner.
+     * {@code CatalogControllerTest.searchPricesStaysOpenToAnyAuthenticatedRole_perIssue388Ruling}
+     * and {@code CatalogPricingReadAuthzIntegrationTest.factoryPurchasePricesStayOpenPerIssue388Ruling}
+     * pin it.
+     */
     @GetMapping("/prices")
     Map<String, List<ProductPriceDto>> searchPrices(
         @RequestParam(required = false) String q,

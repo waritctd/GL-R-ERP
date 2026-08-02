@@ -6,7 +6,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { Avatar } from '../../components/common/Avatar.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
-import { formatShortDate, requestStatus } from '../../utils/format.js';
+import { formatShortDate, greetingName, requestStatus } from '../../utils/format.js';
 import { divisions, findDivision } from '../../data/referenceData.js';
 import { ActionQueue } from './ActionQueue.jsx';
 
@@ -87,7 +87,7 @@ export function HrDashboard({ employee, employees, profileRequests, dashboardSum
   return (
     <PageStack>
       <PageHeader
-        title={`สวัสดี, คุณ${employee?.nickName || employee?.nameTh || ''}`}
+        title={`สวัสดี, ${greetingName(employee?.nickName || employee?.nameTh)}`}
         subtitle="ภาพรวมระบบทรัพยากรบุคคล"
       />
 

@@ -101,4 +101,17 @@ describe('PriceImportPage product delete (UX-07)', () => {
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'ลบสินค้า' })).toBeNull());
     expect(api.catalog.deleteProduct).not.toHaveBeenCalled();
   });
+
+  it('uses Thai display copy for price-import status and commit actions', async () => {
+    api.priceImport.versions.mockResolvedValue([
+      { versionId: 1, label: 'รายการราคา Q3', status: 'ACTIVE', uploadedAt: '2026-07-01T00:00:00Z' },
+    ]);
+
+    await selectFactoryAndAwaitProduct();
+
+    expect(screen.getByText('อัปโหลดรายการราคาหรือแก้ไขรายสินค้าด้วยตนเอง')).not.toBeNull();
+    expect(screen.getByText('รายการสินค้าที่ใช้งานอยู่')).not.toBeNull();
+    expect(await screen.findByText('ใช้งานอยู่')).not.toBeNull();
+    expect(screen.queryByText(/ACTIVE|Commit|price list/i)).toBeNull();
+  });
 });

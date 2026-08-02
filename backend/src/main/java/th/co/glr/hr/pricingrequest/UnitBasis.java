@@ -41,7 +41,7 @@ public final class UnitBasis {
      */
     public static String canonicalize(String value, String fieldLabel) {
         if (value == null || value.isBlank()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, fieldLabel + " must not be blank");
+            throw new ApiException(HttpStatus.BAD_REQUEST, fieldLabel + " ต้องไม่เว้นว่าง");
         }
         String normalized = value.trim().toUpperCase();
         return switch (normalized) {
@@ -50,7 +50,7 @@ public final class UnitBasis {
             case PER_BOX, "BOX" -> PER_BOX;
             case PER_LINEAR_M, "LINEAR_M", "LINEAR_METER", "METER", "METRE" -> PER_LINEAR_M;
             default -> throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "Unsupported " + fieldLabel + " '" + value + "'");
+                "ไม่รองรับค่า " + fieldLabel + " '" + value + "'");
         };
     }
 }

@@ -2,91 +2,15 @@ import { forwardRef, useImperativeHandle, useState } from 'react';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import {
-  dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, depositPolicyLabel,
-  formatThaiDate, overdueBadgeLabel, paymentStageLabel, pricingRequestStatusLabel, tenderRequirementLabel,
-} from '../../utils/format.js';
-import {
-  activePricingRequestsSummary, PRICING_REQUEST_STATUSES, pricingRequestRecipientLabel,
-} from '../pricingRequests/pricingRequestMeta.js';
+import { dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, formatThaiDate, tenderRequirementLabel } from '../../utils/format.js';
 import { DealStageStepper, PhaseTracker } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
-import {
-  allowedTargetStages, canMarkLost, canSetStage, GATE_LABEL, nextStage,
-  PAYMENT_SUBSTEPS, PROCUREMENT_SUBSTEPS, stageMeta,
-} from './stageMeta.js';
+import { allowedTargetStages, canMarkLost, canSetStage, GATE_LABEL, nextStage, stageMeta } from './stageMeta.js';
 import { UpdateStageModal } from './UpdateStageModal.jsx';
 
 function daysSince(iso) {
   if (!iso) return null;
   return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000));
-}
-
-/**
- * One labelled row of sub-status chips — the inner journey of the current
- * stage (internal pricing / payment / import). Replaces the old standalone
- * Track P / Track F steppers.
- */
-function SubstepChips({ label, steps, currentCode }) {
-  const currentIdx = steps.findIndex((s) => s.code === currentCode);
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <span className="text-2xs font-bold text-text-muted">{label}</span>
-      {steps.map((step, i) => {
-        const done = i < currentIdx;
-        const current = i === currentIdx;
-        return (
-          <span
-            key={step.code}
-            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-2xs font-bold ${
-              done ? 'bg-success-bg text-success-dark'
-                : current ? 'bg-info-bg text-info'
-                  : 'bg-surface-subtle text-text-muted'
-            }`}
-          >
-            {done ? <Icon name="check" size={11} /> : null}
-            {step.label}
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
-/**
- * Deal-level pricing-request glance strip (Fix 3 of the review-remediation
- * plan): a roll-up count line, plus one "recipient → status" line per
- * non-CANCELLED request. Deliberately compact — PricingRequestPanel's cards
- * (items, event log, actions) remain the source of truth for detail; this
- * only needs to answer "is there pricing work in flight on this deal, and
- * with whom" at a glance, without reducing several requests to one.
- */
-function PricingRequestSummaryStrip({ summary }) {
-  const rollupParts = PRICING_REQUEST_STATUSES
-    .filter((status) => status !== 'CANCELLED' && summary.counts[status])
-    .map((status) => `${pricingRequestStatusLabel(status).label} ${summary.counts[status]}`);
-  const rollupText = [`ใบขอราคา ${summary.total} รายการ`, ...rollupParts].join(' · ');
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-2xs font-bold text-text-muted">การขอราคา:</span>
-        <span className="text-2xs text-text-muted">{rollupText}</span>
-      </div>
-      {summary.requests.map((pr) => {
-        const status = pricingRequestStatusLabel(pr.status);
-        return (
-          <div key={pr.id} className="flex flex-wrap items-center gap-1.5 pl-1">
-            <span className="text-2xs text-text-muted">
-              {pricingRequestRecipientLabel(pr.recipientType)}
-              {pr.recipientLabel ? ` · ${pr.recipientLabel}` : ''}
-            </span>
-            <Icon name="chevronRight" size={10} className="text-text-muted" />
-            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-          </div>
-        );
-      })}
-    </div>
-  );
 }
 
 /**
@@ -124,11 +48,27 @@ function PricingRequestSummaryStrip({ summary }) {
  * enforced via its `disabled` attribute, just invoked from the menu instead
  * of a panel button). `nextHint`/the "ถัดไป:" line stay in this panel — they
  * are informational, not a second copy of the action.
+ *
+ * Slice A "chip diet": this panel used to also render a PricingRequestSummaryStrip,
+ * a "ยอดชำระ" badge, a "นโยบายมัดจำ" badge, a PAYMENT_SUBSTEPS chip row, and a
+ * PROCUREMENT_SUBSTEPS chip row + "ส่งมอบ x/y" badge — the same four statuses
+ * (pricing/payment/import/deal-value) the header (DealStateHeader) and the
+ * money/pricing/fulfilment tabs already name, repeated here a second or third
+ * time before the viewer clicked anything. All five were removed:
+ * PricingRequestSummaryStrip (redundant with PricingRequestPanel's own full
+ * per-request list) and the payment/deposit badges (redundant with the money
+ * tab's own panel-header badge and DealDepositPanel's own policy badge) were
+ * deleted outright; the PAYMENT_SUBSTEPS progression (finer than anything the
+ * money tab showed) moved there instead; PROCUREMENT_SUBSTEPS + the delivery
+ * total were deleted, not moved — DealFulfilmentPanel already renders its own
+ * copy of both (see that file's own `SubstepChips`/`totalDelivered` comments).
+ * This panel keeps only the stage number/label/phase/gate/days-in-stage, the
+ * "ถัดไป:" line, the tender `<select>`, the done banner, and docActions/
+ * primaryAction — the pipeline's OWN state, not a rollup of everyone else's.
  */
 export const DealStagePanel = forwardRef(function DealStagePanel({
-  user, summary, availableActions = [], pricingRequests = [], docActions, primaryAction, actionLoading,
+  user, summary, availableActions = [], docActions, primaryAction, actionLoading,
   advanceReady = true,
-  deliveryProgress = null,
   onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement,
 }, ref) {
   const [editOpen, setEditOpen] = useState(false);
@@ -187,22 +127,6 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   const nextHint = next && !canAdvance
     ? (next.auto ? next.autoHint : `ขั้นถัดไปอัปเดตโดย${GATE_LABEL[next.gate]}`)
     : null;
-
-  // Sub-status rows — the inner journey of the current stage:
-  // • การขอราคา: every non-CANCELLED PricingRequest on this deal (Fix 3 of the
-  //   review-remediation plan), NOT ticket.status (which is permanently stuck
-  //   at 'draft' now that ticket creation no longer auto-submits; see
-  //   TicketService.create/submit, commit 5) and NOT just "the latest one" —
-  //   reducing several concurrent requests to a single highest-id winner used
-  //   to hide a live IMPORT_REVIEWING request behind a newer DRAFT, or hide
-  //   the whole strip behind a newer CANCELLED one. Renders nothing when the
-  //   deal has no requests, or every request is CANCELLED.
-  // • การชำระเงิน / การนำเข้า: replace the old Track P / Track F steppers.
-  const pricingSummary = activePricingRequestsSummary(pricingRequests);
-  const showPricingChips = pricingSummary != null;
-  const showPaymentChips = summary.paymentStatus != null;
-  const derivedPayment = paymentStageLabel(summary.paymentStage);
-  const showImportChips = summary.fulfillmentStatus != null;
 
   async function submitStage(payload) {
     await onUpdateStage(payload);
@@ -318,53 +242,10 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
               </div>
             ) : null}
 
-            {/* Inner journeys of the current stage — replace the old standalone
-                Track P / Track F panel and make the internal price workflow
-                (sales → Import → CEO confirmed price) visible inside the quote
-                stages. All read live from the deal's own status fields. */}
-            {(showPricingChips || showPaymentChips || showImportChips) ? (
-              <div className="flex flex-col gap-1.5">
-                {showPricingChips ? (
-                  <PricingRequestSummaryStrip summary={pricingSummary} />
-                ) : null}
-                {showPaymentChips ? (
-                  depositBypassesNotice(summary.depositPolicy) ? null : (
-                    <SubstepChips label="การชำระเงิน:" steps={PAYMENT_SUBSTEPS} currentCode={summary.paymentStatus} />
-                  )
-                ) : null}
-                {summary.paymentStage && summary.paymentStage !== 'NOT_REQUIRED' ? (
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-2xs font-bold text-text-muted">ยอดชำระ:</span>
-                    <StatusBadge tone={derivedPayment.tone}>{derivedPayment.label}</StatusBadge>
-                    {summary.overdue ? (
-                      <StatusBadge tone={overdueBadgeLabel(true).tone}>{overdueBadgeLabel(true).label}</StatusBadge>
-                    ) : null}
-                  </div>
-                ) : null}
-                {depositBypassesNotice(summary.depositPolicy) ? (
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-2xs font-bold text-text-muted">นโยบายมัดจำ:</span>
-                    <StatusBadge tone={depositPolicyLabel(summary.depositPolicy).tone}>
-                      {depositPolicyLabel(summary.depositPolicy).label}
-                    </StatusBadge>
-                    {summary.depositPolicyReason ? (
-                      <span className="text-2xs text-text-muted">— {summary.depositPolicyReason}</span>
-                    ) : null}
-                  </div>
-                ) : null}
-                {showImportChips ? (
-                  <SubstepChips label="การนำเข้า:" steps={PROCUREMENT_SUBSTEPS} currentCode={summary.fulfillmentStatus} />
-                ) : null}
-                {deliveryProgress && deliveryProgress.ordered > 0 ? (
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-2xs font-bold text-text-muted">ส่งมอบ:</span>
-                    <StatusBadge tone={deliveryProgress.delivered >= deliveryProgress.ordered ? 'success' : 'warning'}>
-                      {deliveryProgress.delivered.toLocaleString('en-US')} / {deliveryProgress.ordered.toLocaleString('en-US')}
-                    </StatusBadge>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
+            {/* Slice A "chip diet": the pricing/payment/deposit-policy/import/
+                delivery sub-status rows that used to render here were removed
+                or moved — see this component's own doc comment above for
+                where each one went. */}
 
             {/* The work-state banner (whose move, what's blocking) now lives
                 once, in the sticky header (DealStateHeader) — see
@@ -469,7 +350,3 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     </section>
   );
 });
-
-function depositBypassesNotice(policy) {
-  return ['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'].includes(policy);
-}

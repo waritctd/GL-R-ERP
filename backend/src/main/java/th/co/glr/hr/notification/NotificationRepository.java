@@ -184,7 +184,7 @@ public class NotificationRepository {
     }
 
     private String ticketEventTitle(String type) {
-        return TICKET_EVENT_TITLES.getOrDefault(type, "อัปเดตสถานะใบขอราคา");
+        return TICKET_EVENT_TITLES.getOrDefault(type, "อัปเดตสถานะคำขอราคา");
     }
 
     private NotificationDto mapHrNotification(java.sql.ResultSet rs) throws java.sql.SQLException {

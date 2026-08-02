@@ -161,7 +161,7 @@ public class EmployeeRepository {
 
     public long create(UpsertEmployeeRequest request) {
         if (!hasText(request.nameTh())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "Employee name is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุชื่อพนักงาน");
         }
 
         NameParts thaiName = splitName(request.nameTh());
@@ -236,7 +236,7 @@ public class EmployeeRepository {
 
     public void update(long id, UpsertEmployeeRequest request) {
         if (!exists(id)) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "Employee not found");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบข้อมูลพนักงาน");
         }
 
         List<String> sets = new ArrayList<>();

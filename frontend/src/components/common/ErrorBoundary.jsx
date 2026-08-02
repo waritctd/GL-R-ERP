@@ -1,4 +1,5 @@
 import { Component } from 'react';
+import { StatePanel } from './StatePanel.jsx';
 
 export class ErrorBoundary extends Component {
   state = { error: null };
@@ -24,29 +25,29 @@ export class ErrorBoundary extends Component {
       if (typeof fallback === 'function') {
         return fallback({ error, reset: this.reset });
       }
-      return <DefaultErrorFallback error={error} reset={this.reset} />;
+      return <DefaultErrorFallback reset={this.reset} />;
     }
 
     return children;
   }
 }
 
-function DefaultErrorFallback({ error, reset }) {
+function DefaultErrorFallback({ reset }) {
   return (
-    <div className="panel empty-state">
-      <strong>เกิดข้อผิดพลาด / Something went wrong</strong>
-      <span>โหลดหน้าใหม่หรือลองอีกครั้ง</span>
-      {import.meta.env.DEV && error?.message ? (
-        <span>{error.message}</span>
-      ) : null}
-      <div className="page-actions">
+    <StatePanel
+      state="error"
+      title="โหลดหน้านี้ไม่สำเร็จ"
+      description="ลองใหม่อีกครั้ง หรือโหลดหน้าใหม่หากข้อมูลยังไม่แสดง"
+      action={(
         <button type="button" className="secondary-button" onClick={reset}>
-          ลองใหม่ / Try again
+          ลองใหม่
         </button>
+      )}
+      secondaryAction={(
         <button type="button" className="primary-button" onClick={() => window.location.reload()}>
-          โหลดหน้าใหม่ / Reload
+          โหลดหน้าใหม่
         </button>
-      </div>
-    </div>
+      )}
+    />
   );
 }

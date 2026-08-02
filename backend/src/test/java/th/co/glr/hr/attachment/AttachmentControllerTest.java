@@ -135,14 +135,27 @@ class AttachmentControllerTest {
             .andExpect(status().isNotFound());
     }
 
+    /**
+     * Issue #389: {@code hr} used to sit in this controller's own {@code MANAGER_ROLES} and so
+     * could read every deal's documents, despite being refused the deal itself everywhere else.
+     * These two tests asserted that behaviour; they now assert its absence. The enforcement
+     * against real Postgres lives in {@link AttachmentTicketAccessIntegrationTest}.
+     */
     @Test
-    void managerRoleBypassesOwnershipOnDownload() throws Exception {
+    void hrIsRefusedOnDownload_itHasNoSalesAccessAnywhereElse() throws Exception {
         when(attachmentRepository.findById(ATTACHMENT_ID)).thenReturn(Optional.of(attachment()));
-        when(attachmentRepository.findFilePathById(ATTACHMENT_ID)).thenReturn(missingFilePath());
         when(ticketRepository.findById(TICKET_ID)).thenReturn(Optional.of(ticket()));
 
         mvc.perform(get("/api/attachments/{id}/file", ATTACHMENT_ID).session(session(HR_ID, "hr")))
-            .andExpect(status().isNotFound());
+            .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void hrIsRefusedOnList_itHasNoSalesAccessAnywhereElse() throws Exception {
+        when(ticketRepository.findById(TICKET_ID)).thenReturn(Optional.of(ticket()));
+
+        mvc.perform(get("/api/tickets/{ticketId}/attachments", TICKET_ID).session(session(HR_ID, "hr")))
+            .andExpect(status().isForbidden());
     }
 
     @Test
@@ -152,6 +165,28 @@ class AttachmentControllerTest {
 
         mvc.perform(get("/api/tickets/{ticketId}/attachments", TICKET_ID).session(session(HR_ID, "ceo")))
             .andExpect(status().isOk());
+    }
+
+    /**
+     * #389's other direction: {@code account} confirms the money these documents evidence, so it
+     * may now open them — but it may NOT upload, because the tax invoice keeps exactly one entry
+     * point ({@code CommissionService#createFromDeal}).
+     */
+    @Test
+    void accountCanListButCannotUpload() throws Exception {
+        when(ticketRepository.findById(TICKET_ID)).thenReturn(Optional.of(ticket()));
+        when(attachmentRepository.findByTicketId(TICKET_ID)).thenReturn(List.of(attachment()));
+
+        mvc.perform(get("/api/tickets/{ticketId}/attachments", TICKET_ID).session(session(STRANGER_ID, "account")))
+            .andExpect(status().isOk());
+
+        mvc.perform(multipart("/api/tickets/{ticketId}/attachments", TICKET_ID)
+                .file(pdfFile())
+                .session(session(STRANGER_ID, "account")))
+            .andExpect(status().isForbidden());
+
+        verify(attachmentRepository, never()).save(
+            eq(TICKET_ID), any(), any(), any(), any(), any(), any(), eq(STRANGER_ID));
     }
 
     @Test

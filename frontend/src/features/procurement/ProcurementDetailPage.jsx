@@ -92,7 +92,7 @@ export function ProcurementDetailPage({ showToast }) {
   if (poQuery.isLoading || !po) {
     return (
       <div className="page-stack">
-        <PageHeader title="ใบสั่งซื้อโรงงาน" subtitle="กำลังโหลด..." />
+        <PageHeader title="ใบสั่งซื้อโรงงาน" subtitle="กำลังโหลดรายละเอียดใบสั่งซื้อโรงงาน…" />
       </div>
     );
   }
@@ -111,7 +111,7 @@ export function ProcurementDetailPage({ showToast }) {
       <div className="rounded-lg border border-border bg-surface p-4">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div>
-            <span className="block text-2xs font-bold uppercase text-text-muted">ใบขอราคา</span>
+            <span className="block text-2xs font-bold uppercase text-text-muted">คำขอราคา</span>
             <Link to={`/pricing-requests/${po.pricingRequestId}`} className="text-sm text-primary">{po.pricingRequestCode}</Link>
           </div>
           <div>
@@ -159,7 +159,7 @@ export function ProcurementDetailPage({ showToast }) {
       <div className="rounded-lg border border-border bg-surface p-4">
         <h3 className="mb-2 text-sm font-extrabold text-text">รายการสินค้า</h3>
         <p className="mb-3 text-xs text-text-muted">
-          รายการและราคาอ้างอิงจากราคาต้นทุนที่ CEO อนุมัติแล้ว (pricing_costing_item) ไม่สามารถแก้ไขในหน้านี้ได้
+          รายการและราคาอ้างอิงจากราคาต้นทุนที่ CEO อนุมัติแล้ว จึงแก้ไขรายการสินค้าในหน้านี้ไม่ได้
         </p>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">

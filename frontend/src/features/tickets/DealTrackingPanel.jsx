@@ -143,7 +143,7 @@ export function DealTrackingPanel({
                 <span className="text-text-muted">Win probability</span>
                 <span className="flex items-center gap-1.5 font-bold text-text">
                   {effectiveWin}%
-                  {hasOverride ? <StatusBadge tone="info">override</StatusBadge> : <span className="text-2xs font-normal text-text-muted">(ค่าเริ่มต้นตามขั้นดีล)</span>}
+                  {hasOverride ? <StatusBadge tone="info">กำหนดเอง</StatusBadge> : <span className="text-2xs font-normal text-text-muted">(ค่าเริ่มต้นตามขั้นดีล)</span>}
                 </span>
               </div>
               <div className="flex items-center justify-between gap-2 border-b border-border-subtle py-1.5 text-sm">

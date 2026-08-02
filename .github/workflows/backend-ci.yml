@@ -1,15 +1,18 @@
 name: Backend CI
 
+# The `paths:` filter used to live here, on the triggers. That made `build-and-test`
+# *absent* — not skipped, absent — on any PR that touched no `backend/**` file, and GitHub
+# treats a required check that never reports as permanently pending. So the check could not
+# be made required without deadlocking every frontend-only PR (issue #435).
+#
+# The filter therefore now lives INSIDE the job: the workflow runs on every PR, the
+# `build-and-test` check always reports, and the expensive steps are gated on whether the
+# diff actually touched the backend. A frontend-only PR reports green in seconds; a backend
+# PR still runs the full `./mvnw -B clean verify` and still goes red when it fails.
 on:
   push:
     branches: [main]
-    paths:
-      - 'backend/**'
-      - '.github/workflows/backend-ci.yml'
   pull_request:
-    paths:
-      - 'backend/**'
-      - '.github/workflows/backend-ci.yml'
 
 jobs:
   build-and-test:
@@ -18,9 +21,60 @@ jobs:
       run:
         working-directory: backend
     steps:
+      # fetch-depth: 0 so the base commit is present for the diff below. The pack is ~45 MiB,
+      # so a full fetch costs seconds — cheaper than getting the shallow-fetch dance wrong.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Replaces the old trigger-level `paths:` filter. Fails SAFE: if the base commit cannot
+      # be resolved (force-push, new branch, shallow history), we run the full suite rather
+      # than reporting a green check we have not earned.
+      - name: Detect backend changes
+        id: changes
+        # Pinned to the repo root, overriding this job's `working-directory: backend`. git
+        # prints repo-relative paths regardless of cwd today, but if that ever changed the
+        # `^backend/` match would silently stop matching — i.e. it would fail GREEN. Pin it.
+        working-directory: ${{ github.workspace }}
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE="$PR_BASE_SHA"
+          else
+            BASE="$PUSH_BEFORE_SHA"
+          fi
+
+          if [ -z "$BASE" ] \
+            || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "Base commit unresolvable ('$BASE') — running the full backend suite."
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Two-dot: on a pull_request, HEAD is the PR merge commit, so `BASE HEAD` is exactly
+          # the PR's net effect on the base branch. On a push it is the pushed range.
+          CHANGED="$(git diff --name-only "$BASE" HEAD)"
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          if echo "$CHANGED" | grep -qE '^(backend/|\.github/workflows/backend-ci\.yml$)'; then
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "backend=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: No backend changes — nothing to build
+        if: steps.changes.outputs.backend != 'true'
+        run: echo "No backend/** changes in this diff; skipping the Maven build."
 
       - name: Set up Temurin JDK 21
+        if: steps.changes.outputs.backend == 'true'
         uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -32,10 +86,12 @@ jobs:
       # self-skip (Assumptions.assumeTrue on LibreOfficePdfConverter.isAvailable), so install it here
       # to actually exercise the document-generation path. Mirrors backend/Dockerfile's Render setup.
       - name: Install LibreOffice (for PDF renderer tests)
+        if: steps.changes.outputs.backend == 'true'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-calc
 
       # Testcontainers spins its own throwaway Postgres via the runner's Docker daemon, so the
       # integration + security + Flyway tests run without a manually provisioned DB service. The
       # TEST_DB_URL override path still exists in PostgresTestSupport as a one-line revert if needed.
       - name: Build and test
+        if: steps.changes.outputs.backend == 'true'
         run: ./mvnw -B clean verify

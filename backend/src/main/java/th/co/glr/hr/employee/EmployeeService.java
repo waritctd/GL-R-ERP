@@ -84,12 +84,12 @@ public class EmployeeService {
     public EmployeeDto get(long id, UserPrincipal user) {
         boolean canSeeAnyEmployee = canSeeSensitiveEmployeeFields(user);
         if (!canSeeAnyEmployee && (user.employeeId() == null || user.employeeId() != id)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
 
         boolean includeSensitive = canSeeSensitiveEmployeeFields(user);
         EmployeeDto employee = employees.findEmployeeById(id, includeSensitive)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Employee not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบข้อมูลพนักงาน"));
         if (includeSensitive) {
             AUDIT.info(
                 "sensitive_data_access action=VIEW_EMPLOYEE_DETAIL actorId={} actorEmail=\"{}\" targetEmployeeId={} fields=\"restricted_pii,current_salary,salary_history\" salaryHistoryCount={}",
@@ -134,7 +134,7 @@ public class EmployeeService {
     @Transactional
     public PasswordResetResult resetPassword(long employeeId, UserPrincipal actingUser) {
         if (!employees.exists(employeeId)) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "Employee not found");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบข้อมูลพนักงาน");
         }
         String plaintext = temporaryPasswordGenerator.generate();
         employeeAuth.setTemporaryPassword(employeeId, passwordEncoder.encode(plaintext));

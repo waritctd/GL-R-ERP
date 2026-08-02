@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
@@ -10,35 +10,56 @@ import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
-import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { Tabs, TabPanel } from '../../components/common/Tabs.jsx';
 import {
   dealStageLabel,
   formatMoney,
   formatThaiDate,
-  overdueBadgeLabel,
-  paymentStageLabel,
   quotationRecipientLabel,
-  quotationStatusLabel,
 } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
+import { computeItemEstimateThb, formatThb } from './dealEstimatePricing.js';
+import { activePricingRequestsSummary } from '../pricingRequests/pricingRequestMeta.js';
 import { PricingRequestPanel } from '../pricingRequests/PricingRequestPanel.jsx';
 import { CancelDealModal } from './CancelDealModal.jsx';
 import { hasActivitySince, isReadyToAdvance, lastStageChangeAt, STAGE_ADVANCE_GATE_HINT } from './dealTrackingMeta.js';
+import { ContextSection, FieldRow } from './DealMetaFields.jsx';
+import { DealAttachmentsPanel } from './DealAttachmentsPanel.jsx';
 import { DealDepositPanel } from './DealDepositPanel.jsx';
+import { DealDocumentRegister } from './DealDocumentRegister.jsx';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
+import { DealLegacyQuotations } from './DealLegacyQuotations.jsx';
+import { DealMoneyTimeline } from './DealMoneyTimeline.jsx';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
-import { TicketContextPanel } from './TicketContextPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
-import { allowedTargetStages, canMarkLost, canSetStage, nextStage } from './stageMeta.js';
 import {
-  DEFAULT_TICKET_DETAIL_TAB_ID, resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
+  allowedTargetStages, canMarkLost, canSetStage, nextStage,
+} from './stageMeta.js';
+import {
+  resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
 import { resolveWorkState } from './workState.js';
+
+// Thai copy for dealEstimatePricing.js's `reason` codes, mirroring TicketCreateModal.jsx's own
+// ESTIMATE_REASON_LABELS so the two ราคาตั้ง display sites read the same to a rep — copied rather
+// than imported because it is UI copy, not calculation (dealEstimatePricing.js itself stays
+// untouched; see that file's own doc comment for why the math must not be duplicated).
+const ESTIMATE_REASON_LABELS = {
+  UNSUPPORTED_UNIT: 'หน่วยราคานี้ยังไม่รองรับ',
+  MISSING_QUANTITY: 'ยังไม่ได้กรอกจำนวน/พื้นที่',
+  NO_FX_RATE: 'ยังไม่มีอัตราแลกเปลี่ยนสำหรับสกุลเงินนี้',
+  NO_CATALOG_PRICE: 'ยังไม่มีราคาแคตตาล็อก',
+  UNIT_BASIS_MISMATCH: 'หน่วยที่เลือกไม่ตรงกับหน่วยราคา',
+  NOT_CATALOG: 'ไม่ใช่รายการจากแคตตาล็อก',
+  NO_MARKUP: 'ยังไม่มีตัวคูณราคาจาก CEO',
+};
+function estimateReasonLabel(reason) {
+  return ESTIMATE_REASON_LABELS[reason] || 'ยังคำนวณไม่ได้';
+}
 
 // Ticket-detail IA rebuild Phase 1 (see
 // docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md
@@ -86,7 +107,10 @@ const IN_PAGE_JUMP_TARGET = {
 // `activeTab`/`setActiveTab` live) switches to the owning tab FIRST and only
 // then performs the jump/ref-call, once that tab's own panel has mounted.
 const JUMP_TARGET_TAB = {
-  'deal-tracking-panel': 'activity',
+  // Slice C2b: DealTrackingPanel moved from the old `activity` tab into
+  // `deal` (see ticketDetailTabs.js's own comment on that tab) — this jump
+  // target moves with it, unchanged element id.
+  'deal-tracking-panel': 'deal',
   'deal-fulfilment-panel': 'fulfilment',
   'deal-deposit-panel': 'money',
 };
@@ -95,8 +119,8 @@ function scrollToSection(id) {
   const el = typeof document !== 'undefined' ? document.getElementById(id) : null;
   if (!el) return;
   // jsdom (Vitest) doesn't implement scrollIntoView — guarded so the same
-  // jump helper used by the revise-form effect and the sticky primary CTA
-  // doesn't throw under test, only under a real browser's absence of it.
+  // jump helper used by the sticky primary CTA doesn't throw under test,
+  // only under a real browser's absence of it.
   el.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   el.focus?.({ preventScroll: true });
 }
@@ -110,28 +134,16 @@ function scrollToSection(id) {
 
 const TERMINAL = ['closed', 'cancelled'];
 
-// Quotation revision docStatus (DRAFT / ISSUED / SUPERSEDED) mapped onto the same
-// success/info/neutral tokens StatusBadge uses, instead of one-off hex per state.
-// Previously SUPERSEDED text used Ink Faint (#94a3b8), below the DESIGN.md Ink Muted
-// contrast floor on a light background — this switches it to --color-icon-muted.
-function docStatusColors(docStatus) {
-  if (docStatus === 'SUPERSEDED') {
-    return { background: 'var(--color-surface-subtle)', color: 'var(--color-icon-muted)' };
-  }
-  if (docStatus === 'ISSUED') {
-    return { background: 'var(--color-success-bg)', color: 'var(--color-success-dark)' };
-  }
-  return { background: 'var(--color-info-bg)', color: 'var(--color-info)' };
-}
+// docStatusColors (quotation revision docStatus -> StatusBadge-matching
+// tokens) moved into DealLegacyQuotations.jsx (ia-extract Slice C1) — it had
+// exactly one caller and that caller moved with it.
 
-function InfoRow({ label, value }) {
-  return (
-    <div style={{ display: 'flex', gap: 8, padding: '6px 0', borderBottom: '1px solid var(--color-surface-subtle)', fontSize: 13 }}>
-      <span style={{ color: 'var(--color-text-muted)', minWidth: 120 }}>{label}</span>
-      <span style={{ fontWeight: 600, color: 'var(--color-text)' }}>{value || '-'}</span>
-    </div>
-  );
-}
+// Slice A "chip diet" moved PaymentSubstepChips out of DealStagePanel (see
+// its own doc comment) into the money tab's own payment section. Slice E
+// moved it again, along with the rest of that section, into
+// DealMoneyTimeline.jsx (see that file's own doc comment for why it stays
+// separate from the merged timeline below it) — nothing here references it
+// or depositBypassesNotice any more.
 
 export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const queryClient = useQueryClient();
@@ -215,6 +227,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     }
   }, [activeTab]);
 
+  // The ticket workspace's persistent chrome (state header + detail tabs) is
+  // content-dependent: primary actions, project names, and role-specific tabs
+  // all change its height. Measure the rendered sticky region once and let
+  // scroll-padding + the desktop context rail read the same value.
+  const ticketStickyChromeRef = useRef(null);
+  const [ticketChromeCondensed, setTicketChromeCondensed] = useState(false);
+
   // Imperative handle onto DealStagePanel (see its own doc comment): the
   // header overflow menu / bottom danger zone trigger its modals from here,
   // but DealStagePanel stays the sole owner of whether each is actually
@@ -223,7 +242,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // Imperative handle onto PricingRequestPanel (FIX 1, ticket-detail IA
   // rebuild Phase 1 clutter follow-up): the sticky header's CREATE_PCR
   // primary CTA opens this panel's own create modal directly instead of
-  // duplicating a second "สร้างใบขอราคา" button — same convention as
+  // duplicating a second "สร้างคำขอราคา" button — same convention as
   // dealStagePanelRef above.
   const pricingRequestPanelRef = useRef(null);
   // Imperative handle onto DealQuotationPanel (clutter follow-up round 2,
@@ -243,8 +262,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const [reviseReason, setReviseReason] = useState('');
 
   // UX-03 (slice 5a + 5b): inline field-level validation for the payment /
-  // delivery modals, plus (5b) the revise inline form and the edit-items
-  // quantities. One shared dict, keyed per-form/per-row so a stale error can
+  // delivery modals, plus (5b) the revise form (a modal since Slice C2a) and
+  // the edit-items quantities. One shared dict, keyed per-form/per-row so a stale error can
   // never bleed into another: 'payment.amount' | 'revise.reason' |
   // 'editItems.qty.<rowIndex>' (per-row — see the edit-items save handler).
   // ('quotation.*'/'reject.reason'/'override.<itemId>' were retired along
@@ -315,7 +334,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   // Comment
   const [commentText, setCommentText] = useState('');
-  const [contextCommentText, setContextCommentText] = useState('');
 
   // Confirmation dialogs (state-driven, replaces native browser confirm)
   const [confirm, setConfirm] = useState(null); // { kind: 'deleteAttachment', id, name } | { kind: 'cancelTicket' } | { kind: 'finalPayment' } | null
@@ -333,25 +351,57 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     enabled: !!ticketId,
   });
   const ticket = ticketQuery.data ?? null;
-  // FIX 2 (Opus review): AttachmentController.requireTicketAccess is a
-  // genuinely different, WIDER, identity-based model than every other tab's
-  // role gate — it grants the ticket's participants (createdById/
-  // assignedToId) OR role in {hr, sales_manager, ceo}, not a role-only
-  // check. Computed here (rather than after the loading/no-ticket early
-  // return below, where `isOwner` already lives) so the attachments query
-  // itself never fires for a viewer the backend would 403 — same reasoning
-  // as `activitiesQuery`'s own `enabled` gate for FIX 1. `hr` omitted below:
-  // it never reaches this page at all (route-gated), so the literal,
-  // owner-approved rule is exactly role===ceo||sales_manager||isOwner||
-  // assignee — this is a presentation projection of the existing backend
-  // gate (attachments_* in TicketIaAuthzMatrixIntegrationTest), not a new
-  // authorization rule, and touches neither the backend nor salesViewScope.js.
+
+  // ── Slice F: ราคาตั้ง on the deal's item rows — same FX/markup wiring as
+  // TicketCreateModal.jsx's own estimate inputs (see that file's comment for the full
+  // rationale). Both fetches degrade silently — retry: false, no showToast from an effect (this
+  // repo's useToast has an unstable identity, see CLAUDE.md) — and estimateReady requires BOTH to
+  // have actually succeeded with a usable multiplier. Never default markupMultiplier to 1: an
+  // un-marked-up supplier cost displayed as ราคาตั้ง is exactly the number
+  // dealEstimatePricing.js's header comment says must never appear on screen.
+  const fxRatesQuery = useQuery({
+    queryKey: queryKeys.fxRates(),
+    queryFn: () => api.fxRates.list().then((res) => res.fxRates ?? []),
+    retry: false,
+  });
+  const markupQuery = useQuery({
+    queryKey: queryKeys.dealEstimateMarkup(),
+    queryFn: () => api.dealEstimateMarkup.get().then((res) => res.dealEstimateMarkup ?? null),
+    retry: false,
+  });
+  const fxRatesByCurrency = useMemo(() => {
+    const map = { THB: 1 };
+    for (const rate of fxRatesQuery.data ?? []) {
+      if (rate?.currency) map[rate.currency] = Number(rate.rateToThb);
+    }
+    return map;
+  }, [fxRatesQuery.data]);
+  const markupMultiplier = markupQuery.data?.multiplier ?? null;
+  const estimateReady = fxRatesQuery.isSuccess && markupQuery.isSuccess && markupMultiplier != null;
+  const estimateContext = { fxRatesByCurrency, markupMultiplier };
+  // FIX 2 (Opus review), rewritten for issue #389. Still an identity-aware gate rather than a
+  // role-only one — the deal's participants (createdById/assignedToId) reach its documents
+  // regardless of role — but the ROLE half is no longer this page's private invention: it mirrors
+  // TicketAccessPolicy.canViewDocuments, which is `sales`- AND `import`-scoped to participation.
+  //
+  // What changed: `account` used to be filtered out here, faithfully mirroring a backend gate
+  // that 403'd it — but that 403 was the bug. account is the role asked to confirm deposit and
+  // final-payment receipts against exactly these files, so hiding the tab would have left #389's
+  // fix invisible. A non-assignee `import` stays filtered out, unchanged: AttachType spans
+  // SIGNED_QUOTATION/INVOICE, which carry the approved customer price that salesViewScope already
+  // hides from import (quotation/dealQuotation/payment/depositNotice all false) and that the
+  // backend refuses it on three other endpoints. `hr` needs no mention — route-gated off this
+  // page entirely, and now refused by the backend too.
+  //
+  // Computed here (rather than after the loading/no-ticket early return below, where `isOwner`
+  // already lives) so the attachments query never fires for a viewer the backend would 403 —
+  // same reasoning as `activitiesQuery`'s own `enabled` gate for FIX 1. Presentation projection
+  // of the backend gate, not a new authorization rule.
   const documentsTicketSummary = ticket?.summary ?? null;
   const canViewDocumentsTab = Boolean(documentsTicketSummary) && (
-    role === 'ceo'
-    || role === 'sales_manager'
-    || user.id === documentsTicketSummary.createdById
+    user.id === documentsTicketSummary.createdById
     || user.id === documentsTicketSummary.assignedToId
+    || ROLE_PERMISSIONS.canViewTicketDocuments.includes(role)
   );
   const actionsQuery = useQuery({
     queryKey: queryKeys.ticketActions(ticketId),
@@ -407,18 +457,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     if (ticketQuery.error) showToast('error', ticketQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
   }, [ticketQuery.error, showToast]);
 
-  // The revise form (see the "can.revise && showReviseForm" section further
-  // down) opens ~400px below where its overflow-menu trigger lives — unlike
-  // every other overflow item, which opens a modal in place. Without this,
-  // opening it was a silent no-op from the viewer's vantage point (nothing
-  // visibly happened until they scrolled to look for it), which is exactly
-  // the "the control that matters is off-screen" problem this rebuild
-  // exists to fix. Runs after the section actually mounts (the effect fires
-  // on the render where showReviseForm just became true).
-  useEffect(() => {
-    if (showReviseForm) scrollToSection('revise-form');
-  }, [showReviseForm]);
-
   const attachmentsQuery = useQuery({
     queryKey: queryKeys.ticketAttachments(ticketId),
     queryFn: () => api.attachments.list(ticketId).then((r) => r.attachments ?? []),
@@ -467,7 +505,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     setPaymentModal(false);
     setBillingModal(false);
     setCommentText('');
-    setContextCommentText('');
   }
 
   // Generic action mutation — a drop-in replacement for the old doAction(fn,
@@ -503,7 +540,17 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       // list has to be re-read — otherwise the button only appears after the user
       // navigates away and back.
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.ticket(ticketId) });
+      // `queryKeys.ticket` never existed — queryKeys.js defines ticketDetail/
+      // ticketActions/ticketAttachments/… but no bare `ticket`. Calling it threw
+      // `TypeError: queryKeys.ticket is not a function` HERE, as the third
+      // statement: the two invalidations above had already run, so the file
+      // list and the action list refreshed and the upload looked fine, but the
+      // handler aborted before `showToast` below. react-query does not route an
+      // onSuccess throw to onError, and handleUploadAttachment's `catch {}`
+      // swallowed the rejected mutateAsync — so a successful upload reported
+      // NOTHING to the user, and the ticket detail (whose summary drives the
+      // invoiceOnFile close gate) was never refetched.
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
       showToast('success', `แนบไฟล์ ${file.name} แล้ว`);
     },
     onError: (err) => showToast('error', err.message || 'อัปโหลดไม่สำเร็จ'),
@@ -516,7 +563,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketAttachments(ticketId) });
       // Deleting the invoice re-locks the close confirmation — same reason as upload.
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.ticket(ticketId) });
+      // Same `queryKeys.ticket` TypeError as the upload handler above — see its
+      // comment. Deleting a file silently reported nothing either.
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
       showToast('success', 'ลบไฟล์แล้ว');
     },
     onError: (err) => showToast('error', err.message || 'ลบไม่สำเร็จ'),
@@ -555,6 +604,52 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketAttachments(ticketId) });
   }
+
+  useLayoutEffect(() => {
+    if (loading) return undefined;
+    const chrome = ticketStickyChromeRef.current;
+    if (!chrome || typeof window === 'undefined') return undefined;
+    const scroller = chrome.closest('.content-scroll');
+    if (!scroller) return undefined;
+    const mobileQuery = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(max-width: 720px)')
+      : null;
+    const updateCondensed = () => {
+      setTicketChromeCondensed(scroller.scrollTop > 8 && !mobileQuery?.matches);
+    };
+
+    updateCondensed();
+    scroller.addEventListener('scroll', updateCondensed, { passive: true });
+    mobileQuery?.addEventListener?.('change', updateCondensed);
+    return () => {
+      scroller.removeEventListener('scroll', updateCondensed);
+      mobileQuery?.removeEventListener?.('change', updateCondensed);
+    };
+  }, [loading, ticketId]);
+
+  useLayoutEffect(() => {
+    if (loading) return undefined;
+    const chrome = ticketStickyChromeRef.current;
+    if (!chrome || typeof document === 'undefined') return undefined;
+    const writeHeight = () => {
+      const height = Math.ceil(chrome.getBoundingClientRect().height);
+      if (height > 0) {
+        document.documentElement.style.setProperty('--deal-header-h', `${height}px`);
+      }
+    };
+
+    writeHeight();
+    if (typeof ResizeObserver === 'undefined') {
+      return () => document.documentElement.style.removeProperty('--deal-header-h');
+    }
+
+    const observer = new ResizeObserver(writeHeight);
+    observer.observe(chrome);
+    return () => {
+      observer.disconnect();
+      document.documentElement.style.removeProperty('--deal-header-h');
+    };
+  }, [loading, ticketId]);
 
   if (loading) {
     return (
@@ -605,16 +700,27 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const { summary, items, events, quotations } = ticket;
   const st = summary.status;
   const isOwner = user.id === summary.createdById;
+  // Issue #389: reading a deal's documents is now the same question as reading the deal (so
+  // account/import reach the เอกสาร panel and hr no longer does), but WRITING one stays narrow —
+  // TicketAccessPolicy.canManageDocuments is participant OR sales_manager/ceo. Mirrored here so
+  // the panel does not offer account/import an upload the backend answers with a 403.
+  const canManageDocuments = isOwner
+    || (summary.assignedToId != null && user.id === summary.assignedToId)
+    || ROLE_PERMISSIONS.canManageTicketDocuments.includes(role);
 
   const showProposed = ROLE_PERMISSIONS.canProposePrices.includes(role) || ROLE_PERMISSIONS.canApproveReject.includes(role);
   // ข้อ 10.1: Import sees only rawPrice + proposedPrice — NOT approvedPrice or CEO-set prices
   const showApproved = ROLE_PERMISSIONS.canApproveReject.includes(role) || ROLE_PERMISSIONS.canCreateTickets.includes(role);
   const showCalcBreakdown = ROLE_PERMISSIONS.canApproveReject.includes(role) && items.some((it) => it.calcedCost != null);
+  // ราคาตั้ง (Slice F) is deliberately NOT role-gated: it follows the catalog rule (owner ruling —
+  // catalog purchase prices are readable by any authenticated user, pinned by 4 tests), unlike
+  // ราคาที่เสนอ/ราคาที่อนุมัติ which stay behind showProposed/showApproved. It gets its own grid
+  // column, added ahead of whichever price columns the role sees.
   const itemsGridCols = showCalcBreakdown
-    ? 'minmax(0,1.4fr) minmax(0,1fr) minmax(0,0.5fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.9fr)'
+    ? 'minmax(0,1.4fr) minmax(0,1fr) minmax(0,0.5fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.9fr)'
     : showProposed
-      ? 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr) minmax(0,1.1fr)'
-      : 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr)';
+      ? 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr) minmax(0,1.1fr) minmax(0,1.1fr)'
+      : 'minmax(0,1.8fr) minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1.1fr) minmax(0,1.1fr)';
 
   const ps = summary.paymentStatus;
   const fs = summary.fulfillmentStatus;
@@ -622,12 +728,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const isAccount = ROLE_PERMISSIONS.canConfirmPayments.includes(role);
   // (deliveryDone / dualTrackDone removed with the single-step close: the close
   // gate is now the server's three-party sequence, surfaced via availableActions.)
-  // Still needed for DealStagePanel's own read-only deliveryProgress prop
-  // below — the percentage/per-item breakdown display itself moved into
-  // DealFulfilmentPanel (Phase 3 Slice S4), which computes its own copy from
-  // the same `items`.
-  const totalOrdered = items.reduce((sum, item) => sum + Number(item.qty || 0), 0);
-  const totalDelivered = items.reduce((sum, item) => sum + Number(item.qtyDelivered || 0), 0);
+  // Slice A "chip diet": DealStagePanel's own read-only "ส่งมอบ x/y" badge
+  // (the only consumer of totalOrdered/totalDelivered) was removed as a
+  // straight duplicate of DealFulfilmentPanel's own aggregate + progress bar,
+  // which already computes the same totals from this same `items` prop — see
+  // DealStagePanel.jsx's own doc comment.
 
   // Documents that already exist stay reachable from the deal-stage panel
   // through the later stages: the latest quotation file. The deposit-notice
@@ -648,6 +753,20 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       quotations: sortedQuotations.filter((q) => (q.recipientType ?? 'UNSPECIFIED') === recipientType),
     }))
     .filter((group) => group.quotations.length > 0);
+
+  // Moved verbatim from the now-deleted TicketContextPanel.jsx (ticket-workspace
+  // IA rebuild, Slice B): who the deal's pricing request is currently assigned
+  // to, for the ภาพรวม tab's "ผู้เกี่ยวข้อง" section below. `canViewPricingRequests`
+  // is the same role-scoped readout the panel used — a viewer without pricing-
+  // request visibility gets 'ไม่แสดงในมุมมองนี้' rather than a widened peek at who
+  // owns it.
+  const pricingSummary = activePricingRequestsSummary(pricingRequests);
+  const latestPr = pricingSummary ? pricingSummary.requests[pricingSummary.requests.length - 1] : null;
+  const assignedImport = canViewPricingRequests
+    ? latestPr
+      ? latestPr.assignedImportName || 'ยังไม่มีผู้รับเรื่อง'
+      : 'ยังไม่มีคำขอราคา'
+    : 'ไม่แสดงในมุมมองนี้';
 
   // 'draft' included since V50: a lightweight lead-stage deal gets its product
   // items here, then submits into the price-request flow when it reaches the
@@ -686,24 +805,27 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     downloadRemainingInvoice: st === 'quotation_issued' && fs === 'GOODS_RECEIVED' && isSales,
   };
 
-  // FIX 2 (Opus review): `tabItems`/`activeTab` above are role-level only
-  // (computed before `ticket` loads at all) — เอกสาร additionally needs
-  // `canViewDocumentsTab`'s per-instance identity check, computed once
-  // `ticket` is available. Filtered here, right where isOwner/summary are
-  // finally known, rather than widening `ticketDetailTabs.js`'s (role,
-  // sections)-only `isVisible` signature for one tab.
-  const visibleTabItems = tabItems.filter((tab) => tab.id !== 'documents' || canViewDocumentsTab);
-  const visibleActiveTab = (activeTab === 'documents' && !canViewDocumentsTab) ? DEFAULT_TICKET_DETAIL_TAB_ID : activeTab;
+  // Slice C2b: the FIX 2 (Opus review) per-instance เอกสาร (attachments)
+  // filter that used to live here — `tabItems`/`activeTab` are role-level
+  // only, but the old `documents` (attachments) tab additionally needed
+  // `canViewDocumentsTab`'s per-instance identity check — is gone. That
+  // content now lives inside `history`, an unconditionally-visible tab, so
+  // there is no longer a TAB to filter out or fall back from; the identity
+  // check instead gates just the attachments panel as an inner render
+  // condition (see the `history` TabPanel below). No tab in
+  // ticketDetailTabs.js is per-instance gated any more, so `tabItems`/
+  // `activeTab` are used directly, unfiltered.
+  const visibleTabItems = tabItems;
+  const visibleActiveTab = activeTab;
 
-  // การดำเนินการอื่น ๆ now holds only the rare actions — the workflow-shaped
-  // dual-track confirmations/close live in the sticky header, docs live in
-  // DealStagePanel's เอกสารของขั้นนี้ row, and แก้ไขสถานะ/พักดีลไว้/พัก dormant/
-  // ขอแก้ไข/เสียงาน/ยกเลิก moved into the header overflow menu and the bottom
-  // "จัดการดีล" danger zone (ticket-detail IA rebuild Phase 1 — see
-  // workState.js's own doc comment). The section hides entirely when none of
-  // the remaining actions apply.
-  const hasActions = can.editItems || can.revokeCloseConfirm
-    || (st === 'draft' && isOwner && items.length === 0);
+  // การดำเนินการอื่น ๆ (ticket-detail IA rebuild Phase 1's leftover grab-bag —
+  // see workState.js's own doc comment for where its other siblings went)
+  // is dissolved as of Slice C2b: `can.editItems` moves into the items
+  // table's own panel header (it's an items action) and `can.revokeCloseConfirm`
+  // moves into the money tab (it's a close-lifecycle action, unrelated to
+  // items) — each rendered directly at its new site below rather than behind
+  // one shared `hasActions` flag. The empty-draft hint travels with
+  // `can.editItems` into the items panel.
 
   // Next-action summary for the current viewer only — derived strictly from the
   // `can` flags above (which already encode real status+role permission checks).
@@ -712,8 +834,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // Never invents an owner or action the data can't support. 'revise' is
   // deliberately NOT in this cascade any more (Phase-1 audit finding #1): it
   // describes an OPTIONAL action, not something blocking the deal's progress,
-  // so it no longer competes for the one "ถึงคิวคุณ" banner slot — it is still
-  // fully reachable, from the header overflow menu.
+  // so it no longer competes for the one sticky primary CTA slot — it is
+  // still fully reachable, from the header overflow menu.
   const NEXT_ACTION_STEPS = [
     // Dual-track steps: re-issuing/working the customer quotation lives in
     // DealQuotationPanel, the deposit-notice/deposit-payment steps live in
@@ -730,17 +852,17 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   // The blocker line (region 7 of the IA — "unmet precondition"): why the
   // deal isn't moving even though it might not be this viewer's turn to act.
-  // Paired with the "รอ<role>" waiting banner below, never with an actionable
-  // "ถึงคิวคุณ" line (a live primary action is never "blocked" by the same
-  // thing the banner would name — pairing the two would read as a
-  // contradiction). Kept to the fact only (design law: brief — who/what, not
+  // Paired with the "รอ<role>" waiting banner below, never alongside a live
+  // primary CTA (a live primary action is never "blocked" by the same thing
+  // the banner would name — pairing the two would read as a contradiction).
+  // Kept to the fact only (design law: brief — who/what, not
   // what-to-do-about-it-by-when).
   const closeConfirmedAt = summary?.closeConfirmedAt ?? null;
   // !isAccount on the two payment-wait lines (P3, review round 2): account
   // is the role that CLEARS these two waits (confirmDeposit/
   // confirmFinalPayment — see nextAccountAction in accountActions.js) — for
   // account specifically, this line would otherwise read "รอชำระมัดจำ" right
-  // next to their own resolver-derived "ถึงคิวคุณ: ยืนยันรับมัดจำ" primary,
+  // next to their own resolver-derived "ยืนยันรับมัดจำ" primary CTA button,
   // stating the same fact twice (once as a call to action, once as a
   // blocker) instead of pairing the blocker with a role that ISN'T the one
   // who can act on it — exactly the contradiction this line's own doc
@@ -844,28 +966,32 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'create_pcr') {
       // Ticket-detail IA rebuild Phase 2: PricingRequestPanel now lives
-      // inside the "ราคา" tab, mounted only while that tab is active —
-      // `runOnTab` switches to it first, then calls the ref (see this
-      // component's own doc comment on `runOnTab`).
+      // inside the "สินค้าและราคา" tab (Slice C2b renamed/merged the old
+      // "ราคา" tab into `items` — same panel, same mount point), mounted
+      // only while that tab is active — `runOnTab` switches to it first,
+      // then calls the ref (see this component's own doc comment on
+      // `runOnTab`).
       stickyPrimaryAction = (
-        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('pricing', () => pricingRequestPanelRef.current?.openCreate())}>
+        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('items', () => pricingRequestPanelRef.current?.openCreate())}>
           <Icon name="plus" size={14} />
           {workStateAction.label}
         </button>
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'issue_quotation') {
-      // DealQuotationPanel now lives inside the "ใบเสนอราคา" tab.
+      // DealQuotationPanel now lives inside the "เอกสาร" tab (Slice C2b
+      // renamed the old "ใบเสนอราคา" tab id from `quotations` to `documents`
+      // — same panel, same content, same gate).
       stickyPrimaryAction = (
-        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('quotations', () => dealQuotationPanelRef.current?.openIssueQuotation())}>
+        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('documents', () => dealQuotationPanelRef.current?.openIssueQuotation())}>
           {workStateAction.label}
         </button>
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'confirm_order') {
-      // DealQuotationPanel now lives inside the "ใบเสนอราคา" tab.
+      // DealQuotationPanel now lives inside the "เอกสาร" tab (see comment above).
       stickyPrimaryAction = (
-        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('quotations', () => dealQuotationPanelRef.current?.openConfirmOrder())}>
+        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('documents', () => dealQuotationPanelRef.current?.openConfirmOrder())}>
           {workStateAction.label}
         </button>
       );
@@ -883,15 +1009,32 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     }
   }
 
-  // The ONE work-state banner line (IA region 4/6/7 — replaces the old
-  // duplicated "ถึงคิวคุณ" text that used to appear once in DealStateHeader
-  // and again, unprefixed, in DealStagePanel's own guidance line — Phase-1
-  // audit findings #1/#2).
-  const bannerText = stickyPrimaryLabel
-    ? `ถึงคิวคุณ: ${stickyPrimaryLabel}`
-    : workState.waitingRoleLabel
-      ? `รอ${workState.waitingRoleLabel}${blocker ? ` — ${blocker}` : ''}`
-      : blocker;
+  // The work-state banner line (IA region 4/6/7). The "ถึงคิวคุณ: <label>"
+  // prefix is gone everywhere — it duplicated the CTA sitting right next to
+  // it and read as distracting rather than informative. What replaces it
+  // splits by WHERE the label came from:
+  //
+  //  - Resolver-derived CTAs (workStateAction, the branches above) render
+  //    `workStateAction.label` verbatim on the button, so the line was that
+  //    same string twice. Nulled — the button carries it alone.
+  //  - The four `can.*` CTAs are different: `nextAction` is a descriptive
+  //    SENTENCE ("ส่งมอบและรับเงินครบแล้ว — ยืนยันเพื่อส่งให้ CEO ตรวจสอบปิดงาน")
+  //    naming the precondition and the consequence, while the button is a
+  //    terse verb ("ยืนยันพร้อมปิดงาน"). Nulling those threw away real
+  //    information, and — since the ticket-workspace IA rebuild Slice B
+  //    retired the context rail that used to carry this line as a fallback —
+  //    there is no other surface on the page left to say it. They keep
+  //    their line, prefix-free.
+  //
+  // `primaryAction` (not stickyPrimaryLabel) is the discriminator: it is set
+  // only by that four-branch cascade, and it always wins over the resolver.
+  const bannerText = primaryAction
+    ? nextAction
+    : stickyPrimaryLabel
+      ? null
+      : workState.waitingRoleLabel
+        ? `รอ${workState.waitingRoleLabel}${blocker ? ` — ${blocker}` : ''}`
+        : blocker;
 
   // Overflow-menu / danger-zone availability — mirrors DealStagePanel's own
   // canEditStage/canLost/canHold/canDormant gates byte-for-byte (same
@@ -964,12 +1107,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   function handleOpenHold() { dealStagePanelRef.current?.openHold(); }
   function handleOpenDormant() { dealStagePanelRef.current?.openDormant(); }
   function handleOpenAdvance() { dealStagePanelRef.current?.openAdvance(); }
-  // The revise-form section now lives inside the "ภาพรวม" tab (alongside the
-  // items it revises) — this trigger fires from the header's "⋯" overflow
-  // menu, which sits outside every tab, so it must switch there first (see
-  // runOnTab's own doc comment) or the section it's trying to reveal may not
-  // be mounted yet.
-  function handleOpenRevise() { runOnTab('overview', () => { setShowReviseForm(true); clearFieldError('revise.reason'); }); }
+  // ขอแก้ไข (Revise) opens as a modal (Slice C2a) — it no longer lives inside
+  // a tab, so unlike handleOpenAdvance/handleOpenEditStage's siblings this
+  // needs no runOnTab wrapper to switch tabs first; a plain flag flip is
+  // enough regardless of which tab is active when the overflow item fires.
+  function handleOpenRevise() { setShowReviseForm(true); clearFieldError('revise.reason'); }
 
   // react-hooks/refs (react-hooks v7's Compiler-oriented ruleset — see this
   // file's neighbouring `set-state-in-effect: 'off'` in eslint.config.js for
@@ -1015,7 +1157,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     },
     canHoldDeal && { key: 'hold', label: 'พักดีลไว้', disabled: actionLoading, onSelect: handleOpenHold },
     canDormantDeal && { key: 'dormant', label: 'พัก dormant', disabled: actionLoading, onSelect: handleOpenDormant },
-    can.revise && { key: 'revise', label: 'ขอแก้ไข (Revise)', icon: 'pencil', onSelect: handleOpenRevise },
+    can.revise && { key: 'revise', label: 'ขอแก้ไข', icon: 'pencil', onSelect: handleOpenRevise },
   ].filter(Boolean);
 
   async function handleUploadAttachment(e) {
@@ -1089,11 +1231,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     await doAction(() => api.tickets.comment(ticketId, { message: commentText.trim() }), 'เพิ่มความคิดเห็นแล้ว');
   }
 
-  async function handleContextComment() {
-    if (!contextCommentText.trim()) return;
-    await doAction(() => api.tickets.comment(ticketId, { message: contextCommentText.trim() }), 'เพิ่มความคิดเห็นแล้ว');
-  }
-
   async function handleRecordPayment() {
     const amount = Number(paymentDraft.amount);
     if (!amount || amount <= 0) {
@@ -1160,7 +1297,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // DealFulfilmentPanel (Phase 3 Slice S4).
 
   return (
-    <div className="page-stack">
+    <div className={`page-stack ${bannerText || stickyPrimaryAction || overflowItems.length > 0 ? 'mobile:pb-28' : ''}`}>
       {/* F-14 (ticket-detail IA rebuild Phase 1): the breadcrumb is the single
           up-nav — a full-width "กลับ" bar underneath it just repeated the same
           affordance as page chrome. Verified safe to drop: every e2e "กลับ"
@@ -1175,34 +1312,57 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           payment × fulfilment at a glance, the ONE work-state banner line,
           the sticky primary CTA, and the "⋯" overflow. Subsumes the old bare
           header (title/code/status/refresh). */}
-      <DealStateHeader
-        summary={summary}
-        pricingRequests={pricingRequests}
-        primaryAction={stickyPrimaryAction}
-        bannerText={bannerText}
-        overflowItems={overflowItems}
-        onRefresh={refreshTicket}
-      />
+      <div
+        ref={ticketStickyChromeRef}
+        data-testid="ticket-detail-sticky-chrome"
+        className="sticky top-[calc(var(--deal-scroll-pad-y)*-1)] z-10 bg-surface pt-[var(--deal-scroll-pad-y)] mobile:static mobile:bg-transparent mobile:pt-0"
+      >
+        <div className="overflow-hidden rounded-lg border border-border bg-surface shadow-sm mobile:overflow-visible mobile:border-0 mobile:bg-transparent mobile:shadow-none">
+          <DealStateHeader
+            summary={summary}
+            pricingRequests={pricingRequests}
+            role={role}
+            primaryAction={stickyPrimaryAction}
+            bannerText={bannerText}
+            overflowItems={overflowItems}
+            onRefresh={refreshTicket}
+            condensed={ticketChromeCondensed}
+          />
+          <div className="border-t border-border bg-surface px-4 sm:px-5">
+            <Tabs
+              items={visibleTabItems}
+              value={visibleActiveTab}
+              onChange={setActiveTab}
+              ariaLabel="รายละเอียดดีล"
+              idPrefix="ticket-detail"
+            />
+          </div>
+        </div>
+      </div>
 
-      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-start">
+      {/* Ticket-workspace IA rebuild Slice B ("retire the context rail, one
+          comment composer"): this was a two-column grid (`xl:grid-cols-[minmax(0,1fr)_20rem]`)
+          with the sticky context rail as the second column — now a single
+          full-width stack, since the rail is gone and its four sections were
+          redistributed (see the overview TabPanel above and DealHistoryPanel
+          below) rather than replaced with a second column of anything else. */}
+      <div className="flex min-w-0 flex-col gap-4">
 
       {/* Deal pipeline (V50): the 14-stage journey with stage-gated doc actions.
           Generation buttons reuse the exact handlers/permissions of the action
           row; once a document exists (quotation / ใบแจ้งยอดมัดจำ) it stays
           reachable from here through the later stages too. */}
-      <div className="min-w-0 xl:col-start-1">
+      <div className="min-w-0">
       <DealStagePanel
         ref={dealStagePanelRef}
         user={user}
         summary={summary}
         availableActions={availableActions}
-        pricingRequests={pricingRequests}
         // primaryAction now lives solely in DealStateHeader above (Phase 2 Slice S2's
         // "one primary CTA" — see its own doc comment) — not passed here too, to avoid
         // rendering the exact same button twice on one page.
         advanceReady={readyToAdvance}
         actionLoading={actionLoading}
-        deliveryProgress={{ delivered: totalDelivered, ordered: totalOrdered }}
         onUpdateStage={(payload) => doAction(() => api.tickets.updateStage(ticketId, payload), 'อัปเดตสถานะดีลแล้ว')}
         onMarkLost={(payload) => doAction(() => api.tickets.markLost(ticketId, payload), 'บันทึกเสียงานแล้ว')}
         onReopen={() => doAction(() => api.tickets.reopen(ticketId, {}), 'เปิดดีลอีกครั้งแล้ว')}
@@ -1225,14 +1385,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 onClick={() => handleDownloadQuotation(latestQuotation.id, latestQuotation.number, 'pdf')}>
                 <Icon name="fileText" size={14} />
                 {downloadingQuotationKey === `${latestQuotation.id}-pdf`
-                  ? 'กำลังดาวน์โหลด...'
+                  ? 'กำลังดาวน์โหลด…'
                   : `ใบเสนอราคา ${latestQuotation.number} (PDF)`}
               </button>
             )}
             {can.downloadRemainingInvoice && (
               <button type="button" className="secondary-button" disabled={downloadingInvoice}
                 onClick={handleDownloadRemainingInvoice}>
-                {downloadingInvoice ? 'กำลังดาวน์โหลด...' : 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ'}
+                {downloadingInvoice ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ'}
               </button>
             )}
           </>
@@ -1240,52 +1400,93 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       />
       </div>
 
-      {/* Ticket-detail IA rebuild Phase 2 (see
-          docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md
-          "Tabs (the deal's depth)"): the seven role-projected tabs —
-          ticketDetailTabs.js decides which ones this viewer's role may see
-          at all (never a security boundary, same as salesViewScope.js it
-          reads from), and Tabs.jsx keeps only the active one mounted.
-          FIX 2 (Opus review): `tabItems`'s role-level filter can't express
-          เอกสาร's per-instance identity gate (it needs THIS ticket's
-          createdById/assignedToId, not just the viewer's role — see
-          `canViewDocumentsTab`'s own doc comment above), so it's filtered
-          out here a second time; `visibleActiveTab` mirrors the same
-          fallback `resolveTicketDetailTab` already uses for a role-hidden
-          tab, for the one tab that predicate can't see: a stale/forbidden
-          `?tab=documents` deep link (account, or an import rep who isn't
-          this ticket's assignee) falls back to ภาพรวม instead of
-          highlighting a tab with no button and rendering nothing. */}
-      <div className="min-w-0 xl:col-start-1">
-        <Tabs
-          items={visibleTabItems}
-          value={visibleActiveTab}
-          onChange={setActiveTab}
-          ariaLabel="รายละเอียดดีล"
-          idPrefix="ticket-detail"
-        />
-      </div>
+      {/* Ticket-detail IA rebuild Phase 2 built the seven role-projected tabs
+          from docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md
+          "Tabs (the deal's depth)", grouped by system object. Slice C2b
+          ("the 7→6 tab restructure") regroups them into six tabs grouped by
+          JOB instead — ดีล · สินค้าและราคา · เอกสาร · การเงิน · จัดซื้อ-ส่งมอบ ·
+          ประวัติ — per the owner-approved IA. ticketDetailTabs.js still
+          decides which ones this viewer's role may see at all (never a
+          security boundary, same as salesViewScope.js it reads from), and
+          Tabs.jsx keeps only the active one mounted.
+          FIX 2 (Opus review) used to filter the `documents` (attachments)
+          tab a second time here for its per-instance `canViewDocumentsTab`
+          identity gate. That tab is gone — DealAttachmentsPanel now lives
+          inside `history` (an unconditionally-visible tab) behind an INNER
+          render condition instead, so no tab in ticketDetailTabs.js is
+          per-instance gated any more and this second filter is no longer
+          needed (`visibleTabItems`/`visibleActiveTab` above are now plain
+          aliases of `tabItems`/`activeTab` — see that assignment's own
+          comment). */}
+      <div className="min-w-0">
+      <TabPanel id="deal" idPrefix="ticket-detail" active={visibleActiveTab === 'deal'}>
+          {/* Ticket-workspace IA rebuild Slice B ("retire the context rail, one
+              comment composer"): วันสำคัญ / ผู้เกี่ยวข้อง moved here verbatim from
+              the now-deleted TicketContextPanel.jsx sticky rail — same fields,
+              same labels, same assignedImport role-scoped readout. */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <section className="rounded-lg border border-border bg-surface p-4 shadow-sm">
+              <ContextSection title="วันสำคัญ" helper="Key dates" icon="calendar">
+                <dl className="m-0">
+                  <FieldRow label="ติดตามครั้งถัดไป" value={formatThaiDate(summary.nextFollowUpAt)} />
+                  <FieldRow label="ติดตามล่าสุด" value={formatThaiDate(summary.lastFollowUpAt)} />
+                  <FieldRow label="วันวางบิล" value={formatThaiDate(summary.billingDate)} />
+                  <FieldRow label="ครบกำหนดชำระ" value={formatThaiDate(summary.dueDate)} danger={summary.overdue} />
+                  <FieldRow label="ใบเสนอราคาหมดอายุ" value={formatThaiDate(latestQuotation?.validityDate)} />
+                </dl>
+              </ContextSection>
+            </section>
+            <section className="rounded-lg border border-border bg-surface p-4 shadow-sm">
+              <ContextSection title="ผู้เกี่ยวข้อง" helper="ทีมที่เกี่ยวข้อง" icon="users">
+                <dl className="m-0">
+                  <FieldRow label="เจ้าของดีล" value={summary.createdByName} />
+                  <FieldRow label="ผู้รับเรื่องคำขอราคา" value={assignedImport} />
+                  <FieldRow label="บัญชี" value={summary.closeConfirmedByName || 'ยังไม่ระบุ'} />
+                  <FieldRow label="ผู้ติดต่อ" value={summary.contactName} />
+                </dl>
+              </ContextSection>
+            </section>
+          </div>
 
-      <div className="min-w-0 xl:col-start-1">
-      <TabPanel id="overview" idPrefix="ticket-detail" active={visibleActiveTab === 'overview'}>
-          <section className="panel">
-            <div className="panel-header">
-              <h2>ข้อมูลทั่วไป</h2>
+          {/* Slice C2b: DealTrackingPanel moved in from the old "activity"
+              tab — same `canViewDealTracking` gate, moved verbatim (see
+              ticketDetailTabs.js's own comment on this tab and
+              JUMP_TARGET_TAB's own doc comment above for the jump-target
+              relocation). */}
+          {canViewDealTracking ? (
+            // id: the sticky bar's FOLLOW_UP/LOG_ACTIVITY jump target (see
+            // IN_PAGE_JUMP_TARGET above) — scroll-mt so it doesn't tuck under
+            // the sticky header, tabIndex so the jump can actually move focus
+            // here.
+            <div id="deal-tracking-panel" tabIndex={-1} className="scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none">
+              <DealTrackingPanel
+                summary={summary}
+                events={events}
+                activities={activities}
+                canEdit={isOwner || role === 'sales_manager' || role === 'ceo'}
+                onUpdateTracking={(payload) => updateTrackingMutation.mutateAsync(payload)}
+                updating={updateTrackingMutation.isPending}
+              />
             </div>
-            <InfoRow label="ลูกค้า" value={summary.customerName} />
-            {summary.projectName && <InfoRow label="โครงการ" value={summary.projectName} />}
-            {summary.contactName && (
-              <InfoRow label="ผู้ติดต่อ" value={summary.contactName} />
-            )}
-            <InfoRow label="สร้างโดย" value={summary.createdByName} />
-            <InfoRow label="วันที่สร้าง" value={formatThaiDate(summary.createdAt)} />
-            <InfoRow label="เจ้าหน้าที่นำเข้า" value={summary.assignedToName} />
-            <InfoRow label="อัปเดตล่าสุด" value={formatThaiDate(summary.updatedAt)} />
-          </section>
+          ) : null}
+      </TabPanel>
 
+      <TabPanel id="items" idPrefix="ticket-detail" active={visibleActiveTab === 'items'}>
           <section className="table-panel">
             <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h2>รายการสินค้า ({editMode ? editDraft.length : items.length} รายการ)</h2>
+              {can.editItems && !editMode && (
+                <button type="button" className="secondary-button" disabled={actionLoading}
+                  onClick={() => {
+                    setEditDraft(items.map((item) => ({ ...item })));
+                    setEditNote('');
+                    setEditMode(true);
+                    setFieldErrorsForPrefix('editItems.qty.', {});
+                  }}>
+                  <Icon name="pencil" size={14} />
+                  แก้ไขรายการสินค้า
+                </button>
+              )}
             </div>
 
             {editMode ? (
@@ -1332,7 +1533,18 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                         <label key={key} style={{ margin: 0 }}>
                           <span style={{ fontSize: 12 }}>{label}</span>
                           <input value={item[key] || ''} placeholder={placeholder}
-                            onChange={(e) => setEditDraft((d) => d.map((r, i) => i === index ? { ...r, [key]: e.target.value } : r))} />
+                            onChange={(e) => setEditDraft((d) => d.map((r, i) => {
+                              if (i !== index) return r;
+                              const next = { ...r, [key]: e.target.value };
+                              // A hand-edit to a descriptive field invalidates a catalog link
+                              // picked at deal-creation time — what's typed no longer
+                              // necessarily matches what the link points at. Mirrors
+                              // TicketCreateModal.jsx's updateItem/PricingRequestCreateModal's
+                              // updateItem, same rule.
+                              next.catalogPriceId = null;
+                              next.catalogProductCode = '';
+                              return next;
+                            }))} />
                         </label>
                       ))}
                       {/* Unit basis toggle */}
@@ -1484,6 +1696,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           qtySqm: item.qtySqm != null && item.qtySqm !== '' ? Number(item.qtySqm) : null,
                           proposedPrice: item.proposedPrice != null && item.proposedPrice !== '' ? Number(item.proposedPrice) : null,
                           currency: item.currency ?? 'THB',
+                          // Round-trips the deal-creation catalog link (V110) — editDraft rows
+                          // are seeded straight from the fetched `items` (which already carry
+                          // it), and the row inputs above clear it on any descriptive hand-edit.
+                          catalogPriceId: item.catalogPriceId ?? null,
+                          catalogProductCode: item.catalogProductCode?.trim() || null,
                         })),
                         note: editNote.trim() || null,
                       }), 'บันทึกการแก้ไขแล้ว');
@@ -1502,6 +1719,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                   <span>ยี่ห้อ / รุ่น</span>
                   <span>สี / เนื้อผิว</span>
                   <span>จำนวน</span>
+                  <span>ราคาตั้ง</span>
                   {showCalcBreakdown ? (
                     <>
                       <span>ราคาโรงงาน</span>
@@ -1537,13 +1755,28 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                         : <>{item.qty} แผ่น{item.qtySqm != null && <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
                       }
                     </span>
+                    <span data-label="ราคาตั้ง" style={{ fontSize: 12 }}>
+                      {!estimateReady ? (
+                        <span style={{ color: 'var(--color-text-muted)' }}>ยังคำนวณไม่ได้ (กำลังโหลดอัตราแลกเปลี่ยน/ตัวคูณ)</span>
+                      ) : (() => {
+                        const lineEstimate = computeItemEstimateThb(item, estimateContext);
+                        return lineEstimate.ok ? (
+                          <span>
+                            <strong>{formatThb(lineEstimate.unitThb)}</strong>
+                            <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>รวม {formatThb(lineEstimate.total)} บาท</small>
+                          </span>
+                        ) : (
+                          <span style={{ color: 'var(--color-text-muted)' }}>ยังคำนวณไม่ได้ ({estimateReasonLabel(lineEstimate.reason)})</span>
+                        );
+                      })()}
+                    </span>
                     {showCalcBreakdown ? (
                       <>
                         <span data-label="ราคาโรงงาน" style={{ fontSize: 12 }}>
                           {item.rawPrice != null
                             ? <><strong>{Number(item.rawPrice).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</strong><small style={{ color: 'var(--color-text-muted)' }}> {item.rawCurrency}/{item.rawUnit === 'sqm' ? 'ตร.ม.' : 'แผ่น'}</small></>
                             : <span style={{ color: 'var(--color-text-muted)' }}>-</span>}
-                          {item.calcConfigVersion && <small style={{ display: 'block', color: 'var(--color-text-muted)', fontSize: 10 }}>config v{item.calcConfigVersion}</small>}
+                          {item.calcConfigVersion && <small style={{ display: 'block', color: 'var(--color-text-muted)', fontSize: 10 }}>สูตรราคาเวอร์ชัน {item.calcConfigVersion}</small>}
                         </span>
                         <code data-label="ต้นทุน (THB/ชิ้น)" style={{ color: 'var(--color-info)' }}>{item.calcedCost != null ? formatMoney(item.calcedCost) : '—'}</code>
                         <span data-label="ราคาขาย (THB/ชิ้น)">
@@ -1566,129 +1799,70 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 ))}
               </>
             )}
+
+            {/* Slice C2b: this hint travels with can.editItems into the
+                items panel — same condition, unchanged, moved verbatim from
+                the old (now-dissolved) การดำเนินการอื่น ๆ grab-bag below the
+                table. */}
+            {st === 'draft' && isOwner && items.length === 0 && (
+              <div style={{ padding: '0 18px 16px' }}>
+                <span className="rounded-lg border border-border bg-surface-subtle px-3 py-2 text-xs text-text-muted">
+                  ดีลนี้ยังไม่มีรายการสินค้า — กด “แก้ไขรายการสินค้า” เพื่อเพิ่มก่อนส่งขอราคา
+                </span>
+              </div>
+            )}
           </section>
 
-          {hasActions && (
-            <section className="panel" style={{ background: 'var(--color-surface-muted)' }}>
-              <div className="panel-header">
-                <h2>การดำเนินการอื่น ๆ</h2>
-              </div>
-              <div style={{ padding: '12px 18px', display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-                {st === 'draft' && isOwner && items.length === 0 && (
-                  <span className="rounded-lg border border-border bg-surface-subtle px-3 py-2 text-xs text-text-muted">
-                    ดีลนี้ยังไม่มีรายการสินค้า — กด “แก้ไขรายการสินค้า” เพื่อเพิ่มก่อนส่งขอราคา
-                  </span>
-                )}
-                {can.editItems && !editMode && (
-                  <button type="button" className="secondary-button" disabled={actionLoading}
-                    onClick={() => {
-                      setEditDraft(items.map((item) => ({ ...item })));
-                      setEditNote('');
-                      setEditMode(true);
-                      setFieldErrorsForPrefix('editItems.qty.', {});
-                    }}>
-                    <Icon name="pencil" size={14} />
-                    แก้ไขรายการสินค้า
-                  </button>
-                )}
-
-                {can.revokeCloseConfirm && (
-                  <button type="button" className="secondary-button" disabled={actionLoading}
-                    onClick={() => doAction(() => api.tickets.revokeCloseConfirmation(ticketId, {}),
-                      'ยกเลิกการยืนยันปิดงานแล้ว')}>
-                    ยกเลิกการยืนยันปิดงาน
-                  </button>
-                )}
-              </div>
-            </section>
-          )}
-
-          {/* ขอแก้ไข (Revise) now triggers from the header overflow menu (see
-              overflowItems above) rather than a button in the panel above — but
-              the form itself still needs somewhere to render once opened, and
-              hasActions no longer accounts for can.revise, so this stays its own
-              independent block instead of nesting inside that section. */}
-          {can.revise && showReviseForm && (
-            <section id="revise-form" tabIndex={-1} className="panel scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none" style={{ background: 'var(--color-surface-muted)' }}>
-              <div className="panel-header">
-                <h2>ขอแก้ไข (Revise)</h2>
-              </div>
-              <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, paddingTop: 12 }}>ประเภทการแก้ไข</div>
-                  {[
-                    { value: 'QTY_OR_NOTE',  label: 'แก้จำนวน / หมายเหตุ / % มัดจำ', sub: 'ไม่ต้องอนุมัติใหม่ — ออกเอกสาร Rev ใหม่ได้เลย' },
-                    { value: 'PRICE_CHANGE', label: 'แก้ราคา / ส่วนลดต่อหน่วย',       sub: 'CEO ต้องอนุมัติใหม่' },
-                    { value: 'NEW_ITEM',     label: 'เพิ่มสินค้าใหม่',                sub: 'Import ตั้งราคา → CEO อนุมัติ' },
-                  ].map((opt) => (
-                    // eslint-disable-next-line jsx-a11y/label-has-associated-control -- label nests the radio control; its text is the dynamic opt.label
-                    <label key={opt.value} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer', fontSize: 13 }}>
-                      <input type="radio" name="reviseScope" value={opt.value}
-                        checked={reviseScope === opt.value}
-                        onChange={() => setReviseScope(opt.value)}
-                        style={{ marginTop: 2, flexShrink: 0, width: 16, height: 16, accentColor: 'var(--color-info-dot)', cursor: 'pointer' }} />
-                      <span>
-                        <strong>{opt.label}</strong>
-                        <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)' }}>{opt.sub}</span>
-                      </span>
-                    </label>
-                  ))}
-                  <label style={{ fontSize: 13, fontWeight: 600 }}>
-                    เหตุผลการแก้ไข *
-                    <textarea rows={2}
-                      id="revise-reason"
-                      ref={(el) => { fieldRefs.current['revise.reason'] = el; }}
-                      value={reviseReason}
-                      onChange={(e) => { setReviseReason(e.target.value); clearFieldError('revise.reason'); }}
-                      placeholder="ระบุเหตุผล..." style={{ marginTop: 4 }}
-                      aria-invalid={fieldErrors['revise.reason'] ? true : undefined}
-                      aria-describedby={fieldErrors['revise.reason'] ? fieldErrorId('revise-reason') : undefined}
-                    />
-                    {fieldErrors['revise.reason'] ? (
-                      <p id={fieldErrorId('revise-reason')} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
-                        {fieldErrors['revise.reason']}
-                      </p>
-                    ) : null}
-                  </label>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    {/* This button is already disabled={!reviseReason.trim()} (unchanged
-                        below), so the guard inside onClick is defensive/unreachable
-                        through the UI — wired for consistency with the other 3 forms
-                        in this slice, not because a user can trigger it here. */}
-                    <button type="button" className="primary-button" disabled={actionLoading || !reviseReason.trim()}
-                      onClick={() => {
-                        if (!reviseReason.trim()) {
-                          setFieldError('revise.reason', 'กรุณาระบุเหตุผล');
-                          focusFirstInvalid('revise.reason');
-                          return;
-                        }
-                        clearFieldError('revise.reason');
-                        doAction(() => api.tickets.revision(ticketId, { scope: reviseScope, reason: reviseReason.trim() }), 'ส่งคำขอแก้ไขแล้ว');
-                      }}>
-                      ยืนยันขอแก้ไข
-                    </button>
-                    <button type="button" className="secondary-button" disabled={actionLoading}
-                      onClick={() => { setShowReviseForm(false); setReviseReason(''); clearFieldError('revise.reason'); }}>
-                      ยกเลิก
-                    </button>
-                  </div>
-                </div>
-            </section>
-          )}
-      </TabPanel>
-
-      <TabPanel id="pricing" idPrefix="ticket-detail" active={visibleActiveTab === 'pricing'}>
           {/* id: the sticky bar's CREATE_PCR jump target (see
-              IN_PAGE_JUMP_TARGET above). */}
+              IN_PAGE_JUMP_TARGET above). Slice C2b: PricingRequestPanel
+              merges in here from the old whole-tab-gated "ราคา" tab — the
+              old tab-level predicate
+              (`Boolean(sections.pricingRequest) && canViewPricingRequests`,
+              see ticketDetailTabs.js's own comment on the `items` tab)
+              becomes this INNER render condition instead, reproduced
+              exactly: `items` itself is unconditionally visible, so nothing
+              upstream any longer enforces `sections.pricingRequest` for
+              this panel. */}
           <div id="pricing-request-panel" tabIndex={-1} className="scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none">
-            {canViewPricingRequests ? (
+            {canViewPricingRequests && Boolean(sections.pricingRequest) ? (
               <PricingRequestPanel ref={pricingRequestPanelRef} ticketId={ticketId} deal={summary} ticketItems={items} user={user} />
             ) : null}
           </div>
       </TabPanel>
 
-      <TabPanel id="quotations" idPrefix="ticket-detail" active={visibleActiveTab === 'quotations'}>
-          {/* "ราคาและใบเสนอราคา" (Phase 2 Slice S2): the customer-facing tail of
-              the PricingRequest chain (issue/outcome + confirm-order), pulled
+      <TabPanel id="documents" idPrefix="ticket-detail" active={visibleActiveTab === 'documents'}>
+          {/* Slice D ("the เอกสาร document register"): one read-only roll-up of
+              every document family — quotations (below, unchanged), the
+              deposit notice + remaining invoice, and formal attachments —
+              gated PER ROW FAMILY inside the component itself (this tab's own
+              `isVisible` is now `() => true`, per ticketDetailTabs.js's own
+              comment on this tab). `attachments`/`attachLoading` are the SAME
+              query this page already runs for the ประวัติ tab's
+              DealAttachmentsPanel (gated at that query's own `enabled` by
+              `canViewDocumentsTab`, so it never fires an extra request here,
+              and never fires at all for a viewer it would 403) — reused
+              rather than re-fetched, so the two roll-ups of the same data
+              can never drift. See DealDocumentRegister.jsx's own header
+              comment for the exact three gates and their backend citations. */}
+          <DealDocumentRegister
+            ticketId={ticketId}
+            user={user}
+            summary={summary}
+            sections={sections}
+            canViewPricingRequests={canViewPricingRequests}
+            canViewDocumentsTab={canViewDocumentsTab}
+            pricingRequests={pricingRequests}
+            legacyQuotations={sortedQuotations}
+            attachments={attachments}
+            attachLoading={attachLoading}
+          />
+
+          {/* "เอกสาร" (formerly "ใบเสนอราคา", tab id renamed `quotations` →
+              `documents` in Slice C2b — same content, same gate; this id
+              previously belonged to the attachments tab, whose content moved
+              to `history` below, see ticketDetailTabs.js's own comment).
+              Phase 2 Slice S2: the customer-facing tail of the
+              PricingRequest chain (issue/outcome + confirm-order), pulled
               onto the deal page. Renders nothing until a request reaches
               APPROVED_FOR_QUOTATION — see DealQuotationPanel's own doc
               comment. The factory/costing/CEO-price steps that precede that
@@ -1705,140 +1879,32 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           ) : null}
           {/* Legacy ticket-native quotation rows (region 12's "docs") join the
               PCR-based quotation tail above, in this same tab — see
-              TICKET_INFORMATION_ARCHITECTURE.md's ใบเสนอราคา row. */}
-          {sections.quotation && quotationGroups.length > 0 ? (
-            <section className="panel">
-              <div className="panel-header">
-                <h2>ใบเสนอราคา (เอกสารเดิม)</h2>
-              </div>
-              {/* Ticket-native quotation generate/mark-sent/accepted/rejected is retired
-                  (Phase 2 Slice S1/S2 — see docs/agent-handoffs/104): these rows predate the
-                  PricingRequest/CustomerQuotation redesign (pricing_request_id IS NULL) and
-                  stay visible read-only/download-only so the 3 legacy deals' history isn't
-                  stranded. New quotations live in DealQuotationPanel above. */}
-              {quotationGroups.map((group) => (
-                <div key={group.recipientType} style={{ borderTop: '1px solid var(--color-surface-subtle)' }}>
-                  <div style={{ padding: '12px 18px 6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                    <h3 style={{ margin: 0, fontSize: 14 }}>{group.label}</h3>
-                  </div>
-                  {group.quotations.map((q) => {
-                    const status = quotationStatusLabel(q.docStatus);
-                    return (
-                      <div key={q.id} style={{ padding: '10px 18px', borderTop: '1px solid var(--color-surface-subtle)', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                        <div style={{ flexShrink: 0, marginTop: 2 }}>
-                          <span style={{
-                            fontSize: 11, fontWeight: 700, borderRadius: 4, padding: '2px 7px',
-                            ...docStatusColors(q.docStatus),
-                          }}>Rev {q.quotationVersion}</span>
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                            <span style={{ fontWeight: 600, fontSize: 13 }}>{q.number}</span>
-                            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-                            {q.recipientLabel && <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{q.recipientLabel}</span>}
-                          </div>
-                          <div style={{ fontSize: 12, color: 'var(--color-icon-muted)', marginTop: 2 }}>
-                            ยอดรวม {formatMoney(q.totalAmount)} · ออกโดย {q.issuedByName} · ออก {formatThaiDate(q.issuedAt)}
-                            {q.sentAt ? ` · ส่ง ${formatThaiDate(q.sentAt)}` : ''}
-                            {q.acceptedAt ? ` · รับ ${formatThaiDate(q.acceptedAt)}` : ''}
-                            {q.validityDate ? ` · ใช้ได้ถึง ${formatThaiDate(q.validityDate)}` : ''}
-                          </div>
-                          {(q.paymentTerms || q.leadTime || q.deliveryTerms) && (
-                            <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 4 }}>
-                              {[q.paymentTerms && `ชำระเงิน: ${q.paymentTerms}`, q.leadTime && `Lead time: ${q.leadTime}`, q.deliveryTerms && `ส่งมอบ: ${q.deliveryTerms}`].filter(Boolean).join(' · ')}
-                            </div>
-                          )}
-                        </div>
-                        <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                          <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
-                            disabled={downloadingQuotationKey === `${q.id}-xlsx`}
-                            onClick={() => handleDownloadQuotation(q.id, q.number, 'xlsx')}>
-                            <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-xlsx` ? 'กำลังดาวน์โหลด...' : 'Excel'}
-                          </button>
-                          <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
-                            disabled={downloadingQuotationKey === `${q.id}-pdf`}
-                            onClick={() => handleDownloadQuotation(q.id, q.number, 'pdf')}>
-                            <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-pdf` ? 'กำลังดาวน์โหลด...' : 'PDF'}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
-            </section>
+              TICKET_INFORMATION_ARCHITECTURE.md's ใบเสนอราคา row. Extracted to
+              DealLegacyQuotations.jsx (ia-extract Slice C1); it returns null
+              itself when quotationGroups is empty, matching the
+              `quotationGroups.length > 0` half of this gate exactly. */}
+          {sections.quotation ? (
+            <DealLegacyQuotations
+              quotationGroups={quotationGroups}
+              downloadingQuotationKey={downloadingQuotationKey}
+              handleDownloadQuotation={handleDownloadQuotation}
+            />
           ) : null}
       </TabPanel>
 
       <TabPanel id="money" idPrefix="ticket-detail" active={visibleActiveTab === 'money'}>
           {sections.payment ? (
-            <section className="panel">
-              <div className="panel-header" style={{ alignItems: 'center' }}>
-                <h2>การชำระเงิน</h2>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <StatusBadge tone={paymentStageLabel(summary.paymentStage).tone}>
-                    {paymentStageLabel(summary.paymentStage).label}
-                  </StatusBadge>
-                  {summary.overdue && (
-                    <StatusBadge tone={overdueBadgeLabel(true).tone}>{overdueBadgeLabel(true).label}</StatusBadge>
-                  )}
-                </div>
-              </div>
-              <div style={{ padding: '0 18px 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
-                  {[
-                    ['ยอดที่ต้องชำระ', summary.amountPayable],
-                    ['ชำระแล้ว', summary.amountPaid],
-                    ['คงเหลือ', summary.amountOutstanding],
-                  ].map(([label, value]) => (
-                    <div key={label} style={{ border: '1px solid var(--color-border-subtle)', borderRadius: 8, padding: '10px 12px', background: 'var(--color-surface-muted)' }}>
-                      <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 4 }}>{label}</div>
-                      <strong style={{ fontSize: 18, color: 'var(--color-text)' }}>{formatMoney(value ?? 0)}</strong>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', fontSize: 13, color: 'var(--color-text-muted)' }}>
-                  <span>วันวางบิล <strong style={{ color: 'var(--color-text-secondary)' }}>{formatThaiDate(summary.billingDate)}</strong></span>
-                  <span>ครบกำหนด <strong style={{ color: summary.overdue ? 'var(--color-danger)' : 'var(--color-text-secondary)' }}>{formatThaiDate(summary.dueDate)}</strong></span>
-                  {summary.nextFollowUpAt && <span>ติดตามครั้งถัดไป <strong style={{ color: 'var(--color-text-secondary)' }}>{formatThaiDate(summary.nextFollowUpAt)}</strong></span>}
-                </div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {can.recordPayment && (
-                    <button type="button" className="primary-button" disabled={actionLoading} onClick={openPaymentModal}>
-                      บันทึกรับชำระเงิน
-                    </button>
-                  )}
-                  {can.setBilling && (
-                    <button type="button" className="secondary-button" disabled={actionLoading} onClick={openBillingModal}>
-                      ตั้งค่าการวางบิล
-                    </button>
-                  )}
-                </div>
-                <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 10 }}>
-                  <h3 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700 }}>ประวัติรับชำระ</h3>
-                  {paymentsQuery.isLoading ? (
-                    <SkeletonText lines={2} />
-                  ) : paymentReceipts.length === 0 ? (
-                    <p style={{ margin: 0, fontSize: 13, color: 'var(--color-text-muted)' }}>ยังไม่มีรายการรับชำระ</p>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      {paymentReceipts.map((receipt) => (
-                        <div key={receipt.receiptId} style={{ display: 'grid', gridTemplateColumns: '110px 90px 1fr', gap: 10, alignItems: 'start', fontSize: 13 }}>
-                          <span style={{ color: 'var(--color-text-muted)' }}>{formatThaiDate(receipt.receivedAt)}</span>
-                          <strong>{receipt.kind}</strong>
-                          <span>
-                            {formatMoney(receipt.amount)}
-                            <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>
-                              {receipt.recordedByName || '-'}{receipt.note ? ` · ${receipt.note}` : ''}
-                            </small>
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </section>
+            <DealMoneyTimeline
+              events={events}
+              paymentReceipts={paymentReceipts}
+              paymentsLoading={paymentsQuery.isLoading}
+              summary={summary}
+              canRecordPayment={can.recordPayment}
+              canSetBilling={can.setBilling}
+              actionLoading={actionLoading}
+              onRecordPayment={openPaymentModal}
+              onSetBilling={openBillingModal}
+            />
           ) : null}
 
           {/* "มัดจำ" (Phase 3 Slice S3 — see
@@ -1861,6 +1927,28 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               />
             ) : null}
           </div>
+
+          {/* Slice C2b: relocated here from the dissolved การดำเนินการอื่น ๆ
+              grab-bag — a close-lifecycle action, not an items action, so it
+              belongs with การเงิน rather than สินค้าและราคา. Gate unchanged
+              (`can.revokeCloseConfirm`). Rendered as its own section rather
+              than nested inside the `sections.payment`-gated panel above,
+              since the real server gate (`canRevokeCloseConfirmation`,
+              account/ceo-only) doesn't itself depend on `sections.payment` —
+              though for both those roles it is always true anyway (see
+              ticketDetailTabs.js's own comment on this tab's gate), so the
+              action can never end up stranded behind a hidden `money` tab. */}
+          {can.revokeCloseConfirm && (
+            <section className="panel" style={{ background: 'var(--color-surface-muted)' }}>
+              <div style={{ padding: '12px 18px', display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                <button type="button" className="secondary-button" disabled={actionLoading}
+                  onClick={() => doAction(() => api.tickets.revokeCloseConfirmation(ticketId, {}),
+                    'ยกเลิกการยืนยันปิดงานแล้ว')}>
+                  ยกเลิกการยืนยันปิดงาน
+                </button>
+              </div>
+            </section>
+          )}
       </TabPanel>
 
       <TabPanel id="fulfilment" idPrefix="ticket-detail" active={visibleActiveTab === 'fulfilment'}>
@@ -1888,142 +1976,23 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           </div>
       </TabPanel>
 
-      <TabPanel id="documents" idPrefix="ticket-detail" active={visibleActiveTab === 'documents'}>
-          {/* R5: Attachments */}
-          <section className="panel">
-            <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2>ไฟล์แนบ (PO / ใบเซ็น)</h2>
-              {/* No แนบใบกำกับภาษี control here, deliberately (2026-07-30 owner
-                  decision). The closing tax invoice is ฝ่ายบัญชี's to record, and
-                  the ONLY supported path is CommissionService.createFromDeal
-                  (POST /api/commissions/from-deal, CREATE_FROM_DEAL_ROLES =
-                  account-only), reached from this page's own sticky CTA
-                  "บันทึกใบกำกับ + ออกค่าคอม" -> /commissions?ticketId=NN
-                  (accountActions.js). That one upload dual-writes the file as an
-                  AttachType.INVOICE ticket attachment, so it satisfies the close
-                  gate's invoiceOnFile check AND creates the deal owner's
-                  commission in the same transaction.
-
-                  A second invoice path here would satisfy the close gate WITHOUT
-                  creating the commission — the sales rep would silently lose it.
-                  That is why this is not simply re-gated to a role the backend
-                  permits: the control that used to live here was gated isAccount
-                  while AttachmentController.requireTicketAccess grants only
-                  participants OR hr/sales_manager/ceo, so it 403'd for
-                  real (pinned by TicketIaAuthzMatrixIntegrationTest
-                  .attachments_accountIsNeitherParticipantNorManagerAndIsRefused)
-                  and only ever looked functional because mockApi.js had no authz
-                  on attachments at all. Do not reintroduce it — the regression
-                  guard is TicketDetailPage.test.jsx, "offers NO ใบกำกับภาษี
-                  upload control in เอกสาร". */}
-              {!TERMINAL.includes(st) && (
-                <label className="cursor-pointer max-[720px]:w-full" htmlFor="ticket-attachment-file">
-                  <input
-                    id="ticket-attachment-file"
-                    type="file"
-                    // See FileUploadField: styles.css now loads into @layer legacy
-                    // (before Tailwind's utilities layer), so these utilities win
-                    // over the legacy global `input` rules without `!` overrides.
-                    className="sr-only h-px min-h-0 w-px border-0 p-0"
-                    onChange={handleUploadAttachment}
-                    accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
-                  />
-                  <span
-                    className="secondary-button max-[720px]:min-h-11 max-[720px]:w-full"
-                    style={{ fontSize: 12, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                  >
-                    <Icon name="upload" size={13} />
-                    {uploadingFile ? 'กำลังอัปโหลด...' : 'แนบไฟล์ (PDF/JPG/PNG/Excel)'}
-                  </span>
-                </label>
-              )}
-            </div>
-            {attachLoading ? (
-              <div
-                style={{ padding: '8px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}
-                aria-busy="true"
-                aria-label="กำลังโหลดไฟล์แนบ"
-              >
-                {[0, 1, 2].map((i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'var(--color-surface-muted)', borderRadius: 6, border: '1px solid var(--color-border-subtle)' }}>
-                    <Skeleton width={13} height={13} radius="var(--radius-sm)" />
-                    <Skeleton width="50%" height={13} />
-                    <Skeleton width={40} height={16} radius="var(--radius-pill)" />
-                  </div>
-                ))}
-              </div>
-            ) : attachments.length === 0 ? (
-              <div style={{ padding: '4px 18px 14px' }}>
-                <EmptyState icon="paperclip" title="ยังไม่มีไฟล์แนบ" description="แนบ PO หรือใบเซ็นได้ด้วยปุ่มด้านบน" />
-              </div>
-            ) : (
-              <div style={{ padding: '8px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {attachments.map((att) => (
-                  <div key={att.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'var(--color-surface-muted)', borderRadius: 6, border: '1px solid var(--color-border-subtle)' }}>
-                    <Icon name="paperclip" size={13} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
-                    <span style={{ flex: 1, fontSize: 13, color: 'var(--color-text)', wordBreak: 'break-all' }}>{att.fileName}</span>
-                    <span style={{ fontSize: 11, color: 'var(--color-text-muted)', whiteSpace: 'nowrap', background: 'var(--color-surface-subtle)', padding: '1px 6px', borderRadius: 99 }}>
-                      {att.attachType}
-                    </span>
-                    <a href={api.attachments.fileUrl(att.id)} target="_blank" rel="noreferrer"
-                      style={{ fontSize: 12, color: 'var(--color-link)', textDecoration: 'none', whiteSpace: 'nowrap' }}>
-                      ดูไฟล์
-                    </a>
-                    {!TERMINAL.includes(st) && (
-                      <button type="button" className="icon-button"
-                        style={{ color: 'var(--color-danger)', flexShrink: 0 }}
-                        onClick={() => handleDeleteAttachment(att.id, att.fileName)}>
-                        <Icon name="close" size={13} />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-      </TabPanel>
-
-      <TabPanel id="activity" idPrefix="ticket-detail" active={visibleActiveTab === 'activity'}>
-          {/* FIX 1 (Opus review, owner decision): this tab is now visible to
-              every viewer of the deal (ticketDetailTabs.js's own doc comment
-              on the "activity" entry), but DealTrackingPanel's win%/designer/
-              owner/buyer/next-follow-up fields are a DIFFERENT capability
-              from the two the review actually found lost (the audit trail
-              and the comment box, both handled below) — the review named
-              only those two, so this panel keeps its pre-existing
-              dealTracking gate (sales-owner/sales_manager/ceo) rather than
-              newly exposing a capability nobody asked to restore. */}
-          {canViewDealTracking ? (
-            // id: the sticky bar's FOLLOW_UP/LOG_ACTIVITY jump target (see
-            // IN_PAGE_JUMP_TARGET above) — scroll-mt so it doesn't tuck under
-            // the sticky header, tabIndex so the jump can actually move focus
-            // here.
-            <div id="deal-tracking-panel" tabIndex={-1} className="scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none">
-              <DealTrackingPanel
-                summary={summary}
-                events={events}
-                activities={activities}
-                canEdit={isOwner || role === 'sales_manager' || role === 'ceo'}
-                onUpdateTracking={(payload) => updateTrackingMutation.mutateAsync(payload)}
-                updating={updateTrackingMutation.isPending}
-              />
-            </div>
-          ) : null}
-
+      <TabPanel id="history" idPrefix="ticket-detail" active={visibleActiveTab === 'history'}>
           {/* "ประวัติดีล" (IA rebuild): merges the ticket's audit trail
               (ticket.events, formerly its own "ประวัติการดำเนินการ" panel) with
               the deal-tracking activity log (formerly DealTrackingPanel's own
-              "ประวัติการติดตาม (Activity log)" list, trimmed above) into one
-              chronological stream — regions 17+18 of
-              TICKET_INFORMATION_ARCHITECTURE.md.
+              "ประวัติการติดตาม (Activity log)" list) into one chronological
+              stream — regions 17+18 of TICKET_INFORMATION_ARCHITECTURE.md.
               FIX 1 (Opus review, owner decision): the audit trail (events)
               and the comment box (`can.comment`) are backed by
               `TicketService.projectForRole`/`comment`'s `requireViewAccess`,
-              which every viewer of the deal passes — so, unlike before, they
-              are NOT re-gated on `canViewDealTracking` here; only the
-              follow-up feed (`activities`) and its add-activity form stay
-              gated on `requireDealOwnership`, per
-              TicketIaAuthzMatrixIntegrationTest's activities_* cases. */}
+              which every viewer of the deal passes — so they are NOT
+              re-gated on `canViewDealTracking` here; only the follow-up feed
+              (`activities`) and its add-activity form stay gated on
+              `requireDealOwnership`, per TicketIaAuthzMatrixIntegrationTest's
+              activities_* cases. DealTrackingPanel itself (win%/designer/
+              owner/buyer/next-follow-up) is NOT part of this tab any more —
+              Slice C2b moved it into `deal` above, unchanged gate — see
+              ticketDetailTabs.js's own comment on this tab. */}
           <DealHistoryPanel
             events={events}
             activities={activities}
@@ -2038,24 +2007,45 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             onAddActivity={(payload) => addActivityMutation.mutateAsync(payload)}
             addingActivity={addActivityMutation.isPending}
           />
-      </TabPanel>
-      </div>
 
-      <div className="min-w-0 xl:sticky xl:top-[18rem] xl:col-start-2 xl:row-start-1 xl:row-span-4 xl:max-h-[calc(100vh-19rem)] xl:overflow-y-auto">
-        <TicketContextPanel
-          summary={summary}
-          pricingRequests={pricingRequests}
-          latestQuotation={latestQuotation}
-          events={events}
-          bannerText={bannerText}
-          canComment={can.comment}
-          commentText={contextCommentText}
-          onCommentTextChange={setContextCommentText}
-          onSubmitComment={handleContextComment}
-          commentSubmitting={actionLoading}
-          showCommentForm={visibleActiveTab !== 'activity'}
-          canViewPricingRequests={canViewPricingRequests}
-        />
+          {/* Slice C2b: DealAttachmentsPanel folds in here from the old
+              `documents` (attachments) tab — that id now holds different
+              content (see the `documents` TabPanel above and
+              ticketDetailTabs.js's own comment on the id reuse). That old
+              tab's own `() => true` role gate travels with it, but its
+              per-instance `canViewDocumentsTab` check — formerly a TAB-level
+              filter in `visibleTabItems`/`visibleActiveTab` (the old
+              'documents' special-casing, now removed — see that
+              assignment's own comment above) — is now this INNER render
+              condition instead, since `history` itself is unconditionally
+              visible and has no tab-level analogue left to filter. Anyone
+              `canViewDocumentsTab` excludes still reaches this whole tab
+              (the history stream above), just not this panel — see
+              `canViewDocumentsTab`'s own doc comment near its declaration
+              for the underlying predicate (unchanged: createdById/
+              assignedToId participant OR
+              ROLE_PERMISSIONS.canViewTicketDocuments).
+              R5: Attachments. Extracted to DealAttachmentsPanel.jsx
+              (ia-extract Slice C1) — the long "why no ใบกำกับภาษี control
+              here" comment lives there now, verbatim, since it explains that
+              panel's own JSX. `canUpload`/`notTerminal` are computed here
+              (instead of handing the raw `st`/TERMINAL pair down) so the
+              child only ever sees clean booleans; they reproduce the
+              original `!TERMINAL.includes(st) && ...` guards exactly. */}
+          {canViewDocumentsTab ? (
+            <DealAttachmentsPanel
+              attachments={attachments}
+              attachLoading={attachLoading}
+              canManageDocuments={canManageDocuments}
+              uploadingFile={uploadingFile}
+              onUploadAttachment={handleUploadAttachment}
+              onDeleteAttachment={handleDeleteAttachment}
+              canUpload={!TERMINAL.includes(st) && canManageDocuments}
+              notTerminal={!TERMINAL.includes(st)}
+              user={user}
+            />
+          ) : null}
+      </TabPanel>
       </div>
 
       {/* "จัดการดีล" danger zone (ticket-detail IA rebuild Phase 1): เสียงาน /
@@ -2066,7 +2056,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           modals), only demoted from sitting inline among the day-to-day
           pipeline controls. */}
       {(canLostDeal || can.cancel) ? (
-        <section className="rounded-xl border border-danger-border bg-danger-bg p-4 sm:p-5 xl:col-start-1" aria-labelledby="deal-danger-zone-heading">
+        <section className="rounded-xl border border-danger-border bg-danger-bg p-4 sm:p-5" aria-labelledby="deal-danger-zone-heading">
           <h2 id="deal-danger-zone-heading" className="m-0 text-sm font-extrabold text-danger-dark">จัดการดีล</h2>
           <p className="mt-1 text-xs text-danger-dark">การดำเนินการเหล่านี้ส่งผลต่อทั้งดีล และบางรายการย้อนกลับไม่ได้ — ใช้เมื่อจำเป็นเท่านั้น</p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -2207,6 +2197,83 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                   onChange={(e) => setBillingDraft((draft) => ({ ...draft, nextFollowUpAt: e.target.value }))} />
               </label>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ขอแก้ไข (Revise) — Slice C2a: converted from an inline "ภาพรวม" tab
+          section into a modal, same pattern as paymentModal/billingModal
+          above. The old inline version opened ~400px below its overflow-menu
+          trigger and forced a tab switch (runOnTab('overview', …)) plus a
+          scroll-into-view just to reveal itself — disorienting, and it also
+          meant a menu item outside every tab silently changed which tab was
+          active. A modal has no tab to switch to, so handleOpenRevise is now
+          a plain flag flip (see its own doc comment). */}
+      {can.revise && showReviseForm && (
+        <Modal
+          title="ขอแก้ไข"
+          onClose={() => { setShowReviseForm(false); setReviseReason(''); clearFieldError('revise.reason'); }}
+          footer={(
+            <>
+              <button type="button" className="secondary-button" disabled={actionLoading}
+                onClick={() => { setShowReviseForm(false); setReviseReason(''); clearFieldError('revise.reason'); }}>
+                ยกเลิก
+              </button>
+              {/* This button is already disabled={!reviseReason.trim()} (unchanged
+                  below), so the guard inside onClick is defensive/unreachable
+                  through the UI — wired for consistency with the other 3 forms
+                  in this slice, not because a user can trigger it here. */}
+              <button type="button" className="primary-button" disabled={actionLoading || !reviseReason.trim()}
+                onClick={() => {
+                  if (!reviseReason.trim()) {
+                    setFieldError('revise.reason', 'กรุณาระบุเหตุผล');
+                    focusFirstInvalid('revise.reason');
+                    return;
+                  }
+                  clearFieldError('revise.reason');
+                  doAction(() => api.tickets.revision(ticketId, { scope: reviseScope, reason: reviseReason.trim() }), 'ส่งคำขอแก้ไขแล้ว');
+                }}>
+                ยืนยันขอแก้ไข
+              </button>
+            </>
+          )}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>ประเภทการแก้ไข</div>
+            {[
+              { value: 'QTY_OR_NOTE',  label: 'แก้จำนวน / หมายเหตุ / % มัดจำ', sub: 'ไม่ต้องอนุมัติใหม่ — ออกเอกสารรอบแก้ไขใหม่ได้เลย' },
+              { value: 'PRICE_CHANGE', label: 'แก้ราคา / ส่วนลดต่อหน่วย',       sub: 'CEO ต้องอนุมัติใหม่' },
+              { value: 'NEW_ITEM',     label: 'เพิ่มสินค้าใหม่',                sub: 'ฝ่ายนำเข้าตั้งราคา → CEO อนุมัติ' },
+            ].map((opt) => (
+              // eslint-disable-next-line jsx-a11y/label-has-associated-control -- label nests the radio control; its text is the dynamic opt.label
+              <label key={opt.value} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer', fontSize: 13 }}>
+                <input type="radio" name="reviseScope" value={opt.value}
+                  checked={reviseScope === opt.value}
+                  onChange={() => setReviseScope(opt.value)}
+                  style={{ marginTop: 2, flexShrink: 0, width: 16, height: 16, accentColor: 'var(--color-info-dot)', cursor: 'pointer' }} />
+                <span>
+                  <strong>{opt.label}</strong>
+                  <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)' }}>{opt.sub}</span>
+                </span>
+              </label>
+            ))}
+            <label style={{ fontSize: 13, fontWeight: 600 }}>
+              เหตุผลการแก้ไข *
+              <textarea rows={2}
+                id="revise-reason"
+                ref={(el) => { fieldRefs.current['revise.reason'] = el; }}
+                value={reviseReason}
+                onChange={(e) => { setReviseReason(e.target.value); clearFieldError('revise.reason'); }}
+                placeholder="ระบุเหตุผล…" style={{ marginTop: 4 }}
+                aria-invalid={fieldErrors['revise.reason'] ? true : undefined}
+                aria-describedby={fieldErrors['revise.reason'] ? fieldErrorId('revise-reason') : undefined}
+              />
+              {fieldErrors['revise.reason'] ? (
+                <p id={fieldErrorId('revise-reason')} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                  {fieldErrors['revise.reason']}
+                </p>
+              ) : null}
+            </label>
           </div>
         </Modal>
       )}

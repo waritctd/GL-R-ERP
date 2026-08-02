@@ -129,7 +129,7 @@ export function CatalogSearchPage({ user, showToast }) {
 
   return (
     <PageStack>
-      <PageHeader title="ค้นหาสินค้า" subtitle="ราคาจาก price list ที่ import ล่าสุด (ACTIVE)" />
+      <PageHeader title="ค้นหาสินค้า" subtitle="ราคาจากรายการราคาที่ใช้งานล่าสุด" />
 
       {/* Search bar — search is the primary interaction on this page, so it
           leads with a full-width icon field; factory narrows the same query. */}
@@ -150,7 +150,7 @@ export function CatalogSearchPage({ user, showToast }) {
                 ref={inputRef}
                 type="text"
                 className="input w-full pl-9"
-                placeholder="เช่น Panaria, Stone, L-Trim..."
+                placeholder="เช่น Panaria, Stone, L-Trim…"
                 value={query}
                 onChange={handleQueryChange}
               />
@@ -181,7 +181,7 @@ export function CatalogSearchPage({ user, showToast }) {
 
       {/* Results */}
       {loading && (
-        <p className="text-sm text-muted text-center py-6">กำลังโหลด…</p>
+        <p className="text-sm text-muted text-center py-6">กำลังค้นหารายการสินค้า…</p>
       )}
 
       {!loading && searched && items.length === 0 && (

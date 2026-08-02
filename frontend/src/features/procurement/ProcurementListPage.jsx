@@ -89,7 +89,7 @@ export function ProcurementListPage({ showToast }) {
     },
     {
       key: 'deal',
-      header: 'ดีล / ใบขอราคา',
+      header: 'ดีล / คำขอราคา',
       render: (po) => (
         <span className="flex min-w-0 flex-col gap-0.5">
           <span className="block truncate">{po.pricingRequestCode}</span>
@@ -143,7 +143,7 @@ export function ProcurementListPage({ showToast }) {
     <div className="page-stack">
       <PageHeader
         title="ใบสั่งซื้อโรงงาน"
-        subtitle="Factory Purchase Orders — ต้นทาง สินค้า/ราคา จาก pricing_costing_item ที่ได้รับอนุมัติแล้วเท่านั้น"
+        subtitle="ใบสั่งซื้อแยกตามโรงงาน ใช้ข้อมูลสินค้าและราคาต้นทุนที่ได้รับอนุมัติแล้วเท่านั้น"
         actions={(
           <Button type="button" variant="icon" onClick={invalidate} title="รีเฟรช">
             <Icon name="refresh" />
@@ -180,7 +180,7 @@ export function ProcurementListPage({ showToast }) {
         searchable
         searchValue={searchText}
         onSearchChange={setSearchText}
-        searchPlaceholder="ค้นหาเลขที่ / โรงงาน / ใบขอราคา / ดีล"
+        searchPlaceholder="ค้นหาเลขที่ / โรงงาน / คำขอราคา / ดีล"
         initialSort={{ key: 'updatedAt', dir: 'desc' }}
         loading={poQuery.isLoading}
         error={poQuery.error}

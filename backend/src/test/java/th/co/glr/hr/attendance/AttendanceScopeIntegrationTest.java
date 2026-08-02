@@ -143,7 +143,7 @@ class AttendanceScopeIntegrationTest extends AbstractPostgresIntegrationTest {
     void anEmployeeAskingForSomeoneElseIsRejected() {
         assertThatThrownBy(() -> listDaily(employee(salesStaff), factoryStaff, null))
             .isInstanceOf(ApiException.class)
-            .hasMessageContaining("Forbidden");
+            .hasMessageContaining("ไม่มีสิทธิ์เข้าถึงรายการนี้");
     }
 
     @Test

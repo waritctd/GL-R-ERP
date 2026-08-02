@@ -138,7 +138,7 @@ describe('SalesOverview', () => {
       return worklist.getByText(customerName).closest('button');
     }
 
-    expect(within(ctaFor('บริษัท เอ จำกัด')).getByText('สร้างใบขอราคา')).not.toBeNull(); // no PR at all
+    expect(within(ctaFor('บริษัท เอ จำกัด')).getByText('สร้างคำขอราคา')).not.toBeNull(); // no PR at all
     expect(within(ctaFor('บริษัท บี จำกัด')).getByText('ออกใบเสนอราคา')).not.toBeNull(); // APPROVED_FOR_QUOTATION
     expect(within(ctaFor('บริษัท ซี จำกัด')).getByText('ยืนยันคำสั่งซื้อ')).not.toBeNull(); // QUOTATION_ACCEPTED, not confirmed
     expect(within(ctaFor('บริษัท ดี จำกัด')).getByText('ติดตามลูกค้า')).not.toBeNull(); // follow-up overdue

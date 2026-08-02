@@ -1,7 +1,6 @@
 package th.co.glr.hr.orderconfirmation;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -12,7 +11,6 @@ import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationDto;
-import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationItemDto;
 import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.deposit.DepositNoticeDto;
@@ -130,7 +128,7 @@ public class OrderConfirmationService {
         PricingRequestSummaryDto locked = requirePricingRequest(pricingRequestId);
         if (!PricingRequestStatus.QUOTATION_ACCEPTED.equals(locked.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ยืนยันคำสั่งซื้อได้เฉพาะใบขอราคาที่ลูกค้ายอมรับใบเสนอราคาแล้วเท่านั้น (ปัจจุบัน: " + locked.status() + ")");
+                "ยืนยันคำสั่งซื้อได้เฉพาะคำขอราคาที่ลูกค้ายอมรับใบเสนอราคาแล้วเท่านั้น (ปัจจุบัน: " + locked.status() + ")");
         }
 
         int confirmedRows = pricingRequests.markOrderConfirmed(pricingRequestId, actor.id(), clientRequestId);
@@ -148,7 +146,7 @@ public class OrderConfirmationService {
         if (ticketRows == 1) {
             tickets.addEvent(locked.ticketId(), actor.id(), actor.name(),
                 TicketEventKind.ORDER_CONFIRMED_FROM_QUOTATION, TicketStatus.DRAFT, TicketStatus.QUOTATION_ISSUED,
-                "ยืนยันคำสั่งซื้อจากใบเสนอราคาลูกค้าที่ยอมรับแล้ว (ใบขอราคา " + locked.requestCode() + ")");
+                "ยืนยันคำสั่งซื้อจากใบเสนอราคาลูกค้าที่ยอมรับแล้ว (คำขอราคา " + locked.requestCode() + ")");
         } else {
             // Defensive-only: markOrderConfirmed's own compare-and-set already makes this
             // unreachable through the real API (a genuine replay short-circuits above, before
@@ -188,20 +186,20 @@ public class OrderConfirmationService {
         TicketDto ticketDto = currentTicketState.paymentStatus() == null
             ? ticketService.confirmCustomer(locked.ticketId(), actor)
             : tickets.findById(locked.ticketId())
-                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
 
         pricingRequests.addEvent(pricingRequestId, locked.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.ORDER_CONFIRMED, locked.status(), locked.status(),
             "ยืนยันคำสั่งซื้อแล้ว", null);
         notifications.notifyByRoleForPricingRequest("ceo", pricingRequestId, PricingRequestEventKind.ORDER_CONFIRMED,
-            "ใบขอราคา " + locked.requestCode() + " ยืนยันคำสั่งซื้อแล้ว");
+            "คำขอราคา " + locked.requestCode() + " ยืนยันคำสั่งซื้อแล้ว");
 
         return new OrderConfirmationResultDto(ticketDto, requirePricingRequest(pricingRequestId));
     }
 
     private OrderConfirmationResultDto currentResult(long pricingRequestId, long ticketId, UserPrincipal actor) {
         TicketDto ticketDto = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
         return new OrderConfirmationResultDto(ticketDto, requirePricingRequest(pricingRequestId));
     }
 
@@ -282,7 +280,7 @@ public class OrderConfirmationService {
                 } catch (DataIntegrityViolationException e) {
                     throw new ApiException(HttpStatus.CONFLICT,
                         "ไม่สามารถปรับจำนวนสินค้า (item " + item.sourceTicketItemId()
-                            + ") ให้ตรงกับใบขอราคาที่ยืนยันคำสั่งซื้อได้ เนื่องจากมีการส่งมอบหรือจองสต็อกไปแล้วเกินจำนวนใหม่");
+                            + ") ให้ตรงกับคำขอราคาที่ยืนยันคำสั่งซื้อได้ เนื่องจากมีการส่งมอบหรือจองสต็อกไปแล้วเกินจำนวนใหม่");
                 }
                 anyChange = anyChange || changed;
             } else {
@@ -305,7 +303,7 @@ public class OrderConfirmationService {
         if (anyChange) {
             pricingRequests.addEvent(pricingRequestId, ticketId, actor.id(), actor.name(),
                 PricingRequestEventKind.TICKET_ITEMS_RECONCILED, null, null,
-                "ปรับจำนวนสินค้าในรายการดีลให้ตรงกับใบขอราคาที่ยืนยันคำสั่งซื้อแล้ว", null);
+                "ปรับจำนวนสินค้าในรายการดีลให้ตรงกับคำขอราคาที่ยืนยันคำสั่งซื้อแล้ว", null);
         }
     }
 
@@ -317,12 +315,14 @@ public class OrderConfirmationService {
         if (item.brand() != null && !item.brand().isBlank()) return item.brand();
         if (item.model() != null && !item.model().isBlank()) return item.model();
         if (item.productDescription() != null && !item.productDescription().isBlank()) return item.productDescription();
-        return "รายการใหม่จากใบขอราคา";
+        return "รายการใหม่จากคำขอราคา";
     }
 
     /** ticket_item.unit_basis's own CHECK constraint (V37) only allows PIECE/SQM — a narrower set
      * than UnitBasis's four canonical PER_SQM/PER_PIECE/PER_BOX/PER_LINEAR_M codes. Display-only
-     * mapping, duplicated rather than shared, matching this class's own unitLabel precedent. */
+     * mapping, kept separate from {@link DepositNoticeService#unitLabel} (this branch's shared
+     * quotation-item mapping) since the two map onto entirely different target vocabularies
+     * (ticket_item's own two-value CHECK constraint vs. a human-readable Thai unit label). */
     private String mapUnitBasisToTicketItem(String unitBasis) {
         return UnitBasis.PER_SQM.equals(unitBasis) ? "SQM" : "PIECE";
     }
@@ -335,14 +335,23 @@ public class OrderConfirmationService {
      * Builds a deposit-notice DRAFT from the pricing request's own ACCEPTED customer quotation —
      * items and amounts trace to {@code sales.quotation}/{@code quotation_item} (Step 4/5's
      * aggregate), never to any {@code sales.ticket_item} row. Calls the EXISTING {@link
-     * DepositNoticeService#createDraft} unmodified: because {@code buildItemsFromRequest} inside
-     * that method already returns the caller-supplied items verbatim whenever they are non-empty
-     * (skipping its own legacy ticket_item auto-population entirely), and because {@link
-     * #confirmOrder} already left {@code ticket.status = quotation_issued} — one of {@code
-     * requireApprovedTicket}'s three already-accepted values — no change to {@code
-     * DepositNoticeService} itself was needed. Verified by the "traces to the quotation, NOT to
-     * any sales.ticket_item row" assertions inside {@code OrderConfirmationIntegrationTest
+     * DepositNoticeService#createDraft}: {@code buildItemsFromRequest} inside that method already
+     * returns the caller-supplied items verbatim whenever they are non-empty (skipping its own
+     * ticket-chain auto-population entirely), and {@link #confirmOrder} already left {@code
+     * ticket.status = quotation_issued} — one of {@code requireApprovedTicket}'s three
+     * already-accepted values. Verified by the "traces to the quotation, NOT to any
+     * sales.ticket_item row" assertions inside {@code OrderConfirmationIntegrationTest
      * .fullChain_quotationAcceptedThroughDepositPaid_composesWithoutShortcuts}.
+     *
+     * <p><strong>Post-diagnosis update:</strong> {@code DepositNoticeService.createDraft} itself
+     * DID need a fix — every deal created purely through this chain reaches this method with
+     * {@code ticket_item.approved_price} still NULL on every line (that column is written only by
+     * the {@code @Deprecated}, routeless {@code TicketService.approve}), and the header fields
+     * ({@code customerTaxId}/{@code customerAddress}/{@code projectName}) were never autofilled at
+     * all. This call site is unaffected by that fix (it always supplies non-empty {@code items}
+     * itself, and leaves the header fields {@code null} for {@code createDraft} to autofill from
+     * the ticket's own customer/project, same as the ticket-level route) — see {@code
+     * DepositNoticeService.createDraft}'s own comments for what changed and why.
      */
     @Transactional
     public DepositNoticeDto createDepositNoticeFromQuotation(long pricingRequestId,
@@ -355,19 +364,11 @@ public class OrderConfirmationService {
             .filter(q -> QuotationStatus.ACCEPTED.equals(q.docStatus()))
             .findFirst()
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT,
-                "ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับใบขอราคานี้"));
+                "ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้"));
 
-        List<DepositNoticeItemRequest> items = new ArrayList<>();
-        for (CustomerQuotationItemDto item : accepted.items()) {
-            String description = item.description() != null && !item.description().isBlank()
-                ? item.description() : "รายการสินค้า";
-            BigDecimal discount = item.salesDiscount();
-            String discountLabel = discount != null && discount.signum() > 0
-                ? "ส่วนลด " + discount.stripTrailingZeros().toPlainString() + " ต่อหน่วย" : null;
-            items.add(new DepositNoticeItemRequest(
-                item.seq(), description, item.requestedQuantity(), unitLabel(item.requestedUnitBasis()),
-                item.approvedUnitPrice(), discountLabel, item.finalUnitPrice()));
-        }
+        // Mapping itself now lives on DepositNoticeService (this branch's fix), shared with that
+        // class's own new-chain item fallback in buildItemsFromRequest — see its Javadoc.
+        List<DepositNoticeItemRequest> items = DepositNoticeService.itemsFromQuotation(accepted.items());
 
         DepositNoticeDraftRequest draftRequest = new DepositNoticeDraftRequest(
             null, null, null, null, accepted.number(),
@@ -380,24 +381,13 @@ public class OrderConfirmationService {
         return draft;
     }
 
-    private String unitLabel(String unitBasis) {
-        if (unitBasis == null) return "หน่วย";
-        return switch (unitBasis) {
-            case UnitBasis.PER_SQM -> "ตร.ม.";
-            case UnitBasis.PER_PIECE -> "แผ่น";
-            case UnitBasis.PER_BOX -> "กล่อง";
-            case UnitBasis.PER_LINEAR_M -> "เมตร";
-            default -> unitBasis;
-        };
-    }
-
     // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
         if (!allowed.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
@@ -405,18 +395,18 @@ public class OrderConfirmationService {
      * merely the pricing request's own requested_by (which may differ). */
     private void requireOwner(PricingRequestSummaryDto summary, UserPrincipal actor) {
         if ("sales".equals(actor.role()) && summary.ticketCreatedById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
     private PricingRequestSummaryDto requirePricingRequest(long pricingRequestId) {
         return pricingRequests.findSummary(pricingRequestId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Pricing request not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
     }
 
     private TicketSummaryDto requireTicketSummary(long ticketId) {
         return tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"))
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
             .summary();
     }
 
@@ -427,7 +417,7 @@ public class OrderConfirmationService {
         try {
             return UUID.fromString(clientRequestId.trim()).toString();
         } catch (IllegalArgumentException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId must be a valid UUID");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId ต้องเป็น UUID ที่ถูกต้อง");
         }
     }
 }

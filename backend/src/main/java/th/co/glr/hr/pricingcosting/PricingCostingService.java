@@ -86,7 +86,7 @@ public class PricingCostingService {
         requireRole(actor, IMPORT_ROLES);
         PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId);
         if (!COSTING_CREATE_STATUSES.contains(summary.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Pricing request is not ready for costing");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ยังไม่พร้อมสำหรับการคำนวณต้นทุน");
         }
         requireActiveDeal(summary.ticketId());
         resolveSources(summary);
@@ -98,7 +98,7 @@ public class PricingCostingService {
             PricingCostingDto existing = requireCosting(costingId);
             if (existing.pricingRequestId() != pricingRequestId) {
                 throw new ApiException(HttpStatus.CONFLICT,
-                    "clientRequestId has already been used for another pricing request");
+                    "clientRequestId นี้ถูกใช้ไปแล้วกับคำขอราคาอื่น");
             }
             return existing;
         }
@@ -106,13 +106,13 @@ public class PricingCostingService {
             int transitioned = pricingRequests.transition(summary.id(), summary.status(),
                 PricingRequestStatus.COSTING_IN_PROGRESS, null, null);
             if (transitioned == 0) {
-                throw new ApiException(HttpStatus.CONFLICT, "Pricing request was changed by another user");
+                throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
             }
         }
         addEvent(summary, actor, PricingRequestEventKind.PRICING_COSTING_STARTED, summary.status(),
             PricingRequestStatus.COSTING_IN_PROGRESS, "Costing draft created");
         notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_STARTED,
-            "ใบขอราคา " + summary.requestCode() + " เริ่มร่างต้นทุน");
+            "คำขอราคา " + summary.requestCode() + " เริ่มร่างต้นทุน");
         return requireCosting(costingId);
     }
 
@@ -132,24 +132,24 @@ public class PricingCostingService {
         requireRole(actor, IMPORT_ROLES);
         PricingCostingDto costing = requireCosting(costingId);
         if (PricingCostingStatus.SUBMITTED.equals(costing.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Submitted costing is immutable");
+            throw new ApiException(HttpStatus.CONFLICT, "การคำนวณต้นทุนที่ส่งไปแล้วไม่สามารถแก้ไขได้");
         }
         PricingRequestSummaryDto summary = requirePricingRequest(costing.pricingRequestId());
         if (!PricingRequestStatus.COSTING_IN_PROGRESS.equals(summary.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Pricing request must be COSTING_IN_PROGRESS before recalculation");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาต้องอยู่ในสถานะ COSTING_IN_PROGRESS ก่อนจึงจะคำนวณใหม่ได้");
         }
         requireActiveDeal(summary.ticketId());
         CalculationResult result = calculate(summary);
         costings.replaceItems(costingId, result.items());
         int rows = costings.markCalculated(costingId, result.total(), request.note());
         if (rows == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "Costing cannot be recalculated in its current status");
+            throw new ApiException(HttpStatus.CONFLICT, "ไม่สามารถคำนวณต้นทุนใหม่ได้ในสถานะปัจจุบัน");
         }
         addEvent(summary, actor, PricingRequestEventKind.PRICING_COSTING_CALCULATED, summary.status(), summary.status(),
             "Costing recalculated");
         if (PricingCostingStatus.DRAFT.equals(costing.status())) {
             notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_CALCULATED,
-                "ใบขอราคา " + summary.requestCode() + " คำนวณต้นทุนแล้ว");
+                "คำขอราคา " + summary.requestCode() + " คำนวณต้นทุนแล้ว");
         }
         return requireCosting(costingId);
     }
@@ -159,32 +159,32 @@ public class PricingCostingService {
         requireRole(actor, IMPORT_ROLES);
         PricingCostingDto costing = requireCosting(costingId);
         if (costing.stale()) {
-            throw new ApiException(HttpStatus.CONFLICT, "Costing is stale and must be recalculated before submit");
+            throw new ApiException(HttpStatus.CONFLICT, "ข้อมูลต้นทุนล้าสมัยแล้ว ต้องคำนวณใหม่ก่อนส่ง");
         }
         if (!PricingCostingStatus.CALCULATED.equals(costing.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Only a calculated costing can be submitted");
+            throw new ApiException(HttpStatus.CONFLICT, "ส่งได้เฉพาะการคำนวณต้นทุนที่คำนวณเสร็จแล้วเท่านั้น");
         }
         PricingRequestSummaryDto summary = requirePricingRequest(costing.pricingRequestId());
         if (!PricingRequestStatus.COSTING_IN_PROGRESS.equals(summary.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Pricing request must be COSTING_IN_PROGRESS before CEO submission");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาต้องอยู่ในสถานะ COSTING_IN_PROGRESS ก่อนจึงจะส่งให้ CEO ได้");
         }
         requireActiveDeal(summary.ticketId());
         CalculationResult result = calculate(summary);
         costings.replaceItems(costingId, result.items());
         int rows = costings.submit(costingId, actor.id(), result.total(), request.note());
         if (rows == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "Costing was changed by another user");
+            throw new ApiException(HttpStatus.CONFLICT, "การคำนวณต้นทุนถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.COSTING_IN_PROGRESS,
             PricingRequestStatus.READY_FOR_CEO_REVIEW, null, null);
         if (transitioned == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "Pricing request was changed by another user");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         addEvent(summary, actor, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
             PricingRequestStatus.COSTING_IN_PROGRESS, PricingRequestStatus.READY_FOR_CEO_REVIEW,
             "Costing submitted to CEO");
         notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
-            "ใบขอราคา " + summary.requestCode() + " ส่งต้นทุนให้ CEO แล้ว");
+            "คำขอราคา " + summary.requestCode() + " ส่งต้นทุนให้ CEO แล้ว");
         return requireCosting(costingId);
     }
 
@@ -291,24 +291,24 @@ public class PricingCostingService {
             String factoryName = firstText(item.resolvedFactoryName(), item.factory());
             if (factoryName == null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    "Pricing request item " + item.id() + " has no resolved factory");
+                    "รายการที่ " + item.id() + " ในคำขอราคายังไม่ได้ระบุโรงงาน");
             }
             FactoryQuoteDto quote = factoryQuotes.findCurrentByFactory(summary.id(), factoryName)
                 .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    "No current factory quote for " + factoryName));
+                    "ยังไม่มีใบเสนอราคาโรงงานสำหรับ " + factoryName));
             if (!FactoryQuoteStatus.READY_FOR_COSTING.equals(quote.status())) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    "Factory quote for " + factoryName + " is not ready for costing");
+                    "ใบเสนอราคาของโรงงาน " + factoryName + " ยังไม่พร้อมสำหรับการคำนวณต้นทุน");
             }
             FactoryQuoteItemDto quoteItem = quote.items().stream()
                 .filter(candidate -> candidate.pricingRequestItemId() == item.id())
                 .findFirst()
                 .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    "Factory quote for " + factoryName + " does not cover item " + item.id()));
+                    "ใบเสนอราคาของโรงงาน " + factoryName + " ไม่ครอบคลุมรายการที่ " + item.id()));
             if (quoteItem.rawUnitPrice() == null || quoteItem.currency() == null
                     || quoteItem.quotedUnit() == null || quoteItem.unitBasis() == null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    "Factory quote item " + quoteItem.id() + " is missing raw price, currency or unit");
+                    "รายการที่ " + quoteItem.id() + " ในใบเสนอราคาโรงงานยังไม่มีราคา สกุลเงิน หรือหน่วยนับ");
             }
             result.add(new ResolvedSource(item, quote, quoteItem));
         }
@@ -331,32 +331,32 @@ public class PricingCostingService {
         try {
             return UUID.fromString(clientRequestId.trim()).toString();
         } catch (IllegalArgumentException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId must be a valid UUID");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId ต้องเป็น UUID ที่ถูกต้อง");
         }
     }
 
     private PricingRequestSummaryDto requirePricingRequest(long pricingRequestId) {
         return pricingRequests.findSummary(pricingRequestId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Pricing request not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
     }
 
     private PricingCostingDto requireCosting(long costingId) {
         return costings.find(costingId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Costing not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบการคำนวณต้นทุนนี้"));
     }
 
     private void requireActiveDeal(long ticketId) {
         TicketSummaryDto ticket = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"))
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
             .summary();
         if (!DealLifecycle.ACTIVE.equals(ticket.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Parent deal must be ACTIVE");
+            throw new ApiException(HttpStatus.CONFLICT, "ดีลต้นทางต้องอยู่ในสถานะ ACTIVE");
         }
     }
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
         if (!allowed.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
@@ -410,7 +410,7 @@ public class PricingCostingService {
             case UnitBasis.PER_SQM -> rawThb.multiply(requireFactor(sqmPerPiece, requestItem, "sqmPerUnit"));
             case UnitBasis.PER_LINEAR_M -> rawThb.multiply(requireFactor(linearMPerUnit, requestItem, "linearMPerUnit"));
             default -> throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "Unsupported factory quote unit basis '" + quoteUnitBasis + "'");
+                "ไม่รองรับหน่วยนับของใบเสนอราคาโรงงาน '" + quoteUnitBasis + "'");
         };
     }
 
@@ -434,7 +434,7 @@ public class PricingCostingService {
             case UnitBasis.PER_LINEAR_M -> requestedQty.divide(requireFactor(linearMPerUnit, requestItem, "linearMPerUnit"),
                 8, RoundingMode.HALF_UP);
             default -> throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "Unsupported requested unit basis '" + requestedUnitBasis + "'");
+                "ไม่รองรับหน่วยนับที่ขอ '" + requestedUnitBasis + "'");
         };
     }
 
@@ -448,8 +448,8 @@ public class PricingCostingService {
     /** Names both the item and the missing factor, per the financial-integrity review's requirement. */
     private ApiException missingFactor(PricingRequestItemDto requestItem, String factorName) {
         return new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-            "Pricing request item " + requestItem.id()
-                + " is missing the " + factorName + " conversion factor needed to normalize its price/quantity");
+            "รายการที่ " + requestItem.id()
+                + " ในคำขอราคายังไม่มีค่าแปลงหน่วย " + factorName + " ที่จำเป็นสำหรับคำนวณราคา/จำนวน");
     }
 
     private BigDecimal money4(BigDecimal value) {

@@ -22,10 +22,15 @@ import java.util.List;
  * by {@link PayrollService#preview}/{@link PayrollService#process}. It exists purely so the form
  * survives a reload before a month is processed; the explicit value HR submits to preview/process
  * is always what actually gets calculated and stored, exactly as before this change.
+ *
+ * <p>Optimistic concurrency (issue #422 follow-up): {@code etag} is the month-level token computed
+ * by {@link PayrollDraftETag} from every row's version (V113). {@code GET} returns it so the
+ * client can thread it back as {@code If-Match} on the next {@code PUT}; {@code PUT} itself is a
+ * deliberate, required API contract change -- see {@link PayrollService#saveInputDraft}.
  */
 public final class PayrollInputDraftDtos {
     private PayrollInputDraftDtos() {
     }
 
-    public record PayrollInputDraftResponse(LocalDate payrollMonth, List<PayrollEmployeeInputRequest> drafts) {}
+    public record PayrollInputDraftResponse(LocalDate payrollMonth, List<PayrollEmployeeInputRequest> drafts, String etag) {}
 }

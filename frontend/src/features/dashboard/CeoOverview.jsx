@@ -10,14 +10,14 @@ import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
 import { SkeletonCard } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { formatMoney, formatThaiDate, bangkokMonthStartIso } from '../../utils/format.js';
+import { formatMoney, formatThaiDate, bangkokMonthStartIso, greetingName } from '../../utils/format.js';
 
 /**
  * CEO exec-cockpit landing (plan: docs/agent-handoffs/valiant-watching-map.md
  * "6. CEO"). CEO keeps every existing sales surface + nav item unchanged —
  * this component only adds a role-shaped `/` landing that pulls the
  * cross-domain decisions only the CEO can make into one worklist, instead of
- * making the CEO hunt across ใบขอราคา / รายการดีล / ค่าคอมมิชชัน / คำขอ / ลา.
+ * making the CEO hunt across คำขอราคา / รายการดีล / ค่าคอมมิชชัน / คำขอ / ลา.
  *
  * Every row here deep-links to the real page that owns the mutation — this
  * component never calls an approve/verify/decide endpoint itself (see
@@ -285,7 +285,7 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
     || otManagerApprovedQuery.isLoading || otSubmittedQuery.isLoading || leaveSubmittedQuery.isLoading;
 
   const today = formatThaiDate(new Date().toISOString());
-  const greeting = `สวัสดี, คุณ${employee?.nickName || employee?.nameTh || user?.name || ''}`;
+  const greeting = `สวัสดี, ${greetingName(employee?.nickName || employee?.nameTh || user?.name)}`;
 
   return (
     <PageStack>
@@ -311,7 +311,7 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
               icon="badgeDollar"
               label="อนุมัติราคา"
               value={priceApprovalRows.length}
-              helper="Pricing requests"
+              helper="คำขอราคา"
               tone="rose"
               onClick={priceApprovalRows.length > 0 ? () => navigate('/pricing-requests') : undefined}
             />

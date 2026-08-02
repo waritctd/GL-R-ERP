@@ -223,6 +223,15 @@ export const api = {
     list: () => apiRequest(API_ROUTES.priceCalcConfigs.list),
     update: (payload) => apiRequest(API_ROUTES.priceCalcConfigs.update, { method: 'POST', body: payload }),
   },
+  // BRANCH 1 of the sales pricing-formula redesign (config storage + CEO editing UI only).
+  pricingFormulaConfig: {
+    get: () => apiRequest(API_ROUTES.pricingFormulaConfig.get),
+    update: (payload) => apiRequest(API_ROUTES.pricingFormulaConfig.update, { method: 'POST', body: payload }),
+  },
+  dealEstimateMarkup: {
+    get: () => apiRequest(API_ROUTES.dealEstimateMarkup.get),
+    update: (payload) => apiRequest(API_ROUTES.dealEstimateMarkup.update, { method: 'PUT', body: payload }),
+  },
   attachments: {
     list: (ticketId) => apiRequest(API_ROUTES.attachments.list(ticketId)),
     upload: async (ticketId, file, attachType, quotationId) => {
@@ -233,7 +242,7 @@ export const api = {
       const res = await fetch(API_ROUTES.attachments.upload(ticketId), {
         method: 'POST', credentials: 'include', body: formData,
       });
-      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || 'Upload failed'); }
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || 'อัปโหลดไม่สำเร็จ'); }
       return res.json();
     },
     fileUrl: (id) => API_ROUTES.attachments.file(id),
@@ -388,6 +397,12 @@ export const api = {
     getMyTaxAllowanceDeclarations: (year) => apiRequest(withQuery(API_ROUTES.payroll.taxAllowanceDeclarations.me, { year })),
     submitMyTaxAllowanceDeclaration: (declaration) => apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.me, { method: 'POST', body: declaration }),
     withdrawMyTaxAllowanceDeclaration: (id) => apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.withdraw(id), { method: 'DELETE' }),
+    // Tax-effect estimate (decision #4, 2026-08-01): "what this saves me". Same body shape as
+    // submitMyTaxAllowanceDeclaration -- no employeeId, ever; the server resolves the caller from
+    // the session. Real Thai tax math, run server-side through PayrollCalculator -- never
+    // reimplemented here. Mirrors PayrollService#estimateAllowanceEffect.
+    estimateMyTaxAllowanceDeclaration: (declaration) =>
+      apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.estimate, { method: 'POST', body: declaration }),
     // HR/CEO register (view), HR-only mutations (approve/reject/apply/on-behalf).
     getTaxAllowanceDeclarations: (params) => apiRequest(withQuery(API_ROUTES.payroll.taxAllowanceDeclarations.register, params)),
     createTaxAllowanceDeclarationOnBehalf: (declaration) =>
@@ -398,8 +413,43 @@ export const api = {
       apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.reject(id), { method: 'POST', body: { reviewerNote } }),
     applyTaxAllowanceDeclaration: (id, effectiveMonth) =>
       apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.apply(id), { method: 'POST', body: { effectiveMonth } }),
+    // Yearly expiry (decision #10, 2026-08-01): HR-only mirror of the scheduled expiry sweep --
+    // EXPIRED -> APPROVED, a fresh deadline. Mirrors TaxAllowanceDeclarationService#reverify.
+    reverifyTaxAllowanceDeclaration: (id) =>
+      apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.reverify(id), { method: 'POST' }),
     // Caps metadata, sourced from the backend so the UI never hardcodes a ค่าลดหย่อน cap.
     getTaxAllowanceCaps: (year) => apiRequest(withQuery(API_ROUTES.payroll.taxAllowanceCaps, { year })),
+    // Evidence attachments (decision #5, 2026-08-01). Access (owning employee + HR, re-checked on
+    // every call, no uploader short-circuit, CEO excluded) is enforced entirely server-side by
+    // TaxAllowanceDeclarationService#requireOwnerOrHr -- see that method's javadoc.
+    //
+    // csrfHeaders('POST') is applied explicitly here (unlike several older attachment call sites
+    // in this file, which forget it and 403 in production) -- see the tax-allowance plan doc's PR C
+    // section, "two traps that will cost a day if missed".
+    uploadTaxAllowanceAttachment: async (declarationId, file) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(API_ROUTES.payroll.taxAllowanceDeclarations.attachments(declarationId), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { ...csrfHeaders('POST') },
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'อัปโหลดไม่สำเร็จ');
+      }
+      return res.json();
+    },
+    listTaxAllowanceAttachments: (declarationId) =>
+      apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.attachments(declarationId)),
+    downloadTaxAllowanceAttachment: async (attachmentId) => {
+      const res = await fetch(API_ROUTES.payroll.taxAllowanceAttachmentFile(attachmentId), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+    deleteTaxAllowanceAttachment: (attachmentId, reason) =>
+      apiRequest(API_ROUTES.payroll.taxAllowanceAttachment(attachmentId), { method: 'DELETE', body: { reason } }),
     // C2: year-to-date backfill seed for a mid-year go-live. Same view/edit split.
     getYtdSeed: (year) => apiRequest(withQuery(API_ROUTES.payroll.ytdSeed, { year })),
     saveYtdSeed: (year, items) => apiRequest(withQuery(API_ROUTES.payroll.ytdSeed, { year }), { method: 'PUT', body: { items } }),
@@ -415,8 +465,39 @@ export const api = {
     // hr.payroll_line. GET is HR+CEO (view), PUT is HR-only (edit) -- same split as the rest of
     // this namespace. `payload` is the same { payrollMonth, inputs } shape as preview/process.
     // Mirrors PayrollController#getInputDraft / #putInputDraft.
+    //
+    // Optimistic concurrency (issue #422 follow-up, deliberate API contract change): getInputDraft's
+    // response now carries a month-level `etag` (PayrollService#getInputDraft/PayrollDraftETag) --
+    // the caller threads it straight through as `ifMatch` on the next saveInputDraft call, which
+    // sends it as the `If-Match` header. saveInputDraft's backend counterpart now REQUIRES this
+    // header (428 if absent, 409 if it no longer matches the server's current version) -- see
+    // PayrollService#saveInputDraft's javadoc for the full lock-then-compare-then-write sequence.
     getInputDraft: (params) => apiRequest(withQuery(API_ROUTES.payroll.inputDraft, params)),
-    saveInputDraft: (payload) => apiRequest(API_ROUTES.payroll.inputDraft, { method: 'PUT', body: payload }),
+    saveInputDraft: (payload, { ifMatch } = {}) =>
+      apiRequest(API_ROUTES.payroll.inputDraft, {
+        method: 'PUT',
+        body: payload,
+        headers: ifMatch ? { 'If-Match': ifMatch } : {},
+      }),
+    // Deduction obligation tracking (issue #373): กยศ / กรมบังคับคดี obligation record + remittance
+    // ledger. Mirrors DeductionObligationController. Self-service /me is read-only -- there is
+    // deliberately no employee-facing mutation call anywhere in this group (decision 4: the dispute
+    // route is to the authority, never HR).
+    getMyDeductionObligations: () => apiRequest(API_ROUTES.payroll.deductionObligations.me),
+    getDeductionObligations: (params) => apiRequest(withQuery(API_ROUTES.payroll.deductionObligations.list, params)),
+    getDeductionObligationProgress: (id) => apiRequest(API_ROUTES.payroll.deductionObligations.progress(id)),
+    createDeductionObligation: (payload) =>
+      apiRequest(API_ROUTES.payroll.deductionObligations.create, { method: 'POST', body: payload }),
+    updateDeductionObligation: (id, payload) =>
+      apiRequest(API_ROUTES.payroll.deductionObligations.update(id), { method: 'PUT', body: payload }),
+    stopDeductionObligation: (id) =>
+      apiRequest(API_ROUTES.payroll.deductionObligations.stop(id), { method: 'POST' }),
+    acknowledgeDeductionObligationCompletion: (id) =>
+      apiRequest(API_ROUTES.payroll.deductionObligations.acknowledgeCompletion(id), { method: 'POST' }),
+    overrideDeductionObligationContinue: (id, reason) =>
+      apiRequest(API_ROUTES.payroll.deductionObligations.overrideContinue(id), { method: 'POST', body: { reason } }),
+    clearDeductionObligationOverride: (id) =>
+      apiRequest(API_ROUTES.payroll.deductionObligations.clearOverride(id), { method: 'POST' }),
   },
   priceImport: {
     factories: () => apiRequest(API_ROUTES.priceImport.factories),
@@ -546,7 +627,7 @@ export const api = {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || 'Upload failed');
+        throw new Error(err.message || 'อัปโหลดไม่สำเร็จ');
       }
       return res.json();
     },
@@ -568,7 +649,7 @@ export const api = {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || 'Upload failed');
+        throw new Error(err.message || 'อัปโหลดไม่สำเร็จ');
       }
       return res.json();
     },

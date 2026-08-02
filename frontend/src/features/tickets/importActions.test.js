@@ -36,7 +36,7 @@ describe('nextImportAction', () => {
   it('ignores non-SUBMITTED pricing requests and falls through to the fulfilment chain', () => {
     const ticket = { id: 5, status: 'quotation_issued', fulfillmentStatus: null };
     const action = nextImportAction(ticket, [{ status: 'IMPORT_REVIEWING' }]);
-    expect(action).toEqual({ code: 'issueImportRequest', label: 'ออก IR', to: '/tickets/5' });
+    expect(action).toEqual({ code: 'issueImportRequest', label: 'ออกคำขอนำเข้า', to: '/tickets/5' });
   });
 
   it('deep-links fulfilment-chain actions to the ticket detail page', () => {

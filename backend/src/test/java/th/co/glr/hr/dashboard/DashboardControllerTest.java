@@ -30,7 +30,7 @@ class DashboardControllerTest {
     void requiresAuthentication() throws Exception {
         mvc.perform(get("/api/dashboard/summary"))
             .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.message").value("Not authenticated"));
+            .andExpect(jsonPath("$.message").value("กรุณาเข้าสู่ระบบก่อนใช้งาน"));
 
         verifyNoInteractions(dashboardService);
     }

@@ -39,7 +39,7 @@ public class ApiExceptionHandler {
             .collect(Collectors.joining(", "));
         return ResponseEntity
             .status(HttpStatus.BAD_REQUEST)
-            .body(new ErrorResponse(message.isBlank() ? "Invalid request" : message, HttpStatus.BAD_REQUEST.value()));
+            .body(new ErrorResponse(message.isBlank() ? "คำขอไม่ถูกต้อง" : message, HttpStatus.BAD_REQUEST.value()));
     }
 
     @ExceptionHandler({
@@ -50,21 +50,21 @@ public class ApiExceptionHandler {
     ResponseEntity<ErrorResponse> handleBadRequest(Exception exception) {
         return ResponseEntity
             .status(HttpStatus.BAD_REQUEST)
-            .body(new ErrorResponse("Invalid request", HttpStatus.BAD_REQUEST.value()));
+            .body(new ErrorResponse("คำขอไม่ถูกต้อง", HttpStatus.BAD_REQUEST.value()));
     }
 
     @ExceptionHandler(AuthenticationCredentialsNotFoundException.class)
     ResponseEntity<ErrorResponse> handleMissingAuthentication(AuthenticationCredentialsNotFoundException exception) {
         return ResponseEntity
             .status(HttpStatus.UNAUTHORIZED)
-            .body(new ErrorResponse("Not authenticated", HttpStatus.UNAUTHORIZED.value()));
+            .body(new ErrorResponse("กรุณาเข้าสู่ระบบก่อนใช้งาน", HttpStatus.UNAUTHORIZED.value()));
     }
 
     @ExceptionHandler(AccessDeniedException.class)
     ResponseEntity<ErrorResponse> handleAccessDenied(AccessDeniedException exception) {
         return ResponseEntity
             .status(HttpStatus.FORBIDDEN)
-            .body(new ErrorResponse("Forbidden", HttpStatus.FORBIDDEN.value()));
+            .body(new ErrorResponse("ไม่มีสิทธิ์เข้าถึงรายการนี้", HttpStatus.FORBIDDEN.value()));
     }
 
     // Thrown for any request path with no matching controller or static resource (e.g. GET / on
@@ -74,7 +74,7 @@ public class ApiExceptionHandler {
     ResponseEntity<ErrorResponse> handleNoResourceFound(NoResourceFoundException exception) {
         return ResponseEntity
             .status(HttpStatus.NOT_FOUND)
-            .body(new ErrorResponse("Not found", HttpStatus.NOT_FOUND.value()));
+            .body(new ErrorResponse("ไม่พบรายการนี้", HttpStatus.NOT_FOUND.value()));
     }
 
     @ExceptionHandler(DataAccessException.class)
@@ -82,9 +82,12 @@ public class ApiExceptionHandler {
         log.error("Database error method={} path={} userId={}",
             request.getMethod(), request.getRequestURI(), currentUserId(request), exception);
         String msg = exception.getMostSpecificCause().getMessage();
+        // The prefix is translated; `msg` itself is the raw JDBC driver message (untranslatable,
+        // and arguably shouldn't be echoed to the client at all — that's a pre-existing behavior
+        // this i18n sweep does not change, see PR notes).
         return ResponseEntity
             .status(HttpStatus.INTERNAL_SERVER_ERROR)
-            .body(new ErrorResponse("Database error: " + msg, HttpStatus.INTERNAL_SERVER_ERROR.value()));
+            .body(new ErrorResponse("เกิดข้อผิดพลาดกับฐานข้อมูล: " + msg, HttpStatus.INTERNAL_SERVER_ERROR.value()));
     }
 
     @ExceptionHandler(Exception.class)
@@ -93,7 +96,7 @@ public class ApiExceptionHandler {
             request.getMethod(), request.getRequestURI(), currentUserId(request), exception);
         return ResponseEntity
             .status(HttpStatus.INTERNAL_SERVER_ERROR)
-            .body(new ErrorResponse("Internal server error", HttpStatus.INTERNAL_SERVER_ERROR.value()));
+            .body(new ErrorResponse("เกิดข้อผิดพลาดภายในระบบ", HttpStatus.INTERNAL_SERVER_ERROR.value()));
     }
 
     // Best-effort acting-user lookup for the log line above. Defensive: the session may not exist,
@@ -113,7 +116,14 @@ public class ApiExceptionHandler {
     }
 
     private static String fieldMessage(FieldError error) {
-        return error.getField() + " " + (error.getDefaultMessage() == null ? "is invalid" : error.getDefaultMessage());
+        // NOTE (#393 follow-up): error.getDefaultMessage() is Jakarta Bean Validation's own message
+        // — for the ~230 @NotBlank/@NotNull/@Size/etc. fields in this codebase that carry no custom
+        // `message=`, that is Jakarta's built-in English text ("must not be blank", "must not be
+        // null", ...), not a literal in this file. Translating those needs a
+        // ValidationMessages.properties bundle (or per-annotation message= overrides), a different
+        // and much larger mechanism than the literal-string sweep done here — tracked as a known
+        // gap, not fixed in this change.
+        return error.getField() + " " + (error.getDefaultMessage() == null ? "ไม่ถูกต้อง" : error.getDefaultMessage());
     }
 
     public record ErrorResponse(String message, int status) {

@@ -88,7 +88,7 @@ public class PricingDecisionService {
         requireRole(actor, CEO_ROLES);
         PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId);
         if (!PricingRequestStatus.READY_FOR_CEO_REVIEW.equals(summary.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Pricing request is not ready for CEO review");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ยังไม่พร้อมส่งให้ CEO พิจารณา");
         }
         requireActiveDeal(summary.ticketId());
         String clientRequestId = validateUuid(request.clientRequestId());
@@ -106,7 +106,7 @@ public class PricingDecisionService {
             PricingDecisionDto existing = requireDecision(decisionId);
             if (existing.pricingRequestId() != pricingRequestId) {
                 throw new ApiException(HttpStatus.CONFLICT,
-                    "clientRequestId has already been used for another pricing request");
+                    "clientRequestId นี้ถูกใช้ไปแล้วกับคำขอราคาอื่น");
             }
             return existing;
         }
@@ -128,7 +128,7 @@ public class PricingDecisionService {
         int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.READY_FOR_CEO_REVIEW,
             PricingRequestStatus.CEO_REVIEWING, null, null);
         if (transitioned == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "Pricing request was changed by another user");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         addEvent(summary, actor, PricingRequestEventKind.PRICING_DECISION_STARTED,
             PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.CEO_REVIEWING,
@@ -196,18 +196,18 @@ public class PricingDecisionService {
             if (replay.isPresent()) {
                 if (replay.get().id() != decisionId) {
                     throw new ApiException(HttpStatus.CONFLICT,
-                        "clientRequestId has already been used for another pricing decision");
+                        "clientRequestId นี้ถูกใช้ไปแล้วกับมติราคาอื่น");
                 }
                 return replay.get();
             }
         }
         PricingDecisionDto decision = requireDecision(decisionId);
         if (!PricingDecisionStatus.DRAFT.equals(decision.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Decision is not open for approval");
+            throw new ApiException(HttpStatus.CONFLICT, "มติราคานี้ไม่ได้อยู่ในสถานะที่รออนุมัติ");
         }
         PricingRequestSummaryDto summary = requirePricingRequest(decision.pricingRequestId());
         if (!PricingRequestStatus.CEO_REVIEWING.equals(summary.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Pricing request is not under CEO review");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO");
         }
         requireActiveDeal(summary.ticketId());
 
@@ -223,8 +223,8 @@ public class PricingDecisionService {
         }
         if (!missingMargin.isEmpty() || !missingMinimum.isEmpty()) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "Every item needs a margin and a minimum selling price before approval — missing margin: "
-                    + missingMargin + ", missing minimum selling price: " + missingMinimum);
+                "ทุกรายการต้องระบุ margin และราคาขายขั้นต่ำก่อนอนุมัติ — รายการที่ยังไม่มี margin: "
+                    + missingMargin + ", รายการที่ยังไม่มีราคาขายขั้นต่ำ: " + missingMinimum);
         }
 
         // Design correction 7: never trust a stored/client-supplied selling price at approval —
@@ -239,19 +239,19 @@ public class PricingDecisionService {
 
         int approvedRows = decisions.approve(decisionId, actor.id(), request.ceoNote(), approveClientRequestId);
         if (approvedRows == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "Decision was changed by another user");
+            throw new ApiException(HttpStatus.CONFLICT, "มติราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.CEO_REVIEWING,
             PricingRequestStatus.APPROVED_FOR_QUOTATION, null, null);
         if (transitioned == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "Pricing request was changed by another user");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         addEvent(summary, actor, PricingRequestEventKind.PRICING_DECISION_APPROVED,
             PricingRequestStatus.CEO_REVIEWING, PricingRequestStatus.APPROVED_FOR_QUOTATION,
             "CEO อนุมัติราคาขายแล้ว");
         notifications.notifyEmployeeForPricingRequest(summary.requestedById(), summary.id(),
             PricingRequestEventKind.PRICING_DECISION_APPROVED,
-            "ใบขอราคา " + summary.requestCode() + " ได้รับอนุมัติราคาขายแล้ว");
+            "คำขอราคา " + summary.requestCode() + " ได้รับอนุมัติราคาขายแล้ว");
         return requireDecision(decisionId);
     }
 
@@ -259,7 +259,7 @@ public class PricingDecisionService {
     public PricingDecisionDto returnToImport(long decisionId, ReturnPricingDecisionRequest request, UserPrincipal actor) {
         requireRole(actor, CEO_ROLES);
         if (request.returnReason() == null || request.returnReason().isBlank()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "returnReason is required");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเหตุผลการตีกลับ");
         }
         // Same lock-then-re-read discipline as approve(): return and approve are the two
         // mutually-exclusive terminal exits from DRAFT, so both must serialize against each
@@ -271,12 +271,12 @@ public class PricingDecisionService {
 
         int returnedRows = decisions.returnToImport(decisionId, request.returnReason());
         if (returnedRows == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "Decision was changed by another user");
+            throw new ApiException(HttpStatus.CONFLICT, "มติราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.CEO_REVIEWING,
             PricingRequestStatus.COSTING_REVISION_REQUIRED, null, null);
         if (transitioned == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "Pricing request was changed by another user");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         addEvent(summary, actor, PricingRequestEventKind.PRICING_DECISION_RETURNED,
             PricingRequestStatus.CEO_REVIEWING, PricingRequestStatus.COSTING_REVISION_REQUIRED,
@@ -284,11 +284,11 @@ public class PricingDecisionService {
         if (summary.assignedImportId() != null) {
             notifications.notifyEmployeeForPricingRequest(summary.assignedImportId(), summary.id(),
                 PricingRequestEventKind.PRICING_DECISION_RETURNED,
-                "ใบขอราคา " + summary.requestCode() + " ถูก CEO ตีกลับให้แก้ไขต้นทุน");
+                "คำขอราคา " + summary.requestCode() + " ถูก CEO ตีกลับให้แก้ไขต้นทุน");
         } else {
             notifications.notifyByRoleForPricingRequest("import", summary.id(),
                 PricingRequestEventKind.PRICING_DECISION_RETURNED,
-                "ใบขอราคา " + summary.requestCode() + " ถูก CEO ตีกลับให้แก้ไขต้นทุน");
+                "คำขอราคา " + summary.requestCode() + " ถูก CEO ตีกลับให้แก้ไขต้นทุน");
         }
         return requireDecision(decisionId);
     }
@@ -298,10 +298,10 @@ public class PricingDecisionService {
         requireRole(actor, SALES_VIEW_ROLES);
         PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId);
         if ("sales".equals(actor.role()) && summary.ticketCreatedById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return decisions.findApprovedSalesView(pricingRequestId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "No approved pricing decision yet"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ยังไม่มีมติราคาที่ได้รับอนุมัติ"));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -314,7 +314,7 @@ public class PricingDecisionService {
             PricingDecisionItemDto item = byId.get(req.pricingDecisionItemId());
             if (item == null) {
                 throw new ApiException(HttpStatus.BAD_REQUEST,
-                    "Item " + req.pricingDecisionItemId() + " does not belong to this decision");
+                    "รายการที่ " + req.pricingDecisionItemId() + " ไม่ได้เป็นของมติราคานี้");
             }
             BigDecimal marginPct = req.marginPct();
             BigDecimal sellingPrice = null;
@@ -326,23 +326,23 @@ public class PricingDecisionService {
             if (req.discountCeilingPct() != null
                     && (req.discountCeilingPct().compareTo(BigDecimal.ZERO) < 0
                         || req.discountCeilingPct().compareTo(BigDecimal.ONE) > 0)) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "discountCeilingPct must be between 0 and 1");
+                throw new ApiException(HttpStatus.BAD_REQUEST, "discountCeilingPct ต้องอยู่ระหว่าง 0 ถึง 1");
             }
             if (req.minimumSellingPrice() != null && req.minimumSellingPrice().compareTo(BigDecimal.ZERO) < 0) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "minimumSellingPrice must not be negative");
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ราคาขายขั้นต่ำต้องไม่ติดลบ");
             }
             updates.add(new ItemUpdate(item.id(), marginPct, sellingPrice, req.discountCeilingPct(),
                 req.minimumSellingPrice(), req.decisionNote()));
         }
         int rows = decisions.updateItems(decision.id(), updates);
         if (rows != updates.size()) {
-            throw new ApiException(HttpStatus.CONFLICT, "Decision was changed by another user");
+            throw new ApiException(HttpStatus.CONFLICT, "มติราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
     }
 
     private void requireValidMargin(BigDecimal marginPct) {
         if (marginPct.compareTo(MINUS_ONE) <= 0) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "marginPct must be greater than -1 (selling price cannot be negative)");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "marginPct ต้องมากกว่า -1 (ราคาขายต้องไม่ติดลบ)");
         }
     }
 
@@ -367,7 +367,7 @@ public class PricingDecisionService {
             }
         }
         if (latest == null) {
-            throw new ApiException(HttpStatus.CONFLICT, "Pricing request has no submitted costing");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ยังไม่มีการคำนวณต้นทุนที่ส่งเข้ามา");
         }
         return latest;
     }
@@ -375,11 +375,11 @@ public class PricingDecisionService {
     private PricingDecisionDto requireOpenDecisionForMutation(long decisionId) {
         PricingDecisionDto decision = requireDecision(decisionId);
         if (!PricingDecisionStatus.DRAFT.equals(decision.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Decision is not open for editing");
+            throw new ApiException(HttpStatus.CONFLICT, "มติราคานี้ไม่ได้อยู่ในสถานะที่แก้ไขได้");
         }
         PricingRequestSummaryDto summary = requirePricingRequest(decision.pricingRequestId());
         if (!PricingRequestStatus.CEO_REVIEWING.equals(summary.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Pricing request is not under CEO review");
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO");
         }
         requireActiveDeal(summary.ticketId());
         return decision;
@@ -387,26 +387,26 @@ public class PricingDecisionService {
 
     private PricingDecisionDto requireDecision(long decisionId) {
         return decisions.find(decisionId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Pricing decision not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบมติราคานี้"));
     }
 
     private PricingRequestSummaryDto requirePricingRequest(long pricingRequestId) {
         return pricingRequests.findSummary(pricingRequestId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Pricing request not found"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
     }
 
     private void requireActiveDeal(long ticketId) {
         TicketSummaryDto ticket = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Ticket not found"))
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
             .summary();
         if (!DealLifecycle.ACTIVE.equals(ticket.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT, "Parent deal must be ACTIVE");
+            throw new ApiException(HttpStatus.CONFLICT, "ดีลต้นทางต้องอยู่ในสถานะ ACTIVE");
         }
     }
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
         if (!allowed.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Forbidden");
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
 
@@ -430,7 +430,7 @@ public class PricingDecisionService {
         try {
             return UUID.fromString(clientRequestId.trim()).toString();
         } catch (IllegalArgumentException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId must be a valid UUID");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId ต้องเป็น UUID ที่ถูกต้อง");
         }
     }
 

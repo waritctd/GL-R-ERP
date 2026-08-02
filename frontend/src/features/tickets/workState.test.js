@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { resolveWorkState } from './workState.js';
+import { nextSalesAction } from './salesActions.js';
 
 function baseDeal(overrides = {}) {
   return {
@@ -149,5 +150,82 @@ describe('resolveWorkState', () => {
     const result = resolveWorkState({ role: 'hr' }, deal, []);
     expect(result.action).toBeNull();
     expect(result.waitingRoleLabel).toBe('ฝ่ายขาย');
+  });
+});
+
+// UAT bug: nextSalesAction's bucket 1 (salesActions.js) used to fire
+// unconditionally on "no live pricing request" — true forever for any
+// legacy/demo deal created before the PricingRequest chain existed (e.g.
+// demoData ticket 12, PR-2026-0012), permanently parking it on "create a
+// pricing request" even once it had a quotation, a deposit, and an import
+// request already in flight. These test nextSalesAction directly (rather
+// than through resolveWorkState) since the bug and the fix both live
+// entirely in its bucket-1 gate.
+describe('nextSalesAction — CREATE_PCR gate on legacy/no-PR deals (UAT regression)', () => {
+  it('does NOT offer create_pcr for the reported deal — legacy quotation issued, deposit paid, IR issued, zero pricing requests', () => {
+    const deal = baseDeal({
+      status: 'quotation_issued',
+      salesStage: 'PROCUREMENT',
+      paymentStatus: 'DEPOSIT_PAID',
+      fulfillmentStatus: 'IR_ISSUED',
+    });
+    const action = nextSalesAction(deal, []);
+    expect(action?.key).not.toBe('create_pcr');
+    // Nothing else in the cascade applies either (no follow-up due, not
+    // stale) — the fixed bucket 1 must fall through to "nothing pending",
+    // not invent a different bogus action.
+    expect(action).toBeNull();
+  });
+
+  it('suppresses create_pcr on a paymentStatus alone (a price must exist for anything to be payable), even with the status still draft', () => {
+    const deal = baseDeal({ status: 'draft', paymentStatus: 'CUSTOMER_CONFIRMED' });
+    expect(nextSalesAction(deal, [])?.key).not.toBe('create_pcr');
+  });
+
+  it('suppresses create_pcr on a quoted status alone — legacy quotation out, customer has not confirmed, so paymentStatus is still null', () => {
+    const deal = baseDeal({ status: 'quotation_issued', paymentStatus: null });
+    expect(nextSalesAction(deal, [])?.key).not.toBe('create_pcr');
+  });
+
+  // The guard is (no PR rows AT ALL) AND (a price went out) — not just the
+  // latter. OrderConfirmationService.confirmOrder sets 'quotation_issued' and
+  // confirmCustomer sets paymentStatus under the CURRENT flow too, so a deal
+  // that IS in the chain can carry both signals.
+  it('still offers create_pcr after a customer-change revision leaves {parent SUPERSEDED, child DRAFT} on an order-confirmed deal — no live PR, but the deal is in the chain', () => {
+    const deal = baseDeal({
+      status: 'quotation_issued',
+      salesStage: 'ORDER_RECEIVED',
+      paymentStatus: 'CUSTOMER_CONFIRMED',
+    });
+    const prs = [
+      { id: 11, ticketId: deal.id, status: 'SUPERSEDED' },
+      { id: 12, ticketId: deal.id, status: 'DRAFT' },
+    ];
+    expect(nextSalesAction(deal, prs)).toMatchObject({ key: 'create_pcr' });
+  });
+
+  it('still offers create_pcr for an early-stage deal with no payment status and zero pricing requests (the real case the gate must not break)', () => {
+    const deal = baseDeal(); // QUOTE_DESIGN_SIDE, status/paymentStatus absent
+    const action = nextSalesAction(deal, []);
+    expect(action).toMatchObject({ key: 'create_pcr' });
+  });
+
+  // The three cases below are why the guard reads `status`/`paymentStatus`
+  // rather than salesStage/fulfillmentStatus: each is a deal that has
+  // genuinely never been priced, and suppressing the CTA on any of them would
+  // strand the rep with no button and a "รอฝ่ายขาย" banner naming themselves.
+  it('still offers create_pcr after TicketService.reserveStock sets FROM_STOCK and auto-advances the stage — that path has no pricing precondition', () => {
+    const deal = baseDeal({ salesStage: 'DELIVERY_SCHEDULING', fulfillmentStatus: 'FROM_STOCK' });
+    expect(nextSalesAction(deal, [])).toMatchObject({ key: 'create_pcr' });
+  });
+
+  it('still offers create_pcr when a rep manually set an auto stage (allowedTargetStages does not filter `auto`, so ORDER_RECEIVED is reachable by hand)', () => {
+    const deal = baseDeal({ salesStage: 'ORDER_RECEIVED' });
+    expect(nextSalesAction(deal, [])).toMatchObject({ key: 'create_pcr' });
+  });
+
+  it('still offers create_pcr for a legacy deal stranded mid-flight in the RETIRED engine (in_review) — that price can never arrive now', () => {
+    const deal = baseDeal({ status: 'in_review' });
+    expect(nextSalesAction(deal, [])).toMatchObject({ key: 'create_pcr' });
   });
 });

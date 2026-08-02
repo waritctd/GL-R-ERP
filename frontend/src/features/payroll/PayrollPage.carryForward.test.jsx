@@ -1,8 +1,18 @@
 import React from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PayrollPage } from './PayrollPage.jsx';
 import { api } from '../../api/index.js';
+
+// Issue #422 B1: PayrollPage now reads through react-query, so every render below needs a real
+// QueryClient in context.
+function renderWithClient(ui) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
 
 // Special-pay carry-forward (2026-07-23): a NEW test file (does not edit PayrollPage.test.jsx,
 // which a concurrent branch, feat/payroll-statutory-export-files, also modifies) covering the
@@ -10,11 +20,22 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
+// hasPermission(user?.role, 'canManagePayroll') reads false for an absent user (issue #390 --
+// canManage is an allowlist off ROLE_PERMISSIONS), so every render below passes a real HR user
+// explicitly rather than relying on an implicit default.
+const hrUser = { role: 'hr', employeeId: 10 };
+
 vi.mock('../../api/index.js', () => ({
   api: {
     payroll: {
       current: vi.fn(),
       suggestedInputs: vi.fn(),
+      // Issue #422 A1/A2: getInputDraft is now fetched unconditionally on every load, and
+      // saveInputDraft is called directly (not optional-chained) from saveDraft() and from the
+      // month-change/unmount flush -- both must exist on this mock or a render (or even just an
+      // unmount with a dirty form) throws "is not a function".
+      getInputDraft: vi.fn(),
+      saveInputDraft: vi.fn(),
       preview: vi.fn(),
       process: vi.fn(),
       bankExport: vi.fn(),
@@ -77,6 +98,8 @@ describe('PayrollPage special-pay carry-forward', () => {
     vi.clearAllMocks();
     api.payroll.current.mockResolvedValue({ period: freshPreviewPeriod() });
     api.payroll.preview.mockResolvedValue({ period: freshPreviewPeriod() });
+    api.payroll.getInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
+    api.payroll.saveInputDraft.mockResolvedValue({ payrollMonth: '2026-07-01', drafts: [] });
   });
 
   it('pre-fills carried fields from suggested-inputs on a fresh run, without touching non-carried fields', async () => {
@@ -97,7 +120,7 @@ describe('PayrollPage special-pay carry-forward', () => {
       ],
     });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     // Deliberately not asserting the exact month string (it derives from "today", so hardcoding it
     // would make the test flake across a real month boundary) — only that a payrollMonth was passed.
@@ -138,7 +161,7 @@ describe('PayrollPage special-pay carry-forward', () => {
       ],
     });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     await waitFor(() => expect(costOfLiving.value).toBe('700'));
@@ -147,7 +170,7 @@ describe('PayrollPage special-pay carry-forward', () => {
     fireEvent.change(costOfLiving, { target: { value: '950' } });
     expect(costOfLiving.value).toBe('950');
 
-    fireEvent.click(screen.getByRole('button', { name: /คำนวณตัวอย่าง/i }));
+    fireEvent.click(screen.getByRole('button', { name: /บันทึกร่าง/i }));
 
     await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
     const submittedInput = api.payroll.preview.mock.calls[0][0].inputs.find((item) => item.employeeId === 1);
@@ -159,7 +182,7 @@ describe('PayrollPage special-pay carry-forward', () => {
       period: freshPreviewPeriod({ id: 7, status: 'PROCESSED' }),
     });
 
-    render(<PayrollPage showToast={vi.fn()} />);
+    renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
     await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     expect(api.payroll.suggestedInputs).not.toHaveBeenCalled();

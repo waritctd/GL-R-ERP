@@ -33,8 +33,10 @@ import { canAccessPath } from '../src/app/permissions.js';
 //
 // /catalog IS now asserted: its <Route> was moved INSIDE the RequireAccess
 // wrapper (fix/catalog-route-guard) so the canViewCatalog guard is actually
-// enforced — this spec now guards against it regressing back outside. (NOTE:
-// GET /api/catalog still has no backend role check — a separate follow-up.)
+// enforced — this spec now guards against it regressing back outside. What that
+// guard controls is who sees the SCREEN: GET /api/catalog and /api/catalog/prices
+// are open to any authenticated user by product decision (#205; owner ruling
+// 2026-08-01 closing #388), so this is a UX assertion, not a security one.
 // /overtime and /my-requests remain excluded: both are RequireAccess-guarded
 // Navigate ALIASES (to /employee-requests?tab=ot and /profile respectively)
 // with guards identical to their canonical targets, so testing them adds
@@ -82,18 +84,23 @@ test.describe('rbac gating (frontend-gating only, not a backend authz proof)', (
         const expected = canAccessPath(routePath, user);
         await spaGoto(page, routePath);
 
+        // Both branches now land on `routePath` — issue #391 stopped denied routes
+        // redirecting to '/' so a shared deep link keeps its URL and the refusal
+        // survives a reload. The URL alone therefore no longer distinguishes allow
+        // from deny; the access-denied view's presence is what does.
+        await expect
+          .poll(() => new URL(page.url()).pathname, {
+            message: `${role} @ ${routePath}: URL must be preserved either way (#391)`,
+          })
+          .toBe(routePath);
+
+        const denial = page.getByRole('heading', { name: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' });
         if (expected) {
-          await expect
-            .poll(() => new URL(page.url()).pathname, {
-              message: `${role} @ ${routePath}: expected ALLOW (render), canAccessPath said true`,
-            })
-            .toBe(routePath);
+          await expect(denial, `${role} @ ${routePath}: expected ALLOW (render), canAccessPath said true`)
+            .toBeHidden();
         } else {
-          await expect
-            .poll(() => new URL(page.url()).pathname, {
-              message: `${role} @ ${routePath}: expected REDIRECT to /, canAccessPath said false`,
-            })
-            .toBe('/');
+          await expect(denial, `${role} @ ${routePath}: expected DENY in place, canAccessPath said false`)
+            .toBeVisible();
         }
       }
     });
