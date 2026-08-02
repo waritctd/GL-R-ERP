@@ -8,6 +8,7 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -167,7 +168,6 @@ public class LeaveService {
 
         BigDecimal totalDays = computeTotalDays(request);
         int quotaYear = request.startDate().getYear();
-        BigDecimal remainingBefore = remainingDays(employeeId, leaveType, quotaYear);
         boolean hasAttachment = attachment != null && !attachment.isEmpty();
         // Leave -> payroll unpaid-day deduction (2026-07-23); §5 leave-rules-as-data (V116) added the
         // once-per-employment/min-service/max-consecutive-days/per-type-notice gates. The gate no
@@ -180,33 +180,68 @@ public class LeaveService {
         // quota-based split still needs before it drives a real payroll run.
         String systemNote = autoRejectNote(leaveType, employeeId, request.startDate(), request.endDate(), hasAttachment);
         LeaveStatus status = systemNote == null ? LeaveStatus.APPROVED : LeaveStatus.AUTO_REJECTED;
-        BigDecimal paidDays;
-        BigDecimal unpaidDays;
-        BigDecimal remainingAfter;
-        if (status == LeaveStatus.APPROVED) {
-            // paidDays consumes from the request's earliest working days first (chronological order):
-            // that is the only ordering an aggregate paid/unpaid split can represent, and it matches
-            // the natural reading of "day N onward went unpaid". See LeaveDayMath.
-            BigDecimal quotaBoundedPaidDays = remainingBefore.min(totalDays).max(BigDecimal.ZERO);
-            // §5.4 MATERNITY-shaped rule (V116): paid_days_cap bounds how many of THOSE days are paid,
-            // independently of the quota -- a 98-day MATERNITY request (98-day quota, 45-day cap)
-            // splits 45 paid / 53 unpaid even though the full 98 days fit inside the quota itself.
-            paidDays = boundByPaidCap(employeeId, leaveType, quotaYear, quotaBoundedPaidDays);
-            unpaidDays = totalDays.subtract(paidDays);
-            // review fix (V116): remainingAfter tracks QUOTA consumption, not money paid -- it must be
-            // derived from quotaBoundedPaidDays (== remainingDays()'s own min(remaining, totalDays)
-            // formula), NOT from the paid-cap-narrowed `paidDays`. Using `paidDays` here understated
-            // quota consumption for any capped type: a 98-day MATERNITY request (98-day quota, 45-day
-            // cap) would have stored quota_remaining_after = 98-45 = 53, while the very next
-            // remainingDays() call (which sums total_days, not paid_days) reports 0 -- a stored value
-            // that lies about how much quota is left, and that a UI could genuinely surface to the
-            // employee.
-            remainingAfter = remainingBefore.subtract(quotaBoundedPaidDays).max(BigDecimal.ZERO);
-        } else {
-            paidDays = BigDecimal.ZERO;
-            unpaidDays = BigDecimal.ZERO;
-            remainingAfter = remainingBefore;
+
+        // V118 cross-year quota fix (2026-08-02): a request's days are attributed per calendar year
+        // (almost always just one -- two only for a request spanning 31 Dec/1 Jan, e.g. a long
+        // MATERNITY request -- see LeaveQuotaYearSplit). Each year's paidDays/unpaidDays/remaining
+        // figures are computed INDEPENDENTLY against that year's own quota and paid_days_cap; see
+        // LeaveQuotaYearSplit's Javadoc for the deliberate consequence of that design (a boundary-
+        // straddling request can receive more total paid days than a same-year one would).
+        Map<Integer, BigDecimal> requestedDaysByYear =
+            LeaveDayMath.totalDaysByYear(request.startDate(), request.endDate(), totalDays);
+        List<LeaveQuotaYearSplit> quotaYearSplits = new ArrayList<>();
+        BigDecimal paidDays = BigDecimal.ZERO;
+        BigDecimal unpaidDays = BigDecimal.ZERO;
+        for (Map.Entry<Integer, BigDecimal> entry : requestedDaysByYear.entrySet()) {
+            int year = entry.getKey();
+            BigDecimal daysInYear = entry.getValue();
+            BigDecimal remainingBeforeYear = remainingDays(employeeId, leaveType, year);
+            BigDecimal paidDaysYear;
+            BigDecimal unpaidDaysYear;
+            BigDecimal remainingAfterYear;
+            if (status == LeaveStatus.APPROVED) {
+                // paidDaysYear consumes from THIS YEAR's earliest working days first (chronological
+                // order, reset per year): the only ordering an aggregate paid/unpaid split can
+                // represent, matching the natural reading of "day N of this year onward went unpaid".
+                // See LeaveDayMath.
+                BigDecimal quotaBoundedPaidDaysYear = remainingBeforeYear.min(daysInYear).max(BigDecimal.ZERO);
+                // §5.4 MATERNITY-shaped rule (V116): paid_days_cap bounds how many of THOSE days are
+                // paid, independently of the quota -- e.g. a 44-day slice of a MATERNITY request
+                // still gets bounded by that same year's 45-day paid_days_cap.
+                paidDaysYear = boundByPaidCap(employeeId, leaveType, year, quotaBoundedPaidDaysYear);
+                unpaidDaysYear = daysInYear.subtract(paidDaysYear);
+                // review fix (V116), preserved per-year: remainingAfterYear tracks QUOTA consumption,
+                // not money paid -- derived from quotaBoundedPaidDaysYear, NOT from the
+                // paid-cap-narrowed `paidDaysYear`. See the original review-fix comment (git blame)
+                // for the full "98-45=53 lies about quota left" rationale, which applies identically
+                // per year here.
+                remainingAfterYear = remainingBeforeYear.subtract(quotaBoundedPaidDaysYear).max(BigDecimal.ZERO);
+            } else {
+                paidDaysYear = BigDecimal.ZERO;
+                unpaidDaysYear = BigDecimal.ZERO;
+                remainingAfterYear = remainingBeforeYear;
+            }
+            paidDays = paidDays.add(paidDaysYear);
+            unpaidDays = unpaidDays.add(unpaidDaysYear);
+            quotaYearSplits.add(new LeaveQuotaYearSplit(
+                year, daysInYear, paidDaysYear, unpaidDaysYear, remainingBeforeYear, remainingAfterYear));
         }
+        // hr.leave_request.quota_remaining_before/after (the PARENT columns) reflect ONLY the
+        // request's nominal start year (quotaYear) -- see that table's V118 column comments. In the
+        // rare case the start year itself received zero requested days (e.g. a request starting on
+        // the last weekend of a year with no working days left in it before the boundary), fall back
+        // to that year's own remainingDays() so the parent still carries a real, correct-for-that-year
+        // figure rather than an arbitrary other year's.
+        BigDecimal remainingBefore = quotaYearSplits.stream()
+            .filter(split -> split.quotaYear() == quotaYear)
+            .map(LeaveQuotaYearSplit::quotaRemainingBefore)
+            .findFirst()
+            .orElseGet(() -> remainingDays(employeeId, leaveType, quotaYear));
+        BigDecimal remainingAfter = quotaYearSplits.stream()
+            .filter(split -> split.quotaYear() == quotaYear)
+            .map(LeaveQuotaYearSplit::quotaRemainingAfter)
+            .findFirst()
+            .orElse(remainingBefore);
 
         ResolvedContact contact = resolveContact(employeeId, request);
         long id;
@@ -243,6 +278,10 @@ public class LeaveService {
             // discriminator) before it can keep assuming every DuplicateKeyException here means this.
             throw new ApiException(HttpStatus.CONFLICT, "การลาประเภทนี้ใช้สิทธิ์ได้เพียงครั้งเดียวตลอดระยะเวลาที่เป็นพนักงาน และมีคำขอที่ใช้สิทธิ์นี้ไปแล้ว");
         }
+        // V118 cross-year quota fix: persist the per-year attribution now that the parent row exists
+        // (leave_request_quota_year.leave_request_id is a FK to it). Same transaction as #create
+        // above (this method is @Transactional).
+        leaveRepository.insertQuotaYearSplits(id, quotaYearSplits);
         if (hasAttachment) {
             FileStorageService.StoredFile storedFile = fileStorage.store("leave", id, attachment, LEAVE_ATTACHMENT_MIME_TYPES);
             LeaveAttachmentDto savedAttachment = leaveAttachments.save(
@@ -363,10 +402,18 @@ public class LeaveService {
         if (unpaidDays == null || unpaidDays.signum() <= 0) {
             return;
         }
-        BigDecimal paidDays = cancelled.paidDays() == null ? BigDecimal.ZERO : cancelled.paidDays();
-        BigDecimal totalDays = cancelled.totalDays() == null ? BigDecimal.ZERO : cancelled.totalDays();
-        Map<LocalDate, BigDecimal> unpaidByMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
-            cancelled.startDate(), cancelled.endDate(), paidDays, totalDays);
+        // V118 cross-year quota fix: reads the request's per-year attribution and composes the
+        // per-month unpaid breakdown via LeaveDayMath#unpaidWorkingDaysByMonthAcrossYears, NOT the
+        // parent's aggregate paidDays/totalDays -- see that method's Javadoc for why the aggregate
+        // figures can no longer be fed into a single whole-request chronological-rank threshold once
+        // paid-day consumption resets per calendar year (a request can be "paid, then unpaid" in an
+        // earlier year and "paid" again from the start of a later one; the old aggregate-only call
+        // would have misattributed which calendar days -- and so which months -- are unpaid in that
+        // case). For every pre-V118 (single-year) request this produces the identical result as
+        // before.
+        List<LeaveQuotaYearSplit> quotaYearSplits = leaveRepository.findQuotaYearSplits(cancelled.id());
+        Map<LocalDate, BigDecimal> unpaidByMonth = LeaveDayMath.unpaidWorkingDaysByMonthAcrossYears(
+            cancelled.startDate(), cancelled.endDate(), quotaYearSplits);
         if (unpaidByMonth.isEmpty()) {
             return;
         }
@@ -617,12 +664,17 @@ public class LeaveService {
             .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ประเภทการลาไม่ถูกต้อง"));
     }
 
+    /**
+     * V118 cross-year quota fix (2026-08-02): dropped the "start/end must fall in the same calendar
+     * year" rejection this method used to carry -- quota is now attributed per calendar year (see
+     * LeaveQuotaYearSplit), so a request spanning 31 Dec/1 Jan is no longer categorically unfileable.
+     * A 98-day MATERNITY request starting after roughly mid-September used to 400 here every time;
+     * that was the defect this migration fixes. Only the (unrelated) end-before-start ordering check
+     * remains.
+     */
     private void validateDateRange(LocalDate startDate, LocalDate endDate) {
         if (endDate.isBefore(startDate)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่สิ้นสุดการลาต้องไม่มาก่อนวันที่เริ่มต้น");
-        }
-        if (startDate.getYear() != endDate.getYear()) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "คำขอลาต้องไม่คร่อมปีโควตา");
         }
     }
 

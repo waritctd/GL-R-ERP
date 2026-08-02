@@ -2701,11 +2701,21 @@ function leaveTypeByCode(code) {
   return type;
 }
 
+// V118 cross-year quota fix (2026-08-02): mirrors LeaveService#validateDateRange -- the
+// "start/end must fall in the same calendar year" rejection is gone, matching the real backend (a
+// 98-day MATERNITY request starting after roughly mid-September no longer 400s). NOT mirrored here:
+// the real per-calendar-year quota/paid-cap split (hr.leave_request_quota_year, LeaveQuotaYearSplit)
+// -- this mock predates that redesign already (see the db.leaveTypes comment above: it still
+// auto-rejects on insufficient quota outright rather than approving-with-split, a pre-existing,
+// documented gap this migration does not attempt to close). create() below still keys
+// leaveUsedDays/quotaAvailable off a single quotaYear (the start year only), so a cross-year request
+// in mock mode is checked against just that one year's remaining quota, not the true per-year split
+// -- "not supported in mock mode" for the multi-year figure, same honesty option already taken for
+// the paid-cap gap.
 function workingDaysBetween(startDate, endDate) {
   const start = new Date(`${startDate}T00:00:00`);
   const end = new Date(`${endDate}T00:00:00`);
   if (end < start) fail('วันที่สิ้นสุดการลาต้องไม่มาก่อนวันที่เริ่มต้น', 400);
-  if (startDate.slice(0, 4) !== endDate.slice(0, 4)) fail('คำขอลาต้องไม่คร่อมปีโควตา', 400);
   let days = 0;
   const cursor = new Date(start);
   while (cursor <= end) {
