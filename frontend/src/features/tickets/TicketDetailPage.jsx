@@ -34,7 +34,9 @@ import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
 import { TicketContextPanel } from './TicketContextPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
-import { allowedTargetStages, canMarkLost, canSetStage, nextStage } from './stageMeta.js';
+import {
+  allowedTargetStages, canMarkLost, canSetStage, nextStage, PAYMENT_SUBSTEPS,
+} from './stageMeta.js';
 import {
   DEFAULT_TICKET_DETAIL_TAB_ID, resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
@@ -122,6 +124,52 @@ function docStatusColors(docStatus) {
     return { background: 'var(--color-success-bg)', color: 'var(--color-success-dark)' };
   }
   return { background: 'var(--color-info-bg)', color: 'var(--color-info)' };
+}
+
+// Slice A "chip diet": moved out of DealStagePanel (see its own doc comment)
+// into the money tab's own payment section — the one place on the page that
+// didn't already show this. The payment stage's inner progression
+// (ลูกค้ายืนยัน → ... → ชำระครบแล้ว) is finer-grained than both the header's
+// single "การชำระเงิน" chip (DealStateHeader) and this tab's own
+// paymentStageLabel badge in its panel-header — unlike the old "ยอดชำระ"
+// badge and "นโยบายมัดจำ" badge that used to sit next to this strip in
+// DealStagePanel, which were straight duplicates of that same panel-header
+// badge and of DealDepositPanel's own policy badge, respectively, and were
+// deleted rather than moved.
+function PaymentSubstepChips({ currentCode }) {
+  const currentIdx = PAYMENT_SUBSTEPS.findIndex((s) => s.code === currentCode);
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-2xs font-bold text-text-muted">การชำระเงิน:</span>
+      {PAYMENT_SUBSTEPS.map((step, i) => {
+        const done = i < currentIdx;
+        const current = i === currentIdx;
+        return (
+          <span
+            key={step.code}
+            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-2xs font-bold ${
+              done ? 'bg-success-bg text-success-dark'
+                : current ? 'bg-info-bg text-info'
+                  : 'bg-surface-subtle text-text-muted'
+            }`}
+          >
+            {done ? <Icon name="check" size={11} /> : null}
+            {step.label}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+// Mirrors DealDepositPanel's own (unexported) `bypassesNotice` — duplicated
+// rather than imported, matching the precedent DealFulfilmentPanel's own
+// StepRoleTag/StepNumber comment sets for small single-purpose helpers no
+// file exports yet. A policy other than the default REQUIRED skips the
+// deposit-notice/payment steps entirely, so the substep progression above
+// doesn't mean anything for those deals.
+function depositBypassesNotice(policy) {
+  return ['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'].includes(policy);
 }
 
 export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
@@ -689,12 +737,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const isAccount = ROLE_PERMISSIONS.canConfirmPayments.includes(role);
   // (deliveryDone / dualTrackDone removed with the single-step close: the close
   // gate is now the server's three-party sequence, surfaced via availableActions.)
-  // Still needed for DealStagePanel's own read-only deliveryProgress prop
-  // below — the percentage/per-item breakdown display itself moved into
-  // DealFulfilmentPanel (Phase 3 Slice S4), which computes its own copy from
-  // the same `items`.
-  const totalOrdered = items.reduce((sum, item) => sum + Number(item.qty || 0), 0);
-  const totalDelivered = items.reduce((sum, item) => sum + Number(item.qtyDelivered || 0), 0);
+  // Slice A "chip diet": DealStagePanel's own read-only "ส่งมอบ x/y" badge
+  // (the only consumer of totalOrdered/totalDelivered) was removed as a
+  // straight duplicate of DealFulfilmentPanel's own aggregate + progress bar,
+  // which already computes the same totals from this same `items` prop — see
+  // DealStagePanel.jsx's own doc comment.
 
   // Documents that already exist stay reachable from the deal-stage panel
   // through the later stages: the latest quotation file. The deposit-notice
@@ -1275,6 +1322,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           <DealStateHeader
             summary={summary}
             pricingRequests={pricingRequests}
+            role={role}
             primaryAction={stickyPrimaryAction}
             bannerText={bannerText}
             overflowItems={overflowItems}
@@ -1305,13 +1353,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         user={user}
         summary={summary}
         availableActions={availableActions}
-        pricingRequests={pricingRequests}
         // primaryAction now lives solely in DealStateHeader above (Phase 2 Slice S2's
         // "one primary CTA" — see its own doc comment) — not passed here too, to avoid
         // rendering the exact same button twice on one page.
         advanceReady={readyToAdvance}
         actionLoading={actionLoading}
-        deliveryProgress={{ delivered: totalDelivered, ordered: totalOrdered }}
         onUpdateStage={(payload) => doAction(() => api.tickets.updateStage(ticketId, payload), 'อัปเดตสถานะดีลแล้ว')}
         onMarkLost={(payload) => doAction(() => api.tickets.markLost(ticketId, payload), 'บันทึกเสียงานแล้ว')}
         onReopen={() => doAction(() => api.tickets.reopen(ticketId, {}), 'เปิดดีลอีกครั้งแล้ว')}
@@ -1885,6 +1931,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 </div>
               </div>
               <div style={{ padding: '0 18px 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {summary.paymentStatus && !depositBypassesNotice(summary.depositPolicy) ? (
+                  <PaymentSubstepChips currentCode={summary.paymentStatus} />
+                ) : null}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
                   {[
                     ['ยอดที่ต้องชำระ', summary.amountPayable],

@@ -698,13 +698,15 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage();
 
-    // The deal pipeline panel (outside every tab) already shows the coarse
-    // progress; the delivery HISTORY rows (WAREHOUSE source, the record-
-    // delivery button) live inside DealFulfilmentPanel now, in the
-    // "จัดซื้อ-ส่งมอบ" tab.
+    // Slice A "chip diet": the deal pipeline panel (DealStagePanel, outside
+    // every tab) used to also show this coarse progress — that copy was
+    // removed as a straight duplicate of DealFulfilmentPanel's own aggregate
+    // (see DealStagePanel.jsx's own doc comment), so it, the delivery HISTORY
+    // rows (WAREHOUSE source), and the record-delivery button are all only
+    // inside DealFulfilmentPanel now, in the "จัดซื้อ-ส่งมอบ" tab.
+    await openTab(/จัดซื้อ-ส่งมอบ/);
     expect((await screen.findAllByText('40 / 100')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('ส่งมอบบางส่วน').length).toBeGreaterThan(0);
-    await openTab(/จัดซื้อ-ส่งมอบ/);
     expect(await screen.findByText('WAREHOUSE')).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกการส่งสินค้า' })).toBeNull();
   });
@@ -1781,6 +1783,57 @@ describe('TicketDetailPage', () => {
       expect(await section.findByText('FPO-2026-0001')).not.toBeNull();
       const link = section.getByRole('link', { name: /รายละเอียด/ });
       expect(link.getAttribute('href')).toBe('/factory-purchase-orders/3001');
+    });
+  });
+
+  // Slice A "chip diet": DealStateHeader's stat-chip set is now role-aware
+  // (see DealStateHeader.jsx's own CAN_VIEW_PRICING_REQUESTS_ROLES doc
+  // comment for the full table + reasoning). ขั้นตอนดีล and การนำเข้า are
+  // unconditional for every role that reaches this page; คำขอราคา, การชำระเงิน,
+  // and มูลค่าดีล vary. Assertions are scoped to the header
+  // (`deal-state-header`) specifically — some of these labels have similar
+  // but distinct Thai copy elsewhere on the page (the "การเงิน" tab, the money
+  // panel's own "การชำระเงิน" <h2>), so an unscoped query would be a weaker
+  // assertion, not a stronger one.
+  describe('DealStateHeader chip visibility per role (Slice A "chip diet")', () => {
+    it('sales, sales_manager, and ceo all get every one of the 5 header chips', async () => {
+      for (const user of [salesOwnerUser, { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' }, ceoUser]) {
+        const { unmount } = renderTicketDetailPage(user);
+        const header = await screen.findByTestId('deal-state-header');
+        for (const label of ['ขั้นตอนดีล', 'คำขอราคา', 'การชำระเงิน', 'การนำเข้า', 'มูลค่าดีล']) {
+          expect(within(header).getByText(label)).not.toBeNull();
+        }
+        unmount();
+      }
+    });
+
+    // Correctness fix, not decluttering (see DealStateHeader.jsx's own doc
+    // comment): TicketDetailPage's canViewPricingRequests excludes `account`,
+    // so `pricingRequests` is hard-coded to `[]` for that role regardless of
+    // whether requests actually exist on the deal — showing the chip would
+    // have rendered "ยังไม่มี" (none yet) even when requests are live.
+    it('account never gets the "คำขอราคา" chip (wrong-way-round: it cannot see this even though it keeps การชำระเงิน/มูลค่าดีล)', async () => {
+      renderTicketDetailPage(accountUser);
+      const header = await screen.findByTestId('deal-state-header');
+      expect(within(header).queryByText('คำขอราคา')).toBeNull();
+      expect(within(header).getByText('ขั้นตอนดีล')).not.toBeNull();
+      expect(within(header).getByText('การชำระเงิน')).not.toBeNull();
+      expect(within(header).getByText('การนำเข้า')).not.toBeNull();
+      expect(within(header).getByText('มูลค่าดีล')).not.toBeNull();
+    });
+
+    // Reduces what import is SHOWN here — NOT a security fix (see
+    // DealStateHeader.jsx's own doc comment): TicketService.projectForRole
+    // still sends summary.amountPayable to import over the wire regardless of
+    // this chip.
+    it('import never gets "การชำระเงิน" or "มูลค่าดีล" (wrong-way-round: it cannot see either, even though it keeps ขั้นตอนดีล/คำขอราคา/การนำเข้า)', async () => {
+      renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
+      const header = await screen.findByTestId('deal-state-header');
+      expect(within(header).queryByText('การชำระเงิน')).toBeNull();
+      expect(within(header).queryByText('มูลค่าดีล')).toBeNull();
+      expect(within(header).getByText('ขั้นตอนดีล')).not.toBeNull();
+      expect(within(header).getByText('คำขอราคา')).not.toBeNull();
+      expect(within(header).getByText('การนำเข้า')).not.toBeNull();
     });
   });
 
