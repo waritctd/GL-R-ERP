@@ -67,6 +67,12 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(result.totalDays()).isEqualByComparingTo("98.00");
         assertThat(result.paidDays()).isEqualByComparingTo("45.00");
         assertThat(result.unpaidDays()).isEqualByComparingTo("53.00");
+        // Review fix regression guard: quotaRemainingAfter tracks QUOTA consumption (98-day request
+        // against a 98-day quota -> 0 remaining), NOT the paid-cap-narrowed paidDays figure. Before
+        // the fix this stored 98 - 45 = 53.00 here -- a number that lied about how much MATERNITY
+        // quota was actually left, contradicted by the very next balances() call (which sums
+        // total_days, not paid_days, and would report 0).
+        assertThat(result.quotaRemainingAfter()).isEqualByComparingTo("0.00");
     }
 
     @Test
@@ -228,6 +234,84 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOf(DataAccessException.class);
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // §5.2 PERSONAL "passed probation" gate (review fix, V116). Real-DB proof that
+    // LeaveRepository#findProbationDays' NULL-column mapping and LeaveService's
+    // hire_date+probation_days arithmetic hold through the actual repository -- Mockito can fake
+    // any Optional<Integer> a test wants, but not whether the SQL genuinely reads NULL as
+    // Optional.empty() the way LeaveServiceTest's fallback tests assume.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void personalLeaveIsRefusedWhileTheEmployeeIsStillInProbation() {
+        long employeeId = insertEmployee("PERS-PROB-001", LocalDate.parse("2026-06-20"), 90);
+
+        LeaveRequestDto result = leaveService.submit(
+            submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-13"),
+            employee(employeeId));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        assertThat(result.systemNote()).contains("passed probation");
+    }
+
+    @Test
+    void personalLeaveIsGrantedImmediatelyWhenProbationDaysIsZeroOnTheEmployee() {
+        // Wrong-way-round complement: probation_days = 0 on the real employee row must mean
+        // eligible from the hire date itself, proven through the actual SQL read, not a mocked one.
+        long employeeId = insertEmployee("PERS-PROB-002", LocalDate.parse("2026-07-13"), 0);
+
+        LeaveRequestDto result = leaveService.submit(
+            submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-13"),
+            employee(employeeId));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+    }
+
+    @Test
+    void personalLeaveFallsBackToTheDefaultProbationPeriodWhenProbationDaysIsNullOnTheEmployee() {
+        // probation_days genuinely NULL in the database (not just an unstubbed mock) -> falls back
+        // to SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS (119). Hired exactly 119 days before
+        // the request date -> probation ends ON the request date -- "at least", not "strictly more
+        // than" -- so this must be APPROVED.
+        long employeeId = insertEmployee("PERS-PROB-003", LocalDate.parse("2026-03-16"), null);
+
+        LeaveRequestDto result = leaveService.submit(
+            submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-13"),
+            employee(employeeId));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+    }
+
+    @Test
+    void personalLeaveIsRefusedOneDayBeforeTheDefaultProbationPeriodEndsWhenProbationDaysIsNull() {
+        // Same NULL-probation_days fallback, pinned from the other side: hired one day later (118
+        // completed days, not 119) than the passing case above -> still short -> AUTO_REJECTED.
+        long employeeId = insertEmployee("PERS-PROB-004", LocalDate.parse("2026-03-17"), null);
+
+        LeaveRequestDto result = leaveService.submit(
+            submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-13"),
+            employee(employeeId));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        assertThat(result.systemNote()).contains("passed probation");
+    }
+
+    @Test
+    void personalLeaveIsRefusedWhenTheEmployeeHasNoHireDateOnFileEitherForProbation() {
+        // Real-DB companion to LeaveServiceTest's Mockito version -- proves a genuinely NULL
+        // hire_date column does not silently pass PERSONAL's probation gate either (a separate code
+        // path from the generic min-service NULL-hire_date check covered by
+        // vacationIsRefusedWhenTheEmployeeHasNoHireDateOnFile above).
+        long employeeId = insertEmployeeWithNoHireDate("PERS-PROB-005");
+
+        LeaveRequestDto result = leaveService.submit(
+            submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-13"),
+            employee(employeeId));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        assertThat(result.systemNote()).contains("hire date is not on file");
+    }
+
     // --- helpers ------------------------------------------------------------
 
     private SubmitLeaveRequest submitRequest(long employeeId, String leaveTypeCode, String startDate, String endDate) {
@@ -245,6 +329,23 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             VALUES (:code, :code, 'ทดสอบ', 30000, TRUE, :hireDate)
             RETURNING employee_id
             """, new MapSqlParameterSource().addValue("code", code).addValue("hireDate", hireDate), Long.class);
+    }
+
+    /**
+     * probation_days is genuinely nullable on hr.employee (V1) -- pass {@code null} to leave it
+     * NULL in the database and exercise LeaveRepository#findProbationDays' real NULL-column
+     * mapping, not a mocked Optional.empty().
+     */
+    private long insertEmployee(String code, LocalDate hireDate, Integer probationDays) {
+        return jdbc.queryForObject("""
+            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active, hire_date, probation_days)
+            VALUES (:code, :code, 'ทดสอบ', 30000, TRUE, :hireDate, :probationDays)
+            RETURNING employee_id
+            """, new MapSqlParameterSource()
+            .addValue("code", code)
+            .addValue("hireDate", hireDate)
+            .addValue("probationDays", probationDays),
+            Long.class);
     }
 
     private long insertEmployeeWithNoHireDate(String code) {

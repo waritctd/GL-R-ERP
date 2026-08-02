@@ -171,6 +171,24 @@ public class LeaveRepository {
     }
 
     /**
+     * §5.2 PERSONAL "passed probation" gate (review fix, V116): {@code hr.employee.probation_days}
+     * is nullable -- callers fall back to {@code SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS},
+     * the same convention {@code SpecialMoneyPolicyEvaluator#evaluateStandardProbationEligibility}
+     * already applies for special-money aid eligibility. See LeaveService#autoRejectNote.
+     */
+    public Optional<Integer> findProbationDays(long employeeId) {
+        // Same List#get(0) pattern as findHireDate -- .stream().findFirst() NPEs the moment the
+        // single row's probation_days IS null (Optional.of(null) inside Stream#findFirst()).
+        List<Integer> rows = jdbc.query("""
+            SELECT probation_days
+              FROM hr.employee
+             WHERE employee_id = :employeeId
+            """, Map.of("employeeId", employeeId),
+            (rs, rowNum) -> rs.getObject("probation_days", Integer.class));
+        return rows.isEmpty() ? Optional.empty() : Optional.ofNullable(rows.get(0));
+    }
+
+    /**
      * §5.6 ORDINATION once-per-employment gate (V116), Java-level pre-check paired with the
      * race-proof {@code ux_leave_once_per_employment} partial unique index (see V116's migration
      * comment). Matches the index's own status scope exactly: SUBMITTED/APPROVED count as an

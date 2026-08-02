@@ -140,7 +140,7 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         // cross-month unpaid-day split, not which type triggers it.
         //
         // Thu 2026-07-23 .. Tue 2026-08-04: working days (chronological) are 7/23, 7/24, 7/27, 7/28,
-        // 7/29, 7/30, 7/31 (6 in July) then 8/3, 8/4 (2 in August) -- 9 total... but the 6-day VACATION
+        // 7/29, 7/30, 7/31 (7 in July) then 8/3, 8/4 (2 in August) -- 9 total... but the 6-day VACATION
         // quota (nothing used yet) only covers the first 6 (7/23 through 7/30, all July): paid=6,
         // unpaid=3, split 1 (7/31) in July and 2 (8/3, 8/4) in August -- a genuinely cross-month UNPAID
         // split, which the original all-August-unpaid PERSONAL scenario did not actually exercise.

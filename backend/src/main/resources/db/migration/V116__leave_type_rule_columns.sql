@@ -28,16 +28,20 @@ COMMENT ON COLUMN hr.leave_type.paid_days_cap IS
     '(today''s behaviour). E.g. MATERNITY: 98-day quota, 45-day paid cap (§5.4) -- a 98-day request '
     'splits 45 paid / 53 unpaid regardless of how much of the 98-day quota remains.';
 COMMENT ON COLUMN hr.leave_type.advance_notice_days IS
-    'Working days'' notice required for a request of this type to be paid. Replaces the single '
-    'global app.leave.advance-notice-days (=7), which was wrong for every type except roughly '
-    'VACATION''s neighbourhood -- SICK and most new types need none, PERSONAL needs 1, VACATION '
-    'needs 3 (§5.1-5.3).';
+    'Days of notice required for a request of this type to be paid. The announcement (§5.2/§5.3) '
+    'states these as WORKING days, but LeaveService#autoRejectNote counts CALENDAR days -- a '
+    'deliberate decision, not an oversight: implementing working-day notice needs LeaveDayMath, '
+    'which is out of scope for this migration (see CLAUDE.md). Replaces the single global '
+    'app.leave.advance-notice-days (=7), which was wrong for every type except roughly VACATION''s '
+    'neighbourhood -- SICK and most new types need none, PERSONAL needs 1, VACATION needs 3 '
+    '(§5.1-5.3).';
 COMMENT ON COLUMN hr.leave_type.min_service_months IS
     'Minimum completed months of service (from hr.employee.hire_date) before an employee is '
     'eligible for this leave type at all. 0 = no minimum.';
 COMMENT ON COLUMN hr.leave_type.max_consecutive_days IS
-    'Max days a single request of this type may span; NULL = unlimited. E.g. PERSONAL: 3 '
-    'consecutive days (§5.2, "ไม่เกิน 3 วันติดต่อกัน").';
+    'Max CALENDAR days a single request of this type may span (end_date - start_date + 1); NULL = '
+    'unlimited. E.g. PERSONAL: 3 consecutive days (§5.2, "ไม่เกิน 3 วันติดต่อกัน") -- see '
+    'LeaveService#autoRejectNote for why calendar days, not LeaveDayMath working days.';
 COMMENT ON COLUMN hr.leave_type.once_per_employment IS
     'TRUE if this leave type may be granted at most once over the whole employment, not once per '
     'year (§5.6 ORDINATION, "ใช้ได้เพียงครั้งเดียวตลอดระยะเวลาที่เป็นพนักงาน"). Enforced in Java '
@@ -67,19 +71,25 @@ UPDATE hr.leave_type
 -- 5.2 PERSONAL: 7 days/year (already corrected to 7.00 by V90), fully paid within quota, must be
 -- filed 1 working day ahead, "not more than 3 consecutive days".
 --
--- ASSUMPTION (owner confirmation pending): the announcement grants this right to employees "who
--- have passed probation" (พนักงานที่ผ่านทดลองงานแล้ว) but never states the probation length, and
--- hr.employee has no probation/confirmation-date column to derive it from. min_service_months = 4
--- stands in for the common Thai 119-day probation period (see
--- SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS, the same company convention already used for
--- special-money eligibility), rounded up to whole months (119 days ~= 3.9 months -> 4). This is a
--- best-effort placeholder, NOT a stated company rule -- flag for HR/legal sign-off before it gates a
--- real employee's PERSONAL leave. Do not add a probation-length column to satisfy this; that is out
--- of scope for this migration.
+-- REVIEW CORRECTION (was: min_service_months=4 placeholder for an assumed 119-day probation --
+-- wrong on two counts). hr.employee DOES carry a probation/confirmation model already:
+-- hire_date + probation_days (V1__employee_master_schema.sql), the exact per-employee inputs
+-- SpecialMoneyPolicyEvaluator#evaluateStandardProbationEligibility already uses to decide "passed
+-- probation" for special-money aid (probation_days falls back to
+-- SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS=119 when NULL on the employee row -- NOT a
+-- fixed company-wide number; real prod data is mostly 90, not 119). §5.2's "ผ่านทดลองงานแล้ว"
+-- (passed probation) is the SAME concept special-money aid already resolves this way, so PERSONAL
+-- leave now reuses that exact resolution (LeaveService#autoRejectNote, hardcoded to PERSONAL's
+-- code -- a per-employee day-count floor is not the same shape as min_service_months' per-type
+-- month-count floor, so it does not fit that column). min_service_months is therefore 0 for
+-- PERSONAL: the real eligibility floor lives in Java against hr.employee.hire_date/probation_days,
+-- not in this column. min_service_months stays meaningful for VACATION/ORDINATION below, which the
+-- announcement states as N years/months of SERVICE DURATION -- a genuinely different concept from
+-- PERSONAL's probation-passed gate, not the same rule expressed two ways.
 UPDATE hr.leave_type
    SET paid_days_cap = NULL,
        advance_notice_days = 1,
-       min_service_months = 4,
+       min_service_months = 0,
        max_consecutive_days = 3.00,
        once_per_employment = FALSE,
        updated_at = now()
@@ -116,6 +126,15 @@ UPDATE hr.leave_type
 -- leave and any weekly/traditional holidays falling inside the period -- counted here as calendar
 -- days via LeaveDayMath's existing whole-day path, same as every other type). requires_attachment
 -- mirrors SICK (medical documentation for the leave).
+--
+-- KNOWN RISK (pre-existing, not introduced or fixed by this migration): LeaveService#validateDateRange
+-- rejects any request whose start/end dates fall in different calendar years (quota_year is derived
+-- from start_date alone). A 98-working-day MATERNITY request is roughly 136 calendar days -- for a
+-- start date after mid-September, it will not fit before year-end and the request will 400. This
+-- pre-dates V116 and applies to every leave type in principle, but MATERNITY is the first type
+-- large enough to hit it routinely. Fixing quota-year-splitting for a cross-year request is a
+-- separate, cross-cutting change (affects how quota is attributed for every type, not just this
+-- one) and is out of scope here; flagging it as a known gap for a future branch.
 INSERT INTO hr.leave_type (
     leave_type_code, name_th, name_en, annual_quota_days, requires_attachment,
     paid_days_cap, advance_notice_days, min_service_months, max_consecutive_days, once_per_employment

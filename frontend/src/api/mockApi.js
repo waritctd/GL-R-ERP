@@ -266,9 +266,17 @@ db.deductionObligationRemittances = db.deductionObligationRemittances || [];
 db.leaveTypes = db.leaveTypes || [
   // PERSONAL quota fix (2026-07-25): seeded at 3, company rule (§5.2) grants 7 paid personal
   // days/year -- see V90__leave_subday_and_contact.sql for the backend-side correction.
+  //
+  // minServiceMonths: 0 (review fix, V116) -- PERSONAL's real eligibility floor is "passed
+  // probation" (hire_date + hr.employee.probation_days, falling back to
+  // SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS=119 when NULL), NOT a fixed months-of-
+  // service number. That per-employee resolution is one of the things this mock does not
+  // replicate (see the file-level note above) -- db.employees has no probation_days field to
+  // resolve it from, so leaving PERSONAL unrestricted here is the honest "not supported in mock
+  // mode" option rather than inventing a different, wrong approximation.
   {
     code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal leave', annualQuotaDays: 7, requiresAttachment: false,
-    paidDaysCap: null, advanceNoticeDays: 1, minServiceMonths: 4, maxConsecutiveDays: 3, oncePerEmployment: false,
+    paidDaysCap: null, advanceNoticeDays: 1, minServiceMonths: 0, maxConsecutiveDays: 3, oncePerEmployment: false,
   },
   {
     code: 'SICK', nameTh: 'ลาป่วย', nameEn: 'Sick leave', annualQuotaDays: 30, requiresAttachment: true,

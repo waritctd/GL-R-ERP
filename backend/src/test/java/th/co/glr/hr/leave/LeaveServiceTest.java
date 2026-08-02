@@ -530,6 +530,13 @@ class LeaveServiceTest {
             null, "PERSONAL", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-16"), "Family matter");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(personalTypeWithMaxConsecutive()));
+        // Review fix (V116): every PERSONAL submission now runs the probation-passed gate
+        // (personalProbationRejectionNote) regardless of what this test is actually about -- stub a
+        // hire date far enough in the past that it never binds, so this test still isolates
+        // max-consecutive-days. findProbationDays is deliberately left unstubbed (falls back to
+        // SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS via Optional.empty()), which is still
+        // comfortably in the past relative to this hire date.
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
         when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(request.startDate().getYear()), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
@@ -556,6 +563,9 @@ class LeaveServiceTest {
             null, "PERSONAL", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-15"), "Family matter");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(personalTypeWithMaxConsecutive()));
+        // Review fix (V116): see the identical stub note in
+        // submitRejectsARequestExceedingTheMaxConsecutiveDaysCap above.
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
         when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(request.startDate().getYear()), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.sumPaidDays(eq(10L), eq("PERSONAL"), eq(request.startDate().getYear()), any(Collection.class)))
@@ -570,6 +580,173 @@ class LeaveServiceTest {
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
         assertThat(result.status()).isEqualTo("APPROVED");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // §5.2 PERSONAL "passed probation" gate (review fix, V116). Real prod data is mostly
+    // probation_days=90, NOT the 119-day DEFAULT_PROBATION_DAYS fallback -- these tests are
+    // specifically about the RESOLUTION (per-employee probation_days, falling back to
+    // SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS only when NULL), not about 90 vs 119 being
+    // "the" company number. All requests are single-day, comfortably under
+    // personalTypeWithMaxConsecutive()'s 3-day cap, so that gate never interferes here.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void submitRejectsPersonalLeaveWhenTheEmployeeIsStillInProbation() {
+        // Hired 2026-06-20, probation_days=90 -> probation ends 2026-09-18. Requesting PERSONAL
+        // leave for 2026-07-13 (weekdayAfterNotice()) is well before that.
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "PERSONAL", weekdayAfterNotice(), weekdayAfterNotice(), "Family matter");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(personalTypeWithMaxConsecutive()));
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2026-06-20")));
+        when(leaveRepository.findProbationDays(10L)).thenReturn(Optional.of(90));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(100L);
+        when(leaveRepository.findById(100L)).thenReturn(Optional.of(
+            requestDto(100L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("passed probation"), eq(null), eq(null), eq(null), eq(null), eq(null));
+    }
+
+    @Test
+    void submitAllowsPersonalLeaveAfterProbationHasPassed() {
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "PERSONAL", weekdayAfterNotice(), weekdayAfterNotice(), "Family matter");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(personalTypeWithMaxConsecutive()));
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
+        when(leaveRepository.findProbationDays(10L)).thenReturn(Optional.of(90));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(101L);
+        when(leaveRepository.findById(101L)).thenReturn(Optional.of(
+            requestDto(101L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+    }
+
+    @Test
+    void submitRejectsPersonalLeaveWhenTheEmployeeHasNoHireDateOnFile() {
+        // DECISION (same fail-closed direction as every other eligibility gate in this class): a
+        // NULL hire_date does NOT silently pass the probation check -- eligibility cannot be
+        // verified, so the request is rejected, not approved.
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "PERSONAL", weekdayAfterNotice(), weekdayAfterNotice(), "Family matter");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(personalTypeWithMaxConsecutive()));
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.empty());
+        when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(102L);
+        when(leaveRepository.findById(102L)).thenReturn(Optional.of(
+            requestDto(102L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("hire date is not on file"), eq(null), eq(null), eq(null), eq(null), eq(null));
+        // findProbationDays must never be reached once hire_date is already missing.
+        verify(leaveRepository, org.mockito.Mockito.never()).findProbationDays(anyLong());
+    }
+
+    @Test
+    void submitAllowsPersonalLeaveImmediatelyWhenProbationDaysIsZero() {
+        // probation_days = 0 means eligible from the hire date itself -- hired on the exact request
+        // date, no waiting period.
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "PERSONAL", weekdayAfterNotice(), weekdayAfterNotice(), "Family matter");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(personalTypeWithMaxConsecutive()));
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(weekdayAfterNotice()));
+        when(leaveRepository.findProbationDays(10L)).thenReturn(Optional.of(0));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(103L);
+        when(leaveRepository.findById(103L)).thenReturn(Optional.of(
+            requestDto(103L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+    }
+
+    @Test
+    void submitFallsBackToTheDefaultProbationPeriodWhenProbationDaysIsNullOnTheEmployee() {
+        // findProbationDays deliberately unstubbed -> Optional.empty() -> falls back to
+        // SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS (119). Hired exactly 119 days before
+        // the request date -> probation ends ON the request date itself -- "at least", not "strictly
+        // more than" -- so this must be APPROVED.
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "PERSONAL", weekdayAfterNotice(), weekdayAfterNotice(), "Family matter");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(personalTypeWithMaxConsecutive()));
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2026-03-16")));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(104L);
+        when(leaveRepository.findById(104L)).thenReturn(Optional.of(
+            requestDto(104L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+    }
+
+    @Test
+    void submitRejectsPersonalLeaveOneDayBeforeTheDefaultProbationPeriodEndsWhenProbationDaysIsNull() {
+        // Wrong-way-round complement, pinning the exact DEFAULT_PROBATION_DAYS=119 boundary from the
+        // other side: hired ONE DAY LATER than the passing case above (118 completed days, not 119)
+        // -> still one day short -> must be rejected, proving the fallback is exactly 119, not some
+        // other nearby number, and that the boundary is enforced correctly in both directions.
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "PERSONAL", weekdayAfterNotice(), weekdayAfterNotice(), "Family matter");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(personalTypeWithMaxConsecutive()));
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2026-03-17")));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(105L);
+        when(leaveRepository.findById(105L)).thenReturn(Optional.of(
+            requestDto(105L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("passed probation"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -761,11 +938,6 @@ class LeaveServiceTest {
     private LeaveTypeDto leaveWithoutPayType() {
         return new LeaveTypeDto("LEAVE_WITHOUT_PAY", "Leave without pay", "Leave without pay", BigDecimal.ZERO, false,
             BigDecimal.ZERO, 0, 0, null, false);
-    }
-
-    private LeaveTypeDto maternityType() {
-        return new LeaveTypeDto("MATERNITY", "Maternity", "Maternity leave", new BigDecimal("98.00"), true,
-            new BigDecimal("45.00"), 0, 0, null, false);
     }
 
     private LeaveTypeDto ordinationType() {

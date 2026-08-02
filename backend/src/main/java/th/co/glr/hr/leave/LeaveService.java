@@ -23,6 +23,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.notification.NotificationService;
+import th.co.glr.hr.specialmoney.SpecialMoneyPolicyEvaluator;
 
 @Service
 public class LeaveService {
@@ -192,7 +193,15 @@ public class LeaveService {
             // splits 45 paid / 53 unpaid even though the full 98 days fit inside the quota itself.
             paidDays = boundByPaidCap(employeeId, leaveType, quotaYear, quotaBoundedPaidDays);
             unpaidDays = totalDays.subtract(paidDays);
-            remainingAfter = remainingBefore.subtract(paidDays).max(BigDecimal.ZERO);
+            // review fix (V116): remainingAfter tracks QUOTA consumption, not money paid -- it must be
+            // derived from quotaBoundedPaidDays (== remainingDays()'s own min(remaining, totalDays)
+            // formula), NOT from the paid-cap-narrowed `paidDays`. Using `paidDays` here understated
+            // quota consumption for any capped type: a 98-day MATERNITY request (98-day quota, 45-day
+            // cap) would have stored quota_remaining_after = 98-45 = 53, while the very next
+            // remainingDays() call (which sums total_days, not paid_days) reports 0 -- a stored value
+            // that lies about how much quota is left, and that a UI could genuinely surface to the
+            // employee.
+            remainingAfter = remainingBefore.subtract(quotaBoundedPaidDays).max(BigDecimal.ZERO);
         } else {
             paidDays = BigDecimal.ZERO;
             unpaidDays = BigDecimal.ZERO;
@@ -226,6 +235,12 @@ public class LeaveService {
             // above (both requests read "no existing claim" before either had committed). The
             // Java-level check is what produces the normal AUTO_REJECTED-with-systemNote UX; this is
             // only the last-resort guard when two submissions genuinely race.
+            //
+            // NOTE: this maps ANY DuplicateKeyException thrown by leaveRepository.create to the
+            // once-per-employment message -- safe today, since ux_leave_once_per_employment is the
+            // only unique constraint hr.leave_request has. If a future migration adds another unique
+            // index on this table, this catch will need to inspect the constraint name (or a similar
+            // discriminator) before it can keep assuming every DuplicateKeyException here means this.
             throw new ApiException(HttpStatus.CONFLICT, "การลาประเภทนี้ใช้สิทธิ์ได้เพียงครั้งเดียวตลอดระยะเวลาที่เป็นพนักงาน และมีคำขอที่ใช้สิทธิ์นี้ไปแล้ว");
         }
         if (hasAttachment) {
@@ -401,6 +416,50 @@ public class LeaveService {
     }
 
     /**
+     * §5.2 PERSONAL "passed probation" gate (review fix, V116). Extracted to its own method so the
+     * decision is unit-testable in isolation from the rest of {@link #autoRejectNote}'s branches --
+     * see {@code LeaveServiceTest} for the Mockito-level reject/allow/NULL-hire_date/
+     * NULL-probation_days/probation_days=0 coverage, and {@code LeaveTypeRuleIntegrationTest} for
+     * the same cases proven through the real repository (the NULL-column SQL mapping is exactly
+     * what Mockito cannot verify).
+     *
+     * <p>Resolves "passed probation" the SAME way
+     * {@code SpecialMoneyPolicyEvaluator#evaluateStandardProbationEligibility} already does for
+     * special-money aid: {@code hire_date + probation_days}, where {@code probation_days} falls
+     * back to {@link SpecialMoneyPolicyEvaluator#DEFAULT_PROBATION_DAYS} when NULL on the employee
+     * row. Referencing that constant directly (not a duplicated literal) is what actually prevents
+     * the two rules drifting apart.
+     *
+     * <p>{@code probation_days == 0} means eligible from the hire date itself (no waiting period) --
+     * handled by the plain {@code plusDays(0)} arithmetic below, not a special case. A NULL
+     * hire_date fails closed (returns a rejection), the same direction as every other eligibility
+     * gate in this class -- it must never silently pass.
+     *
+     * <p>DECISION, unlike {@code SpecialMoneyPolicyEvaluator}: this does NOT consult
+     * {@code hr.employee.confirm_date}. The correction this implements was scoped to
+     * {@code hire_date + probation_days}; whether an explicit {@code confirm_date} should also
+     * override PERSONAL eligibility is a separate policy question, left open rather than silently
+     * assumed.
+     *
+     * @return a rejection message, or {@code null} if the employee has passed probation.
+     */
+    private String personalProbationRejectionNote(long employeeId, LocalDate startDate) {
+        Optional<LocalDate> hireDate = leaveRepository.findHireDate(employeeId);
+        if (hireDate.isEmpty()) {
+            return "Your hire date is not on file, so probation status cannot be verified. "
+                + "Contact HR to record it before PERSONAL leave can be used.";
+        }
+        int probationDays = leaveRepository.findProbationDays(employeeId)
+            .orElse(SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS);
+        LocalDate probationEndsOn = hireDate.get().plusDays(probationDays);
+        if (probationEndsOn.isAfter(startDate)) {
+            return "PERSONAL leave requires having passed probation (expected " + probationEndsOn
+                + "). Contact HR if this is an exception.";
+        }
+        return null;
+    }
+
+    /**
      * §5 leave-rules-as-data (V116). Checks run in this order -- categorical eligibility first
      * (once-per-employment, minimum service), then request-shape (max consecutive days), then
      * document/timing checks (SICK certificate, advance notice) -- so the surfaced systemNote is
@@ -415,12 +474,13 @@ public class LeaveService {
             return "This leave type may be used only once during your employment, and a claim for it already exists.";
         }
 
-        // §5.2/§5.3 minimum service (months since hr.employee.hire_date). DECISION: a NULL hire_date
-        // does NOT silently pass -- eligibility cannot be verified, so the request is rejected with an
-        // actionable message, the same fail-closed direction as every other eligibility gate in this
-        // method. This only matters for types with min_service_months > 0 (PERSONAL, VACATION,
-        // ORDINATION as seeded); a NULL hire_date is a no-op for SICK/MATERNITY/MILITARY/
-        // LEAVE_WITHOUT_PAY, which have no such requirement.
+        // §5.3 minimum SERVICE DURATION (months since hr.employee.hire_date). This is genuinely
+        // different from PERSONAL's "passed probation" gate just below -- VACATION/ORDINATION state
+        // an N-year/month tenure requirement, not a probation-length one -- which is why PERSONAL's
+        // min_service_months is 0 (seeded, V116) and does not reach this branch at all; see that
+        // migration's PERSONAL comment. DECISION: a NULL hire_date does NOT silently pass -- eligibility
+        // cannot be verified, so the request is rejected with an actionable message, the same
+        // fail-closed direction as every other eligibility gate in this method.
         if (leaveType.minServiceMonths() > 0) {
             Optional<LocalDate> hireDate = leaveRepository.findHireDate(employeeId);
             if (hireDate.isEmpty()) {
@@ -431,6 +491,17 @@ public class LeaveService {
             if (completedMonths < leaveType.minServiceMonths()) {
                 return leaveType.nameEn() + " requires at least " + leaveType.minServiceMonths()
                     + " month(s) of completed service. Contact HR if this is an exception.";
+            }
+        }
+
+        // §5.2 PERSONAL "passed probation" gate (review fix, V116): hardcoded to PERSONAL's code,
+        // the same way the SICK certificate check below is hardcoded to SICK's code -- neither is a
+        // per-type column the way quota/notice/consecutive-days are. See
+        // #personalProbationRejectionNote's Javadoc for the full rationale and decisions.
+        if ("PERSONAL".equals(leaveType.code())) {
+            String note = personalProbationRejectionNote(employeeId, startDate);
+            if (note != null) {
+                return note;
             }
         }
 
@@ -474,8 +545,13 @@ public class LeaveService {
     private void notifyAfterSubmit(LeaveRequestDto request, LeaveStatus status) {
         if (status == LeaveStatus.APPROVED) {
             boolean hasUnpaidDays = request.unpaidDays() != null && request.unpaidDays().signum() > 0;
+            // review fix (V116): the unpaid portion no longer only comes from exceeding the quota --
+            // paid_days_cap (e.g. MATERNITY: 98-day quota, 45-day paid cap) can produce unpaid days on
+            // a request that never touched the quota limit at all. "เนื่องจากเกินโควตา" ("because it
+            // exceeded quota") would be a false claim in that case, so the wording no longer names a
+            // specific cause.
             String unpaidSuffix = hasUnpaidDays
-                ? " (รวมวันลาไม่รับค่าจ้าง " + formatDays(request.unpaidDays()) + " วัน เนื่องจากเกินโควตา)"
+                ? " (รวมวันลาไม่รับค่าจ้าง " + formatDays(request.unpaidDays()) + " วัน ตามเงื่อนไขของประเภทการลานี้)"
                 : "";
             notificationService.notify(
                 request.employeeId(),
