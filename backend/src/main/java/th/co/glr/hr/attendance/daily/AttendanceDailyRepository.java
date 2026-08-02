@@ -111,6 +111,23 @@ public class AttendanceDailyRepository {
     }
 
     /**
+     * Department per employee, in one query — {@code TieredWorkScheduleResolver} needs it
+     * alongside division for every row. Kept as its own method (rather than folded into
+     * {@link #findDivisionIdsByEmployee}) so neither method's existing callers/tests need to change
+     * shape; callers that need both call both, once each per batch, never once per employee-day.
+     */
+    public Map<Long, Long> findDepartmentIdsByEmployee() {
+        Map<Long, Long> byEmployee = new HashMap<>();
+        jdbc.query(
+            "SELECT employee_id, department_id FROM hr.employee",
+            new MapSqlParameterSource(),
+            rs -> {
+                byEmployee.put(rs.getLong("employee_id"), nullableLong(rs.getObject("department_id")));
+            });
+        return byEmployee;
+    }
+
+    /**
      * APPROVED overtime minutes for every employee-day in the range, in one query.
      *
      * <p>Same APPROVED-only rule as {@link #findApprovedOvertimeMinutes} — MANAGER_APPROVED is half
@@ -563,6 +580,16 @@ public class AttendanceDailyRepository {
             "SELECT division_id FROM hr.employee WHERE employee_id = :employeeId",
             new MapSqlParameterSource("employeeId", employeeId),
             (rs, rowNum) -> nullableLong(rs.getObject("division_id"))
+        );
+        return found.isEmpty() ? null : found.get(0);
+    }
+
+    /** The employee's department, needed to resolve their schedule alongside division. */
+    public Long findDepartmentId(long employeeId) {
+        List<Long> found = jdbc.query(
+            "SELECT department_id FROM hr.employee WHERE employee_id = :employeeId",
+            new MapSqlParameterSource("employeeId", employeeId),
+            (rs, rowNum) -> nullableLong(rs.getObject("department_id"))
         );
         return found.isEmpty() ? null : found.get(0);
     }

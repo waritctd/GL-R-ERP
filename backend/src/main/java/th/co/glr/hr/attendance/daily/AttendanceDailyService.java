@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.attendance.schedule.HolidayCalendar;
 import th.co.glr.hr.attendance.schedule.WorkSchedule;
 import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
 
@@ -31,14 +32,17 @@ public class AttendanceDailyService {
     private final AttendanceDailyRepository repository;
     private final AttendanceDailyCalculator calculator;
     private final WorkScheduleResolver scheduleResolver;
+    private final HolidayCalendar holidayCalendar;
 
     public AttendanceDailyService(
             AttendanceDailyRepository repository,
             AttendanceDailyCalculator calculator,
-            WorkScheduleResolver scheduleResolver) {
+            WorkScheduleResolver scheduleResolver,
+            HolidayCalendar holidayCalendar) {
         this.repository = repository;
         this.calculator = calculator;
         this.scheduleResolver = scheduleResolver;
+        this.holidayCalendar = holidayCalendar;
     }
 
     /** Recalculates one employee-day. Silently no-ops when the day has no punches left. */
@@ -68,7 +72,8 @@ public class AttendanceDailyService {
                 pair.workDate(),
                 punches,
                 scheduleFor(pair),
-                repository.findApprovedOvertimeMinutes(pair.employeeId(), pair.workDate())
+                repository.findApprovedOvertimeMinutes(pair.employeeId(), pair.workDate()),
+                holidayCalendar.isHoliday(pair.workDate())
             ));
         }
         return repository.upsertAll(records);
@@ -77,11 +82,12 @@ public class AttendanceDailyService {
     /**
      * Recalculates every employee-day with punches in the range. Idempotent; safe to re-run.
      *
-     * <p>Loads punches, divisions and approved overtime in <strong>three</strong> queries rather
-     * than three per employee-day. A full historical backfill covers thousands of days; the
-     * per-day form meant ~14,000 round trips inside one transaction, which on a hosted database
-     * exceeds the request timeout and rolls the entire job back — writing nothing, and reporting
-     * nothing useful about why.
+     * <p>Loads punches, divisions/departments, approved overtime and holidays in <strong>four</strong>
+     * queries rather than four per employee-day. A full historical backfill covers thousands of
+     * days; the per-day form meant ~14,000 round trips inside one transaction, which on a hosted
+     * database exceeds the request timeout and rolls the entire job back — writing nothing, and
+     * reporting nothing useful about why. ({@code scheduleResolver.resolve} itself adds no further
+     * per-call query — see {@code TieredWorkScheduleResolver}'s own caching.)
      */
     @Transactional
     public int recalculateRange(LocalDate fromDate, LocalDate toDate, Long employeeId) {
@@ -91,8 +97,10 @@ public class AttendanceDailyService {
             return 0;
         }
         Map<Long, Long> divisionByEmployee = repository.findDivisionIdsByEmployee();
+        Map<Long, Long> departmentByEmployee = repository.findDepartmentIdsByEmployee();
         Map<EmployeeDay, Integer> overtimeByDay =
             repository.findApprovedOvertimeMinutesInRange(fromDate, toDate);
+        Set<LocalDate> holidays = holidayCalendar.holidaysBetween(fromDate, toDate);
 
         List<AttendanceDailyRecord> records = new ArrayList<>(punchesByDay.size());
         punchesByDay.forEach((day, punches) -> records.add(calculator.calculate(
@@ -100,8 +108,12 @@ public class AttendanceDailyService {
             day.workDate(),
             punches,
             scheduleResolver.resolve(
-                day.employeeId(), divisionByEmployee.get(day.employeeId()), day.workDate()),
-            overtimeByDay.getOrDefault(day, 0)
+                day.employeeId(),
+                divisionByEmployee.get(day.employeeId()),
+                departmentByEmployee.get(day.employeeId()),
+                day.workDate()),
+            overtimeByDay.getOrDefault(day, 0),
+            holidays.contains(day.workDate())
         )));
         return repository.upsertAll(records);
     }
@@ -131,9 +143,25 @@ public class AttendanceDailyService {
     /**
      * The day view: one row per employee per day across the range, including days with no data so
      * the UI can render "-" rather than dropping them.
+     *
+     * <p>Batch-loads the employee-&gt;division/department mapping and the range's holidays once,
+     * the same way {@link #recalculateRange} batches its own per-range lookups (see that method's
+     * javadoc) — fixes a latent bug where {@link #toDto} used to resolve every row's schedule with
+     * {@code divisionId = null}, harmless only while {@code WorkScheduleResolver} ignored every
+     * argument; once schedules can differ by division/department, that null silently picked a
+     * different schedule on read than the write path used to compute the stored figures.
      */
     public List<AttendanceDailyDto> list(AttendanceDailyFilter filter) {
-        return repository.findRange(filter).stream().map(this::toDto).toList();
+        List<AttendanceDailyRow> rows = repository.findRange(filter);
+        if (rows.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, Long> divisionByEmployee = repository.findDivisionIdsByEmployee();
+        Map<Long, Long> departmentByEmployee = repository.findDepartmentIdsByEmployee();
+        Set<LocalDate> holidays = holidayCalendar.holidaysBetween(filter.fromDate(), filter.toDate());
+        return rows.stream()
+            .map(row -> toDto(row, divisionByEmployee, departmentByEmployee, holidays))
+            .toList();
     }
 
     public List<UnmappedBadge> listUnmappedBadges(LocalDate fromDate, LocalDate toDate) {
@@ -168,34 +196,57 @@ public class AttendanceDailyService {
 
     private WorkSchedule scheduleFor(EmployeeDay pair) {
         return scheduleResolver.resolve(
-            pair.employeeId(), repository.findDivisionId(pair.employeeId()), pair.workDate());
+            pair.employeeId(),
+            repository.findDivisionId(pair.employeeId()),
+            repository.findDepartmentId(pair.employeeId()),
+            pair.workDate());
     }
 
     /**
      * Re-derives status and flags on read rather than storing them.
      *
      * <p>Keeps the labels in one place and keeps the schema unchanged — every persisted column
-     * already existed in V7. It also means a corrected schedule reclassifies history on the next
-     * read without a migration.
+     * already existed in V7. It also means a corrected schedule (or a holiday added after the
+     * fact) reclassifies history on the next read without a migration.
      */
-    private AttendanceDailyDto toDto(AttendanceDailyRow row) {
-        WorkSchedule schedule = scheduleResolver.resolve(row.employeeId(), null, row.workDate());
-        boolean workday = schedule.isWorkday(row.workDate());
+    private AttendanceDailyDto toDto(
+            AttendanceDailyRow row,
+            Map<Long, Long> divisionByEmployee,
+            Map<Long, Long> departmentByEmployee,
+            Set<LocalDate> holidays) {
+        WorkSchedule schedule = scheduleResolver.resolve(
+            row.employeeId(),
+            divisionByEmployee.get(row.employeeId()),
+            departmentByEmployee.get(row.employeeId()),
+            row.workDate());
+        boolean holiday = holidays.contains(row.workDate());
+        // A holiday is not a workday regardless of the schedule — same rule the calculator applies
+        // on write; see AttendanceDailyCalculator#calculate and AttendanceDayFlag#HOLIDAY.
+        boolean workday = schedule.isWorkday(row.workDate()) && !holiday;
         Set<AttendanceDayFlag> flags = EnumSet.noneOf(AttendanceDayFlag.class);
         AttendanceDayStatus status;
 
         if (!row.hasRecord()) {
-            status = workday ? AttendanceDayStatus.NO_RECORD : AttendanceDayStatus.NON_WORKDAY;
-            if (!workday) {
+            if (holiday) {
+                status = AttendanceDayStatus.HOLIDAY;
+                flags.add(AttendanceDayFlag.HOLIDAY);
+            } else if (!workday) {
+                status = AttendanceDayStatus.NON_WORKDAY;
                 flags.add(AttendanceDayFlag.NON_WORKDAY);
+            } else {
+                status = AttendanceDayStatus.NO_RECORD;
             }
         } else {
             if (row.manualOverride() && row.punchCount() == 0) {
                 // A CEO/HR stand-up or WFH mark: present with no punches, on purpose. Checked before
-                // the workday/checkIn logic below so it reads as WFH even on a non-workday, instead
-                // of NON_WORKDAY or MISSING_CHECK_IN — those describe the absence of data, not this.
+                // the holiday/workday/checkIn logic below so it reads as WFH even on a non-workday
+                // or a holiday, instead of HOLIDAY/NON_WORKDAY/MISSING_CHECK_IN — those describe the
+                // absence of data, not this.
                 status = AttendanceDayStatus.WFH;
                 flags.add(AttendanceDayFlag.WFH);
+            } else if (holiday) {
+                flags.add(AttendanceDayFlag.HOLIDAY);
+                status = AttendanceDayStatus.HOLIDAY;
             } else if (!workday) {
                 flags.add(AttendanceDayFlag.NON_WORKDAY);
                 status = AttendanceDayStatus.NON_WORKDAY;

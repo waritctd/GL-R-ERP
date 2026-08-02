@@ -37,6 +37,20 @@ class AttendanceDailyCalculatorTest {
                DayOfWeek.THURSDAY, DayOfWeek.FRIDAY)
     );
 
+    /**
+     * V117: SALES_5D — identical hours/workdays/grace to {@link #SCHEDULE} (OFFICE_5D) but
+     * {@code requiresCheckOut = false}, per §4's ฝ่ายขาย scan-in-only exemption.
+     */
+    private static final WorkSchedule SALES_SCHEDULE = new WorkSchedule(
+        BANGKOK,
+        LocalTime.of(8, 30),
+        LocalTime.of(17, 30),
+        5,
+        Set.of(DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY,
+               DayOfWeek.THURSDAY, DayOfWeek.FRIDAY),
+        false
+    );
+
     private static PunchRecord punch(long id, LocalDate date, int hour, int minute) {
         return new PunchRecord(
             id,
@@ -46,7 +60,7 @@ class AttendanceDailyCalculatorTest {
     }
 
     private AttendanceDailyRecord calculate(List<PunchRecord> punches) {
-        return calculator.calculate(7L, WEDNESDAY, punches, SCHEDULE, 0);
+        return calculator.calculate(7L, WEDNESDAY, punches, SCHEDULE, 0, false);
     }
 
     @Test
@@ -127,6 +141,84 @@ class AttendanceDailyCalculatorTest {
     }
 
     /**
+     * §4's ฝ่ายขาย scan-in-only exemption (V117): on SALES_5D, a lone morning punch is a complete,
+     * compliant day — no MISSING_CHECK_OUT, no fabricated early-leave, no fabricated total, but
+     * lateness is still evaluated normally from the check-in.
+     */
+    @Test
+    void salesScheduleLoneMorningPunchIsNotMissingCheckOut() {
+        AttendanceDailyRecord record = calculator.calculate(
+            7L, WEDNESDAY, List.of(punch(1, WEDNESDAY, 8, 47)), SALES_SCHEDULE, 0, false);
+
+        assertThat(record.checkIn()).isNotNull();
+        assertThat(record.checkOut()).isNull();
+        assertThat(record.status()).isNotEqualTo(AttendanceDayStatus.MISSING_CHECK_OUT);
+        assertThat(record.flags()).doesNotContain(AttendanceDayFlag.MISSING_CHECK_OUT);
+        assertThat(record.lateMinutes()).isEqualTo(17);
+        assertThat(record.status()).isEqualTo(AttendanceDayStatus.LATE);
+        // No check-out means no early-leave figure may be invented, exempt schedule or not.
+        assertThat(record.earlyLeaveMinutes()).isZero();
+        assertThat(record.totalMinutes()).isNull();
+    }
+
+    /**
+     * A sales employee who DOES scan out is unaffected by the exemption: the ordinary two-punch
+     * path applies unchanged, including early-leave.
+     */
+    @Test
+    void salesScheduleWithBothPunchesBehavesLikeAnyOtherSchedule() {
+        AttendanceDailyRecord record = calculator.calculate(
+            7L, WEDNESDAY,
+            List.of(punch(1, WEDNESDAY, 8, 28), punch(2, WEDNESDAY, 16, 20)),
+            SALES_SCHEDULE, 0, false);
+
+        assertThat(record.checkIn()).isNotNull();
+        assertThat(record.checkOut()).isNotNull();
+        assertThat(record.earlyLeaveMinutes()).isEqualTo(70);
+        assertThat(record.flags()).contains(AttendanceDayFlag.EARLY_LEAVE);
+        assertThat(record.flags()).doesNotContain(AttendanceDayFlag.MISSING_CHECK_OUT);
+        assertThat(record.lateMinutes()).isZero();
+        assertThat(record.totalMinutes()).isNotNull();
+    }
+
+    /**
+     * Assert BOTH sides on ONE fixture (CLAUDE.md's testing rule): the identical lone-morning-punch
+     * day is MISSING_CHECK_OUT under OFFICE_5D and NOT missing under SALES_5D. A one-sided assertion
+     * ("SALES_5D is not missing") would also pass if the calculator secretly ignored
+     * {@code requiresCheckOut} entirely and simply never flagged anyone — checking the exact same
+     * punch under OFFICE_5D still flags rules that out.
+     */
+    @Test
+    void sameLoneMorningPunchIsMissingCheckOutUnderOfficeScheduleButNotUnderSalesSchedule() {
+        List<PunchRecord> punches = List.of(punch(1, WEDNESDAY, 8, 47));
+
+        AttendanceDailyRecord officeRecord =
+            calculator.calculate(7L, WEDNESDAY, punches, SCHEDULE, 0, false);
+        AttendanceDailyRecord salesRecord =
+            calculator.calculate(7L, WEDNESDAY, punches, SALES_SCHEDULE, 0, false);
+
+        assertThat(officeRecord.status()).isEqualTo(AttendanceDayStatus.MISSING_CHECK_OUT);
+        assertThat(officeRecord.flags()).contains(AttendanceDayFlag.MISSING_CHECK_OUT);
+
+        assertThat(salesRecord.status()).isNotEqualTo(AttendanceDayStatus.MISSING_CHECK_OUT);
+        assertThat(salesRecord.flags()).doesNotContain(AttendanceDayFlag.MISSING_CHECK_OUT);
+    }
+
+    /**
+     * The exemption is check-out only: a sales employee's lone AFTERNOON punch is still
+     * MISSING_CHECK_IN even on SALES_5D — §4 never relaxes the arrival scan.
+     */
+    @Test
+    void salesScheduleLoneAfternoonPunchIsStillMissingCheckIn() {
+        AttendanceDailyRecord record = calculator.calculate(
+            7L, WEDNESDAY, List.of(punch(1, WEDNESDAY, 17, 25)), SALES_SCHEDULE, 0, false);
+
+        assertThat(record.checkIn()).isNull();
+        assertThat(record.status()).isEqualTo(AttendanceDayStatus.MISSING_CHECK_IN);
+        assertThat(record.flags()).contains(AttendanceDayFlag.MISSING_CHECK_IN);
+    }
+
+    /**
      * The case that motivates the midpoint rule: treating this as an arrival would report someone
      * turning up at 17:25 and fabricate ~535 late minutes.
      */
@@ -195,7 +287,8 @@ class AttendanceDailyCalculatorTest {
             SATURDAY,
             List.of(punch(1, SATURDAY, 10, 15), punch(2, SATURDAY, 14, 0)),
             SCHEDULE,
-            0
+            0,
+            false
         );
 
         assertThat(record.lateMinutes()).isZero();
@@ -205,6 +298,42 @@ class AttendanceDailyCalculatorTest {
         assertThat(record.punchCount()).isEqualTo(2);
     }
 
+    /** Holiday beats workday: a weekday that is also a company holiday evaluates no late/early. */
+    @Test
+    void holidayBeatsWorkday() {
+        AttendanceDailyRecord record = calculator.calculate(
+            7L,
+            WEDNESDAY,
+            List.of(punch(1, WEDNESDAY, 8, 40), punch(2, WEDNESDAY, 17, 35)),
+            SCHEDULE,
+            0,
+            true
+        );
+
+        assertThat(record.status()).isEqualTo(AttendanceDayStatus.HOLIDAY);
+        assertThat(record.flags()).contains(AttendanceDayFlag.HOLIDAY);
+        assertThat(record.flags()).doesNotContain(AttendanceDayFlag.NON_WORKDAY, AttendanceDayFlag.LATE);
+        assertThat(record.lateMinutes()).isZero();
+        assertThat(record.earlyLeaveMinutes()).isZero();
+    }
+
+    /** Distinct from NON_WORKDAY: a holiday that falls on what would already be a non-workday is still HOLIDAY. */
+    @Test
+    void holidayOnANonWorkdayIsStillHolidayNotNonWorkday() {
+        AttendanceDailyRecord record = calculator.calculate(
+            7L,
+            SATURDAY,
+            List.of(punch(1, SATURDAY, 9, 0), punch(2, SATURDAY, 17, 0)),
+            SCHEDULE,
+            0,
+            true
+        );
+
+        assertThat(record.status()).isEqualTo(AttendanceDayStatus.HOLIDAY);
+        assertThat(record.flags()).contains(AttendanceDayFlag.HOLIDAY);
+        assertThat(record.flags()).doesNotContain(AttendanceDayFlag.NON_WORKDAY);
+    }
+
     @Test
     void approvedOvertimeIsFlaggedAndStored() {
         AttendanceDailyRecord record = calculator.calculate(
@@ -212,7 +341,8 @@ class AttendanceDailyCalculatorTest {
             WEDNESDAY,
             List.of(punch(1, WEDNESDAY, 8, 20), punch(2, WEDNESDAY, 19, 0)),
             SCHEDULE,
-            90
+            90,
+            false
         );
 
         assertThat(record.overtimeMinutes()).isEqualTo(90);
@@ -273,7 +403,7 @@ class AttendanceDailyCalculatorTest {
     void overtimeMinutesNeverGoNegative() {
         AttendanceDailyRecord record = calculator.calculate(
             7L, WEDNESDAY, List.of(punch(1, WEDNESDAY, 8, 20), punch(2, WEDNESDAY, 17, 35)),
-            SCHEDULE, -30
+            SCHEDULE, -30, false
         );
 
         assertThat(record.overtimeMinutes()).isZero();

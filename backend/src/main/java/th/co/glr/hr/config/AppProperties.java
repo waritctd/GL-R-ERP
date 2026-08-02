@@ -10,7 +10,6 @@ public class AppProperties {
     private final Attendance attendance = new Attendance();
     private final LoginRateLimit loginRateLimit = new LoginRateLimit();
     private final Auth auth = new Auth();
-    private final Leave leave = new Leave();
     private final Overtime overtime = new Overtime();
     private final SpecialMoney specialMoney = new SpecialMoney();
     private final Bot bot = new Bot();
@@ -32,10 +31,6 @@ public class AppProperties {
 
     public Auth getAuth() {
         return auth;
-    }
-
-    public Leave getLeave() {
-        return leave;
     }
 
     public Overtime getOvertime() {
@@ -62,15 +57,36 @@ public class AppProperties {
         return payroll;
     }
 
+    /**
+     * BOT issues a <strong>separate API key per API</strong> — there is no shared credential. This
+     * class used to expose a single {@code apiToken} that both {@code BotFxFetchService} and {@code
+     * BotHolidayFetchService} read; that was wrong (one of the two was always sending a key invalid
+     * for the API it called) and the failure was invisible — a bad key 401s, the caller logs and
+     * returns, and the only symptom is silently stale data. Each fetcher now has its own property
+     * and its own env var, with <strong>no fallback between them</strong>: a missing key must be
+     * loudly absent (a WARN naming exactly which env var to set), never quietly substituted with the
+     * other API's key.
+     */
     public static class Bot {
-        private String apiToken = "";
+        private String holidayApiToken = "";
+        private String fxApiToken = "";
 
-        public String getApiToken() {
-            return apiToken;
+        /** {@code BOT_HOLIDAY_API_TOKEN} — Financial Institutions' Holidays API only. */
+        public String getHolidayApiToken() {
+            return holidayApiToken;
         }
 
-        public void setApiToken(String apiToken) {
-            this.apiToken = apiToken;
+        public void setHolidayApiToken(String holidayApiToken) {
+            this.holidayApiToken = holidayApiToken;
+        }
+
+        /** {@code BOT_FX_API_TOKEN} — Exchange Rate API only. */
+        public String getFxApiToken() {
+            return fxApiToken;
+        }
+
+        public void setFxApiToken(String fxApiToken) {
+            this.fxApiToken = fxApiToken;
         }
     }
 
@@ -111,11 +127,11 @@ public class AppProperties {
     }
 
     /**
-     * The company-wide standard working day used to derive late / early-leave minutes.
-     *
-     * <p>Company-wide is deliberate: there is no per-employee or per-division schedule yet. Read
-     * this through {@code WorkScheduleResolver} rather than injecting it into calculation code, so
-     * adding per-division schedules later is a new resolver implementation instead of a rewrite.
+     * The company-wide standard working day used to derive late / early-leave minutes — the
+     * fallback schedule for any employee with no {@code hr.work_schedule_assignment} row (V115).
+     * Read this through {@code WorkScheduleResolver} (see {@code TieredWorkScheduleResolver} /
+     * {@code CompanyWideWorkScheduleResolver}) rather than injecting it into calculation code
+     * directly, so schedule tiering stays a resolver concern instead of a rewrite.
      */
     public static class Schedule {
         private String zone = "Asia/Bangkok";
@@ -202,18 +218,6 @@ public class AppProperties {
 
         public void setBackfillOnStartup(boolean backfillOnStartup) {
             this.backfillOnStartup = backfillOnStartup;
-        }
-    }
-
-    public static class Leave {
-        private int advanceNoticeDays = 7;
-
-        public int getAdvanceNoticeDays() {
-            return advanceNoticeDays;
-        }
-
-        public void setAdvanceNoticeDays(int advanceNoticeDays) {
-            this.advanceNoticeDays = advanceNoticeDays;
         }
     }
 

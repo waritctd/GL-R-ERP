@@ -15,7 +15,10 @@ import th.co.glr.hr.config.AppProperties;
 
 /**
  * Fetches daily average FX rates from the Bank of Thailand (BOT) API at 18:00 Bangkok time.
- * Token must be set via BOT_API_TOKEN env var (never hardcoded).
+ * Token must be set via the {@code BOT_FX_API_TOKEN} env var (never hardcoded) — BOT issues a
+ * separate key per API, so this is <strong>not</strong> the same token {@code
+ * BotHolidayFetchService} uses; there is deliberately no fallback between the two (see {@code
+ * AppProperties.Bot}'s javadoc for why).
  * Falls back silently when BOT has not published today's rate yet.
  */
 @Service
@@ -41,9 +44,9 @@ public class BotFxFetchService {
 
     @Scheduled(cron = "0 0 18 * * *", zone = "Asia/Bangkok")
     public void fetchDailyRates() {
-        String token = props.getBot().getApiToken();
+        String token = props.getBot().getFxApiToken();
         if (token == null || token.isBlank()) {
-            log.warn("BOT_API_TOKEN not configured — skipping FX auto-fetch");
+            log.warn("BOT_FX_API_TOKEN not configured — skipping FX auto-fetch");
             return;
         }
 

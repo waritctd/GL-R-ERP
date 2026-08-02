@@ -18,9 +18,16 @@ public enum AttendanceDayFlag {
      * every other status here; carries no pay effect of its own.
      */
     WFH,
-    /** Only an afternoon punch exists — the arrival scan is missing. */
+    /** Only an afternoon punch exists — the arrival scan is missing. Always required, even for a
+     * schedule that does not require a check-out (V117): the announcement's exemption only ever
+     * covers the departure scan. */
     MISSING_CHECK_IN,
-    /** Only a morning punch exists — the departure scan is missing. */
+    /**
+     * Only a morning punch exists — the departure scan is missing, on a schedule that requires one.
+     * Never set when {@link th.co.glr.hr.attendance.schedule.WorkSchedule#requiresCheckOut()} is
+     * {@code false} (V117: ฝ่ายขาย อนุญาตให้ทาบบัตรเข้างานอย่างเดียวได้) — that lone check-in is a
+     * complete, compliant day instead.
+     */
     MISSING_CHECK_OUT,
     /** An APPROVED overtime request covers this day. This is the only pay-relevant flag. */
     OVERTIME_APPROVED,
@@ -31,5 +38,15 @@ public enum AttendanceDayFlag {
      */
     WORKED_LATE_UNAPPROVED,
     /** The date falls outside the configured workdays; late/early are not evaluated. */
-    NON_WORKDAY
+    NON_WORKDAY,
+    /**
+     * The date is a company holiday (นักขัตฤกษ์ or other {@code hr.holiday} row), regardless of
+     * what the employee's {@code WorkSchedule} would otherwise say. Late/early are not evaluated,
+     * exactly as {@link #NON_WORKDAY} behaves — but kept as a distinct flag/status rather than
+     * folded into {@code NON_WORKDAY}: a rostered นักขัตฤกษ์ shift by ฝ่ายขาย is OT-eligible (the
+     * company pays overtime for those shifts specifically), while an ordinary Saturday scan by an
+     * office worker on {@code NON_WORKDAY} is not. Collapsing the two would erase that difference
+     * for anyone reading the daily table or building a payroll-adjacent report off it.
+     */
+    HOLIDAY
 }
