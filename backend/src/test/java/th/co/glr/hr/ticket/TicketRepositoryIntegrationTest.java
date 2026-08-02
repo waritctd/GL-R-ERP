@@ -167,6 +167,108 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOf(DataIntegrityViolationException.class);
     }
 
+    // ── Slice F (ticket-workspace IA programme): ราคาตั้ง on the deal's item rows ──────────────
+    // findItemsByTicketId's LEFT JOIN to price_catalog.product_prices resolves catalogPrice/
+    // catalogCurrency/catalogPriceUnit/sqmPerPiece and derives source. Every assertion below reads
+    // a TicketItemDto back from tickets.findById(...).items() -- NOT a constructed fixture -- on
+    // purpose: a fixture built the way the tests above build one carries source/catalogPrice "for
+    // free" (it is just a field on the record), so it would pass whether or not the join exists.
+    // Only a real round trip proves the SELECT actually resolves these fields.
+
+    @Test
+    void findItemsByTicketId_catalogLinkedItem_resolvesCatalogPriceFields() {
+        long priceId = insertCatalogProductWithSqmPerPiece("Cotto Factory", "TH", "CT-400",
+            new BigDecimal("350.5000"), "THB", "per_sqm", new BigDecimal("1.440000"));
+
+        long ticketId = tickets.create(sampleTicket(
+            itemWithCatalogLink("Cotto", "Stone Series", "White", "Matte", "60x60", priceId, "CT-400")),
+            tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
+        assertThat(persisted.source()).isEqualTo("catalog");
+        assertThat(persisted.catalogPrice()).isEqualByComparingTo("350.5000");
+        assertThat(persisted.catalogCurrency()).isEqualTo("THB");
+        assertThat(persisted.catalogPriceUnit()).isEqualTo("per_sqm");
+        assertThat(persisted.sqmPerPiece()).isEqualByComparingTo("1.440000");
+    }
+
+    @Test
+    void findItemsByTicketId_freeTextItem_hasNullCatalogFieldsAndStaysInTheList() {
+        // Proves the join is LEFT, not INNER: a custom line has catalog_price_id = NULL and must
+        // still come back in the list -- an INNER JOIN would drop the row entirely rather than
+        // merely leaving the catalog fields null.
+        long ticketId = tickets.create(sampleTicket(
+            item("Custom", "Line", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        List<TicketItemDto> items = tickets.findById(ticketId).orElseThrow().items();
+        assertThat(items).hasSize(1); // <- would be empty under an INNER JOIN
+        TicketItemDto persisted = items.get(0);
+        assertThat(persisted.source()).isEqualTo("custom");
+        assertThat(persisted.catalogPrice()).isNull();
+        assertThat(persisted.catalogCurrency()).isNull();
+        assertThat(persisted.catalogPriceUnit()).isNull();
+        assertThat(persisted.sqmPerPiece()).isNull();
+    }
+
+    @Test
+    void findItemsByTicketId_retiredCatalogPrice_stillReadsBackWithNullCatalogFields() {
+        // ON DELETE SET NULL (V110): retiring the catalog price a line was linked to must clear
+        // the link, not block or cascade the delete. Reaches the same "must still be in the list"
+        // proof as the free-text case above via retirement instead of "never linked".
+        long priceId = insertCatalogProduct("Cotto Factory", "TH", "CT-500",
+            new BigDecimal("275.00"), "THB", "per_piece");
+        long ticketId = tickets.create(sampleTicket(
+            itemWithCatalogLink("Cotto", "Stone Series", "White", "Matte", "60x60", priceId, "CT-500")),
+            tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        jdbc.update("DELETE FROM price_catalog.product_prices WHERE price_id = :id", Map.of("id", priceId));
+
+        List<TicketItemDto> items = tickets.findById(ticketId).orElseThrow().items();
+        assertThat(items).hasSize(1); // <- would be empty under an INNER JOIN
+        TicketItemDto persisted = items.get(0);
+        assertThat(persisted.catalogPriceId()).isNull(); // ON DELETE SET NULL fired
+        assertThat(persisted.source()).isEqualTo("custom"); // re-derived from the now-null link
+        assertThat(persisted.catalogPrice()).isNull();
+    }
+
+    private long insertCatalogProductWithSqmPerPiece(String factoryName, String countryCode2, String productCode,
+                                                      BigDecimal price, String currency, String priceUnit,
+                                                      BigDecimal sqmPerPiece) {
+        Long factoryId = jdbc.queryForObject("""
+            INSERT INTO price_catalog.factories (name, country, default_currency)
+            VALUES (:name, :country, :currency)
+            ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+            RETURNING factory_id
+            """,
+            new MapSqlParameterSource()
+                .addValue("name", factoryName)
+                .addValue("country", countryCode2)
+                .addValue("currency", currency),
+            Long.class);
+        Long versionId = jdbc.queryForObject("""
+            INSERT INTO price_catalog.price_list_versions (factory_id, label, status, effective_from)
+            VALUES (:factoryId, 'Test catalog', 'ACTIVE', CURRENT_DATE)
+            RETURNING version_id
+            """,
+            new MapSqlParameterSource().addValue("factoryId", factoryId),
+            Long.class);
+        return jdbc.queryForObject("""
+            INSERT INTO price_catalog.product_prices
+                (factory_id, version_id, product_code, price, currency, price_unit, sqm_per_piece)
+            VALUES (:factoryId, :versionId, :productCode, :price, :currency, :priceUnit, :sqmPerPiece)
+            RETURNING price_id
+            """,
+            new MapSqlParameterSource()
+                .addValue("factoryId", factoryId)
+                .addValue("versionId", versionId)
+                .addValue("productCode", productCode)
+                .addValue("price", price)
+                .addValue("currency", currency)
+                .addValue("priceUnit", priceUnit)
+                .addValue("sqmPerPiece", sqmPerPiece),
+            Long.class);
+    }
+
     @Test
     void summariesPaginateWhileCountReflectsTheWholeMatch() {
         for (int i = 0; i < 3; i++) {
