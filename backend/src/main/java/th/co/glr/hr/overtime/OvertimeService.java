@@ -92,6 +92,15 @@ public class OvertimeService {
         validateEmployee(employeeId);
         validatePlannedWindow(request);
         validateRetroactiveWindow(request);
+        // Opus review finding F2: this used to live at the BOTTOM of validateRetroactiveWindow,
+        // which returns early for a work date that is today or later -- so a closed payroll month
+        // was only refused for BACKDATED submissions. Hoisted here so it runs for every submit,
+        // matching what this guard's own javadoc has always claimed. Harmless for the current
+        // seed-covered case (Jan-Jun 2026 is entirely in the past, so the old placement did fire),
+        // but the gap was real: record coverage for a current month and same-day OT sailed past
+        // submit, only to be refused a stage later at manager approval -- surfacing the error to
+        // the wrong person, after the request had already entered the queue.
+        requirePayrollMonthOpen(request.workDate());
 
         int plannedMinutes = minutesBetween(request.plannedStartAt(), request.plannedEndAt());
         LocalDate payrollMonth = request.workDate().withDayOfMonth(1);
@@ -336,7 +345,6 @@ public class OvertimeService {
                     + BACKDATED_REASON_MIN_LENGTH + " ตัวอักษร)"
             );
         }
-        requirePayrollMonthOpen(request.workDate());
     }
 
     /**

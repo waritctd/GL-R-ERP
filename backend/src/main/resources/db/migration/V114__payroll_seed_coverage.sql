@@ -43,10 +43,21 @@ SELECT 2026, DATE '2026-06-01',
  )
 ON CONFLICT (tax_year) DO NOTHING;
 
--- Drop whatever trigger(s) on hr.payroll_period currently invoke the hand-installed function,
--- regardless of what the trigger object itself happens to be named -- we only know the function
--- name for certain (read live from pg_proc), not the trigger's own catalog identifier. A database
--- with no such function (UAT, fresh) matches zero rows here and this is a no-op.
+-- Drop whatever trigger(s) on hr.payroll_period currently invoke the hand-installed guard,
+-- regardless of what the trigger object itself happens to be named.
+--
+-- The two names differ on prod and that matters -- verified live against the production database
+-- (project tdyzcqzxmhtxpbouewud) via pg_trigger joined to pg_proc:
+--     trigger object : trg_guard_seeded_month_not_processed
+--     function       : hr.guard_seeded_month_not_processed   <- NO "trg_" prefix
+-- An earlier draft of this block matched on proname = 'trg_guard_...' and therefore found nothing
+-- on prod; the migration only still worked because the literal DROP TRIGGER below happens to match
+-- the trigger's own name. That was luck, not design. Match BOTH the hand-installed function name
+-- and this migration's own canonical one, so the block does its job on prod and stays idempotent
+-- against itself. A database with neither (UAT, fresh) matches zero rows and this is a no-op.
+--
+-- Not filtered by schema on purpose: if the original was ever created with a default search_path it
+-- could live in public, and matching by name alone still finds it.
 DO $$
 DECLARE
     old_trigger RECORD;
@@ -55,16 +66,22 @@ BEGIN
         SELECT t.tgname
           FROM pg_trigger t
           JOIN pg_proc p ON p.oid = t.tgfoid
-          JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE t.tgrelid = 'hr.payroll_period'::regclass
            AND NOT t.tgisinternal
-           AND n.nspname = 'hr'
-           AND p.proname = 'trg_guard_seeded_month_not_processed'
+           AND p.proname IN ('guard_seeded_month_not_processed',
+                             'trg_guard_seeded_month_not_processed')
     LOOP
         EXECUTE format('DROP TRIGGER %I ON hr.payroll_period', old_trigger.tgname);
     END LOOP;
 END;
 $$;
+
+-- The hand-installed function is now unreferenced (its trigger was just dropped, and the trigger
+-- recreated below points at this migration's own function instead). Drop it rather than leave an
+-- orphan behind, so "one source of truth" is actually true afterwards: a stale copy carrying the
+-- old hardcoded `< DATE '2026-07-01'` literal would keep firing if anything ever re-attached it,
+-- and would silently ignore hr.payroll_seed_coverage. No-op on UAT/fresh, where it never existed.
+DROP FUNCTION IF EXISTS hr.guard_seeded_month_not_processed();
 
 -- Also cover a rerun of this exact migration's own canonical trigger name (Testcontainers golden
 -- template / repeated local migrate), so this file is idempotent against itself, not just against

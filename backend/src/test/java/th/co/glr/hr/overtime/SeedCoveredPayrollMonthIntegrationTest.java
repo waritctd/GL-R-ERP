@@ -7,6 +7,7 @@ import static org.mockito.Mockito.mock;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Map;
@@ -76,6 +77,33 @@ class SeedCoveredPayrollMonthIntegrationTest extends AbstractPostgresIntegration
         assertThatThrownBy(() -> overtimeService.submit(backdated(workDate), employee(staff)))
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("จ่ายนอกระบบ") // distinguishes this from the "already processed"
+            .satisfies(exception -> assertThat(((ApiException) exception).getStatus())
+                .isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(countOvertimeRequestsFor(staff)).isZero();
+    }
+
+    /**
+     * Opus review finding F2. {@code requirePayrollMonthOpen} used to sit at the BOTTOM of
+     * {@code validateRetroactiveWindow}, which returns early for a work date that is today or
+     * later -- so a closed month was only ever refused for BACKDATED submissions. Every other case
+     * in this class uses a 2026-03 work date, which is in the past, so the old placement fired and
+     * none of them could detect the gap.
+     *
+     * <p>This one uses TODAY, with coverage recorded through the current month. Under the old
+     * placement the submit succeeded and the request landed in the queue, only to be refused a
+     * stage later at manager approval -- surfacing the error to the wrong person. Under the fix it
+     * is refused at submit and nothing is written.
+     */
+    @Test
+    void submitForTODAYInASeedCoveredMonthIsRefusedAtSubmitNotAtApproval() {
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Bangkok"));
+        LocalDate monthStart = today.withDayOfMonth(1);
+        insertCoverage(today.getYear(), monthStart.toString());
+
+        assertThatThrownBy(() -> overtimeService.submit(backdated(today), employee(staff)))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("จ่ายนอกระบบ")
             .satisfies(exception -> assertThat(((ApiException) exception).getStatus())
                 .isEqualTo(HttpStatus.CONFLICT));
 
