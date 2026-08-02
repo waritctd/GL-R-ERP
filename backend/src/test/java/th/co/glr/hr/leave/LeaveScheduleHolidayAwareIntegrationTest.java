@@ -60,7 +60,8 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
         AppProperties appProperties = new AppProperties();
         WorkScheduleResolver scheduleResolver = new TieredWorkScheduleResolver(
             new WorkScheduleAssignmentRepository(jdbc, appProperties),
-            new CompanyWideWorkScheduleResolver(appProperties));
+            new CompanyWideWorkScheduleResolver(appProperties),
+            appProperties);
         HolidayCalendar holidayCalendar = new DbHolidayCalendar(jdbc);
         leaveRepository = new LeaveRepository(jdbc, scheduleResolver, holidayCalendar);
 

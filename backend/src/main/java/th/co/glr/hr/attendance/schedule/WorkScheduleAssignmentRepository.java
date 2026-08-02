@@ -24,11 +24,12 @@ import th.co.glr.hr.config.AppProperties;
  * (one row per scope — a handful of divisions/departments plus occasional employee overrides), not
  * one that scales with attendance volume, so a full read is cheap and — critically — bounded,
  * unlike a query issued once per employee-day would be. {@link TieredWorkScheduleResolver} caches
- * the result for the lifetime of the bean, the same way {@link CompanyWideWorkScheduleResolver}
- * parses its configured schedule once at construction: today's assignments are edited only via a
- * forward-only migration or direct SQL (there is deliberately no admin CRUD UI in this branch), so
- * picking up a change requires a redeploy either way. A future admin UI must add cache invalidation
- * alongside it — see {@link TieredWorkScheduleResolver}'s class javadoc.
+ * the result for a bounded TTL rather than the lifetime of the bean — today's assignments are edited
+ * only via a forward-only migration or direct SQL (there is deliberately no admin CRUD UI in this
+ * branch), so a restart is not guaranteed after a change, and the TTL is what makes such a change
+ * take effect on its own. See {@link TieredWorkScheduleResolver}'s class javadoc for the full design
+ * (including {@link TieredWorkScheduleResolver#invalidate()}, the seam a future admin UI should use
+ * for immediate effect).
  */
 @Repository
 public class WorkScheduleAssignmentRepository {

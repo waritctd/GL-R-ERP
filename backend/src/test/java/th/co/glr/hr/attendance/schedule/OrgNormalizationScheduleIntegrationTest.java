@@ -36,9 +36,10 @@ class OrgNormalizationScheduleIntegrationTest extends AbstractPostgresIntegratio
 
     @BeforeEach
     void wireRealCollaboratorsAndReadMigration() throws IOException {
-        repository = new WorkScheduleAssignmentRepository(jdbc, new AppProperties());
+        AppProperties properties = new AppProperties();
+        repository = new WorkScheduleAssignmentRepository(jdbc, properties);
         resolver = new TieredWorkScheduleResolver(
-            repository, new CompanyWideWorkScheduleResolver(new AppProperties()));
+            repository, new CompanyWideWorkScheduleResolver(properties), properties);
         try (InputStream in = getClass().getClassLoader()
                 .getResourceAsStream("db/migration/V121__org_normalize_approvers_and_schedules.sql")) {
             assertThat(in).as("V121 migration file must be on the test classpath").isNotNull();
