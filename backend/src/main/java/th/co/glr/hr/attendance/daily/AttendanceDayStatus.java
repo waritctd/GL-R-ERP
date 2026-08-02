@@ -19,5 +19,10 @@ public enum AttendanceDayStatus {
     MISSING_CHECK_IN,
     MISSING_CHECK_OUT,
     /** Outside the configured workdays. */
-    NON_WORKDAY
+    NON_WORKDAY,
+    /**
+     * A company holiday (นักขัตฤกษ์). Distinct from {@link #NON_WORKDAY} because it carries a
+     * different pay meaning for a rostered ฝ่ายขาย shift — see {@link AttendanceDayFlag#HOLIDAY}.
+     */
+    HOLIDAY
 }

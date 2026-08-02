@@ -21,6 +21,7 @@ import th.co.glr.hr.attendance.daily.AttendanceDailyRepository;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
 import th.co.glr.hr.attendance.daily.AttendanceDayStatus;
 import th.co.glr.hr.attendance.schedule.CompanyWideWorkScheduleResolver;
+import th.co.glr.hr.attendance.schedule.DbHolidayCalendar;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -60,7 +61,8 @@ class AttendanceMarkPresentIntegrationTest extends AbstractPostgresIntegrationTe
         dailyService = new AttendanceDailyService(
             dailyRepository,
             new AttendanceDailyCalculator(),
-            new CompanyWideWorkScheduleResolver(properties));
+            new CompanyWideWorkScheduleResolver(properties),
+            new DbHolidayCalendar(jdbc));
         AttendanceService service = new AttendanceService(
             new AttendanceRepository(jdbc, new ObjectMapper()),
             new AttendanceDatParser(),

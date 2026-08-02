@@ -191,7 +191,10 @@ export function DivisionManagerOverview({ user, employee, dashboardSummary, show
   // statuses (late, missing check-out) surface first, same "don't bury what
   // needs a look" principle as the worklist above; capped to keep the card short.
   const teamAttendanceRows = useMemo(() => {
-    const priority = { LATE: 0, MISSING_CHECK_OUT: 1, MISSING_CHECK_IN: 2, PRESENT: 3, NON_WORKDAY: 4, NO_RECORD: 5 };
+    const priority = {
+      LATE: 0, MISSING_CHECK_OUT: 1, MISSING_CHECK_IN: 2, PRESENT: 3,
+      NON_WORKDAY: 4, HOLIDAY: 4, NO_RECORD: 5,
+    };
     return attendanceDays
       .slice()
       .sort((a, b) => (priority[a.status] ?? 9) - (priority[b.status] ?? 9))

@@ -111,11 +111,11 @@ public class AppProperties {
     }
 
     /**
-     * The company-wide standard working day used to derive late / early-leave minutes.
-     *
-     * <p>Company-wide is deliberate: there is no per-employee or per-division schedule yet. Read
-     * this through {@code WorkScheduleResolver} rather than injecting it into calculation code, so
-     * adding per-division schedules later is a new resolver implementation instead of a rewrite.
+     * The company-wide standard working day used to derive late / early-leave minutes — the
+     * fallback schedule for any employee with no {@code hr.work_schedule_assignment} row (V115).
+     * Read this through {@code WorkScheduleResolver} (see {@code TieredWorkScheduleResolver} /
+     * {@code CompanyWideWorkScheduleResolver}) rather than injecting it into calculation code
+     * directly, so schedule tiering stays a resolver concern instead of a rewrite.
      */
     public static class Schedule {
         private String zone = "Asia/Bangkok";
