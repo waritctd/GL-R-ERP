@@ -273,6 +273,18 @@ db.deductionObligationRemittances = db.deductionObligationRemittances || [];
 // does not reimplement (see the file-level note on why: a shared algorithmic error would be
 // invisible on both sides). Anyone testing the §5.4 calendar-day behaviour itself must do so against
 // the real backend, not VITE_USE_MOCKS=true.
+//
+// certificateFilingWindowDays / noCertificateMonthlyTolerance (V124, §5.1 SICK): SHAPE parity only,
+// same "not enforced" caveat as every other field in this block. create() below still uses the OLD
+// unconditional "SICK + no attachment -> reject" rule -- it does NOT grant the 3-times-a-month
+// no-certificate tolerance, nor the certificate filing-window deadline. This is a genuine, real,
+// money-moving business-rule decision (see LeaveService#sickCertificateNote's combined decision
+// table on the real backend) exactly the kind this mock deliberately declines to reimplement (a
+// shared algorithmic error between mock and backend would be invisible on both sides -- see the
+// file-level note). Anyone testing the §5.1 tolerance/filing-window behaviour itself must do so
+// against the real backend, not VITE_USE_MOCKS=true. Note this is the SAFE divergence direction
+// (mock is now STRICTER than production, not more permissive -- CLAUDE.md's "more permissive than
+// prod" is the dangerous one).
 db.leaveTypes = db.leaveTypes || [
   // PERSONAL quota fix (2026-07-25): seeded at 3, company rule (§5.2) grants 7 paid personal
   // days/year -- see V90__leave_subday_and_contact.sql for the backend-side correction.
@@ -293,11 +305,15 @@ db.leaveTypes = db.leaveTypes || [
     code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal leave', annualQuotaDays: 7, requiresAttachment: false,
     paidDaysCap: null, advanceNoticeDays: 1, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
     dayCountBasis: 'WORKING_DAYS', proratedFirstYear: true, firstYearMaxDays: 3,
+    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0,
   },
+  // certificateFilingWindowDays: 3 / noCertificateMonthlyTolerance: 3 (V124, §5.1) -- SHAPE parity
+  // only, see the file-level note above this array: create() below does NOT enforce either of these.
   {
     code: 'SICK', nameTh: 'ลาป่วย', nameEn: 'Sick leave', annualQuotaDays: 30, requiresAttachment: true,
     paidDaysCap: null, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
     dayCountBasis: 'WORKING_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
+    certificateFilingWindowDays: 3, noCertificateMonthlyTolerance: 3,
   },
   // minServiceMonths: 0 / proratedFirstYear: true (V120, defect 1 fix) -- V116's original
   // min_service_months=12 refused ALL vacation leave under a year of service outright, contradicting
@@ -307,11 +323,13 @@ db.leaveTypes = db.leaveTypes || [
     code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation leave', annualQuotaDays: 6, requiresAttachment: false,
     paidDaysCap: null, advanceNoticeDays: 3, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
     dayCountBasis: 'WORKING_DAYS', proratedFirstYear: true, firstYearMaxDays: null,
+    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0,
   },
   {
     code: 'MATERNITY', nameTh: 'ลาคลอดบุตร', nameEn: 'Maternity leave', annualQuotaDays: 98, requiresAttachment: true,
     paidDaysCap: 45, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
     dayCountBasis: 'CALENDAR_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
+    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0,
   },
   // annualQuotaDays: 366 (sentinel, not a real policy number) / paidDaysCap: 60 (V120, defect 2 fix)
   // -- V116 wrongly capped the LEAVE ITSELF at 60 days; §5.5 only caps the PAY. See
@@ -320,11 +338,13 @@ db.leaveTypes = db.leaveTypes || [
     code: 'MILITARY', nameTh: 'ลารับราชการทหาร', nameEn: 'Military service leave', annualQuotaDays: 366, requiresAttachment: true,
     paidDaysCap: 60, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
     dayCountBasis: 'WORKING_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
+    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0,
   },
   {
     code: 'ORDINATION', nameTh: 'ลาอุปสมบท', nameEn: 'Ordination leave', annualQuotaDays: 60, requiresAttachment: false,
     paidDaysCap: 15, advanceNoticeDays: 0, minServiceMonths: 12, maxConsecutiveDays: null, oncePerEmployment: true,
     dayCountBasis: 'WORKING_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
+    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0,
   },
 ];
 // leaveRequests/overtimeRequests/specialMoneyRequests are seeded by demoHr.js, wired

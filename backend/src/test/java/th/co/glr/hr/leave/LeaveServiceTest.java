@@ -22,9 +22,12 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Predicate;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
@@ -150,52 +153,73 @@ class LeaveServiceTest {
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), org.mockito.ArgumentMatchers.contains("at least 7"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
-    @Test
-    void submissionAutoRejectsSickLeaveWithoutCertificate() {
-        SubmitLeaveRequest request = new SubmitLeaveRequest(
-            null,
-            "SICK",
-            weekdayAfterNotice(),
-            weekdayAfterNotice(),
-            "Fever"
-        );
+    // ─────────────────────────────────────────────────────────────────────
+    // §5.1 SICK certificate + filing-window + no-certificate tolerance (V124). Replaces the old
+    // "SICK requires an attachment, full stop" behaviour these two tests used to pin
+    // (submissionAutoRejectsSickLeaveWithoutCertificate, pre-V124) -- a certificate-less request is
+    // now ALLOWED up to sickType()'s seeded 3-occasions-per-month tolerance, and a certificate must
+    // be filed within the seeded 3-working-day window. See LeaveService#sickCertificateNote's
+    // Javadoc for the full combined decision table this class of tests proves.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {0, 1, 2})
+    void submissionAllowsCertificatelessSickLeaveForTheFirstThreeMonthlyOccasions(int occasionsAlreadyUsedThisMonth) {
+        // occasionsAlreadyUsedThisMonth = 0/1/2 -> this request is the 1st/2nd/3rd occasion this
+        // month -- all three are within sickType()'s seeded tolerance of 3, so all three must be
+        // APPROVED (money-moving: today this would have been an outright AUTO_REJECTED, no pay).
+        SubmitLeaveRequest request = new SubmitLeaveRequest(null, "SICK", weekdayAfterNotice(), weekdayAfterNotice(), "Fever");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("SICK")).thenReturn(Optional.of(sickType()));
         when(leaveRepository.sumUsedDays(eq(10L), eq("SICK"), eq(request.startDate().getYear()), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
-        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+        when(leaveRepository.countNoCertificateRequestsInMonth(eq(10L), eq("SICK"),
+            eq(request.startDate().withDayOfMonth(1)), any(LocalDate.class), any(Collection.class)))
+            .thenReturn(occasionsAlreadyUsedThisMonth);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(58L);
         when(leaveRepository.findById(58L)).thenReturn(Optional.of(
-            requestDto(58L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+            requestDto(58L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), org.mockito.ArgumentMatchers.contains("medical certificate"), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(result.status()).isEqualTo("APPROVED");
     }
 
     @Test
-    void submissionOnSickLeaveBeyondQuotaStillRequiresCertificate() {
-        // "SICK>30 still needs attachment": exceeding the 30-day quota changes the paid/unpaid split,
-        // it does NOT waive the medical-certificate requirement -- that check runs independently of
-        // quota availability.
-        SubmitLeaveRequest request = new SubmitLeaveRequest(
-            null,
-            "SICK",
-            weekdayAfterNotice(),
-            weekdayAfterNotice(),
-            "Fever"
-        );
+    void submissionAllowsTheThirdCertificatelessSickOccasionButRejectsTheFourthInTheSameMonth() {
+        // THE boundary, asserted from both sides on ONE fixture (same request shape, same month):
+        // 2 occasions already used -> this one is the 3rd -> still within the tolerance of 3 ->
+        // APPROVED. 3 occasions already used -> this one would be the 4th -> exceeds the tolerance ->
+        // AUTO_REJECTED. If the boundary comparison used > instead of >=, this test would fail on the
+        // "3 used" side instead of passing.
+        SubmitLeaveRequest request = new SubmitLeaveRequest(null, "SICK", weekdayAfterNotice(), weekdayAfterNotice(), "Fever");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("SICK")).thenReturn(Optional.of(sickType()));
-        // Quota already fully used (30/30) -- remaining is 0, so even WITH a certificate this would
-        // be entirely unpaid; without one, it must still auto-reject on the certificate rule.
         when(leaveRepository.sumUsedDays(eq(10L), eq("SICK"), eq(request.startDate().getYear()), any(Collection.class)))
-            .thenReturn(new BigDecimal("30.00"));
+            .thenReturn(BigDecimal.ZERO);
+
+        // Side 1: 2 occasions already used this month -> the 3rd -> ALLOWED.
+        when(leaveRepository.countNoCertificateRequestsInMonth(eq(10L), eq("SICK"),
+            eq(request.startDate().withDayOfMonth(1)), any(LocalDate.class), any(Collection.class)))
+            .thenReturn(2);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(58L);
+        when(leaveRepository.findById(58L)).thenReturn(Optional.of(
+            requestDto(58L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "0.00")));
+
+        LeaveRequestDto allowed = leaveService.submit(request, user("employee", 10L));
+        assertThat(allowed.status()).isEqualTo("APPROVED");
+
+        // Side 2: 3 occasions already used this month -> the 4th -> REJECTED. Re-stub the SAME
+        // repository mock, same request, only the occasion count changes.
+        when(leaveRepository.countNoCertificateRequestsInMonth(eq(10L), eq("SICK"),
+            eq(request.startDate().withDayOfMonth(1)), any(LocalDate.class), any(Collection.class)))
+            .thenReturn(3);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
@@ -203,12 +227,104 @@ class LeaveServiceTest {
         when(leaveRepository.findById(59L)).thenReturn(Optional.of(
             requestDto(59L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
 
-        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+        LeaveRequestDto rejected = leaveService.submit(request, user("employee", 10L));
+        assertThat(rejected.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("3 occasion(s) per calendar month"), eq(null), eq(null), eq(null), eq(null), eq(null));
+    }
+
+    @Test
+    void submissionApprovesSickLeaveWithACertificateFiledWithinTheWorkingDayWindow() {
+        // FIXED_NOW = Wed 2026-07-01. Start date Mon 2026-06-29: addWorkingDays(Mon, 3) = Thu
+        // 2026-07-02 -- "today" (2026-07-01) is on/before that deadline -> ON TIME -> APPROVED.
+        LocalDate start = LocalDate.parse("2026-06-29");
+        SubmitLeaveRequest request = new SubmitLeaveRequest(null, "SICK", start, start, "Fever, saw a doctor");
+        MultipartFile certificate = new MockMultipartFile("attachment", "cert.pdf", "application/pdf", "cert".getBytes());
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("SICK")).thenReturn(Optional.of(sickType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("SICK"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(60L);
+        when(leaveRepository.findById(60L)).thenReturn(Optional.of(
+            requestDto(60L, 10L, "APPROVED", start, start, "1.00", "0.00")));
+        when(fileStorage.store(eq("leave"), eq(60L), eq(certificate), any(Set.class)))
+            .thenReturn(new FileStorageService.StoredFile("cert.pdf", "/uploads/leave/60/x.pdf", "application/pdf", 4L));
+        when(leaveAttachments.save(eq(60L), eq("cert.pdf"), eq("/uploads/leave/60/x.pdf"), eq("application/pdf"), eq(4L), eq(10L)))
+            .thenReturn(new LeaveAttachmentDto(900L, "leave", 60L, "cert.pdf", "application/pdf", 4L, 10L, Instant.now()));
+
+        LeaveRequestDto result = leaveService.submit(request, certificate, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+        verify(leaveRepository).attachFile(60L, 900L);
+    }
+
+    @Test
+    void submissionRejectsSickLeaveWithACertificateFiledOutsideTheWorkingDayWindow() {
+        // FIXED_NOW = Wed 2026-07-01. Start date Mon 2026-06-01 (a full month earlier):
+        // addWorkingDays(Mon, 3) = Thu 2026-06-04 -- "today" (2026-07-01) is long past that deadline
+        // -> LATE -> AUTO_REJECTED, even though a real certificate was attached.
+        LocalDate start = LocalDate.parse("2026-06-01");
+        SubmitLeaveRequest request = new SubmitLeaveRequest(null, "SICK", start, start, "Fever, saw a doctor (filed late)");
+        MultipartFile certificate = new MockMultipartFile("attachment", "cert.pdf", "application/pdf", "cert".getBytes());
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("SICK")).thenReturn(Optional.of(sickType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("SICK"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
+            eq(BigDecimal.ZERO), eq(2026),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(61L);
+        when(leaveRepository.findById(61L)).thenReturn(Optional.of(
+            requestDto(61L, 10L, "AUTO_REJECTED", start, start, "0.00", "0.00")));
+        // #submit stores an attachment whenever one is present, UNCONDITIONALLY of whether the
+        // request itself was approved or auto-rejected (see LeaveService#submit: the hasAttachment
+        // block runs after #create regardless of `status`) -- the late-filed certificate is still
+        // recorded for HR to see when reviewing the rejection, it just does not buy the request
+        // approval.
+        when(fileStorage.store(eq("leave"), eq(61L), eq(certificate), any(Set.class)))
+            .thenReturn(new FileStorageService.StoredFile("cert.pdf", "/uploads/leave/61/x.pdf", "application/pdf", 4L));
+        when(leaveAttachments.save(eq(61L), eq("cert.pdf"), eq("/uploads/leave/61/x.pdf"), eq("application/pdf"), eq(4L), eq(10L)))
+            .thenReturn(new LeaveAttachmentDto(901L, "leave", 61L, "cert.pdf", "application/pdf", 4L, 10L, Instant.now()));
+
+        LeaveRequestDto result = leaveService.submit(request, certificate, user("employee", 10L));
 
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), org.mockito.ArgumentMatchers.contains("medical certificate"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            eq(BigDecimal.ZERO), eq(2026),
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
+            org.mockito.ArgumentMatchers.contains("working day(s) of the leave start date"), eq(null), eq(null), eq(null), eq(null), eq(null));
+    }
+
+    @Test
+    void submissionAllowsCertificatelessSickLeaveEvenWhenFiledLongAfterTheStartDate() {
+        // THE combined case the task calls out explicitly: no certificate AND beyond the 3-working-
+        // day window (same start date as the "filed late" test above, which is AUTO_REJECTED WITH a
+        // certificate) -- but WITHOUT a certificate and with tolerance still available, this is
+        // APPROVED. The filing-window clause governs the certificate path only; it never gates the
+        // no-certificate tolerance path. Occasion count 0 (1st this month) proves the interaction, not
+        // just "no certificate ever needs one" -- the SAME date that fails the window on the
+        // certificate path passes cleanly here.
+        LocalDate start = LocalDate.parse("2026-06-01");
+        SubmitLeaveRequest request = new SubmitLeaveRequest(null, "SICK", start, start, "Minor illness, no doctor visit, filed late");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("SICK")).thenReturn(Optional.of(sickType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("SICK"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.countNoCertificateRequestsInMonth(eq(10L), eq("SICK"),
+            eq(start.withDayOfMonth(1)), any(LocalDate.class), any(Collection.class)))
+            .thenReturn(0);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(62L);
+        when(leaveRepository.findById(62L)).thenReturn(Optional.of(
+            requestDto(62L, 10L, "APPROVED", start, start, "1.00", "0.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
     }
 
     @Test
@@ -438,11 +554,17 @@ class LeaveServiceTest {
         // permanently missing -- a data-integrity gap, not just a cosmetic one.
         //
         // Uses SICK (not VACATION) so autoRejectNote fires for a simple, unrelated reason (missing
-        // medical certificate) rather than needing the cross-year date itself to trigger a gate.
+        // medical certificate, monthly no-certificate tolerance already exhausted -- V124) rather
+        // than needing the cross-year date itself to trigger a gate.
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("SICK")).thenReturn(Optional.of(sickType()));
         when(leaveRepository.sumUsedDays(eq(10L), eq("SICK"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
         when(leaveRepository.sumUsedDays(eq(10L), eq("SICK"), eq(2027), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        // V124: this month's no-certificate tolerance (3) is already exhausted, so the certificate-less
+        // gate still fires -- keeps this test isolated to the cross-year quota-split mechanism, not
+        // the (separately tested) tolerance boundary itself.
+        when(leaveRepository.countNoCertificateRequestsInMonth(eq(10L), eq("SICK"), any(LocalDate.class), any(LocalDate.class), any(Collection.class)))
+            .thenReturn(3);
         SubmitLeaveRequest sickRequest = new SubmitLeaveRequest(
             null, "SICK", LocalDate.parse("2026-12-31"), LocalDate.parse("2027-01-04"), "Year-end illness");
         when(leaveRepository.create(eq(10L), eq(10L), eq(sickRequest), any(BigDecimal.class), eq(BigDecimal.ZERO),
@@ -916,7 +1038,8 @@ class LeaveServiceTest {
         // this Mockito-based class can't fake). The exact §5.4 MATERNITY 98/45/53 split is proven
         // against real dates in LeaveTypeRuleIntegrationTest.
         LeaveTypeDto cappedType = new LeaveTypeDto("VACATION", "Vacation", "Vacation leave",
-            new BigDecimal("10.00"), false, new BigDecimal("4.00"), 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null);
+            new BigDecimal("10.00"), false, new BigDecimal("4.00"), 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null,
+            null, 0);
         // Mon 2026-07-13 .. Mon 2026-07-20: working days 13,14,15,16,17,20 = 6 working days.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-20"), "Capped leave test");
@@ -950,7 +1073,8 @@ class LeaveServiceTest {
         // Same fixture, but the cap (9) is larger than the 6 working days requested -- the cap must
         // not bind, and the result must be identical to the uncapped (quota-only) behaviour.
         LeaveTypeDto cappedType = new LeaveTypeDto("VACATION", "Vacation", "Vacation leave",
-            new BigDecimal("10.00"), false, new BigDecimal("9.00"), 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null);
+            new BigDecimal("10.00"), false, new BigDecimal("9.00"), 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null,
+            null, 0);
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-20"), "Capped leave test");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -1419,22 +1543,28 @@ class LeaveServiceTest {
         // LeaveTypeDto with proratedFirstYear=true explicitly rather than making every existing
         // VACATION test in this class newly depend on a stubbed hire date.
         return new LeaveTypeDto("VACATION", "Vacation", "Vacation leave", new BigDecimal("6.00"), false,
-            null, 7, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null);
+            null, 7, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0);
     }
 
+    // §5.1 SICK certificate + filing-window + no-certificate tolerance (V124): certificateFilingWindowDays=3,
+    // noCertificateMonthlyTolerance=3 -- the REAL seeded values (V124's migration), matching the
+    // precedent personalTypeProratedFirstYear()/vacationTypeProratedFirstYear() already set of using
+    // real seeded figures once a fixture's whole purpose is to exercise that exact rule (as opposed
+    // to vacationType()/leaveWithoutPayType()/ordinationType() above and below, which deliberately
+    // use "no restriction" placeholders for fields not under test in THEIR tests).
     private LeaveTypeDto sickType() {
         return new LeaveTypeDto("SICK", "Sick", "Sick leave", new BigDecimal("30.00"), true,
-            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null);
+            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, 3, 3);
     }
 
     private LeaveTypeDto leaveWithoutPayType() {
         return new LeaveTypeDto("LEAVE_WITHOUT_PAY", "Leave without pay", "Leave without pay", BigDecimal.ZERO, false,
-            BigDecimal.ZERO, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null);
+            BigDecimal.ZERO, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0);
     }
 
     private LeaveTypeDto ordinationType() {
         return new LeaveTypeDto("ORDINATION", "Ordination", "Ordination leave", new BigDecimal("60.00"), false,
-            new BigDecimal("15.00"), 0, 12, null, true, LeaveDayCountBasis.WORKING_DAYS, false, null);
+            new BigDecimal("15.00"), 0, 12, null, true, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0);
     }
 
     // proratedFirstYear=false, maxConsecutiveDays=3.00 (deliberately the OLD pre-V120 shape -- see
@@ -1446,7 +1576,7 @@ class LeaveServiceTest {
     // null, firstYearMaxDays 3.00) is personalTypeProratedFirstYear() below.
     private LeaveTypeDto personalTypeWithMaxConsecutive() {
         return new LeaveTypeDto("PERSONAL", "Personal", "Personal leave", new BigDecimal("7.00"), false,
-            null, 0, 0, new BigDecimal("3.00"), false, LeaveDayCountBasis.WORKING_DAYS, false, null);
+            null, 0, 0, new BigDecimal("3.00"), false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0);
     }
 
     // §5.4 MATERNITY calendar-day counting (V119, 2026-08-02): the one fixture in this class with
@@ -1454,7 +1584,7 @@ class LeaveServiceTest {
     // the basis from the leave type, not a hardcoded assumption.
     private LeaveTypeDto maternityType() {
         return new LeaveTypeDto("MATERNITY", "Maternity", "Maternity leave", new BigDecimal("98.00"), true,
-            new BigDecimal("45.00"), 0, 0, null, false, LeaveDayCountBasis.CALENDAR_DAYS, false, null);
+            new BigDecimal("45.00"), 0, 0, null, false, LeaveDayCountBasis.CALENDAR_DAYS, false, null, null, 0);
     }
 
     // §5.2/§5.3 pro-ration (V120, defect 1 fix). Real completed-months-of-service arithmetic against
@@ -1464,7 +1594,7 @@ class LeaveServiceTest {
 
     private LeaveTypeDto vacationTypeProratedFirstYear() {
         return new LeaveTypeDto("VACATION", "Vacation", "Vacation leave", new BigDecimal("6.00"), false,
-            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, true, null);
+            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, true, null, null, 0);
     }
 
     // §5.2 first-year total-days cap (V120, defect 3 fix). maxConsecutiveDays=null (the OLD blanket
@@ -1474,7 +1604,7 @@ class LeaveServiceTest {
     // for its own, unrelated tests).
     private LeaveTypeDto personalTypeProratedFirstYear() {
         return new LeaveTypeDto("PERSONAL", "Personal", "Personal leave", new BigDecimal("7.00"), false,
-            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, true, new BigDecimal("3.00"));
+            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, true, new BigDecimal("3.00"), null, 0);
     }
 
     private LeaveRequestDto requestDto(long id, long employeeId, String status, LocalDate startDate, LocalDate endDate,

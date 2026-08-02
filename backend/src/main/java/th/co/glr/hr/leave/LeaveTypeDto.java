@@ -25,6 +25,14 @@ import java.math.BigDecimal;
  * old blanket {@code maxConsecutiveDays=3} everyone-and-consecutive-only rule). See {@link
  * LeaveService#autoRejectNote} for how this composes with pro-ration (effective cap =
  * {@code min(proratedQuota, firstYearMaxDays)}).
+ *
+ * <p>{@code certificateFilingWindowDays} / {@code noCertificateMonthlyTolerance} (V124): §5.1's two
+ * previously-missing SICK rules -- a working-day deadline to file a medical certificate, and a
+ * per-calendar-month tolerance for certificate-less "minor illness" requests. {@code null} filing
+ * window = no such rule; {@code 0} tolerance = no tolerance (a missing attachment always rejects,
+ * today's behaviour for every type except SICK). See {@link LeaveService#sickCertificateNote} for
+ * the combined decision table and V124's migration comment for the seeded SICK values (3 / 3) and
+ * the interpretation caveats.
  */
 public record LeaveTypeDto(
     String code,
@@ -39,6 +47,8 @@ public record LeaveTypeDto(
     boolean oncePerEmployment,
     LeaveDayCountBasis dayCountBasis,
     boolean proratedFirstYear,
-    BigDecimal firstYearMaxDays
+    BigDecimal firstYearMaxDays,
+    Integer certificateFilingWindowDays,
+    int noCertificateMonthlyTolerance
 ) {
 }

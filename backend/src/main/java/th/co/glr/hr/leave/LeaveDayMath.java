@@ -213,6 +213,29 @@ final class LeaveDayMath {
         return day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY;
     }
 
+    /**
+     * §5.1 SICK certificate filing-window (V124): returns the date reached by walking forward from
+     * {@code from}, counting only WORKING days ({@link #isWorkingDay}, Mon-Fri -- same known
+     * no-holiday-calendar limitation as the rest of this class, see the class Javadoc and CLAUDE.md;
+     * NOT fixed here), until {@code workingDays} of them have been counted. {@code from} itself is
+     * NEVER counted, even when it is itself a working day -- "file within N working days of X" reads
+     * as N days AFTER X, not X itself as day one (mirrors the ordinary "N business days from today"
+     * reading a filing deadline states). {@code workingDays <= 0} returns {@code from} unchanged
+     * (defensive; every caller today passes a positive filing-window value, enforced by {@code
+     * chk_leave_type_certificate_filing_window_positive}).
+     */
+    static LocalDate addWorkingDays(LocalDate from, int workingDays) {
+        LocalDate date = from;
+        int counted = 0;
+        while (counted < workingDays) {
+            date = date.plusDays(1);
+            if (isWorkingDay(date)) {
+                counted++;
+            }
+        }
+        return date;
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // V118 cross-year quota fix (2026-08-02): a request's days may now need to be attributed to more
     // than one calendar year (§5.4 MATERNITY, up to 98 working days -- see LeaveQuotaYearSplit). The
