@@ -294,6 +294,102 @@ public class LeaveRepository {
     }
 
     /**
+     * §5.3.4 (ประกาศ "วันเวลาทำงาน และการหยุดงาน" eff. 1 ต.ค. 2567): does {@code hr.resignation} (V1)
+     * carry a row for this employee at all -- see {@link LeaveService}'s resignation-gate Javadoc for
+     * why mere presence, not {@code resign_date}, is what this gate reads. {@code employee_id} is
+     * that table's PRIMARY KEY (1:1), so this is a plain existence check.
+     */
+    public boolean hasSubmittedResignation(long employeeId) {
+        Boolean exists = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                  FROM hr.resignation
+                 WHERE employee_id = :employeeId
+            )
+            """, Map.of("employeeId", employeeId), Boolean.class);
+        return Boolean.TRUE.equals(exists);
+    }
+
+    /**
+     * §5.3.3 contiguous-leave-type gate: SUBMITTED/APPROVED {@code leaveTypeCode} requests for
+     * {@code employeeId} whose range overlaps [{@code fromDate}, {@code toDate}] -- a small padding
+     * window around the new request's own dates (see {@code LeaveService#CONTIGUOUS_CHECK_WINDOW_DAYS}),
+     * not the employee's whole history. Same SUBMITTED/APPROVED scope as {@link
+     * #hasOutstandingOrGrantedRequest} -- a still-pending request counts as taken for this gate too.
+     */
+    public List<LeaveRequestSpan> findActiveRequestsByType(
+            long employeeId, String leaveTypeCode, LocalDate fromDate, LocalDate toDate) {
+        return jdbc.query("""
+            SELECT start_date, end_date
+              FROM hr.leave_request
+             WHERE employee_id = :employeeId
+               AND leave_type_code = :leaveTypeCode
+               AND status IN ('SUBMITTED', 'APPROVED')
+               AND start_date <= :toDate
+               AND end_date >= :fromDate
+             ORDER BY start_date
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("leaveTypeCode", leaveTypeCode)
+            .addValue("fromDate", fromDate)
+            .addValue("toDate", toDate),
+            (rs, rowNum) -> new LeaveRequestSpan(
+                rs.getObject("start_date", LocalDate.class),
+                rs.getObject("end_date", LocalDate.class)));
+    }
+
+    /**
+     * §5.3.2 department-coverage gate: the employee_id of every OTHER active employee in {@code
+     * employeeId}'s own department (excluding {@code employeeId} itself) -- see {@code
+     * LeaveService#departmentCoverageRejectionNote}, which resolves each one's own working-day
+     * predicate via {@link #workingDayPredicate} rather than this method carrying schedule columns.
+     *
+     * <p>Returns an EMPTY list -- not an error -- both when {@code employeeId} has no
+     * {@code department_id} on file and when their department has no other active employee. Either
+     * way {@code LeaveService} reads that as "nothing to check against" -- the latter is exactly the
+     * announcement's own one-person-department exemption, so no separate headcount query exists.
+     */
+    public List<Long> findActiveDepartmentColleagues(long employeeId) {
+        return jdbc.query("""
+            SELECT e.employee_id
+              FROM hr.employee e
+             WHERE e.is_active = TRUE
+               AND e.employee_id <> :employeeId
+               AND e.department_id IS NOT NULL
+               AND e.department_id = (SELECT department_id FROM hr.employee WHERE employee_id = :employeeId)
+            """, Map.of("employeeId", employeeId), (rs, rowNum) -> rs.getLong("employee_id"));
+    }
+
+    /**
+     * §5.3.2 department-coverage gate: SUBMITTED/APPROVED requests of ANY leave type, for the given
+     * {@code employeeIds} (a department's OTHER active employees), overlapping [{@code fromDate},
+     * {@code toDate}]. {@code employeeIds} empty short-circuits to an empty list without querying --
+     * an empty SQL {@code IN (...)} list is invalid, and {@link #findActiveDepartmentColleagues}
+     * already guarantees this is only ever called with a non-empty set in practice.
+     */
+    public List<EmployeeLeaveSpan> findActiveLeaveSpans(
+            Collection<Long> employeeIds, LocalDate fromDate, LocalDate toDate) {
+        if (employeeIds.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.query("""
+            SELECT employee_id, start_date, end_date
+              FROM hr.leave_request
+             WHERE employee_id IN (:employeeIds)
+               AND status IN ('SUBMITTED', 'APPROVED')
+               AND start_date <= :toDate
+               AND end_date >= :fromDate
+            """, new MapSqlParameterSource()
+            .addValue("employeeIds", employeeIds)
+            .addValue("fromDate", fromDate)
+            .addValue("toDate", toDate),
+            (rs, rowNum) -> new EmployeeLeaveSpan(
+                rs.getLong("employee_id"),
+                rs.getObject("start_date", LocalDate.class),
+                rs.getObject("end_date", LocalDate.class)));
+    }
+
+    /**
      * V118 cross-year quota fix (2026-08-02): reads from {@code hr.leave_request_quota_year}, NOT the
      * parent's own {@code total_days}/{@code quota_year} -- a request's days may now be attributed to
      * more than one calendar year (§5.4 MATERNITY), so quota consumption for a given year must sum

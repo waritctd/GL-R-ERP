@@ -9,6 +9,7 @@ import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -59,6 +60,19 @@ public class LeaveService {
     // itself in #autoRejectNote for why this is a hardcoded Java constant, not a hr.leave_type
     // column, the same way SICK's certificate requirement and PERSONAL's probation gate are.
     private static final BigDecimal WEDDING_LEAVE_MAX_DAYS = new BigDecimal("3.00");
+    // §5.3.4: types the announcement names explicitly ("ลาพักร้อน ลากิจ" -- VACATION, PERSONAL).
+    private static final Set<String> RESIGNATION_GATED_LEAVE_TYPES = Set.of("VACATION", "PERSONAL");
+    // §5.3.3: the pair the announcement names ("ลากิจและลาพักผ่อน") -- each type maps to the other,
+    // so a single lookup tells #contiguousLeaveRejectionNote which type to search for.
+    private static final Map<String, String> CONTIGUOUS_LEAVE_PAIR = Map.of(
+        "VACATION", "PERSONAL",
+        "PERSONAL", "VACATION"
+    );
+    // §5.3.3: how far past the new request's own dates to search for a same-employee request of the
+    // paired type. 14 days comfortably bounds every seeded schedule's longest realistic run of
+    // consecutive non-workdays (WEEKEND_DUTY's is the extreme case at 5) with room to spare -- see
+    // #hasInterveningWorkday.
+    private static final int CONTIGUOUS_CHECK_WINDOW_DAYS = 14;
 
     private final LeaveRepository leaveRepository;
     private final LeaveAttachmentRepository leaveAttachments;
@@ -761,6 +775,209 @@ public class LeaveService {
     }
 
     /**
+     * §5.3.4 (ประกาศ "วันเวลาทำงาน และการหยุดงาน" eff. 1 ต.ค. 2567): <i>"ไม่อนุญาตให้พนักงานที่ยื่นใบ
+     * ลาออกแล้ว ลาพักร้อน ลากิจ ยกเว้นได้รับอนุมัติจากหัวหน้างานว่าได้ทำงานที่ค้างอยู่เรียบร้อยแล้ว
+     * ตลอดจนได้สอนงานและถ่ายทอดงานให้แก่พนักงานอื่นเรียบร้อยแล้ว"</i> ("An employee who has already
+     * submitted a resignation may not take VACATION or PERSONAL leave, except with the supervisor's
+     * approval that outstanding work has been finished and handed over to another employee.")
+     *
+     * <p><b>{@code hr.resignation} (V1__employee_master_schema.sql), inspected for this rule:</b> one
+     * row per employee ({@code employee_id} PRIMARY KEY, 1:1 -- not a history table), with {@code
+     * recorded_date} (when the resignation was recorded) and {@code resign_date} (the effective/last
+     * working date), both nullable and neither documented, in that migration or anywhere else in this
+     * codebase, as distinguishing "submitted" from "confirmed/effective". The announcement's "ยื่นใบ
+     * ลาออกแล้ว" ("has ALREADY SUBMITTED [a resignation]") keys off submission, not effectiveness, so
+     * this gate reads the mere EXISTENCE of a row as "has submitted a resignation" -- the only column
+     * guaranteed non-null is {@code employee_id} itself, and this codebase has no other write path
+     * that would insert a row here for any reason other than an actual resignation. {@code
+     * resign_date} being in the future/past is deliberately NOT consulted: the normal case this rule
+     * targets is an employee working out their notice period, still active, with a {@code
+     * resign_date} that has not yet arrived; {@code hr.employee.is_active} is independently derived
+     * FALSE once it does (V1's comment on that column), at which point {@link #validateEmployee}
+     * already refuses the submission before this method is ever reached.
+     *
+     * <p><b>KNOWN GAP found while inspecting this table:</b> {@code PayrollService#remainingPayPeriods}
+     * (2026-07-29) documents that resignations are not currently recorded in this platform at all --
+     * they live in another system, so nothing populates {@code hr.resignation} in production today.
+     * This gate is correct but DORMANT until that changes; flagged here so a green test suite is not
+     * mistaken for "verified against real resignation data".
+     *
+     * <p><b>Handover-confirmation escape hatch: DOCUMENTED NON-ENFORCEMENT, not a system override.</b>
+     * "ได้รับอนุมัติจากหัวหน้างานว่า...เรียบร้อยแล้ว" is a human judgement this system cannot verify --
+     * the same shape of problem as {@link #personalProbationRejectionNote} and every other categorical
+     * gate below that ends its message with "Contact HR if this is an exception" while implementing no
+     * system-level bypass (the exception is arranged entirely outside this codebase). This gate follows
+     * that exact, already-established convention rather than inventing a new bypass (e.g. a submit-time
+     * flag any caller could set) that the announcement gives no way to verify either.
+     *
+     * @return a rejection message, or {@code null} if the type is not resignation-gated or no
+     *         resignation row exists for this employee.
+     */
+    private String resignationRejectionNote(LeaveTypeDto leaveType, long employeeId) {
+        if (!RESIGNATION_GATED_LEAVE_TYPES.contains(leaveType.code())) {
+            return null;
+        }
+        if (!leaveRepository.hasSubmittedResignation(employeeId)) {
+            return null;
+        }
+        return leaveType.nameEn() + " is not permitted once a resignation has been submitted, unless "
+            + "your supervisor has confirmed outstanding work has been completed and handed over to "
+            + "another employee. Contact HR if this is an exception.";
+    }
+
+    /**
+     * §5.3.3: <i>"ไม่อนุญาตให้ลากิจและลาพักผ่อนติดต่อกัน"</i> ("PERSONAL and VACATION leave may not be
+     * taken back to back"). Symmetric: submitting either type checks against the other.
+     *
+     * <p><b>DECISION -- "ติดต่อกัน" ("contiguous"/"back to back") across a non-working day:</b> two
+     * requests are contiguous when there is no day the employee would actually have been AT WORK
+     * between them -- i.e. every calendar day strictly between the earlier request's end and the
+     * later request's start is a non-working day under {@link LeaveRepository#workingDayPredicate}
+     * (schedule- AND holiday-aware, see {@link #hasInterveningWorkday}). A Friday PERSONAL request
+     * immediately followed by a Monday VACATION request (an ordinary Sat/Sun weekend sitting between
+     * them) therefore counts as CONTIGUOUS and is rejected: the employee never actually returned to
+     * work between the two, so the weekend does not break the run any more than it would for two
+     * halves of a single request. This is the reading that gives the rule teeth -- the opposite
+     * reading (any calendar gap at all, including a plain weekend, breaks contiguity) would let every
+     * VACATION/PERSONAL pair dodge this rule just by landing on either side of a weekend, which is
+     * precisely the kind of disguised-extended-break pattern "ติดต่อกัน" exists to catch. A real,
+     * worked weekday sitting between the two requests DOES break contiguity -- the employee genuinely
+     * came back to work, so the two periods are not one continuous absence.
+     *
+     * <p>Searches only {@link #CONTIGUOUS_CHECK_WINDOW_DAYS} on either side of the new request's own
+     * dates (see {@link LeaveRepository#findActiveRequestsByType}), not the employee's whole history
+     * -- nothing further away can possibly be contiguous under any seeded schedule.
+     *
+     * @return a rejection message, or {@code null} if this type is not gated or no contiguous request
+     *         of the paired type exists.
+     */
+    private String contiguousLeaveRejectionNote(LeaveTypeDto leaveType, long employeeId, LocalDate startDate, LocalDate endDate) {
+        String pairedTypeCode = CONTIGUOUS_LEAVE_PAIR.get(leaveType.code());
+        if (pairedTypeCode == null) {
+            return null;
+        }
+        List<LeaveRequestSpan> existingRequests = leaveRepository.findActiveRequestsByType(
+            employeeId, pairedTypeCode,
+            startDate.minusDays(CONTIGUOUS_CHECK_WINDOW_DAYS), endDate.plusDays(CONTIGUOUS_CHECK_WINDOW_DAYS));
+        for (LeaveRequestSpan existing : existingRequests) {
+            if (isContiguous(employeeId, existing, startDate, endDate)) {
+                return leaveType.nameEn() + " may not be taken immediately before or after " + pairedTypeCode
+                    + " leave with no working day in between. Contact HR if this is an exception.";
+            }
+        }
+        return null;
+    }
+
+    /** See {@link #contiguousLeaveRejectionNote}'s Javadoc for the across-a-non-working-day decision. */
+    private boolean isContiguous(long employeeId, LeaveRequestSpan existing, LocalDate newStart, LocalDate newEnd) {
+        LocalDate earlierEnd;
+        LocalDate laterStart;
+        if (existing.endDate().isBefore(newStart)) {
+            earlierEnd = existing.endDate();
+            laterStart = newStart;
+        } else if (newEnd.isBefore(existing.startDate())) {
+            earlierEnd = newEnd;
+            laterStart = existing.startDate();
+        } else {
+            return true; // overlapping/touching ranges -- trivially contiguous.
+        }
+        return !hasInterveningWorkday(employeeId, earlierEnd.plusDays(1), laterStart.minusDays(1));
+    }
+
+    /**
+     * True if at least one date in [{@code from}, {@code to}] (inclusive) is a day the employee would
+     * actually have worked, per {@link LeaveRepository#workingDayPredicate} (schedule/holiday-aware,
+     * see V115/V117/V121 and #470's LeaveDayMath rework). An empty/invalid range ({@code from} after
+     * {@code to}, i.e. the two spans are adjacent with no days between them at all) returns {@code
+     * false} -- no possible working day, so still contiguous.
+     */
+    private boolean hasInterveningWorkday(long employeeId, LocalDate from, LocalDate to) {
+        if (from.isAfter(to)) {
+            return false;
+        }
+        Predicate<LocalDate> isWorkingDay = leaveRepository.workingDayPredicate(employeeId, from, to);
+        for (LocalDate day = from; !day.isAfter(to); day = day.plusDays(1)) {
+            if (isWorkingDay.test(day)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * §5.3.2: <i>"ไม่อนุญาตให้ลาพร้อมกันทั้งแผนก ต้องมีพนักงานที่มีอายุงานเกิน 1 ปี มาทำงานอย่างน้อย 1
+     * คน"</i> ("The whole department may not be on leave at the same time; at least one employee with
+     * over 1 year of tenure must be at work.")
+     *
+     * <p><b>OWNER RELAXATION -- implemented here, NOT the literal text above:</b> the "&gt;1 year
+     * tenure" qualifier is DROPPED. The rule actually enforced is simply: at least one employee of the
+     * department must be at work. Do not reintroduce a tenure check into this method; it was
+     * deliberately removed, not missed.
+     *
+     * <p>Binds at DEPARTMENT level. A PENDING (SUBMITTED) request counts as absent, the same as an
+     * APPROVED one -- first-come-first-served, so two colleagues are never both told "yes" for the
+     * same day (see {@link LeaveRepository#findActiveLeaveSpans}'s SUBMITTED/APPROVED scope).
+     * Departments with exactly one active employee are EXEMPT -- otherwise that employee could never
+     * take any leave at all; see {@link LeaveRepository#findActiveDepartmentColleagues}'s Javadoc for
+     * how an empty colleague list already IS that exemption, with no separate headcount query.
+     *
+     * <p>Applies to EVERY leave type, not just VACATION/PERSONAL -- the announcement's text has no
+     * type qualifier here (contrast §5.3.3/§5.3.4, which both explicitly name their types), and this
+     * reading is now an owner-confirmed ruling: SICK included, one-employee-department exemption the
+     * only carve-out. This means even SICK leave -- typically unplanned/urgent -- can be blocked if
+     * approving it would leave the department empty; flagged in the PR body as a known risk.
+     *
+     * <p><b>Schedule-awareness (V115/V117/V121, via #470's {@link LeaveRepository#workingDayPredicate}):
+     * </b> "at work" is evaluated per employee's own resolved schedule, not a hardcoded Mon-Fri
+     * assumption -- a warehouse (OPS_6D) colleague genuinely at work on a Saturday counts as coverage
+     * even though the requester's own office (OFFICE_5D) schedule has Saturday off. Only days that are
+     * a WORKDAY for the REQUESTER'S OWN schedule are checked at all -- a day the requester would not
+     * have worked anyway is not a day their leave request removes any coverage from. This check is
+     * independent of the CALENDAR_DAYS/WORKING_DAYS quota-counting basis (out of scope for this rule --
+     * see CLAUDE.md); it always asks "would this person have physically worked this day", which is a
+     * {@code workingDayPredicate} question regardless of how the requester's OWN leave type counts days
+     * for quota purposes.
+     *
+     * @return a rejection message naming the first uncovered date, or {@code null} if the department
+     *         is exempt or stays covered on every day of the request.
+     */
+    private String departmentCoverageRejectionNote(long employeeId, LocalDate startDate, LocalDate endDate) {
+        List<Long> colleagueIds = leaveRepository.findActiveDepartmentColleagues(employeeId);
+        if (colleagueIds.isEmpty()) {
+            return null;
+        }
+        Predicate<LocalDate> ownWorkingDay = leaveRepository.workingDayPredicate(employeeId, startDate, endDate);
+        // Built ONCE per colleague, outside the day loop below -- workingDayPredicate is a per-
+        // employee-per-request call (two queries), not a per-day one; see its javadoc.
+        Map<Long, Predicate<LocalDate>> colleagueWorkingDays = new HashMap<>();
+        for (Long colleagueId : colleagueIds) {
+            colleagueWorkingDays.put(colleagueId, leaveRepository.workingDayPredicate(colleagueId, startDate, endDate));
+        }
+        List<EmployeeLeaveSpan> colleagueLeave = leaveRepository.findActiveLeaveSpans(colleagueIds, startDate, endDate);
+
+        for (LocalDate cursor = startDate; !cursor.isAfter(endDate); cursor = cursor.plusDays(1)) {
+            LocalDate day = cursor;
+            if (!ownWorkingDay.test(day)) {
+                continue; // not a day the requester would have worked anyway -- no coverage at stake.
+            }
+            boolean someoneElseAtWork = colleagueIds.stream().anyMatch(colleagueId -> {
+                if (!colleagueWorkingDays.get(colleagueId).test(day)) {
+                    return false;
+                }
+                return colleagueLeave.stream().noneMatch(span ->
+                    span.employeeId() == colleagueId
+                        && !day.isBefore(span.startDate())
+                        && !day.isAfter(span.endDate()));
+            });
+            if (!someoneElseAtWork) {
+                return "This request would leave nobody else in your department at work on " + day
+                    + ". At least one department member must remain at work. Contact HR if this is an exception.";
+            }
+        }
+        return null;
+    }
+
+    /**
      * §5 leave-rules-as-data (V116, extended V120/V124/V125). Checks run in this order -- categorical
      * eligibility first (once-per-employment, missing hire_date on a pro-rated type, minimum service,
      * PERSONAL probation, the first-year total-days cap), then request-shape (wedding-leave cap, max
@@ -783,6 +1000,13 @@ public class LeaveService {
         // (V116) is the race-proof DB backstop -- see the DuplicateKeyException catch in #submit.
         if (leaveType.oncePerEmployment() && leaveRepository.hasOutstandingOrGrantedRequest(employeeId, leaveType.code())) {
             return AutoRejectResult.reject("This leave type may be used only once during your employment, and a claim for it already exists.");
+        }
+
+        // §5.3.4 post-resignation gate (relational rules, 2026-08). See #resignationRejectionNote's
+        // Javadoc for what hr.resignation actually contains and the handover-escape-hatch decision.
+        String resignationNote = resignationRejectionNote(leaveType, employeeId);
+        if (resignationNote != null) {
+            return AutoRejectResult.reject(resignationNote);
         }
 
         // §5.2/§5.3 pro-ration (V120): #employeeAnnualQuota cannot compute a quota without hire_date
@@ -933,6 +1157,21 @@ public class LeaveService {
             }
         }
 
+        // §5.3.3 contiguous VACATION/PERSONAL gate (relational rules, 2026-08) runs before the SICK
+        // certificate gate just below. ORDERING NOTE: the two are mutually exclusive by leave type
+        // (CONTIGUOUS_LEAVE_PAIR only keys VACATION/PERSONAL; sickCertificateNote only fires for
+        // SICK), so for any single request at most one of them can ever return non-null -- this
+        // placement is a documentation choice (keeps it grouped with the request-shape checks above,
+        // consistent with where it lived before V124), not a decision with an observable effect on
+        // which message a user sees. See #contiguousLeaveRejectionNote's Javadoc for the "ติดต่อกัน
+        // across a non-working day" decision.
+        String contiguousNote = contiguousLeaveRejectionNote(leaveType, employeeId, startDate, endDate);
+        if (contiguousNote != null) {
+            return AutoRejectResult.reject(contiguousNote);
+        }
+
+        // §5.1 SICK certificate + filing-window + no-certificate tolerance (V124). See
+        // #sickCertificateNote's Javadoc for the combined decision table.
         if ("SICK".equals(leaveType.code())) {
             String note = sickCertificateNote(leaveType, employeeId, startDate, hasAttachment);
             if (note != null) {
@@ -1015,6 +1254,21 @@ public class LeaveService {
                 return AutoRejectResult.reject("Leave requests must be submitted at least " + noticeDays
                     + " day(s) before the start date. Contact your manager or HR for urgent leave.");
             }
+        }
+
+        // §5.3.2 department-coverage gate (relational rules, 2026-08). Runs LAST of all -- after
+        // V125's wedding-cap/SICK-certificate/notice-and-emergency gates too, not just the pre-V125
+        // set: it is the most data-heavy check (reads every other active department member's
+        // schedule/leave) and, unlike every gate above (including V125's, which are all still about
+        // THIS employee's own eligibility/timing), it is not about the requester at all -- it is the
+        // least "fundamental" reason in the ordering this Javadoc describes, and it applies to every
+        // leave type (type-agnostic), so it must not sit ahead of a type-specific rejection that would
+        // otherwise have fired first. See #departmentCoverageRejectionNote's Javadoc for the owner's
+        // relaxation of the announcement's text, the department-size floor, and the schedule-awareness
+        // this depends on.
+        String departmentCoverageNote = departmentCoverageRejectionNote(employeeId, startDate, endDate);
+        if (departmentCoverageNote != null) {
+            return AutoRejectResult.reject(departmentCoverageNote);
         }
         return AutoRejectResult.APPROVED;
     }
