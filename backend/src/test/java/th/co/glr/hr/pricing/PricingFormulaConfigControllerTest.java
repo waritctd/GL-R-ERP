@@ -4,6 +4,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -21,7 +22,10 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
+import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingClearanceFeeDto;
+import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingDutyRateDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingFormulaConfigDto;
+import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingFreightRateDto;
 
 /**
  * BRANCH 1 -- config storage + CEO editing UI only. This is a NEW endpoint (not a change to
@@ -300,6 +304,130 @@ class PricingFormulaConfigControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body))
             .andExpect(status().is2xxSuccessful());
+    }
+
+    // ============================================================================================
+    // Issue #436 -- add / remove a freight row. Decision-level cases only; the enforcement evidence
+    // (that the guard runs BEFORE the SQL, and that the row really does not land) is in
+    // PricingFormulaConfigFreightRowIntegrationTest against real Postgres, per CLAUDE.md.
+    // ============================================================================================
+
+    /** The read gate must not leak into these new writes either -- {ceo} only, import included. */
+    @Test
+    void nonCeoRolesCannotAddOrDeleteAFreightRow() throws Exception {
+        when(formulaConfigs.findCurrent()).thenReturn(Optional.of(configWithItalyLadder()));
+        for (String role : List.of("import", "employee", "warehouse", "qc", "hr", "sales", "sales_manager", "account")) {
+            mvc.perform(post("/api/pricing-formula-config/freight-rates")
+                    .session(session(role))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(freightRowBody("Turkey", 3, 8, 1, "101", 70000)))
+                .andExpect(status().isForbidden());
+            mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", 11L).session(session(role)))
+                .andExpect(status().isForbidden());
+        }
+    }
+
+    @Test
+    void addAndDeleteAreUnauthorizedWithoutASession() throws Exception {
+        mvc.perform(post("/api/pricing-formula-config/freight-rates")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(freightRowBody("Turkey", 3, 8, 1, "101", 70000)))
+            .andExpect(status().isUnauthorized());
+        mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", 11L))
+            .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void ceoCanAddAFreightRowForANewCountry() throws Exception {
+        when(formulaConfigs.findCurrent()).thenReturn(Optional.of(configWithItalyLadder()));
+        when(formulaConfigs.createNewVersion(any(), anyLong())).thenReturn(sampleConfig());
+        mvc.perform(post("/api/pricing-formula-config/freight-rates")
+                .session(session("ceo"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(freightRowBody("Turkey", 3, 8, 1, "101", 70000)))
+            .andExpect(status().is2xxSuccessful());
+    }
+
+    /** Validation holds on INSERT, not just on the whole-config replace. */
+    @Test
+    void ceoCannotAddAFreightRowThatOverlapsAnExistingBand() throws Exception {
+        when(formulaConfigs.findCurrent()).thenReturn(Optional.of(configWithItalyLadder()));
+        mvc.perform(post("/api/pricing-formula-config/freight-rates")
+                .session(session("ceo"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(freightRowBody("Italy", 3, 8, 50, "200", 90000)))
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void addFreightRateIsNotFoundWhenThereIsNoCurrentConfig() throws Exception {
+        when(formulaConfigs.findCurrent()).thenReturn(Optional.empty());
+        mvc.perform(post("/api/pricing-formula-config/freight-rates")
+                .session(session("ceo"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(freightRowBody("Turkey", 3, 8, 1, "101", 70000)))
+            .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void deleteIsNotFoundForAnIdOutsideTheCurrentVersion() throws Exception {
+        when(formulaConfigs.findCurrent()).thenReturn(Optional.of(configWithItalyLadder()));
+        mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", 9999L).session(session("ceo")))
+            .andExpect(status().isNotFound());
+    }
+
+    /** {@code @NotEmpty} on the request record has to hold on this path too, which builds it by hand. */
+    @Test
+    void deleteRejectsRemovingTheLastRemainingFreightRow() throws Exception {
+        when(formulaConfigs.findCurrent()).thenReturn(Optional.of(configWithFreightRates(
+            new PricingFreightRateDto(11L, "Italy", new BigDecimal("3"), new BigDecimal("8"),
+                new BigDecimal("1"), null, new BigDecimal("80000")))));
+        mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", 11L).session(session("ceo")))
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void ceoCanDeleteAnEdgeQuantityBand() throws Exception {
+        when(formulaConfigs.findCurrent()).thenReturn(Optional.of(configWithItalyLadder()));
+        when(formulaConfigs.createNewVersion(any(), anyLong())).thenReturn(sampleConfig());
+        mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", 13L).session(session("ceo")))
+            .andExpect(status().is2xxSuccessful());
+    }
+
+    @Test
+    void ceoCannotDeleteAMiddleQuantityBand() throws Exception {
+        when(formulaConfigs.findCurrent()).thenReturn(Optional.of(configWithItalyLadder()));
+        mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", 12L).session(session("ceo")))
+            .andExpect(status().isBadRequest());
+    }
+
+    /** Three contiguous [1,101)/[101,451)/[451,+inf) bands for Italy [3,8)mm, ids 11/12/13. */
+    private PricingFormulaConfigDto configWithItalyLadder() {
+        return configWithFreightRates(
+            new PricingFreightRateDto(11L, "Italy", new BigDecimal("3"), new BigDecimal("8"),
+                new BigDecimal("1"), new BigDecimal("101"), new BigDecimal("80000")),
+            new PricingFreightRateDto(12L, "Italy", new BigDecimal("3"), new BigDecimal("8"),
+                new BigDecimal("101"), new BigDecimal("451"), new BigDecimal("90000")),
+            new PricingFreightRateDto(13L, "Italy", new BigDecimal("3"), new BigDecimal("8"),
+                new BigDecimal("451"), null, new BigDecimal("100000")));
+    }
+
+    private PricingFormulaConfigDto configWithFreightRates(PricingFreightRateDto... freightRates) {
+        return new PricingFormulaConfigDto(
+            1L, 1,
+            new BigDecimal("1.15"), new BigDecimal("0.0045"), new BigDecimal("1.07"),
+            new BigDecimal("1.07"), new BigDecimal("1.07"), new BigDecimal("0.2"),
+            new BigDecimal("10"), true, LocalDate.of(2026, 1, 1), Instant.now(),
+            List.of(freightRates),
+            List.of(new PricingDutyRateDto(1L, "TILE", "กระเบื้อง", new BigDecimal("0.3"))),
+            List.of(new PricingClearanceFeeDto(1L, new BigDecimal("1"), null, new BigDecimal("8000"))));
+    }
+
+    private String freightRowBody(String country, int thicknessMin, int thicknessMax, int qtyMin, String qtyMax, int amount) {
+        return """
+            {"originCountry": "%s", "thicknessMinMm": %d, "thicknessMaxMm": %d,
+             "qtyMinSqm": %d, "qtyMaxSqm": %s, "amountThb": %d}
+            """.formatted(country, thicknessMin, thicknessMax, qtyMin, qtyMax, amount);
     }
 
     private String validBody() {
