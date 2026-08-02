@@ -125,29 +125,99 @@ public class LeaveRepository {
         });
     }
 
+    private static final String LEAVE_TYPE_COLUMNS = """
+        leave_type_code, name_th, name_en, annual_quota_days, requires_attachment,
+        paid_days_cap, advance_notice_days, min_service_months, max_consecutive_days,
+        once_per_employment
+        """;
+
     public List<LeaveTypeDto> findLeaveTypes() {
         return jdbc.query("""
-            SELECT leave_type_code, name_th, name_en, annual_quota_days, requires_attachment
+            SELECT %s
               FROM hr.leave_type
              WHERE is_active = TRUE
              ORDER BY leave_type_code
-            """, this::mapLeaveType);
+            """.formatted(LEAVE_TYPE_COLUMNS), this::mapLeaveType);
     }
 
     public Optional<LeaveTypeDto> findLeaveType(String code) {
         return jdbc.query("""
-            SELECT leave_type_code, name_th, name_en, annual_quota_days, requires_attachment
+            SELECT %s
               FROM hr.leave_type
              WHERE leave_type_code = :code
                AND is_active = TRUE
-            """, Map.of("code", code), this::mapLeaveType)
+            """.formatted(LEAVE_TYPE_COLUMNS), Map.of("code", code), this::mapLeaveType)
             .stream()
             .findFirst();
+    }
+
+    /**
+     * §5 leave-rules-as-data (V116), min-service-months gate: {@code hr.employee.hire_date} is
+     * nullable, so this is {@code Optional.empty()} exactly when the column is NULL -- see
+     * LeaveService#submit for how a missing hire date is handled (deliberately NOT a silent pass).
+     */
+    public Optional<LocalDate> findHireDate(long employeeId) {
+        // NOTE: deliberately NOT .stream().findFirst() -- Stream#findFirst() boxes its result via
+        // Optional.of(element) internally, which throws NPE the moment the single element IS null
+        // (exactly the hire_date IS NULL case this method exists to represent as Optional.empty()).
+        // List#get(0) has no such trap.
+        List<LocalDate> rows = jdbc.query("""
+            SELECT hire_date
+              FROM hr.employee
+             WHERE employee_id = :employeeId
+            """, Map.of("employeeId", employeeId),
+            (rs, rowNum) -> rs.getObject("hire_date", LocalDate.class));
+        return rows.isEmpty() ? Optional.empty() : Optional.ofNullable(rows.get(0));
+    }
+
+    /**
+     * §5.6 ORDINATION once-per-employment gate (V116), Java-level pre-check paired with the
+     * race-proof {@code ux_leave_once_per_employment} partial unique index (see V116's migration
+     * comment). Matches the index's own status scope exactly: SUBMITTED/APPROVED count as an
+     * outstanding or consumed claim, CANCELLED/REJECTED/AUTO_REJECTED do not.
+     */
+    public boolean hasOutstandingOrGrantedRequest(long employeeId, String leaveTypeCode) {
+        Boolean exists = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                  FROM hr.leave_request
+                 WHERE employee_id = :employeeId
+                   AND leave_type_code = :leaveTypeCode
+                   AND status IN ('SUBMITTED', 'APPROVED')
+            )
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("leaveTypeCode", leaveTypeCode),
+            Boolean.class);
+        return Boolean.TRUE.equals(exists);
     }
 
     public BigDecimal sumUsedDays(long employeeId, String leaveTypeCode, int quotaYear, Collection<LeaveStatus> statuses) {
         BigDecimal value = jdbc.queryForObject("""
             SELECT COALESCE(sum(total_days), 0)::numeric(5,2)
+              FROM hr.leave_request
+             WHERE employee_id = :employeeId
+               AND leave_type_code = :leaveTypeCode
+               AND quota_year = :quotaYear
+               AND status IN (:statuses)
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("leaveTypeCode", leaveTypeCode)
+            .addValue("quotaYear", quotaYear)
+            .addValue("statuses", statuses.stream().map(LeaveStatus::name).toList()),
+            BigDecimal.class);
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    /**
+     * §5 leave-rules-as-data (V116), paid_days_cap gate: sum of the {@code paid_days} (not
+     * {@code total_days} -- see {@link #sumUsedDays}) already granted/pending this quota year, for
+     * types whose paid allowance is capped independently of the quota itself (e.g. MATERNITY: 98-day
+     * quota, 45-day paid cap). See LeaveService#submit.
+     */
+    public BigDecimal sumPaidDays(long employeeId, String leaveTypeCode, int quotaYear, Collection<LeaveStatus> statuses) {
+        BigDecimal value = jdbc.queryForObject("""
+            SELECT COALESCE(sum(paid_days), 0)::numeric(5,2)
               FROM hr.leave_request
              WHERE employee_id = :employeeId
                AND leave_type_code = :leaveTypeCode
@@ -531,7 +601,12 @@ public class LeaveRepository {
             rs.getString("name_th"),
             rs.getString("name_en"),
             rs.getObject("annual_quota_days", BigDecimal.class),
-            rs.getBoolean("requires_attachment")
+            rs.getBoolean("requires_attachment"),
+            rs.getObject("paid_days_cap", BigDecimal.class),
+            rs.getInt("advance_notice_days"),
+            rs.getInt("min_service_months"),
+            rs.getObject("max_consecutive_days", BigDecimal.class),
+            rs.getBoolean("once_per_employment")
         );
     }
 

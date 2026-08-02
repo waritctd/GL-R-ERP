@@ -78,8 +78,11 @@ app:
     # OFF by default: never seed the low-entropy employee_code as a temp login password (guessable
     # before first login). Opt in for local dev only; secure onboarding uses the HR reset endpoint.
     seed-employee-code-passwords: ${APP_AUTH_SEED_EMPLOYEE_CODE_PASSWORDS:false}
-  leave:
-    advance-notice-days: ${APP_LEAVE_ADVANCE_NOTICE_DAYS:7}
+  # §5 leave-rules-as-data (V116): the single global app.leave.advance-notice-days property (was
+  # always 7, wrong for every leave type except roughly VACATION's neighbourhood) is replaced by
+  # hr.leave_type.advance_notice_days, a per-type column LeaveService now reads directly.
+  # APP_LEAVE_ADVANCE_NOTICE_DAYS is no longer read — remove it from any deployment environment that
+  # still sets it.
   overtime:
     # Advance notice was removed on CEO instruction; same-day and retroactive requests are allowed
     # when the reason explains why. APP_OVERTIME_ADVANCE_NOTICE_DAYS is no longer read — remove it

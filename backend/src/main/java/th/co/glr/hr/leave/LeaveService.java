@@ -7,10 +7,13 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,7 +22,6 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.notification.NotificationService;
 
 @Service
@@ -46,17 +48,21 @@ public class LeaveService {
     private final FileStorageService fileStorage;
     private final AuditService auditService;
     private final NotificationService notificationService;
-    private final AppProperties appProperties;
     private final Clock clock;
 
+    // §5 leave-rules-as-data (V116): advance notice used to be a single global
+    // app.leave.advance-notice-days property (AppProperties.Leave), which was wrong for every type
+    // except roughly VACATION's neighbourhood. That dependency is removed cleanly here in favour of
+    // LeaveTypeDto#advanceNoticeDays -- there is no longer any global fallback to preserve, since
+    // hr.leave_type.advance_notice_days is NOT NULL DEFAULT 0 and every row (including the ones this
+    // migration adds) has an explicit value.
     @Autowired
     public LeaveService(LeaveRepository leaveRepository,
                         LeaveAttachmentRepository leaveAttachments,
                         FileStorageService fileStorage,
                         AuditService auditService,
-                        NotificationService notificationService,
-                        AppProperties appProperties) {
-        this(leaveRepository, leaveAttachments, fileStorage, auditService, notificationService, appProperties,
+                        NotificationService notificationService) {
+        this(leaveRepository, leaveAttachments, fileStorage, auditService, notificationService,
             Clock.system(BUSINESS_ZONE));
     }
 
@@ -65,14 +71,12 @@ public class LeaveService {
                  FileStorageService fileStorage,
                  AuditService auditService,
                  NotificationService notificationService,
-                 AppProperties appProperties,
                  Clock clock) {
         this.leaveRepository = leaveRepository;
         this.leaveAttachments = leaveAttachments;
         this.fileStorage = fileStorage;
         this.auditService = auditService;
         this.notificationService = notificationService;
-        this.appProperties = appProperties;
         this.clock = clock;
     }
 
@@ -164,14 +168,16 @@ public class LeaveService {
         int quotaYear = request.startDate().getYear();
         BigDecimal remainingBefore = remainingDays(employeeId, leaveType, quotaYear);
         boolean hasAttachment = attachment != null && !attachment.isEmpty();
-        // Leave -> payroll unpaid-day deduction (2026-07-23): the gate no longer auto-rejects purely
-        // for exceeding quota. It approves and splits the requested days into paidDays (covered by
-        // remaining statutory quota) and unpaidDays (no-work-no-pay, deducted downstream in payroll at
-        // base/30 per unpaid WORKING day -- see PayrollCalculator#unpaidLeaveDeduction). The only
-        // remaining auto-reject reasons are non-quota ones: a SICK request missing its required
-        // attachment, and insufficient advance notice. See docs/agent-handoffs for the HR/legal
-        // sign-off caveat this rule still needs before it drives a real payroll run.
-        String systemNote = autoRejectNote(leaveType, request.startDate(), hasAttachment);
+        // Leave -> payroll unpaid-day deduction (2026-07-23); §5 leave-rules-as-data (V116) added the
+        // once-per-employment/min-service/max-consecutive-days/per-type-notice gates. The gate no
+        // longer auto-rejects purely for exceeding quota. It approves and splits the requested days
+        // into paidDays (bounded by both the remaining statutory quota AND, if the type has one, the
+        // remaining paid-days-cap allowance -- see boundByPaidCap) and unpaidDays (no-work-no-pay,
+        // deducted downstream in payroll at base/30 per unpaid WORKING day -- see
+        // PayrollCalculator#unpaidLeaveDeduction). See autoRejectNote for the full list of remaining
+        // auto-reject reasons. See docs/agent-handoffs for the HR/legal sign-off caveat the
+        // quota-based split still needs before it drives a real payroll run.
+        String systemNote = autoRejectNote(leaveType, employeeId, request.startDate(), request.endDate(), hasAttachment);
         LeaveStatus status = systemNote == null ? LeaveStatus.APPROVED : LeaveStatus.AUTO_REJECTED;
         BigDecimal paidDays;
         BigDecimal unpaidDays;
@@ -180,7 +186,11 @@ public class LeaveService {
             // paidDays consumes from the request's earliest working days first (chronological order):
             // that is the only ordering an aggregate paid/unpaid split can represent, and it matches
             // the natural reading of "day N onward went unpaid". See LeaveDayMath.
-            paidDays = remainingBefore.min(totalDays).max(BigDecimal.ZERO);
+            BigDecimal quotaBoundedPaidDays = remainingBefore.min(totalDays).max(BigDecimal.ZERO);
+            // §5.4 MATERNITY-shaped rule (V116): paid_days_cap bounds how many of THOSE days are paid,
+            // independently of the quota -- a 98-day MATERNITY request (98-day quota, 45-day cap)
+            // splits 45 paid / 53 unpaid even though the full 98 days fit inside the quota itself.
+            paidDays = boundByPaidCap(employeeId, leaveType, quotaYear, quotaBoundedPaidDays);
             unpaidDays = totalDays.subtract(paidDays);
             remainingAfter = remainingBefore.subtract(paidDays).max(BigDecimal.ZERO);
         } else {
@@ -190,24 +200,34 @@ public class LeaveService {
         }
 
         ResolvedContact contact = resolveContact(employeeId, request);
-        long id = leaveRepository.create(
-            employeeId,
-            actorEmployeeId,
-            request,
-            totalDays,
-            paidDays,
-            unpaidDays,
-            quotaYear,
-            status,
-            remainingBefore,
-            remainingAfter,
-            systemNote,
-            contact.houseNo(),
-            contact.subdistrict(),
-            contact.district(),
-            contact.province(),
-            contact.phone()
-        );
+        long id;
+        try {
+            id = leaveRepository.create(
+                employeeId,
+                actorEmployeeId,
+                request,
+                totalDays,
+                paidDays,
+                unpaidDays,
+                quotaYear,
+                status,
+                remainingBefore,
+                remainingAfter,
+                systemNote,
+                contact.houseNo(),
+                contact.subdistrict(),
+                contact.district(),
+                contact.province(),
+                contact.phone()
+            );
+        } catch (DuplicateKeyException e) {
+            // §5.6 once-per-employment (V116) race backstop: ux_leave_once_per_employment catches a
+            // concurrent second submission that slipped past the Java-level check in autoRejectNote
+            // above (both requests read "no existing claim" before either had committed). The
+            // Java-level check is what produces the normal AUTO_REJECTED-with-systemNote UX; this is
+            // only the last-resort guard when two submissions genuinely race.
+            throw new ApiException(HttpStatus.CONFLICT, "การลาประเภทนี้ใช้สิทธิ์ได้เพียงครั้งเดียวตลอดระยะเวลาที่เป็นพนักงาน และมีคำขอที่ใช้สิทธิ์นี้ไปแล้ว");
+        }
         if (hasAttachment) {
             FileStorageService.StoredFile storedFile = fileStorage.store("leave", id, attachment, LEAVE_ATTACHMENT_MIME_TYPES);
             LeaveAttachmentDto savedAttachment = leaveAttachments.save(
@@ -365,15 +385,88 @@ public class LeaveService {
         return leaveType.annualQuotaDays().subtract(used).max(BigDecimal.ZERO);
     }
 
-    private String autoRejectNote(LeaveTypeDto leaveType, LocalDate startDate, boolean hasAttachment) {
+    /**
+     * §5.4-shaped paid-days-cap gate (V116): bounds an already quota-bounded candidate paidDays
+     * figure by what remains of the type's OWN paid allowance this quota year (independent of the
+     * quota itself). {@code paidDaysCap == null} means "no separate cap" (today's behaviour for
+     * SICK/VACATION/PERSONAL) -- every quota-bounded day is paid, unchanged.
+     */
+    private BigDecimal boundByPaidCap(long employeeId, LeaveTypeDto leaveType, int quotaYear, BigDecimal candidatePaidDays) {
+        if (leaveType.paidDaysCap() == null) {
+            return candidatePaidDays;
+        }
+        BigDecimal paidUsed = leaveRepository.sumPaidDays(employeeId, leaveType.code(), quotaYear, ACTIVE_QUOTA_STATUSES);
+        BigDecimal remainingPaidAllowance = leaveType.paidDaysCap().subtract(paidUsed).max(BigDecimal.ZERO);
+        return candidatePaidDays.min(remainingPaidAllowance);
+    }
+
+    /**
+     * §5 leave-rules-as-data (V116). Checks run in this order -- categorical eligibility first
+     * (once-per-employment, minimum service), then request-shape (max consecutive days), then
+     * document/timing checks (SICK certificate, advance notice) -- so the surfaced systemNote is
+     * always the most fundamental reason the request cannot be paid, not an incidental one. Only the
+     * first violation found is returned; see the individual checks below for what each one means and
+     * the decisions behind it.
+     */
+    private String autoRejectNote(LeaveTypeDto leaveType, long employeeId, LocalDate startDate, LocalDate endDate, boolean hasAttachment) {
+        // §5.6 once-per-employment (ORDINATION today). Java-level check; ux_leave_once_per_employment
+        // (V116) is the race-proof DB backstop -- see the DuplicateKeyException catch in #submit.
+        if (leaveType.oncePerEmployment() && leaveRepository.hasOutstandingOrGrantedRequest(employeeId, leaveType.code())) {
+            return "This leave type may be used only once during your employment, and a claim for it already exists.";
+        }
+
+        // §5.2/§5.3 minimum service (months since hr.employee.hire_date). DECISION: a NULL hire_date
+        // does NOT silently pass -- eligibility cannot be verified, so the request is rejected with an
+        // actionable message, the same fail-closed direction as every other eligibility gate in this
+        // method. This only matters for types with min_service_months > 0 (PERSONAL, VACATION,
+        // ORDINATION as seeded); a NULL hire_date is a no-op for SICK/MATERNITY/MILITARY/
+        // LEAVE_WITHOUT_PAY, which have no such requirement.
+        if (leaveType.minServiceMonths() > 0) {
+            Optional<LocalDate> hireDate = leaveRepository.findHireDate(employeeId);
+            if (hireDate.isEmpty()) {
+                return "Your hire date is not on file, so eligibility for " + leaveType.nameEn()
+                    + " cannot be verified. Contact HR to record it before this leave type can be used.";
+            }
+            long completedMonths = ChronoUnit.MONTHS.between(hireDate.get(), startDate);
+            if (completedMonths < leaveType.minServiceMonths()) {
+                return leaveType.nameEn() + " requires at least " + leaveType.minServiceMonths()
+                    + " month(s) of completed service. Contact HR if this is an exception.";
+            }
+        }
+
+        // §5.2 "not more than 3 consecutive days" (PERSONAL) and any other type given a
+        // max_consecutive_days cap. DECISION: "consecutive" is counted in CALENDAR days (end - start +
+        // 1 inclusive), not working days -- LeaveDayMath's Mon-Fri-only counting is explicitly out of
+        // scope for this branch (see CLAUDE.md), and a calendar-day span is the natural reading of "3
+        // days in a row" for a short request that, by definition, rarely crosses a weekend anyway. A
+        // sub-day request is always single-day (start_date = end_date, enforced by
+        // validateSubDayTimes), so this never conflicts with the sub-day feature.
+        if (leaveType.maxConsecutiveDays() != null) {
+            long spanDays = ChronoUnit.DAYS.between(startDate, endDate) + 1;
+            if (BigDecimal.valueOf(spanDays).compareTo(leaveType.maxConsecutiveDays()) > 0) {
+                return leaveType.nameEn() + " may not exceed " + formatDays(leaveType.maxConsecutiveDays())
+                    + " consecutive day(s) per request. Contact HR if this is an exception.";
+            }
+        }
+
         if ("SICK".equals(leaveType.code()) && !hasAttachment) {
             return "Sick leave requires a medical certificate attachment. Attach the certificate or contact HR for help.";
         }
-        int noticeDays = Math.max(0, appProperties.getLeave().getAdvanceNoticeDays());
-        LocalDate earliestAllowed = LocalDate.now(clock).plusDays(noticeDays);
-        if (!"SICK".equals(leaveType.code()) && startDate.isBefore(earliestAllowed)) {
-            return "Leave requests must be submitted at least " + noticeDays
-                + " day(s) before the start date. Contact your manager or HR for urgent leave.";
+
+        // §5 advance notice, now per-type (hr.leave_type.advance_notice_days) instead of the removed
+        // global app.leave.advance-notice-days property. DECISION: counted in CALENDAR days, not
+        // working days -- same reasoning and same out-of-LeaveDayMath-scope boundary as the
+        // consecutive-days check above; this is an unchanged behaviour carried over from the original
+        // global-property version, which also compared plain calendar dates. A type with
+        // advanceNoticeDays == 0 (SICK, MATERNITY, MILITARY, LEAVE_WITHOUT_PAY as seeded) skips this
+        // check entirely, matching the old code's unconditional SICK exemption.
+        int noticeDays = Math.max(0, leaveType.advanceNoticeDays());
+        if (noticeDays > 0) {
+            LocalDate earliestAllowed = LocalDate.now(clock).plusDays(noticeDays);
+            if (startDate.isBefore(earliestAllowed)) {
+                return "Leave requests must be submitted at least " + noticeDays
+                    + " day(s) before the start date. Contact your manager or HR for urgent leave.";
+            }
         }
         return null;
     }

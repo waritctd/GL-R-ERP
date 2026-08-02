@@ -23,7 +23,6 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -74,7 +73,6 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
             fileStorage,
             mock(AuditService.class),
             mock(NotificationService.class),
-            new AppProperties(),
             Clock.fixed(FIXED_NOW, BUSINESS_ZONE));
     }
 
@@ -135,22 +133,28 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
     void aLeaveSpanningTwoCalendarMonthsSplitsItsUnpaidDaysCorrectly() {
         long employeeId = insertEmployee("SPLIT-001");
 
+        // §5 leave-rules-as-data (V116): this scenario used to submit PERSONAL, but PERSONAL now
+        // carries a 3-consecutive-calendar-day cap (§5.2) that a 13-calendar-day span like this one
+        // would violate -- see LeaveTypeRuleIntegrationTest for that gate's dedicated coverage. VACATION
+        // has no consecutive-day cap, so it is used here instead; the point of this test is the
+        // cross-month unpaid-day split, not which type triggers it.
+        //
         // Thu 2026-07-23 .. Tue 2026-08-04: working days (chronological) are 7/23, 7/24, 7/27, 7/28,
-        // 7/29, 7/30, 7/31 (7 in July) then 8/3, 8/4 (2 in August) -- 9 total. PERSONAL quota is 7
-        // (nothing used yet -- V90 raised it from 3 to 7 per company rule §5.2), so the first 7 (all in
-        // July) are paid and the last 2 (8/3, 8/4) are unpaid -- both landing in August despite the
-        // request starting in July.
+        // 7/29, 7/30, 7/31 (6 in July) then 8/3, 8/4 (2 in August) -- 9 total... but the 6-day VACATION
+        // quota (nothing used yet) only covers the first 6 (7/23 through 7/30, all July): paid=6,
+        // unpaid=3, split 1 (7/31) in July and 2 (8/3, 8/4) in August -- a genuinely cross-month UNPAID
+        // split, which the original all-August-unpaid PERSONAL scenario did not actually exercise.
         LeaveRequestDto result = leaveService.submit(
-            submitRequest(employeeId, "PERSONAL", "2026-07-23", "2026-08-04"),
+            submitRequest(employeeId, "VACATION", "2026-07-23", "2026-08-04"),
             employee(employeeId));
 
         assertThat(result.status()).isEqualTo("APPROVED");
         assertThat(result.totalDays()).isEqualByComparingTo("9.00");
-        assertThat(result.paidDays()).isEqualByComparingTo("7.00");
-        assertThat(result.unpaidDays()).isEqualByComparingTo("2.00");
+        assertThat(result.paidDays()).isEqualByComparingTo("6.00");
+        assertThat(result.unpaidDays()).isEqualByComparingTo("3.00");
 
         assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-07-01")))
-            .doesNotContainKey(employeeId);
+            .containsEntry(employeeId, new BigDecimal("1.00"));
         assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-08-01")))
             .containsEntry(employeeId, new BigDecimal("2.00"));
     }
@@ -257,12 +261,22 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         return new UserPrincipal(1L, "hr@glr.co.th", "HR", "hr", 1L, true, LocalDate.now(), false, null, false);
     }
 
+    // §5 leave-rules-as-data (V116): VACATION/PERSONAL now carry a min_service_months eligibility
+    // floor (12/4 months respectively). None of the scenarios in this class are ABOUT that gate --
+    // they predate it and exercise the quota/paid-cap/cross-month-split machinery -- so the default
+    // hire date here is far enough in the past (2015, well over both floors) that it is a no-op for
+    // every existing test. LeaveTypeRuleIntegrationTest carries the dedicated min-service coverage,
+    // including the "no hire_date on file" case.
     private long insertEmployee(String code) {
+        return insertEmployee(code, LocalDate.parse("2015-01-01"));
+    }
+
+    private long insertEmployee(String code, LocalDate hireDate) {
         return jdbc.queryForObject("""
-            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active)
-            VALUES (:code, :code, 'ทดสอบ', 30000, TRUE)
+            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active, hire_date)
+            VALUES (:code, :code, 'ทดสอบ', 30000, TRUE, :hireDate)
             RETURNING employee_id
-            """, Map.of("code", code), Long.class);
+            """, new MapSqlParameterSource().addValue("code", code).addValue("hireDate", hireDate), Long.class);
     }
 
     private void insertProcessedPayrollPeriod(LocalDate payrollMonth) {

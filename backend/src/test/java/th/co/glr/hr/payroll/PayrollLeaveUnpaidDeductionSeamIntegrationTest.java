@@ -68,8 +68,7 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
             mock(LeaveAttachmentRepository.class),
             mock(FileStorageService.class),
             mock(AuditService.class),
-            mock(NotificationService.class),
-            new AppProperties());
+            mock(NotificationService.class));
 
         payrollRepository = new PayrollRepository(jdbc);
         payrollService = new PayrollService(
@@ -83,7 +82,7 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
             new th.co.glr.hr.payroll.export.Pnd1Exporter(),
             new th.co.glr.hr.payroll.export.SsoExporter(),
             new th.co.glr.hr.payroll.export.PayrollDetailExporter(),
-            new th.co.glr.hr.config.AppProperties(),
+            new AppProperties(),
             new th.co.glr.hr.payroll.obligation.DeductionObligationService(
                 new th.co.glr.hr.payroll.obligation.DeductionObligationRepository(jdbc),
                 mock(th.co.glr.hr.employee.EmployeeRepository.class),
@@ -278,10 +277,13 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
         return new UserPrincipal(1L, "hr@glr.co.th", "HR", "hr", 1L, true, LocalDate.now(), false, null, false);
     }
 
+    // §5 leave-rules-as-data (V116): VACATION now carries a 12-month min_service_months floor. This
+    // class is about the leave->payroll seam (deduction/refund plumbing), not eligibility, so
+    // hire_date is set far enough in the past (2015) that the floor is always a no-op here.
     private long insertEmployee(String code) {
         return jdbc.queryForObject("""
-            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active)
-            VALUES (:code, :code, 'ทดสอบ', :salary, TRUE)
+            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active, hire_date)
+            VALUES (:code, :code, 'ทดสอบ', :salary, TRUE, DATE '2015-01-01')
             RETURNING employee_id
             """, new MapSqlParameterSource().addValue("code", code).addValue("salary", SALARY), Long.class);
     }
