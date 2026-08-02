@@ -3,6 +3,7 @@ package th.co.glr.hr.overtime;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -221,6 +222,61 @@ class OvertimeServiceTest {
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.CONFLICT);
         verify(overtimeRepository, never()).ceoApprove(anyLong(), anyLong(), anyString());
+    }
+
+    // V114: a month can be closed to OT without ever being PROCESSED in this system -- it was paid
+    // outside the ERP and is already covered by hr.payroll_year_to_date_seed (PND1 filed). This is
+    // the OTHER branch of requirePayrollMonthOpen; payrollMonthProcessed stays false throughout.
+    // These three assert on MESSAGE CONTENT ("จ่ายนอกระบบ"), not just HTTP status. A status-only
+    // check is not enough to prove the seed-covered branch fired: managerApprove/ceoApprove return
+    // an unstubbed `int` (Mockito default 0), so the pre-existing "already reviewed" conflict path
+    // also throws 409 if the guard is bypassed -- verified directly by mutation-testing this file
+    // (temporarily short-circuiting the seed-covered check in OvertimeService reproduced exactly
+    // this: status-only assertions kept passing while overtimeRepository.managerApprove/ceoApprove
+    // were invoked with a write that should have been refused).
+    @Test
+    void retroactiveOvertimeIntoASeedCoveredPayrollMonthIsRejected() {
+        SubmitOvertimeRequest request = backdatedSubmit(2, "Filed late after the customer escalation closed");
+        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
+        when(overtimeRepository.payrollMonthProcessed(request.workDate().withDayOfMonth(1))).thenReturn(false);
+        when(overtimeRepository.payrollMonthSeedCovered(request.workDate().withDayOfMonth(1))).thenReturn(true);
+
+        assertThatThrownBy(() -> overtimeService.submit(request, user("employee", 10L)))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("จ่ายนอกระบบ")
+            .satisfies(exception -> assertThat(((ApiException) exception).getStatus())
+                .isEqualTo(HttpStatus.CONFLICT));
+        verify(overtimeRepository, never()).create(
+            anyLong(), anyLong(), any(SubmitOvertimeRequest.class), anyInt(), any(OvertimeDayType.class), any(LocalDate.class));
+    }
+
+    @Test
+    void managerApprovalIntoASeedCoveredPayrollMonthIsRejected() {
+        OvertimeRequestDto submitted = requestDto(78L, 10L, "SUBMITTED");
+        when(overtimeRepository.findById(78L)).thenReturn(Optional.of(submitted));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, null, true)));
+        when(overtimeRepository.payrollMonthProcessed(submitted.workDate().withDayOfMonth(1))).thenReturn(false);
+        when(overtimeRepository.payrollMonthSeedCovered(submitted.workDate().withDayOfMonth(1))).thenReturn(true);
+
+        assertThatThrownBy(() -> overtimeService.approve(78L, new ReviewOvertimeRequest("ok"), user("employee", 99L)))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("จ่ายนอกระบบ")
+            .satisfies(exception -> assertThat(((ApiException) exception).getStatus())
+                .isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    @Test
+    void ceoApprovalIntoASeedCoveredPayrollMonthIsRejected() {
+        OvertimeRequestDto managerApproved = requestDto(79L, 10L, "MANAGER_APPROVED");
+        when(overtimeRepository.findById(79L)).thenReturn(Optional.of(managerApproved));
+        when(overtimeRepository.payrollMonthProcessed(managerApproved.workDate().withDayOfMonth(1))).thenReturn(false);
+        when(overtimeRepository.payrollMonthSeedCovered(managerApproved.workDate().withDayOfMonth(1))).thenReturn(true);
+
+        assertThatThrownBy(() -> overtimeService.approve(79L, new ReviewOvertimeRequest("ok"), user("ceo", 500L)))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("จ่ายนอกระบบ")
+            .satisfies(exception -> assertThat(((ApiException) exception).getStatus())
+                .isEqualTo(HttpStatus.CONFLICT));
     }
 
     @Test

@@ -92,6 +92,15 @@ public class OvertimeService {
         validateEmployee(employeeId);
         validatePlannedWindow(request);
         validateRetroactiveWindow(request);
+        // Opus review finding F2: this used to live at the BOTTOM of validateRetroactiveWindow,
+        // which returns early for a work date that is today or later -- so a closed payroll month
+        // was only refused for BACKDATED submissions. Hoisted here so it runs for every submit,
+        // matching what this guard's own javadoc has always claimed. Harmless for the current
+        // seed-covered case (Jan-Jun 2026 is entirely in the past, so the old placement did fire),
+        // but the gap was real: record coverage for a current month and same-day OT sailed past
+        // submit, only to be refused a stage later at manager approval -- surfacing the error to
+        // the wrong person, after the request had already entered the queue.
+        requirePayrollMonthOpen(request.workDate());
 
         int plannedMinutes = minutesBetween(request.plannedStartAt(), request.plannedEndAt());
         LocalDate payrollMonth = request.workDate().withDayOfMonth(1);
@@ -336,16 +345,25 @@ public class OvertimeService {
                     + BACKDATED_REASON_MIN_LENGTH + " ตัวอักษร)"
             );
         }
-        requirePayrollMonthOpen(request.workDate());
     }
 
     /**
-     * Refuses to touch a work date whose payroll month has already been processed.
+     * Refuses to touch a work date whose payroll month is closed, for either of two distinct
+     * reasons -- an HR reader needs to tell them apart, so each gets its own Thai message:
      *
-     * <p>Payroll derives overtime by {@code payroll_month} and a processed period is inserted once,
-     * so a request that lands in a closed month is approved and then never paid — silently. This
-     * runs at submit and again at each approval stage, because a request filed before the cut-off
-     * can still be approved after it.
+     * <ol>
+     *   <li><b>Already processed in this system.</b> Payroll derives overtime by {@code
+     *       payroll_month} and a processed period is inserted once, so a request that lands in a
+     *       processed month is approved and then never paid -- silently.
+     *   <li><b>Seed-covered.</b> The month was paid outside the ERP and is already reflected in
+     *       {@code hr.payroll_year_to_date_seed} (PND1 filed) -- see V114. It is never {@code
+     *       PROCESSED} here (a DB trigger refuses that, to avoid double-counting year-to-date
+     *       withholding), so checking {@link OvertimeRepository#payrollMonthProcessed(LocalDate)}
+     *       alone would report such a month as open.
+     * </ol>
+     *
+     * <p>This runs at submit and again at each approval stage, because a request filed before a
+     * month closes -- by either route -- can still be approved after it does.
      */
     private void requirePayrollMonthOpen(LocalDate workDate) {
         LocalDate payrollMonth = workDate.withDayOfMonth(1);
@@ -354,6 +372,13 @@ public class OvertimeService {
                 HttpStatus.CONFLICT,
                 "งวดเงินเดือน " + payrollMonth.getYear() + "-" + payrollMonth.getMonthValue()
                     + " ได้ประมวลผลไปแล้ว จึงไม่สามารถจ่ายค่าล่วงเวลานี้ได้อีก"
+            );
+        }
+        if (overtimeRepository.payrollMonthSeedCovered(payrollMonth)) {
+            throw new ApiException(
+                HttpStatus.CONFLICT,
+                "งวดเงินเดือน " + payrollMonth.getYear() + "-" + payrollMonth.getMonthValue()
+                    + " ถูกจ่ายนอกระบบไปแล้วและได้ยื่นแบบภาษีแล้ว จึงไม่สามารถยื่นหรืออนุมัติค่าล่วงเวลาในงวดนี้ได้"
             );
         }
     }
