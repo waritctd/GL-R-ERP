@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,9 +32,19 @@ import java.util.Map;
  * month, with no rank/weekday logic needed since there is only one day it could ever land in. The
  * multi-day branch is unchanged (still whole-day-only), now simply emitting {@code BigDecimal("1.00")}
  * per unpaid weekday instead of {@code 1}.
+ *
+ * <p><b>§5.4 MATERNITY calendar-day counting (V119, 2026-08-02):</b> every method below now has a
+ * {@link LeaveDayCountBasis}-aware overload alongside its original working-day-only signature,
+ * which is UNCHANGED and simply delegates to the new overload with {@code WORKING_DAYS} -- this
+ * class's Mon-Fri assumption for every leave type except MATERNITY is untouched. See {@link
+ * LeaveDayCountBasis} for the announcement text this implements and {@link LeaveService#submit}/
+ * {@link LeaveService#computeTotalDays} for where the basis is selected.
  */
 final class LeaveDayMath {
-    private static final BigDecimal ONE_WORKING_DAY = new BigDecimal("1.00");
+    // Renamed from ONE_WORKING_DAY (V119): this constant is now merged per COUNTED day under
+    // EITHER basis (working or calendar), not just a working day -- see the basis-aware overloads
+    // below. Purely an internal name; not part of any tested/pinned public shape.
+    private static final BigDecimal ONE_DAY = new BigDecimal("1.00");
 
     private LeaveDayMath() {
     }
@@ -52,6 +63,16 @@ final class LeaveDayMath {
     }
 
     /**
+     * §5.4 MATERNITY calendar-day counting (V119): total CALENDAR days (every day, no Mon-Fri
+     * filter) in the inclusive range [startDate, endDate]. Trivial ({@code endDate - startDate +
+     * 1}), but centralised here (rather than inlined in LeaveService) so every day-counting rule
+     * this codebase uses lives in one place. See {@link LeaveDayCountBasis#CALENDAR_DAYS}.
+     */
+    static int countCalendarDays(LocalDate startDate, LocalDate endDate) {
+        return (int) (ChronoUnit.DAYS.between(startDate, endDate) + 1);
+    }
+
+    /**
      * The unpaid portion of [startDate, endDate] beyond {@code paidDays}, bucketed by calendar month
      * (keyed by the first-of-month date).
      *
@@ -66,6 +87,24 @@ final class LeaveDayMath {
      */
     static Map<LocalDate, BigDecimal> unpaidWorkingDaysByMonth(
             LocalDate startDate, LocalDate endDate, BigDecimal paidDays, BigDecimal totalDays) {
+        return unpaidWorkingDaysByMonth(startDate, endDate, paidDays, totalDays, LeaveDayCountBasis.WORKING_DAYS);
+    }
+
+    /**
+     * §5.4 MATERNITY calendar-day counting (V119): basis-aware overload of {@link
+     * #unpaidWorkingDaysByMonth(LocalDate, LocalDate, BigDecimal, BigDecimal)}. Behaviour for
+     * {@link LeaveDayCountBasis#WORKING_DAYS} is BYTE-IDENTICAL to the 4-arg overload above (which
+     * now just delegates here) -- nothing about existing working-day counting changes. {@link
+     * LeaveDayCountBasis#CALENDAR_DAYS} runs the exact same chronological-rank algorithm, just
+     * ranking every day in the range instead of only Mon-Fri ones -- so a weekend or (weekday)
+     * holiday falling in the UNPAID tail of the range is bucketed into its month's deduction the
+     * same way a working day would be. See LeaveService's decision note on why the payroll
+     * deduction path (LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth) uses this same basis
+     * as the leave type's quota counting, not always WORKING_DAYS.
+     */
+    static Map<LocalDate, BigDecimal> unpaidWorkingDaysByMonth(
+            LocalDate startDate, LocalDate endDate, BigDecimal paidDays, BigDecimal totalDays,
+            LeaveDayCountBasis basis) {
         Map<LocalDate, BigDecimal> byMonth = new LinkedHashMap<>();
         BigDecimal paid = paidDays == null ? BigDecimal.ZERO : paidDays;
 
@@ -82,11 +121,11 @@ final class LeaveDayMath {
         int rank = 0;
         LocalDate cursor = startDate;
         while (!cursor.isAfter(endDate)) {
-            if (isWorkingDay(cursor)) {
+            if (basis.counts(cursor)) {
                 rank++;
                 if (rank > paidWholeDays) {
                     LocalDate month = cursor.withDayOfMonth(1);
-                    byMonth.merge(month, ONE_WORKING_DAY, BigDecimal::add);
+                    byMonth.merge(month, ONE_DAY, BigDecimal::add);
                 }
             }
             cursor = cursor.plusDays(1);
@@ -94,7 +133,7 @@ final class LeaveDayMath {
         return byMonth;
     }
 
-    private static boolean isWorkingDay(LocalDate date) {
+    static boolean isWorkingDay(LocalDate date) {
         DayOfWeek day = date.getDayOfWeek();
         return day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY;
     }
@@ -118,6 +157,19 @@ final class LeaveDayMath {
      * (start) year.
      */
     static Map<Integer, BigDecimal> totalDaysByYear(LocalDate startDate, LocalDate endDate, BigDecimal totalDays) {
+        return totalDaysByYear(startDate, endDate, totalDays, LeaveDayCountBasis.WORKING_DAYS);
+    }
+
+    /**
+     * §5.4 MATERNITY calendar-day counting (V119): basis-aware overload. {@link
+     * LeaveDayCountBasis#WORKING_DAYS} is byte-identical to the 3-arg overload above (which now
+     * delegates here); {@link LeaveDayCountBasis#CALENDAR_DAYS} buckets every day in the range by
+     * year, not just Mon-Fri ones -- required so a cross-year MATERNITY request (§5.4, up to 98
+     * CALENDAR days) splits its calendar days per year, matching how {@link LeaveService#submit}
+     * now computes {@code totalDays} for a CALENDAR_DAYS type in the first place.
+     */
+    static Map<Integer, BigDecimal> totalDaysByYear(
+            LocalDate startDate, LocalDate endDate, BigDecimal totalDays, LeaveDayCountBasis basis) {
         Map<Integer, BigDecimal> byYear = new LinkedHashMap<>();
         if (startDate.equals(endDate)) {
             BigDecimal total = totalDays == null ? BigDecimal.ZERO : totalDays;
@@ -127,8 +179,8 @@ final class LeaveDayMath {
 
         LocalDate cursor = startDate;
         while (!cursor.isAfter(endDate)) {
-            if (isWorkingDay(cursor)) {
-                byYear.merge(cursor.getYear(), ONE_WORKING_DAY, BigDecimal::add);
+            if (basis.counts(cursor)) {
+                byYear.merge(cursor.getYear(), ONE_DAY, BigDecimal::add);
             }
             cursor = cursor.plusDays(1);
         }
@@ -171,6 +223,19 @@ final class LeaveDayMath {
      */
     static Map<LocalDate, BigDecimal> unpaidWorkingDaysByMonthAcrossYears(
             LocalDate startDate, LocalDate endDate, List<LeaveQuotaYearSplit> perYear) {
+        return unpaidWorkingDaysByMonthAcrossYears(startDate, endDate, perYear, LeaveDayCountBasis.WORKING_DAYS);
+    }
+
+    /**
+     * §5.4 MATERNITY calendar-day counting (V119): basis-aware overload of {@link
+     * #unpaidWorkingDaysByMonthAcrossYears(LocalDate, LocalDate, List)}. The SAME basis applies to
+     * every year in {@code perYear} -- a leave TYPE's counting basis does not change from one
+     * calendar year to the next, only the request's date range does. {@link
+     * LeaveDayCountBasis#WORKING_DAYS} is byte-identical to the 3-arg overload above (which now
+     * delegates here).
+     */
+    static Map<LocalDate, BigDecimal> unpaidWorkingDaysByMonthAcrossYears(
+            LocalDate startDate, LocalDate endDate, List<LeaveQuotaYearSplit> perYear, LeaveDayCountBasis basis) {
         Map<LocalDate, BigDecimal> combined = new LinkedHashMap<>();
         for (LeaveQuotaYearSplit year : perYear) {
             LocalDate[] clipped = clipToYear(startDate, endDate, year.quotaYear());
@@ -178,7 +243,7 @@ final class LeaveDayMath {
                 continue;
             }
             Map<LocalDate, BigDecimal> yearly =
-                unpaidWorkingDaysByMonth(clipped[0], clipped[1], year.paidDays(), year.totalDays());
+                unpaidWorkingDaysByMonth(clipped[0], clipped[1], year.paidDays(), year.totalDays(), basis);
             yearly.forEach((month, days) -> combined.merge(month, days, BigDecimal::add));
         }
         return combined;

@@ -55,12 +55,15 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     void aNinetyEightDayMaternityRequestSplitsIntoFortyFivePaidAndFiftyThreeUnpaidDays() {
         long employeeId = insertEmployee("MAT-001", LocalDate.parse("2015-01-01"));
 
-        // Mon 2026-01-05 .. Wed 2026-05-20: exactly 98 working weekdays (verified independently of
-        // LeaveDayMath). MATERNITY's 98-day quota fully covers the request, but its 45-day
-        // paid_days_cap (V116) is what actually determines the split -- this is the gate the
-        // MATERNITY row exists to prove.
+        // Mon 2026-01-05 .. Sun 2026-04-12: exactly 98 CALENDAR days (verified independently of
+        // LeaveDayMath: 27 remaining days of January + 28 of February + 31 of March + 12 of April =
+        // 98), INCLUDING every Saturday/Sunday inside the range -- §5.4 MATERNITY calendar-day
+        // counting (V119). Before V119, this same range would have counted as roughly 70 WORKING
+        // days, not 98 -- the defect this migration fixes. MATERNITY's 98-day quota fully covers the
+        // request, but its 45-day paid_days_cap (V116, now bounding CALENDAR days) is what actually
+        // determines the split -- this is the gate the MATERNITY row exists to prove.
         LeaveRequestDto result = leaveService.submit(
-            submitRequest(employeeId, "MATERNITY", "2026-01-05", "2026-05-20"),
+            submitRequest(employeeId, "MATERNITY", "2026-01-05", "2026-04-12"),
             employee(employeeId));
 
         assertThat(result.status()).isEqualTo("APPROVED");
@@ -73,6 +76,59 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         // quota was actually left, contradicted by the very next balances() call (which sums
         // total_days, not paid_days, and would report 0).
         assertThat(result.quotaRemainingAfter()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void aMaternityRequestCountsCalendarDaysButAnIdenticalSickRequestCountsOnlyWorkingDays() {
+        // §5.4 MATERNITY calendar-day counting (V119): the vacuous-fixture guard, through the REAL
+        // repository/SQL this time (LeaveServiceTest's Mockito-level companion proves the same thing
+        // against a faked LeaveTypeDto). Mon 2026-07-13 .. Sun 2026-07-19 -- a full week, both
+        // weekend days included -- must count 7 for MATERNITY (every day) but only 5 for SICK
+        // (Mon-Fri only).
+        //
+        // The SICK side is submitted without an attachment, so it AUTO_REJECTs on the medical-
+        // certificate gate -- irrelevant here, since totalDays is computed BEFORE the auto-reject
+        // gates run and stored unconditionally on every submission (LeaveService#submit).
+        long maternityEmployeeId = insertEmployee("MAT-CAL-001", LocalDate.parse("2015-01-01"));
+        long sickEmployeeId = insertEmployee("SICK-CAL-001", LocalDate.parse("2015-01-01"));
+
+        LeaveRequestDto maternityResult = leaveService.submit(
+            submitRequest(maternityEmployeeId, "MATERNITY", "2026-07-13", "2026-07-19"),
+            employee(maternityEmployeeId));
+        LeaveRequestDto sickResult = leaveService.submit(
+            submitRequest(sickEmployeeId, "SICK", "2026-07-13", "2026-07-19"),
+            employee(sickEmployeeId));
+
+        assertThat(maternityResult.status()).isEqualTo("APPROVED");
+        assertThat(maternityResult.totalDays()).isEqualByComparingTo("7.00");
+        assertThat(sickResult.status()).isEqualTo("AUTO_REJECTED");
+        assertThat(sickResult.totalDays()).isEqualByComparingTo("5.00");
+        // The critical negative assertion: the two must NOT be equal on this identical date range.
+        assertThat(sickResult.totalDays()).isNotEqualByComparingTo(maternityResult.totalDays());
+    }
+
+    @Test
+    void aSeededTraditionalHolidayInsideAMaternityRangeIsStillJustOneCountedDay() {
+        // §5.4's calendar-day counting explicitly names "วันหยุดตามประเพณี" (traditional/public
+        // holidays) alongside weekly holidays. CALENDAR_DAYS counts every date in the range with no
+        // hr.holiday lookup at all (see LeaveDayCountBasis's Javadoc) -- so a real seeded holiday
+        // landing on an ordinary WEEKDAY inside the range changes nothing: it was already going to be
+        // counted as a plain calendar day. This test proves the presence of a real hr.holiday row
+        // does not cause a double-count, an exclusion, or any other special-cased behaviour -- Mon
+        // 2026-07-13 .. Fri 2026-07-17 (5 calendar days) with Wed 2026-07-15 seeded as a company
+        // holiday must still total exactly 5.
+        long employeeId = insertEmployee("MAT-HOLIDAY-001", LocalDate.parse("2015-01-01"));
+        jdbc.update("""
+            INSERT INTO hr.holiday (holiday_date, name_th, source)
+            VALUES ('2026-07-15', 'วันหยุดทดสอบ', 'COMPANY')
+            """, Map.of());
+
+        LeaveRequestDto result = leaveService.submit(
+            submitRequest(employeeId, "MATERNITY", "2026-07-13", "2026-07-17"),
+            employee(employeeId));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.totalDays()).isEqualByComparingTo("5.00");
     }
 
     @Test

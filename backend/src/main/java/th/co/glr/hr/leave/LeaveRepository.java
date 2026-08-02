@@ -128,7 +128,7 @@ public class LeaveRepository {
     private static final String LEAVE_TYPE_COLUMNS = """
         leave_type_code, name_th, name_en, annual_quota_days, requires_attachment,
         paid_days_cap, advance_notice_days, min_service_months, max_consecutive_days,
-        once_per_employment
+        once_per_employment, day_count_basis
         """;
 
     public List<LeaveTypeDto> findLeaveTypes() {
@@ -337,16 +337,30 @@ public class LeaveRepository {
      * exactly why the PARENT's aggregate paid_days/total_days can no longer be used here). For every
      * pre-V118 (necessarily single-year) request this is byte-identical to the old behaviour, since
      * the year-clip is a no-op when the whole range already sits inside one year.
+     *
+     * <p>§5.4 MATERNITY calendar-day counting (V119): joins {@code hr.leave_type} for {@code
+     * day_count_basis} and passes it through to {@link LeaveDayMath#unpaidWorkingDaysByMonth}.
+     * DECISION (see LeaveService's submit()/recordPayrollCorrectionIfNeeded() Javadoc for the full
+     * reasoning): the payroll base/30 deduction uses the SAME basis as the leave type's own
+     * quota/paid-cap counting, not always WORKING_DAYS. For MATERNITY this means an unpaid day that
+     * falls on a Saturday/Sunday inside the leave IS deducted -- because {@code paid_days}/{@code
+     * total_days} were themselves computed on a calendar-day basis (§5.4), so a working-days-only
+     * reading here would silently drop weekend/holiday days from the deduction even though they were
+     * counted as consumed leave, breaking the {@code paidDays + unpaidDays == totalDays} invariant
+     * this method's ranking logic depends on. For every WORKING_DAYS type (everything except
+     * MATERNITY) this is byte-identical to the pre-V119 behaviour.
      */
     public Map<Long, BigDecimal> findUnpaidLeaveDaysByEmployeeForMonth(LocalDate monthStart) {
         LocalDate monthEndInclusive = monthStart.plusMonths(1).minusDays(1);
         int year = monthStart.getYear();
         List<UnpaidLeaveSpan> spans = jdbc.query("""
-            SELECT lr.employee_id, lr.start_date, lr.end_date, lrqy.paid_days, lrqy.total_days
+            SELECT lr.employee_id, lr.start_date, lr.end_date, lrqy.paid_days, lrqy.total_days,
+                   lt.day_count_basis
               FROM hr.leave_request lr
               JOIN hr.leave_request_quota_year lrqy
                 ON lrqy.leave_request_id = lr.leave_request_id
                AND lrqy.quota_year = :year
+              JOIN hr.leave_type lt ON lt.leave_type_code = lr.leave_type_code
              WHERE lr.status = 'APPROVED'
                AND lrqy.unpaid_days > 0
                AND lr.start_date <= :monthEndInclusive
@@ -361,7 +375,8 @@ public class LeaveRepository {
                 rs.getObject("start_date", LocalDate.class),
                 rs.getObject("end_date", LocalDate.class),
                 rs.getObject("paid_days", BigDecimal.class),
-                rs.getObject("total_days", BigDecimal.class)
+                rs.getObject("total_days", BigDecimal.class),
+                LeaveDayCountBasis.valueOf(rs.getString("day_count_basis"))
             ));
 
         Map<Long, BigDecimal> byEmployee = new LinkedHashMap<>();
@@ -373,7 +388,7 @@ public class LeaveRepository {
             // Sub-day leave (2026-07-25): reads the BigDecimal LeaveDayMath computes directly --
             // no more setScale(0, DOWN) floor, which used to discard a sub-day fraction entirely.
             BigDecimal unpaidInMonth = LeaveDayMath
-                .unpaidWorkingDaysByMonth(clipped[0], clipped[1], span.paidDays(), span.totalDays())
+                .unpaidWorkingDaysByMonth(clipped[0], clipped[1], span.paidDays(), span.totalDays(), span.basis())
                 .get(monthStart);
             if (unpaidInMonth != null && unpaidInMonth.signum() > 0) {
                 byEmployee.merge(span.employeeId(), unpaidInMonth, BigDecimal::add);
@@ -495,7 +510,8 @@ public class LeaveRepository {
     }
 
     private record UnpaidLeaveSpan(
-        long employeeId, LocalDate startDate, LocalDate endDate, BigDecimal paidDays, BigDecimal totalDays) {
+        long employeeId, LocalDate startDate, LocalDate endDate, BigDecimal paidDays, BigDecimal totalDays,
+        LeaveDayCountBasis basis) {
     }
 
     public long create(
@@ -712,7 +728,8 @@ public class LeaveRepository {
             rs.getInt("advance_notice_days"),
             rs.getInt("min_service_months"),
             rs.getObject("max_consecutive_days", BigDecimal.class),
-            rs.getBoolean("once_per_employment")
+            rs.getBoolean("once_per_employment"),
+            LeaveDayCountBasis.valueOf(rs.getString("day_count_basis"))
         );
     }
 

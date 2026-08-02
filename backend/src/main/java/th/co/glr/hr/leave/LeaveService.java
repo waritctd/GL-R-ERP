@@ -166,7 +166,7 @@ public class LeaveService {
         validateDateRange(request.startDate(), request.endDate());
         validateSubDayTimes(request);
 
-        BigDecimal totalDays = computeTotalDays(request);
+        BigDecimal totalDays = computeTotalDays(request, leaveType);
         int quotaYear = request.startDate().getYear();
         boolean hasAttachment = attachment != null && !attachment.isEmpty();
         // Leave -> payroll unpaid-day deduction (2026-07-23); §5 leave-rules-as-data (V116) added the
@@ -188,7 +188,7 @@ public class LeaveService {
         // LeaveQuotaYearSplit's Javadoc for the deliberate consequence of that design (a boundary-
         // straddling request can receive more total paid days than a same-year one would).
         Map<Integer, BigDecimal> requestedDaysByYear =
-            LeaveDayMath.totalDaysByYear(request.startDate(), request.endDate(), totalDays);
+            LeaveDayMath.totalDaysByYear(request.startDate(), request.endDate(), totalDays, leaveType.dayCountBasis());
         List<LeaveQuotaYearSplit> quotaYearSplits = new ArrayList<>();
         BigDecimal paidDays = BigDecimal.ZERO;
         BigDecimal unpaidDays = BigDecimal.ZERO;
@@ -411,9 +411,19 @@ public class LeaveService {
         // would have misattributed which calendar days -- and so which months -- are unpaid in that
         // case). For every pre-V118 (single-year) request this produces the identical result as
         // before.
+        //
+        // §5.4 MATERNITY calendar-day counting (V119): the basis used to REVERSE a cancellation must
+        // be the SAME basis used to GRANT it, or the recomputed unpaid-by-month figures would not
+        // match what was actually deducted -- see LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth's
+        // Javadoc for the identical decision on the forward (deduction) path. Falls back to
+        // WORKING_DAYS if the leave type has since been deactivated/removed (defensive only; every
+        // type a request could have been submitted under still exists in practice).
+        LeaveDayCountBasis basis = leaveRepository.findLeaveType(cancelled.leaveTypeCode())
+            .map(LeaveTypeDto::dayCountBasis)
+            .orElse(LeaveDayCountBasis.WORKING_DAYS);
         List<LeaveQuotaYearSplit> quotaYearSplits = leaveRepository.findQuotaYearSplits(cancelled.id());
         Map<LocalDate, BigDecimal> unpaidByMonth = LeaveDayMath.unpaidWorkingDaysByMonthAcrossYears(
-            cancelled.startDate(), cancelled.endDate(), quotaYearSplits);
+            cancelled.startDate(), cancelled.endDate(), quotaYearSplits, basis);
         if (unpaidByMonth.isEmpty()) {
             return;
         }
@@ -687,14 +697,21 @@ public class LeaveService {
     }
 
     /**
-     * Sub-day leave (2026-07-25): no times -> the existing whole-day weekday count. Times set ->
-     * clock-hours(start,end) / 8 (STANDARD_WORKDAY_MINUTES), no lunch subtraction (decided rule),
-     * rounded HALF_UP to 2dp, capped at 1.00 (a sub-day request can never exceed one whole day).
-     * FULL_DAY (not BigDecimal.ONE) keeps the cap at scale 2, matching the NUMERIC(5,2) convention
-     * every other day figure in this codebase uses.
+     * Sub-day leave (2026-07-25): no times -&gt; the existing whole-day day count, per the leave
+     * type's {@link LeaveDayCountBasis} (V119: CALENDAR_DAYS for MATERNITY, WORKING_DAYS for every
+     * other type -- unchanged). Times set -&gt; clock-hours(start,end) / 8 (STANDARD_WORKDAY_MINUTES),
+     * no lunch subtraction (decided rule), rounded HALF_UP to 2dp, capped at 1.00 (a sub-day request
+     * can never exceed one whole day). FULL_DAY (not BigDecimal.ONE) keeps the cap at scale 2,
+     * matching the NUMERIC(5,2) convention every other day figure in this codebase uses. The sub-day
+     * branch is basis-independent by construction: sub-day leave is always single-day (start_date ==
+     * end_date, enforced by {@link #validateSubDayTimes}), so "which days count" never arises -- the
+     * one date in question always counts, under either basis.
      */
-    private BigDecimal computeTotalDays(SubmitLeaveRequest request) {
+    private BigDecimal computeTotalDays(SubmitLeaveRequest request, LeaveTypeDto leaveType) {
         if (request.startTime() == null) {
+            if (leaveType.dayCountBasis() == LeaveDayCountBasis.CALENDAR_DAYS) {
+                return BigDecimal.valueOf(LeaveDayMath.countCalendarDays(request.startDate(), request.endDate()));
+            }
             return workingDaysBetween(request.startDate(), request.endDate());
         }
         long minutes = Duration.between(request.startTime(), request.endTime()).toMinutes();

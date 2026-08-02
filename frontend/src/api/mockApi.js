@@ -263,6 +263,14 @@ db.deductionObligationRemittances = db.deductionObligationRemittances || [];
 // a PRE-EXISTING gap this migration does not attempt to fix). advanceNoticeDays IS read below
 // (mechanical 1:1 mirror of the column), since leaving the old hardcoded 7-day check in place would
 // have positively contradicted the real per-type values this migration introduces.
+//
+// dayCountBasis (V119, 2026-08-02): §5.4 MATERNITY calendar-day counting -- SHAPE parity only, same
+// as the rest of this block. create() below still ALWAYS calls workingDaysBetween() for a whole-day
+// request regardless of this field (see workingDaysBetween's own call site) -- switching MATERNITY
+// to calendar-day counting is exactly the kind of business-rule computation this mock deliberately
+// does not reimplement (see the file-level note on why: a shared algorithmic error would be
+// invisible on both sides). Anyone testing the §5.4 calendar-day behaviour itself must do so against
+// the real backend, not VITE_USE_MOCKS=true.
 db.leaveTypes = db.leaveTypes || [
   // PERSONAL quota fix (2026-07-25): seeded at 3, company rule (§5.2) grants 7 paid personal
   // days/year -- see V90__leave_subday_and_contact.sql for the backend-side correction.
@@ -277,26 +285,32 @@ db.leaveTypes = db.leaveTypes || [
   {
     code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal leave', annualQuotaDays: 7, requiresAttachment: false,
     paidDaysCap: null, advanceNoticeDays: 1, minServiceMonths: 0, maxConsecutiveDays: 3, oncePerEmployment: false,
+    dayCountBasis: 'WORKING_DAYS',
   },
   {
     code: 'SICK', nameTh: 'ลาป่วย', nameEn: 'Sick leave', annualQuotaDays: 30, requiresAttachment: true,
     paidDaysCap: null, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
+    dayCountBasis: 'WORKING_DAYS',
   },
   {
     code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation leave', annualQuotaDays: 6, requiresAttachment: false,
     paidDaysCap: null, advanceNoticeDays: 3, minServiceMonths: 12, maxConsecutiveDays: null, oncePerEmployment: false,
+    dayCountBasis: 'WORKING_DAYS',
   },
   {
     code: 'MATERNITY', nameTh: 'ลาคลอดบุตร', nameEn: 'Maternity leave', annualQuotaDays: 98, requiresAttachment: true,
     paidDaysCap: 45, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
+    dayCountBasis: 'CALENDAR_DAYS',
   },
   {
     code: 'MILITARY', nameTh: 'ลารับราชการทหาร', nameEn: 'Military service leave', annualQuotaDays: 60, requiresAttachment: true,
     paidDaysCap: null, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
+    dayCountBasis: 'WORKING_DAYS',
   },
   {
     code: 'ORDINATION', nameTh: 'ลาอุปสมบท', nameEn: 'Ordination leave', annualQuotaDays: 60, requiresAttachment: false,
     paidDaysCap: 15, advanceNoticeDays: 0, minServiceMonths: 12, maxConsecutiveDays: null, oncePerEmployment: true,
+    dayCountBasis: 'WORKING_DAYS',
   },
 ];
 // leaveRequests/overtimeRequests/specialMoneyRequests are seeded by demoHr.js, wired
