@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -902,7 +903,7 @@ class LeaveServiceTest {
         // this Mockito-based class can't fake). The exact §5.4 MATERNITY 98/45/53 split is proven
         // against real dates in LeaveTypeRuleIntegrationTest.
         LeaveTypeDto cappedType = new LeaveTypeDto("VACATION", "Vacation", "Vacation leave",
-            new BigDecimal("10.00"), false, new BigDecimal("4.00"), 0, 0, null, false);
+            new BigDecimal("10.00"), false, new BigDecimal("4.00"), 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS);
         // Mon 2026-07-13 .. Mon 2026-07-20: working days 13,14,15,16,17,20 = 6 working days.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-20"), "Capped leave test");
@@ -936,7 +937,7 @@ class LeaveServiceTest {
         // Same fixture, but the cap (9) is larger than the 6 working days requested -- the cap must
         // not bind, and the result must be identical to the uncapped (quota-only) behaviour.
         LeaveTypeDto cappedType = new LeaveTypeDto("VACATION", "Vacation", "Vacation leave",
-            new BigDecimal("10.00"), false, new BigDecimal("9.00"), 0, 0, null, false);
+            new BigDecimal("10.00"), false, new BigDecimal("9.00"), 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS);
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-20"), "Capped leave test");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -960,6 +961,111 @@ class LeaveServiceTest {
             eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(paidDays.getValue()).isEqualByComparingTo("6.00");
         assertThat(unpaidDays.getValue()).isEqualByComparingTo("0.00");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // §5.4 MATERNITY calendar-day counting (V119, 2026-08-02). LeaveTypeRuleIntegrationTest and
+    // LeaveCrossYearQuotaIntegrationTest carry the real-Postgres proof (real calendar math, real
+    // LeaveDayMath, real V119 schema); these Mockito-level tests instead prove LeaveService#submit
+    // reads the basis OFF THE LEAVE TYPE rather than hardcoding one -- both maternityType()
+    // (CALENDAR_DAYS) and sickType() (WORKING_DAYS) are real LeaveTypeDto values a test can swap in.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void submitCountsCalendarDaysForMaternityButWorkingDaysForSickOnTheIdenticalDateRange() {
+        // THE vacuous-fixture guard (CLAUDE.md): the SAME Mon 2026-07-13 .. Sun 2026-07-19 range (a
+        // full week, both weekend days included) must count DIFFERENTLY depending on the leave
+        // type's basis -- 7 calendar days for MATERNITY, but only 5 working days (Mon-Fri) for SICK.
+        // A test asserting only one side would still pass if #computeTotalDays ignored the leave
+        // type entirely and always used one basis.
+        //
+        // SICK's status here is irrelevant to what this test proves (totalDays is computed BEFORE
+        // the auto-reject gates run, unconditionally on every submission -- see LeaveService#submit)
+        // -- SICK has no attachment here, so it auto-rejects on the medical-certificate gate, which
+        // is exactly why the create()/status matchers below are basis-agnostic (any(LeaveStatus.class))
+        // rather than pinned to APPROVED. LeaveTypeRuleIntegrationTest's real-DB companion instead
+        // supplies a real attachment so both sides land APPROVED.
+        LocalDate start = LocalDate.parse("2026-07-13");
+        LocalDate end = LocalDate.parse("2026-07-19");
+
+        SubmitLeaveRequest maternityRequest = new SubmitLeaveRequest(null, "MATERNITY", start, end, "Maternity leave");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("MATERNITY")).thenReturn(Optional.of(maternityType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("MATERNITY"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.sumPaidDays(eq(10L), eq("MATERNITY"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(maternityRequest), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026),
+            any(LeaveStatus.class), any(BigDecimal.class), any(BigDecimal.class), nullable(String.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(120L);
+        when(leaveRepository.findById(120L)).thenReturn(Optional.of(
+            requestDto(120L, 10L, "APPROVED", start, end, "7.00", "0.00")));
+
+        leaveService.submit(maternityRequest, user("employee", 10L));
+
+        ArgumentCaptor<BigDecimal> maternityTotalDays = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(maternityRequest), maternityTotalDays.capture(),
+            any(BigDecimal.class), any(BigDecimal.class), eq(2026),
+            any(LeaveStatus.class), any(BigDecimal.class), any(BigDecimal.class), nullable(String.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(maternityTotalDays.getValue()).isEqualByComparingTo("7.00");
+
+        SubmitLeaveRequest sickRequest = new SubmitLeaveRequest(null, "SICK", start, end, "Sick leave");
+        when(leaveRepository.findLeaveType("SICK")).thenReturn(Optional.of(sickType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("SICK"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(sickRequest), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026),
+            any(LeaveStatus.class), any(BigDecimal.class), any(BigDecimal.class), nullable(String.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(121L);
+        when(leaveRepository.findById(121L)).thenReturn(Optional.of(
+            requestDto(121L, 10L, "AUTO_REJECTED", start, end, "0.00", "0.00")));
+
+        leaveService.submit(sickRequest, user("employee", 10L));
+
+        ArgumentCaptor<BigDecimal> sickTotalDays = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(sickRequest), sickTotalDays.capture(),
+            any(BigDecimal.class), any(BigDecimal.class), eq(2026),
+            any(LeaveStatus.class), any(BigDecimal.class), any(BigDecimal.class), nullable(String.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null));
+        // The critical negative assertion: 5.00 (working days), NOT 7.00 -- proves SICK did not pick
+        // up MATERNITY's calendar-day basis.
+        assertThat(sickTotalDays.getValue()).isEqualByComparingTo("5.00");
+        assertThat(sickTotalDays.getValue()).isNotEqualByComparingTo(maternityTotalDays.getValue());
+    }
+
+    @Test
+    void submitAppliesTheFortyFiveDayPaidCapToCalendarDaysForMaternity() {
+        // §5.4's 45-day paid cap applies to CALENDAR days (V119), not working days: a 50-calendar-day
+        // MATERNITY request (Mon 2026-07-13 .. Sat 2026-08-31, chosen only for a round day count) is
+        // fully within the 98-day quota but exceeds the 45-day paid cap by 5 -- 45 paid, 5 unpaid.
+        // (The exact §5.4 98/45/53 split against real dates is LeaveTypeRuleIntegrationTest's real-DB
+        // proof; this Mockito-level test isolates just the cap arithmetic.)
+        SubmitLeaveRequest request = new SubmitLeaveRequest(
+            null, "MATERNITY", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-08-31"), "Maternity leave");
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("MATERNITY")).thenReturn(Optional.of(maternityType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("MATERNITY"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.sumPaidDays(eq(10L), eq("MATERNITY"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(122L);
+        when(leaveRepository.findById(122L)).thenReturn(Optional.of(
+            requestDto(122L, 10L, "APPROVED", request.startDate(), request.endDate(), "45.00", "5.00")));
+
+        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+        ArgumentCaptor<BigDecimal> totalDays = ArgumentCaptor.forClass(BigDecimal.class);
+        ArgumentCaptor<BigDecimal> paidDays = ArgumentCaptor.forClass(BigDecimal.class);
+        ArgumentCaptor<BigDecimal> unpaidDays = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), totalDays.capture(), paidDays.capture(),
+            unpaidDays.capture(), eq(2026),
+            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(totalDays.getValue()).isEqualByComparingTo("50.00");
+        assertThat(paidDays.getValue()).isEqualByComparingTo("45.00");
+        assertThat(unpaidDays.getValue()).isEqualByComparingTo("5.00");
     }
 
     private SubmitLeaveRequest validSubmit(Long employeeId) {
@@ -993,27 +1099,35 @@ class LeaveServiceTest {
     // LeaveTypeRuleIntegrationTest against the real V116-migrated schema.
     private LeaveTypeDto vacationType() {
         return new LeaveTypeDto("VACATION", "Vacation", "Vacation leave", new BigDecimal("6.00"), false,
-            null, 7, 0, null, false);
+            null, 7, 0, null, false, LeaveDayCountBasis.WORKING_DAYS);
     }
 
     private LeaveTypeDto sickType() {
         return new LeaveTypeDto("SICK", "Sick", "Sick leave", new BigDecimal("30.00"), true,
-            null, 0, 0, null, false);
+            null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS);
     }
 
     private LeaveTypeDto leaveWithoutPayType() {
         return new LeaveTypeDto("LEAVE_WITHOUT_PAY", "Leave without pay", "Leave without pay", BigDecimal.ZERO, false,
-            BigDecimal.ZERO, 0, 0, null, false);
+            BigDecimal.ZERO, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS);
     }
 
     private LeaveTypeDto ordinationType() {
         return new LeaveTypeDto("ORDINATION", "Ordination", "Ordination leave", new BigDecimal("60.00"), false,
-            new BigDecimal("15.00"), 0, 12, null, true);
+            new BigDecimal("15.00"), 0, 12, null, true, LeaveDayCountBasis.WORKING_DAYS);
     }
 
     private LeaveTypeDto personalTypeWithMaxConsecutive() {
         return new LeaveTypeDto("PERSONAL", "Personal", "Personal leave", new BigDecimal("7.00"), false,
-            null, 0, 0, new BigDecimal("3.00"), false);
+            null, 0, 0, new BigDecimal("3.00"), false, LeaveDayCountBasis.WORKING_DAYS);
+    }
+
+    // §5.4 MATERNITY calendar-day counting (V119, 2026-08-02): the one fixture in this class with
+    // CALENDAR_DAYS, used by the unit tests proving LeaveService#computeTotalDays and #submit select
+    // the basis from the leave type, not a hardcoded assumption.
+    private LeaveTypeDto maternityType() {
+        return new LeaveTypeDto("MATERNITY", "Maternity", "Maternity leave", new BigDecimal("98.00"), true,
+            new BigDecimal("45.00"), 0, 0, null, false, LeaveDayCountBasis.CALENDAR_DAYS);
     }
 
     private LeaveRequestDto requestDto(long id, long employeeId, String status, LocalDate startDate, LocalDate endDate,

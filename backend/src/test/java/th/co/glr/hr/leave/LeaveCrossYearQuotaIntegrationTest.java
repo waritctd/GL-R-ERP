@@ -121,50 +121,86 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     @Test
-    void aNinetyEightDayMaternityRequestStartingOnFirstNovemberIsFileableAndSplitsAcrossTheYearBoundary() {
+    void aNinetyEightDayMaternityRequestStartingOnFirstOctoberIsFileableAndSplitsAcrossTheYearBoundary() {
         // THE case the owner asked for by name: pre-V118, LeaveService#validateDateRange rejected
-        // this outright (400 "คำขอลาต้องไม่คร่อมปีโควตา") because a 98-working-day MATERNITY request
-        // starting 1 Nov is ~136 calendar days, unavoidably crossing into the next year. It must now
-        // be APPROVED.
+        // any cross-year request outright (400) because a 98-day MATERNITY request routinely crosses
+        // into the next year. It must now be APPROVED.
         //
-        // Mon 2026-11-01 (Sunday, but that only affects which days count) .. Wed 2027-03-17: verified
-        // independently of LeaveDayMath (see the branch's PR description) to be exactly 98 working
-        // weekdays, split 44 in 2026 (Nov 1 - Dec 31) / 54 in 2027 (Jan 1 - Mar 17).
+        // §5.4 MATERNITY calendar-day counting (V119): Thu 2026-10-01 .. Wed 2027-01-06 is exactly 98
+        // CALENDAR days (verified independently of LeaveDayMath: 31 Oct + 30 Nov + 31 Dec = 92 days in
+        // 2026, then 6 in 2027 = 98 total) -- INCLUDING every weekend inside the range, per §5.4. This
+        // replaces the branch's original working-day-counted fixture (2026-11-01 .. 2027-03-17, which
+        // was exactly 98 WORKING days -- 137 calendar days -- under the pre-V119 assumption that
+        // MATERNITY counted like every other type; V119 makes that assumption wrong for MATERNITY
+        // specifically, so the fixture and its numbers are recomputed here on a calendar-day basis).
         //
-        // MATERNITY's paid_days_cap (45) applies PER YEAR under this migration's design (see
-        // LeaveQuotaYearSplit's Javadoc) -- both years start with a fresh 45-day allowance:
-        //   2026: 44 requested days, cap 45 -> all 44 paid, 0 unpaid.
-        //   2027: 54 requested days, cap 45 -> 45 paid, 9 unpaid.
-        // Total: 98 requested, 89 paid, 9 unpaid. This is MORE than the single-year 45-day cap would
-        // ever allow a same-year request -- a deliberate, documented consequence of attributing the
-        // cap per calendar year, not a miscalculation. See LeaveQuotaYearSplit's Javadoc.
+        // MATERNITY's paid_days_cap (45) applies PER YEAR under V118's design (see LeaveQuotaYearSplit's
+        // Javadoc) -- both years start with a fresh 45-day allowance, now bounding CALENDAR days:
+        //   2026: 92 requested calendar days, cap 45 -> 45 paid, 47 unpaid.
+        //   2027: 6 requested calendar days, cap 45 -> all 6 paid, 0 unpaid.
+        // Total: 98 requested, 51 paid, 47 unpaid.
         long employeeId = insertEmployee("MAT-CROSSYEAR-001");
 
         LeaveRequestDto result = leaveService.submit(
-            submitRequest(employeeId, "MATERNITY", "2026-11-01", "2027-03-17"),
+            submitRequest(employeeId, "MATERNITY", "2026-10-01", "2027-01-06"),
             employee(employeeId));
 
         assertThat(result.status()).isEqualTo("APPROVED");
         assertThat(result.totalDays()).isEqualByComparingTo("98.00");
-        assertThat(result.paidDays()).isEqualByComparingTo("89.00");
-        assertThat(result.unpaidDays()).isEqualByComparingTo("9.00");
+        assertThat(result.paidDays()).isEqualByComparingTo("51.00");
+        assertThat(result.unpaidDays()).isEqualByComparingTo("47.00");
 
         List<LeaveQuotaYearSplit> splits = leaveRepository.findQuotaYearSplits(result.id());
         assertThat(splits).hasSize(2);
         assertThat(splits.get(0).quotaYear()).isEqualTo(2026);
-        assertThat(splits.get(0).totalDays()).isEqualByComparingTo("44.00");
-        assertThat(splits.get(0).paidDays()).isEqualByComparingTo("44.00");
-        assertThat(splits.get(0).unpaidDays()).isEqualByComparingTo("0.00");
+        assertThat(splits.get(0).totalDays()).isEqualByComparingTo("92.00");
+        assertThat(splits.get(0).paidDays()).isEqualByComparingTo("45.00");
+        assertThat(splits.get(0).unpaidDays()).isEqualByComparingTo("47.00");
         assertThat(splits.get(1).quotaYear()).isEqualTo(2027);
-        assertThat(splits.get(1).totalDays()).isEqualByComparingTo("54.00");
-        assertThat(splits.get(1).paidDays()).isEqualByComparingTo("45.00");
-        assertThat(splits.get(1).unpaidDays()).isEqualByComparingTo("9.00");
+        assertThat(splits.get(1).totalDays()).isEqualByComparingTo("6.00");
+        assertThat(splits.get(1).paidDays()).isEqualByComparingTo("6.00");
+        assertThat(splits.get(1).unpaidDays()).isEqualByComparingTo("0.00");
 
         // Parent quota_remaining_before/after reflect ONLY the start year (2026) -- see
-        // hr.leave_request's V118 column comments. 2026's own 98-day quota had all 44 requested days
-        // consumed from it (paid_days_cap bounds PAYMENT, not quota consumption) -> 98 - 44 = 54
+        // hr.leave_request's V118 column comments. 2026's own 98-day quota had all 92 requested days
+        // consumed from it (paid_days_cap bounds PAYMENT, not quota consumption) -> 98 - 92 = 6
         // remaining, NOT a number derived from the 2027 figures at all.
-        assertThat(result.quotaRemainingAfter()).isEqualByComparingTo("54.00");
+        assertThat(result.quotaRemainingAfter()).isEqualByComparingTo("6.00");
+    }
+
+    @Test
+    void aCrossYearMaternityRequestsUnpaidCalendarDaysAttributeToTheCorrectMonthIncludingWeekends() {
+        // §5.4 MATERNITY calendar-day counting (V119), composed with V118's per-year attribution AND
+        // the payroll deduction path (LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth). Reuses
+        // the exact fixture above (98 calendar days, 2026-10-01 .. 2027-01-06, 47 unpaid in 2026 / 0
+        // in 2027) to prove the DECISION documented on LeaveService#recordPayrollCorrectionIfNeeded
+        // and LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth: the payroll base/30 deduction
+        // uses the SAME calendar-day basis as the quota split, so weekend days inside the unpaid
+        // portion ARE deducted, not silently dropped.
+        //
+        // 2026's 92 requested days run Oct 1 - Dec 31; the first 45 (chronologically, Oct 1 - Nov 14)
+        // are paid, the remaining 47 (Nov 15 - Dec 31) are unpaid and span TWO calendar months:
+        // November (Nov 15-30 = 16 days) and December (Dec 1-31 = 31 days) = 16 + 31 = 47.
+        long employeeId = insertEmployee("MAT-XY-DEDUCT-001");
+
+        LeaveRequestDto result = leaveService.submit(
+            submitRequest(employeeId, "MATERNITY", "2026-10-01", "2027-01-06"),
+            employee(employeeId));
+        assertThat(result.unpaidDays()).isEqualByComparingTo("47.00");
+
+        Map<Long, BigDecimal> novemberDeduction =
+            leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-11-01"));
+        Map<Long, BigDecimal> decemberDeduction =
+            leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-12-01"));
+        Map<Long, BigDecimal> januaryDeduction =
+            leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2027-01-01"));
+
+        // 16.00 (Nov 15-30) includes two full weekends inside it -- weekend days a WORKING_DAYS
+        // reading would have excluded from the deduction entirely.
+        assertThat(novemberDeduction).containsEntry(employeeId, new BigDecimal("16.00"));
+        assertThat(decemberDeduction).containsEntry(employeeId, new BigDecimal("31.00"));
+        // 2027's 6 days were all paid (fresh cap) -- nothing unpaid, nothing to deduct.
+        assertThat(januaryDeduction).doesNotContainKey(employeeId);
     }
 
     @Test
@@ -229,6 +265,36 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
 
         Map<Long, BigDecimal> pending = leaveRepository.findPendingPayrollCorrectionsByEmployee();
         assertThat(pending).containsEntry(employeeId, new BigDecimal("3.00"));
+    }
+
+    @Test
+    void cancellingACrossYearMaternityLeaveAfterNovemberPayrollIsProcessedRefundsCalendarDaysIncludingWeekends() {
+        // §5.4 MATERNITY calendar-day counting (V119), through the cancel-after-close reversal
+        // (LeaveService#recordPayrollCorrectionIfNeeded). Same fixture as
+        // aCrossYearMaternityRequestsUnpaidCalendarDaysAttributeToTheCorrectMonthIncludingWeekends
+        // above (98 calendar days, 2026-10-01 .. 2027-01-06, 47 unpaid days in 2026: 16 in November,
+        // 31 in December). Only November 2026 payroll has been PROCESSED -- the refund owed must be
+        // 16.00 (the same calendar-day figure, weekends included, that was actually deducted), NOT a
+        // working-days-only re-derivation that would undercount it.
+        long employeeId = insertEmployee("MAT-XY-CANCEL-001");
+        LeaveRequestDto approved = leaveService.submit(
+            submitRequest(employeeId, "MATERNITY", "2026-10-01", "2027-01-06"),
+            employee(employeeId));
+        assertThat(approved.unpaidDays()).isEqualByComparingTo("47.00");
+
+        insertProcessedPayrollPeriod(LocalDate.parse("2026-11-01"));
+
+        leaveService.cancel(approved.id(), new ReviewLeaveRequest("no longer needed"), hr());
+
+        List<Map<String, Object>> corrections = jdbc.queryForList("""
+            SELECT payroll_month, unpaid_days_to_refund
+              FROM hr.leave_payroll_correction
+             WHERE leave_request_id = :leaveRequestId
+            """, new MapSqlParameterSource("leaveRequestId", approved.id()));
+        assertThat(corrections).hasSize(1);
+        LocalDate correctionMonth = ((java.sql.Date) corrections.get(0).get("payroll_month")).toLocalDate();
+        assertThat(correctionMonth).isEqualTo(LocalDate.parse("2026-11-01"));
+        assertThat((BigDecimal) corrections.get(0).get("unpaid_days_to_refund")).isEqualByComparingTo("16.00");
     }
 
     @Test
