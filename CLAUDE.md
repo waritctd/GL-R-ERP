@@ -131,11 +131,35 @@ The frontend is migrating from the single global `frontend/src/styles.css` to a 
 - **One branch per task.** `main` must stay deployable; branch off `main`, open a PR, merge only after review.
 - **One implementation agent per branch.** Do not let two agents (e.g. Claude and Codex) edit the same branch at the same time.
 - **Reviewer agents do not implement** — except tiny, safe fixes (typos, obvious one-liners). Anything larger goes back to an implementation branch.
+- **Cap branch lifetime — sync with `main` at most once before opening the PR.** A branch that needs
+  a second or third `git fetch origin main && git merge/rebase` mid-flight has grown too large or sat
+  open too long; both cost real agent time re-reading diffs and re-resolving conflicts. `feat/leave-rules-tab`
+  synced `main` four times before merging — that pattern is the thing to avoid, not repeat.
+- **Use a PR stack instead of one long branch when a task naturally has sequential parts** (e.g. "add
+  the composer" → "wire it to the API" → "add the calendar admin UI"). Branch each step off the
+  previous step's branch (`git checkout -b feat/x-step2 feat/x-step1`) and open each as its own PR
+  targeting the previous branch, so each is small, reviewable, and only ever merges forward — never
+  re-synced against a moving `main` mid-task. If a stacking CLI (Graphite `gt`, `git-spice`) is
+  installed and configured for this repo, use it instead of hand-rolled stacked branches; check for
+  it (`which gt`, `which git-spice` / `gs`) before assuming plain git is the only option. Land and
+  merge the bottom of the stack first — don't let the whole stack sit unmerged waiting on the top PR.
+- **Rework costs a full second pass — verify before handing off, not after review flags it.** Commits
+  like `review fixes for V116` (a second pass on quota bookkeeping and probation resolution after
+  review) are exactly the pattern to prevent: for business-logic-sensitive surfaces (leave/payroll
+  math, permission gates), re-check the diff against the spec/migration yourself before opening the
+  PR, rather than relying on review to catch it.
 
 ## Before you finish an implementation task
 - **Always run the relevant tests/builds** and record the results:
   - Frontend: `cd frontend && npm run lint && npm test && npm run build` (there is no `typecheck` script)
   - Backend: `cd backend && ./mvnw -B clean verify` (integration tests need Postgres — either `TEST_DB_URL` **or** a running Docker for Testcontainers; note if they were skipped)
+- **Don't pay full-suite cost on every edit.** While iterating, run only the targeted test
+  (`npx vitest run <file>`, a single Maven `-Dtest=ClassName`) against the file you're changing.
+  Reserve the full commands above — and a full `mvnw verify` — for the pre-PR check, run once, after
+  the change has settled.
+- **If neither `TEST_DB_URL` nor Docker is available, don't retry Testcontainers.** Note once that
+  integration tests were skipped for lack of a DB and move on — repeated attempts just burn time on a
+  precondition that isn't going to change mid-session.
 - **Did the change touch authorization?** (a role gate, a scope/filter, who may read or write whose
   rows.) If yes, a real-DB integration test through the real Java service is **required** — see
   "Permission changes must ship evidence" above. If it ran on mocks only, report the permission
