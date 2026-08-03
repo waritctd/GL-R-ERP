@@ -23,4 +23,12 @@ public final class LeaveResponses {
 
     public record LeaveContactDefaultsResponse(LeaveContactDefaultsDto contactDefaults) {
     }
+
+    /** POST /api/leave/preview (Phase A0b dry-run) -- see {@link LeaveService#preview}. */
+    public record LeavePreviewResponse(LeavePreviewDto preview) {
+    }
+
+    /** GET /api/leave/review-summary (Phase A0b) -- see {@link LeaveService#reviewSummary}. */
+    public record LeaveReviewSummaryResponse(LeaveReviewSummaryDto reviewSummary) {
+    }
 }

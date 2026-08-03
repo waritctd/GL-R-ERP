@@ -30,7 +30,7 @@ import java.math.BigDecimal;
  * previously-missing SICK rules -- a working-day deadline to file a medical certificate, and a
  * per-calendar-month tolerance for certificate-less "minor illness" requests. {@code null} filing
  * window = no such rule; {@code 0} tolerance = no tolerance (a missing attachment always rejects,
- * today's behaviour for every type except SICK). See {@link LeaveService#sickCertificateNote} for
+ * today's behaviour for every type except SICK). See {@link LeaveService#sickCertificateRuleOutcome} for
  * the combined decision table and V124's migration comment for the seeded SICK values (3 / 3) and
  * the interpretation caveats.
  *
