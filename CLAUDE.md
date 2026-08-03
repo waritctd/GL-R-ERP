@@ -128,6 +128,11 @@ The frontend is migrating from the single global `frontend/src/styles.css` to a 
 - **Tailwind breakpoints drive responsive behavior.** Remove dead CSS carefully, and never at the cost of a visual regression.
 - Migrating existing CSS is expected and allowed, but do it in reviewable slices with screenshots — not as one blind rewrite.
 
+## Frontend design skills — use before/during UI work
+- **Use the `information-architecture` skill** whenever frontend work involves navigation, page/content structure, URL patterns, or user flows — plan the structural layer before touching visual design. This applies to new pages/sections and to any restructuring of existing ones, not just net-new features.
+- **Use the `frontend-design` skill/plugin** when implementing the actual UI. Hold implementation to an impeccable bar: no generic/placeholder-looking output, consistent with the Tailwind-first direction above and the existing design tokens in `frontend/src/index.css`.
+- Both are installed locally (`.agents/skills/information-architecture`, `.agents/skills/frontend-design`, and the `frontend-design@claude-plugins-official` Claude Code plugin) — invoke them rather than freehanding IA or visual design decisions.
+
 ## Branch & agent discipline
 - **One branch per task.** `main` must stay deployable; branch off `main`, open a PR, merge only after review.
 - **One implementation agent per branch.** Do not let two agents (e.g. Claude and Codex) edit the same branch at the same time.
