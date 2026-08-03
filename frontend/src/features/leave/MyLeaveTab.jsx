@@ -16,6 +16,7 @@ import { QuotaBar } from '../../components/common/QuotaBar.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { downloadBlob } from '../../utils/download.js';
 import { leaveStatusLabel as statusInfo } from '../../utils/format.js';
 import {
   formatDateRange, formatDays, monthStartIso, todayIso, yearFrom,
@@ -103,9 +104,24 @@ function retryLeaveRequestHref(request) {
  * (the request errored with a 403).
  */
 function OwnRequestsSection({
-  requestsQuery, rows, hasCustomFilters, onClearFilters, expandedId, onToggleExpand, onCancel, user,
+  requestsQuery, rows, hasCustomFilters, onClearFilters, expandedId, onToggleExpand, onCancel, user, showToast,
 }) {
   const navigate = useNavigate();
+  // Phase A4: the medical-certificate download for the requester's OWN expanded row -- the
+  // reviewer-side equivalent lives in ReviewQueueTab.jsx. Local to this section (not lifted to
+  // MyLeaveTab) since only this table's expanded row ever needs it.
+  const [downloadingAttachmentId, setDownloadingAttachmentId] = useState(null);
+  async function downloadAttachment(request) {
+    setDownloadingAttachmentId(request.id);
+    try {
+      const blob = await api.leave.downloadAttachment(request.attachmentId);
+      downloadBlob(blob, `leave-attachment-${request.id}`, 'pdf');
+    } catch (error) {
+      showToast('error', error.message || 'ดาวน์โหลดเอกสารไม่สำเร็จ');
+    } finally {
+      setDownloadingAttachmentId(null);
+    }
+  }
   const loading = requestsQuery.isPending;
   const denied = requestsQuery.isError && isPermissionError(requestsQuery.error);
   const hasError = requestsQuery.isError && !denied;
@@ -228,7 +244,31 @@ function OwnRequestsSection({
       error={hasError}
       onRetry={() => requestsQuery.refetch()}
       mobileCard={mobileCard}
-      renderExpanded={(request) => (expandedId === request.id ? renderLeaveRequestExpanded(request) : null)}
+      renderExpanded={(request) => {
+        if (expandedId !== request.id) return null;
+        return (
+          <>
+            {renderLeaveRequestExpanded(request)}
+            {request.attachmentId ? (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-surface px-3 py-2">
+                <span className="inline-flex min-w-0 items-center gap-2 text-sm text-text">
+                  <Icon name="fileText" size={16} className="text-icon-muted" />
+                  <span className="min-w-0 truncate">{request.attachmentFileName || 'เอกสารแนบ'}</span>
+                </span>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={downloadingAttachmentId === request.id}
+                  onClick={() => downloadAttachment(request)}
+                >
+                  <Icon name="fileText" size={14} />
+                  {downloadingAttachmentId === request.id ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด'}
+                </Button>
+              </div>
+            ) : null}
+          </>
+        );
+      }}
       showPagination
     />
   );
@@ -626,6 +666,7 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
           onToggleExpand={(id) => setExpandedId((current) => (current === id ? null : id))}
           onCancel={requestCancel}
           user={user}
+          showToast={showToast}
         />
       </Panel>
 

@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReviewQueueTab } from './ReviewQueueTab.jsx';
 import { api } from '../../api/index.js';
+import { downloadBlob } from '../../utils/download.js';
 
 globalThis.React = React;
 
@@ -14,8 +15,13 @@ vi.mock('../../api/index.js', () => ({
       approve: vi.fn(),
       reject: vi.fn(),
       cancel: vi.fn(),
+      downloadAttachment: vi.fn(),
     },
   },
+}));
+
+vi.mock('../../utils/download.js', () => ({
+  downloadBlob: vi.fn(),
 }));
 
 const manager = { employeeId: 5, name: 'หัวหน้างาน', role: 'employee', manager: true };
@@ -66,6 +72,24 @@ const submittedUnderSomeoneElse = {
   quotaRemainingAfter: 6,
   status: 'SUBMITTED',
   reason: 'ธุระส่วนตัว',
+};
+
+const submittedWithCertificate = {
+  id: 704,
+  employeeId: 4,
+  employeeName: 'ลูกทีม สาม',
+  employeeCode: 'GLR-004',
+  managerEmployeeId: 5,
+  leaveTypeCode: 'SICK',
+  leaveTypeNameTh: 'ลาป่วย',
+  startDate: '2026-08-14',
+  endDate: '2026-08-14',
+  totalDays: 1,
+  quotaRemainingAfter: 25,
+  status: 'SUBMITTED',
+  reason: 'ไข้หวัดใหญ่',
+  attachmentId: 9001,
+  attachmentFileName: 'ใบรับรองแพทย์.pdf',
 };
 
 function renderReviewQueueTab(showToast = vi.fn()) {
@@ -157,5 +181,102 @@ describe('ReviewQueueTab', () => {
 
     expect(await screen.findByText('ยังเปิดหน้านี้ไม่ได้')).not.toBeNull();
     expect(showToast).not.toHaveBeenCalled();
+  });
+
+  describe('Phase A4: certificate download', () => {
+    it('a row with no attachment never renders a download button', async () => {
+      api.leave.list.mockResolvedValue({ requests: [submittedUnderManager] });
+      renderReviewQueueTab();
+
+      fireEvent.click(await screen.findByRole('button', { name: /ดูรายละเอียดคำขอลาของ/ }));
+      expect(screen.queryByRole('button', { name: /ดาวน์โหลด/ })).toBeNull();
+    });
+
+    it('downloads the attachment via GET /api/leave/attachments/{id} and hands the blob to downloadBlob', async () => {
+      api.leave.list.mockResolvedValue({ requests: [submittedWithCertificate] });
+      const blob = new Blob(['fake-pdf']);
+      api.leave.downloadAttachment.mockResolvedValue(blob);
+      renderReviewQueueTab();
+
+      fireEvent.click(await screen.findByRole('button', { name: /ดูรายละเอียดคำขอลาของ/ }));
+      fireEvent.click(await screen.findByRole('button', { name: 'ดาวน์โหลด' }));
+
+      await waitFor(() => expect(api.leave.downloadAttachment).toHaveBeenCalledWith(9001));
+      await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(blob, 'leave-attachment-704', 'pdf'));
+    });
+
+    it('a failed download shows an error toast instead of failing silently', async () => {
+      const showToast = vi.fn();
+      api.leave.list.mockResolvedValue({ requests: [submittedWithCertificate] });
+      api.leave.downloadAttachment.mockRejectedValue(new Error('ไม่พบเอกสารนี้'));
+      renderReviewQueueTab(showToast);
+
+      fireEvent.click(await screen.findByRole('button', { name: /ดูรายละเอียดคำขอลาของ/ }));
+      fireEvent.click(await screen.findByRole('button', { name: 'ดาวน์โหลด' }));
+
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ไม่พบเอกสารนี้'));
+      expect(downloadBlob).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Phase A4: 409 already-decided', () => {
+    it('an approve 409 replaces the transient toast with an inline, force-expanded explanation and refetches the row', async () => {
+      const showToast = vi.fn();
+      api.leave.list
+        .mockResolvedValueOnce({ requests: [submittedUnderManager] })
+        .mockResolvedValueOnce({ requests: [{ ...submittedUnderManager, status: 'APPROVED' }] });
+      api.leave.approve.mockRejectedValue(Object.assign(new Error('คำขอลานี้ได้รับการพิจารณาไปแล้ว'), { status: 409 }));
+      renderReviewQueueTab(showToast);
+
+      await screen.findByText('พักผ่อน');
+      fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
+      const approveButtons = await screen.findAllByRole('button', { name: 'อนุมัติ' });
+      fireEvent.click(approveButtons[approveButtons.length - 1]);
+
+      expect(await screen.findByText('คำขอนี้ถูกพิจารณาไปแล้ว')).not.toBeNull();
+      // The row's real, refetched status appears in the inline panel -- not a generic message.
+      expect(await screen.findByText(/สถานะปัจจุบัน:.*อนุมัติแล้ว/)).not.toBeNull();
+      // No transient toast for this case -- only the inline panel.
+      expect(showToast).not.toHaveBeenCalled();
+      // list() is called again (query invalidation) so the row can show its real current status.
+      await waitFor(() => expect(api.leave.list).toHaveBeenCalledTimes(2));
+    });
+
+    it('dismisses the inline conflict panel when the row is collapsed again', async () => {
+      api.leave.list.mockResolvedValue({ requests: [submittedUnderManager] });
+      api.leave.approve.mockRejectedValue(Object.assign(new Error('คำขอลานี้ได้รับการพิจารณาไปแล้ว'), { status: 409 }));
+      renderReviewQueueTab();
+
+      await screen.findByText('พักผ่อน');
+      fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
+      const approveButtons = await screen.findAllByRole('button', { name: 'อนุมัติ' });
+      fireEvent.click(approveButtons[approveButtons.length - 1]);
+      await screen.findByText('คำขอนี้ถูกพิจารณาไปแล้ว');
+
+      fireEvent.click(screen.getByRole('button', { name: /ซ่อนรายละเอียดคำขอลาของ/ }));
+      expect(screen.queryByText('คำขอนี้ถูกพิจารณาไปแล้ว')).toBeNull();
+    });
+
+    it('disables only the affected row\'s action buttons while its own mutation is in flight', async () => {
+      let resolveApprove;
+      api.leave.list.mockResolvedValue({ requests: [submittedUnderManager, submittedWithCertificate] });
+      api.leave.approve.mockImplementation(() => new Promise((resolve) => { resolveApprove = resolve; }));
+      renderReviewQueueTab();
+
+      await screen.findByText('พักผ่อน');
+      const approveButtons = screen.getAllByRole('button', { name: 'อนุมัติ' });
+      fireEvent.click(approveButtons[0]);
+      const confirmButtons = await screen.findAllByRole('button', { name: 'อนุมัติ' });
+      fireEvent.click(confirmButtons[confirmButtons.length - 1]);
+
+      // While the mutation for row 701 is in flight, that row's own icon button disables --
+      // the other row (704) is untouched by this mutation and stays interactive.
+      await waitFor(() => expect(screen.getAllByRole('button', { name: 'อนุมัติ' })[0].disabled).toBe(true));
+      const otherRowApprove = screen.getAllByRole('button', { name: 'อนุมัติ' })[1];
+      expect(otherRowApprove.disabled).toBe(false);
+
+      resolveApprove({ request: { ...submittedUnderManager, status: 'APPROVED' } });
+      await waitFor(() => expect(screen.getAllByRole('button', { name: 'อนุมัติ' })[0].disabled).toBe(false));
+    });
   });
 });

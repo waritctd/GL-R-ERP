@@ -22,12 +22,22 @@ import { hasPermission } from '../../app/permissions.js';
 // the real gate on every mutation regardless. See CLAUDE.md: verify against the real
 // Java service, never the mock.
 //
-// Phase A0 (not yet landed) adds a server-supplied `canReview` boolean to each request
-// row (GET /api/leave and the new GET /api/leave/review-summary) that will fold in the
-// real backend decision authoritatively. `canReviewRequest` below already prefers it
-// when present, falling back to the client-side approximation for a row that predates
-// it -- once A0 ships, every row will carry the field and the fallback branch simply
-// stops being exercised, with no call-site change needed here.
+// Phase A0 shipped (#485): LeaveService#list now runs every returned row through
+// withCanReviewFlag unconditionally (see LeaveRequestDto.canReview's own Javadoc), so the REAL
+// backend always supplies this field now -- `canReviewRequest` below already prefers it when
+// present.
+//
+// Phase A4 finding: the fallback branch is NOT dead and must stay. mockApi.js's `leave`
+// namespace (list/create/approve/reject/cancel) never sets a `canReview` field on any row it
+// returns -- there is no mirror of withCanReviewFlag there. Under `VITE_USE_MOCKS=true` (this
+// app's default verification surface, per CLAUDE.md) every request object therefore has
+// `canReview === undefined`, and this file's own test fixtures (leaveSurfaceTabs.test.js,
+// ReviewQueueTab.test.jsx) never set it either -- removing the fallback would make
+// `canReviewRequest` return `Boolean(undefined)` (always false) for every one of those rows,
+// silently emptying the "รอพิจารณา" tab under mocks and breaking both test suites. Keep this
+// branch until mockApi.js's leave namespace is updated to mirror withCanReviewFlag too.
+// `canManagerCancelRequest` below never read `canReview` in the first place (always the
+// client-side approximation) -- there is no fallback to remove there either.
 export function canReviewRequest(request, user, canReviewAll) {
   if (request?.canReview != null) return Boolean(request.canReview);
   return request?.status === 'SUBMITTED'
