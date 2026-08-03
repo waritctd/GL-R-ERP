@@ -371,7 +371,9 @@ describe('PayrollPage adjustment inputs', () => {
 
     const zeroDisclosure = employeeCell.querySelector('details');
     expect(zeroDisclosure).toBeTruthy();
-    expect(zeroDisclosure.textContent).toContain('รายการศูนย์ 2 รายการ');
+    // 3 since V128 added สวัสดิการ to mobileOptionalMoneySummaries: เงินพิเศษ, ล่วงเวลา/คอมมิชชัน
+    // and สวัสดิการ are all zero on this fixture, and the phone layout folds zero rows away.
+    expect(zeroDisclosure.textContent).toContain('รายการศูนย์ 3 รายการ');
     expect(zeroDisclosure.textContent).toContain('เงินพิเศษ');
     expect(zeroDisclosure.textContent).toContain('ล่วงเวลา/คอมมิชชัน');
     expect(container.querySelector('tbody td[data-label="สุทธิ"]').className).toContain('mobile:hidden');
