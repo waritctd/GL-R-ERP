@@ -57,8 +57,20 @@ export function AttachmentList({ requestId, canUpload = false, showToast, classN
       return;
     }
     try {
+      // imageCompression() returns a plain Blob, not a File -- it does not carry `file.name`
+      // through. FormData.append('file', blob) then has no filename to send, and per the spec
+      // defaults the multipart part's filename to the literal string "blob": every compressed
+      // JPG/PNG lands in the backend, and every list/download UI thereafter, named "blob" instead
+      // of e.g. "receipt-medical.jpg". Re-wrapping in a File restores the name (and mtime) the
+      // compression step dropped. PDFs skip compression entirely and never hit this path, which is
+      // why the bug reads as image-only. Same defect exists in TaxAllowanceEvidencePanel.jsx,
+      // which this component's upload flow was modelled on -- not fixed here, out of welfare scope.
       const prepared = file.type.startsWith('image/')
-        ? await imageCompression(file, { maxSizeMB: 2, maxWidthOrHeight: 1600, useWebWorker: true })
+        ? new File(
+          [await imageCompression(file, { maxSizeMB: 2, maxWidthOrHeight: 1600, useWebWorker: true })],
+          file.name,
+          { type: file.type },
+        )
         : file;
       uploadMutation.mutate(prepared);
     } catch (error) {
