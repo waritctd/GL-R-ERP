@@ -148,6 +148,11 @@ export const api = {
     cancel: (id, payload = {}) => apiRequest(API_ROUTES.leave.cancel(id), { method: 'POST', body: payload }),
     // Leave-surface IA rebuild, Phase A0 (not yet landed) — see routes.js's own comment.
     reviewSummary: () => apiRequest(API_ROUTES.leave.reviewSummary),
+    // Leave-request composer (Phase A2, #485): `options.signal` lets a caller abort an
+    // in-flight dry-run when a newer one supersedes it (the debounced step-2 QUICK preview) --
+    // see LeaveRequestPage.jsx's own comment on why that matters.
+    preview: (payload, options = {}) =>
+      apiRequest(API_ROUTES.leave.preview, { method: 'POST', body: payload, signal: options.signal }),
     // Leave-surface IA rebuild, Phase A3: the §5 announcement PDF link on the "กฎการลา" tab.
     // HEAD-probes first (no body transfer) so RulesTab.jsx can render a disabled/explained state
     // when the backend has no path configured, instead of a broken link the user only discovers by

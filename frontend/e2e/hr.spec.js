@@ -92,16 +92,38 @@ test.describe('HR — overtime, leave, attendance', () => {
 
     const reason = `e2e-leave-${Date.now()}`;
     const start = nextWeekdayAtLeast(10);
-    await page.locator('#leave-type-code').selectOption('VACATION');
+
+    // Phase A2 (#493) moved the request form off /leave entirely, onto its own
+    // deep-linkable /leave/new composer (three steps: type -> dates/details ->
+    // review). #leave-type-code no longer exists — step 1 is a set of type
+    // CARDS (real <button>s named by the type's Thai label, aria-pressed when
+    // selected), not a <select>; #leave-start-date/-end-date/-reason moved to
+    // step 2 but kept their ids.
+    //
+    // "ยื่นคำขอลา" now matches TWO buttons on /leave: the page header's primary
+    // CTA (PageHeader.jsx's .page-actions) AND the empty request list's own
+    // EmptyState action — both real, both visible for a fresh employee with no
+    // requests yet. Scope to .page-actions to disambiguate.
+    await page.locator('.page-actions').getByRole('button', { name: 'ยื่นคำขอลา' }).click();
+    await expect(page).toHaveURL(/\/leave\/new/);
+
+    await page.getByRole('button', { name: 'ลาพักร้อน' }).click();
+    await page.getByRole('button', { name: 'ถัดไป' }).click();
+
     await page.locator('#leave-start-date').fill(start);
     await page.locator('#leave-end-date').fill(start);
     await page.locator('#leave-reason').fill(reason);
+    await page.getByRole('button', { name: 'ถัดไป: ตรวจสอบก่อนส่ง' }).click();
+
     await page.getByRole('button', { name: 'ส่งคำขอ' }).click();
 
     // leave.create() resolves synchronously to APPROVED or AUTO_REJECTED —
     // never SUBMITTED (see file header note) — so the success toast IS the
-    // approval, not just an acknowledgement.
+    // approval, not just an acknowledgement. A successful submit navigates
+    // back to /leave (LeaveSurfacePage's goBackToSurface), landing on the tab
+    // it was opened from.
     await expect(page.getByText('ส่งคำขอลาและอนุมัติอัตโนมัติแล้ว')).toBeVisible();
+    await expect(page).toHaveURL(/\/leave(\?|$)/);
 
     // The request list's default filter is [start of this month, today] —
     // it deliberately excludes future-dated requests. Our VACATION request

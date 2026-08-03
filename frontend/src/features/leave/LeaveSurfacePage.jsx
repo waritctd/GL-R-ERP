@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
@@ -28,6 +28,8 @@ const TAB_ID_PREFIX = 'leave-surface';
  */
 export function LeaveSurfacePage({ user, currentEmployee, showToast }) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
 
   function setActiveTab(tabId) {
@@ -59,43 +61,28 @@ export function LeaveSurfacePage({ user, currentEmployee, showToast }) {
   const visibleTabs = LEAVE_SURFACE_TABS.filter((tab) => visibleTabIds.includes(tab.id));
   const activeTab = resolveLeaveSurfaceTab(searchParams.get('tab'), visibleTabIds);
 
-  // The sticky header's "ยื่นคำขอลา" CTA switches to the `me` tab (if not already there) and
-  // focuses the request-form panel once it has mounted. TODO(A2): once the submit form moves to
-  // its own `/leave/new` route, this becomes a plain navigate() and the pendingFocusRef/effect
-  // pair below goes away entirely.
-  const pendingFocusRef = useRef(false);
-  const requestFormAnchorRef = useRef(null);
-
-  function focusRequestForm() {
-    const node = requestFormAnchorRef.current;
-    if (!node) return;
-    // Same defensive guard as TicketDetailPage.jsx's `focusFirstInvalid` -- `scrollIntoView` is
-    // absent under jsdom (no test-environment stub), so an unguarded call breaks every test that
-    // exercises this path rather than only skipping the (purely cosmetic) scroll.
-    if (typeof node.scrollIntoView === 'function') node.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    node.focus();
-  }
+  // The sticky header's "ยื่นคำขอลา" CTA (Phase A2, #485): navigates to the /leave/new composer,
+  // carrying the currently-active tab so LeaveRequestPage can send the employee back to where they
+  // started (not always "ของฉัน") on cancel/submit/back.
+  const requestCtaRef = useRef(null);
 
   function openRequestForm() {
-    if (activeTab === 'me') {
-      focusRequestForm();
-      return;
-    }
-    pendingFocusRef.current = true;
-    setActiveTab('me');
+    navigate(`/leave/new?returnTab=${encodeURIComponent(activeTab)}`);
   }
 
-  // Mirrors TicketDetailPage.jsx's pendingTabActionRef convention: `activeTab` only changes once
-  // the URL update above has actually committed, and by then MyLeaveTab (and its form anchor ref)
-  // has already mounted in the SAME commit -- so this always finds a live target, never a stale
-  // one. Intentionally keyed on `activeTab` alone: the pending flag is read fresh from the ref
-  // (never a dependency), so adding it would replay a stale queued focus on every unrelated render.
+  // Focus-restore: LeaveRequestPage navigates back here with `state.focusRequestCta` set (on
+  // cancel, back, or successful submit) -- see its own comment. Consumed once via `replace` so a
+  // later reload/re-render of this same location never re-fires the focus.
+  // Fires once per landing with `location.state.focusRequestCta` set; deliberately keyed on
+  // `location.state` ALONE -- adding pathname/search/navigate would re-run this on every
+  // unrelated render (navigate's identity is not guaranteed stable across renders) and replay a
+  // stale queued focus.
   useEffect(() => {
-    if (activeTab === 'me' && pendingFocusRef.current) {
-      pendingFocusRef.current = false;
-      focusRequestForm();
-    }
-  }, [activeTab]);
+    if (!location.state?.focusRequestCta) return;
+    requestCtaRef.current?.focus();
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: {} });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
 
   function refreshAll() {
     queryClient.invalidateQueries({ queryKey: ['leave'] });
@@ -135,7 +122,7 @@ export function LeaveSurfacePage({ user, currentEmployee, showToast }) {
           subtitle="ยื่นคำขอลา ตรวจโควตา และพิจารณาคำขอของทีมในที่เดียว"
           actions={(
             <>
-              <Button type="button" onClick={openRequestForm}>
+              <Button type="button" ref={requestCtaRef} onClick={openRequestForm}>
                 <Icon name="plus" />
                 ยื่นคำขอลา
               </Button>
@@ -162,7 +149,6 @@ export function LeaveSurfacePage({ user, currentEmployee, showToast }) {
           user={user}
           currentEmployee={currentEmployee}
           showToast={showToast}
-          formAnchorRef={requestFormAnchorRef}
         />
       </TabPanel>
 

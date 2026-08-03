@@ -105,7 +105,9 @@ const PATH_GUARDS = [
     test: (p) => p === '/employee-requests' || p === '/overtime',
     can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllOvertime') || hasPermission(u.role, 'canViewAllSpecialMoney'),
   },
-  { test: (p) => p === '/leave', can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllLeave') },
+  // /leave/new (Phase A2, #485): the composer files a request for the SAME "self or an
+  // employeeId-bearing acting employee" audience as /leave itself -- same guard.
+  { test: (p) => p === '/leave' || p === '/leave/new', can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllLeave') },
   { test: (p) => p === '/price-import', can: (u) => hasPermission(u.role, 'canManagePriceImport') },
   // The bare queue (`/pricing-requests`) is Import's work list — canViewPricingRequestQueue
   // only (import/ceo/sales_manager), never sales. Detail sub-paths are a separate rule: a sales
