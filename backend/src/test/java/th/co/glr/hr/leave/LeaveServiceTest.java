@@ -2336,7 +2336,11 @@ class LeaveServiceTest {
             // LeaveRepository#recordAutoRejectReason write, so a helper-constructed DTO never carries
             // a genuine code/params pair anyway).
             null,
-            Map.of()
+            Map.of(),
+            // Phase A0b (review-summary phase): no test in this class asserts on canReview via the
+            // helper (LeaveService#withCanReviewFlag runs on the RETURNED dto, not this fixture, and
+            // this class is Mockito-level, so it never exercises that code path anyway).
+            false
         );
     }
 

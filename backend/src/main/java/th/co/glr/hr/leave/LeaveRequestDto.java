@@ -73,6 +73,15 @@ public record LeaveRequestDto(
     // human-readable Thai sentence); these two fields are the stable contract a caller should branch
     // logic on instead of parsing that sentence.
     String systemNoteCode,
-    Map<String, String> systemNoteParams
+    Map<String, String> systemNoteParams,
+    // Phase A0b (GET /api/leave/review-summary phase): computed SERVER-SIDE, per requesting actor,
+    // by LeaveService#withCanReviewFlag -- true when this actor could act on this employee's
+    // requests (HR/CEO, or this employee's own direct manager), the SAME decision
+    // LeaveService#approve/#reject already gate on. NOT a role check (a department manager reviews
+    // their own reports too, despite REVIEW_ALL_ROLES being {hr} only) and NOT "is this SPECIFIC
+    // request actionable right now" -- callers should still check status == SUBMITTED themselves.
+    // LeaveRepository#mapRequest always writes false here (it has no actor to check against);
+    // LeaveService overwrites it for every DTO it returns -- see #withCanReviewFlag.
+    boolean canReview
 ) {
 }

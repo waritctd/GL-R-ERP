@@ -27,8 +27,12 @@ import java.math.BigDecimal;
  * <p>{@code quotaRemainingBefore}/{@code quotaRemainingAfter} are this year's own remaining-quota
  * figures (mirroring {@code hr.leave_request}'s own columns of the same name, which now reflect only
  * the request's START year -- see that table's column comments).
+ *
+ * <p>{@code public} (Phase A0b, was package-private): {@code LeavePreviewDto} now carries a {@code
+ * List<LeaveQuotaYearSplit>} in the {@code POST /api/leave/preview} response, so this needs to be
+ * visible outside the package for Jackson to serialize it reliably. No other change.
  */
-record LeaveQuotaYearSplit(
+public record LeaveQuotaYearSplit(
     int quotaYear,
     BigDecimal totalDays,
     BigDecimal paidDays,
