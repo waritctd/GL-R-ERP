@@ -466,4 +466,11 @@ export const ROLE_PERMISSIONS = {
   // Step 7: Factory Purchase Order and Import Execution — Import/CEO only, mirrors
   // ProcurementService.RAW_PO_ROLES. Raw supplier PO detail is never shown to sales.
   canManageProcurement: ['import', 'ceo'],
+  // Attendance calendar admin UI (/settings/attendance-calendar — PR #480 shipped the write API
+  // with no UI at all). Mirrors HolidayController / WorkScheduleController /
+  // WorkScheduleAssignmentController's requireAnyRole(user, "hr", "ceo") exactly. FRONTEND GATING
+  // ONLY: the backend already enforces this role check independently on every endpoint — this key
+  // decides who sees the SCREEN, it grants nothing itself. See CLAUDE.md's "Mock API contract" on
+  // why a frontend permission key is never itself evidence of a backend authorization change.
+  canManageAttendanceCalendar: ['hr', 'ceo'],
 };
