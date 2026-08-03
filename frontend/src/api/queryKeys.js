@@ -48,6 +48,10 @@ export const queryKeys = {
   specialMoneyEmployees: () => ['specialMoney', 'employees'],
   specialMoneyTypes: () => ['specialMoney', 'types'],
   specialMoneyUsage: (employeeId, year) => ['specialMoney', 'usage', employeeId, year],
+  // Attachment list (welfare page IA redesign, 2026-08) — mirrors SpecialMoneyController's nested
+  // .../{id}/attachments endpoint, same shape as taxAllowanceAttachments above. None existed
+  // before this: AttachmentList.jsx is the first caller of api.specialMoney.attachments().
+  specialMoneyAttachments: (id) => ['specialMoney', 'attachments', id ?? ''],
   // ticketDetail/ticketAttachments are for slice B (TicketDetailPage) — defined
   // now so the key module is stable across both slices; only ticketList is used here.
   ticketList: (status) => ['tickets', 'list', status ?? ''],
