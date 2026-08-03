@@ -2,10 +2,17 @@ package th.co.glr.hr.leave;
 
 import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
+import java.nio.file.Paths;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -16,11 +23,14 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.leave.LeaveResponses.LeaveBalancesResponse;
 import th.co.glr.hr.leave.LeaveResponses.LeaveContactDefaultsResponse;
 import th.co.glr.hr.leave.LeaveResponses.LeaveDetailResponse;
 import th.co.glr.hr.leave.LeaveResponses.LeaveEmployeeOptionsResponse;
 import th.co.glr.hr.leave.LeaveResponses.LeaveListResponse;
+import th.co.glr.hr.leave.LeaveResponses.LeavePreviewResponse;
+import th.co.glr.hr.leave.LeaveResponses.LeaveReviewSummaryResponse;
 import th.co.glr.hr.leave.LeaveResponses.LeaveTypesResponse;
 
 @RestController
@@ -140,5 +150,46 @@ public class LeaveController {
             HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new LeaveDetailResponse(leaveService.cancel(id, request, user));
+    }
+
+    // Phase A0b dry-run: runs the identical gate chain #submit runs, against an uncommitted
+    // request, writing nothing -- see LeaveService#preview for the FULL vs QUICK depth and the
+    // nullable-dates contract.
+    @PostMapping("/preview")
+    LeavePreviewResponse preview(@Valid @RequestBody LeavePreviewRequest request, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new LeavePreviewResponse(leaveService.preview(request, user));
+    }
+
+    // Phase A0b: count of SUBMITTED requests THIS actor may act on -- see
+    // LeaveService#reviewSummary for why this is canReviewEmployee-shaped, not a role check.
+    @GetMapping("/review-summary")
+    LeaveReviewSummaryResponse reviewSummary(HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new LeaveReviewSummaryResponse(leaveService.reviewSummary(user));
+    }
+
+    // Phase A0b AUTHORIZATION CHANGE: leave attachments (e.g. a SICK medical certificate) were
+    // upload-only before this endpoint existed -- nothing could read one back. Modelled on
+    // SpecialMoneyController#downloadAttachment: authorize BEFORE serving, 404 (not 403) for an
+    // unknown id so this cannot be used to probe which ids exist. See
+    // LeaveService#resolveAttachmentForDownload for the access predicate.
+    @GetMapping("/attachments/{attachmentId}")
+    ResponseEntity<Resource> downloadAttachment(@PathVariable long attachmentId, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        LeaveAttachmentRepository.AttachmentLocation location =
+            leaveService.resolveAttachmentForDownload(attachmentId, user);
+        Resource resource = new FileSystemResource(Paths.get(location.storagePath()));
+        if (!resource.exists()) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์เอกสารนี้");
+        }
+        MediaType mediaType = location.mimeType() == null
+            ? MediaType.APPLICATION_OCTET_STREAM
+            : MediaType.parseMediaType(location.mimeType());
+        return ResponseEntity.ok()
+            .contentType(mediaType)
+            .header(HttpHeaders.CONTENT_DISPOSITION,
+                ContentDisposition.attachment().filename(location.fileName()).build().toString())
+            .body(resource);
     }
 }

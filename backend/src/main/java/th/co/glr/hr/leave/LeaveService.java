@@ -160,7 +160,9 @@ public class LeaveService {
             effectiveFrom,
             effectiveTo,
             parseStatus(requestedStatus)
-        ));
+        )).stream()
+            .map(dto -> withCanReviewFlag(dto, user))
+            .toList();
     }
 
     public List<LeaveEmployeeOption> employeeOptions(UserPrincipal user) {
@@ -228,7 +230,8 @@ public class LeaveService {
         String purposeCode = normalizePurposeCode(request.purposeCode());
         boolean requestedAsEmergency = Boolean.TRUE.equals(request.requestedAsEmergency());
 
-        BigDecimal totalDays = computeTotalDays(request, leaveType, isWorkingDay);
+        BigDecimal totalDays = computeTotalDays(
+            request.startDate(), request.endDate(), request.startTime(), request.endTime(), leaveType, isWorkingDay);
         int quotaYear = request.startDate().getYear();
         boolean hasAttachment = attachment != null && !attachment.isEmpty();
         // Leave -> payroll unpaid-day deduction (2026-07-23); §5 leave-rules-as-data (V116) added the
@@ -240,8 +243,11 @@ public class LeaveService {
         // PayrollCalculator#unpaidLeaveDeduction). See autoRejectNote for the full list of remaining
         // auto-reject reasons. See docs/agent-handoffs for the HR/legal sign-off caveat the
         // quota-based split still needs before it drives a real payroll run.
+        // evaluateDepartmentCoverage = true, always -- a real submission must evaluate the FULL gate
+        // chain, exactly as before Phase A0b added the QUICK-preview skip; see AutoRejectResult's
+        // Javadoc and #preview's Javadoc for the only caller that ever passes `false`.
         AutoRejectResult autoReject = autoRejectNote(leaveType, employeeId, request.startDate(), request.endDate(),
-            hasAttachment, totalDays, purposeCode, requestedAsEmergency);
+            hasAttachment, totalDays, purposeCode, requestedAsEmergency, true);
         // Phase A0a (structured rejection outcome): `blocking` carries the machine-readable
         // LeaveRuleCode + params alongside the same Thai sentence that used to be the ONLY thing
         // #autoRejectNote returned -- systemNote/status derive from it exactly as before, since
@@ -251,74 +257,19 @@ public class LeaveService {
         String systemNote = outcome == null ? null : outcome.messageTh();
         LeaveStatus status = systemNote == null ? LeaveStatus.APPROVED : LeaveStatus.AUTO_REJECTED;
 
-        // V118 cross-year quota fix (2026-08-02): a request's days are attributed per calendar year
-        // (almost always just one -- two only for a request spanning 31 Dec/1 Jan, e.g. a long
-        // MATERNITY request -- see LeaveQuotaYearSplit). Each year's paidDays/unpaidDays/remaining
-        // figures are computed INDEPENDENTLY against that year's own quota and paid_days_cap; see
-        // LeaveQuotaYearSplit's Javadoc for the deliberate consequence of that design (a boundary-
-        // straddling request can receive more total paid days than a same-year one would).
-        Map<Integer, BigDecimal> requestedDaysByYear = LeaveDayMath.totalDaysByYear(
-            request.startDate(), request.endDate(), totalDays, leaveType.dayCountBasis(), isWorkingDay);
-        List<LeaveQuotaYearSplit> quotaYearSplits = new ArrayList<>();
-        BigDecimal paidDays = BigDecimal.ZERO;
-        BigDecimal unpaidDays = BigDecimal.ZERO;
-        for (Map.Entry<Integer, BigDecimal> entry : requestedDaysByYear.entrySet()) {
-            int year = entry.getKey();
-            BigDecimal daysInYear = entry.getValue();
-            // §5.2/§5.3 pro-ration (V120): the quota itself may depend on the employee's completed
-            // service AS OF this request -- request.startDate() is used uniformly for every year in
-            // a cross-year split (VACATION/PERSONAL never span a year boundary in practice: VACATION
-            // has no max_consecutive_days cap but is a planned, short-notice-driven leave type in
-            // practice, and PERSONAL is hard-capped at 3 consecutive days), matching how the
-            // pre-existing min-service-months and PERSONAL-probation gates already evaluate tenure
-            // as of the request's start date, not "today".
-            BigDecimal remainingBeforeYear = remainingDays(employeeId, leaveType, year, request.startDate());
-            BigDecimal paidDaysYear;
-            BigDecimal unpaidDaysYear;
-            BigDecimal remainingAfterYear;
-            if (status == LeaveStatus.APPROVED) {
-                // paidDaysYear consumes from THIS YEAR's earliest working days first (chronological
-                // order, reset per year): the only ordering an aggregate paid/unpaid split can
-                // represent, matching the natural reading of "day N of this year onward went unpaid".
-                // See LeaveDayMath.
-                BigDecimal quotaBoundedPaidDaysYear = remainingBeforeYear.min(daysInYear).max(BigDecimal.ZERO);
-                // §5.4 MATERNITY-shaped rule (V116): paid_days_cap bounds how many of THOSE days are
-                // paid, independently of the quota -- e.g. a 44-day slice of a MATERNITY request
-                // still gets bounded by that same year's 45-day paid_days_cap.
-                paidDaysYear = boundByPaidCap(employeeId, leaveType, year, quotaBoundedPaidDaysYear);
-                unpaidDaysYear = daysInYear.subtract(paidDaysYear);
-                // review fix (V116), preserved per-year: remainingAfterYear tracks QUOTA consumption,
-                // not money paid -- derived from quotaBoundedPaidDaysYear, NOT from the
-                // paid-cap-narrowed `paidDaysYear`. See the original review-fix comment (git blame)
-                // for the full "98-45=53 lies about quota left" rationale, which applies identically
-                // per year here.
-                remainingAfterYear = remainingBeforeYear.subtract(quotaBoundedPaidDaysYear).max(BigDecimal.ZERO);
-            } else {
-                paidDaysYear = BigDecimal.ZERO;
-                unpaidDaysYear = BigDecimal.ZERO;
-                remainingAfterYear = remainingBeforeYear;
-            }
-            paidDays = paidDays.add(paidDaysYear);
-            unpaidDays = unpaidDays.add(unpaidDaysYear);
-            quotaYearSplits.add(new LeaveQuotaYearSplit(
-                year, daysInYear, paidDaysYear, unpaidDaysYear, remainingBeforeYear, remainingAfterYear));
-        }
-        // hr.leave_request.quota_remaining_before/after (the PARENT columns) reflect ONLY the
-        // request's nominal start year (quotaYear) -- see that table's V118 column comments. In the
-        // rare case the start year itself received zero requested days (e.g. a request starting on
-        // the last weekend of a year with no working days left in it before the boundary), fall back
-        // to that year's own remainingDays() so the parent still carries a real, correct-for-that-year
-        // figure rather than an arbitrary other year's.
-        BigDecimal remainingBefore = quotaYearSplits.stream()
-            .filter(split -> split.quotaYear() == quotaYear)
-            .map(LeaveQuotaYearSplit::quotaRemainingBefore)
-            .findFirst()
-            .orElseGet(() -> remainingDays(employeeId, leaveType, quotaYear, request.startDate()));
-        BigDecimal remainingAfter = quotaYearSplits.stream()
-            .filter(split -> split.quotaYear() == quotaYear)
-            .map(LeaveQuotaYearSplit::quotaRemainingAfter)
-            .findFirst()
-            .orElse(remainingBefore);
+        // V118 cross-year quota fix (2026-08-02): extracted (Phase A0b) to #computeQuotaSplit -- see
+        // that method's Javadoc, which carries this comment's full original text verbatim. #preview
+        // calls the SAME method for its own totalDays/paidDays/unpaidDays/quotaYearSplits response
+        // fields, so a previewed figure and the figure #submit would actually persist can never drift
+        // apart through two separate implementations of this arithmetic.
+        QuotaSplitResult quotaSplit = computeQuotaSplit(
+            employeeId, leaveType, request.startDate(), request.endDate(), totalDays, isWorkingDay,
+            quotaYear, status == LeaveStatus.APPROVED);
+        List<LeaveQuotaYearSplit> quotaYearSplits = quotaSplit.quotaYearSplits();
+        BigDecimal paidDays = quotaSplit.paidDays();
+        BigDecimal unpaidDays = quotaSplit.unpaidDays();
+        BigDecimal remainingBefore = quotaSplit.remainingBefore();
+        BigDecimal remainingAfter = quotaSplit.remainingAfter();
 
         ResolvedContact contact = resolveContact(employeeId, request);
         long id;
@@ -390,7 +341,127 @@ public class LeaveService {
         LeaveRequestDto created = requireRequest(id);
         auditService.record(user, "SUBMIT_LEAVE_REQUEST", "leave_request", id, null, created);
         notifyAfterSubmit(created, status);
-        return created;
+        return withCanReviewFlag(created, user);
+    }
+
+    /**
+     * POST /api/leave/preview (Phase A0b dry-run): runs the IDENTICAL gate chain {@link #submit}
+     * runs -- {@link #eligibilityRuleOutcome} (always) and, when dates are supplied, {@link
+     * #autoRejectNote} (the SAME method #submit calls, with the SAME arguments) -- against an
+     * UNCOMMITTED request, and writes nothing: no {@link LeaveRepository#create}, no attachment
+     * storage, no audit record, no notification. Exists because every rule {@link #autoRejectNote}
+     * computes was previously reachable only by actually submitting and receiving an AUTO_REJECTED
+     * row -- there was no way for the frontend to show a verdict before the employee commits.
+     *
+     * <p><b>{@code depth} (QUICK vs FULL):</b> QUICK skips {@link #departmentCoverageRuleOutcome} --
+     * it fans out over every active department colleague's schedule and leave spans (see that
+     * method's Javadoc for the query cost), and the UI is expected to call this endpoint on a
+     * debounce as the user types dates, which cannot afford that fan-out on every keystroke. This is
+     * NEVER silent: {@link LeavePreviewDto#coverageEvaluated} is {@code false} whenever the check did
+     * not run (QUICK depth, or a gate above it in {@link #autoRejectNote} already blocked first, or
+     * the pre-existing emergency-filing early return skipped it -- see {@link AutoRejectResult}'s
+     * Javadoc), so a caller can never mistake "not evaluated" for "evaluated, and clear". FULL runs
+     * everything, exactly as {@link #submit} does -- {@code depth == null} defaults to FULL, the safer
+     * reading for a caller that does not specify (a caller who wants the cheap QUICK read must ask
+     * for it explicitly).
+     *
+     * <p><b>Nullable {@code startDate}/{@code endDate}:</b> with no dates chosen yet, the caller still
+     * gets the eligibility verdict from the gates that need only the employee and type -- {@link
+     * #eligibilityRuleOutcome} (once-per-employment, resignation, hire-date, min-service, probation),
+     * evaluated against {@code LocalDate.now(clock)} (the same as-of-today stand-in {@link
+     * #balanceFor} already uses). Every date-dependent gate (max-consecutive-days, wedding cap,
+     * contiguous VACATION/PERSONAL, SICK certificate window, advance notice, department coverage) is
+     * NOT evaluated in this case -- {@link LeavePreviewDto#datesEvaluated} is {@code false} and
+     * {@code totalDays}/{@code paidDays}/{@code unpaidDays}/{@code quotaYearSplits} are all {@code
+     * null}/empty, so the response can never be misread as "approved" when most of the gate chain
+     * never ran. This is the explicit representation the brief for this phase asks for.
+     *
+     * <p>{@code hasAttachment}/{@code requestedAsEmergency}/{@code purposeCode} are the caller's OWN
+     * declarations, exactly as {@link #submit} treats them -- this endpoint cannot verify a file was
+     * actually chosen (there is no multipart upload here), so a caller that wants an accurate SICK
+     * preview must pass {@code hasAttachment} truthfully.
+     *
+     * <p>{@code counters} (emergencyFilingsRemaining/noCertificateOccasionsRemaining) are always
+     * computed, regardless of {@code depth} or whether dates were supplied -- both are scoped to the
+     * CURRENT calendar month (see {@link #previewCounters}), not to the request's own dates, so
+     * neither needs them.
+     */
+    public LeavePreviewDto preview(LeavePreviewRequest request, UserPrincipal user) {
+        if (request == null || request.leaveTypeCode() == null || request.leaveTypeCode().isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุประเภทการลา");
+        }
+        long employeeId = resolveTargetEmployee(request.employeeId(), user);
+        validateEmployee(employeeId);
+        LeaveTypeDto leaveType = requireLeaveType(request.leaveTypeCode());
+        String purposeCode = normalizePurposeCode(request.purposeCode());
+        boolean requestedAsEmergency = Boolean.TRUE.equals(request.requestedAsEmergency());
+        boolean hasAttachment = Boolean.TRUE.equals(request.hasAttachment());
+        LeavePreviewDepth depth = request.depth() == null ? LeavePreviewDepth.FULL : request.depth();
+
+        // Independent of dates/depth -- see #previewCounters's Javadoc.
+        LeavePreviewCounters counters = previewCounters(leaveType, employeeId);
+
+        LocalDate startDate = request.startDate();
+        LocalDate endDate = request.endDate();
+        if (startDate == null || endDate == null) {
+            // Nullable-dates case: only the categorical eligibility gates can be evaluated -- see
+            // this method's own Javadoc for why LocalDate.now(clock) stands in for the request's own
+            // (not-yet-chosen) startDate here, and why datesEvaluated/coverageEvaluated must both be
+            // explicit false rather than silently defaulting to an "approved" reading.
+            LeaveRuleOutcome eligibilityOutcome = eligibilityRuleOutcome(leaveType, employeeId, LocalDate.now(clock));
+            return new LeavePreviewDto(eligibilityOutcome, false, false, null, null, null, List.of(), counters);
+        }
+        validateDateRange(startDate, endDate);
+
+        Predicate<LocalDate> isWorkingDay = leaveRepository.workingDayPredicate(employeeId, startDate, endDate);
+        // No sub-day times in LeavePreviewRequest's shape -- always the whole-day path, the same path
+        // a legacy no-times submission always took. See #computeTotalDays's Javadoc.
+        BigDecimal totalDays = computeTotalDays(startDate, endDate, null, null, leaveType, isWorkingDay);
+        boolean evaluateDepartmentCoverage = depth == LeavePreviewDepth.FULL;
+        AutoRejectResult autoReject = autoRejectNote(leaveType, employeeId, startDate, endDate,
+            hasAttachment, totalDays, purposeCode, requestedAsEmergency, evaluateDepartmentCoverage);
+        LeaveRuleOutcome outcome = autoReject.blocking();
+        boolean approved = outcome == null;
+        int quotaYear = startDate.getYear();
+        QuotaSplitResult split = computeQuotaSplit(
+            employeeId, leaveType, startDate, endDate, totalDays, isWorkingDay, quotaYear, approved);
+
+        return new LeavePreviewDto(
+            outcome, true, autoReject.coverageEvaluated(),
+            totalDays, split.paidDays(), split.unpaidDays(), split.quotaYearSplits(), counters);
+    }
+
+    /**
+     * The counters {@link #autoRejectNote}'s SICK/PERSONAL branches already compute as locals
+     * ({@code occasionsUsed}/{@code usedThisMonth}) -- exposed here for {@link #preview} via the SAME
+     * two repository methods those branches call ({@link LeaveRepository#countNoCertificateRequestsInMonth}/
+     * {@link LeaveRepository#countEmergencyFilings}), without changing how either gate USES them.
+     * Always scoped to the CURRENT calendar month ({@code LocalDate.now(clock)}), independent of any
+     * dates the caller may have chosen -- so this is computable even for a dateless preview.
+     *
+     * <p>{@code 0} when the type carries no such allowance at all (a non-SICK type for the
+     * no-certificate tolerance, or any type but PERSONAL for the emergency exception) -- the same "no
+     * allowance" reading {@link #autoRejectNote} itself uses ({@code tolerance <= 0} rejects
+     * outright; {@code emergencyMonthlyAllowance() == null} never grants the exception).
+     */
+    private LeavePreviewCounters previewCounters(LeaveTypeDto leaveType, long employeeId) {
+        LocalDate today = LocalDate.now(clock);
+        int tolerance = leaveType.noCertificateMonthlyTolerance();
+        int noCertificateUsed = tolerance > 0
+            ? leaveRepository.countNoCertificateRequestsInMonth(
+                employeeId, leaveType.code(), today.withDayOfMonth(1),
+                today.withDayOfMonth(1).plusMonths(1).minusDays(1), ACTIVE_QUOTA_STATUSES)
+            : 0;
+        int noCertificateOccasionsRemaining = Math.max(0, tolerance - noCertificateUsed);
+
+        Integer emergencyAllowance = leaveType.emergencyMonthlyAllowance();
+        int emergencyUsed = emergencyAllowance != null
+            ? leaveRepository.countEmergencyFilings(employeeId, leaveType.code(), today, ACTIVE_QUOTA_STATUSES)
+            : 0;
+        int emergencyFilingsRemaining =
+            Math.max(0, (emergencyAllowance == null ? 0 : emergencyAllowance) - emergencyUsed);
+
+        return new LeavePreviewCounters(emergencyFilingsRemaining, noCertificateOccasionsRemaining);
     }
 
     @Transactional
@@ -413,7 +484,7 @@ public class LeaveService {
                 + " ได้รับการอนุมัติแล้ว เหลือโควตา " + formatDays(after.quotaRemainingAfter()) + " วัน",
             "/leave",
             true);
-        return after;
+        return withCanReviewFlag(after, user);
     }
 
     @Transactional
@@ -436,7 +507,7 @@ public class LeaveService {
                 + " ถูกปฏิเสธ: " + (after.reviewerNote() == null ? "กรุณาติดต่อ HR" : after.reviewerNote()),
             "/leave",
             true);
-        return after;
+        return withCanReviewFlag(after, user);
     }
 
     @Transactional
@@ -463,7 +534,7 @@ public class LeaveService {
         recordPayrollCorrectionIfNeeded(existing);
         LeaveRequestDto after = requireRequest(id);
         auditService.record(user, "CANCEL_LEAVE_REQUEST", "leave_request", id, existing, after);
-        return after;
+        return withCanReviewFlag(after, user);
     }
 
     /**
@@ -549,6 +620,13 @@ public class LeaveService {
         BigDecimal carriedIn = carryInDays(employeeId, type, year);
         BigDecimal quota = annualQuota.add(carriedIn);
         BigDecimal remaining = quota.subtract(approved).subtract(pending).max(BigDecimal.ZERO);
+        // Phase A0b carry-forward provenance: DERIVED, not queried -- see LeaveBalanceDto's Javadoc
+        // for why `year - 1`/31 Dec of `year` is the same relationship hr.leave_carryover's own
+        // earned_year/usable_year columns already encode (no migration, no new query). null for a
+        // type that does not carry forward at all -- "from which year" is meaningless there, not
+        // just zero.
+        Integer carriedInFromYear = type.carriesForward() ? year - 1 : null;
+        LocalDate carriedInExpiresOn = type.carriesForward() ? LocalDate.of(year, 12, 31) : null;
         return new LeaveBalanceDto(
             type.code(),
             type.nameTh(),
@@ -558,7 +636,9 @@ public class LeaveService {
             pending,
             remaining,
             type.requiresAttachment(),
-            carriedIn
+            carriedIn,
+            carriedInFromYear,
+            carriedInExpiresOn
         );
     }
 
@@ -567,6 +647,102 @@ public class LeaveService {
         BigDecimal quota = employeeAnnualQuota(leaveType, employeeId, asOf)
             .add(carryInDays(employeeId, leaveType, quotaYear));
         return quota.subtract(used).max(BigDecimal.ZERO);
+    }
+
+    /**
+     * V118 cross-year quota fix (2026-08-02), extracted verbatim in Phase A0b from {@link #submit}
+     * (previously inline there -- see git blame for the original comment this Javadoc preserves): a
+     * request's days are attributed per calendar year (almost always just one -- two only for a
+     * request spanning 31 Dec/1 Jan, e.g. a long MATERNITY request -- see {@link LeaveQuotaYearSplit}).
+     * Each year's paidDays/unpaidDays/remaining figures are computed INDEPENDENTLY against that
+     * year's own quota and paid_days_cap; see {@link LeaveQuotaYearSplit}'s Javadoc for the deliberate
+     * consequence of that design (a boundary-straddling request can receive more total paid days than
+     * a same-year one would).
+     *
+     * <p>{@code approved} stands in for the caller's {@code status == LeaveStatus.APPROVED} check --
+     * an unapproved (AUTO_REJECTED) request still gets a full per-year breakdown, just with every
+     * paidDaysYear/unpaidDaysYear pinned to ZERO (nothing was actually granted) and
+     * remainingAfterYear left equal to remainingBeforeYear (nothing was consumed).
+     *
+     * <p>Called from both {@link #submit} (persists the result) and {@link #preview} (a dry run --
+     * see that method's Javadoc) with identical arguments for identical inputs, so a previewed figure
+     * and the figure {@link #submit} would actually persist can never drift apart through two separate
+     * copies of this arithmetic.
+     */
+    private QuotaSplitResult computeQuotaSplit(
+            long employeeId, LeaveTypeDto leaveType, LocalDate startDate, LocalDate endDate,
+            BigDecimal totalDays, Predicate<LocalDate> isWorkingDay, int quotaYear, boolean approved) {
+        Map<Integer, BigDecimal> requestedDaysByYear = LeaveDayMath.totalDaysByYear(
+            startDate, endDate, totalDays, leaveType.dayCountBasis(), isWorkingDay);
+        List<LeaveQuotaYearSplit> quotaYearSplits = new ArrayList<>();
+        BigDecimal paidDays = BigDecimal.ZERO;
+        BigDecimal unpaidDays = BigDecimal.ZERO;
+        for (Map.Entry<Integer, BigDecimal> entry : requestedDaysByYear.entrySet()) {
+            int year = entry.getKey();
+            BigDecimal daysInYear = entry.getValue();
+            // §5.2/§5.3 pro-ration (V120): the quota itself may depend on the employee's completed
+            // service AS OF this request -- startDate is used uniformly for every year in a
+            // cross-year split (VACATION/PERSONAL never span a year boundary in practice: VACATION
+            // has no max_consecutive_days cap but is a planned, short-notice-driven leave type in
+            // practice, and PERSONAL is hard-capped at 3 consecutive days), matching how the
+            // pre-existing min-service-months and PERSONAL-probation gates already evaluate tenure
+            // as of the request's start date, not "today".
+            BigDecimal remainingBeforeYear = remainingDays(employeeId, leaveType, year, startDate);
+            BigDecimal paidDaysYear;
+            BigDecimal unpaidDaysYear;
+            BigDecimal remainingAfterYear;
+            if (approved) {
+                // paidDaysYear consumes from THIS YEAR's earliest working days first (chronological
+                // order, reset per year): the only ordering an aggregate paid/unpaid split can
+                // represent, matching the natural reading of "day N of this year onward went unpaid".
+                // See LeaveDayMath.
+                BigDecimal quotaBoundedPaidDaysYear = remainingBeforeYear.min(daysInYear).max(BigDecimal.ZERO);
+                // §5.4 MATERNITY-shaped rule (V116): paid_days_cap bounds how many of THOSE days are
+                // paid, independently of the quota -- e.g. a 44-day slice of a MATERNITY request
+                // still gets bounded by that same year's 45-day paid_days_cap.
+                paidDaysYear = boundByPaidCap(employeeId, leaveType, year, quotaBoundedPaidDaysYear);
+                unpaidDaysYear = daysInYear.subtract(paidDaysYear);
+                // review fix (V116), preserved per-year: remainingAfterYear tracks QUOTA consumption,
+                // not money paid -- derived from quotaBoundedPaidDaysYear, NOT from the
+                // paid-cap-narrowed `paidDaysYear`. See the original review-fix comment (git blame)
+                // for the full "98-45=53 lies about quota left" rationale, which applies identically
+                // per year here.
+                remainingAfterYear = remainingBeforeYear.subtract(quotaBoundedPaidDaysYear).max(BigDecimal.ZERO);
+            } else {
+                paidDaysYear = BigDecimal.ZERO;
+                unpaidDaysYear = BigDecimal.ZERO;
+                remainingAfterYear = remainingBeforeYear;
+            }
+            paidDays = paidDays.add(paidDaysYear);
+            unpaidDays = unpaidDays.add(unpaidDaysYear);
+            quotaYearSplits.add(new LeaveQuotaYearSplit(
+                year, daysInYear, paidDaysYear, unpaidDaysYear, remainingBeforeYear, remainingAfterYear));
+        }
+        // hr.leave_request.quota_remaining_before/after (the PARENT columns) reflect ONLY the
+        // request's nominal start year (quotaYear) -- see that table's V118 column comments. In the
+        // rare case the start year itself received zero requested days (e.g. a request starting on
+        // the last weekend of a year with no working days left in it before the boundary), fall back
+        // to that year's own remainingDays() so the parent still carries a real, correct-for-that-year
+        // figure rather than an arbitrary other year's.
+        BigDecimal remainingBefore = quotaYearSplits.stream()
+            .filter(split -> split.quotaYear() == quotaYear)
+            .map(LeaveQuotaYearSplit::quotaRemainingBefore)
+            .findFirst()
+            .orElseGet(() -> remainingDays(employeeId, leaveType, quotaYear, startDate));
+        BigDecimal remainingAfter = quotaYearSplits.stream()
+            .filter(split -> split.quotaYear() == quotaYear)
+            .map(LeaveQuotaYearSplit::quotaRemainingAfter)
+            .findFirst()
+            .orElse(remainingBefore);
+        return new QuotaSplitResult(paidDays, unpaidDays, quotaYearSplits, remainingBefore, remainingAfter);
+    }
+
+    private record QuotaSplitResult(
+        BigDecimal paidDays,
+        BigDecimal unpaidDays,
+        List<LeaveQuotaYearSplit> quotaYearSplits,
+        BigDecimal remainingBefore,
+        BigDecimal remainingAfter) {
     }
 
     /**
@@ -927,12 +1103,20 @@ public class LeaveService {
      * Thai sentence) -- see that record's Javadoc. This is a pure representation change: every call
      * site below still returns for the exact same reason, under the exact same condition, in the
      * exact same order as before.
+     *
+     * <p>Phase A0b: {@code coverageEvaluated} records whether {@link #departmentCoverageRuleOutcome}
+     * actually RAN for this call -- {@code false} for every return that happens before reaching it
+     * (every gate above it in {@link #autoRejectNote}, including the pre-existing emergency-filing
+     * early-return at line ~1451, which already skipped department coverage entirely before this
+     * field existed -- see that call site's own comment) or when the caller passed {@code
+     * evaluateDepartmentCoverage = false} (QUICK-depth {@link #preview}); {@code true} only when the
+     * method reached and executed {@link #departmentCoverageRuleOutcome}. {@link #submit} always
+     * passes {@code evaluateDepartmentCoverage = true}, so this flag is {@code true} for every
+     * submission that reaches that point today -- unchanged observable behaviour for submit.
      */
-    private record AutoRejectResult(LeaveRuleOutcome blocking, boolean emergencyFilingApplied) {
-        private static final AutoRejectResult APPROVED = new AutoRejectResult(null, false);
-
+    private record AutoRejectResult(LeaveRuleOutcome blocking, boolean emergencyFilingApplied, boolean coverageEvaluated) {
         private static AutoRejectResult reject(LeaveRuleOutcome outcome) {
-            return new AutoRejectResult(outcome, false);
+            return new AutoRejectResult(outcome, false, false);
         }
     }
 
@@ -1161,6 +1345,89 @@ public class LeaveService {
     }
 
     /**
+     * Phase A0b dry-run extraction: the subset of {@link #autoRejectNote}'s checks that depend only
+     * on the employee and leave type -- plus, for two of them, a single {@code referenceDate} -- not
+     * on a request's actual date RANGE. Bundles, in the SAME order they always ran inline in {@link
+     * #autoRejectNote}: once-per-employment, §5.3.4 resignation, hire-date-missing-on-a-prorated-type,
+     * minimum service months, and PERSONAL probation. Every line of logic below is moved verbatim
+     * from {@link #autoRejectNote} (Phase A0b extraction, not a rewrite) -- {@link #autoRejectNote}
+     * calls this SAME method, with {@code referenceDate == startDate}, exactly where these five checks
+     * used to sit inline, so a submission's decisions, thresholds and evaluation order are byte-for-
+     * byte unchanged by this extraction.
+     *
+     * <p>Exists so {@link #preview} can evaluate these five when the caller has not chosen dates yet
+     * (see {@code LeavePreviewRequest}'s nullable startDate/endDate) without a second, drift-prone
+     * copy of the same decisions -- the brief this phase implements is explicit that the rules must
+     * not be reimplemented, only extracted. For that dateless case, {@link #preview} passes {@code
+     * LocalDate.now(clock)} as {@code referenceDate} -- the SAME "as-of-today" stand-in {@link
+     * #balanceFor} already uses when a query has no request date of its own (see that method's
+     * Javadoc on {@code annualQuota}), not a new convention invented for this method.
+     *
+     * @return the first blocking outcome among these five, or {@code null} if none applies.
+     */
+    private LeaveRuleOutcome eligibilityRuleOutcome(LeaveTypeDto leaveType, long employeeId, LocalDate referenceDate) {
+        // §5.6 once-per-employment (ORDINATION today). Java-level check; ux_leave_once_per_employment
+        // (V116) is the race-proof DB backstop -- see the DuplicateKeyException catch in #submit.
+        if (leaveType.oncePerEmployment() && leaveRepository.hasOutstandingOrGrantedRequest(employeeId, leaveType.code())) {
+            return LeaveRuleOutcome.of(LeaveRuleCode.ONCE_PER_EMPLOYMENT,
+                Map.of("leaveTypeNameTh", leaveType.nameTh()));
+        }
+
+        // §5.3.4 post-resignation gate (relational rules, 2026-08). See #resignationRuleOutcome's
+        // Javadoc for what hr.resignation actually contains and the handover-escape-hatch decision.
+        LeaveRuleOutcome resignationOutcome = resignationRuleOutcome(leaveType, employeeId);
+        if (resignationOutcome != null) {
+            return resignationOutcome;
+        }
+
+        // §5.2/§5.3 pro-ration (V120): #employeeAnnualQuota cannot compute a quota without hire_date
+        // for a prorated_first_year type (VACATION, PERSONAL) -- fails CLOSED here, the same
+        // direction as every other eligibility gate in this method, rather than letting
+        // #employeeAnnualQuota silently return ZERO and produce a confusing all-unpaid approval with
+        // no explanation. Runs before minServiceMonths below (VACATION's own min_service_months is
+        // now 0 post-V120, so that check would never catch this) and before PERSONAL's probation
+        // gate (which has its own, narrower NULL-hire_date check further down -- unreachable in
+        // practice once this fires first, kept as a defensive fallback, not because it needs to run).
+        if (leaveType.proratedFirstYear() && leaveRepository.findHireDate(employeeId).isEmpty()) {
+            return LeaveRuleOutcome.of(LeaveRuleCode.HIRE_DATE_MISSING_PRORATED,
+                Map.of("leaveTypeNameTh", leaveType.nameTh()));
+        }
+
+        // §5.3 minimum SERVICE DURATION (months since hr.employee.hire_date). This is genuinely
+        // different from PERSONAL's "passed probation" gate just below -- VACATION/ORDINATION state
+        // an N-year/month tenure requirement, not a probation-length one -- which is why PERSONAL's
+        // min_service_months is 0 (seeded, V116) and does not reach this branch at all; see that
+        // migration's PERSONAL comment. DECISION: a NULL hire_date does NOT silently pass -- eligibility
+        // cannot be verified, so the request is rejected with an actionable message, the same
+        // fail-closed direction as every other eligibility gate in this method.
+        if (leaveType.minServiceMonths() > 0) {
+            Optional<LocalDate> hireDate = leaveRepository.findHireDate(employeeId);
+            if (hireDate.isEmpty()) {
+                return LeaveRuleOutcome.of(LeaveRuleCode.HIRE_DATE_MISSING_MIN_SERVICE,
+                    Map.of("leaveTypeNameTh", leaveType.nameTh()));
+            }
+            long completedMonths = ChronoUnit.MONTHS.between(hireDate.get(), referenceDate);
+            if (completedMonths < leaveType.minServiceMonths()) {
+                return LeaveRuleOutcome.of(LeaveRuleCode.MIN_SERVICE_MONTHS, Map.of(
+                    "leaveTypeNameTh", leaveType.nameTh(),
+                    "minServiceMonths", String.valueOf(leaveType.minServiceMonths())));
+            }
+        }
+
+        // §5.2 PERSONAL "passed probation" gate (review fix, V116): hardcoded to PERSONAL's code,
+        // the same way the SICK certificate check below is hardcoded to SICK's code -- neither is a
+        // per-type column the way quota/notice/consecutive-days are. See
+        // #personalProbationRuleOutcome's Javadoc for the full rationale and decisions.
+        if ("PERSONAL".equals(leaveType.code())) {
+            LeaveRuleOutcome probationOutcome = personalProbationRuleOutcome(leaveType, employeeId, referenceDate);
+            if (probationOutcome != null) {
+                return probationOutcome;
+            }
+        }
+        return null;
+    }
+
+    /**
      * §5 leave-rules-as-data (V116, extended V120/V124/V125, relational rules 2026-08). Checks run in
      * this order -- categorical eligibility first (once-per-employment, §5.3.4 post-resignation,
      * missing hire_date on a pro-rated type, minimum service, PERSONAL probation, the first-year
@@ -1196,64 +1463,18 @@ public class LeaveService {
      * has had a chance to give a more specific reason first.
      */
     private AutoRejectResult autoRejectNote(LeaveTypeDto leaveType, long employeeId, LocalDate startDate, LocalDate endDate,
-            boolean hasAttachment, BigDecimal totalDays, String purposeCode, boolean requestedAsEmergency) {
-        // §5.6 once-per-employment (ORDINATION today). Java-level check; ux_leave_once_per_employment
-        // (V116) is the race-proof DB backstop -- see the DuplicateKeyException catch in #submit.
-        if (leaveType.oncePerEmployment() && leaveRepository.hasOutstandingOrGrantedRequest(employeeId, leaveType.code())) {
-            return AutoRejectResult.reject(LeaveRuleOutcome.of(LeaveRuleCode.ONCE_PER_EMPLOYMENT,
-                Map.of("leaveTypeNameTh", leaveType.nameTh())));
-        }
-
-        // §5.3.4 post-resignation gate (relational rules, 2026-08). See #resignationRuleOutcome's
-        // Javadoc for what hr.resignation actually contains and the handover-escape-hatch decision.
-        LeaveRuleOutcome resignationOutcome = resignationRuleOutcome(leaveType, employeeId);
-        if (resignationOutcome != null) {
-            return AutoRejectResult.reject(resignationOutcome);
-        }
-
-        // §5.2/§5.3 pro-ration (V120): #employeeAnnualQuota cannot compute a quota without hire_date
-        // for a prorated_first_year type (VACATION, PERSONAL) -- fails CLOSED here, the same
-        // direction as every other eligibility gate in this method, rather than letting
-        // #employeeAnnualQuota silently return ZERO and produce a confusing all-unpaid approval with
-        // no explanation. Runs before minServiceMonths below (VACATION's own min_service_months is
-        // now 0 post-V120, so that check would never catch this) and before PERSONAL's probation
-        // gate (which has its own, narrower NULL-hire_date check further down -- unreachable in
-        // practice once this fires first, kept as a defensive fallback, not because it needs to run).
-        if (leaveType.proratedFirstYear() && leaveRepository.findHireDate(employeeId).isEmpty()) {
-            return AutoRejectResult.reject(LeaveRuleOutcome.of(LeaveRuleCode.HIRE_DATE_MISSING_PRORATED,
-                Map.of("leaveTypeNameTh", leaveType.nameTh())));
-        }
-
-        // §5.3 minimum SERVICE DURATION (months since hr.employee.hire_date). This is genuinely
-        // different from PERSONAL's "passed probation" gate just below -- VACATION/ORDINATION state
-        // an N-year/month tenure requirement, not a probation-length one -- which is why PERSONAL's
-        // min_service_months is 0 (seeded, V116) and does not reach this branch at all; see that
-        // migration's PERSONAL comment. DECISION: a NULL hire_date does NOT silently pass -- eligibility
-        // cannot be verified, so the request is rejected with an actionable message, the same
-        // fail-closed direction as every other eligibility gate in this method.
-        if (leaveType.minServiceMonths() > 0) {
-            Optional<LocalDate> hireDate = leaveRepository.findHireDate(employeeId);
-            if (hireDate.isEmpty()) {
-                return AutoRejectResult.reject(LeaveRuleOutcome.of(LeaveRuleCode.HIRE_DATE_MISSING_MIN_SERVICE,
-                    Map.of("leaveTypeNameTh", leaveType.nameTh())));
-            }
-            long completedMonths = ChronoUnit.MONTHS.between(hireDate.get(), startDate);
-            if (completedMonths < leaveType.minServiceMonths()) {
-                return AutoRejectResult.reject(LeaveRuleOutcome.of(LeaveRuleCode.MIN_SERVICE_MONTHS, Map.of(
-                    "leaveTypeNameTh", leaveType.nameTh(),
-                    "minServiceMonths", String.valueOf(leaveType.minServiceMonths()))));
-            }
-        }
-
-        // §5.2 PERSONAL "passed probation" gate (review fix, V116): hardcoded to PERSONAL's code,
-        // the same way the SICK certificate check below is hardcoded to SICK's code -- neither is a
-        // per-type column the way quota/notice/consecutive-days are. See
-        // #personalProbationRuleOutcome's Javadoc for the full rationale and decisions.
-        if ("PERSONAL".equals(leaveType.code())) {
-            LeaveRuleOutcome probationOutcome = personalProbationRuleOutcome(leaveType, employeeId, startDate);
-            if (probationOutcome != null) {
-                return AutoRejectResult.reject(probationOutcome);
-            }
+            boolean hasAttachment, BigDecimal totalDays, String purposeCode, boolean requestedAsEmergency,
+            boolean evaluateDepartmentCoverage) {
+        // Phase A0b: the categorical eligibility gates (once-per-employment, resignation,
+        // hire-date-missing-prorated, min-service-months, PERSONAL probation) are extracted to
+        // #eligibilityRuleOutcome -- called here with the SAME arguments (leaveType, employeeId,
+        // startDate), in the SAME order, as they ran inline before this extraction. This is a pure
+        // relocation, not a behaviour change: see that method's Javadoc for why it exists (LeaveService
+        // #preview needs to run exactly these checks against LocalDate.now(clock) when the caller has
+        // not chosen dates yet, without a second, drift-prone copy of the same decisions).
+        LeaveRuleOutcome eligibilityOutcome = eligibilityRuleOutcome(leaveType, employeeId, startDate);
+        if (eligibilityOutcome != null) {
+            return AutoRejectResult.reject(eligibilityOutcome);
         }
 
         // §5.2 first-year total-days cap (V120, defect 3). SEPARATE rule from pro-ration and from
@@ -1448,7 +1669,14 @@ public class LeaveService {
                     int usedThisMonth = leaveRepository.countEmergencyFilings(
                         employeeId, leaveType.code(), startDate, ACTIVE_QUOTA_STATUSES);
                     if (usedThisMonth < leaveType.emergencyMonthlyAllowance()) {
-                        return new AutoRejectResult(null, true);
+                        // PRE-EXISTING quirk, unchanged by Phase A0b: this return happens BEFORE the
+                        // department-coverage block below, so an emergency-approved request always
+                        // skips that gate entirely, regardless of `evaluateDepartmentCoverage` --
+                        // coverageEvaluated is therefore `false` here, accurately reflecting that
+                        // #departmentCoverageRuleOutcome never ran for this outcome. This is a
+                        // behaviour this extraction inherited, not one it introduces; flagged in the
+                        // PR body rather than silently "fixed".
+                        return new AutoRejectResult(null, true, false);
                     }
                     return AutoRejectResult.reject(LeaveRuleOutcome.of(LeaveRuleCode.EMERGENCY_TOLERANCE_EXHAUSTED,
                         Map.of("allowance", String.valueOf(leaveType.emergencyMonthlyAllowance()))));
@@ -1468,11 +1696,20 @@ public class LeaveService {
         // otherwise have fired first. See #departmentCoverageRuleOutcome's Javadoc for the owner's
         // relaxation of the announcement's text, the department-size floor, and the schedule-awareness
         // this depends on.
-        LeaveRuleOutcome departmentCoverageOutcome = departmentCoverageRuleOutcome(employeeId, startDate, endDate);
+        //
+        // Phase A0b: gated on `evaluateDepartmentCoverage` -- #submit always passes `true` (identical
+        // behaviour to before this parameter existed), so this branch is unconditionally reached for
+        // every real submission, unchanged. QUICK-depth LeaveService#preview passes `false` instead,
+        // to skip this check's fan-out over every active department colleague's schedule/leave spans
+        // -- see #preview's Javadoc for why (debounced-as-the-user-types calls cannot afford it). The
+        // check's own condition is untouched; only whether it runs at all is now caller-controlled.
+        LeaveRuleOutcome departmentCoverageOutcome = evaluateDepartmentCoverage
+            ? departmentCoverageRuleOutcome(employeeId, startDate, endDate)
+            : null;
         if (departmentCoverageOutcome != null) {
-            return AutoRejectResult.reject(departmentCoverageOutcome);
+            return new AutoRejectResult(departmentCoverageOutcome, false, true);
         }
-        return AutoRejectResult.APPROVED;
+        return new AutoRejectResult(null, false, evaluateDepartmentCoverage);
     }
 
     private void notifyAfterSubmit(LeaveRequestDto request, LeaveStatus status) {
@@ -1613,16 +1850,23 @@ public class LeaveService {
      * {@link #submit}, only read by the WORKING_DAYS branch below (via {@link #workingDaysBetween})
      * -- the CALENDAR_DAYS (MATERNITY) branch never touches it, unchanged from before this predicate
      * existed.
+     *
+     * <p>Phase A0b: takes {@code startDate}/{@code endDate}/{@code startTime}/{@code endTime}
+     * directly rather than a {@code SubmitLeaveRequest} (a pure parameter-extraction refactor, same
+     * body, same behaviour for every #submit call site below) so {@link #preview} -- which has no
+     * sub-day times in its request shape at all -- can call it too, passing {@code null} for both
+     * times to take the same whole-day path a legacy no-times submission always took.
      */
     private BigDecimal computeTotalDays(
-            SubmitLeaveRequest request, LeaveTypeDto leaveType, Predicate<LocalDate> isWorkingDay) {
-        if (request.startTime() == null) {
+            LocalDate startDate, LocalDate endDate, LocalTime startTime, LocalTime endTime,
+            LeaveTypeDto leaveType, Predicate<LocalDate> isWorkingDay) {
+        if (startTime == null) {
             if (leaveType.dayCountBasis() == LeaveDayCountBasis.CALENDAR_DAYS) {
-                return BigDecimal.valueOf(LeaveDayMath.countCalendarDays(request.startDate(), request.endDate()));
+                return BigDecimal.valueOf(LeaveDayMath.countCalendarDays(startDate, endDate));
             }
-            return workingDaysBetween(request.startDate(), request.endDate(), isWorkingDay);
+            return workingDaysBetween(startDate, endDate, isWorkingDay);
         }
-        long minutes = Duration.between(request.startTime(), request.endTime()).toMinutes();
+        long minutes = Duration.between(startTime, endTime).toMinutes();
         BigDecimal fraction = BigDecimal.valueOf(minutes)
             .divide(STANDARD_WORKDAY_MINUTES, 2, RoundingMode.HALF_UP);
         return fraction.min(FULL_DAY);
@@ -1715,6 +1959,115 @@ public class LeaveService {
                 && access.managerEmployeeId() != null
                 && access.managerEmployeeId() == actorEmployeeId)
             .orElse(false);
+    }
+
+    /**
+     * GET /api/leave/review-summary phase (Phase A0b): stamps {@code canReview} onto {@code dto} for
+     * THIS {@code user} -- a capability flag ("this actor could act on this employee's requests"),
+     * computed from the SAME decision {@link #approve}/{@link #reject} already gate on ({@link
+     * #canReviewAll}(user) OR {@link #isDirectManager}), not a role check: {@code REVIEW_ALL_ROLES}
+     * is {@code {hr}} only, but any ฝ่าย manager may review their own direct reports too. Exposed so
+     * the frontend stops inferring "can I approve this" from the actor's own role alone, which would
+     * under-report for a department manager. It says nothing about whether THIS PARTICULAR request is
+     * actionable right now -- {@link #approve}/{@link #reject} still enforce {@code status ==
+     * SUBMITTED} server-side regardless of this flag, and callers should too.
+     *
+     * <p>{@code user.employeeId()} is read directly (not via {@link #requireEmployeeId}) so this can
+     * never turn an otherwise-successful {@link #list} call into a 400 for an account with no bound
+     * employee record -- such an actor simply can never be a direct manager; {@link #canReviewAll}
+     * is still evaluated normally for them.
+     *
+     * <p>Records are immutable, so this is a full reconstruction with one field changed -- {@code
+     * dto}'s own {@code canReview()} (always {@code false}, the placeholder {@link
+     * LeaveRepository#mapRequest} writes -- see its comment) is discarded in favour of the value
+     * computed here.
+     */
+    private LeaveRequestDto withCanReviewFlag(LeaveRequestDto dto, UserPrincipal user) {
+        boolean canReview = canReviewAll(user)
+            || (user.employeeId() != null && isDirectManager(dto.employeeId(), user.employeeId()));
+        return new LeaveRequestDto(
+            dto.id(), dto.employeeId(), dto.employeeCode(), dto.employeeName(),
+            dto.leaveTypeCode(), dto.leaveTypeNameTh(), dto.leaveTypeNameEn(),
+            dto.startDate(), dto.endDate(), dto.startTime(), dto.endTime(),
+            dto.totalDays(), dto.paidDays(), dto.unpaidDays(), dto.quotaYear(),
+            dto.reason(), dto.attachmentId(), dto.attachmentFileName(), dto.status(),
+            dto.quotaRemainingBefore(), dto.quotaRemainingAfter(), dto.systemNote(),
+            dto.requestedById(), dto.requestedByName(), dto.requestedAt(),
+            dto.reviewedById(), dto.reviewedByName(), dto.reviewedAt(), dto.reviewerNote(),
+            dto.cancelledAt(), dto.managerEmployeeId(), dto.managerName(),
+            dto.createdAt(), dto.updatedAt(),
+            dto.contactHouseNo(), dto.contactSubdistrict(), dto.contactDistrict(),
+            dto.contactProvince(), dto.contactPhone(), dto.purposeCode(), dto.emergencyFiling(),
+            dto.systemNoteCode(), dto.systemNoteParams(),
+            canReview);
+    }
+
+    /**
+     * GET /api/leave/review-summary (Phase A0b). Returns TWO independent signals -- see {@link
+     * LeaveReviewSummaryDto}'s Javadoc for the full rationale, which this method's design refinement
+     * (added after the frontend's phase A1 started consuming it) exists to satisfy:
+     *
+     * <ul>
+     *   <li>{@code isReviewer}: can this actor review ANYONE at all, independent of whether anything
+     *       is SUBMITTED right now. {@code true} for HR/CEO ({@link #canReviewAll}) or when {@link
+     *       LeaveRepository#hasActiveDirectReports} finds at least one active direct report -- the
+     *       SAME {@link #canReviewEmployee}/{@link #isDirectManager} shape {@link #approve}/{@link
+     *       #reject}/{@link #withCanReviewFlag} already use, NOT a role check.
+     *   <li>{@code pendingCount}: the count of SUBMITTED requests they may act on right now, via
+     *       {@link LeaveRepository#countReviewableSubmitted}. Skipped entirely (returned as 0,
+     *       without an extra query) when {@code isReviewer} is {@code false} -- {@code
+     *       countReviewableSubmitted} would compute 0 for a non-reviewer anyway (it filters on the
+     *       identical active-direct-report condition), so this is a pure optimization, not a
+     *       different decision.
+     * </ul>
+     *
+     * <p>A manager whose whole team happens to be caught up (zero SUBMITTED rows right now) still
+     * gets {@code isReviewer = true} -- the motivating case a single "reviewable count" collapsed
+     * into one field would have gotten wrong: it would have been indistinguishable from that actor
+     * having no review rights at all, hiding the review queue's tab/entry point for exactly the
+     * managers who use it, and making it flicker in and out of existence as requests come and go.
+     */
+    public LeaveReviewSummaryDto reviewSummary(UserPrincipal user) {
+        if (canReviewAll(user)) {
+            return new LeaveReviewSummaryDto(true, leaveRepository.countReviewableSubmitted(null, true));
+        }
+        long actorEmployeeId = requireEmployeeId(user);
+        boolean isReviewer = leaveRepository.hasActiveDirectReports(actorEmployeeId);
+        int pendingCount = isReviewer ? leaveRepository.countReviewableSubmitted(actorEmployeeId, false) : 0;
+        return new LeaveReviewSummaryDto(isReviewer, pendingCount);
+    }
+
+    /**
+     * GET /api/leave/attachments/{attachmentId} (Phase A0b): resolves an attachment to its storage
+     * location, authorizing BEFORE returning it -- mirrors {@code
+     * SpecialMoneyService#resolveAttachmentForDownload} (the pattern this phase's brief names to
+     * copy). An unknown/nonexistent attachment id returns 404, never 403, so this endpoint cannot be
+     * used to probe which ids exist -- the SAME 404-before-authz-check ordering
+     * SpecialMoneyService's version uses.
+     *
+     * <p>AUTHORIZATION CHANGE (stated per CLAUDE.md's rule for sales/CRM-adjacent authz work, though
+     * leave is outside that section -- the same discipline applies to any new authz surface): before
+     * this endpoint existed, a leave attachment (e.g. a SICK medical certificate) was upload-only --
+     * nothing could read it back. The access predicate is {@link #canAccessEmployee} (self or direct
+     * manager) OR {@link #canReviewEmployee} (HR/CEO or direct manager) -- the union is: the employee
+     * themselves, their own direct manager, or HR/CEO. A same-department peer who is not the manager,
+     * an unrelated employee, or a DIFFERENT employee's manager are all refused. This is a NEW
+     * authorization decision, not inferred from {@code mockApi.js} -- see the real-Postgres
+     * integration test ({@code LeaveAttachmentDownloadAuthzIntegrationTest}) this phase ships
+     * alongside it, written wrong-way-round (asserting what each caller CANNOT reach).
+     */
+    public LeaveAttachmentRepository.AttachmentLocation resolveAttachmentForDownload(long attachmentId, UserPrincipal user) {
+        LeaveAttachmentRepository.AttachmentLocation location = leaveAttachments.findAttachmentLocation(attachmentId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบเอกสารนี้"));
+        LeaveRequestDto owningRequest = leaveRepository.findById(location.leaveRequestId())
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบเอกสารนี้"));
+        long actorEmployeeId = requireEmployeeId(user);
+        boolean allowed = canAccessEmployee(actorEmployeeId, owningRequest.employeeId())
+            || canReviewEmployee(owningRequest.employeeId(), actorEmployeeId, user);
+        if (!allowed) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        return location;
     }
 
     private LeaveRequestDto requireRequest(long id) {

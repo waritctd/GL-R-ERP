@@ -1017,6 +1017,60 @@ public class LeaveRepository {
         return jdbc.query(sql.toString(), params, this::mapRequest);
     }
 
+    /**
+     * GET /api/leave/review-summary (Phase A0b): whether {@code employeeId} is the {@code
+     * reports_to_employee_id} of at least one ACTIVE employee -- i.e. whether they are a reviewer AT
+     * ALL, independent of whether anything is currently SUBMITTED. This is the filter-INDEPENDENT
+     * half of {@code LeaveReviewSummaryDto} ({@code isReviewer}); {@link #countReviewableSubmitted}
+     * below is the filter-DEPENDENT half ({@code pendingCount}). Deliberately separate queries, not
+     * "count > 0 implies reviewer" reasoning from the pending count -- a manager whose whole team is
+     * currently caught up (zero SUBMITTED rows) must still read as a reviewer, or the frontend cannot
+     * tell "empty queue" from "no permission" (see {@code LeaveService#reviewSummary}'s Javadoc).
+     */
+    public boolean hasActiveDirectReports(long employeeId) {
+        Boolean exists = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                  FROM hr.employee
+                 WHERE reports_to_employee_id = :employeeId
+                   AND is_active = TRUE
+            )
+            """, Map.of("employeeId", employeeId), Boolean.class);
+        return Boolean.TRUE.equals(exists);
+    }
+
+    /**
+     * GET /api/leave/review-summary (Phase A0b): count of SUBMITTED requests {@code
+     * managerEmployeeId} may actually act on -- mirrors {@code LeaveService#canReviewEmployee}'s OWN
+     * decision ({@code canReviewAll(user)} OR direct-manager), NOT a role check: {@code
+     * REVIEW_ALL_ROLES} is {@code {hr}} only, but any ฝ่าย manager may review their own direct
+     * reports too (see {@code LeaveService#isDirectManager}). {@code includeAll = true} bypasses the
+     * manager filter entirely (HR/CEO see every SUBMITTED request, {@code managerEmployeeId} ignored
+     * -- pass {@code null}); otherwise {@code managerEmployeeId} is required and matches ONLY ACTIVE
+     * direct reports ({@code e.is_active = TRUE AND e.reports_to_employee_id = :managerEmployeeId}),
+     * the SAME two conditions {@code LeaveService#isDirectManager} checks via {@link
+     * #findEmployeeAccess}. Deliberately does NOT also match {@code lr.employee_id =
+     * :managerEmployeeId} (the manager's OWN submitted requests) -- a manager cannot review their own
+     * leave, and {@code isDirectManager} never returns true for one's own employeeId either (it would
+     * require the employee to be their own manager), so including that clause here would silently
+     * inflate the count beyond what {@code canReviewEmployee} actually grants.
+     */
+    public int countReviewableSubmitted(Long managerEmployeeId, boolean includeAll) {
+        StringBuilder sql = new StringBuilder("""
+            SELECT count(*)
+              FROM hr.leave_request lr
+              JOIN hr.employee e ON e.employee_id = lr.employee_id
+             WHERE lr.status = 'SUBMITTED'
+            """);
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        if (!includeAll) {
+            sql.append(" AND e.reports_to_employee_id = :managerEmployeeId AND e.is_active = TRUE");
+            params.addValue("managerEmployeeId", managerEmployeeId);
+        }
+        Integer count = jdbc.queryForObject(sql.toString(), params, Integer.class);
+        return count == null ? 0 : count;
+    }
+
     public int approve(long id, Long reviewedById, String reviewerNote) {
         return jdbc.update("""
             UPDATE hr.leave_request
@@ -1187,7 +1241,10 @@ public class LeaveRepository {
             rs.getString("purpose_code"),
             rs.getBoolean("emergency_filing"),
             rs.getString("system_note_code"),
-            fromJson(rs.getString("system_note_params"))
+            fromJson(rs.getString("system_note_params")),
+            // Phase A0b: placeholder -- this mapper has no actor to check "can review" against.
+            // LeaveService#withCanReviewFlag overwrites this on every DTO it returns; see its Javadoc.
+            false
         );
     }
 
