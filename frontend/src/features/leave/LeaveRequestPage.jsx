@@ -389,8 +389,16 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
     if (!['application/pdf', 'image/jpeg', 'image/png'].includes(file.type)) {
       throw new Error('รองรับเฉพาะไฟล์ PDF, JPG หรือ PNG');
     }
+    // imageCompression() returns a plain Blob, not a File -- it does not carry `file.name`
+    // through, so the FormData part built from it defaults to the literal filename "blob" per the
+    // Fetch/FormData spec. Re-wrapping in a File restores the original name. PDFs skip
+    // compression entirely and never hit this path. See #498/#504 for the reference fix.
     if (!file.type.startsWith('image/')) return file;
-    return imageCompression(file, { maxSizeMB: 2, maxWidthOrHeight: 1600, useWebWorker: true });
+    return new File(
+      [await imageCompression(file, { maxSizeMB: 2, maxWidthOrHeight: 1600, useWebWorker: true })],
+      file.name,
+      { type: file.type },
+    );
   }
 
   const createMutation = useMutation({
