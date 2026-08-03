@@ -57,17 +57,32 @@ import th.co.glr.hr.config.AppProperties;
  * misleading, not a second requirement. {@code year} (format {@code YYYY}) is a required query
  * parameter.
  *
- * <p>The response is a <strong>bare top-level JSON array</strong> — not an envelope like the FX
- * API's {@code result.data.data_detail} — of objects with string fields {@code HolidayWeekDay},
- * {@code HolidayWeekDayThai}, {@code Date} (ISO {@code yyyy-MM-dd}), {@code DateThai} (Buddhist-era
- * {@code dd/MM/yy}), {@code HolidayDescription} and {@code HolidayDescriptionThai}. {@link
- * #parseHolidays} matches this exactly: a non-array top level, or an element missing {@code Date}
- * or both description fields, does not match and is skipped rather than coerced — no tree-searching
- * fallback. An earlier version of this class searched the whole response tree for anything that
- * looked like a holiday list, as a hedge for when nobody could see a real payload; now that the
- * shape is confirmed, that hedge is deleted deliberately, because it could latch onto an unrelated
- * array in a differently-shaped response and misparse it as holidays. A shape that does not match
- * now fails to match, full stop, rather than possibly matching something wrong.
+ * <p><strong>The spec and the live service disagree, and the live service wins.</strong> BOT's
+ * published OpenAPI spec says the response is a bare top-level JSON array. A real production call
+ * on <strong>2026-08-03</strong> proved otherwise: HTTP 200, zero holidays parsed, and the
+ * diagnostic in {@link #processResponse} showed {@code topLevel=[result]} — the array is wrapped
+ * one level deep, {@code {"result": [...]}}, the same shape family as the FX API's {@code
+ * result.data.data_detail} (see {@code BotFxFetchService}), just shallower. The element shape
+ * itself matches the spec exactly: objects with string fields {@code HolidayWeekDay}, {@code
+ * HolidayWeekDayThai}, {@code Date} (ISO {@code yyyy-MM-dd}), {@code DateThai} (Buddhist-era
+ * {@code dd/MM/yy}), {@code HolidayDescription} and {@code HolidayDescriptionThai}. Only the
+ * envelope is wrong, not the payload inside it.
+ *
+ * <p>{@link #resolveHolidayArray} therefore checks an <strong>explicit, ordered list of named
+ * candidate locations</strong> — root, {@code result}, {@code result.data}, {@code
+ * result.data.data_detail} — rather than the top level alone. <strong>Do not simplify this back
+ * down to a single path on the spec's authority</strong>: the spec has already been shown wrong
+ * once for this exact endpoint, so "the spec says X" is not sufficient grounds to drop a
+ * candidate that a real call needed. Each candidate is a named, commented location, not a tree
+ * search: an earlier version of this class searched the whole response tree for anything that
+ * looked like a holiday list, as a hedge for when nobody could see a real payload; that hedge was
+ * deleted deliberately, because it could latch onto an unrelated array in a differently-shaped
+ * response and misparse it as holidays. That reasoning still holds — the fix for "the one
+ * documented path was wrong" is a short list of other named paths worth trying, not a search.
+ * {@link #parseHolidays} matches strictly against whichever candidate wins: an element missing
+ * {@code Date} or both description fields does not match and is skipped rather than coerced. If no
+ * candidate matches, that is itself a real "shape changed" signal — see {@link #processResponse}'s
+ * WARN.
  *
  * <p>{@code DateThai} and {@code HolidayWeekDay}/{@code HolidayWeekDayThai} are read by nobody
  * here. {@code Date} is unambiguous (ISO, Gregorian); {@code DateThai} is Buddhist-era and would
@@ -258,10 +273,10 @@ public class BotHolidayFetchService {
     }
 
     /**
-     * Strictly parses a BOT holiday-list response against the confirmed OpenAPI schema: a bare
-     * top-level JSON array of objects. Maps each element via {@link #toHoliday}, skipping (not
-     * throwing on) any element that does not parse into a valid, year-matching holiday. A
-     * non-array top level, malformed/non-JSON input, or an empty array all yield an empty list
+     * Strictly parses a BOT holiday-list response by locating the holiday array via {@link
+     * #resolveHolidayArray} and mapping each element via {@link #toHoliday}, skipping (not
+     * throwing on) any element that does not parse into a valid, year-matching holiday. No
+     * matching candidate, malformed/non-JSON input, or an empty array all yield an empty list
      * rather than an exception — this method never throws.
      */
     List<BankHoliday> parseHolidays(String json, int year) {
@@ -275,21 +290,71 @@ public class BotHolidayFetchService {
             log.warn("BOT holiday fetch: response for {} was not valid JSON — {}", year, e.getMessage());
             return List.of();
         }
-        if (!root.isArray()) {
-            // The documented shape is a bare top-level array. Anything else — an envelope, an
-            // error object, a bare string — does not match it, deliberately: see the class javadoc
-            // on why this no longer falls back to searching the tree for something array-shaped.
+        JsonNode array = resolveHolidayArray(root);
+        if (array == null) {
+            // None of the named candidates matched. Deliberately does not fall back to searching
+            // the tree for something array-shaped — see the class javadoc on why that hedge was
+            // removed. A response this doesn't recognise is a real "shape changed" signal, not
+            // something to guess at; {@link #processResponse} surfaces it via the WARN diagnostic.
             return List.of();
         }
 
         List<BankHoliday> result = new ArrayList<>();
-        for (JsonNode entry : root) {
+        for (JsonNode entry : array) {
             BankHoliday holiday = toHoliday(entry, year);
             if (holiday != null) {
                 result.add(holiday);
             }
         }
         return result;
+    }
+
+    /**
+     * Locates the holiday array within an ordered list of named candidate locations, returning the
+     * first candidate that is a non-empty JSON array whose first element carries a {@code Date}
+     * field — enough to tell a holiday list apart from any other array BOT might send, without
+     * reading further into the entry (that is {@link #toHoliday}'s job). Returns {@code null} if no
+     * candidate matches.
+     *
+     * <p>This is a fixed, commented list — not a tree search. See the class javadoc for why: a
+     * search can silently pick up an unrelated array in a differently-shaped response, where a
+     * named-candidate miss instead surfaces honestly as "shape not recognised."
+     */
+    private static JsonNode resolveHolidayArray(JsonNode root) {
+        // 1. The documented shape (BOT's OpenAPI spec): a bare top-level array. Kept first so a
+        //    future spec-conforming response still works without touching this method.
+        if (isHolidayArray(root)) {
+            return root;
+        }
+        // 2. The observed live shape, confirmed against production 2026-08-03: {"result": [...]}.
+        //    This is the one actually hit in practice today — see the class javadoc.
+        JsonNode result = pathTo(root, "result");
+        if (isHolidayArray(result)) {
+            return result;
+        }
+        // 3. One layer deeper than (2), in case BOT nests it under "data" the way other BOT APIs do.
+        JsonNode resultData = pathTo(result, "data");
+        if (isHolidayArray(resultData)) {
+            return resultData;
+        }
+        // 4. The FX API's own envelope shape (see BotFxFetchService): result.data.data_detail.
+        //    Cheap insurance — BOT already uses this exact shape elsewhere on the same gateway.
+        JsonNode resultDataDetail = pathTo(resultData, "data_detail");
+        if (isHolidayArray(resultDataDetail)) {
+            return resultDataDetail;
+        }
+        return null;
+    }
+
+    /** {@code null}-safe single-field lookup: {@code node.field} if {@code node} is an object, else {@code null}. */
+    private static JsonNode pathTo(JsonNode node, String field) {
+        return (node != null && node.isObject()) ? node.get(field) : null;
+    }
+
+    /** A candidate matches when it is a non-empty array whose first element is an object carrying a {@code Date} field. */
+    private static boolean isHolidayArray(JsonNode node) {
+        return node != null && node.isArray() && !node.isEmpty()
+            && node.get(0).isObject() && node.get(0).has("Date");
     }
 
     private BankHoliday toHoliday(JsonNode entry, int year) {
