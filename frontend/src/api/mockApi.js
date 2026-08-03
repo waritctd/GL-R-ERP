@@ -1649,6 +1649,10 @@ function mockPayrollLine(employee) {
     leaveDeductionRefund: 0,
     withholdingTaxOverride: null,
     mealAllowance: 0,
+    // V128: auto-fed from approved welfare in production (PayrollRepository
+    // #findApprovedWelfarePayByEmployee). The mock has no welfare->payroll pipeline, so this stays
+    // 0 rather than pretending to compute it -- see this file's header on not mirroring backend math.
+    welfarePay: 0,
     perDiemExempt: 0,
     perDiemTaxable: 0,
     perDiemBasis: null,

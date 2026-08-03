@@ -99,6 +99,55 @@ public class PayrollRepository {
     }
 
     /**
+     * Approved welfare (สวัสดิการ) payable in this payroll month, per employee — V128.
+     *
+     * <p>{@code status = 'APPROVED'} is load-bearing, not defensive: a SUBMITTED claim is a request,
+     * not money owed, and this repo has been bitten before by a payroll money query that forgot the
+     * status filter. {@code payroll_month} is assigned once at CEO approval (the 25th-of-month
+     * cutoff, rolled past any already-processed month) and frozen, so a claim cannot drift between
+     * periods after the fact.
+     *
+     * <p>Sums {@code approved_amount}, never {@code requested_amount}: the approved figure is the
+     * only one anybody authorised to pay.
+     */
+    public Map<Long, BigDecimal> findApprovedWelfarePayByEmployee(LocalDate payrollMonth) {
+        return jdbc.query("""
+            SELECT smr.employee_id,
+                   COALESCE(SUM(smr.approved_amount), 0) AS welfare_pay
+              FROM hr.special_money_request smr
+             WHERE smr.status = 'APPROVED'
+               AND smr.payroll_month = :payrollMonth
+             GROUP BY smr.employee_id
+            """,
+            Map.of("payrollMonth", payrollMonth),
+            (rs, rowNum) -> Map.entry(rs.getLong("employee_id"), money(rs.getBigDecimal("welfare_pay"))))
+            .stream()
+            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    /**
+     * Stamps which payroll period actually paid each approved welfare claim. {@code
+     * included_period_id} has existed since V66 and was never written, because nothing consumed
+     * these rows.
+     *
+     * <p>Only ever fills a NULL: a claim already attributed to a period must not be re-pointed at a
+     * later one by a re-run, or the audit trail would follow the most recent process rather than the
+     * payment.
+     */
+    public int markWelfareIncludedInPeriod(LocalDate payrollMonth, long periodId) {
+        return jdbc.update("""
+            UPDATE hr.special_money_request
+               SET included_period_id = :periodId,
+                   updated_at = now()
+             WHERE status = 'APPROVED'
+               AND payroll_month = :payrollMonth
+               AND included_period_id IS NULL
+            """, new MapSqlParameterSource()
+            .addValue("payrollMonth", payrollMonth)
+            .addValue("periodId", periodId));
+    }
+
+    /**
      * Year-to-date figures used to project annual income (C2). Combines actual processed
      * {@code payroll_line} rows for months already run this year with
      * {@code hr.payroll_year_to_date_seed} -- the pre-system history back-loaded at go-live. An
@@ -1293,7 +1342,8 @@ public class PayrollRepository {
                    -- reprocess would silently recompute SALARY as the bare rate again). pl.pay_type is
                    -- frozen at processing time (see V103), the same pattern
                    -- hr.overtime_request.salary_basis already uses for an identical reason.
-                   pl.pay_type
+                   pl.pay_type,
+                   pl.welfare_pay
               FROM hr.payroll_line pl
               JOIN hr.employee e ON e.employee_id = pl.employee_id
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
@@ -1596,7 +1646,7 @@ public class PayrollRepository {
                 customer_return_already_earned, garnishment_type,
                 meal_allowance, per_diem_exempt, per_diem_taxable, per_diem_basis,
                 customer_return_requested,
-                days_worked, pay_type
+                days_worked, pay_type, welfare_pay
             )
             VALUES (
                 :periodId, :employeeId, :baseSalary, :dailyRate, :hourlyRate,
@@ -1622,7 +1672,7 @@ public class PayrollRepository {
                 :customerReturnAlreadyEarned, :garnishmentType,
                 :mealAllowance, :perDiemExempt, :perDiemTaxable, :perDiemBasis,
                 :customerReturnRequested,
-                :daysWorked, :payType
+                :daysWorked, :payType, :welfarePay
             )
             """,
             new MapSqlParameterSource()
@@ -1689,6 +1739,7 @@ public class PayrollRepository {
                 .addValue("withholdingTaxCumulativeLimb", safe(line.withholdingTaxCumulativeLimb()))
                 .addValue("customerReturnAlreadyEarned", line.customerReturnAlreadyEarned())
                 .addValue("garnishmentType", line.garnishmentType() == null ? "SALARY" : line.garnishmentType())
+                .addValue("welfarePay", safe(line.welfarePay()))
                 .addValue("mealAllowance", safe(line.mealAllowance()))
                 .addValue("perDiemExempt", safe(line.perDiemExempt()))
                 .addValue("perDiemTaxable", safe(line.perDiemTaxable()))
@@ -1797,7 +1848,10 @@ public class PayrollRepository {
             // Daily-rate support (2026-07-30): nullable -- read raw (no money()) so a monthly
             // employee's line, which never has this figure, stays null rather than a misleading 0.00.
             rs.getBigDecimal("days_worked"),
-            rs.getString("pay_type")
+            rs.getString("pay_type"),
+            // V128: nullable on purpose -- a line processed before welfare reached payroll has no
+            // figure, which is not the same statement as a genuine ฿0.00 of welfare that month.
+            rs.getBigDecimal("welfare_pay")
         );
     }
 

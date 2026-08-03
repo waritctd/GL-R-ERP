@@ -89,6 +89,12 @@ public class PayslipRenderer {
             // nonTaxableIncome (which IS itemised below as "รายได้ไม่คิดภาษี") because it shares that
             // figure's tax treatment exactly (see PayrollComponent's javadoc).
             addIfNonZero(earnings, "ค่าอาหาร", line.mealAllowance());
+            // V128. Itemised for the same reason as ค่าอาหาร above: welfare is taxable and inside
+            // grossEarnings, so omitting the row would make รวมรายได้ exceed the sum of the lines
+            // printed beneath it -- and this is the one earning the employee can check against a
+            // claim they filed themselves, so a payslip that hides it invites exactly the query it
+            // should answer.
+            addIfNonZero(earnings, "สวัสดิการ", line.welfarePay());
             addIfNonZero(earnings, "เบี้ยเลี้ยง (ส่วนเกิน)", line.perDiemTaxable());
             addIfNonZero(earnings, "ค่าตอบแทนกรรมการ", line.directorRemuneration());
             addIfNonZero(earnings, "รายได้ไม่คิดภาษี", line.nonTaxableIncome());

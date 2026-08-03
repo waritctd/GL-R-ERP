@@ -41,6 +41,7 @@ const MOBILE_PROCESS_CONFIRM_PHRASE = 'ประมวลผล';
 const mobileOptionalMoneySummaries = [
   { key: 'specialPayTotal', label: 'เงินพิเศษ', amount: (line) => Number(line.specialPayTotal || 0) },
   { key: 'otCommission', label: 'ล่วงเวลา/คอมมิชชัน', amount: (line) => Number(line.overtimePay || 0) + Number(line.commissionPay || 0) },
+  { key: 'welfarePay', label: 'สวัสดิการ', amount: (line) => Number(line.welfarePay || 0) },
 ];
 
 function MoneyCode({ value }) {
@@ -353,6 +354,10 @@ const TAX_TREATMENT_COMPONENTS = [
   { key: 'COMMISSION_PAY', label: 'คอมมิชชั่น (ระบบคอมมิชชัน อัตโนมัติ)' },
   { key: 'MEAL_ALLOWANCE', label: 'ค่าอาหาร' },
   { key: 'PER_DIEM_TAXABLE', label: 'เบี้ยเลี้ยง — ส่วนเกิน (เสียภาษี)' },
+  // V128. Listed here specifically so HR can change the ป.96 treatment the migration seeds
+  // (EXTRA_KNOWN_FREQUENCY, by analogy with เงินโบนัส) without needing another migration. Not in
+  // namedAllowanceFields above: welfare is auto-fed from approved claims, never typed.
+  { key: 'WELFARE_PAY', label: 'สวัสดิการ (จากคำขอที่อนุมัติแล้ว อัตโนมัติ)' },
   { key: 'BONUS_PAY', label: 'เงินโบนัส' },
   { key: 'OTHER_ONE_OFF_PAY', label: 'เงินก้อนอื่นๆ (ครั้งเดียว)' },
   { key: 'DIRECTOR_REMUNERATION', label: 'ค่าตอบแทนกรรมการ' },
