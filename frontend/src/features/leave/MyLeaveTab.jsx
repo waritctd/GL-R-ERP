@@ -12,6 +12,7 @@ import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FieldList } from '../../components/common/FieldList.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
+import { QuotaBar } from '../../components/common/QuotaBar.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -241,6 +242,14 @@ function OwnRequestsSection({
   );
 }
 
+// QuotaBar's `formatValue` defaults to `formatMoney` (every other current caller is money); leave
+// balances are day counts, so this mirrors the plain-number formatter LeaveRequestPage.jsx's own
+// step-3 QuotaBar already uses -- unit-less, because the caption below spells out "(วัน)" itself.
+const daysNumberFormat = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 });
+function formatDaysNumber(value) {
+  return daysNumberFormat.format(Number(value) || 0);
+}
+
 /**
  * The one balance card the owner asked for ("really show just the primary one default because
  * if we show everything the page will just be over populated with cards") -- driven by whichever
@@ -251,6 +260,22 @@ function OwnRequestsSection({
  * acting employee resolved yet" (balancesQuery is disabled until then) so this never flashes a
  * bare `0` before real data lands; a resolved-but-missing balance (the selected type has no row)
  * gets its own EmptyState rather than silently rendering zeros.
+ *
+ * Phase A5 (#489/#493 convergence): the everyday headline used to be a bespoke `<strong>` number
+ * with no visual proportion and no `role="progressbar"`. QuotaBar (promoted from the tax-allowance
+ * form, already adopted by the /leave/new composer's step 3) replaces it. `used` is exactly what
+ * the API already subtracts to produce `balance.remainingDays` (mockApi.js:
+ * `remainingDays = annualQuotaDays - approvedDays - pendingDays`) -- the bar's empty portion IS
+ * remainingDays, just shown as proportion instead of a lone digit, so this is a display change,
+ * not an arithmetic one. `cap` is `isEveryday ? balance.annualQuotaDays : null` -- reusing the
+ * same everyday/rare split this file already computes, rather than hand-rolling a fourth
+ * MILITARY-sentinel check (the balance card, the composer, and the rules tab each already needed
+ * one). QuotaBar itself renders nothing when `cap == null`, which is exactly the suppression rare
+ * types need: MILITARY's annualQuotaDays (366) is a sentinel ("no annual ceiling; the paid cap is
+ * the real rule", V120), and MATERNITY/ORDINATION are per-occasion entitlements, not a running
+ * balance -- none of the three have a cap a progress bar could meaningfully fill toward. The
+ * paid-cap headline + condition text that already existed for rare types renders unconditionally
+ * alongside it, unchanged.
  */
 function PrimaryLeaveBalanceCard({ loading, balance, leaveType, isEveryday }) {
   if (loading) {
@@ -268,19 +293,32 @@ function PrimaryLeaveBalanceCard({ loading, balance, leaveType, isEveryday }) {
   }
 
   const name = balance.leaveTypeNameTh || leaveType?.nameTh || balance.leaveTypeCode;
-  // Rare types never headline remainingDays/annualQuotaDays (MILITARY's 366 sentinel) -- the paid
-  // cap is the meaningful headline figure instead. See rareBalanceSummary's comment above.
-  const headlineLabel = isEveryday ? 'คงเหลือ' : 'สิทธิ์จ่ายค่าจ้างสูงสุด';
-  const headlineValue = isEveryday
-    ? formatDays(balance.remainingDays)
-    : (leaveType?.paidDaysCap != null ? formatDays(leaveType.paidDaysCap) : '-');
+  // Same arithmetic mockApi.js used to derive balance.remainingDays -- see the doc comment above.
+  const used = Number(balance.approvedDays || 0) + Number(balance.pendingDays || 0);
   const summary = isEveryday ? everydayBalanceSummary(balance) : rareBalanceSummary(balance, leaveType);
 
   return (
-    <div className="grid gap-1" data-testid="primary-balance-card">
+    <div className="grid gap-2" data-testid="primary-balance-card">
       <span className="block min-w-0 truncate text-base font-bold text-text-secondary">{name}</span>
-      <span className="mt-1 block text-xs font-bold uppercase tracking-wide text-text-muted">{headlineLabel}</span>
-      <strong className="block text-4xl font-extrabold leading-tight tabular-nums text-text">{headlineValue}</strong>
+      <QuotaBar
+        label={name}
+        caption={`โควตา${name} (วัน)`}
+        used={used}
+        cap={isEveryday ? balance.annualQuotaDays : null}
+        formatValue={formatDaysNumber}
+        overMessage="ใช้วันลาเกินโควตาประจำปีแล้ว ส่วนที่เกินอาจไม่ได้รับอนุมัติอัตโนมัติ"
+      />
+      {/* Rare types (MATERNITY/MILITARY/ORDINATION): QuotaBar renders nothing above (cap=null),
+          so the paid-cap headline is the meaningful figure instead. See rareBalanceSummary's
+          comment on why this never reads annualQuotaDays/remainingDays. */}
+      {!isEveryday ? (
+        <>
+          <span className="mt-1 block text-xs font-bold uppercase tracking-wide text-text-muted">สิทธิ์จ่ายค่าจ้างสูงสุด</span>
+          <strong className="block text-4xl font-extrabold leading-tight tabular-nums text-text">
+            {leaveType?.paidDaysCap != null ? formatDays(leaveType.paidDaysCap) : '-'}
+          </strong>
+        </>
+      ) : null}
       <small className="mt-1 block text-sm text-text-muted">{summary}</small>
     </div>
   );
