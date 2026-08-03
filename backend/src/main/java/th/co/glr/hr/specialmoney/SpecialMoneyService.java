@@ -105,9 +105,14 @@ public class SpecialMoneyService {
         UsageSnapshot snapshot = repository.findUsage(employeeId, year);
         Map<String, BigDecimal> amounts = new LinkedHashMap<>();
         snapshot.approvedAmountThisYearByType().forEach((type, amount) -> amounts.put(type.name(), amount));
-        Map<String, Integer> counts = new LinkedHashMap<>();
-        snapshot.activeCountLifetimeByType().forEach((type, count) -> counts.put(type.name(), count));
-        return new SpecialMoneyUsageDto(employeeId, year, amounts, counts);
+        Map<String, Integer> lifetimeCounts = new LinkedHashMap<>();
+        snapshot.activeCountLifetimeByType().forEach((type, count) -> lifetimeCounts.put(type.name(), count));
+        // The snapshot has always carried the per-year count for the once-per-year uniform rule;
+        // it was simply dropped here, so the UI could not warn "you already filed this year" and
+        // the employee only found out from the 400 on submit.
+        Map<String, Integer> yearCounts = new LinkedHashMap<>();
+        snapshot.activeCountThisYearByType().forEach((type, count) -> yearCounts.put(type.name(), count));
+        return new SpecialMoneyUsageDto(employeeId, year, amounts, lifetimeCounts, yearCounts);
     }
 
     @Transactional

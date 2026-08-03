@@ -501,6 +501,34 @@ class SpecialMoneyServiceTest {
         );
     }
 
+    // ---------------------------------------------------------------------
+    // usage()
+    // ---------------------------------------------------------------------
+
+    /**
+     * The snapshot has always carried a per-year count (the once-per-year uniform gate needs it),
+     * but {@code usage()} built the DTO from only two of the three maps and silently dropped it. The
+     * UI therefore could not warn "you already filed this year" and the employee learned it from the
+     * 400 on submit. The three maps here hold three different values on purpose: copying the wrong
+     * one through fails this test rather than passing by coincidence.
+     */
+    @Test
+    void usageCarriesThePerYearCountThroughToTheDtoInsteadOfDroppingIt() {
+        when(repository.findUsage(10L, 2026)).thenReturn(new UsageSnapshot(
+            Map.of(SpecialMoneyType.MEDICAL, new BigDecimal("1500")),
+            Map.of(SpecialMoneyType.MEDICAL, 3, SpecialMoneyType.UNIFORM_ANNUAL, 2),
+            Map.of(SpecialMoneyType.MEDICAL, 2, SpecialMoneyType.UNIFORM_ANNUAL, 1)));
+
+        SpecialMoneyUsageDto dto = service.usage(10L, 2026, user("employee", 10L));
+
+        assertThat(dto.activeCountThisYearByType())
+            .containsEntry("MEDICAL", 2)
+            .containsEntry("UNIFORM_ANNUAL", 1);
+        // ...and it is not just an alias of one of the other two maps.
+        assertThat(dto.approvedCountLifetimeByType()).containsEntry("MEDICAL", 3);
+        assertThat(dto.approvedAmountThisYearByType().get("MEDICAL")).isEqualByComparingTo("1500");
+    }
+
     private UserPrincipal user(String role, Long employeeId) {
         return new UserPrincipal(employeeId == null ? 1L : employeeId, role + "@glr.co.th", role, role, employeeId, true, LocalDate.now(), false, null, false);
     }

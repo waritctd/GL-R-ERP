@@ -111,6 +111,7 @@ describe('SpecialMoneyPanel', () => {
         year: new Date().getFullYear(),
         approvedAmountThisYearByType: {},
         approvedCountLifetimeByType: {},
+        activeCountThisYearByType: {},
       },
     });
     api.specialMoney.create.mockResolvedValue({ request: { id: 3001 } });
