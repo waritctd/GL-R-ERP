@@ -102,12 +102,9 @@ public class SpecialMoneyPolicyEvaluator {
             switch (type.capRule()) {
                 case FIXED_AID -> evaluateFixedAid(type, request, employee, usage, amounts, violations);
                 case MEDICAL_ANNUAL -> evaluateMedical(request, employee, usage, amounts, violations);
-                case UNIFORM_ANNUAL -> evaluateUniformAnnual(request, amounts, violations);
+                case UNIFORM_ANNUAL -> evaluateUniformAnnual(request, usage, amounts, violations);
                 case UNIFORM_NEW_STAFF ->
-                    // No per-piece rate shape was specified for this type beyond the max_pieces=6
-                    // seed -- see class Javadoc / handoff for this gap. Passed through uncapped
-                    // rather than inventing a rate.
-                    request.requestedAmount();
+                    evaluateUniformNewStaff(request, employee, usage, amounts, violations);
                 case UNIFORM_PREPROBATION_KIT -> evaluateUniformPreprobationKit(request, amounts, violations);
                 case PER_DIEM_RATE -> evaluateTravelPerDiem(request, amounts, excludedProvinces, violations);
                 case DISCRETIONARY -> request.requestedAmount();
@@ -120,6 +117,19 @@ public class SpecialMoneyPolicyEvaluator {
     // Eligibility
     // ---------------------------------------------------------------------
 
+    /**
+     * The หมายเหตุ's eligibility conditions: (1) เป็นพนักงานประจำ, (2) ผ่านการทดลองงาน.
+     *
+     * <p><b>Condition (1) is intentionally folded into (2), on the owner's ruling of 2026-08-03:
+     * passing probation is treated as sufficient evidence of being พนักงานประจำ.</b> {@code
+     * hr.employment_status} exists and is ETL-populated, so a stricter gate is possible later, but
+     * it is not applied today. This is a deliberate simplification, recorded here rather than left
+     * as a silent gap — if the company starts employing contract staff who pass probation without
+     * becoming ประจำ, this method is where that has to change.
+     *
+     * <p>(3) หัวหน้าฝ่ายอนุมัติ is not a policy rule and is not evaluated here — welfare approval is
+     * CEO-only, enforced in {@code SpecialMoneyService}.
+     */
     private void evaluateStandardProbationEligibility(EmployeeEligibilitySnapshot employee, List<String> violations) {
         boolean passedProbation = hasPassedProbation(
             employee.hireDate(), employee.probationDays(), employee.confirmDate(), employee.today());
@@ -167,17 +177,13 @@ public class SpecialMoneyPolicyEvaluator {
             List<String> violations) {
         BigDecimal cap = amounts.amountOrZero("cap");
 
-        // NOT in the source welfare-policy document -- three months from event_date is an
-        // assumption pending confirmation. See ClaimWindow.THREE_MONTHS_FROM_EVENT.
-        if (request.eventDate() != null && employee.today() != null) {
-            LocalDate windowEnd = request.eventDate().plusMonths(3);
-            if (employee.today().isAfter(windowEnd)) {
-                violations.add("เลยกำหนดระยะเวลาเบิก (3 เดือนนับจากวันที่เกิดเหตุ) แล้ว");
-            }
-        }
+        // There is deliberately NO claim deadline for aid. A three-months-from-event window used to
+        // live here; it was never in the welfare document -- which states a deadline only for
+        // ค่ารักษาพยาบาล (2.3, one month from the receipt) -- and it was refusing genuine claims.
+        // Removed on the owner's ruling, 2026-08-03. Do not reintroduce one without a written rule.
 
         if (type == SpecialMoneyType.AID_WEDDING || type == SpecialMoneyType.AID_ORDINATION) {
-            if (usage.approvedCountLifetime(type) >= 1) {
+            if (usage.activeCountLifetime(type) >= 1) {
                 violations.add(type.name() + " เบิกได้เพียงครั้งเดียวตลอดการเป็นพนักงาน");
             }
         }
@@ -216,12 +222,27 @@ public class SpecialMoneyPolicyEvaluator {
         return request.requestedAmount();
     }
 
+    /**
+     * §2.1.1 — one claim per year, filed in June.
+     *
+     * <p>The May receipt date applies to the SELF_BUY route ONLY. The document ties May to the
+     * self-buy case ("ซื้อ...ในเดือนพฤษภาคม...แล้วนำใบเสร็จมาเบิก...ในเดือนมิถุนายน") and says nothing
+     * about when the tailor bills for the ร้านคุณลำพอง route. Requiring May of both used to refuse a
+     * perfectly valid tailored claim receipted in June.
+     */
     private BigDecimal evaluateUniformAnnual(
-            SubmitSpecialMoneyRequest request, PolicyAmounts amounts, List<String> violations) {
-        if (request.receiptDate() == null) {
-            violations.add("คำขอเบิกเครื่องแบบประจำปีต้องระบุวันที่ในใบเสร็จ");
-        } else if (request.receiptDate().getMonth() != Month.MAY) {
-            violations.add("ใบเสร็จเครื่องแบบประจำปีต้องลงวันที่ในเดือนพฤษภาคม");
+            SubmitSpecialMoneyRequest request,
+            UsageSnapshot usage,
+            PolicyAmounts amounts,
+            List<String> violations) {
+        boolean selfBuy = "SELF_BUY".equalsIgnoreCase(request.detailValue("uniformMode"));
+
+        if (selfBuy) {
+            if (request.receiptDate() == null) {
+                violations.add("คำขอเบิกเครื่องแบบประจำปี (ซื้อเอง) ต้องระบุวันที่ในใบเสร็จ");
+            } else if (request.receiptDate().getMonth() != Month.MAY) {
+                violations.add("ใบเสร็จการซื้อเครื่องแบบเองต้องลงวันที่ในเดือนพฤษภาคม");
+            }
         }
 
         if (request.eventDate() == null) {
@@ -230,17 +251,25 @@ public class SpecialMoneyPolicyEvaluator {
             violations.add("การเบิกเครื่องแบบประจำปีต้องยื่นภายในเดือนมิถุนายน");
         }
 
-        String mode = request.detailValue("uniformMode");
-        if ("SELF_BUY".equalsIgnoreCase(mode)) {
-            int maxPieces = amounts.intAmountOrZero("max_pieces");
+        // "ให้พนักงานเบิกชุดฟอร์มได้ปีละ 1 ครั้ง". The June-only window alone does not enforce this --
+        // it leaves the whole of June open for a second claim.
+        if (usage.activeCountThisYear(SpecialMoneyType.UNIFORM_ANNUAL) >= 1) {
+            violations.add("เบิกเครื่องแบบประจำปีได้ปีละ 1 ครั้งเท่านั้น");
+        }
+
+        int maxPieces = amounts.intAmountOrZero("max_pieces");
+        int shirtCount = parseIntOrZero(request.detailValue("shirtCount"));
+        int trouserCount = parseIntOrZero(request.detailValue("trouserCount"));
+        // The 4-piece limit is the document's, not the self-buy route's: "เสื้อหรือกางเกงหรือกระโปรง
+        // ก็ได้รวมกัน 4 ชิ้น" is stated for the tailored route and repeated for self-buy. It used to
+        // be checked in SELF_BUY only, so a tailored claim for 10 pieces under ฿1,300 passed.
+        if (shirtCount + trouserCount > maxPieces) {
+            violations.add("เบิกเครื่องแบบประจำปีได้ไม่เกิน " + maxPieces + " ชิ้น");
+        }
+
+        if (selfBuy) {
             BigDecimal shirtRate = amounts.amountOrZero("per_piece_shirt");
             BigDecimal trouserRate = amounts.amountOrZero("per_piece_trouser");
-            int shirtCount = parseIntOrZero(request.detailValue("shirtCount"));
-            int trouserCount = parseIntOrZero(request.detailValue("trouserCount"));
-
-            if (shirtCount + trouserCount > maxPieces) {
-                violations.add("การซื้อเครื่องแบบเองเกินจำนวนสูงสุด " + maxPieces + " ชิ้น");
-            }
             int cappedShirts = Math.min(shirtCount, maxPieces);
             int cappedTrousers = Math.min(trouserCount, Math.max(0, maxPieces - cappedShirts));
 
@@ -258,6 +287,51 @@ public class SpecialMoneyPolicyEvaluator {
         return request.requestedAmount();
     }
 
+    /**
+     * §2.1.2 — "เริ่มตัดชุดฟอร์มให้ตัดได้ 3 ชุด (หรือ 6 ชิ้น) สำหรับปีแรกที่เข้าทำงาน".
+     *
+     * <p>Both limits are now enforced. This used to pass the requested amount straight through with
+     * no checks at all: the seeded {@code max_pieces = 6} was ignored, and nothing tied the claim to
+     * the first year of employment, so it was reachable forever and for any number of pieces.
+     *
+     * <p>No baht figure is given for new staff anywhere in the document, so the amount stays
+     * uncapped rather than borrowing §2.1.1's rates — but it is no longer unguarded either: the CEO
+     * must now justify approving more than was requested (see {@code SpecialMoneyService}).
+     */
+    private BigDecimal evaluateUniformNewStaff(
+            SubmitSpecialMoneyRequest request,
+            EmployeeEligibilitySnapshot employee,
+            UsageSnapshot usage,
+            PolicyAmounts amounts,
+            List<String> violations) {
+        int maxPieces = amounts.intAmountOrZero("max_pieces");
+        int pieces = parseIntOrZero(request.detailValue("shirtCount"))
+            + parseIntOrZero(request.detailValue("trouserCount"));
+        if (pieces > maxPieces) {
+            violations.add("ชุดฟอร์มพนักงานใหม่เบิกได้ไม่เกิน " + maxPieces + " ชิ้น");
+        }
+
+        LocalDate claimDate = request.eventDate() != null ? request.eventDate() : employee.today();
+        if (employee.hireDate() == null) {
+            violations.add("ไม่พบวันที่เริ่มงานของพนักงาน จึงตรวจสอบสิทธิ์ชุดฟอร์มพนักงานใหม่ไม่ได้");
+        } else if (claimDate != null && claimDate.isAfter(employee.hireDate().plusYears(1))) {
+            violations.add("ชุดฟอร์มพนักงานใหม่เบิกได้เฉพาะปีแรกที่เข้าทำงานเท่านั้น");
+        }
+
+        if (usage.activeCountLifetime(SpecialMoneyType.UNIFORM_NEW_STAFF) >= 1) {
+            violations.add("ชุดฟอร์มพนักงานใหม่เบิกได้เพียงครั้งเดียว");
+        }
+
+        return request.requestedAmount();
+    }
+
+    /**
+     * §2.1.3 — the fixed pre-probation kit: เสื้อยืด ×3, กางเกง ×3, รองเท้า ×1, and สายรัดหลัง ×1.
+     *
+     * <p>สายรัดหลัง is conditional in the document — "กรณีของเดิมที่มีไม่เพียงพอ" — so it is added only
+     * when the request says one is needed. It used to be added unconditionally, which over-stated
+     * every kit by the belt's ฿700 whether or not one was issued.
+     */
     private BigDecimal evaluateUniformPreprobationKit(
             SubmitSpecialMoneyRequest request, PolicyAmounts amounts, List<String> violations) {
         BigDecimal total =
@@ -265,8 +339,11 @@ public class SpecialMoneyPolicyEvaluator {
                 .amountOrZero("tshirt")
                 .multiply(amounts.amountOrZero("tshirt_qty"))
                 .add(amounts.amountOrZero("trouser").multiply(amounts.amountOrZero("trouser_qty")))
-                .add(amounts.amountOrZero("shoes").multiply(amounts.amountOrZero("shoes_qty")))
-                .add(amounts.amountOrZero("belt").multiply(amounts.amountOrZero("belt_qty")));
+                .add(amounts.amountOrZero("shoes").multiply(amounts.amountOrZero("shoes_qty")));
+
+        if (Boolean.parseBoolean(request.detailValue("needsBackSupport"))) {
+            total = total.add(amounts.amountOrZero("belt").multiply(amounts.amountOrZero("belt_qty")));
+        }
         return total;
     }
 

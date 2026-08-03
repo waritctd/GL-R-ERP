@@ -44,7 +44,7 @@ const TYPES = [
   { requestType: 'OTHER', thaiLabel: 'อื่นๆ', payrollBucket: 'AID', evidenceRequired: true },
 ];
 
-function renderPanel() {
+function renderPanel(as = user) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -54,9 +54,29 @@ function renderPanel() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <SpecialMoneyPanel user={user} currentEmployee={currentEmployee} showToast={vi.fn()} />
+      <SpecialMoneyPanel user={as} currentEmployee={currentEmployee} showToast={vi.fn()} />
     </QueryClientProvider>,
   );
+}
+
+const ceoUser = { employeeId: 9, name: 'ซีอีโอ', role: 'ceo', manager: false };
+const managerUser = { employeeId: 8, name: 'ผู้จัดการ', role: 'employee', manager: true, divisionId: 5 };
+
+function submittedRequest() {
+  return {
+    id: 4001,
+    employeeId: 1,
+    employeeName: 'พนักงาน ทดสอบ',
+    requestType: 'AID_WEDDING',
+    eventDate: '2026-07-01',
+    requestedAmount: 5000,
+    approvedAmount: null,
+    status: 'SUBMITTED',
+    payrollBucket: 'AID',
+    detail: {},
+    requestedById: 1,
+    managerEmployeeId: 8,
+  };
 }
 
 async function selectType(value) {
@@ -168,6 +188,37 @@ describe('SpecialMoneyPanel', () => {
       requestedAmount: 5000,
       reason: 'ทดสอบระบบ',
       detail: {},
+    });
+  });
+
+  // Welfare is CEO-only in one stage. These pin the button gating, which is the half of that rule
+  // a user actually meets -- the server-side half is SpecialMoneyScopeIntegrationTest's job.
+  describe('approval gating', () => {
+    beforeEach(() => {
+      api.specialMoney.list.mockResolvedValue({ requests: [submittedRequest()] });
+    });
+
+    it('offers the CEO an approve button on a SUBMITTED request', async () => {
+      renderPanel(ceoUser);
+
+      expect(await screen.findByRole('button', { name: 'CEO อนุมัติ' })).toBeTruthy();
+    });
+
+    it('offers a ฝ่าย manager no approve button, even for their own division', async () => {
+      // The tempting wrong answer: overtime DOES let a ฝ่าย manager approve, and this panel used
+      // to as well. Welfare has no manager stage at all, so the button must not appear.
+      renderPanel(managerUser);
+
+      await screen.findByText(/พนักงาน ทดสอบ ·/);
+      expect(screen.queryByRole('button', { name: 'CEO อนุมัติ' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /ผู้จัดการอนุมัติ/ })).toBeNull();
+    });
+
+    it('offers the requester no approve button on their own request', async () => {
+      renderPanel();
+
+      await screen.findByText(/พนักงาน ทดสอบ ·/);
+      expect(screen.queryByRole('button', { name: 'CEO อนุมัติ' })).toBeNull();
     });
   });
 });

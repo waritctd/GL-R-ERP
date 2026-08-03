@@ -69,7 +69,7 @@ class SpecialMoneyPolicyEvaluatorTest {
     }
 
     private static UsageSnapshot noUsage() {
-        return new UsageSnapshot(Map.of(), Map.of());
+        return new UsageSnapshot(Map.of(), Map.of(), Map.of());
     }
 
     private static BigDecimal bd(int value) {
@@ -84,7 +84,7 @@ class SpecialMoneyPolicyEvaluatorTest {
     void medicalOverYtdCapClampsToRemainingBalance() {
         UsageSnapshot usage =
             new UsageSnapshot(
-                new EnumMap<>(Map.of(SpecialMoneyType.MEDICAL, bd(2000))), Map.of());
+                new EnumMap<>(Map.of(SpecialMoneyType.MEDICAL, bd(2000))), Map.of(), Map.of());
         SubmitSpecialMoneyRequest request =
             new SubmitSpecialMoneyRequest(
                 1L, TODAY, null, TODAY.minusDays(5), BigDecimal.ONE, bd(1500), "clinic visit", Map.of());
@@ -286,7 +286,7 @@ class SpecialMoneyPolicyEvaluatorTest {
     // ---------------------------------------------------------------------
 
     @Test
-    void uniformAprilReceiptRejected() {
+    void uniformSelfBuyAprilReceiptRejected() {
         SubmitSpecialMoneyRequest request =
             new SubmitSpecialMoneyRequest(
                 1L,
@@ -296,7 +296,7 @@ class SpecialMoneyPolicyEvaluatorTest {
                 BigDecimal.ONE,
                 bd(1000),
                 "annual uniform",
-                Map.of());
+                Map.of("uniformMode", "SELF_BUY", "shirtCount", "2", "trouserCount", "0"));
 
         PolicyDecision decision =
             EVALUATOR.evaluate(
@@ -308,6 +308,91 @@ class SpecialMoneyPolicyEvaluatorTest {
                 EXCLUDED_PROVINCES);
 
         assertThat(decision.violations()).anyMatch(v -> v.contains("เดือนพฤษภาคม"));
+    }
+
+    /**
+     * The other half of the May rule: it binds the SELF_BUY route only. The document ties May to
+     * buying it yourself; it says nothing about when the ร้านคุณลำพอง tailor bills. Requiring May of
+     * both -- as this used to -- refused a perfectly valid tailored claim receipted in June.
+     */
+    @Test
+    void uniformTailoredJuneReceiptAccepted() {
+        SubmitSpecialMoneyRequest request =
+            new SubmitSpecialMoneyRequest(
+                1L,
+                LocalDate.of(2026, 6, 15),
+                null,
+                LocalDate.of(2026, 6, 10),
+                BigDecimal.ONE,
+                bd(1000),
+                "annual uniform, tailored",
+                Map.of("shirtCount", "2", "trouserCount", "2"));
+
+        PolicyDecision decision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.UNIFORM_ANNUAL,
+                request,
+                activeEmployeePastProbation(),
+                noUsage(),
+                amounts(Map.of()),
+                EXCLUDED_PROVINCES);
+
+        assertThat(decision.violations()).isEmpty();
+        assertThat(decision.eligibleAmount()).isEqualByComparingTo(bd(1000));
+    }
+
+    @Test
+    void uniformTailoredOverFourPiecesRejected() {
+        // The 4-piece limit used to be checked in SELF_BUY only, so a tailored claim for 10 pieces
+        // under the ฿1,300 cap sailed through.
+        SubmitSpecialMoneyRequest request =
+            new SubmitSpecialMoneyRequest(
+                1L,
+                LocalDate.of(2026, 6, 15),
+                null,
+                LocalDate.of(2026, 6, 10),
+                BigDecimal.ONE,
+                bd(1200),
+                "annual uniform, tailored",
+                Map.of("shirtCount", "6", "trouserCount", "4"));
+
+        PolicyDecision decision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.UNIFORM_ANNUAL,
+                request,
+                activeEmployeePastProbation(),
+                noUsage(),
+                amounts(Map.of()),
+                EXCLUDED_PROVINCES);
+
+        assertThat(decision.violations()).anyMatch(v -> v.contains("ไม่เกิน 4 ชิ้น"));
+    }
+
+    @Test
+    void uniformSecondClaimInTheSameYearRejected() {
+        // "ปีละ 1 ครั้ง". The June-only window alone leaves the whole month open for a second claim.
+        SubmitSpecialMoneyRequest request =
+            new SubmitSpecialMoneyRequest(
+                1L,
+                LocalDate.of(2026, 6, 20),
+                null,
+                LocalDate.of(2026, 6, 10),
+                BigDecimal.ONE,
+                bd(500),
+                "second uniform claim",
+                Map.of("shirtCount", "1", "trouserCount", "0"));
+
+        PolicyDecision decision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.UNIFORM_ANNUAL,
+                request,
+                activeEmployeePastProbation(),
+                new UsageSnapshot(Map.of(), Map.of(),
+                    new EnumMap<>(Map.of(SpecialMoneyType.UNIFORM_ANNUAL, 1))),
+                amounts(Map.of()),
+                EXCLUDED_PROVINCES);
+
+        assertThat(decision.violations()).anyMatch(v -> v.contains("ปีละ 1 ครั้ง"));
     }
 
     @Test
@@ -371,7 +456,7 @@ class SpecialMoneyPolicyEvaluatorTest {
                 amounts(Map.of()),
                 EXCLUDED_PROVINCES);
 
-        assertThat(decision.violations()).anyMatch(v -> v.contains("จำนวนสูงสุด 4 ชิ้น"));
+        assertThat(decision.violations()).anyMatch(v -> v.contains("ไม่เกิน 4 ชิ้น"));
         assertThat(decision.eligibleAmount()).isEqualByComparingTo(bd(1200));
     }
 
@@ -384,7 +469,8 @@ class SpecialMoneyPolicyEvaluatorTest {
         EmployeeEligibilitySnapshot employee =
             new EmployeeEligibilitySnapshot(3L, TODAY.minusDays(10), null, null, "17", true, TODAY);
         SubmitSpecialMoneyRequest request =
-            new SubmitSpecialMoneyRequest(3L, TODAY, null, null, BigDecimal.ONE, bd(2660), "kit", Map.of());
+            new SubmitSpecialMoneyRequest(3L, TODAY, null, null, BigDecimal.ONE, bd(2660), "kit",
+                Map.of("needsBackSupport", "true"));
 
         PolicyDecision decision =
             EVALUATOR.evaluate(
@@ -399,12 +485,99 @@ class SpecialMoneyPolicyEvaluatorTest {
         assertThat(decision.eligibleAmount()).isEqualByComparingTo(bd(2660));
     }
 
+    /** สายรัดหลัง is "กรณีของเดิมที่มีไม่เพียงพอ" -- omitted, the kit is ฿700 cheaper. */
+    @Test
+    void preprobationKitExcludesTheBackSupportUnlessRequested() {
+        EmployeeEligibilitySnapshot employee = new EmployeeEligibilitySnapshot(
+            3L, TODAY.minusDays(8), null, null, "17", true, TODAY);
+        SubmitSpecialMoneyRequest request =
+            new SubmitSpecialMoneyRequest(3L, TODAY, null, null, BigDecimal.ONE, bd(1960), "kit", Map.of());
+
+        PolicyDecision decision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.UNIFORM_PREPROBATION_KIT,
+                request,
+                employee,
+                noUsage(),
+                amountsWithConfiguredSalesSupportCode("17"),
+                EXCLUDED_PROVINCES);
+
+        assertThat(decision.violations()).isEmpty();
+        // 220x3 + 300x3 + 400x1 = 1,960 -- the belt's ฿700 is NOT added.
+        assertThat(decision.eligibleAmount()).isEqualByComparingTo(bd(1960));
+    }
+
+    // ---------------------------------------------------------------------
+    // UNIFORM_NEW_STAFF (§2.1.2)
+    // ---------------------------------------------------------------------
+
+    @Test
+    void newStaffUniformOverSixPiecesRejected() {
+        // max_pieces=6 was seeded in V66 and then ignored entirely: this type used to pass the
+        // requested amount straight through with no checks at all.
+        SubmitSpecialMoneyRequest request =
+            new SubmitSpecialMoneyRequest(1L, TODAY, null, null, BigDecimal.ONE, bd(3000), "new staff uniform",
+                Map.of("shirtCount", "5", "trouserCount", "4"));
+
+        PolicyDecision decision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.UNIFORM_NEW_STAFF,
+                request,
+                activeEmployeePastProbation(),
+                noUsage(),
+                amounts(Map.of("max_pieces", bd(6))),
+                EXCLUDED_PROVINCES);
+
+        assertThat(decision.violations()).anyMatch(v -> v.contains("ไม่เกิน 6 ชิ้น"));
+    }
+
+    @Test
+    void newStaffUniformRejectedAfterTheFirstYear() {
+        EmployeeEligibilitySnapshot longServing = new EmployeeEligibilitySnapshot(
+            1L, TODAY.minusYears(4), TODAY.minusYears(4).plusDays(119), null, null, true, TODAY);
+        SubmitSpecialMoneyRequest request =
+            new SubmitSpecialMoneyRequest(1L, TODAY, null, null, BigDecimal.ONE, bd(1000), "new staff uniform",
+                Map.of("shirtCount", "3", "trouserCount", "3"));
+
+        PolicyDecision decision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.UNIFORM_NEW_STAFF,
+                request,
+                longServing,
+                noUsage(),
+                amounts(Map.of("max_pieces", bd(6))),
+                EXCLUDED_PROVINCES);
+
+        assertThat(decision.violations()).anyMatch(v -> v.contains("ปีแรกที่เข้าทำงาน"));
+    }
+
+    @Test
+    void newStaffUniformAcceptedWithinTheFirstYear() {
+        EmployeeEligibilitySnapshot recentJoiner = new EmployeeEligibilitySnapshot(
+            1L, TODAY.minusMonths(4), TODAY.minusMonths(4).plusDays(119), null, null, true, TODAY);
+        SubmitSpecialMoneyRequest request =
+            new SubmitSpecialMoneyRequest(1L, TODAY, null, null, BigDecimal.ONE, bd(1000), "new staff uniform",
+                Map.of("shirtCount", "3", "trouserCount", "3"));
+
+        PolicyDecision decision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.UNIFORM_NEW_STAFF,
+                request,
+                recentJoiner,
+                noUsage(),
+                amounts(Map.of("max_pieces", bd(6))),
+                EXCLUDED_PROVINCES);
+
+        assertThat(decision.violations()).isEmpty();
+    }
+
     @Test
     void preprobationKitRejectedForNonSalesSupportDepartment() {
         EmployeeEligibilitySnapshot employee =
             new EmployeeEligibilitySnapshot(3L, TODAY.minusDays(10), null, null, "99", true, TODAY);
         SubmitSpecialMoneyRequest request =
-            new SubmitSpecialMoneyRequest(3L, TODAY, null, null, BigDecimal.ONE, bd(2660), "kit", Map.of());
+            new SubmitSpecialMoneyRequest(3L, TODAY, null, null, BigDecimal.ONE, bd(2660), "kit",
+                Map.of("needsBackSupport", "true"));
 
         PolicyDecision decision =
             EVALUATOR.evaluate(
@@ -423,7 +596,8 @@ class SpecialMoneyPolicyEvaluatorTest {
         EmployeeEligibilitySnapshot employee =
             new EmployeeEligibilitySnapshot(3L, TODAY.minusDays(3), null, null, "17", true, TODAY);
         SubmitSpecialMoneyRequest request =
-            new SubmitSpecialMoneyRequest(3L, TODAY, null, null, BigDecimal.ONE, bd(2660), "kit", Map.of());
+            new SubmitSpecialMoneyRequest(3L, TODAY, null, null, BigDecimal.ONE, bd(2660), "kit",
+                Map.of("needsBackSupport", "true"));
 
         PolicyDecision decision =
             EVALUATOR.evaluate(
@@ -444,7 +618,7 @@ class SpecialMoneyPolicyEvaluatorTest {
     @Test
     void weddingRejectedWhenAlreadyClaimedOnce() {
         UsageSnapshot usage =
-            new UsageSnapshot(Map.of(), new EnumMap<>(Map.of(SpecialMoneyType.AID_WEDDING, 1)));
+            new UsageSnapshot(Map.of(), new EnumMap<>(Map.of(SpecialMoneyType.AID_WEDDING, 1)), Map.of());
         SubmitSpecialMoneyRequest request =
             new SubmitSpecialMoneyRequest(
                 1L, TODAY.minusDays(10), null, null, BigDecimal.ONE, bd(5000), "wedding aid", Map.of());
@@ -464,7 +638,7 @@ class SpecialMoneyPolicyEvaluatorTest {
     @Test
     void childbirthAllowedTwice() {
         UsageSnapshot usage =
-            new UsageSnapshot(Map.of(), new EnumMap<>(Map.of(SpecialMoneyType.AID_CHILDBIRTH, 2)));
+            new UsageSnapshot(Map.of(), new EnumMap<>(Map.of(SpecialMoneyType.AID_CHILDBIRTH, 2)), Map.of());
         SubmitSpecialMoneyRequest request =
             new SubmitSpecialMoneyRequest(
                 1L, TODAY.minusDays(10), null, null, BigDecimal.ONE, bd(5000), "childbirth aid", Map.of());

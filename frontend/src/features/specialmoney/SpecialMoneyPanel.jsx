@@ -161,6 +161,7 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
   const queryClient = useQueryClient();
   const [confirmState, setConfirmState] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
+  const [evidenceFile, setEvidenceFile] = useState(null);
 
   const employeesQuery = useQuery({
     queryKey: queryKeys.specialMoneyEmployees(),
@@ -284,13 +285,34 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
   }
 
   const createMutation = useMutation({
-    mutationFn: (payload) => api.specialMoney.create(payload).then((response) => response.request),
+    // Evidence needs a request id, so the file can only go up AFTER create. Chained here rather
+    // than left to the user: an evidence-required type cannot be approved without an attachment,
+    // so a request filed with the file forgotten is stuck until someone attaches one.
+    mutationFn: async (payload) => {
+      const created = await api.specialMoney.create(payload).then((response) => response.request);
+      if (evidenceFile) {
+        await api.specialMoney.addAttachment(created.id, evidenceFile);
+      }
+      return created;
+    },
     onSuccess: () => {
       reset(defaultForm(currentEmployee?.id || user.employeeId || ''));
+      setEvidenceFile(null);
       showToast('success', 'ส่งคำขอเงินสวัสดิการแล้ว');
       invalidateSpecialMoney();
     },
     onError: (error) => showToast('error', error.message || 'ส่งคำขอไม่สำเร็จ'),
+  });
+
+  // Attaching to an ALREADY-filed request. Without this a forgotten file would leave the request
+  // permanently unapprovable, since only the requester may attach and only while it is SUBMITTED.
+  const attachMutation = useMutation({
+    mutationFn: ({ id, file }) => api.specialMoney.addAttachment(id, file),
+    onSuccess: () => {
+      showToast('success', 'แนบเอกสารแล้ว');
+      invalidateSpecialMoney();
+    },
+    onError: (error) => showToast('error', error.message || 'แนบเอกสารไม่สำเร็จ'),
   });
 
   const approveMutation = useMutation({
@@ -368,23 +390,25 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
     rejectMutation.mutate({ id: confirmState.id, reviewerNote: reviewerNote.trim() });
   }
 
-  function managesRequest(request) {
-    const directManager = request.managerEmployeeId && Number(request.managerEmployeeId) === Number(user.employeeId);
-    const divisionManager = user.manager && Number(request.employeeId) !== Number(user.employeeId);
-    return Boolean(directManager || divisionManager);
-  }
-  function canManagerApprove(request) {
-    return request.status === 'SUBMITTED' && managesRequest(request);
-  }
+  // Welfare is CEO-only, in one stage, for every employee -- there is no manager stage to offer a
+  // button for. MANAGER_APPROVED is still accepted because rows written before that rule was
+  // introduced can still be sitting in it. Mirrors SpecialMoneyService.approve().
   function canCeoApprove(request) {
-    return request.status === 'MANAGER_APPROVED' && user.role === 'ceo';
+    return user.role === 'ceo' && ['SUBMITTED', 'MANAGER_APPROVED'].includes(request.status);
   }
   function canReviewRequest(request) {
-    return canManagerApprove(request) || canCeoApprove(request);
+    return canCeoApprove(request);
   }
   // Mirrors SpecialMoneyService.cancel(): only the employee or whoever filed on
   // their behalf, and only while SUBMITTED -- no manager-cancel path here,
   // unlike overtime.
+  // Mirrors SpecialMoneyService.requireCanAttach(): the requester only, while still SUBMITTED.
+  function canAttach(request) {
+    const isEmployee = Number(request.employeeId) === Number(user.employeeId);
+    const isRequester = request.requestedById != null && Number(request.requestedById) === Number(user.employeeId);
+    return request.status === 'SUBMITTED' && (isEmployee || isRequester);
+  }
+
   function canCancel(request) {
     const isEmployee = Number(request.employeeId) === Number(user.employeeId);
     const isRequester = request.requestedById != null && Number(request.requestedById) === Number(user.employeeId);
@@ -601,11 +625,18 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
 
           {requestType ? (
             <div className={formGridSpan2}>
-              <FormField label="หลักฐานประกอบ" htmlFor="smr-evidence" hint="อัปโหลดไฟล์ยังไม่รองรับในเวอร์ชันนี้ — ระบบยังไม่มี endpoint สำหรับแนบไฟล์ กรุณาเตรียมเอกสารไว้ส่งต่างหากตามที่ผู้จัดการ/HR แจ้ง">
-                <div id="smr-evidence" className="border border-dashed border-border rounded-md p-3.5 text-center text-sm text-icon-muted bg-surface-muted opacity-70" aria-disabled="true">
-                  <Icon name="paperclip" size={16} />
-                  <div className="mt-1">{evidenceLabel(requestType)} (ยังไม่เปิดใช้งานการอัปโหลด)</div>
-                </div>
+              <FormField
+                label="หลักฐานประกอบ"
+                htmlFor="smr-evidence"
+                hint={`${evidenceLabel(requestType)} — ไฟล์ PDF, JPG หรือ PNG. คำขอประเภทที่ต้องมีหลักฐานจะอนุมัติไม่ได้จนกว่าจะแนบเอกสาร`}
+              >
+                <input
+                  id="smr-evidence"
+                  type="file"
+                  accept="application/pdf,image/jpeg,image/png"
+                  onChange={(event) => setEvidenceFile(event.target.files?.[0] || null)}
+                  className="block w-full text-sm"
+                />
               </FormField>
             </div>
           ) : null}
@@ -647,7 +678,8 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
           const status = statusInfo(request.status);
           const typeMeta = typeOptions.find((item) => item.requestType === request.requestType);
           const reviewable = canReviewRequest(request);
-          const approveTitle = canCeoApprove(request) ? 'CEO อนุมัติ' : 'ผู้จัดการอนุมัติ';
+          // Only the CEO ever sees an approve button here, so there is no second label to pick.
+          const approveTitle = 'CEO อนุมัติ';
           return (
             <div className={`${TABLE_GRID} data-row`} key={request.id}>
               <span data-label="ประเภท / รายละเอียด" className="max-[720px]:order-1">
@@ -657,11 +689,37 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
               <span data-label="สถานะ" className="max-[720px]:order-2">
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
                 {request.reviewerNote ? <small>{request.reviewerNote}</small> : null}
+                {typeMeta?.evidenceRequired && request.status === 'SUBMITTED' && !request.attachmentCount ? (
+                  <small className="text-warning">ยังไม่ได้แนบเอกสาร — อนุมัติไม่ได้</small>
+                ) : null}
+                {request.attachmentCount ? (
+                  <small>แนบเอกสารแล้ว {request.attachmentCount} ไฟล์</small>
+                ) : null}
               </span>
               <span data-label="งวดจ่าย" className="max-[720px]:order-3">
                 {request.payrollMonth ? `งวด ${formatThaiMonthYear(new Date(`${request.payrollMonth}T00:00:00`))}` : 'ยังไม่กำหนด'}
               </span>
               <span className="row-actions max-[720px]:order-4">
+                {canAttach(request) ? (
+                  <label
+                    title="แนบเอกสารหลักฐาน"
+                    aria-label="แนบเอกสารหลักฐาน"
+                    className="inline-flex items-center justify-center cursor-pointer border border-border rounded-md w-8 h-8"
+                  >
+                    <Icon name="paperclip" size={14} />
+                    <input
+                      type="file"
+                      accept="application/pdf,image/jpeg,image/png"
+                      className="sr-only"
+                      disabled={saving}
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (file) attachMutation.mutate({ id: request.id, file });
+                        event.target.value = '';
+                      }}
+                    />
+                  </label>
+                ) : null}
                 {reviewable ? (
                   <>
                     <Button

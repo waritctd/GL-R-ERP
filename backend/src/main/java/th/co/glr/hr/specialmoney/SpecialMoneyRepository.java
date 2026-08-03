@@ -108,7 +108,10 @@ public class SpecialMoneyRepository {
                 return null;
             });
 
-        Map<SpecialMoneyType, Integer> approvedCountLifetime = new EnumMap<>(SpecialMoneyType.class);
+        // Counts include in-flight rows on purpose -- see UsageSnapshot's javadoc. Counting only
+        // APPROVED would let an employee file the same once-per-year claim twice before either was
+        // decided, and both would then be approvable.
+        Map<SpecialMoneyType, Integer> activeCountLifetime = new EnumMap<>(SpecialMoneyType.class);
         jdbc.query("""
             SELECT request_type, COUNT(*) AS lifetime_count
               FROM hr.special_money_request
@@ -119,12 +122,97 @@ public class SpecialMoneyRepository {
             (rs, rowNum) -> {
                 SpecialMoneyType type = parseType(rs.getString("request_type"));
                 if (type != null) {
-                    approvedCountLifetime.put(type, rs.getInt("lifetime_count"));
+                    activeCountLifetime.put(type, rs.getInt("lifetime_count"));
                 }
                 return null;
             });
 
-        return new UsageSnapshot(approvedAmountThisYear, approvedCountLifetime);
+        Map<SpecialMoneyType, Integer> activeCountThisYear = new EnumMap<>(SpecialMoneyType.class);
+        jdbc.query("""
+            SELECT request_type, COUNT(*) AS year_count
+              FROM hr.special_money_request
+             WHERE employee_id = :employeeId
+               AND status IN ('SUBMITTED', 'MANAGER_APPROVED', 'APPROVED')
+               AND EXTRACT(YEAR FROM event_date) = :year
+             GROUP BY request_type
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("year", year),
+            (rs, rowNum) -> {
+                SpecialMoneyType type = parseType(rs.getString("request_type"));
+                if (type != null) {
+                    activeCountThisYear.put(type, rs.getInt("year_count"));
+                }
+                return null;
+            });
+
+        return new UsageSnapshot(approvedAmountThisYear, activeCountLifetime, activeCountThisYear);
+    }
+
+    // ---------------------------------------------------------------------
+    // Evidence attachments (hr.special_money_request_attachment, V66)
+    // ---------------------------------------------------------------------
+
+    public long addAttachment(
+            long requestId, Long uploadedById, String fileName, String storagePath, String mimeType, Long sizeBytes) {
+        return jdbc.queryForObject("""
+            INSERT INTO hr.special_money_request_attachment
+                (special_money_request_id, file_name, storage_path, mime_type, size_bytes, uploaded_by_id)
+            VALUES (:requestId, :fileName, :storagePath, :mimeType, :sizeBytes, :uploadedById)
+            RETURNING attachment_id
+            """, new MapSqlParameterSource()
+            .addValue("requestId", requestId)
+            .addValue("fileName", fileName)
+            .addValue("storagePath", storagePath)
+            .addValue("mimeType", mimeType)
+            .addValue("sizeBytes", sizeBytes)
+            .addValue("uploadedById", uploadedById), Long.class);
+    }
+
+    public List<SpecialMoneyAttachmentDto> findAttachments(long requestId) {
+        return jdbc.query("""
+            SELECT a.attachment_id, a.special_money_request_id, a.file_name, a.mime_type,
+                   a.size_bytes, a.uploaded_by_id,
+                   concat_ws(' ', u.first_name_th, u.last_name_th) AS uploaded_by_name,
+                   a.uploaded_at
+              FROM hr.special_money_request_attachment a
+              LEFT JOIN hr.employee u ON u.employee_id = a.uploaded_by_id
+             WHERE a.special_money_request_id = :requestId
+             ORDER BY a.attachment_id
+            """, Map.of("requestId", requestId), (rs, rowNum) -> new SpecialMoneyAttachmentDto(
+                rs.getLong("attachment_id"),
+                rs.getLong("special_money_request_id"),
+                rs.getString("file_name"),
+                rs.getString("mime_type"),
+                nullableLong(rs, "size_bytes"),
+                nullableLong(rs, "uploaded_by_id"),
+                blankToNull(rs.getString("uploaded_by_name")),
+                rs.getObject("uploaded_at", OffsetDateTime.class)));
+    }
+
+    /** Storage path + owning request for a download, so the controller can authorize before serving. */
+    public Optional<AttachmentLocation> findAttachmentLocation(long attachmentId) {
+        return jdbc.query("""
+            SELECT special_money_request_id, file_name, storage_path, mime_type
+              FROM hr.special_money_request_attachment
+             WHERE attachment_id = :attachmentId
+            """, Map.of("attachmentId", attachmentId), (rs, rowNum) -> new AttachmentLocation(
+                rs.getLong("special_money_request_id"),
+                rs.getString("file_name"),
+                rs.getString("storage_path"),
+                rs.getString("mime_type")))
+            .stream()
+            .findFirst();
+    }
+
+    public int countAttachments(long requestId) {
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM hr.special_money_request_attachment WHERE special_money_request_id = :requestId",
+            Map.of("requestId", requestId), Integer.class);
+        return count == null ? 0 : count;
+    }
+
+    public record AttachmentLocation(long requestId, String fileName, String storagePath, String mimeType) {
     }
 
     public PolicyAmounts findPolicyAmounts(String requestType, LocalDate asOf) {
@@ -215,7 +303,11 @@ public class SpecialMoneyRepository {
         }
         if (filter.managerEmployeeId() != null) {
             StringBuilder scope = new StringBuilder(
-                " AND (s.employee_id = :managerEmployeeId OR e.reports_to_employee_id = :managerEmployeeId");
+                // Own requests, plus the whole ฝ่าย for a ผู้จัดการ. reports_to is deliberately not
+                // a disjunct here: it no longer grants approval rights (see
+                // SpecialMoneyService.managesEmployee), and a list that showed rows the viewer
+                // cannot act on is how a reviewer ends up staring at a request with no buttons.
+                " AND (s.employee_id = :managerEmployeeId");
             params.addValue("managerEmployeeId", filter.managerEmployeeId());
             if (filter.managerDivisionId() != null) {
                 scope.append(" OR e.division_id = :managerDivisionId");
@@ -237,21 +329,42 @@ public class SpecialMoneyRepository {
         return jdbc.query(sql.toString(), params, this::mapRequest);
     }
 
-    public int managerApprove(long id, Long reviewedById, String reviewerNote) {
+    /**
+     * The live approval route: SUBMITTED straight to APPROVED. Welfare has no manager stage, so
+     * {@code manager_approved_by} / {@code manager_approved_at} stay NULL on every request approved
+     * from here — stamping the CEO into those columns would forge a review stage that never
+     * happened.
+     *
+     * <p>{@link #ceoApprove} is the same statement guarded on {@code MANAGER_APPROVED}, kept only to
+     * clear rows written before the manager stage was removed.
+     */
+    public int ceoDirectApprove(
+            long id,
+            Long reviewedById,
+            BigDecimal approvedAmount,
+            LocalDate payrollMonth,
+            String capOverrideReason,
+            String reviewerNote) {
         return jdbc.update("""
             UPDATE hr.special_money_request
-               SET status = 'MANAGER_APPROVED',
-                   manager_approved_by = :reviewedById,
-                   manager_approved_at = now(),
+               SET status = 'APPROVED',
+                   approved_amount = :approvedAmount,
+                   payroll_month = :payrollMonth,
+                   cap_override_reason = :capOverrideReason,
+                   ceo_approved_by = :reviewedById,
+                   ceo_approved_at = now(),
                    reviewed_by_id = :reviewedById,
                    reviewed_at = now(),
-                   reviewer_note = :reviewerNote,
+                   reviewer_note = COALESCE(CAST(:reviewerNote AS text), reviewer_note),
                    updated_at = now()
              WHERE special_money_request_id = :id
                AND status = 'SUBMITTED'
             """, new MapSqlParameterSource()
             .addValue("id", id)
             .addValue("reviewedById", reviewedById)
+            .addValue("approvedAmount", approvedAmount)
+            .addValue("payrollMonth", payrollMonth)
+            .addValue("capOverrideReason", capOverrideReason)
             .addValue("reviewerNote", cleanNote(reviewerNote)));
     }
 
@@ -352,7 +465,10 @@ public class SpecialMoneyRepository {
             .addValue("managerEmployeeId", managerEmployeeId)
             .addValue("managerDivisionId", managerDivisionId);
         if (!includeAll) {
-            sql.append(" AND (e.employee_id = :managerEmployeeId OR e.reports_to_employee_id = :managerEmployeeId");
+            // Kept in step with findRequests' scope and SpecialMoneyService.managesEmployee:
+            // offering an employee here that submit() would then refuse turns a picker choice
+            // into a 403.
+            sql.append(" AND (e.employee_id = :managerEmployeeId");
             if (managerDivisionId != null) {
                 sql.append(" OR e.division_id = :managerDivisionId");
             }
@@ -362,11 +478,10 @@ public class SpecialMoneyRepository {
 
         return jdbc.query(sql.toString(), params, (rs, rowNum) -> {
             long employeeId = rs.getLong("employee_id");
-            Long reportsTo = nullableLong(rs, "reports_to_employee_id");
             Long divisionId = nullableLong(rs, "division_id");
             boolean self = managerEmployeeId != null && employeeId == managerEmployeeId;
-            boolean directReport = (managerEmployeeId != null && managerEmployeeId.equals(reportsTo))
-                || (managerDivisionId != null && managerDivisionId.equals(divisionId) && !self);
+            boolean directReport =
+                managerDivisionId != null && managerDivisionId.equals(divisionId) && !self;
             return new SpecialMoneyEmployeeOption(
                 employeeId,
                 rs.getString("employee_code"),
@@ -445,6 +560,8 @@ public class SpecialMoneyRepository {
                    s.cancelled_at,
                    e.reports_to_employee_id,
                    concat_ws(' ', manager.first_name_th, manager.last_name_th) AS manager_name,
+                   (SELECT COUNT(*) FROM hr.special_money_request_attachment a
+                     WHERE a.special_money_request_id = s.special_money_request_id) AS attachment_count,
                    s.created_at,
                    s.updated_at
               FROM hr.special_money_request s
@@ -493,6 +610,7 @@ public class SpecialMoneyRepository {
             rs.getObject("cancelled_at", OffsetDateTime.class),
             nullableLong(rs, "reports_to_employee_id"),
             blankToNull(rs.getString("manager_name")),
+            rs.getInt("attachment_count"),
             rs.getObject("created_at", OffsetDateTime.class),
             rs.getObject("updated_at", OffsetDateTime.class)
         );

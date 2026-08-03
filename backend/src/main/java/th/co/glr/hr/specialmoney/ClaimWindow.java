@@ -5,14 +5,15 @@ package th.co.glr.hr.specialmoney;
  * to the underlying event or receipt.
  */
 public enum ClaimWindow {
-    NONE,
-    /** MEDICAL: must submit within one month of the receipt date. */
-    ONE_MONTH_FROM_RECEIPT,
     /**
-     * All AID_* types: must submit within three months of the event date.
+     * No deadline. This is the correct value for the AID_* types: the welfare document sets no
+     * claim window for เงินช่วยเหลือ, only evidence requirements.
      *
-     * <p><b>NOT in the source welfare-policy document</b> -- this window is an assumption pending
-     * confirmation with the CEO/HR before it is relied on to reject a real claim.
+     * <p>A {@code THREE_MONTHS_FROM_EVENT} constant used to exist and was applied to all AID_*
+     * types. It was invented, not sourced from the document, and it refused genuine claims; removed
+     * on the owner's ruling, 2026-08-03.
      */
-    THREE_MONTHS_FROM_EVENT
+    NONE,
+    /** MEDICAL: must submit within one month of the receipt date (§2.3 — the document's only claim deadline). */
+    ONE_MONTH_FROM_RECEIPT
 }
