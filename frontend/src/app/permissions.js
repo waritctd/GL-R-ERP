@@ -127,6 +127,11 @@ const PATH_GUARDS = [
   // (ProcurementFulfilmentPage) — same audience as the raw PO list above,
   // since it embeds ProcurementListPage as its second section.
   { test: (p) => p === '/procurement', can: (u) => hasPermission(u.role, 'canManageProcurement') },
+  // Attendance calendar admin (hr.holiday / hr.work_schedule / hr.work_schedule_assignment CRUD —
+  // PR #480's API, this branch's UI). Mirrors the three controllers' requireAnyRole(user, "hr",
+  // "ceo") exactly. This is frontend gating only — see ROLE_PERMISSIONS.canManageAttendanceCalendar
+  // in routes.js for the same caveat.
+  { test: (p) => p === '/settings/attendance-calendar', can: (u) => hasPermission(u.role, 'canManageAttendanceCalendar') },
 ];
 
 export function canAccessPath(path, user) {
