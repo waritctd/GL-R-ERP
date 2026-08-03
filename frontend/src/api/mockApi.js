@@ -5936,6 +5936,66 @@ export const api = {
     },
   },
 
+  // Mirrors HolidayController (attendance/schedule/) -- hr.holiday admin CRUD, HR/CEO only.
+  // AUTHZ IS NOT AUTHORITATIVE HERE -- see CLAUDE.md "Mock API contract". No persisted hr.holiday
+  // store exists in the mock, so reads return empty rather than faking data that was never written,
+  // and writes throw the same "not supported in mock mode" stub already used above for
+  // markPresent/backfillCards/importDat -- a fake success would look verified without proving
+  // anything about the real write path or the real role gate.
+  holidays: {
+    async list(params) {
+      void params;
+      hasRole('hr', 'ceo');
+      return delay({ holidays: [] });
+    },
+    async create(payload) {
+      void payload;
+      hasRole('hr', 'ceo');
+      throw new Error('เพิ่มวันหยุดไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async update(date, payload) {
+      void date; void payload;
+      hasRole('hr', 'ceo');
+      throw new Error('แก้ไขวันหยุดไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async remove(date) {
+      void date;
+      hasRole('hr', 'ceo');
+      throw new Error('ลบวันหยุดไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async fetch() {
+      hasRole('hr', 'ceo');
+      return delay({ outcomes: [] });
+    },
+  },
+
+  // Mirrors WorkScheduleController (attendance/schedule/) -- read-only hr.work_schedule catalogue.
+  workSchedules: {
+    async list() {
+      hasRole('hr', 'ceo');
+      return delay({ schedules: [] });
+    },
+  },
+
+  // Mirrors WorkScheduleAssignmentController (attendance/schedule/) -- hr.work_schedule_assignment
+  // admin CRUD, HR/CEO only. Same "no persisted store, honest stub" rationale as holidays above.
+  workScheduleAssignments: {
+    async list() {
+      hasRole('hr', 'ceo');
+      return delay({ assignments: [] });
+    },
+    async create(payload) {
+      void payload;
+      hasRole('hr', 'ceo');
+      throw new Error('กำหนดตารางเวลาทำงานไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async end(assignmentId, payload) {
+      void assignmentId; void payload;
+      hasRole('hr', 'ceo');
+      throw new Error('สิ้นสุดการกำหนดตารางเวลาทำงานไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+  },
+
   // Mirrors DashboardController + DashboardService (dashboard/).
   dashboard: {
     async summary() {

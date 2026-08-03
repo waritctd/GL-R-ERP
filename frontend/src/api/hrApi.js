@@ -45,6 +45,27 @@ export const api = {
     importDat: (payload) => apiRequest(API_ROUTES.attendance.importDat, { method: 'POST', body: payload }),
     devices: () => apiRequest(API_ROUTES.attendance.devices),
   },
+  // Mirrors HolidayController (attendance/schedule/) — hr.holiday admin CRUD, HR/CEO only.
+  holidays: {
+    list: (params) => apiRequest(withQuery(API_ROUTES.holidays.list, params)),
+    create: (payload) => apiRequest(API_ROUTES.holidays.create, { method: 'POST', body: payload }),
+    update: (date, payload) => apiRequest(API_ROUTES.holidays.detail(date), { method: 'PUT', body: payload }),
+    remove: (date) => apiRequest(API_ROUTES.holidays.detail(date), { method: 'DELETE' }),
+    fetch: () => apiRequest(API_ROUTES.holidays.fetch, { method: 'POST' }),
+  },
+  // Mirrors WorkScheduleController (attendance/schedule/) — read-only hr.work_schedule catalogue.
+  workSchedules: {
+    list: () => apiRequest(API_ROUTES.workSchedules.list),
+  },
+  // Mirrors WorkScheduleAssignmentController (attendance/schedule/) — hr.work_schedule_assignment
+  // admin CRUD, HR/CEO only.
+  workScheduleAssignments: {
+    list: () => apiRequest(API_ROUTES.workScheduleAssignments.list),
+    create: (payload) =>
+      apiRequest(API_ROUTES.workScheduleAssignments.create, { method: 'POST', body: payload }),
+    end: (assignmentId, payload) =>
+      apiRequest(API_ROUTES.workScheduleAssignments.end(assignmentId), { method: 'POST', body: payload }),
+  },
   overtime: {
     list: (params) => apiRequest(withQuery(API_ROUTES.overtime.list, params)),
     employees: () => apiRequest(API_ROUTES.overtime.employees),

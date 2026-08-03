@@ -3,6 +3,7 @@ package th.co.glr.hr.attendance.schedule;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
@@ -19,6 +20,7 @@ import java.time.ZoneId;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.RestClient;
 import th.co.glr.hr.attendance.schedule.HolidayRepository.BankHoliday;
@@ -97,6 +99,74 @@ class BotHolidayFetchServiceTest {
                 List.of(new BankHoliday(LocalDate.of(2026, 5, 1), "วันแรงงาน")));
             assertThat(appender.list).noneMatch(event ->
                 event.getFormattedMessage().contains("no holidays parsed"));
+        } finally {
+            detachLogAppender(appender);
+        }
+    }
+
+    /**
+     * The bug this class was reported for: a {@link DataIntegrityViolationException} from the write
+     * step (e.g. production's real {@code value too long for type character varying(120)} against
+     * the pre-V129 column) must WARN with the fact that parsing succeeded but the write failed —
+     * never share {@link #fetchYear}'s "no data for {@code year}" INFO wording, which is reserved
+     * for BOT genuinely having nothing published. Both sides are asserted on the same JSON fixture
+     * and the same log capture so the split is proven real, not just two independently-passing
+     * tests: the first call (repository throws) takes the loud WARN path and must not also log the
+     * quiet "reconciled" INFO message; the second call, same fixture, repository now succeeding,
+     * takes the quiet path and must not also log the loud "database write failed" WARN message.
+     */
+    @Test
+    void aDatabaseWriteFailureLogsALoudWarningWhileASuccessfulWriteOnTheSameFixtureStaysQuiet() {
+        String json = """
+            {
+              "result": [
+                {"Date": "2026-05-01", "HolidayDescription": "Labour Day", "HolidayDescriptionThai": "วันแรงงาน"}
+              ]
+            }
+            """;
+        HolidayRepository repository = mock(HolidayRepository.class);
+        BotHolidayFetchService service = new BotHolidayFetchService(
+            repository, new AppProperties(), RestClient.builder(),
+            new ObjectMapper().registerModule(new JavaTimeModule()));
+        ListAppender<ILoggingEvent> appender = attachLogAppender();
+
+        try {
+            // First invocation throws (simulating the production write failure); the second, same
+            // arguments, succeeds as a no-op mock call -- Mockito's default for an unstubbed void
+            // call -- so the very same fixture can drive both the loud and the quiet path below.
+            doThrow(new DataIntegrityViolationException(
+                    "ERROR: value too long for type character varying(120)"))
+                .doNothing()
+                .when(repository).reconcileBankHolidaysForYear(2026,
+                    List.of(new BankHoliday(LocalDate.of(2026, 5, 1), "วันแรงงาน")));
+
+            BotHolidayFetchService.FetchOutcome failedOutcome = service.processResponse(json, 2026);
+
+            // Outcome contract unchanged on a write failure: holidayCount 0, applied false, exactly
+            // as any other failed/empty fetch -- even though one holiday genuinely parsed.
+            assertThat(failedOutcome.holidayCount()).isZero();
+            assertThat(failedOutcome.applied()).isFalse();
+            assertThat(appender.list).anyMatch(event ->
+                event.getLevel() == Level.WARN
+                    && event.getFormattedMessage().contains("parsed 1 holiday(s) successfully")
+                    && event.getFormattedMessage().contains("database write failed")
+                    && event.getFormattedMessage().contains("value too long"));
+            assertThat(appender.list).noneMatch(event ->
+                event.getFormattedMessage().contains("no data for"));
+            assertThat(appender.list).noneMatch(event ->
+                event.getFormattedMessage().contains("reconciled 1 holiday(s)"));
+
+            appender.list.clear();
+
+            BotHolidayFetchService.FetchOutcome successOutcome = service.processResponse(json, 2026);
+
+            assertThat(successOutcome.holidayCount()).isEqualTo(1);
+            assertThat(successOutcome.applied()).isTrue();
+            assertThat(appender.list).anyMatch(event ->
+                event.getLevel() == Level.INFO
+                    && event.getFormattedMessage().contains("reconciled 1 holiday(s)"));
+            assertThat(appender.list).noneMatch(event ->
+                event.getFormattedMessage().contains("database write failed"));
         } finally {
             detachLogAppender(appender);
         }
