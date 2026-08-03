@@ -17,6 +17,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.employee.ManagerApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -50,6 +51,7 @@ class OvertimeRetroactiveScopeIntegrationTest extends AbstractPostgresIntegratio
         // them keeps this test about who may write whose rows. The repository is real.
         service = new OvertimeService(
             new OvertimeRepository(jdbc),
+            new ManagerApproverRepository(jdbc),
             mock(AuditService.class),
             mock(NotificationService.class),
             new AppProperties(),
@@ -57,7 +59,7 @@ class OvertimeRetroactiveScopeIntegrationTest extends AbstractPostgresIntegratio
 
         salesDivision = insertDivision("SLS", "ฝ่ายขาย");
         factoryDivision = insertDivision("FAC", "ฝ่ายโรงงาน");
-        salesManager = insertEmployee("M001", salesDivision, null);
+        salesManager = insertEmployee("M001", salesDivision, null, "ผู้จัดการฝ่ายขาย");
         salesStaff = insertEmployee("S001", salesDivision, salesManager);
         factoryStaff = insertEmployee("F001", factoryDivision, null);
     }
@@ -175,18 +177,39 @@ class OvertimeRetroactiveScopeIntegrationTest extends AbstractPostgresIntegratio
     }
 
     private long insertEmployee(String code, Long divisionId, Long reportsTo) {
+        return insertEmployee(code, divisionId, reportsTo, null);
+    }
+
+    private long insertEmployee(String code, Long divisionId, Long reportsTo, String positionNameTh) {
         Map<String, Object> params = new HashMap<>();
         params.put("code", code);
         params.put("divisionId", divisionId);
         params.put("reportsTo", reportsTo);
         params.put("hireDate", LocalDate.of(2020, 1, 1));
+        params.put("positionId", positionNameTh == null ? null : insertPosition(code, positionNameTh));
         return jdbc.queryForObject("""
             INSERT INTO hr.employee (employee_code, badge_card_no, first_name_th, last_name_th,
-                                     division_id, reports_to_employee_id, hire_date, is_active)
-            VALUES (:code, :code, 'ทดสอบ', :code, :divisionId, :reportsTo, :hireDate, TRUE)
+                                     division_id, reports_to_employee_id, position_id, hire_date, is_active)
+            VALUES (:code, :code, 'ทดสอบ', :code, :divisionId, :reportsTo, :positionId, :hireDate, TRUE)
             RETURNING employee_id
             """, params, Long.class);
     }
+
+    /**
+     * A ผู้จัดการ position is what makes an employee a manager <em>in the database</em>, which is
+     * what {@code ManagerApproverRepository} reads when deciding whether a manager stage exists at
+     * all. It must agree with the {@code manager} flag on the {@link UserPrincipal} used for that
+     * person -- in production both derive from the same position via {@code DivisionAccessPolicy},
+     * so a fixture where they disagree models a state that cannot occur, and would quietly send
+     * requests down the CEO-direct route instead of the manager route under test.
+     */
+    private long insertPosition(String code, String nameTh) {
+        return jdbc.queryForObject("""
+            INSERT INTO hr.position (source_code, name_th, is_active)
+            VALUES (:code, :name, TRUE) RETURNING position_id
+            """, Map.of("code", code, "name", nameTh), Long.class);
+    }
+
 
     private void insertProcessedPeriod(LocalDate payrollMonth) {
         jdbc.update("""

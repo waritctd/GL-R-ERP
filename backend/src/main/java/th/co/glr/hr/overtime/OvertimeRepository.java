@@ -11,6 +11,7 @@ import java.util.Optional;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.employee.ManagerApproverRepository;
 
 @Repository
 public class OvertimeRepository {
@@ -103,7 +104,9 @@ public class OvertimeRepository {
             .addValue("managerEmployeeId", managerEmployeeId)
             .addValue("managerDivisionId", managerDivisionId);
         if (!includeAll) {
-            sql.append(" AND (e.employee_id = :managerEmployeeId OR e.reports_to_employee_id = :managerEmployeeId");
+            // Kept in step with findRequests' scope and OvertimeService.managesEmployee: offering an
+            // employee here that submit() would then refuse turns a picker choice into a 403.
+            sql.append(" AND (e.employee_id = :managerEmployeeId");
             if (managerDivisionId != null) {
                 sql.append(" OR e.division_id = :managerDivisionId");
             }
@@ -113,11 +116,10 @@ public class OvertimeRepository {
 
         return jdbc.query(sql.toString(), params, (rs, rowNum) -> {
             long employeeId = rs.getLong("employee_id");
-            Long reportsTo = nullableLong(rs, "reports_to_employee_id");
             Long divisionId = nullableLong(rs, "division_id");
             boolean self = managerEmployeeId != null && employeeId == managerEmployeeId;
-            boolean directReport = (managerEmployeeId != null && managerEmployeeId.equals(reportsTo))
-                || (managerDivisionId != null && managerDivisionId.equals(divisionId) && !self);
+            boolean directReport =
+                managerDivisionId != null && managerDivisionId.equals(divisionId) && !self;
             return new OvertimeEmployeeOption(
                 employeeId,
                 rs.getString("employee_code"),
@@ -182,7 +184,11 @@ public class OvertimeRepository {
         }
         if (filter.managerEmployeeId() != null) {
             StringBuilder scope = new StringBuilder(
-                " AND (o.employee_id = :managerEmployeeId OR e.reports_to_employee_id = :managerEmployeeId");
+                // Own requests, plus the whole ฝ่าย for a ผู้จัดการ. reports_to is deliberately not
+                // a disjunct here: it no longer grants approval rights (see
+                // OvertimeService.managesEmployee), and a list that showed rows the viewer cannot
+                // act on is how a reviewer ends up staring at a request with no buttons.
+                " AND (o.employee_id = :managerEmployeeId");
             params.addValue("managerEmployeeId", filter.managerEmployeeId());
             if (filter.managerDivisionId() != null) {
                 scope.append(" OR e.division_id = :managerDivisionId");
@@ -314,6 +320,47 @@ public class OvertimeRepository {
             .addValue("reviewerNote", cleanNote(reviewerNote)));
     }
 
+    /**
+     * The manager-less route: SUBMITTED straight to APPROVED in one statement.
+     *
+     * <p>Writes the calculation and salary basis that {@link #managerApprove} would have written,
+     * because payroll reads those off an APPROVED row regardless of which route produced it.
+     *
+     * <p>{@code manager_approved_by} / {@code manager_approved_at} are deliberately left NULL —
+     * no manager approved this, and stamping the CEO into those columns would forge a review stage
+     * that never happened. Those NULLs are what tell the two routes apart in the audit trail.
+     */
+    public int ceoDirectApprove(
+            long id, Long reviewedById, OvertimeCalculation calculation, BigDecimal salaryBasis, String reviewerNote) {
+        return jdbc.update("""
+            UPDATE hr.overtime_request
+               SET status = 'APPROVED',
+                   actual_start_at = :actualStartAt,
+                   actual_end_at = :actualEndAt,
+                   actual_minutes = :actualMinutes,
+                   payable_minutes = :payableMinutes,
+                   calculation_note = :calculationNote,
+                   salary_basis = :salaryBasis,
+                   ceo_approved_by = :reviewedById,
+                   ceo_approved_at = now(),
+                   reviewed_by_id = :reviewedById,
+                   reviewed_at = now(),
+                   reviewer_note = :reviewerNote,
+                   updated_at = now()
+             WHERE overtime_request_id = :id
+               AND status = 'SUBMITTED'
+            """, new MapSqlParameterSource()
+            .addValue("id", id)
+            .addValue("reviewedById", reviewedById)
+            .addValue("actualStartAt", calculation.actualStartAt())
+            .addValue("actualEndAt", calculation.actualEndAt())
+            .addValue("actualMinutes", calculation.actualMinutes())
+            .addValue("payableMinutes", calculation.payableMinutes())
+            .addValue("calculationNote", calculation.calculationNote())
+            .addValue("salaryBasis", salaryBasis)
+            .addValue("reviewerNote", cleanNote(reviewerNote)));
+    }
+
     public int ceoApprove(long id, Long reviewedById, String reviewerNote) {
         return jdbc.update("""
             UPDATE hr.overtime_request
@@ -417,6 +464,13 @@ public class OvertimeRepository {
                    o.cancelled_at,
                    e.reports_to_employee_id,
                    concat_ws(' ', manager.first_name_th, manager.last_name_th) AS manager_name,
+                   """
+            // Projected per row so the UI can tell a manager-less request apart without a second
+            // round trip. Same expression the approve/reject gate uses, so the button the CEO sees
+            // and the gate the server enforces cannot disagree.
+            + ManagerApproverRepository.hasManagerApproverSql("e") + " AS has_manager_approver,"
+            + """
+
                    o.created_at,
                    o.updated_at
               FROM hr.overtime_request o
@@ -465,6 +519,7 @@ public class OvertimeRepository {
             rs.getObject("cancelled_at", OffsetDateTime.class),
             nullableLong(rs, "reports_to_employee_id"),
             blankToNull(rs.getString("manager_name")),
+            rs.getBoolean("has_manager_approver"),
             rs.getObject("created_at", OffsetDateTime.class),
             rs.getObject("updated_at", OffsetDateTime.class)
         );

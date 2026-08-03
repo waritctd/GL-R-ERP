@@ -62,6 +62,25 @@ export const api = {
     approve: (id, payload = {}) => apiRequest(API_ROUTES.specialMoney.approve(id), { method: 'POST', body: payload }),
     reject: (id, payload = {}) => apiRequest(API_ROUTES.specialMoney.reject(id), { method: 'POST', body: payload }),
     cancel: (id, payload = {}) => apiRequest(API_ROUTES.specialMoney.cancel(id), { method: 'POST', body: payload }),
+    attachments: (id) => apiRequest(API_ROUTES.specialMoney.attachments(id)),
+    // Evidence upload. Multipart, so it bypasses apiRequest's JSON body handling the same way
+    // leave.create does for its attachment.
+    addAttachment: async (id, file) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const response = await fetch(API_ROUTES.specialMoney.attachments(id), {
+        method: 'POST',
+        credentials: 'include',
+        headers: csrfHeaders(),
+        body: formData,
+      });
+      if (!response.ok) {
+        const problem = await response.json().catch(() => ({}));
+        throw new Error(problem.message || 'อัปโหลดเอกสารไม่สำเร็จ');
+      }
+      return response.json();
+    },
+    attachmentDownloadUrl: (attachmentId) => API_ROUTES.specialMoney.attachmentDownload(attachmentId),
   },
   leave: {
     list: (params) => apiRequest(withQuery(API_ROUTES.leave.list, params)),

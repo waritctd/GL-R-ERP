@@ -44,6 +44,8 @@ export const API_ROUTES = {
     approve: (id) => `/api/special-money/${id}/approve`,
     reject: (id) => `/api/special-money/${id}/reject`,
     cancel: (id) => `/api/special-money/${id}/cancel`,
+    attachments: (id) => `/api/special-money/${id}/attachments`,
+    attachmentDownload: (attachmentId) => `/api/special-money/attachments/${attachmentId}`,
   },
   leave: {
     list: '/api/leave',
