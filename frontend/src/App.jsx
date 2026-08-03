@@ -57,6 +57,10 @@ const PricingRequestDetailPage = lazy(() => import('./features/pricingRequests/P
 const ProcurementListPage = lazy(() => import('./features/procurement/ProcurementListPage.jsx').then(toDefault('ProcurementListPage')));
 const ProcurementDetailPage = lazy(() => import('./features/procurement/ProcurementDetailPage.jsx').then(toDefault('ProcurementDetailPage')));
 const ProcurementFulfilmentPage = lazy(() => import('./features/procurement/ProcurementFulfilmentPage.jsx').then(toDefault('ProcurementFulfilmentPage')));
+// Attendance calendar admin (PR #480 shipped the hr.holiday / hr.work_schedule_assignment write
+// API with no UI at all) — HR/CEO only, gated via canManageAttendanceCalendar. Never gated on
+// SALES_ENABLED: this is attendance/HR-core, not the sales/CRM stack.
+const AttendanceCalendarPage = lazy(() => import('./features/attendanceCalendar/AttendanceCalendarPage.jsx').then(toDefault('AttendanceCalendarPage')));
 
 // Thin wrappers that source the ticket id from the URL for the frozen sales
 // pages (they already fetch by id internally — branch 5 only rewires how the
@@ -361,6 +365,11 @@ export function App() {
             <Route
               path="/payroll"
               element={<PayrollPage user={user} showToast={showToast} />}
+            />
+            {/* Attendance calendar admin (PR #480's API, this branch's UI) — HR/CEO only. */}
+            <Route
+              path="/settings/attendance-calendar"
+              element={<AttendanceCalendarPage user={user} showToast={showToast} />}
             />
             {/* Frozen sales stack — param-wired to keep working / URL-addressable. */}
             {SALES_ENABLED && (

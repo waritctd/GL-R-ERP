@@ -98,4 +98,11 @@ export const queryKeys = {
   factoryPurchaseOrderList: (status) => ['factoryPurchaseOrders', 'list', status ?? ''],
   factoryPurchaseOrdersForPricingRequest: (pricingRequestId) => ['pricingRequests', 'factoryPurchaseOrders', pricingRequestId],
   factoryPurchaseOrderDetail: (id) => ['factoryPurchaseOrders', 'detail', id],
+  // Attendance calendar admin (PR #480's API, this branch's UI). `holidays` is per year-range
+  // (mirrors GET /api/holidays?from&to) since the tab's year selector re-queries per year; the
+  // other two have no filters yet (workSchedules is the whole read-only catalogue,
+  // workScheduleAssignments is the whole admin list).
+  holidays: (from, to) => ['holidays', from ?? '', to ?? ''],
+  workSchedules: () => ['workSchedules'],
+  workScheduleAssignments: () => ['workScheduleAssignments'],
 };
