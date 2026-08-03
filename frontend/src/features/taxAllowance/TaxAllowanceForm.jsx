@@ -7,6 +7,7 @@ import { CollapsibleSection } from '../../components/common/CollapsibleSection.j
 import { FormField } from '../../components/common/FormField.jsx';
 import { InfoTip } from '../../components/common/InfoTip.jsx';
 import { FormGrid, formGridSpan2 } from '../../components/common/Layout.jsx';
+import { QuotaBar } from '../../components/common/QuotaBar.jsx';
 import { formatMoney } from '../../utils/format.js';
 import {
   ALLOWANCE_COUNT_KEYS,
@@ -70,26 +71,20 @@ function CountField({ id, label, unit, hint, error, disabled, register }) {
   );
 }
 
+// The bar itself now lives in components/common/QuotaBar.jsx -- welfare needs the same readout and
+// this was the only accessible implementation in the app. Only the ล.ย.01-specific copy and this
+// form's grid placement stay here; everything else is the shared component's job.
 function GroupUsageBar({ group }) {
   const { label, total, cap } = group;
-  if (cap == null) return null;
-  const pct = cap > 0 ? Math.min(100, (total / cap) * 100) : 0;
-  const over = total > cap;
   return (
-    <div className="col-span-2 max-[720px]:col-span-1 rounded-md border border-border-subtle bg-surface-subtle p-3">
-      <div className="flex items-center justify-between gap-3 text-xs font-bold text-text-muted">
-        <span>{label} ใช้วงเงินรวมกัน {formatMoney(cap)}</span>
-        <span className={over ? 'text-danger' : 'text-text'}>{formatMoney(total)} / {formatMoney(cap)}</span>
-      </div>
-      <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-border-subtle" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100} aria-label={`${label} ใช้ไปแล้ว ${Math.round(pct)}%`}>
-        <div className={`h-full rounded-full ${over ? 'bg-danger' : 'bg-primary'}`} style={{ width: `${pct}%` }} />
-      </div>
-      {over ? (
-        <p className="m-0 mt-1.5 text-xs font-bold text-danger">
-          ยอดที่ยื่นเกินวงเงินรวมของกลุ่มนี้ — ระบบจะยื่นตามยอดที่กรอกจริง แต่ตอนคำนวณภาษี HR จะเห็นยอดที่ตัดตามเพดานจริง
-        </p>
-      ) : null}
-    </div>
+    <QuotaBar
+      className={`${formGridSpan2}`}
+      label={label}
+      caption={`${label} ใช้วงเงินรวมกัน ${formatMoney(cap)}`}
+      used={total}
+      cap={cap}
+      overMessage="ยอดที่ยื่นเกินวงเงินรวมของกลุ่มนี้ — ระบบจะยื่นตามยอดที่กรอกจริง แต่ตอนคำนวณภาษี HR จะเห็นยอดที่ตัดตามเพดานจริง"
+    />
   );
 }
 
