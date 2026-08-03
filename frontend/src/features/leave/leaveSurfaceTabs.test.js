@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   canManagerCancelRequest,
   canReviewRequest,
+  canSubmitOwnLeave,
   DEFAULT_LEAVE_SURFACE_TAB_ID,
+  defaultLeaveSurfaceTabId,
   LEAVE_SURFACE_TABS,
   resolveLeaveSurfaceTab,
   visibleLeaveSurfaceTabIds,
@@ -11,6 +13,7 @@ import {
 const employee = { role: 'employee', employeeId: 1 };
 const nonHrManager = { role: 'employee', employeeId: 5, manager: true };
 const hr = { role: 'hr', employeeId: 99 };
+const ceo = { role: 'ceo', employeeId: 1 };
 
 const submittedRequestUnderNonHrManager = {
   id: 501, status: 'SUBMITTED', managerEmployeeId: 5,
@@ -82,6 +85,53 @@ describe('resolveLeaveSurfaceTab', () => {
     // e.g. a plain employee with no reports hand-editing the URL, or a stale deep link
     // shared by a manager to someone who isn't one.
     expect(resolveLeaveSurfaceTab('review', ['me', 'rules'])).toBe(DEFAULT_LEAVE_SURFACE_TAB_ID);
+  });
+
+  // Leave HR-submit gate (2026-08-03): the optional third argument lets a caller (hr/ceo actors
+  // via LeaveSurfacePage.jsx's defaultLeaveSurfaceTabId(user)) prefer a different landing tab
+  // than the hardcoded "me".
+  it('prefers a supplied preferredDefaultId over DEFAULT_LEAVE_SURFACE_TAB_ID for an absent/unknown tab id', () => {
+    expect(resolveLeaveSurfaceTab(null, ['me', 'review', 'rules'], 'review')).toBe('review');
+    expect(resolveLeaveSurfaceTab('not-a-real-tab', ['me', 'review', 'rules'], 'review')).toBe('review');
+  });
+
+  it('degrades to DEFAULT_LEAVE_SURFACE_TAB_ID when preferredDefaultId is not currently visible', () => {
+    // e.g. a ceo actor -- not in ROLE_PERMISSIONS.canReviewLeave -- with zero actionable rows
+    // loaded yet, so "review" itself is hidden.
+    expect(resolveLeaveSurfaceTab(null, ['me', 'rules'], 'review')).toBe(DEFAULT_LEAVE_SURFACE_TAB_ID);
+  });
+
+  it('still honours an explicitly requested, currently-visible tab over preferredDefaultId', () => {
+    expect(resolveLeaveSurfaceTab('rules', ['me', 'review', 'rules'], 'review')).toBe('rules');
+  });
+});
+
+describe('canSubmitOwnLeave', () => {
+  it('is false for hr and ceo -- they oversee leave but do not request it for themselves', () => {
+    expect(canSubmitOwnLeave(hr)).toBe(false);
+    expect(canSubmitOwnLeave(ceo)).toBe(false);
+  });
+
+  it('is true for a plain employee and a non-HR manager', () => {
+    expect(canSubmitOwnLeave(employee)).toBe(true);
+    expect(canSubmitOwnLeave(nonHrManager)).toBe(true);
+  });
+
+  it('is true (fail-open on presentation) for a missing/undefined user', () => {
+    expect(canSubmitOwnLeave(undefined)).toBe(true);
+    expect(canSubmitOwnLeave({})).toBe(true);
+  });
+});
+
+describe('defaultLeaveSurfaceTabId', () => {
+  it('is "review" for hr and ceo', () => {
+    expect(defaultLeaveSurfaceTabId(hr)).toBe('review');
+    expect(defaultLeaveSurfaceTabId(ceo)).toBe('review');
+  });
+
+  it('is DEFAULT_LEAVE_SURFACE_TAB_ID ("me") for every other role', () => {
+    expect(defaultLeaveSurfaceTabId(employee)).toBe(DEFAULT_LEAVE_SURFACE_TAB_ID);
+    expect(defaultLeaveSurfaceTabId(nonHrManager)).toBe(DEFAULT_LEAVE_SURFACE_TAB_ID);
   });
 });
 

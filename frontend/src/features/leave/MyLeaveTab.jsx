@@ -21,6 +21,7 @@ import { leaveStatusLabel as statusInfo } from '../../utils/format.js';
 import {
   formatDateRange, formatDays, monthStartIso, todayIso, yearFrom,
 } from './leaveFormatting.js';
+import { canSubmitOwnLeave } from './leaveSurfaceTabs.js';
 import {
   buildLeaveRequestColumns, LEAVE_REQUEST_TABLE_GRID, leaveRequestRowKey,
   renderLeaveRequestExpanded,
@@ -229,7 +230,14 @@ function OwnRequestsSection({
         state="empty"
         title="ยังไม่มีคำขอลา"
         description="ลาคือการหยุดงานที่ได้รับอนุมัติ กดปุ่ม “ยื่นคำขอลา” ด้านบนเพื่อเริ่ม เลือกประเภทและช่วงวันที่ ระบบจะตรวจโควตาและอนุมัติอัตโนมัติถ้าเข้าเงื่อนไข"
-        action={<Button type="button" onClick={() => navigate('/leave/new')}><Icon name="plus" />ยื่นคำขอลา</Button>}
+        // Leave HR-submit gate (2026-08-03): mirrors LeaveSurfacePage.jsx's page-header CTA --
+        // hr/ceo oversee leave but do not request it for themselves (owner ruling). This is the
+        // SECOND of the two "ยื่นคำขอลา" entry points on this page; hiding it here too keeps the
+        // UI coherent (no button that only leads to a server-side 403). Presentation only -- the
+        // real rule is LeaveService#resolveTargetEmployee.
+        action={canSubmitOwnLeave(user) ? (
+          <Button type="button" onClick={() => navigate('/leave/new')}><Icon name="plus" />ยื่นคำขอลา</Button>
+        ) : undefined}
       />
     );
   }

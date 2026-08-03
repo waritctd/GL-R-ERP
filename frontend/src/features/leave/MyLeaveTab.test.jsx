@@ -54,7 +54,7 @@ const emptyContactDefaults = {
   },
 };
 
-function renderMyLeaveTab() {
+function renderMyLeaveTab(renderUser = user) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -65,7 +65,7 @@ function renderMyLeaveTab() {
   render(
     <MemoryRouter>
       <QueryClientProvider client={queryClient}>
-        <MyLeaveTab user={user} currentEmployee={currentEmployee} showToast={vi.fn()} />
+        <MyLeaveTab user={renderUser} currentEmployee={currentEmployee} showToast={vi.fn()} />
       </QueryClientProvider>
     </MemoryRouter>,
   );
@@ -290,6 +290,18 @@ describe('MyLeaveTab own-request table: the three state-defect fixes (Phase A1)'
     expect(await screen.findByText('ยังไม่มีคำขอลา')).not.toBeNull();
     expect(screen.getByRole('button', { name: /ยื่นคำขอลา/ })).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'ล้างตัวกรอง' })).toBeNull();
+  });
+
+  // Leave HR-submit gate (2026-08-03): hr/ceo oversee leave but do not request it for
+  // themselves (owner ruling) -- the empty-state's own "ยื่นคำขอลา" action is the SECOND CTA
+  // this rule touches (LeaveSurfacePage.jsx's page-header CTA is the first). Presentation only;
+  // the real rule is LeaveService#resolveTargetEmployee's server-side 403.
+  it('DEFECT 3a (hr/ceo variant): the empty-state CTA does not render for hr or ceo', async () => {
+    api.leave.list.mockResolvedValue({ requests: [] });
+    renderMyLeaveTab({ employeeId: 99, name: 'ฝ่ายบุคคล', role: 'hr', manager: false });
+
+    expect(await screen.findByText('ยังไม่มีคำขอลา')).not.toBeNull();
+    expect(screen.queryByRole('button', { name: /ยื่นคำขอลา/ })).toBeNull();
   });
 
   it('DEFECT 3b: a filtered-to-zero result offers a clear-filters action distinct from the empty-teaching copy', async () => {
