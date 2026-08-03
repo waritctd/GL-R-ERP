@@ -4368,6 +4368,20 @@ export const api = {
       request.updatedAt = now;
       return delay({ request: buildLeaveRecord(request) });
     },
+
+    // Leave-surface IA rebuild, Phase A0 (not yet landed on the real backend): will back the
+    // "รอพิจารณา" tab's badge/count with a per-manager summary of requests awaiting THIS user's
+    // decision. Added here (Phase A1) ONLY so contract.test.js's hrApi<->mockApi method-surface
+    // parity check stays green ahead of that work landing -- no page in this phase calls it yet,
+    // and `review.isVisible` (leaveSurfaceTabs.js) still derives visibility from the already-loaded
+    // `list()` response, not from this endpoint. This is a small FIXED fixture, not a rule engine:
+    // it does not recompute canReviewLeave() or scan db.leaveRequests, so its shape AND its
+    // authorization are not authoritative -- verify the real endpoint against LeaveService once A0
+    // actually lands.
+    async reviewSummary() {
+      requireSession();
+      return delay({ pendingCount: 0, requests: [] });
+    },
   },
 
   // Mirrors OvertimeController + OvertimeService (overtime/) — see

@@ -1,0 +1,113 @@
+// Leave-surface IA rebuild, Phase A1 ("shell"). LeavePage.jsx was one flat, 1000+ line
+// component serving three unrelated jobs at once -- track my own leave, decide someone
+// else's, and (not at all) look up a rule -- in one unbroken vertical scroll, so an
+// approver used to see the submit form sitting directly above the queue they were
+// reviewing. This module is the tab metadata list for the new tabbed shell
+// (LeaveSurfacePage.jsx): same `[{id,label,helper,isVisible}]` + `resolve*Tab`/
+// `visible*TabIds`/`DEFAULT_*_TAB_ID` shape as ticketDetailTabs.js, so the page stays a
+// thin shell around it.
+//
+// Phase A1 deliberately adds NO new rule disclosure. `rules` below is a placeholder
+// panel only -- see LeaveSurfacePage.jsx's TODO(A3) at its render site.
+
+import { hasPermission } from '../../app/permissions.js';
+
+// Ported from the pre-A1 LeavePage.jsx's `canReviewRequest` (~L540) and `canManagerCancel`
+// (~L545) -- the per-row decision of whether THIS user may approve/reject (canReview) or
+// cancel (canManagerCancel) a given request. Both check the same thing LeaveService.
+// canReviewEmployee/isDirectManager check server-side: canReviewAll (the role-level
+// permission -- hr today) OR a stored managerEmployeeId FK match. NEVER read either of
+// these as an authorization decision on its own -- they are the client's best guess at
+// what the server will allow, used only to decide what to render; the server enforces
+// the real gate on every mutation regardless. See CLAUDE.md: verify against the real
+// Java service, never the mock.
+//
+// Phase A0 (not yet landed) adds a server-supplied `canReview` boolean to each request
+// row (GET /api/leave and the new GET /api/leave/review-summary) that will fold in the
+// real backend decision authoritatively. `canReviewRequest` below already prefers it
+// when present, falling back to the client-side approximation for a row that predates
+// it -- once A0 ships, every row will carry the field and the fallback branch simply
+// stops being exercised, with no call-site change needed here.
+export function canReviewRequest(request, user, canReviewAll) {
+  if (request?.canReview != null) return Boolean(request.canReview);
+  return request?.status === 'SUBMITTED'
+    && (canReviewAll || (request?.managerEmployeeId && Number(request.managerEmployeeId) === Number(user?.employeeId)));
+}
+
+export function canManagerCancelRequest(request, user, canReviewAll) {
+  return ['SUBMITTED', 'APPROVED'].includes(request?.status)
+    && (canReviewAll || (request?.managerEmployeeId && Number(request.managerEmployeeId) === Number(user?.employeeId)));
+}
+
+function userMayActOnAnyRequest(requests, user, canReviewAll) {
+  return requests.some((request) => canReviewRequest(request, user, canReviewAll)
+    || canManagerCancelRequest(request, user, canReviewAll));
+}
+
+export const LEAVE_SURFACE_TABS = [
+  {
+    id: 'me',
+    label: 'ของฉัน',
+    helper: 'โควตาและคำขอลาของคุณ',
+    isVisible: () => true,
+  },
+  {
+    id: 'review',
+    label: 'รอพิจารณา',
+    helper: 'คำขอลาที่รอคุณพิจารณา',
+    // THE load-bearing rule of this phase. LeaveService.canReviewEmployee =
+    // canReviewAll(user) || isDirectManager(employeeId, actorEmployeeId), and
+    // REVIEW_ALL_ROLES = Set.of("hr") server-side -- so ANY direct manager may approve
+    // their own reports' leave, not just HR. ROLE_PERMISSIONS.canReviewLeave (routes.js)
+    // is ['hr'] only: that constant is the coarse "sees a review surface at all,
+    // regardless of whose requests" UI signal the rest of this app uses for route
+    // guarding, NOT the real per-request gate. Gating this TAB on canReviewLeave alone
+    // would hide the queue from every department manager -- exactly the role that uses
+    // it most day to day.
+    //
+    // So: visible when EITHER the role-level permission already says so (hr, an
+    // unconditional "always may review something"), OR the currently-loaded request
+    // list contains at least one row this user may actually act on (their own reports'
+    // SUBMITTED/APPROVED requests) -- reusing the exact per-row predicates above.
+    isVisible: (user, requests, canReviewAll) => canReviewAll || userMayActOnAnyRequest(requests, user, canReviewAll),
+  },
+  {
+    id: 'rules',
+    label: 'กฎการลา',
+    helper: 'เงื่อนไขการลาแต่ละประเภท',
+    // TODO(A3): fill this tab with real rule disclosure (per-leave-type policy: quota,
+    // notice window, attachment requirement, etc). Phase A1 renders a placeholder only
+    // -- see LeaveSurfacePage.jsx's own TODO(A3) comment at the render site. Always
+    // visible (same as `me`): there is no role gate on reading the leave-rules copy
+    // itself, only on reviewing OTHER people's requests.
+    isVisible: () => true,
+  },
+];
+
+export const DEFAULT_LEAVE_SURFACE_TAB_ID = 'me';
+
+/**
+ * The ordered list of tab ids `user` may see right now, given the currently-loaded
+ * `requests` (used only by `review`'s isVisible -- see its own comment above).
+ * `requests` defaults to `[]` so a caller mid-first-load (no data yet) never throws;
+ * the `review` tab simply stays hidden until either the role permission is known or a
+ * loaded row proves it should show.
+ */
+export function visibleLeaveSurfaceTabIds(user, requests = []) {
+  const canReviewAll = hasPermission(user?.role, 'canReviewLeave');
+  return LEAVE_SURFACE_TABS
+    .filter((tab) => tab.isVisible(user, requests, canReviewAll))
+    .map((tab) => tab.id);
+}
+
+/**
+ * `requestedId` if it is one of `visibleIds`, else `DEFAULT_LEAVE_SURFACE_TAB_ID` -- an
+ * absent, unknown, or currently-hidden `?tab=` value (a stale deep link from before a
+ * role change, a typo, hand-editing the URL, or a link shared by someone who *can* see
+ * `review`) never renders a blank/forbidden panel, it silently falls back to "ของฉัน".
+ * Takes `visibleIds` directly (not `user`/`requests`) so a caller that already computed
+ * them via `visibleLeaveSurfaceTabIds` above never pays for the computation twice.
+ */
+export function resolveLeaveSurfaceTab(requestedId, visibleIds) {
+  return visibleIds.includes(requestedId) ? requestedId : DEFAULT_LEAVE_SURFACE_TAB_ID;
+}

@@ -146,6 +146,8 @@ export const api = {
     approve: (id, payload = {}) => apiRequest(API_ROUTES.leave.approve(id), { method: 'POST', body: payload }),
     reject: (id, payload = {}) => apiRequest(API_ROUTES.leave.reject(id), { method: 'POST', body: payload }),
     cancel: (id, payload = {}) => apiRequest(API_ROUTES.leave.cancel(id), { method: 'POST', body: payload }),
+    // Leave-surface IA rebuild, Phase A0 (not yet landed) — see routes.js's own comment.
+    reviewSummary: () => apiRequest(API_ROUTES.leave.reviewSummary),
   },
   tickets: {
     list: (params) => apiRequest(withQuery(API_ROUTES.tickets.list, params)),
