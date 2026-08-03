@@ -1,29 +1,33 @@
 package th.co.glr.hr.attendance.schedule;
 
 import jakarta.servlet.http.HttpSession;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.attendance.schedule.BotHolidayFetchService.FetchOutcome;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 
 /**
- * Manual trigger for {@link BotHolidayFetchService}, so HR can force a refresh (e.g. after BOT
- * publishes a mid-year special holiday) without waiting for the monthly cron.
+ * {@code hr.holiday} admin surface: the manual BOT-refresh trigger, plus create/update/delete/list
+ * for HR's own company-day additions ({@link HolidayAdminService}). Every handler is gated {@code
+ * "hr", "ceo"}, matching the existing pattern for other admin-triggered attendance actions ({@code
+ * AttendanceController}'s device import / card backfill).
  *
- * <p>An endpoint was chosen over a cron-only design because the codebase already has this exact
- * pattern for other admin-triggered attendance actions ({@code AttendanceController}'s device
- * import / card backfill, gated {@code "hr", "ceo"}) — adding one more small, idempotent,
- * read-mostly-safe POST is proportionate, not a new kind of surface. The handler does nothing a
- * repeated cron tick would not also eventually do; it only moves the timing under HR's control.
- *
- * <p>This is a new authorization rule (a new endpoint with a role gate), so it ships with a
- * real-Postgres integration test through this exact controller
- * ({@code HolidayControllerIntegrationTest}) proving the wrong roles get 403 — see CLAUDE.md
- * "Permission changes must ship evidence".
+ * <p>This is a new authorization surface (five new/extended endpoints with a role gate), so it
+ * ships with a real-Postgres integration test through this exact controller
+ * ({@code HolidayControllerIntegrationTest}) proving the wrong roles get 403 for every handler —
+ * see CLAUDE.md "Permission changes must ship evidence".
  *
  * <p>{@link BotHolidayFetchService#fetchNow()} — not this controller — enforces a minimum interval
  * between attempts (this fetcher's own {@code BOT_HOLIDAY_API_TOKEN} budget of 100 calls/hour — a
@@ -36,10 +40,13 @@ import th.co.glr.hr.auth.UserPrincipal;
 public class HolidayController {
 
     private final BotHolidayFetchService fetchService;
+    private final HolidayAdminService adminService;
     private final SessionContext sessions;
 
-    public HolidayController(BotHolidayFetchService fetchService, SessionContext sessions) {
+    public HolidayController(
+            BotHolidayFetchService fetchService, HolidayAdminService adminService, SessionContext sessions) {
         this.fetchService = fetchService;
+        this.adminService = adminService;
         this.sessions = sessions;
     }
 
@@ -49,5 +56,48 @@ public class HolidayController {
         UserPrincipal user = sessions.requireUser(session);
         sessions.requireAnyRole(user, "hr", "ceo");
         return Map.of("outcomes", fetchService.fetchNow());
+    }
+
+    /** The admin list view (both BANK and COMPANY rows) for a date range. HR/CEO only. */
+    @GetMapping
+    HolidaysResponse list(
+            @RequestParam("from") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam("to") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        sessions.requireAnyRole(user, "hr", "ceo");
+        return new HolidaysResponse(adminService.list(from, to));
+    }
+
+    /** Adds a one-off company holiday. Always lands as {@code source = 'COMPANY'}. HR/CEO only. */
+    @PostMapping
+    HolidayDto create(@RequestBody HolidayCreateRequest request, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        sessions.requireAnyRole(user, "hr", "ceo");
+        return adminService.create(user, request.holidayDate(), request.nameTh());
+    }
+
+    /**
+     * Renames an existing holiday (bank- or company-sourced) and forces it to {@code source =
+     * 'COMPANY'} — see {@link HolidayAdminService}. HR/CEO only.
+     */
+    @PutMapping("/{date}")
+    HolidayDto update(
+            @PathVariable("date") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+            @RequestBody HolidayUpdateRequest request,
+            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        sessions.requireAnyRole(user, "hr", "ceo");
+        return adminService.update(user, date, request.nameTh());
+    }
+
+    /** Removes a holiday outright (bank- or company-sourced). HR/CEO only. */
+    @DeleteMapping("/{date}")
+    void delete(
+            @PathVariable("date") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        sessions.requireAnyRole(user, "hr", "ceo");
+        adminService.delete(user, date);
     }
 }
