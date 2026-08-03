@@ -22,9 +22,22 @@ import th.co.glr.hr.common.ApiException;
  * a stable, collision-free numeric surrogate — rather than {@code null}, so every audit row for one
  * holiday date is still findable via {@code hr.audit_log}'s {@code (entity, entity_id)} index. The
  * date itself also travels in the before/after payload for readability.
+ *
+ * <p><strong>{@code nameTh} length bound ({@link #MAX_NAME_LENGTH})</strong>: V129 widened {@code
+ * hr.holiday.name_th} from {@code VARCHAR(120)} to {@code TEXT} (production BOT names routinely
+ * exceed 120 chars — a substitution-day prefix plus a full royal title measured at 137 chars for a
+ * real 2026 entry), which removed the database's own length guard entirely. Without an
+ * application-level bound, a manual create/update of any length now succeeds silently instead of
+ * failing loudly, which is worse than the pre-V129 500. {@code MAX_NAME_LENGTH = 500} is chosen to
+ * sit comfortably above every genuine name this system has ever produced (137, with headroom for a
+ * longer future title/prefix combination) while still catching a paste accident or abuse — it is a
+ * guard against those, not a style rule, so it stays generous rather than tight.
  */
 @Service
 public class HolidayAdminService {
+
+    /** See the class javadoc for why 500 and not something closer to the longest real name (137). */
+    static final int MAX_NAME_LENGTH = 500;
 
     private final HolidayRepository repository;
     private final AuditService auditService;
@@ -48,10 +61,7 @@ public class HolidayAdminService {
         if (holidayDate == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุวันที่วันหยุด");
         }
-        String trimmedName = blankToNull(nameTh);
-        if (trimmedName == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุชื่อวันหยุด");
-        }
+        String trimmedName = requireValidName(nameTh);
         if (repository.existsForDate(holidayDate)) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "มีข้อมูลวันหยุดสำหรับวันที่ " + holidayDate + " อยู่แล้ว กรุณาแก้ไขรายการเดิมแทนการสร้างใหม่");
@@ -67,10 +77,7 @@ public class HolidayAdminService {
         if (holidayDate == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุวันที่วันหยุด");
         }
-        String trimmedName = blankToNull(nameTh);
-        if (trimmedName == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุชื่อวันหยุด");
-        }
+        String trimmedName = requireValidName(nameTh);
         HolidayRow before = repository.findByDate(holidayDate)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบข้อมูลวันหยุดสำหรับวันที่ " + holidayDate));
 
@@ -99,11 +106,21 @@ public class HolidayAdminService {
         auditService.record(actor, "DELETE_HOLIDAY", "holiday", holidayDate.toEpochDay(), HolidayDto.from(before), null);
     }
 
-    private static String blankToNull(String value) {
-        if (value == null) {
-            return null;
+    /**
+     * Trims {@code value}, rejects blank (400, existing behaviour), and rejects anything over
+     * {@link #MAX_NAME_LENGTH} characters (400) — the guard V129 removed at the database layer.
+     * Length is checked against the trimmed value, so surrounding whitespace never counts against
+     * the limit or masks an otherwise-valid name.
+     */
+    private static String requireValidName(String value) {
+        String trimmed = value == null ? null : value.trim();
+        if (trimmed == null || trimmed.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุชื่อวันหยุด");
         }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
+        if (trimmed.length() > MAX_NAME_LENGTH) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ชื่อวันหยุดยาวเกินไป (สูงสุด " + MAX_NAME_LENGTH + " ตัวอักษร)");
+        }
+        return trimmed;
     }
 }

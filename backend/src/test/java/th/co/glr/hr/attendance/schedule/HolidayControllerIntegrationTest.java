@@ -202,6 +202,62 @@ class HolidayControllerIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualTo(HttpStatus.BAD_REQUEST);
     }
 
+    /**
+     * V129 widened {@code hr.holiday.name_th} to {@code TEXT}, removing the database's own length
+     * guard (production BOT names have measured 137 characters for a real substitution-day + full
+     * royal title entry). {@link HolidayAdminService#MAX_NAME_LENGTH} (500) replaces that guard at
+     * the application layer.
+     *
+     * <p>Both sides asserted on ONE fixture, per CLAUDE.md's testing rule: a name at the real
+     * measured length (137 chars, well under the 500 bound) must be accepted, while a name past the
+     * bound must be rejected with 400 and never reach the database. A one-sided test (only the
+     * rejection) would also pass if the bound were set absurdly low and rejected legitimate BOT
+     * names too — which is exactly the regression this bound must not reintroduce.
+     */
+    @Test
+    void aRealisticallyLongNameIsAcceptedAndAnAbsurdlyLongOneIsRejected() {
+        // Mirrors the measured longest real BOT holiday name (137 chars: substitution-day prefix +
+        // King Rama X's full royal title + special-holiday designation) -- built programmatically to
+        // hit exactly that length rather than hand-counting Thai characters.
+        String realisticName = ("วันหยุดชดเชยวันเฉลิมพระชนมพรรษาพระบาทสมเด็จพระปรเมนทรรามาธิบดี"
+            + "ศรีสินทรมหาวชิราลงกรณ พระวชิรเกล้าเจ้าอยู่หัว (วันหยุดพิเศษเพิ่มเติม)"
+            + "ก".repeat(200)).substring(0, 137);
+        assertThat(realisticName).hasSize(137);
+        LocalDate acceptedDate = LocalDate.of(2027, 10, 1);
+
+        HolidayDto accepted = createHoliday(hr(), acceptedDate, realisticName);
+        assertThat(accepted.nameTh()).isEqualTo(realisticName);
+
+        String absurdlyLongName = "ก".repeat(HolidayAdminService.MAX_NAME_LENGTH + 1);
+        LocalDate rejectedDate = LocalDate.of(2027, 10, 2);
+
+        assertThatThrownBy(() -> createHoliday(hr(), rejectedDate, absurdlyLongName))
+            .as("a name past MAX_NAME_LENGTH must be rejected with 400, on the SAME fixture that "
+                + "just proved a realistic 137-char name is accepted")
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(holidayRepository.findByDate(rejectedDate))
+            .as("the rejected write must never reach the database")
+            .isEmpty();
+    }
+
+    /** Same bound, update path -- {@code requireValidName} is shared between create and update. */
+    @Test
+    void updateAlsoEnforcesTheNameLengthBound() {
+        LocalDate date = LocalDate.of(2027, 10, 3);
+        createHoliday(hr(), date, "เดิม");
+        String absurdlyLongName = "ข".repeat(HolidayAdminService.MAX_NAME_LENGTH + 1);
+
+        assertThatThrownBy(() -> updateHoliday(hr(), date, absurdlyLongName))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(holidayRepository.findByDate(date).orElseThrow().nameTh())
+            .as("a rejected update must not have overwritten the existing name")
+            .isEqualTo("เดิม");
+    }
+
     @Test
     void updateOnAMissingDateIs404() {
         assertThatThrownBy(() -> updateHoliday(hr(), LocalDate.of(2027, 9, 9), "ไม่มีอยู่จริง"))
