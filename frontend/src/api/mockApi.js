@@ -833,6 +833,23 @@ function round2(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 }
 
+// "Today" in the business zone, as "YYYY-MM-DD" -- the mock stand-in for the backend's
+// `LocalDate.now(ZoneId.of("Asia/Bangkok"))`.
+//
+// Deliberately NOT `new Date().toISOString().slice(0, 10)`, which is the convention elsewhere in
+// this file: that is UTC, and UTC runs up to 7 hours behind Bangkok. Any endpoint whose default
+// window is derived from "today" (see specialMoney.list) would otherwise pick a different day --
+// and on the 1st of a month before 07:00 Bangkok, a different MONTH -- than the service it mirrors.
+// Uses en-CA because it formats as ISO "YYYY-MM-DD".
+function bangkokTodayIso() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Bangkok',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
 // Step 6: mirrors OrderConfirmationService's own private unitLabel(), used when building a
 // deposit-notice item from a customer-quotation item's requestedUnitBasis.
 function mockUnitBasisLabel(unitBasis) {
@@ -4672,6 +4689,19 @@ export const api = {
       });
     },
 
+    // Mirrors SpecialMoneyService.list() + SpecialMoneyRepository.findRequests().
+    //
+    // The date window is NOT optional on the real backend: omitting `from`/`to` does not mean
+    // "everything", it means "this calendar month". SpecialMoneyService.list() computes
+    //     effectiveTo   = to   ?? LocalDate.now(Asia/Bangkok)
+    //     effectiveFrom = from ?? effectiveTo.withDayOfMonth(1)
+    // and findRequests filters `WHERE s.event_date BETWEEN :fromDate AND :toDate`.
+    //
+    // This mock previously applied NO window when the params were absent, which is the dangerous
+    // direction CLAUDE.md names: it returned MORE rows than production, so a screen that silently
+    // depends on the month scoping looks correct in mock mode and is empty in prod. That is exactly
+    // how the CEO review queue shipped scoped to the current month while claiming "ไม่มีคำขอรออนุมัติ"
+    // for anything dated outside it.
     async list(params = {}) {
       const user = requireSession();
       let list = db.specialMoneyRequests;
@@ -4680,12 +4710,33 @@ export const api = {
         if (params.employeeId && !canAccessSpecialMoneyEmployee(user, Number(params.employeeId))) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
         list = list.filter((item) => item.employeeId === user.employeeId || canReviewSpecialMoney(user, item.employeeId));
       }
+
+      // Asia/Bangkok, not `new Date().toISOString()`: the backend reads the business zone, and UTC
+      // runs up to 7 hours behind it. On the 1st of a month before 07:00 Bangkok the two disagree
+      // about which month "today" is in, so a UTC default would silently window a different month
+      // than production.
+      const effectiveTo = params.to || bangkokTodayIso();
+      const effectiveFrom = params.from || `${effectiveTo.slice(0, 7)}-01`;
+      // SpecialMoneyService.list() throws 400 before touching the repository.
+      if (effectiveTo < effectiveFrom) fail('วันที่สิ้นสุดต้องไม่มาก่อนวันที่เริ่มต้น', 400);
+
       if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
       if (params.status) list = list.filter((item) => item.status === params.status);
       if (params.type) list = list.filter((item) => item.requestType === params.type);
-      if (params.from) list = list.filter((item) => item.eventDate >= params.from);
-      if (params.to) list = list.filter((item) => item.eventDate <= params.to);
-      return delay({ requests: list.map(buildSpecialMoneyRecord) });
+      list = list.filter((item) => item.eventDate >= effectiveFrom && item.eventDate <= effectiveTo);
+
+      // Mirrors findRequests' trailing
+      //   ORDER BY s.event_date DESC, s.requested_at DESC, s.special_money_request_id DESC
+      // Ordering is part of the contract, not a detail: `contract.test.js` compares parameter
+      // COUNTS only and cannot see it, and the same rows in a different order is how #434's
+      // truncation bug hid. Sorted on a copy -- `db.specialMoneyRequests` is the live store and
+      // create() relies on its own unshift order.
+      const sorted = [...list].sort((a, b) => (
+        (a.eventDate < b.eventDate ? 1 : a.eventDate > b.eventDate ? -1 : 0)
+        || (String(a.requestedAt) < String(b.requestedAt) ? 1 : String(a.requestedAt) > String(b.requestedAt) ? -1 : 0)
+        || (b.id - a.id)
+      ));
+      return delay({ requests: sorted.map(buildSpecialMoneyRecord) });
     },
 
     async create(payload) {
