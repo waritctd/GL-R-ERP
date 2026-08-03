@@ -38,6 +38,10 @@ const RequestsPage = lazy(() => import('./features/requests/RequestsPage.jsx').t
 // Leave-surface IA rebuild Phase A1: LeavePage.jsx (one flat component) was replaced by a tabbed
 // shell -- see LeaveSurfacePage.jsx's own doc comment.
 const LeaveSurfacePage = lazy(() => import('./features/leave/LeaveSurfacePage.jsx').then(toDefault('LeaveSurfacePage')));
+// Leave-request composer, Phase A2 (#485): the 3-step /leave/new route the "ยื่นคำขอลา" CTA now
+// navigates to, replacing the inline form MyLeaveTab.jsx used to render -- see LeaveRequestPage.jsx's
+// own doc comment.
+const LeaveRequestPage = lazy(() => import('./features/leave/LeaveRequestPage.jsx').then(toDefault('LeaveRequestPage')));
 const TicketListPage = lazy(() => import('./features/tickets/TicketListPage.jsx').then(toDefault('TicketListPage')));
 const TicketDetailPage = lazy(() => import('./features/tickets/TicketDetailPage.jsx').then(toDefault('TicketDetailPage')));
 const CommissionPage = lazy(() => import('./features/commissions/CommissionPage.jsx').then(toDefault('CommissionPage')));
@@ -357,6 +361,13 @@ export function App() {
             <Route
               path="/leave"
               element={<LeaveSurfacePage user={user} currentEmployee={currentEmployee} showToast={showToast} />}
+            />
+            {/* Leave-request composer, Phase A2 (#485): deep-linkable so the empty state, a
+                rejected row's "ยื่นคำขอใหม่", and the auto-rejection notification can all link
+                straight into a prefilled step (?type=&start=&end=). */}
+            <Route
+              path="/leave/new"
+              element={<LeaveRequestPage user={user} currentEmployee={currentEmployee} showToast={showToast} />}
             />
             <Route
               path="/payroll"
