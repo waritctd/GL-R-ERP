@@ -156,7 +156,16 @@ public record PayrollLineDto(
     // number #calculateLine saw, with no re-derivation possible. Intentionally NOT persisted to
     // hr.payroll_line (no column, no INSERT/SELECT reference) -- it is consumed once, in the same
     // #process() transaction, from the same in-memory PayrollLineDto list #preview() already built.
-    BigDecimal legalExecutionRequested
+    BigDecimal legalExecutionRequested,
+    // V128: approved สวัสดิการ pulled in for this payroll month. Appended last, following the same
+    // rule every field above it followed -- every existing positional call site keeps compiling
+    // through the legacy constructors below, which pass null here.
+    //
+    // Persisted (unlike legalExecutionRequested directly above): without a column the figure would
+    // still be paid, because PayrollCalculator derives gross from componentAmounts and never needs
+    // this field -- but the breakdown would vanish the moment the period was re-read, leaving HR a
+    // gross they cannot reconcile against the welfare claims that produced it.
+    BigDecimal welfarePay
 ) {
     /**
      * Legacy 61-arg constructor: the full signature as it stood right before {@code
@@ -249,7 +258,105 @@ public record PayrollLineDto(
             // javadoc). ssoWageGross: this constructor predates V123 entirely -- every caller at
             // this arity is a pre-existing test fixture with no SSO-wage-gross concept, so null
             // (falls back to ssoWageBase in SsoExporter) is correct, not just convenient.
-            null, null
+            // welfarePay: V128 postdates this arity too -- no fixture at this size knows about
+            // welfare, and null reads as "not recorded" rather than a fabricated ฿0.
+            null, null, null
+        );
+    }
+
+    /**
+     * As the constructor above, plus V128's welfarePay. Exists so {@code PayrollRepository#mapLine}
+     * can carry the persisted welfare figure back out of {@code payroll_line} without restating all
+     * sixty-odd canonical arguments; every other caller at the shorter arity is a fixture that
+     * predates welfare entirely and correctly gets null.
+     */
+    public PayrollLineDto(
+        Long id,
+        long employeeId,
+        String employeeCode,
+        String employeeName,
+        String departmentName,
+        String bankName,
+        String bankAccount,
+        BigDecimal baseSalary,
+        BigDecimal dailyRate,
+        BigDecimal hourlyRate,
+        List<PayrollSpecialPayDto> specialPays,
+        BigDecimal specialPayTotal,
+        BigDecimal overtimePay,
+        BigDecimal commissionPay,
+        BigDecimal grossEarnings,
+        BigDecimal nonTaxableIncome,
+        BigDecimal unpaidLeaveDays,
+        BigDecimal unpaidLeaveDeduction,
+        BigDecimal grossTaxableIncome,
+        BigDecimal ssoWageBase,
+        BigDecimal socialSecurity,
+        BigDecimal projectedAnnualIncome,
+        BigDecimal taxExpenseDeduction,
+        BigDecimal taxAllowanceTotal,
+        BigDecimal taxableAnnualIncome,
+        BigDecimal annualTax,
+        BigDecimal withholdingTax,
+        BigDecimal studentLoanDeduction,
+        BigDecimal legalExecutionDeduction,
+        BigDecimal otherPostTaxDeductions,
+        BigDecimal totalDeductions,
+        BigDecimal netPay,
+        String calculationNote,
+        BigDecimal directorRemuneration,
+        BigDecimal warningLetterDeduction,
+        BigDecimal customerReturnDeduction,
+        BigDecimal otherPretaxDeduction,
+        BigDecimal leaveRefundDays,
+        BigDecimal leaveDeductionRefund,
+        BigDecimal withholdingTaxOverride,
+        BigDecimal regularTaxableIncome,
+        BigDecimal variableTaxableIncome,
+        BigDecimal regularWithholdingTax,
+        BigDecimal variableWithholdingTax,
+        BigDecimal bonusPay,
+        BigDecimal otherOneOffPay,
+        BigDecimal excessWithheldToDate,
+        BigDecimal taxableIncomeRegularLimb,
+        BigDecimal taxableIncomeKnownLimb,
+        BigDecimal taxableIncomeCumulativeLimb,
+        BigDecimal withholdingTaxRegularLimb,
+        BigDecimal withholdingTaxCumulativeLimb,
+        boolean customerReturnAlreadyEarned,
+        String garnishmentType,
+        BigDecimal mealAllowance,
+        BigDecimal perDiemExempt,
+        BigDecimal perDiemTaxable,
+        String perDiemBasis,
+        BigDecimal customerReturnRequested,
+        BigDecimal daysWorked,
+        String payType,
+        BigDecimal welfarePay
+    ) {
+        this(
+            id, employeeId, employeeCode, employeeName, departmentName, bankName, bankAccount,
+            baseSalary, dailyRate, hourlyRate, specialPays, specialPayTotal, overtimePay, commissionPay,
+            grossEarnings, nonTaxableIncome, unpaidLeaveDays, unpaidLeaveDeduction, grossTaxableIncome,
+            ssoWageBase, socialSecurity, projectedAnnualIncome, taxExpenseDeduction, taxAllowanceTotal,
+            taxableAnnualIncome, annualTax, withholdingTax, studentLoanDeduction, legalExecutionDeduction,
+            otherPostTaxDeductions, totalDeductions, netPay, calculationNote,
+            directorRemuneration, warningLetterDeduction, customerReturnDeduction, otherPretaxDeduction,
+            leaveRefundDays, leaveDeductionRefund, withholdingTaxOverride,
+            regularTaxableIncome, variableTaxableIncome, regularWithholdingTax, variableWithholdingTax,
+            bonusPay, otherOneOffPay, excessWithheldToDate,
+            taxableIncomeRegularLimb, taxableIncomeKnownLimb, taxableIncomeCumulativeLimb,
+            withholdingTaxRegularLimb, withholdingTaxCumulativeLimb,
+            customerReturnAlreadyEarned, garnishmentType,
+            mealAllowance, perDiemExempt, perDiemTaxable, perDiemBasis,
+            customerReturnRequested, daysWorked, payType,
+            // legalExecutionRequested: never derivable from this arity (see that field's own
+            // javadoc). ssoWageGross: this constructor predates V123 entirely -- every caller at
+            // this arity is a pre-existing test fixture with no SSO-wage-gross concept, so null
+            // (falls back to ssoWageBase in SsoExporter) is correct, not just convenient.
+            // welfarePay: V128 postdates this arity too -- no fixture at this size knows about
+            // welfare, and null reads as "not recorded" rather than a fabricated ฿0.
+            null, null, welfarePay
         );
     }
 

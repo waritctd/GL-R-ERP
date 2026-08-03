@@ -196,6 +196,13 @@ public class PayrollService {
         // LeaveRepository#resolvePendingCorrections for exactly how that stays consistent with the
         // read (same WHERE-shape, same transaction) and idempotent across re-processing this month.
         leaveRepository.resolvePendingCorrections(periodId);
+        // V128: attribute each approved welfare claim to the period that actually paid it.
+        // hr.special_money_request.included_period_id has existed since V66 and was never written,
+        // because nothing consumed these rows. Only fills NULLs, so re-processing this month does
+        // not re-point a claim that an earlier run already attributed -- the same idempotency
+        // guarantee saveProcessedPeriod's delete-then-insert gives hr.payroll_line. Never called
+        // from #preview, which must stay side-effect-free.
+        payrollRepository.markWelfareIncludedInPeriod(month, periodId);
         // Deduction obligation tracking (issue #373): record what was ACTUALLY deducted this period
         // (post every other cap) against each employee's driving obligation, then re-derive
         // ACTIVE/COMPLETED from the recomputed cumulative total. Idempotent per (obligation,
@@ -736,10 +743,15 @@ public class PayrollService {
         PayrollTaxAllowanceInput baselineAllowances = storedAllowancesByEmployee.get(employeeId);
 
         try {
-            PayrollLineDto baselineLine = calculateLine(employee, null, overtimePay, commissionPay, yearToDate,
-                baselineAllowances, BigDecimal.ZERO, payrollMonth, treatments, ssoInclusion);
-            PayrollLineDto proposedLine = calculateLine(employee, null, overtimePay, commissionPay, yearToDate,
-                proposedAllowances, BigDecimal.ZERO, payrollMonth, treatments, ssoInclusion);
+            // Welfare deliberately ZERO here: this is the tax-allowance what-if estimator, and both
+            // sides of the comparison must differ ONLY by the allowance change. Feeding real welfare
+            // in would move both figures by the same amount and change the delta the employee is
+            // shown, for a reason that has nothing to do with their allowance declaration.
+            BigDecimal welfarePay = BigDecimal.ZERO;
+            PayrollLineDto baselineLine = calculateLine(employee, null, overtimePay, commissionPay, welfarePay,
+                yearToDate, baselineAllowances, BigDecimal.ZERO, payrollMonth, treatments, ssoInclusion);
+            PayrollLineDto proposedLine = calculateLine(employee, null, overtimePay, commissionPay, welfarePay,
+                yearToDate, proposedAllowances, BigDecimal.ZERO, payrollMonth, treatments, ssoInclusion);
             return new PayrollAllowanceEstimateResult(
                 true, null, taxYear, effectiveMonth,
                 baselineLine.withholdingTax(), proposedLine.withholdingTax(),
@@ -772,6 +784,8 @@ public class PayrollService {
         List<PayrollEmployeeSnapshot> employees = payrollRepository.findActiveEmployees();
         Map<Long, BigDecimal> overtimeByEmployee = payrollRepository.findApprovedOvertimePayByEmployee(payrollMonth);
         Map<Long, BigDecimal> commissionByEmployee = commissionPayByEmployee(payrollMonth);
+        // V128: approved สวัสดิการ now reaches payroll instead of being keyed by hand.
+        Map<Long, BigDecimal> welfareByEmployee = payrollRepository.findApprovedWelfarePayByEmployee(payrollMonth);
         Map<Long, PayrollYearToDate> yearToDateByEmployee = payrollRepository.findYearToDateByEmployee(payrollMonth);
         // C1: the standing tax-allowance declaration for this payroll's tax year is the BASE. Any
         // field the request body supplies for an employee (non-null) is an in-run correction and wins
@@ -805,6 +819,7 @@ public class PayrollService {
                 inputByEmployee.get(employee.employeeId()),
                 overtimeByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
                 commissionByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
+                welfareByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
                 yearToDateByEmployee.getOrDefault(employee.employeeId(), PayrollYearToDate.empty()),
                 storedAllowancesByEmployee.get(employee.employeeId()),
                 leaveRefundDaysByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
@@ -1048,6 +1063,7 @@ public class PayrollService {
         PayrollEmployeeInputRequest input,
         BigDecimal overtimePay,
         BigDecimal commissionPay,
+        BigDecimal welfarePay,
         PayrollYearToDate yearToDate,
         PayrollTaxAllowanceInput storedAllowances,
         BigDecimal leaveRefundDays,
@@ -1145,6 +1161,30 @@ public class PayrollService {
         componentAmounts.put(PayrollComponent.SPECIAL_PAY_8, amountAt(specialPays, 7));
         componentAmounts.put(PayrollComponent.SPECIAL_PAY_9, amountAt(specialPays, 8));
         componentAmounts.put(PayrollComponent.OVERTIME_PAY, overtimePay == null ? BigDecimal.ZERO : overtimePay);
+
+        // ⚠️ DOUBLE-PAY GUARD (V128 cutover). Until this change, welfare was keyed into payroll by
+        // hand -- the welfare document §2.2 instructs exactly that ("รวบรวมข้อมูลการเบิก...ก่อนวันที่ 25
+        // เพื่อคีย์ข้อมูลเข้าในระบบเงินเดือน"), and พิเศษ 9 (เงินรางวัล/เงินช่วยเหลืออื่นๆ) is where it went.
+        // Now that approved claims feed WELFARE_PAY automatically, a month carrying BOTH figures for
+        // the same employee pays that welfare twice.
+        //
+        // Refused loudly, naming the employee and both amounts, rather than trusting a process
+        // change to stick: this is real money leaving the company, and the failure is invisible on
+        // the payslip because both figures are legitimate-looking earnings lines. HR clears the
+        // manual พิเศษ 9 entry, or -- if the พิเศษ 9 amount is genuinely something else (it is a
+        // general เงินรางวัล slot) -- records it in another slot for this month.
+        BigDecimal resolvedWelfarePay = welfarePay == null ? BigDecimal.ZERO : welfarePay;
+        BigDecimal manualSpecialPay9 = amountAt(specialPays, 8);
+        if (resolvedWelfarePay.signum() > 0 && manualSpecialPay9.signum() > 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "พนักงาน " + employee.employeeCode() + " " + employee.employeeName()
+                    + " มีสวัสดิการที่อนุมัติแล้ว " + resolvedWelfarePay.toPlainString() + " บาท"
+                    + " ซึ่งระบบดึงเข้างวดนี้ให้อัตโนมัติแล้ว และยังมีการคีย์ พิเศษ 9 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)"
+                    + " ไว้อีก " + manualSpecialPay9.toPlainString() + " บาท"
+                    + " หากเป็นรายการสวัสดิการเดียวกันจะจ่ายซ้ำ กรุณาลบยอดที่คีย์ไว้ในช่อง พิเศษ 9"
+                    + " (หากเป็นเงินรางวัลรายการอื่นจริง กรุณาบันทึกในช่องพิเศษอื่นสำหรับงวดนี้)");
+        }
+        componentAmounts.put(PayrollComponent.WELFARE_PAY, resolvedWelfarePay);
         componentAmounts.put(PayrollComponent.COMMISSION_PAY, effectiveCommissionPay);
         componentAmounts.put(PayrollComponent.MEAL_ALLOWANCE, input == null ? BigDecimal.ZERO : safe(input.mealAllowance()));
         componentAmounts.put(PayrollComponent.PER_DIEM_TAXABLE, input == null ? BigDecimal.ZERO : safe(input.perDiemTaxable()));
@@ -1302,7 +1342,11 @@ public class PayrollService {
             // Issue #376, D-376-1 fix: the EXACT figure this run resolved and fed to
             // PayrollCalculator as garnishmentRequested -- see PayrollLineDto#legalExecutionRequested's
             // own javadoc for why this must be carried out here rather than re-derived later.
-            resolvedLegalExecutionRequested
+            resolvedLegalExecutionRequested,
+            // V128: the welfare figure this run pulled in, carried out so it persists to
+            // payroll_line.welfare_pay. Already in gross via componentAmounts above; this is what
+            // keeps the breakdown readable after the period is re-read.
+            resolvedWelfarePay
         );
     }
 
