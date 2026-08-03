@@ -1,5 +1,8 @@
 package th.co.glr.hr.leave;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -48,6 +51,18 @@ public class LeaveRepository {
             return Set.of();
         }
     };
+    // Phase A0a (structured rejection outcome, V131): serializes/deserializes
+    // hr.leave_request.system_note_params (a flat Map<String,String>) to/from jsonb -- see #toJson/
+    // #fromJson below. A private, LOCAL ObjectMapper instance (not Spring-injected, unlike
+    // SpecialMoneyRepository's identical-shape precedent) is a DELIBERATE choice: injecting one
+    // would add a constructor parameter to BOTH LeaveRepository constructors, and this repository is
+    // constructed directly (bypassing Spring DI) by ~40 payroll/leave integration tests across this
+    // codebase (see the 1-arg constructor's own Javadoc) -- every one of those call sites would need
+    // editing for a change wholly unrelated to what they test. A flat String-to-String map needs
+    // nothing from Spring's configured ObjectMapper (no custom modules, no date types), so a plain
+    // instance is equivalent in behaviour and keeps this phase's diff to the files it is actually
+    // about.
+    private static final ObjectMapper SYSTEM_NOTE_PARAMS_MAPPER = new ObjectMapper();
 
     private final NamedParameterJdbcTemplate jdbc;
     private final WorkScheduleResolver scheduleResolver;
@@ -273,7 +288,7 @@ public class LeaveRepository {
 
     /**
      * HR's recorded {@code hr.employee.confirm_date}, consulted by §5.2 PERSONAL's "passed
-     * probation" gate (see {@code LeaveService#personalProbationRejectionNote}) ahead of the
+     * probation" gate (see {@code LeaveService#personalProbationRuleOutcome}) ahead of the
      * computed {@code hire_date + probation_days} fallback, per {@link
      * th.co.glr.hr.specialmoney.SpecialMoneyPolicyEvaluator#hasPassedProbation}. Nullable, so same
      * List#get(0) pattern as findHireDate/findProbationDays above -- Stream#findFirst() would NPE
@@ -359,7 +374,7 @@ public class LeaveRepository {
     /**
      * §5.3.2 department-coverage gate: the employee_id of every OTHER active employee in {@code
      * employeeId}'s own department (excluding {@code employeeId} itself) -- see {@code
-     * LeaveService#departmentCoverageRejectionNote}, which resolves each one's own working-day
+     * LeaveService#departmentCoverageRuleOutcome}, which resolves each one's own working-day
      * predicate via {@link #workingDayPredicate} rather than this method carrying schedule columns.
      *
      * <p>Returns an EMPTY list -- not an error -- when {@code employeeId} has no {@code
@@ -469,7 +484,7 @@ public class LeaveRepository {
      * ({@code attachment_id IS NULL}) requests of this type, in the given status set, whose {@code
      * start_date} falls within {@code [monthStart, monthEndInclusive]} -- the SAME start_date-only
      * month attribution {@code quota_year} already uses (see {@link LeaveService#submit}). Counts
-     * REQUESTS (occasions), not days -- see {@link LeaveService#sickCertificateNote}'s Javadoc for
+     * REQUESTS (occasions), not days -- see {@link LeaveService#sickCertificateRuleOutcome}'s Javadoc for
      * why. Does NOT include the request currently being submitted (it does not exist yet at the time
      * this is called, since {@link LeaveService#submit} evaluates {@code autoRejectNote} before
      * {@link #create}).
@@ -900,6 +915,29 @@ public class LeaveRepository {
     }
 
     /**
+     * Phase A0a (structured rejection outcome, V131): persists the structured
+     * {@code (LeaveRuleCode, params)} pair behind an AUTO_REJECTED request's {@code system_note} --
+     * a small follow-up UPDATE by id, called ONLY for a rejected outcome, same shape as {@link
+     * #markEmergencyFiling}/{@link #attachFile} above and for the identical reason: kept OUT of
+     * {@link #create}'s own parameter list so every pre-existing caller/test of that method is
+     * unaffected by this addition. {@code system_note_code}/{@code system_note_params} stay NULL for
+     * an APPROVED request -- {@link #create} never sets them to anything but their SQL default, so
+     * there is no separate "clear" path to write.
+     */
+    public void recordAutoRejectReason(long leaveRequestId, LeaveRuleCode code, Map<String, String> params) {
+        jdbc.update("""
+            UPDATE hr.leave_request
+               SET system_note_code = :code,
+                   system_note_params = CAST(:params AS jsonb),
+                   updated_at = now()
+             WHERE leave_request_id = :leaveRequestId
+            """, new MapSqlParameterSource()
+            .addValue("leaveRequestId", leaveRequestId)
+            .addValue("code", code.name())
+            .addValue("params", toJson(params)));
+    }
+
+    /**
      * §5.2 emergency-filing exception (V125): rolling monthly count of this employee's PRIOR
      * requests of {@code leaveTypeCode} that were themselves approved via the emergency exception
      * ({@code emergency_filing = TRUE}), for the calendar month containing {@code requestStartDate}
@@ -1070,7 +1108,9 @@ public class LeaveRepository {
                    lr.contact_province,
                    lr.contact_phone,
                    lr.purpose_code,
-                   lr.emergency_filing
+                   lr.emergency_filing,
+                   lr.system_note_code,
+                   lr.system_note_params
               FROM hr.leave_request lr
               JOIN hr.employee e ON e.employee_id = lr.employee_id
               JOIN hr.leave_type lt ON lt.leave_type_code = lr.leave_type_code
@@ -1145,7 +1185,9 @@ public class LeaveRepository {
             rs.getString("contact_province"),
             rs.getString("contact_phone"),
             rs.getString("purpose_code"),
-            rs.getBoolean("emergency_filing")
+            rs.getBoolean("emergency_filing"),
+            rs.getString("system_note_code"),
+            fromJson(rs.getString("system_note_params"))
         );
     }
 
@@ -1160,5 +1202,36 @@ public class LeaveRepository {
 
     private String clean(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    /**
+     * Phase A0a (structured rejection outcome, V131): serializes {@code params} for
+     * {@code system_note_params}, matching {@code SpecialMoneyRepository#toJson}'s identical
+     * shape/precedent (empty map for {@code null}, never a NULL jsonb value for a rejected request).
+     */
+    private String toJson(Map<String, String> params) {
+        try {
+            return SYSTEM_NOTE_PARAMS_MAPPER.writeValueAsString(params == null ? Map.of() : params);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Failed to serialize leave rule params", exception);
+        }
+    }
+
+    /**
+     * Phase A0a (structured rejection outcome, V131): the read-side counterpart of {@link #toJson}
+     * for {@code system_note_params} -- {@code null}/blank (an APPROVED request, or any historical
+     * pre-V131 row, since V131 deliberately backfills nothing) maps to {@link Map#of()}, never
+     * {@code null}, matching {@link LeaveRequestDto#systemNoteParams}'s null-safe contract.
+     */
+    private Map<String, String> fromJson(String json) {
+        if (json == null || json.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return SYSTEM_NOTE_PARAMS_MAPPER.readValue(json, new TypeReference<Map<String, String>>() {
+            });
+        } catch (JsonProcessingException exception) {
+            return Map.of();
+        }
     }
 }

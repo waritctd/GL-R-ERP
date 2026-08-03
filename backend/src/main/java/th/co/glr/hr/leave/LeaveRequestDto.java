@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.util.Map;
 
 public record LeaveRequestDto(
     long id,
@@ -62,6 +63,16 @@ public record LeaveRequestDto(
     // §5.2 emergency-filing exception (V125): TRUE if this request was approved via the monthly
     // emergency tolerance rather than by meeting its type's ordinary advance notice -- see
     // LeaveService#autoRejectNote and hr.leave_request.emergency_filing's migration comment.
-    boolean emergencyFiling
+    boolean emergencyFiling,
+    // Phase A0a (structured rejection outcome, V131): the machine-readable LeaveRuleCode name (e.g.
+    // "SICK_CERTIFICATE_WINDOW") behind an AUTO_REJECTED request's systemNote, and the params that
+    // rendered it -- see LeaveRuleOutcome/LeaveRuleMessages. Both null-safe: systemNoteCode is
+    // {@code null} for an APPROVED request or any historical pre-V131 row (V131 backfills nothing --
+    // see that migration's comment); systemNoteParams is never {@code null}, only an empty map, in
+    // either of those same cases. systemNote itself remains the source of truth for DISPLAY (a
+    // human-readable Thai sentence); these two fields are the stable contract a caller should branch
+    // logic on instead of parsing that sentence.
+    String systemNoteCode,
+    Map<String, String> systemNoteParams
 ) {
 }

@@ -63,7 +63,7 @@ public class LeaveService {
     // §5.3.4: types the announcement names explicitly ("ลาพักร้อน ลากิจ" -- VACATION, PERSONAL).
     private static final Set<String> RESIGNATION_GATED_LEAVE_TYPES = Set.of("VACATION", "PERSONAL");
     // §5.3.3: the pair the announcement names ("ลากิจและลาพักผ่อน") -- each type maps to the other,
-    // so a single lookup tells #contiguousLeaveRejectionNote which type to search for.
+    // so a single lookup tells #contiguousLeaveRuleOutcome which type to search for.
     private static final Map<String, String> CONTIGUOUS_LEAVE_PAIR = Map.of(
         "VACATION", "PERSONAL",
         "PERSONAL", "VACATION"
@@ -71,7 +71,7 @@ public class LeaveService {
     // §5.3.2: <i>"ไม่อนุญาตให้ลาพร้อมกันทั้งแผนก ต้องมีพนักงานที่มีอายุงานเกิน 1 ปี มาทำงานอย่างน้อย 1
     // คน"</i> names neither a tenure-free reading nor a department-size floor -- BOTH are owner
     // relaxations layered onto the literal text, not this branch's own interpretation:
-    //   1. the "&gt;1 year tenure" qualifier is dropped (owner ruling, see #departmentCoverageRejectionNote).
+    //   1. the "&gt;1 year tenure" qualifier is dropped (owner ruling, see #departmentCoverageRuleOutcome).
     //   2. the gate only APPLIES when the department has at least this many ACTIVE employees
     //      (owner ruling, 2026-08-03, given after CI showed the un-floored gate blocking realistic
     //      2-person departments -- e.g. a warehouse pair where one is already off could never let the
@@ -242,7 +242,13 @@ public class LeaveService {
         // quota-based split still needs before it drives a real payroll run.
         AutoRejectResult autoReject = autoRejectNote(leaveType, employeeId, request.startDate(), request.endDate(),
             hasAttachment, totalDays, purposeCode, requestedAsEmergency);
-        String systemNote = autoReject.rejectionNote();
+        // Phase A0a (structured rejection outcome): `blocking` carries the machine-readable
+        // LeaveRuleCode + params alongside the same Thai sentence that used to be the ONLY thing
+        // #autoRejectNote returned -- systemNote/status derive from it exactly as before, since
+        // `outcome == null` (approved) and `outcome.messageTh() == null` never happens (see
+        // LeaveRuleOutcome#of, which always renders a non-null sentence for a non-null code).
+        LeaveRuleOutcome outcome = autoReject.blocking();
+        String systemNote = outcome == null ? null : outcome.messageTh();
         LeaveStatus status = systemNote == null ? LeaveStatus.APPROVED : LeaveStatus.AUTO_REJECTED;
 
         // V118 cross-year quota fix (2026-08-02): a request's days are attributed per calendar year
@@ -355,6 +361,15 @@ public class LeaveService {
         // LeaveRepository#markEmergencyFiling's Javadoc).
         if (autoReject.emergencyFilingApplied()) {
             leaveRepository.markEmergencyFiling(id);
+        }
+        // Phase A0a (structured rejection outcome, V131): same small-follow-up-UPDATE-by-id shape as
+        // markEmergencyFiling immediately above and #attachFile below -- kept OUT of #create's own
+        // parameter list for the identical reason (every pre-existing caller/test of
+        // LeaveRepository#create stays unaffected). Only called for an actually-rejected outcome;
+        // system_note_code/system_note_params stay NULL for an APPROVED request (create() never sets
+        // them to anything but their SQL default), the same as system_note itself.
+        if (outcome != null) {
+            leaveRepository.recordAutoRejectReason(id, outcome.code(), outcome.params());
         }
         // V118 cross-year quota fix: persist the per-year attribution now that the parent row exists
         // (leave_request_quota_year.leave_request_id is a FK to it). Same transaction as #create
@@ -763,14 +778,17 @@ public class LeaveService {
      * (returns a rejection), the same direction as every other eligibility gate in this class -- it
      * must never silently pass.
      *
-     * @return a rejection message, or {@code null} if the employee has passed probation.
+     * @return a rejection outcome ({@link LeaveRuleCode#PROBATION_HIRE_DATE_MISSING} or
+     *     {@link LeaveRuleCode#PROBATION_NOT_PASSED}), or {@code null} if the employee has passed
+     *     probation. (Phase A0a: was a plain English rejection message; the DECISION this method
+     *     makes is unchanged, only its return shape is now structured -- see {@link LeaveRuleOutcome}.)
      */
-    private String personalProbationRejectionNote(long employeeId, LocalDate startDate) {
+    private LeaveRuleOutcome personalProbationRuleOutcome(LeaveTypeDto leaveType, long employeeId, LocalDate startDate) {
         Optional<LocalDate> hireDate = leaveRepository.findHireDate(employeeId);
         Optional<LocalDate> confirmDate = leaveRepository.findConfirmDate(employeeId);
         if (hireDate.isEmpty() && confirmDate.isEmpty()) {
-            return "Your hire date is not on file, so probation status cannot be verified. "
-                + "Contact HR to record it before PERSONAL leave can be used.";
+            return LeaveRuleOutcome.of(LeaveRuleCode.PROBATION_HIRE_DATE_MISSING,
+                Map.of("leaveTypeNameTh", leaveType.nameTh()));
         }
         // confirm_date is authoritative when present (see #hasPassedProbation), so probation_days
         // is only ever consulted on the hire_date fallback path -- skip the extra read otherwise,
@@ -788,8 +806,9 @@ public class LeaveService {
             .map(d -> d.plusDays(1))
             .orElseGet(() -> hireDate.get()
                 .plusDays(probationDays != null ? probationDays : SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS));
-        return "PERSONAL leave requires having passed probation (expected " + probationEndsOn
-            + "). Contact HR if this is an exception.";
+        return LeaveRuleOutcome.of(LeaveRuleCode.PROBATION_NOT_PASSED, Map.of(
+            "leaveTypeNameTh", leaveType.nameTh(),
+            "probationEndsOn", probationEndsOn.toString()));
     }
 
     /**
@@ -857,10 +876,14 @@ public class LeaveService {
      * LeaveRepository#countNoCertificateRequestsInMonth}) -- a rolling allowance, never a stored
      * counter that could drift.
      *
-     * @return a rejection message, or {@code null} if the SICK-specific rule is satisfied (other
-     *     gates in {@link #autoRejectNote} may still apply).
+     * @return a rejection outcome ({@link LeaveRuleCode#SICK_CERTIFICATE_WINDOW},
+     *     {@link LeaveRuleCode#SICK_CERTIFICATE_REQUIRED}, or
+     *     {@link LeaveRuleCode#SICK_NO_CERT_TOLERANCE_EXHAUSTED}), or {@code null} if the
+     *     SICK-specific rule is satisfied (other gates in {@link #autoRejectNote} may still apply).
+     *     (Phase A0a: was a plain English rejection message; the DECISION TABLE above is unchanged,
+     *     only its return shape is now structured -- see {@link LeaveRuleOutcome}.)
      */
-    private String sickCertificateNote(LeaveTypeDto leaveType, long employeeId, LocalDate startDate, boolean hasAttachment) {
+    private LeaveRuleOutcome sickCertificateRuleOutcome(LeaveTypeDto leaveType, long employeeId, LocalDate startDate, boolean hasAttachment) {
         if (hasAttachment) {
             Integer filingWindowDays = leaveType.certificateFilingWindowDays();
             if (filingWindowDays == null) {
@@ -869,42 +892,47 @@ public class LeaveService {
             LocalDate deadline = LeaveDayMath.addWorkingDays(startDate, filingWindowDays);
             LocalDate today = LocalDate.now(clock);
             if (today.isAfter(deadline)) {
-                return "Medical certificate must be filed within " + filingWindowDays
-                    + " working day(s) of the leave start date (by " + deadline
-                    + "). Contact HR if this is an exception.";
+                return LeaveRuleOutcome.of(LeaveRuleCode.SICK_CERTIFICATE_WINDOW, Map.of(
+                    "certificateWindowDays", String.valueOf(filingWindowDays),
+                    "certificateDeadline", deadline.toString()));
             }
             return null;
         }
 
         int tolerance = leaveType.noCertificateMonthlyTolerance();
         if (tolerance <= 0) {
-            return "Sick leave requires a medical certificate attachment. Attach the certificate or contact HR for help.";
+            return LeaveRuleOutcome.of(LeaveRuleCode.SICK_CERTIFICATE_REQUIRED, Map.of());
         }
         LocalDate monthStart = startDate.withDayOfMonth(1);
         LocalDate monthEndInclusive = monthStart.plusMonths(1).minusDays(1);
         int occasionsUsed = leaveRepository.countNoCertificateRequestsInMonth(
             employeeId, leaveType.code(), monthStart, monthEndInclusive, ACTIVE_QUOTA_STATUSES);
         if (occasionsUsed >= tolerance) {
-            return "Sick leave without a medical certificate is limited to " + tolerance
-                + " occasion(s) per calendar month; that allowance has already been used this month. "
-                + "Attach a certificate or contact HR for help.";
+            return LeaveRuleOutcome.of(LeaveRuleCode.SICK_NO_CERT_TOLERANCE_EXHAUSTED,
+                Map.of("tolerance", String.valueOf(tolerance)));
         }
         return null;
     }
 
     /**
      * §5.2 emergency-filing exception (V125): the outcome of {@link #autoRejectNote} in the one case
-     * that needs to communicate more than a rejection message -- whether THIS request was approved
+     * that needs to communicate more than a rejection outcome -- whether THIS request was approved
      * specifically because it used the emergency tolerance (so {@link #submit} knows to record
      * {@code emergency_filing = TRUE} via {@link LeaveRepository#markEmergencyFiling}). {@code
-     * rejectionNote == null} means approved; {@code emergencyFilingApplied} is only ever {@code true}
-     * on an approved outcome (never paired with a non-null rejectionNote).
+     * blocking == null} means approved; {@code emergencyFilingApplied} is only ever {@code true}
+     * on an approved outcome (never paired with a non-null {@code blocking}).
+     *
+     * <p>Phase A0a: {@code blocking} was a plain English rejection {@code String} ({@code
+     * rejectionNote}); it is now a structured {@link LeaveRuleOutcome} (code + params + rendered
+     * Thai sentence) -- see that record's Javadoc. This is a pure representation change: every call
+     * site below still returns for the exact same reason, under the exact same condition, in the
+     * exact same order as before.
      */
-    private record AutoRejectResult(String rejectionNote, boolean emergencyFilingApplied) {
+    private record AutoRejectResult(LeaveRuleOutcome blocking, boolean emergencyFilingApplied) {
         private static final AutoRejectResult APPROVED = new AutoRejectResult(null, false);
 
-        private static AutoRejectResult reject(String note) {
-            return new AutoRejectResult(note, false);
+        private static AutoRejectResult reject(LeaveRuleOutcome outcome) {
+            return new AutoRejectResult(outcome, false);
         }
     }
 
@@ -938,25 +966,25 @@ public class LeaveService {
      *
      * <p><b>Handover-confirmation escape hatch: DOCUMENTED NON-ENFORCEMENT, not a system override.</b>
      * "ได้รับอนุมัติจากหัวหน้างานว่า...เรียบร้อยแล้ว" is a human judgement this system cannot verify --
-     * the same shape of problem as {@link #personalProbationRejectionNote} and every other categorical
+     * the same shape of problem as {@link #personalProbationRuleOutcome} and every other categorical
      * gate below that ends its message with "Contact HR if this is an exception" while implementing no
      * system-level bypass (the exception is arranged entirely outside this codebase). This gate follows
      * that exact, already-established convention rather than inventing a new bypass (e.g. a submit-time
      * flag any caller could set) that the announcement gives no way to verify either.
      *
-     * @return a rejection message, or {@code null} if the type is not resignation-gated or no
-     *         resignation row exists for this employee.
+     * @return a rejection outcome ({@link LeaveRuleCode#RESIGNATION_GATE}), or {@code null} if the
+     *         type is not resignation-gated or no resignation row exists for this employee. (Phase
+     *         A0a: was a plain English rejection message; the DECISION is unchanged, only its return
+     *         shape is now structured -- see {@link LeaveRuleOutcome}.)
      */
-    private String resignationRejectionNote(LeaveTypeDto leaveType, long employeeId) {
+    private LeaveRuleOutcome resignationRuleOutcome(LeaveTypeDto leaveType, long employeeId) {
         if (!RESIGNATION_GATED_LEAVE_TYPES.contains(leaveType.code())) {
             return null;
         }
         if (!leaveRepository.hasSubmittedResignation(employeeId)) {
             return null;
         }
-        return leaveType.nameEn() + " is not permitted once a resignation has been submitted, unless "
-            + "your supervisor has confirmed outstanding work has been completed and handed over to "
-            + "another employee. Contact HR if this is an exception.";
+        return LeaveRuleOutcome.of(LeaveRuleCode.RESIGNATION_GATE, Map.of("leaveTypeNameTh", leaveType.nameTh()));
     }
 
     /**
@@ -982,10 +1010,12 @@ public class LeaveService {
      * dates (see {@link LeaveRepository#findActiveRequestsByType}), not the employee's whole history
      * -- nothing further away can possibly be contiguous under any seeded schedule.
      *
-     * @return a rejection message, or {@code null} if this type is not gated or no contiguous request
-     *         of the paired type exists.
+     * @return a rejection outcome ({@link LeaveRuleCode#CONTIGUOUS_LEAVE_PAIR}), or {@code null} if
+     *         this type is not gated or no contiguous request of the paired type exists. (Phase A0a:
+     *         was a plain English rejection message; the DECISION is unchanged, only its return shape
+     *         is now structured -- see {@link LeaveRuleOutcome}.)
      */
-    private String contiguousLeaveRejectionNote(LeaveTypeDto leaveType, long employeeId, LocalDate startDate, LocalDate endDate) {
+    private LeaveRuleOutcome contiguousLeaveRuleOutcome(LeaveTypeDto leaveType, long employeeId, LocalDate startDate, LocalDate endDate) {
         String pairedTypeCode = CONTIGUOUS_LEAVE_PAIR.get(leaveType.code());
         if (pairedTypeCode == null) {
             return null;
@@ -995,14 +1025,23 @@ public class LeaveService {
             startDate.minusDays(CONTIGUOUS_CHECK_WINDOW_DAYS), endDate.plusDays(CONTIGUOUS_CHECK_WINDOW_DAYS));
         for (LeaveRequestSpan existing : existingRequests) {
             if (isContiguous(employeeId, existing, startDate, endDate)) {
-                return leaveType.nameEn() + " may not be taken immediately before or after " + pairedTypeCode
-                    + " leave with no working day in between. Contact HR if this is an exception.";
+                // Phase A0a: pairedTypeNameTh is looked up ONLY on this (rare) rejection path, not on
+                // every submission -- a presentational-only read (the paired type's own Thai name for
+                // the message), not a change to the DECISION made just above. Falls back to the raw
+                // code if the type row is somehow missing (defensive only; VACATION/PERSONAL are both
+                // permanently-seeded rows).
+                String pairedTypeNameTh = leaveRepository.findLeaveType(pairedTypeCode)
+                    .map(LeaveTypeDto::nameTh)
+                    .orElse(pairedTypeCode);
+                return LeaveRuleOutcome.of(LeaveRuleCode.CONTIGUOUS_LEAVE_PAIR, Map.of(
+                    "leaveTypeNameTh", leaveType.nameTh(),
+                    "pairedTypeNameTh", pairedTypeNameTh));
             }
         }
         return null;
     }
 
-    /** See {@link #contiguousLeaveRejectionNote}'s Javadoc for the across-a-non-working-day decision. */
+    /** See {@link #contiguousLeaveRuleOutcome}'s Javadoc for the across-a-non-working-day decision. */
     private boolean isContiguous(long employeeId, LeaveRequestSpan existing, LocalDate newStart, LocalDate newEnd) {
         LocalDate earlierEnd;
         LocalDate laterStart;
@@ -1075,10 +1114,13 @@ public class LeaveService {
      * {@code workingDayPredicate} question regardless of how the requester's OWN leave type counts days
      * for quota purposes.
      *
-     * @return a rejection message naming the first uncovered date, or {@code null} if the department
-     *         is exempt or stays covered on every day of the request.
+     * @return a rejection outcome ({@link LeaveRuleCode#DEPARTMENT_COVERAGE}) naming the first
+     *         uncovered date, or {@code null} if the department is exempt or stays covered on every
+     *         day of the request. (Phase A0a: was a plain English rejection message naming the date;
+     *         the DECISION is unchanged, only its return shape is now structured -- see
+     *         {@link LeaveRuleOutcome}.)
      */
-    private String departmentCoverageRejectionNote(long employeeId, LocalDate startDate, LocalDate endDate) {
+    private LeaveRuleOutcome departmentCoverageRuleOutcome(long employeeId, LocalDate startDate, LocalDate endDate) {
         List<Long> colleagueIds = leaveRepository.findActiveDepartmentColleagues(employeeId);
         // +1 for the requester, who is themselves an active member of the department but is
         // deliberately excluded from findActiveDepartmentColleagues's own result -- see that
@@ -1111,8 +1153,8 @@ public class LeaveService {
                         && !day.isAfter(span.endDate()));
             });
             if (!someoneElseAtWork) {
-                return "This request would leave nobody else in your department at work on " + day
-                    + ". At least one department member must remain at work. Contact HR if this is an exception.";
+                return LeaveRuleOutcome.of(LeaveRuleCode.DEPARTMENT_COVERAGE,
+                    Map.of("uncoveredDate", day.toString()));
             }
         }
         return null;
@@ -1158,14 +1200,15 @@ public class LeaveService {
         // §5.6 once-per-employment (ORDINATION today). Java-level check; ux_leave_once_per_employment
         // (V116) is the race-proof DB backstop -- see the DuplicateKeyException catch in #submit.
         if (leaveType.oncePerEmployment() && leaveRepository.hasOutstandingOrGrantedRequest(employeeId, leaveType.code())) {
-            return AutoRejectResult.reject("This leave type may be used only once during your employment, and a claim for it already exists.");
+            return AutoRejectResult.reject(LeaveRuleOutcome.of(LeaveRuleCode.ONCE_PER_EMPLOYMENT,
+                Map.of("leaveTypeNameTh", leaveType.nameTh())));
         }
 
-        // §5.3.4 post-resignation gate (relational rules, 2026-08). See #resignationRejectionNote's
+        // §5.3.4 post-resignation gate (relational rules, 2026-08). See #resignationRuleOutcome's
         // Javadoc for what hr.resignation actually contains and the handover-escape-hatch decision.
-        String resignationNote = resignationRejectionNote(leaveType, employeeId);
-        if (resignationNote != null) {
-            return AutoRejectResult.reject(resignationNote);
+        LeaveRuleOutcome resignationOutcome = resignationRuleOutcome(leaveType, employeeId);
+        if (resignationOutcome != null) {
+            return AutoRejectResult.reject(resignationOutcome);
         }
 
         // §5.2/§5.3 pro-ration (V120): #employeeAnnualQuota cannot compute a quota without hire_date
@@ -1177,8 +1220,8 @@ public class LeaveService {
         // gate (which has its own, narrower NULL-hire_date check further down -- unreachable in
         // practice once this fires first, kept as a defensive fallback, not because it needs to run).
         if (leaveType.proratedFirstYear() && leaveRepository.findHireDate(employeeId).isEmpty()) {
-            return AutoRejectResult.reject("Your hire date is not on file, so eligibility for " + leaveType.nameEn()
-                + " cannot be verified. Contact HR to record it before this leave type can be used.");
+            return AutoRejectResult.reject(LeaveRuleOutcome.of(LeaveRuleCode.HIRE_DATE_MISSING_PRORATED,
+                Map.of("leaveTypeNameTh", leaveType.nameTh())));
         }
 
         // §5.3 minimum SERVICE DURATION (months since hr.employee.hire_date). This is genuinely
@@ -1191,24 +1234,25 @@ public class LeaveService {
         if (leaveType.minServiceMonths() > 0) {
             Optional<LocalDate> hireDate = leaveRepository.findHireDate(employeeId);
             if (hireDate.isEmpty()) {
-                return AutoRejectResult.reject("Your hire date is not on file, so eligibility for " + leaveType.nameEn()
-                    + " cannot be verified. Contact HR to record it before this leave type can be used.");
+                return AutoRejectResult.reject(LeaveRuleOutcome.of(LeaveRuleCode.HIRE_DATE_MISSING_MIN_SERVICE,
+                    Map.of("leaveTypeNameTh", leaveType.nameTh())));
             }
             long completedMonths = ChronoUnit.MONTHS.between(hireDate.get(), startDate);
             if (completedMonths < leaveType.minServiceMonths()) {
-                return AutoRejectResult.reject(leaveType.nameEn() + " requires at least " + leaveType.minServiceMonths()
-                    + " month(s) of completed service. Contact HR if this is an exception.");
+                return AutoRejectResult.reject(LeaveRuleOutcome.of(LeaveRuleCode.MIN_SERVICE_MONTHS, Map.of(
+                    "leaveTypeNameTh", leaveType.nameTh(),
+                    "minServiceMonths", String.valueOf(leaveType.minServiceMonths()))));
             }
         }
 
         // §5.2 PERSONAL "passed probation" gate (review fix, V116): hardcoded to PERSONAL's code,
         // the same way the SICK certificate check below is hardcoded to SICK's code -- neither is a
         // per-type column the way quota/notice/consecutive-days are. See
-        // #personalProbationRejectionNote's Javadoc for the full rationale and decisions.
+        // #personalProbationRuleOutcome's Javadoc for the full rationale and decisions.
         if ("PERSONAL".equals(leaveType.code())) {
-            String note = personalProbationRejectionNote(employeeId, startDate);
-            if (note != null) {
-                return AutoRejectResult.reject(note);
+            LeaveRuleOutcome probationOutcome = personalProbationRuleOutcome(leaveType, employeeId, startDate);
+            if (probationOutcome != null) {
+                return AutoRejectResult.reject(probationOutcome);
             }
         }
 
@@ -1254,9 +1298,9 @@ public class LeaveService {
                     BigDecimal usedThisYear = leaveRepository.sumUsedDays(
                         employeeId, leaveType.code(), startDate.getYear(), ACTIVE_QUOTA_STATUSES);
                     if (usedThisYear.add(totalDays).compareTo(effectiveCap) > 0) {
-                        return AutoRejectResult.reject(leaveType.nameEn() + " is limited to " + formatDays(effectiveCap)
-                            + " day(s) total per year during your first " + FULL_SERVICE_MONTHS
-                            + " months of service. Contact HR if this is an exception.");
+                        return AutoRejectResult.reject(LeaveRuleOutcome.of(LeaveRuleCode.FIRST_YEAR_MAX_DAYS, Map.of(
+                            "leaveTypeNameTh", leaveType.nameTh(),
+                            "effectiveCap", formatDays(effectiveCap))));
                     }
                 }
             }
@@ -1285,8 +1329,8 @@ public class LeaveService {
         if ("PERSONAL".equals(leaveType.code()) && WEDDING_PURPOSE_CODE.equals(purposeCode)) {
             long weddingSpanDays = ChronoUnit.DAYS.between(startDate, endDate) + 1;
             if (BigDecimal.valueOf(weddingSpanDays).compareTo(WEDDING_LEAVE_MAX_DAYS) > 0) {
-                return AutoRejectResult.reject("Wedding leave (own marriage or a child's) may not exceed "
-                    + formatDays(WEDDING_LEAVE_MAX_DAYS) + " day(s) per request. Contact HR if this is an exception.");
+                return AutoRejectResult.reject(LeaveRuleOutcome.of(LeaveRuleCode.WEDDING_MAX_DAYS,
+                    Map.of("maxDays", formatDays(WEDDING_LEAVE_MAX_DAYS))));
             }
         }
 
@@ -1311,30 +1355,31 @@ public class LeaveService {
         if (leaveType.maxConsecutiveDays() != null) {
             long spanDays = ChronoUnit.DAYS.between(startDate, endDate) + 1;
             if (BigDecimal.valueOf(spanDays).compareTo(leaveType.maxConsecutiveDays()) > 0) {
-                return AutoRejectResult.reject(leaveType.nameEn() + " may not exceed " + formatDays(leaveType.maxConsecutiveDays())
-                    + " consecutive day(s) per request. Contact HR if this is an exception.");
+                return AutoRejectResult.reject(LeaveRuleOutcome.of(LeaveRuleCode.MAX_CONSECUTIVE_DAYS, Map.of(
+                    "leaveTypeNameTh", leaveType.nameTh(),
+                    "maxConsecutiveDays", formatDays(leaveType.maxConsecutiveDays()))));
             }
         }
 
         // §5.3.3 contiguous VACATION/PERSONAL gate (relational rules, 2026-08) runs before the SICK
         // certificate gate just below. ORDERING NOTE: the two are mutually exclusive by leave type
-        // (CONTIGUOUS_LEAVE_PAIR only keys VACATION/PERSONAL; sickCertificateNote only fires for
-        // SICK), so for any single request at most one of them can ever return non-null -- this
+        // (CONTIGUOUS_LEAVE_PAIR only keys VACATION/PERSONAL; sickCertificateRuleOutcome only fires
+        // for SICK), so for any single request at most one of them can ever return non-null -- this
         // placement is a documentation choice (keeps it grouped with the request-shape checks above,
         // consistent with where it lived before V124), not a decision with an observable effect on
-        // which message a user sees. See #contiguousLeaveRejectionNote's Javadoc for the "ติดต่อกัน
+        // which message a user sees. See #contiguousLeaveRuleOutcome's Javadoc for the "ติดต่อกัน
         // across a non-working day" decision.
-        String contiguousNote = contiguousLeaveRejectionNote(leaveType, employeeId, startDate, endDate);
-        if (contiguousNote != null) {
-            return AutoRejectResult.reject(contiguousNote);
+        LeaveRuleOutcome contiguousOutcome = contiguousLeaveRuleOutcome(leaveType, employeeId, startDate, endDate);
+        if (contiguousOutcome != null) {
+            return AutoRejectResult.reject(contiguousOutcome);
         }
 
         // §5.1 SICK certificate + filing-window + no-certificate tolerance (V124). See
-        // #sickCertificateNote's Javadoc for the combined decision table.
+        // #sickCertificateRuleOutcome's Javadoc for the combined decision table.
         if ("SICK".equals(leaveType.code())) {
-            String note = sickCertificateNote(leaveType, employeeId, startDate, hasAttachment);
-            if (note != null) {
-                return AutoRejectResult.reject(note);
+            LeaveRuleOutcome sickOutcome = sickCertificateRuleOutcome(leaveType, employeeId, startDate, hasAttachment);
+            if (sickOutcome != null) {
+                return AutoRejectResult.reject(sickOutcome);
             }
         }
 
@@ -1377,7 +1422,7 @@ public class LeaveService {
         //
         // ISOLATION FROM V124's SICK no-certificate tolerance: this counter
         // (LeaveRepository#countEmergencyFilings) reads hr.leave_request.emergency_filing, a column
-        // set ONLY by #markEmergencyFiling for THIS gate; V124's sickCertificateNote/
+        // set ONLY by #markEmergencyFiling for THIS gate; V124's sickCertificateRuleOutcome/
         // countNoCertificateRequestsInMonth instead reads attachment_id IS NULL and is called only
         // for SICK. The two counters share no column and are never invoked for the same
         // leave_type_code in practice (emergencyMonthlyAllowance is non-null only for PERSONAL,
@@ -1405,13 +1450,11 @@ public class LeaveService {
                     if (usedThisMonth < leaveType.emergencyMonthlyAllowance()) {
                         return new AutoRejectResult(null, true);
                     }
-                    return AutoRejectResult.reject("Emergency leave without advance notice is limited to "
-                        + leaveType.emergencyMonthlyAllowance()
-                        + " occasion(s) per calendar month, and that allowance has already been used this month. "
-                        + "Contact your manager or HR.");
+                    return AutoRejectResult.reject(LeaveRuleOutcome.of(LeaveRuleCode.EMERGENCY_TOLERANCE_EXHAUSTED,
+                        Map.of("allowance", String.valueOf(leaveType.emergencyMonthlyAllowance()))));
                 }
-                return AutoRejectResult.reject("Leave requests must be submitted at least " + noticeDays
-                    + " day(s) before the start date. Contact your manager or HR for urgent leave.");
+                return AutoRejectResult.reject(LeaveRuleOutcome.of(LeaveRuleCode.ADVANCE_NOTICE,
+                    Map.of("noticeDays", String.valueOf(noticeDays))));
             }
         }
 
@@ -1422,12 +1465,12 @@ public class LeaveService {
         // THIS employee's own eligibility/timing), it is not about the requester at all -- it is the
         // least "fundamental" reason in the ordering this Javadoc describes, and it applies to every
         // leave type (type-agnostic), so it must not sit ahead of a type-specific rejection that would
-        // otherwise have fired first. See #departmentCoverageRejectionNote's Javadoc for the owner's
+        // otherwise have fired first. See #departmentCoverageRuleOutcome's Javadoc for the owner's
         // relaxation of the announcement's text, the department-size floor, and the schedule-awareness
         // this depends on.
-        String departmentCoverageNote = departmentCoverageRejectionNote(employeeId, startDate, endDate);
-        if (departmentCoverageNote != null) {
-            return AutoRejectResult.reject(departmentCoverageNote);
+        LeaveRuleOutcome departmentCoverageOutcome = departmentCoverageRuleOutcome(employeeId, startDate, endDate);
+        if (departmentCoverageOutcome != null) {
+            return AutoRejectResult.reject(departmentCoverageOutcome);
         }
         return AutoRejectResult.APPROVED;
     }
