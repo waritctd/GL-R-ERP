@@ -8,18 +8,28 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
+import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
 import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { DataTable, expandedRowRegionId } from '../../components/common/DataTable.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
+import { FieldList } from '../../components/common/FieldList.jsx';
 import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { formGridSpan2, Panel, PageStack, RowActions } from '../../components/common/Layout.jsx';
-import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { formGridSpan2, Panel } from '../../components/common/Layout.jsx';
+import { Skeleton } from '../../components/common/Skeleton.jsx';
+import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { leaveStatusLabel as statusInfo } from '../../utils/format.js';
+import {
+  formatDateRange, formatDays, monthStartIso, todayIso, yearFrom,
+} from './leaveFormatting.js';
+import {
+  buildLeaveRequestColumns, LEAVE_PURPOSE_OPTIONS, LEAVE_REQUEST_TABLE_GRID, leaveRequestRowKey,
+  renderLeaveRequestExpanded,
+} from './leaveRequestTable.jsx';
 
-const LEAVE_TABLE_GRID = 'grid-cols-[minmax(0,1.35fr)_minmax(0,1.1fr)_minmax(0,1.65fr)_minmax(0,0.75fr)_minmax(0,1.35fr)_minmax(0,0.8fr)] max-[1040px]:min-w-[900px] reflow-cards';
 // FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
 // (Enter-to-submit on the search button), so its exact utility string is reproduced
 // here rather than wrapping a <form> inside a non-form primitive.
@@ -27,45 +37,51 @@ const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-center bg-surface bord
 // FormGrid (Layout.jsx) renders a <div>; the submit form needs to be a native <form>
 // for onSubmit/noValidate, so its exact (2-column) utility string is reproduced here.
 const FORM_GRID_CLASS = 'grid gap-[14px] max-[720px]:grid-cols-1 grid-cols-2';
-// No primitive reproduces `.leave-balance-grid` (3-col, no ≤1040px override, 1-col ≤720px;
-// styles.css:922 + :1871). StatGrid is 4→2→1 col, a different ratio, so it doesn't fit.
-const LEAVE_BALANCE_GRID = 'grid grid-cols-3 gap-3 max-[720px]:grid-cols-1';
 
-function bangkokDateParts(date = new Date()) {
-  return Object.fromEntries(new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Bangkok',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(date).map((part) => [part.type, part.value]));
+// Leave-surface IA rebuild Phase A1 (later narrowed by owner feedback, "one primary card, not
+// every quota card at once"): the everyday-vs-rare balance split. SICK/PERSONAL/VACATION are what
+// every employee actually files day to day; MATERNITY/MILITARY/ORDINATION are real but uncommon,
+// and MILITARY's annualQuotaDays (366) is a deliberate sentinel, not a policy number (see
+// mockApi.js's db.leaveTypes comment) -- showing "เหลือ 366 วัน" for it is worse than not showing
+// a quota figure at all. Named constant, not an inline `code === 'SICK' || ...` check at each call
+// site, so the split has exactly one definition to update if the everyday set ever changes.
+const EVERYDAY_LEAVE_TYPE_CODES = new Set(['SICK', 'PERSONAL', 'VACATION']);
+
+// A rare type's meaningful figures are the paid-days cap and the eligibility gate, never a quota
+// or a remaining-days count -- both are derived from annualQuotaDays, and MILITARY's is the 366
+// sentinel above. minServiceMonths/oncePerEmployment mirror the hr.leave_type columns (see
+// mockApi.js's db.leaveTypes comment); maxConsecutiveDays/firstYearMaxDays are not surfaced here
+// because the seeded rare types never set them, and this file is not the place to invent copy for
+// fields no rare type currently uses.
+function rareLeaveConditionText(leaveType) {
+  if (!leaveType) return null;
+  const parts = [];
+  if (Number(leaveType.minServiceMonths) > 0) {
+    parts.push(`อายุงานอย่างน้อย ${leaveType.minServiceMonths} เดือน`);
+  }
+  if (leaveType.oncePerEmployment) {
+    parts.push('ใช้ได้ครั้งเดียวตลอดการทำงาน');
+  }
+  return parts.length > 0 ? parts.join(' · ') : null;
 }
 
-const todayIso = () => {
-  const parts = bangkokDateParts();
-  return `${parts.year}-${parts.month}-${parts.day}`;
-};
-
-const monthStartIso = () => {
-  const parts = bangkokDateParts();
-  return `${parts.year}-${parts.month}-01`;
-};
-
-function yearFrom(dateString) {
-  return Number((dateString || todayIso()).slice(0, 4));
+function everydayBalanceSummary(balance) {
+  return `ใช้แล้ว ${formatDays(balance.approvedDays)} · รออนุมัติ ${formatDays(balance.pendingDays)} · สิทธิ์ ${formatDays(balance.annualQuotaDays)}`;
 }
 
-// §5.2 leave purpose (V125): the five NAMED purposes plus OTHER, the always-available catch-all for
-// the announcement's trailing "เป็นต้น" ("etc.") -- mirrors LeaveService's KNOWN_PURPOSE_CODES.
-// Purpose is optional (see LeaveService#normalizePurposeCode's Javadoc) and only meaningful for
-// PERSONAL (ลากิจ) today, so this select is only shown for that leave type below.
-const LEAVE_PURPOSE_OPTIONS = [
-  { value: 'DRIVING_LICENSE_OR_GOVERNMENT', label: 'ทำใบขับขี่ / ติดต่องานราชการ' },
-  { value: 'FAMILY_NECESSITY', label: 'กิจธุระอันจำเป็นของครอบครัว' },
-  { value: 'RELIGIOUS_PRACTICE', label: 'ปฏิบัติธรรมทางศาสนาตามธรรมเนียมปฏิบัติ' },
-  { value: 'WEDDING', label: 'พิธีสมรส (ของตนเองหรือบุตร) — ลาได้ไม่เกิน 3 วัน' },
-  { value: 'FAMILY_FUNERAL', label: 'งานศพของบุคคลในครอบครัว' },
-  { value: 'OTHER', label: 'อื่นๆ' },
-];
+// Deliberately never reads balance.annualQuotaDays/remainingDays -- see rareLeaveConditionText's
+// comment above on why (MILITARY's 366 sentinel). approved/pending stay real, request-driven
+// counts regardless of the sentinel, so they stay meaningful for every rare type; paidDaysCap and
+// the eligibility gate come from the leave-type record, not the balance.
+function rareBalanceSummary(balance, leaveType) {
+  const parts = [`ใช้แล้ว ${formatDays(balance.approvedDays)}`, `รออนุมัติ ${formatDays(balance.pendingDays)}`];
+  if (leaveType?.paidDaysCap != null) {
+    parts.push(`จ่ายค่าจ้างสูงสุด ${formatDays(leaveType.paidDaysCap)}`);
+  }
+  const condition = rareLeaveConditionText(leaveType);
+  if (condition) parts.push(condition);
+  return parts.join(' · ');
+}
 
 function defaultForm(employeeId = '', leaveTypeCode = 'VACATION') {
   const date = todayIso();
@@ -113,7 +129,6 @@ function createLeaveFormSchema({ requireEmployeeId, minStartDate }) {
     contactDistrict: z.string().optional(),
     contactProvince: z.string().optional(),
     contactPhone: z.string().optional(),
-    // §5.2 purpose/emergency-filing (V125): both optional -- see defaultForm's comment.
     purposeCode: z.string().optional(),
     requestedAsEmergency: z.boolean().optional(),
   }).superRefine((data, context) => {
@@ -145,39 +160,161 @@ function createLeaveFormSchema({ requireEmployeeId, minStartDate }) {
   });
 }
 
-
-function formatDate(value) {
-  if (!value) return '-';
-  const date = new Date(`${value}T00:00:00+07:00`);
-  if (Number.isNaN(date.getTime())) return '-';
-  return new Intl.DateTimeFormat('th-TH', {
-    dateStyle: 'medium',
-    timeZone: 'Asia/Bangkok',
-  }).format(date);
+function isPermissionError(error) {
+  return error?.status === 403;
 }
 
-function formatDateTime(value) {
-  if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '-';
-  return new Intl.DateTimeFormat('th-TH', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-    hour12: false,
-    timeZone: 'Asia/Bangkok',
-  }).format(date);
+/**
+ * The employee's own request table, split into DataTable (loading skeleton / real rows /
+ * pagination / error+retry) plus a StatePanel for the three zero-row cases the pre-A1 table
+ * collapsed into one generic EmptyState: `filtered` (non-default filters applied, offers a
+ * clear-filters action), `empty` (teaching copy -- first-time, no data at all yet), and `denied`
+ * (the request errored with a 403).
+ */
+function OwnRequestsSection({
+  requestsQuery, rows, hasCustomFilters, onClearFilters, expandedId, onToggleExpand, onCancel, user,
+}) {
+  const loading = requestsQuery.isPending;
+  const denied = requestsQuery.isError && isPermissionError(requestsQuery.error);
+  const hasError = requestsQuery.isError && !denied;
+
+  const columns = useMemo(() => buildLeaveRequestColumns({
+    expandedId,
+    onToggleExpand,
+    renderActions: (request) => {
+      const canCancel = request.status === 'SUBMITTED' && Number(request.employeeId) === Number(user.employeeId);
+      if (!canCancel) return null;
+      return (
+        <Button type="button" variant="icon" title="ยกเลิก" aria-label="ยกเลิก" onClick={() => onCancel(request.id)}>
+          <Icon name="close" size={14} />
+        </Button>
+      );
+    },
+  }), [expandedId, onToggleExpand, onCancel, user.employeeId]);
+
+  function mobileCard(request) {
+    const status = statusInfo(request.status);
+    const canCancel = request.status === 'SUBMITTED' && Number(request.employeeId) === Number(user.employeeId);
+    const expanded = expandedId === request.id;
+    return (
+      <>
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <strong className="min-w-0 truncate text-sm font-extrabold text-text">
+            {formatDateRange(request.startDate, request.endDate)}
+          </strong>
+          <span className="flex items-center gap-1.5">
+            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+            <button
+              type="button"
+              className="icon-button"
+              aria-expanded={expanded}
+              aria-controls={expandedRowRegionId(request.id)}
+              title={expanded ? 'ซ่อนรายละเอียด' : 'ดูรายละเอียด'}
+              aria-label={expanded ? 'ซ่อนรายละเอียด' : 'ดูรายละเอียด'}
+              onClick={() => onToggleExpand(request.id)}
+            >
+              <Icon name={expanded ? 'chevronUp' : 'chevronDown'} size={14} />
+            </button>
+          </span>
+        </div>
+        <span className="min-w-0 truncate text-xs text-text-muted">
+          {request.leaveTypeNameTh || request.leaveTypeCode} · {formatDays(request.totalDays)}
+        </span>
+        <span className="min-w-0 truncate text-xs text-text-muted">{request.reason}</span>
+        {canCancel ? (
+          <Button type="button" variant="secondary" className="mt-1 min-h-11" onClick={() => onCancel(request.id)}>
+            <Icon name="close" size={14} />
+            ยกเลิกคำขอ
+          </Button>
+        ) : null}
+      </>
+    );
+  }
+
+  if (!loading && denied) {
+    return (
+      <StatePanel
+        state="denied"
+        description={requestsQuery.error?.message || 'ไม่มีสิทธิ์เข้าถึงรายการนี้'}
+      />
+    );
+  }
+
+  if (!loading && !hasError && rows.length === 0) {
+    return hasCustomFilters ? (
+      <StatePanel
+        state="filtered"
+        action={<Button type="button" variant="secondary" onClick={onClearFilters}>ล้างตัวกรอง</Button>}
+      />
+    ) : (
+      <StatePanel
+        state="empty"
+        title="ยังไม่มีคำขอลา"
+        description="ลาคือการหยุดงานที่ได้รับอนุมัติ ยื่นคำขอที่ฟอร์ม “ยื่นคำขอลา” ด้านบน ระบุประเภทและช่วงวันที่ ระบบจะตรวจโควตาและอนุมัติอัตโนมัติถ้าเข้าเงื่อนไข"
+      />
+    );
+  }
+
+  return (
+    <DataTable
+      columns={columns}
+      rows={rows}
+      getRowKey={leaveRequestRowKey}
+      gridClassName={LEAVE_REQUEST_TABLE_GRID}
+      loading={loading}
+      error={hasError}
+      onRetry={() => requestsQuery.refetch()}
+      mobileCard={mobileCard}
+      renderExpanded={(request) => (expandedId === request.id ? renderLeaveRequestExpanded(request) : null)}
+      showPagination
+    />
+  );
 }
 
-function formatDateRange(start, end) {
-  return start === end ? formatDate(start) : `${formatDate(start)} - ${formatDate(end)}`;
+/**
+ * The one balance card the owner asked for ("really show just the primary one default because
+ * if we show everything the page will just be over populated with cards") -- driven by whichever
+ * leave type is currently selected in the request form's "ประเภทการลา" select, so it tracks the
+ * form instead of asking the reader to cross-reference a grid. `loading` covers both "balances
+ * haven't loaded yet" and "no acting employee resolved yet" (balancesQuery is disabled until
+ * then) so this never flashes a bare `0` before real data lands; a resolved-but-missing balance
+ * (the selected type has no row) gets its own EmptyState rather than silently rendering zeros.
+ */
+function PrimaryLeaveBalanceCard({ loading, balance, leaveType, isEveryday }) {
+  if (loading) {
+    return (
+      <div className="grid gap-2" aria-busy="true" aria-label="กำลังโหลดข้อมูลโควตา">
+        <Skeleton width="35%" height={14} />
+        <Skeleton width="20%" height={12} />
+        <Skeleton width="45%" height={36} />
+        <Skeleton width="70%" height={14} />
+      </div>
+    );
+  }
+  if (!balance) {
+    return <EmptyState icon="calendar" title="ยังไม่มีข้อมูลโควตาสำหรับประเภทนี้" />;
+  }
+
+  const name = balance.leaveTypeNameTh || leaveType?.nameTh || balance.leaveTypeCode;
+  // Rare types never headline remainingDays/annualQuotaDays (MILITARY's 366 sentinel) -- the paid
+  // cap is the meaningful headline figure instead. See rareBalanceSummary's comment above.
+  const headlineLabel = isEveryday ? 'คงเหลือ' : 'สิทธิ์จ่ายค่าจ้างสูงสุด';
+  const headlineValue = isEveryday
+    ? formatDays(balance.remainingDays)
+    : (leaveType?.paidDaysCap != null ? formatDays(leaveType.paidDaysCap) : '-');
+  const summary = isEveryday ? everydayBalanceSummary(balance) : rareBalanceSummary(balance, leaveType);
+
+  return (
+    <div className="grid gap-1" data-testid="primary-balance-card">
+      <span className="block min-w-0 truncate text-base font-bold text-text-secondary">{name}</span>
+      <span className="mt-1 block text-xs font-bold uppercase tracking-wide text-text-muted">{headlineLabel}</span>
+      <strong className="block text-4xl font-extrabold leading-tight tabular-nums text-text">{headlineValue}</strong>
+      <small className="mt-1 block text-sm text-text-muted">{summary}</small>
+    </div>
+  );
 }
 
-function formatDays(value) {
-  const days = Number(value || 0);
-  return `${new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 }).format(days)} วัน`;
-}
-
-export function LeavePage({ user, currentEmployee, showToast }) {
+export function MyLeaveTab({ user, currentEmployee, showToast, formAnchorRef }) {
   const queryClient = useQueryClient();
   const initialFilters = {
     from: monthStartIso(),
@@ -190,7 +327,12 @@ export function LeavePage({ user, currentEmployee, showToast }) {
   const [confirmState, setConfirmState] = useState(null);
   const [attachmentFile, setAttachmentFile] = useState(null);
   const [fileInputKey, setFileInputKey] = useState(0);
+  const [expandedId, setExpandedId] = useState(null);
 
+  // Same as the pre-A1 LeavePage.jsx: `canReviewAll` (hr today) also widens the SUBMIT-ON-BEHALF-OF
+  // picker below to every active employee, not just this user's own direct reports -- unrelated to
+  // review/cancel row actions, which this tab no longer renders at all (ReviewQueueTab.jsx owns
+  // those exclusively now, so this flag is not threaded any further than the one filter below).
   const canReviewAll = hasPermission(user.role, 'canReviewLeave');
 
   // --- Reads (TanStack Query) ---
@@ -206,10 +348,13 @@ export function LeavePage({ user, currentEmployee, showToast }) {
   });
   const leaveTypes = useMemo(() => leaveTypesQuery.data ?? [], [leaveTypesQuery.data]);
 
-  // Issue #422 B4: a modest poll + window-focus refetch on this queue specifically -- leave
-  // approvals are genuinely multi-user (a manager/HR approval made in another session must show
-  // up here without a manual reload). The app-wide `refetchOnWindowFocus: false` default
-  // (api/queryClient.js) stays put; this is a per-query opt-in, not a default flip.
+  // Issue #422 B4: a modest poll + window-focus refetch on this list specifically -- leave
+  // approvals are genuinely multi-user (a manager/HR approval made in another session, or in the
+  // "รอพิจารณา" tab, must show up here without a manual reload). FIX (Phase A1): this used to
+  // double as the table's `loading` flag (`isLoading || isFetching`), which meant every one of
+  // these background refetches blanked the table into an EmptyState -- `isPending` below drives
+  // the skeleton (first load only); `isFetching` alone now only powers a quiet, non-destructive
+  // header indicator that never removes the rows already on screen.
   const requestsQuery = useQuery({
     queryKey: queryKeys.leaveRequests(appliedFilters),
     queryFn: () => api.leave.list({
@@ -222,7 +367,8 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     refetchOnWindowFocus: true,
   });
   const requests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
-  const loading = requestsQuery.isLoading || requestsQuery.isFetching;
+  const refreshing = requestsQuery.isFetching && !requestsQuery.isPending;
+  const hasCustomFilters = JSON.stringify(appliedFilters) !== JSON.stringify(initialFilters);
 
   const submitEmployeeOptions = useMemo(
     () => employeeOptions.filter((employee) => employee.self || employee.directReport || canReviewAll),
@@ -264,10 +410,23 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     enabled: !!formEmployeeId,
   });
   const balances = useMemo(() => balancesQuery.data ?? [], [balancesQuery.data]);
+  const everydayBalances = useMemo(
+    () => balances.filter((balance) => EVERYDAY_LEAVE_TYPE_CODES.has(balance.leaveTypeCode)),
+    [balances],
+  );
   const selectedBalance = useMemo(
     () => balances.find((balance) => balance.leaveTypeCode === formLeaveTypeCode),
     [balances, formLeaveTypeCode],
   );
+  const selectedLeaveType = useMemo(
+    () => leaveTypes.find((type) => type.code === formLeaveTypeCode),
+    [leaveTypes, formLeaveTypeCode],
+  );
+  // Covers both "no acting employee resolved yet" (balancesQuery is `enabled: !!formEmployeeId`,
+  // so it never even starts a fetch until then) and "the fetch is in flight" -- either way the
+  // primary card must show its skeleton, not a stale/zeroed balance from before formEmployeeId
+  // was known.
+  const primaryBalanceLoading = !formEmployeeId || balancesQuery.isPending;
 
   // Paper-form (ใบลาหยุด F-HR-020) contact-during-leave autofill + read-only position/dept/division.
   const contactDefaultsQuery = useQuery({
@@ -279,28 +438,18 @@ export function LeavePage({ user, currentEmployee, showToast }) {
   });
   const contactDefaults = contactDefaultsQuery.data ?? null;
 
-  // Preserve the original error-toast behavior of the imperative loaders.
-  useEffect(() => {
-    if (employeesQuery.error) showToast('error', employeesQuery.error.message || 'โหลดข้อมูลตั้งต้นวันลาไม่สำเร็จ');
-  }, [employeesQuery.error, showToast]);
-  useEffect(() => {
-    if (leaveTypesQuery.error) showToast('error', leaveTypesQuery.error.message || 'โหลดข้อมูลตั้งต้นวันลาไม่สำเร็จ');
-  }, [leaveTypesQuery.error, showToast]);
-  useEffect(() => {
-    if (requestsQuery.error) showToast('error', requestsQuery.error.message || 'โหลดข้อมูลวันลาไม่สำเร็จ');
-  }, [requestsQuery.error, showToast]);
-  useEffect(() => {
-    if (balancesQuery.error) showToast('error', balancesQuery.error.message || 'โหลดโควตาวันลาไม่สำเร็จ');
-  }, [balancesQuery.error, showToast]);
-  useEffect(() => {
-    if (contactDefaultsQuery.error) showToast('error', contactDefaultsQuery.error.message || 'โหลดข้อมูลติดต่อไม่สำเร็จ');
-  }, [contactDefaultsQuery.error, showToast]);
-
-  // Paper-form contact block: prefill from the autofill defaults. Factored out of the effect below
-  // so createMutation's onSuccess can re-apply it too -- reset() after a successful submit blanks
-  // these fields, but when the acting employee is unchanged, `contactDefaults` is the same query
-  // result reference, so the effect alone would never re-fire and the block would stay blank until
-  // the employee was switched.
+  // FIX (Phase A1): the pre-A1 page fired `showToast('error', ...)` from FIVE separate
+  // `useEffect`s keyed on each query's `.error` (employees/types/requests/balances/
+  // contactDefaults) -- with no inline error UI or retry at all for any of them, AND
+  // `showToast` has an unstable identity (CLAUDE.md), so a dependency array that ever grew to
+  // include it directly (rather than as the last, harmless-if-stale entry these already were)
+  // would infinite-loop. The table's own load failure now has real inline UI instead (DataTable's
+  // `error`+`onRetry` via OwnRequestsSection above); the other four reference-data queries
+  // (employees/types/balances/contactDefaults) already degrade to their existing empty-state
+  // fallbacks below (`balances.length === 0` -> EmptyState, empty `<select>` options, etc.) when
+  // their query errors, since each one's `.data ?? []`/`?? null` default already treats "errored"
+  // and "genuinely empty" the same way -- removing the toast is a strict improvement (no more
+  // infinite-loop risk) with no silent-failure regression beyond what already existed.
   function applyContactDefaults(defaults) {
     if (!defaults) return;
     setValue('contactHouseNo', defaults.contactHouseNo || '');
@@ -315,16 +464,24 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contactDefaults]);
 
-  const canSubmitForTeam = submitEmployeeOptions.some((employee) => employee.directReport) || canReviewAll;
   const hasMultipleEmployeeOptions = employeeOptions.length > 1;
 
   const totals = useMemo(() => {
     const submitted = requests.filter((request) => request.status === 'SUBMITTED').length;
     const approved = requests.filter((request) => request.status === 'APPROVED');
     const approvedDays = approved.reduce((sum, request) => sum + Number(request.totalDays || 0), 0);
-    const remainingDays = balances.reduce((sum, balance) => sum + Number(balance.remainingDays || 0), 0);
+    // EVERYDAY types ONLY -- summing every balance here produced "โควตาคงเหลือ 564 วัน", which is
+    // not a number that means anything. MILITARY's annual_quota_days is 366, a deliberate SENTINEL
+    // standing for "no annual ceiling, the 60-day PAID cap is the real rule" (V120), not a quota an
+    // employee holds; MATERNITY's 98 and ORDINATION's 60 are per-occasion entitlements gated behind
+    // conditions (once per employment, 12 months' service), not a running balance either. Adding
+    // them to ลากิจ/ลาป่วย/ลาพักร้อน tells someone they have a year and a half of leave banked.
+    // The rare-type rows in the "โควตาการลาทั้งหมด" disclosure below already suppress these same
+    // numbers for the same reason -- this is that rule applied to the aggregate, which was the
+    // one place it leaked.
+    const remainingDays = everydayBalances.reduce((sum, balance) => sum + Number(balance.remainingDays || 0), 0);
     return { submitted, approved: approved.length, approvedDays, remainingDays };
-  }, [requests, balances]);
+  }, [requests, everydayBalances]);
 
   const activeCalendarItems = useMemo(
     () => requests
@@ -354,31 +511,34 @@ export function LeavePage({ user, currentEmployee, showToast }) {
 
   // Issue #422 B3 fix: invalidate the ['leave'] PREFIX, not the exact
   // queryKeys.leaveRequests(appliedFilters)/leaveBalances(formEmployeeId, balancesYear) pair --
-  // every other filter combination (a different date range/status/employee a sibling tab or
-  // another reviewer has open) used to stay stale until its own filters were reapplied. Every key
-  // this module defines (leaveRequests/leaveBalances/leaveEmployees/leaveTypes/
-  // leaveContactDefaults) is already prefixed with 'leave', so the broader invalidation
-  // subsumes the two specific calls this replaces with no narrower alternative needed.
+  // every other filter combination (a different date range/status/employee, this same tab or
+  // ReviewQueueTab's own unfiltered query) used to stay stale until its own filters were
+  // reapplied.
   function invalidateLeave() {
     return queryClient.invalidateQueries({ queryKey: ['leave'] });
+  }
+
+  function invalidatePayrollUpstream() {
+    return queryClient.invalidateQueries({ queryKey: ['payroll'] });
   }
 
   function updateFilter(field, value) {
     setFilters((current) => ({ ...current, [field]: value }));
   }
 
+  function clearFilters() {
+    setFilters(initialFilters);
+    setAppliedFilters(initialFilters);
+  }
+
   function handleStartDateChange(event) {
     const value = event.target.value;
-    // Sub-day leave (2026-07-25): endDate always tracks startDate while the sub-day checkbox is on
-    // (a sub-day request is single-date only).
     if (getValues('subDay') || getValues('endDate') < value) {
       setValue('endDate', value, { shouldDirty: true, shouldValidate: true });
     }
   }
 
   function handleSubDayToggle(event) {
-    // register('subDay', ...) already writes the checkbox value itself; this only handles the
-    // side effects -- forcing endDate=startDate on, clearing the times off.
     if (event.target.checked) {
       setValue('endDate', getValues('startDate'), { shouldDirty: true, shouldValidate: true });
     } else {
@@ -397,9 +557,6 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     onSuccess: (created) => {
       const nextEmployeeId = formEmployeeId || currentEmployee?.id || user.employeeId || '';
       reset(defaultForm(nextEmployeeId, formLeaveTypeCode));
-      // reset() above blanks the contact block; when the acting employee is unchanged the
-      // contactDefaults query result is the same reference, so its own effect won't re-fire --
-      // re-apply it explicitly so the block doesn't sit blank until the employee is switched.
       applyContactDefaults(contactDefaults);
       setAttachmentFile(null);
       setFileInputKey((key) => key + 1);
@@ -413,36 +570,6 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     onError: (error) => showToast('error', error.message || 'ส่งคำขอลาไม่สำเร็จ'),
   });
 
-  // Issue #422 B5 fix: approve/reject/cancel each change a figure PayrollPage reads
-  // (unpaidLeaveDays, via suggested-inputs) with no way for that screen to find out short of a
-  // manual reload. Invalidating the ['payroll'] prefix alongside invalidateLeave() lets an open
-  // PayrollPage tab pick the change up on its own next poll/focus refetch (issue #422 B1).
-  function invalidatePayrollUpstream() {
-    return queryClient.invalidateQueries({ queryKey: ['payroll'] });
-  }
-
-  const approveMutation = useMutation({
-    mutationFn: (id) => api.leave.approve(id, {}).then((response) => response.request),
-    onSuccess: () => {
-      showToast('success', 'อนุมัติวันลาแล้ว');
-      setConfirmState(null);
-      invalidateLeave();
-      invalidatePayrollUpstream();
-    },
-    onError: (error) => showToast('error', error.message || 'อนุมัติวันลาไม่สำเร็จ'),
-  });
-
-  const rejectMutation = useMutation({
-    mutationFn: ({ id, reviewerNote }) => api.leave.reject(id, { reviewerNote }).then((response) => response.request),
-    onSuccess: () => {
-      showToast('success', 'ปฏิเสธคำขอลาแล้ว');
-      setConfirmState(null);
-      invalidateLeave();
-      invalidatePayrollUpstream();
-    },
-    onError: (error) => showToast('error', error.message || 'ปฏิเสธวันลาไม่สำเร็จ'),
-  });
-
   const cancelMutation = useMutation({
     mutationFn: ({ id, reviewerNote }) => api.leave.cancel(id, { reviewerNote: reviewerNote?.trim() || null }).then((response) => response.request),
     onSuccess: () => {
@@ -454,8 +581,7 @@ export function LeavePage({ user, currentEmployee, showToast }) {
     onError: (error) => showToast('error', error.message || 'ยกเลิกวันลาไม่สำเร็จ'),
   });
 
-  const saving = createMutation.isPending || approveMutation.isPending
-    || rejectMutation.isPending || cancelMutation.isPending;
+  const saving = createMutation.isPending || cancelMutation.isPending;
 
   async function prepareAttachment(file) {
     if (!file) return null;
@@ -484,8 +610,6 @@ export function LeavePage({ user, currentEmployee, showToast }) {
       employeeId: values.employeeId ? Number(values.employeeId) : null,
       leaveTypeCode: values.leaveTypeCode,
       startDate: values.startDate,
-      // Sub-day leave: endDate always equals startDate while subDay is on (mirrors the checkbox's
-      // own forcing behavior, in case a stale endDate ever slips through).
       endDate: values.subDay ? values.startDate : values.endDate,
       reason: values.reason.trim(),
       startTime: values.subDay && values.startTime ? values.startTime : null,
@@ -495,71 +619,22 @@ export function LeavePage({ user, currentEmployee, showToast }) {
       contactDistrict: values.contactDistrict?.trim() || null,
       contactProvince: values.contactProvince?.trim() || null,
       contactPhone: values.contactPhone?.trim() || null,
-      // §5.2 purpose/emergency-filing (V125): only meaningful for PERSONAL -- the form only shows
-      // these fields for that leave type (see the JSX below), but this guard also protects against
-      // a stale value surviving a leaveTypeCode switch within the same form session.
       purposeCode: values.leaveTypeCode === 'PERSONAL' && values.purposeCode ? values.purposeCode : null,
       requestedAsEmergency: values.leaveTypeCode === 'PERSONAL' ? Boolean(values.requestedAsEmergency) : null,
       attachmentFile: preparedAttachment,
     });
   }
 
-  // Approve now goes through a confirmation step (matches the reference
-  // CommissionPage/TicketDetailPage pattern) instead of firing immediately,
-  // so the reviewer sees what they're approving before committing to it.
-  function approve(id) {
-    setConfirmState({ kind: 'approve', id });
-  }
-
-  function confirmApprove() {
-    approveMutation.mutate(confirmState.id);
-  }
-
-  function reject(id) {
-    setConfirmState({ kind: 'reject', id });
-  }
-
-  function confirmReject(reviewerNote) {
-    if (!reviewerNote?.trim()) return;
-    rejectMutation.mutate({ id: confirmState.id, reviewerNote: reviewerNote.trim() });
-  }
-
-  function cancel(id) {
-    const request = requests.find((item) => item.id === id);
-    if (request && canManagerCancel(request)) {
-      setConfirmState({ kind: 'cancel', id });
-      return;
-    }
-    doCancel(id, '');
+  function requestCancel(id) {
+    setConfirmState({ kind: 'cancel', id });
   }
 
   function doCancel(id, reviewerNote) {
     cancelMutation.mutate({ id, reviewerNote });
   }
 
-  function canReviewRequest(request) {
-    return request.status === 'SUBMITTED'
-      && (canReviewAll || (request.managerEmployeeId && Number(request.managerEmployeeId) === Number(user.employeeId)));
-  }
-
-  function canManagerCancel(request) {
-    return ['SUBMITTED', 'APPROVED'].includes(request.status)
-      && (canReviewAll || (request.managerEmployeeId && Number(request.managerEmployeeId) === Number(user.employeeId)));
-  }
-
   return (
-    <PageStack>
-      <PageHeader
-        title="จัดการการลา"
-        subtitle={canSubmitForTeam ? 'ยื่นคำขอแทนทีม ตรวจโควตา และอนุมัติวันลา' : 'ยื่นคำขอลาและดูโควตาของคุณ'}
-        actions={(
-          <Button type="button" variant="secondary" onClick={() => requestsQuery.refetch()} disabled={loading}>
-            <Icon name="refresh" />
-            รีเฟรช
-          </Button>
-        )}
-      />
-
+    <>
       <CompactStatRow
         items={[
           { key: 'total', label: 'คำขอทั้งหมด', value: requests.length, helper: 'ในช่วงที่เลือก' },
@@ -569,38 +644,39 @@ export function LeavePage({ user, currentEmployee, showToast }) {
         ]}
       />
 
-      {/* Nesting fix (card-diet, 2026-07): each balance used to be its own
-          `.leave-balance-card` (border+radius+bg+padding) sitting INSIDE this
-          Panel's own card chrome — a nested card, never right per DESIGN.md.
-          The balances stay legible/distinct via typography (bold label,
-          large tabular value, muted breakdown line) plus a divider between
-          them, not a second surface each. The real leave-type count is 4
-          (SICK/VACATION/PERSONAL/LEAVE_WITHOUT_PAY — see LeaveService.balances()),
-          not the 3 the mock seeds, and LEAVE_BALANCE_GRID is 3-column at
-          >=721px, so the divider must be row-aware (`nth-child(3n+1)`), not
-          `first-child` — `first-child` only clears item 1 of the whole list,
-          not item 1 of every row, and would leave a stray divider hanging
-          off the left edge wherever a row wraps. */}
+      {/* Card-diet, round 2 (owner feedback, 2026-08): showing all seven balances at once
+          "over-populated the page with cards" -- the fix is not fewer, smaller cards (that's
+          "the same mistake wearing a coat"), it's exactly ONE balance: whichever leave type is
+          selected in the "ประเภทการลา" field below. Everything else sits behind one disclosure,
+          rendered as compact FieldList rows (a `<dl>`), never a second grid of cards. */}
       <Panel title="โควตาวันลา">
-        <div className={LEAVE_BALANCE_GRID}>
-          {balances.length === 0 ? (
-            <EmptyState icon="calendar" title="ยังไม่มีข้อมูลโควตา" />
-          ) : balances.map((balance) => (
-            <div
-              className="grid min-w-0 gap-[5px] max-[720px]:border-t max-[720px]:border-border max-[720px]:pt-3 max-[720px]:first:border-t-0 max-[720px]:first:pt-0 min-[721px]:border-l min-[721px]:border-border min-[721px]:pl-4 min-[721px]:[&:nth-child(3n+1)]:border-l-0 min-[721px]:[&:nth-child(3n+1)]:pl-0"
-              key={balance.leaveTypeCode}
-            >
-              <span className="block min-w-0 truncate text-sm font-bold text-text-secondary">
-                {balance.leaveTypeNameTh || balance.leaveTypeCode}
-              </span>
-              <strong className="text-xl font-extrabold leading-tight tabular-nums text-text">
-                {formatDays(balance.remainingDays)}
-              </strong>
-              <small className="block min-w-0 truncate text-xs text-text-muted">
-                ใช้แล้ว {formatDays(balance.approvedDays)} · รออนุมัติ {formatDays(balance.pendingDays)} · สิทธิ์ {formatDays(balance.annualQuotaDays)}
-              </small>
-            </div>
-          ))}
+        <PrimaryLeaveBalanceCard
+          loading={primaryBalanceLoading}
+          balance={selectedBalance}
+          leaveType={selectedLeaveType}
+          isEveryday={EVERYDAY_LEAVE_TYPE_CODES.has(formLeaveTypeCode)}
+        />
+        <div className="mt-4">
+          <CollapsibleSection title="โควตาการลาทั้งหมด" subtitle="ทุกประเภท รวมเงื่อนไขพิเศษ" defaultOpen={false}>
+            {balances.length === 0 ? (
+              <EmptyState icon="calendar" title="ยังไม่มีข้อมูลโควตา" />
+            ) : (
+              <FieldList>
+                {balances.map((balance) => {
+                  const leaveType = leaveTypes.find((type) => type.code === balance.leaveTypeCode);
+                  const isEveryday = EVERYDAY_LEAVE_TYPE_CODES.has(balance.leaveTypeCode);
+                  return (
+                    <div key={balance.leaveTypeCode}>
+                      <dt>{balance.leaveTypeNameTh || balance.leaveTypeCode}</dt>
+                      {/* Rare rows deliberately never read balance.annualQuotaDays/remainingDays --
+                          see rareBalanceSummary's comment above (MILITARY's 366 sentinel). */}
+                      <dd>{isEveryday ? everydayBalanceSummary(balance) : rareBalanceSummary(balance, leaveType)}</dd>
+                    </div>
+                  );
+                })}
+              </FieldList>
+            )}
+          </CollapsibleSection>
         </div>
       </Panel>
 
@@ -635,14 +711,26 @@ export function LeavePage({ user, currentEmployee, showToast }) {
             </select>
           </label>
         ) : null}
-        <Button type="submit" disabled={loading}>
+        <Button type="submit" disabled={requestsQuery.isPending}>
           <Icon name="search" />
           ค้นหา
         </Button>
+        {refreshing ? (
+          <span className="inline-flex items-center gap-1 text-xs text-text-muted" aria-live="polite">
+            <Icon name="refresh" size={12} />
+            กำลังอัปเดต…
+          </span>
+        ) : null}
       </form>
 
       <Panel title="ยื่นคำขอลา">
-        <form className={FORM_GRID_CLASS} onSubmit={handleSubmit(submitLeave)} noValidate>
+        <form
+          ref={formAnchorRef}
+          tabIndex={-1}
+          className={`${FORM_GRID_CLASS} focus-visible:outline-none`}
+          onSubmit={handleSubmit(submitLeave)}
+          noValidate
+        >
           {hasMultipleSubmitOptions ? (
             <FormField label="พนักงาน" htmlFor="leave-employee" error={errors.employeeId?.message}>
               <select
@@ -681,16 +769,11 @@ export function LeavePage({ user, currentEmployee, showToast }) {
                 <option key={type.code} value={type.code}>{type.nameTh || type.nameEn}</option>
               ))}
             </select>
-            {selectedBalance ? (
-              <small>คงเหลือ {formatDays(selectedBalance.remainingDays)} จากสิทธิ์ {formatDays(selectedBalance.annualQuotaDays)}</small>
-            ) : null}
+            {/* The "คงเหลือ ... จากสิทธิ์ ..." duplicate line that used to live here was deleted --
+                the "โควตาวันลา" primary card above (PrimaryLeaveBalanceCard) already tracks this
+                same select and says exactly this, larger. */}
           </FormField>
 
-          {/* §5.2 leave purpose + emergency-filing exception (V125): only meaningful for PERSONAL
-              (ลากิจ) -- see LeaveTypeDto's Javadoc. Purpose is optional; selecting "พิธีสมรส" caps
-              the request at 3 days server-side. The emergency checkbox is the requester's own
-              declaration that a late filing should be considered under the <=3/month "โดยไม่หักเงิน"
-              tolerance instead of being auto-rejected outright for missing the 1-day notice. */}
           {formLeaveTypeCode === 'PERSONAL' ? (
             <>
               <FormField label="เหตุผลการลากิจ (ถ้ามี)" htmlFor="leave-purpose-code">
@@ -747,8 +830,6 @@ export function LeavePage({ user, currentEmployee, showToast }) {
             />
           </FormField>
 
-          {/* Sub-day leave (2026-07-25): Overtime-style start/end time pickers, only for a
-              single-date request. Checked -> forces endDate=startDate (handleSubDayToggle). */}
           <div className={formGridSpan2}>
             <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
               <input
@@ -784,8 +865,6 @@ export function LeavePage({ user, currentEmployee, showToast }) {
             </>
           ) : null}
 
-          {/* Paper-form (ใบลาหยุด F-HR-020): position/department/division read-only, contact
-              block autofilled from api.leave.contactDefaults and editable. */}
           <FormField label="ตำแหน่ง" htmlFor="leave-position-display">
             <input id="leave-position-display" value={contactDefaults?.positionTh || '-'} disabled />
           </FormField>
@@ -828,12 +907,12 @@ export function LeavePage({ user, currentEmployee, showToast }) {
               />
             </FormField>
           </div>
-          <RowActions className={formGridSpan2}>
+          <div className={`${formGridSpan2} flex justify-end`}>
             <Button type="submit" disabled={saving || startDateInPast} className="max-[720px]:min-h-11 max-[720px]:w-full">
               <Icon name="plus" />
               ส่งคำขอ
             </Button>
-          </RowActions>
+          </div>
         </form>
         <p className="mt-3 text-sm text-text-muted">
           อ้างอิง พ.ร.บ. คุ้มครองแรงงาน พ.ศ. 2541: ลากิจธุระจำเป็นไม่น้อยกว่า 3 วันต่อปี,
@@ -861,138 +940,19 @@ export function LeavePage({ user, currentEmployee, showToast }) {
         </div>
       </Panel>
 
-      <section className="table-panel">
-        <div className={`${LEAVE_TABLE_GRID} table-head`}>
-          <span>ช่วงลา / พนักงาน</span>
-          <span>ประเภท / จำนวนวัน</span>
-          <span>เหตุผล / เอกสาร</span>
-          <span>สถานะ</span>
-          <span>อนุมัติ / หมายเหตุ</span>
-          <span />
-        </div>
-        {loading ? (
-          <EmptyState icon="calendar" title="กำลังโหลดคำขอลา" />
-        ) : requests.length === 0 ? (
-          <EmptyState icon="calendar" title="ยังไม่มีคำขอลา" description="ลองเปลี่ยนช่วงวันที่หรือยื่นคำขอใหม่" />
-        ) : requests.map((request) => {
-          const status = statusInfo(request.status);
-          const reviewable = canReviewRequest(request);
-          const canCancel = request.status === 'SUBMITTED' && Number(request.employeeId) === Number(user.employeeId);
-          const managerCancellable = canManagerCancel(request);
-          return (
-            <div className={`${LEAVE_TABLE_GRID} data-row`} key={request.id}>
-              {/* Mobile order (step 8 rule 7 — summary -> actions -> details): this
-                  span is the summary (who/when) and stays first on every viewport. */}
-              <span data-label="ช่วงลา / พนักงาน" className="max-[720px]:order-1">
-                <strong>{formatDateRange(request.startDate, request.endDate)}</strong>
-                <small>{request.employeeName || request.employeeCode || request.employeeId}</small>
-              </span>
-              <span data-label="ประเภท / จำนวนวัน" className="max-[720px]:order-4">
-                <strong>{request.leaveTypeNameTh || request.leaveTypeCode}</strong>
-                {/* formatDays figures get mono digits so multi-day counts line up
-                    when scanning several cards, per step 9 rule 5. */}
-                <small><span className="font-mono">{formatDays(request.totalDays)}</span> · เหลือ <span className="font-mono">{formatDays(request.quotaRemainingAfter)}</span></small>
-              </span>
-              <span data-label="เหตุผล / เอกสาร" className="max-[720px]:order-5">
-                <strong>{request.reason}</strong>
-                <small>{request.attachmentFileName || '-'}</small>
-              </span>
-              {/* Wrapped in a labelled span (was a bare StatusBadge) so mobile gets
-                  a "สถานะ" label like every other cell, and so it can join the
-                  summary block via the order utility below. */}
-              <span data-label="สถานะ" className="max-[720px]:order-2">
-                <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-              </span>
-              <span data-label="อนุมัติ / หมายเหตุ" className="max-[720px]:order-6">
-                <strong>{request.reviewedByName || '-'}</strong>
-                <small>{request.reviewerNote || request.systemNote || formatDateTime(request.requestedAt)}</small>
-              </span>
-              {/* Approve/reject visually differentiated per DESIGN.md (danger stays
-                  outlined, not filled) and step 9 rule 2 — mirrors the exact
-                  success/danger icon-button tinting CommissionPage uses for its
-                  manager/CEO review actions. */}
-              <span className="row-actions max-[720px]:order-3">
-                {reviewable ? (
-                  <>
-                    <Button
-                      type="button"
-                      variant="icon"
-                      title="อนุมัติ"
-                      aria-label="อนุมัติ"
-                      disabled={saving}
-                      style={{ color: 'var(--color-success)', borderColor: 'var(--color-success)' }}
-                      onClick={() => approve(request.id)}
-                    >
-                      <Icon name="check" size={14} />
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="icon"
-                      title="ปฏิเสธ"
-                      aria-label="ปฏิเสธ"
-                      disabled={saving}
-                      style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger)' }}
-                      onClick={() => reject(request.id)}
-                    >
-                      <Icon name="close" size={14} />
-                    </Button>
-                  </>
-                ) : null}
-                {(canCancel || managerCancellable) ? (
-                  <Button type="button" variant="icon" title="ยกเลิก" aria-label="ยกเลิก" disabled={saving} onClick={() => cancel(request.id)}>
-                    <Icon name="close" size={14} />
-                  </Button>
-                ) : null}
-              </span>
-            </div>
-          );
-        })}
-      </section>
+      <Panel title="คำขอลาของฉัน" className="!p-0">
+        <OwnRequestsSection
+          requestsQuery={requestsQuery}
+          rows={requests}
+          hasCustomFilters={hasCustomFilters}
+          onClearFilters={clearFilters}
+          expandedId={expandedId}
+          onToggleExpand={(id) => setExpandedId((current) => (current === id ? null : id))}
+          onCancel={requestCancel}
+          user={user}
+        />
+      </Panel>
 
-      <ConfirmDialog
-        open={confirmState?.kind === 'approve'}
-        title="ยืนยันการอนุมัติวันลา"
-        message={(() => {
-          const request = requests.find((item) => item.id === confirmState?.id);
-          if (!request) return 'ยืนยันการอนุมัติคำขอลานี้?';
-          return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <p className="confirm-dialog-message" style={{ margin: 0 }}>
-                ตรวจสอบคำขอลาของ <strong>{request.employeeName || request.employeeCode || request.employeeId}</strong> ก่อนอนุมัติ
-              </p>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid var(--color-border)', paddingTop: 8 }}>
-                <span style={{ color: 'var(--color-icon-muted)' }}>ประเภท / ช่วงวันที่</span>
-                <span>{request.leaveTypeNameTh || request.leaveTypeCode} · {formatDateRange(request.startDate, request.endDate)}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700 }}>
-                <span>จำนวนวันลา</span>
-                <span className="font-mono">{formatDays(request.totalDays)}</span>
-              </div>
-              {/* Next-step copy quoted from api.leave.approve (src/api/mockApi.js
-                  ~L1536-1550): it only sets status -> APPROVED plus the reviewer
-                  stamp — it does not recompute quotaRemainingAfter, which was
-                  already fixed at create() time. */}
-              <p style={{ margin: 0, fontSize: 12, color: 'var(--color-icon-muted)' }}>{'สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว"'}</p>
-            </div>
-          );
-        })()}
-        confirmLabel="อนุมัติ"
-        busy={saving}
-        onConfirm={confirmApprove}
-        onCancel={() => setConfirmState(null)}
-      />
-      <ConfirmDialog
-        open={confirmState?.kind === 'reject'}
-        title="ปฏิเสธคำขอลา"
-        message='ยืนยันการปฏิเสธคำขอลานี้? สถานะจะเปลี่ยนเป็น "ปฏิเสธแล้ว" และไม่สามารถอนุมัติย้อนหลังได้'
-        confirmLabel="ปฏิเสธคำขอ"
-        tone="danger"
-        busy={saving}
-        requireReason
-        reasonLabel="เหตุผลการปฏิเสธ"
-        onConfirm={confirmReject}
-        onCancel={() => setConfirmState(null)}
-      />
       <ConfirmDialog
         open={confirmState?.kind === 'cancel'}
         title="ยกเลิกคำขอลา"
@@ -1006,6 +966,6 @@ export function LeavePage({ user, currentEmployee, showToast }) {
         onConfirm={(reason) => doCancel(confirmState.id, reason)}
         onCancel={() => setConfirmState(null)}
       />
-    </PageStack>
+    </>
   );
 }

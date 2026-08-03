@@ -23,6 +23,10 @@ export const queryKeys = {
   leaveEmployees: () => ['leave', 'employees'],
   leaveTypes: () => ['leave', 'types'],
   leaveContactDefaults: (employeeId) => ['leave', 'contactDefaults', employeeId],
+  // Leave-surface IA rebuild, Phase A0 (not yet landed) — see routes.js's own comment on
+  // API_ROUTES.leave.reviewSummary. Defined now for the same reason: keep the module stable ahead
+  // of A0, even though no query in this phase constructs it yet.
+  leaveReviewSummary: () => ['leave', 'reviewSummary'],
   overtimeRequests: (filters = {}) => ['overtime', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   overtimeEmployees: () => ['overtime', 'employees'],
   // CommissionController#list only ever takes payrollMonth (no status param —

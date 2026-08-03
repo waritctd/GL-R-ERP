@@ -35,7 +35,9 @@ const ProfileRequestsPage = lazy(() => import('./features/profileRequests/Profil
 const ProfilePage = lazy(() => import('./features/profile/ProfilePage.jsx').then(toDefault('ProfilePage')));
 const AttendancePage = lazy(() => import('./features/attendance/AttendancePage.jsx').then(toDefault('AttendancePage')));
 const RequestsPage = lazy(() => import('./features/requests/RequestsPage.jsx').then(toDefault('RequestsPage')));
-const LeavePage = lazy(() => import('./features/leave/LeavePage.jsx').then(toDefault('LeavePage')));
+// Leave-surface IA rebuild Phase A1: LeavePage.jsx (one flat component) was replaced by a tabbed
+// shell -- see LeaveSurfacePage.jsx's own doc comment.
+const LeaveSurfacePage = lazy(() => import('./features/leave/LeaveSurfacePage.jsx').then(toDefault('LeaveSurfacePage')));
 const TicketListPage = lazy(() => import('./features/tickets/TicketListPage.jsx').then(toDefault('TicketListPage')));
 const TicketDetailPage = lazy(() => import('./features/tickets/TicketDetailPage.jsx').then(toDefault('TicketDetailPage')));
 const CommissionPage = lazy(() => import('./features/commissions/CommissionPage.jsx').then(toDefault('CommissionPage')));
@@ -354,7 +356,7 @@ export function App() {
             <Route path="/overtime" element={<Navigate to="/employee-requests?tab=ot" replace />} />
             <Route
               path="/leave"
-              element={<LeavePage user={user} currentEmployee={currentEmployee} showToast={showToast} />}
+              element={<LeaveSurfacePage user={user} currentEmployee={currentEmployee} showToast={showToast} />}
             />
             <Route
               path="/payroll"
