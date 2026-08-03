@@ -16,6 +16,7 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -240,9 +241,12 @@ public class BotHolidayFetchService {
                 .body(String.class);
             return processResponse(json, year);
         } catch (Exception e) {
-            // A future year predictably 404s/errors until BOT publishes it — log at INFO, not WARN,
-            // so that expected case does not read as a real failure. Anything else (auth, network,
-            // 5xx) still surfaces, just without taking the scheduler thread down with it.
+            // Reaches here only for a failure BEFORE or DURING the HTTP call itself -- a future year
+            // predictably 404s/errors until BOT publishes it, or a genuine network/auth failure.
+            // Deliberately does NOT also catch failures from processResponse's own write step: see
+            // that method's DataAccessException handling for why a database failure must never be
+            // reported through this same "no data" wording, which is INFO on purpose so the expected
+            // future-year case does not read as a real failure.
             log.info("BOT holiday fetch: no data for {} ({})", year, e.getMessage());
             return new FetchOutcome(year, 0, false);
         }
@@ -253,7 +257,20 @@ public class BotHolidayFetchService {
      * and logging as appropriate. Split out from {@link #fetchYear} — which owns the network call
      * and its own failure handling — so this half (parse, decide, log, reconcile) is reachable from
      * a unit test without a real HTTP call. Package-private for exactly that: {@code
-     * BotHolidayFetchServiceTest} drives the "200 but nothing parsed" WARN path directly.
+     * BotHolidayFetchServiceTest} drives the "200 but nothing parsed" WARN path, and the
+     * database-write-failure WARN below, directly.
+     *
+     * <p><strong>Parsing and writing are logged at different severities on purpose.</strong> A
+     * {@link DataAccessException} from {@link #holidays}'s reconcile call means the fetch itself
+     * worked — BOT's response parsed into real holidays — but our own write to {@code hr.holiday}
+     * failed (e.g. a value that no longer fits a column, a constraint violation). That is never
+     * routed through {@link #fetchYear}'s "no data for {@code year}" INFO wording, which is reserved
+     * for BOT genuinely having nothing published yet; a write failure is caught here, close to the
+     * write itself, so it cannot be conflated with that unrelated, unremarkable case. A production
+     * {@code value too long for type character varying(120)} insert failure was previously reported
+     * as "no data for 2026" at INFO through this shared catch-all, costing a diagnosis round trip
+     * before anyone thought to doubt that message (see V129, which widens {@code name_th} to remove
+     * the specific trigger, but this split stands on its own for any future write failure).
      */
     FetchOutcome processResponse(String json, int year) {
         List<BankHoliday> parsed = parseHolidays(json, year);
@@ -267,7 +284,18 @@ public class BotHolidayFetchService {
                 + "were {} — the documented shape may have changed", year, describeShape(json));
             return new FetchOutcome(year, 0, false);
         }
-        holidays.reconcileBankHolidaysForYear(year, parsed);
+        try {
+            holidays.reconcileBankHolidaysForYear(year, parsed);
+        } catch (DataAccessException e) {
+            // Our bug, not BOT's silence: WARN, and say plainly that parsing succeeded but the write
+            // did not, including the cause — never share wording with fetchYear's routine "no data"
+            // INFO log. Outcome contract is unchanged even though `parsed` was non-empty: nothing was
+            // actually written, so holidayCount stays 0 and applied stays false, same as any other
+            // failed/empty fetch.
+            log.warn("BOT holiday fetch: {} parsed {} holiday(s) successfully but the database write "
+                + "failed — {}: {}", year, parsed.size(), e.getClass().getSimpleName(), e.getMessage(), e);
+            return new FetchOutcome(year, 0, false);
+        }
         log.info("BOT holiday fetch: reconciled {} holiday(s) for {}", parsed.size(), year);
         return new FetchOutcome(year, parsed.size(), true);
     }
