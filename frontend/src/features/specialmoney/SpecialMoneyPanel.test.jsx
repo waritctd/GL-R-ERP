@@ -5,8 +5,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SpecialMoneyPanel } from './SpecialMoneyPanel.jsx';
 import { TYPE_GROUPS } from './specialMoneyRules.js';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 
 globalThis.React = React;
+
+// Bangkok-safe year for test expectations -- mirrors the component's own currentBangkokYear()
+// (Intl.DateTimeFormat with timeZone: 'Asia/Bangkok'), deliberately NOT `new Date().getFullYear()`
+// (local/UTC time). frontend-ci.yml sets no TZ, so CI runs UTC: at e.g.
+// 2026-12-31T18:00:00+00:00 that's still 2026 in UTC but already 2027 in Bangkok, so a test built
+// on `new Date().getFullYear()` would go red against CORRECT Bangkok-aware component code once a
+// year -- the exact `bangkok-timezone-test-flake` trap, recreated in JS if this used local time.
+function currentBangkokYearForTest() {
+  return Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Bangkok', year: 'numeric' }).format(new Date()));
+}
 
 vi.mock('../../api/index.js', () => ({
   api: {
@@ -60,11 +71,15 @@ function renderPanel(as = user) {
     },
   });
 
-  return render(
+  const view = render(
     <QueryClientProvider client={queryClient}>
       <SpecialMoneyPanel user={as} currentEmployee={currentEmployee} showToast={vi.fn()} />
     </QueryClientProvider>,
   );
+  // Exposed for tests that need to inspect the cache directly (e.g. counting distinct
+  // ['specialMoney','list',...] entries) rather than inferring cache-key separation from fetch
+  // call counts, which react-query's own staleness/refetch-on-mount behaviour can make unreliable.
+  return { ...view, queryClient };
 }
 
 const ceoUser = { employeeId: 9, name: 'ซีอีโอ', role: 'ceo', manager: false };
@@ -398,6 +413,178 @@ describe('SpecialMoneyPanel', () => {
     });
   });
 
+  // The history table used to call api.specialMoney.list({status}) with no dates at all, which the
+  // REAL backend (SpecialMoneyService.list():66-68) silently defaults to "this calendar month" --
+  // this fixture's mock does not reproduce that filtering itself (same caveat as the review-queue
+  // window test above), so what these pin is that the FRONTEND now always sends an explicit,
+  // user-controllable window instead of relying on any default.
+  describe('history table period selector', () => {
+    it('sends a current-year window by default (ปีนี้)', async () => {
+      renderPanel();
+
+      await waitFor(() => expect(api.specialMoney.list).toHaveBeenCalledTimes(1));
+      const currentYear = currentBangkokYearForTest();
+      expect(api.specialMoney.list).toHaveBeenCalledWith({
+        status: undefined,
+        from: `${currentYear}-01-01`,
+        to: `${currentYear}-12-31`,
+      });
+    });
+
+    it('widens the window to ~10 years back / 1 year forward when switched to "ทั้งหมด"', async () => {
+      renderPanel();
+      await waitFor(() => expect(api.specialMoney.list).toHaveBeenCalledTimes(1));
+
+      fireEvent.change(screen.getByLabelText('กรองตามช่วงเวลา'), { target: { value: 'ALL' } });
+
+      await waitFor(() => expect(api.specialMoney.list).toHaveBeenCalledTimes(2));
+      const [{ from, to }] = api.specialMoney.list.mock.calls[1];
+      // historyWindow's ALL branch builds a local-midnight Date (today's year/month/day +/- N,
+      // via the local `getFullYear()`/`getMonth()`/`getDate()` getters) and then stringifies it
+      // through `dateIso`, which reformats that instant in Asia/Bangkok via Intl. So this test
+      // reproduces BOTH steps exactly -- an expectation built only from local Y/M/D getters (no
+      // Bangkok re-render) would itself drift from the real output on any test runner whose system
+      // timezone isn't Bangkok, since the component's actual stringification always re-renders in
+      // Bangkok regardless of which getters built the Date. Building against `currentYear()`
+      // (Bangkok) at the assertion level would separately reintroduce the UTC/Bangkok year-boundary
+      // flake this suite exists to prevent. Mirroring the pipeline is the only version immune to
+      // both axes at once.
+      const bangkokDateIso = (date) => new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit',
+      }).format(date);
+      const today = new Date();
+      expect(from).toBe(bangkokDateIso(new Date(today.getFullYear() - 10, today.getMonth(), today.getDate())));
+      expect(to).toBe(bangkokDateIso(new Date(today.getFullYear() + 1, today.getMonth(), today.getDate())));
+    });
+
+    it('sends the previous-year window when switched to "ปีที่แล้ว"', async () => {
+      renderPanel();
+      await waitFor(() => expect(api.specialMoney.list).toHaveBeenCalledTimes(1));
+
+      fireEvent.change(screen.getByLabelText('กรองตามช่วงเวลา'), { target: { value: 'LAST_YEAR' } });
+
+      await waitFor(() => expect(api.specialMoney.list).toHaveBeenCalledTimes(2));
+      const [{ from, to }] = api.specialMoney.list.mock.calls[1];
+      const lastYear = currentBangkokYearForTest() - 1;
+      expect(from).toBe(`${lastYear}-01-01`);
+      expect(to).toBe(`${lastYear}-12-31`);
+    });
+
+    it('names the active period in the empty state, and hints at "ทั้งหมด" while year-scoped', async () => {
+      renderPanel();
+
+      const buddhistYear = currentBangkokYearForTest() + 543;
+      expect(await screen.findByText(`ยังไม่มีคำขอเงินสวัสดิการในปี ${buddhistYear}`)).not.toBeNull();
+      // Unconditional advice, shown on every year-scoped empty result -- a hint pointing at "ทั้งหมด".
+      expect(screen.getByText(/ลองเปลี่ยนช่วงเวลาเป็น/)).not.toBeNull();
+
+      fireEvent.change(screen.getByLabelText('กรองตามช่วงเวลา'), { target: { value: 'ALL' } });
+
+      await waitFor(() => expect(screen.queryByText(`ยังไม่มีคำขอเงินสวัสดิการในปี ${buddhistYear}`)).toBeNull());
+      expect(await screen.findByText('ยังไม่มีคำขอเงินสวัสดิการ')).not.toBeNull();
+      // No period to hint at once "ทั้งหมด" is already selected.
+      expect(screen.queryByText(/ลองเปลี่ยนช่วงเวลาเป็น/)).toBeNull();
+    });
+
+    // historyPeriodYear must be DERIVED from historyWindow.from, not recomputed independently --
+    // otherwise a re-render that crosses the Bangkok New Year (with historyPeriod never touched,
+    // so historyWindow itself stays memoized/unchanged) can show a label year one year ahead of
+    // the window the query actually ran with.
+    it('keeps the empty-state year in sync with the actual query window across a re-render that crosses a Bangkok New Year, without touching the period selector', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        vi.setSystemTime(new Date('2026-12-31T16:00:00Z')); // 2026-12-31 23:00 Bangkok -- still 2026
+        renderPanel();
+        await waitFor(() => expect(api.specialMoney.list).toHaveBeenCalledTimes(1));
+        expect(await screen.findByText('ยังไม่มีคำขอเงินสวัสดิการในปี 2569')).not.toBeNull();
+
+        // Cross the Bangkok New Year, then force a re-render WITHOUT changing the period
+        // selector -- e.g. typing in the unrelated "reason" field re-renders the whole panel via
+        // react-hook-form's watch.
+        vi.setSystemTime(new Date('2026-12-31T18:00:00Z')); // 2027-01-01 01:00 Bangkok -- now 2027
+        fireEvent.change(screen.getByLabelText(/เหตุผล/), { target: { value: 'x' } });
+
+        // Still 2569: the query never re-ran (historyPeriod, and therefore historyWindow, never
+        // changed), so the label describing it must not have silently jumped to 2570 either.
+        expect(await screen.findByText('ยังไม่มีคำขอเงินสวัสดิการในปี 2569')).not.toBeNull();
+        expect(screen.queryByText('ยังไม่มีคำขอเงินสวัสดิการในปี 2570')).toBeNull();
+        expect(api.specialMoney.list).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  // SpecialMoneyPanel builds the history table's cache-key filters with a BARE `statusFilter`
+  // ('' when unset), while the CEO review queue's key comes from `reviewQueueWindow` -- a plain
+  // {from,to} object with no `status` property at all, so queryKeys.specialMoneyRequests() reads
+  // its `filters.status` as `undefined`. Under historyPeriod 'ALL' with no status filter, the two
+  // queries' date windows are the SAME 10-years-back/1-year-forward shape, so '' vs `undefined` at
+  // that one key slot is the only thing keeping their react-query cache entries apart. This does
+  // not render the component -- it tests queryKeys.specialMoneyRequests() directly against the
+  // exact filter shapes SpecialMoneyPanel constructs, which is what actually protects the
+  // invariant (see the comment on `filters` in SpecialMoneyPanel.jsx).
+  describe('history/review-queue cache-key separation', () => {
+    // Documents the exact key shapes involved (pure, no render) -- pins that '' and `undefined`
+    // serialize differently at the `status` slot for every window shape the two queries can take.
+    // This alone does NOT catch a regression in SpecialMoneyPanel's own `filters` construction
+    // (e.g. someone "cleaning up" `status: statusFilter` to `status: statusFilter || undefined`)
+    // since it never touches the component -- see the real-wiring test below for that.
+    it('keeps every historyPeriod x status combination distinct from the review queue key', () => {
+      // Mirrors reviewQueueWindow's shape: no `status` property at all.
+      const reviewQueueWindow = { from: '2016-08-03', to: '2027-08-03' };
+      const reviewQueueKey = JSON.stringify(queryKeys.specialMoneyRequests(reviewQueueWindow));
+
+      const historyWindows = [
+        { from: '2026-01-01', to: '2026-12-31' }, // THIS_YEAR-shaped
+        { from: '2025-01-01', to: '2025-12-31' }, // LAST_YEAR-shaped
+        reviewQueueWindow, // ALL-shaped -- identical window to the queue; the risky combination
+      ];
+      const statuses = ['', 'SUBMITTED', 'MANAGER_APPROVED', 'APPROVED', 'REJECTED', 'CANCELLED'];
+
+      for (const window of historyWindows) {
+        for (const status of statuses) {
+          // Mirrors SpecialMoneyPanel's `filters` object exactly: bare `status`, never
+          // `status || undefined`.
+          const historyKey = JSON.stringify(queryKeys.specialMoneyRequests({ status, from: window.from, to: window.to }));
+          expect(historyKey).not.toBe(reviewQueueKey);
+        }
+      }
+    });
+
+    // The real guard: exercises SpecialMoneyPanel's ACTUAL `filters` useMemo and the ACTUAL
+    // reviewQueueQuery side by side, as a CEO, under "ทั้งหมด" + no status -- the one combination
+    // where their date windows become identical. If the two queries' cache keys ever collided
+    // (e.g. from the "cleanup" the comment on `filters` warns against), react-query would treat
+    // them as the SAME query: the history table's switch to "ทั้งหมด" would just reuse the review
+    // queue's already-cached result instead of firing its own fetch, so the THIRD
+    // api.specialMoney.list call below would never happen.
+    // Inspects the QueryClient's cache directly rather than counting api.specialMoney.list calls:
+    // an earlier version of this test counted fetches instead, and a mutation-check proved it
+    // vacuous -- react-query's own refetch-on-mount/staleness behaviour means a THIRD fetch fires
+    // when switching to "ทั้งหมด" whether or not the two keys actually collide (switching away
+    // from the THIS_YEAR window is by itself enough to trigger it), so call-counting alone cannot
+    // tell separate-but-both-fetched apart from collided-and-both-fetched. Counting distinct cache
+    // ENTRIES can: a collision merges two observers onto one Query object, so the cache holds one
+    // fewer ['specialMoney','list',...] entry than it should.
+    it('keeps the history table\'s "ทั้งหมด" query and the review queue as separate cache entries (real component wiring)', async () => {
+      api.specialMoney.list.mockResolvedValue({ requests: [] });
+      const { queryClient } = renderPanel(ceoUser);
+
+      await waitFor(() => expect(api.specialMoney.list).toHaveBeenCalledTimes(2));
+
+      fireEvent.change(await screen.findByLabelText('กรองตามช่วงเวลา'), { target: { value: 'ALL' } });
+      await waitFor(() => expect(api.specialMoney.list).toHaveBeenCalledTimes(3));
+
+      const specialMoneyListEntries = queryClient.getQueryCache()
+        .findAll({ queryKey: ['specialMoney', 'list'] });
+      // THIS_YEAR (now stale/inactive but still cached), 'ALL'+no-status, and reviewQueueWindow --
+      // three distinct entries. If the history table's 'ALL' key had collided with
+      // reviewQueueWindow's, there would only be two.
+      expect(specialMoneyListEntries).toHaveLength(3);
+    });
+  });
+
   // Welfare is CEO-only in one stage. These pin the button gating, which is the half of that rule
   // a user actually meets -- the server-side half is SpecialMoneyScopeIntegrationTest's job.
   describe('approval gating', () => {
@@ -470,7 +657,10 @@ describe('SpecialMoneyPanel', () => {
       renderPanel(ceoUser);
 
       await screen.findByRole('button', { name: 'CEO อนุมัติ' });
-      const wideWindowCall = api.specialMoney.list.mock.calls.find(([params]) => params && params.from);
+      // The history table below now ALSO sends an explicit `from`/`to` (its own period selector,
+      // defaulting to the current year) -- distinguish the review queue's call by the absence of a
+      // `status` key, which only the history table's query ever sends (even as `undefined`).
+      const wideWindowCall = api.specialMoney.list.mock.calls.find(([params]) => params && params.from && !('status' in params));
       expect(wideWindowCall).toBeTruthy();
       const [{ from, to }] = wideWindowCall;
       expect(from <= '2020-01-15').toBe(true);

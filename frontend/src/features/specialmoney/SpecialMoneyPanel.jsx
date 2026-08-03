@@ -59,6 +59,32 @@ function currentBuddhistYear() {
   return new Date().getFullYear() + 543;
 }
 
+// Bangkok-anchored current year, distinct from currentBuddhistYear()'s local-time
+// `new Date().getFullYear()` above. The history period selector below builds date-range
+// BOUNDARIES that get sent straight to the backend's `event_date BETWEEN :from AND :to` filter
+// (SpecialMoneyRepository#findRequests), so the year it picks must agree with the Bangkok
+// calendar the backend filters against -- a UTC-vs-Bangkok mismatch near midnight would otherwise
+// silently shift the window by a year. currentBuddhistYear() itself is left untouched: it only
+// drives display text on the (unrelated) entitlement panel above, matching this file's existing
+// convention there.
+function currentBangkokYear() {
+  return Number(bangkokDateParts().year);
+}
+
+// History table period selector (distinct from reviewQueueWindow's own fixed wide window below --
+// see that constant's comment). 'THIS_YEAR' is the default: the EntitlementPanel directly above is
+// already year-scoped ("โควตาคงเหลือปี <BE year>"), so defaulting the table to the same calendar
+// year lets an employee reconcile "ใช้ไปแล้ว ฿X" against the rows that produced it.
+const HISTORY_PERIODS = {
+  THIS_YEAR: 'ปีนี้',
+  LAST_YEAR: 'ปีที่แล้ว',
+  ALL: 'ทั้งหมด',
+};
+
+function yearWindow(year) {
+  return { from: `${year}-01-01`, to: `${year}-12-31` };
+}
+
 function defaultForm(employeeId = '') {
   return {
     employeeId: employeeId ? String(employeeId) : '',
@@ -194,6 +220,7 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
   const queryClient = useQueryClient();
   const [confirmState, setConfirmState] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
+  const [historyPeriod, setHistoryPeriod] = useState('THIS_YEAR');
   const [evidenceFile, setEvidenceFile] = useState(null);
   const [submitViolations, setSubmitViolations] = useState([]);
 
@@ -219,10 +246,61 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
       .filter(Boolean),
   })), [typeOptions]);
 
-  const filters = useMemo(() => ({ status: statusFilter }), [statusFilter]);
+  // The history table's own period window -- MUST be sent explicitly. Without it,
+  // `SpecialMoneyController#list` defaults `from`/`to` to the current calendar month
+  // (SpecialMoneyService.list():66-68), silently scoping this table to "this month" with nothing
+  // on screen saying so (see reviewQueueWindow's comment below for the full story; this is the
+  // employee-facing half of the same bug). 'ALL' intentionally reuses the exact 10-years-back /
+  // 1-year-forward shape reviewQueueWindow uses, kept as a separate computation so a future change
+  // to the CEO queue's window doesn't silently also change this employee-facing one.
+  const historyWindow = useMemo(() => {
+    if (historyPeriod === 'ALL') {
+      // Not literally "everything" -- this deliberately matches reviewQueueWindow's own
+      // 10-years-back/1-year-forward shape below, so an aid claim old enough to still be
+      // findable in the CEO queue is also findable here. Kept as its own copy (not a shared
+      // helper) so a future change to one window doesn't silently also change the other; if
+      // they ever need to diverge, this is where that would start. Also unlike THIS_YEAR/
+      // LAST_YEAR below, this branch uses local `today.getFullYear()` rather than
+      // currentBangkokYear() -- at 10-year width a UTC/Bangkok boundary mismatch is harmless
+      // (off by at most one day out of ~4000), so the extra Intl call isn't worth it here.
+      const today = new Date();
+      return {
+        from: dateIso(new Date(today.getFullYear() - 10, today.getMonth(), today.getDate())),
+        to: dateIso(new Date(today.getFullYear() + 1, today.getMonth(), today.getDate())),
+      };
+    }
+    const year = historyPeriod === 'LAST_YEAR' ? currentBangkokYear() - 1 : currentBangkokYear();
+    return yearWindow(year);
+  }, [historyPeriod]);
+
+  // Drives the empty state below (and the once-per-lifetime hint). Derived FROM historyWindow.from
+  // itself (not recomputed independently via currentBangkokYear()) so the two literally cannot
+  // drift apart: historyWindow is memoized on [historyPeriod] alone, so if this were computed
+  // separately, a re-render that crosses a Bangkok New Year with the page left open could show a
+  // label year one year ahead of the window the query is still actually using. Reading it back off
+  // historyWindow.from makes them the same value by construction.
+  const historyPeriodYear = historyPeriod === 'ALL' ? null : Number(historyWindow.from.slice(0, 4));
+
+  // `status: statusFilter` here is deliberately the BARE state value ('' when unset) -- do not
+  // "clean up" this to `statusFilter || undefined` to match the queryFn's own normalization two
+  // lines down. Under historyPeriod 'ALL' with no status filter, this table's date window becomes
+  // IDENTICAL to reviewQueueWindow's below, and queryKeys.specialMoneyRequests() would then produce
+  // the exact same cache key for both queries EXCEPT for this one slot ('' here vs `undefined` on
+  // reviewQueueWindow, which never carries a `status` property at all) -- that's the only thing
+  // keeping the history table's and the CEO review queue's cache entries from colliding in that
+  // case. See the "keeps every historyPeriod x status combination distinct from the review queue's
+  // key" test below, which guards this directly.
+  const filters = useMemo(
+    () => ({ status: statusFilter, from: historyWindow.from, to: historyWindow.to }),
+    [statusFilter, historyWindow],
+  );
   const requestsQuery = useQuery({
     queryKey: queryKeys.specialMoneyRequests(filters),
-    queryFn: () => api.specialMoney.list({ status: statusFilter || undefined }).then((response) => response.requests || []),
+    queryFn: () => api.specialMoney.list({
+      status: statusFilter || undefined,
+      from: historyWindow.from,
+      to: historyWindow.to,
+    }).then((response) => response.requests || []),
   });
   const requests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
   const loading = requestsQuery.isLoading || requestsQuery.isFetching;
@@ -880,15 +958,43 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
       <Panel
         title="คำขอเงินสวัสดิการ"
         actions={(
-          // Options are derived from the canonical label map rather than
-          // duplicated inline — the inline copy is how this filter kept saying
-          // 'รอผู้จัดการ' after the manager stage was removed.
-          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="กรองตามสถานะ">
-            <option value="">ทุกสถานะ</option>
-            {SPECIAL_MONEY_STATUSES.map((status) => (
-              <option key={status} value={status}>{statusInfo(status).label}</option>
-            ))}
-          </select>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* w-auto on both selects: legacy styles.css sets `select { width: 100% }` (its
+                width:100%, not a flex-basis override, still wins the cascade over a bare `flex`
+                utility per this file's Tailwind-vs-legacy note elsewhere), so two selects
+                sharing this row would each claim the full row width and stack vertically instead
+                of sitting side by side -- w-auto is a Tailwind utility in a later layer, so it
+                wins and restores content-based sizing. Browser-verified: both selects render
+                side by side at 1280px with this class; without it they stack and the header
+                grows ~40px -> ~88px tall. */}
+            {/* Period selector -- makes the table's date window explicit and user-controllable
+                instead of silently defaulting (see historyWindow's comment above). Defaults to
+                'THIS_YEAR' to match the entitlement panel above. */}
+            <select
+              value={historyPeriod}
+              onChange={(event) => setHistoryPeriod(event.target.value)}
+              aria-label="กรองตามช่วงเวลา"
+              className="w-auto"
+            >
+              {Object.entries(HISTORY_PERIODS).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+            {/* Options are derived from the canonical label map rather than
+                duplicated inline — the inline copy is how this filter kept saying
+                'รอผู้จัดการ' after the manager stage was removed. */}
+            <select
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value)}
+              aria-label="กรองตามสถานะ"
+              className="w-auto"
+            >
+              <option value="">ทุกสถานะ</option>
+              {SPECIAL_MONEY_STATUSES.map((status) => (
+                <option key={status} value={status}>{statusInfo(status).label}</option>
+              ))}
+            </select>
+          </div>
         )}
       >
         <div className={`${TABLE_GRID} table-head`}>
@@ -900,7 +1006,28 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
         {loading ? (
           <EmptyState icon="badgeDollar" title="กำลังโหลดคำขอ" />
         ) : requests.length === 0 ? (
-          <EmptyState icon="badgeDollar" title="ยังไม่มีคำขอเงินสวัสดิการ" description="ยื่นคำขอใหม่ด้านบน" />
+          <EmptyState
+            icon="badgeDollar"
+            // The period is named in the title itself -- this table used to say the bare
+            // "ยังไม่มีคำขอเงินสวัสดิการ" regardless of which window (silently "this month" on the
+            // real backend) produced zero rows, which is exactly the false-negative this whole
+            // change exists to fix.
+            title={historyPeriodYear
+              ? `ยังไม่มีคำขอเงินสวัสดิการในปี ${historyPeriodYear + 543}`
+              : 'ยังไม่มีคำขอเงินสวัสดิการ'}
+            description={historyPeriod === 'ALL'
+              ? 'ยื่นคำขอใหม่ด้านบน'
+              // Once-per-lifetime types (ONCE_PER_LIFETIME_TYPES) are reported from a LIFETIME
+              // count on the entitlement panel above -- under a year-scoped default it can say
+              // "ใช้สิทธิแล้ว" for a claim made in an earlier year, while this table shows nothing
+              // for the current one. This line is unconditional advice shown on EVERY year-scoped
+              // empty result, not a targeted guard -- it does not check usage.
+              // approvedCountLifetimeByType (the API has no per-year breakdown of it to check
+              // against). It is phrased as a suggestion ("หากเคย...ลองเปลี่ยน...") specifically so
+              // it is never literally false when shown for an unrelated reason (e.g. an employee
+              // who has simply never filed anything).
+              : 'ยื่นคำขอใหม่ด้านบน หรือหากเคยยื่นคำขอในปีก่อนหน้า ลองเปลี่ยนช่วงเวลาเป็น "ทั้งหมด"'}
+          />
         ) : requests.map((request) => {
           const status = statusInfo(request.status);
           const typeMeta = typeOptions.find((item) => item.requestType === request.requestType);
