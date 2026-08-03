@@ -20,6 +20,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Predicate;
 import java.util.Set;
@@ -150,7 +151,7 @@ class LeaveServiceTest {
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), org.mockito.ArgumentMatchers.contains("at least 7"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), org.mockito.ArgumentMatchers.contains("อย่างน้อย 7 วัน"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -158,7 +159,7 @@ class LeaveServiceTest {
     // "SICK requires an attachment, full stop" behaviour these two tests used to pin
     // (submissionAutoRejectsSickLeaveWithoutCertificate, pre-V124) -- a certificate-less request is
     // now ALLOWED up to sickType()'s seeded 3-occasions-per-month tolerance, and a certificate must
-    // be filed within the seeded 3-working-day window. See LeaveService#sickCertificateNote's
+    // be filed within the seeded 3-working-day window. See LeaveService#sickCertificateRuleOutcome's
     // Javadoc for the full combined decision table this class of tests proves.
     // ─────────────────────────────────────────────────────────────────────
 
@@ -232,7 +233,7 @@ class LeaveServiceTest {
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("3 occasion(s) per calendar month"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("ไม่เกิน 3 ครั้งต่อเดือน"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -295,7 +296,7 @@ class LeaveServiceTest {
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(2026),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("working day(s) of the leave start date"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("วันทำการนับจากวันที่เริ่มลาป่วย"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -669,7 +670,7 @@ class LeaveServiceTest {
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("month(s) of completed service"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("อย่างน้อย 12 เดือน"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -724,7 +725,7 @@ class LeaveServiceTest {
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("hire date is not on file"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("ไม่สามารถตรวจสอบสิทธิ์การ"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -737,7 +738,7 @@ class LeaveServiceTest {
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(personalTypeWithMaxConsecutive()));
         // Review fix (V116): every PERSONAL submission now runs the probation-passed gate
-        // (personalProbationRejectionNote) regardless of what this test is actually about -- stub a
+        // (personalProbationRuleOutcome) regardless of what this test is actually about -- stub a
         // hire date far enough in the past that it never binds, so this test still isolates
         // max-consecutive-days. findProbationDays is deliberately left unstubbed (falls back to
         // SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS via Optional.empty()), which is still
@@ -758,7 +759,7 @@ class LeaveServiceTest {
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("consecutive day(s)"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("ติดต่อกันได้ไม่เกิน"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -822,7 +823,7 @@ class LeaveServiceTest {
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("passed probation"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("ผ่านทดลองงานก่อน"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -872,7 +873,7 @@ class LeaveServiceTest {
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("hire date is not on file"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("สถานะการผ่านทดลองงานได้"), eq(null), eq(null), eq(null), eq(null), eq(null));
         // findProbationDays must never be reached once hire_date is already missing.
         verify(leaveRepository, org.mockito.Mockito.never()).findProbationDays(anyLong());
     }
@@ -952,7 +953,7 @@ class LeaveServiceTest {
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("passed probation"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("ผ่านทดลองงานก่อน"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -989,7 +990,7 @@ class LeaveServiceTest {
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("passed probation"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("ผ่านทดลองงานก่อน"), eq(null), eq(null), eq(null), eq(null), eq(null));
         // confirm_date is authoritative -- probation_days must never even be read once it is present.
         verify(leaveRepository, org.mockito.Mockito.never()).findProbationDays(anyLong());
     }
@@ -1049,7 +1050,7 @@ class LeaveServiceTest {
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("once during your employment"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("เพียงครั้งเดียวตลอดระยะเวลาที่เป็นพนักงาน"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -1110,7 +1111,7 @@ class LeaveServiceTest {
         // a 98-working-day date range (LeaveDayMath.countWorkingDays is real, static calendar math
         // this Mockito-based class can't fake). The exact §5.4 MATERNITY 98/45/53 split is proven
         // against real dates in LeaveTypeRuleIntegrationTest.
-        LeaveTypeDto cappedType = new LeaveTypeDto("VACATION", "Vacation", "Vacation leave",
+        LeaveTypeDto cappedType = new LeaveTypeDto("VACATION", "ลาพักร้อน", "Vacation leave",
             new BigDecimal("10.00"), false, new BigDecimal("4.00"), 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null,
             null, 0, null, false);
         // Mon 2026-07-13 .. Mon 2026-07-20: working days 13,14,15,16,17,20 = 6 working days.
@@ -1145,7 +1146,7 @@ class LeaveServiceTest {
     void submitDoesNotApplyThePaidCapWhenItExceedsWhatWasRequested() {
         // Same fixture, but the cap (9) is larger than the 6 working days requested -- the cap must
         // not bind, and the result must be identical to the uncapped (quota-only) behaviour.
-        LeaveTypeDto cappedType = new LeaveTypeDto("VACATION", "Vacation", "Vacation leave",
+        LeaveTypeDto cappedType = new LeaveTypeDto("VACATION", "ลาพักร้อน", "Vacation leave",
             new BigDecimal("10.00"), false, new BigDecimal("9.00"), 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null,
             null, 0, null, false);
         SubmitLeaveRequest request = new SubmitLeaveRequest(
@@ -1362,7 +1363,7 @@ class LeaveServiceTest {
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("hire date is not on file"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("ไม่สามารถตรวจสอบสิทธิ์การ"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -1421,7 +1422,7 @@ class LeaveServiceTest {
         assertThat(overCapResult.status()).isEqualTo("AUTO_REJECTED");
         verify(leaveRepository).create(eq(10L), eq(10L), eq(overCap), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("day(s) total per year"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("12 เดือนแรกของการทำงาน"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -1624,7 +1625,7 @@ class LeaveServiceTest {
         assertThat(overCapResult.status()).isEqualTo("AUTO_REJECTED");
         verify(leaveRepository).create(eq(10L), eq(10L), eq(overCap), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("Wedding leave"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("เข้าพิธีสมรส"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -1754,7 +1755,7 @@ class LeaveServiceTest {
         verify(leaveRepository, org.mockito.Mockito.never()).markEmergencyFiling(anyLong());
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("occasion(s) per calendar month"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("ลากิจฉุกเฉินโดยไม่แจ้งล่วงหน้า"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -1786,7 +1787,7 @@ class LeaveServiceTest {
             .countEmergencyFilings(anyLong(), any(String.class), any(LocalDate.class), any(Collection.class));
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("at least 1 day(s)"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("อย่างน้อย 1 วัน"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -1818,7 +1819,7 @@ class LeaveServiceTest {
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("at least 7"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("อย่างน้อย 7 วัน"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     // §5.3 relational rules (2026-08): §5.3.2 department coverage, §5.3.3 contiguous PERSONAL/
@@ -1849,7 +1850,7 @@ class LeaveServiceTest {
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("resignation has been submitted"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("ยื่นใบลาออกแล้ว"), eq(null), eq(null), eq(null), eq(null), eq(null));
         // Categorical gate, runs before hire-date-dependent gates -- findHireDate must never be reached.
         verify(leaveRepository, org.mockito.Mockito.never()).findHireDate(anyLong());
     }
@@ -1880,7 +1881,7 @@ class LeaveServiceTest {
         // SICK is not VACATION/PERSONAL -- hasSubmittedResignation must never even be called, proving
         // the type gate short-circuits rather than merely happening to allow it in this fixture.
         // V124: sickType() carries a real noCertificateMonthlyTolerance (3), so this must still force
-        // AUTO_REJECTED via #sickCertificateNote -- stub the occasion count at the tolerance itself so
+        // AUTO_REJECTED via #sickCertificateRuleOutcome -- stub the occasion count at the tolerance itself so
         // the certificate-less request is refused for an unrelated (SICK-specific) reason, isolating
         // this test to the resignation-gate short-circuit it actually proves.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
@@ -1931,7 +1932,7 @@ class LeaveServiceTest {
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("immediately before or after"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("โดยไม่มีวันทำงานคั่นระหว่างกัน"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -1990,7 +1991,7 @@ class LeaveServiceTest {
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("nobody else in your department"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("ไม่มีพนักงานคนอื่นในแผนกมาทำงาน"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -2085,7 +2086,7 @@ class LeaveServiceTest {
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("nobody else in your department"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("ไม่มีพนักงานคนอื่นในแผนกมาทำงาน"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     @Test
@@ -2093,7 +2094,7 @@ class LeaveServiceTest {
         // §5.3.2 one-person-department exemption: an empty colleague list must short-circuit BEFORE
         // any further schedule lookup for the department-coverage gate -- proven here by asserting
         // workingDayPredicate for the requester's own range was called exactly ONCE (submit()'s own
-        // unconditional day-counting call), not a second time by departmentCoverageRejectionNote's
+        // unconditional day-counting call), not a second time by departmentCoverageRuleOutcome's
         // own-day check, which is exactly the empty-list short-circuit doing its job.
         SubmitLeaveRequest request = validSubmit(null);
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -2123,8 +2124,8 @@ class LeaveServiceTest {
         // size floor is a carve-out -- a THREE-person department is used here, deliberately AT the
         // floor, so this test cannot pass merely because the department was too small for the gate to
         // apply at all). This proves the two gates genuinely compose -- a SICK request that clears
-        // #sickCertificateNote cleanly (no attachment, but comfortably under the monthly tolerance) is
-        // STILL refused by #departmentCoverageRejectionNote, which runs after it in #autoRejectNote.
+        // #sickCertificateRuleOutcome cleanly (no attachment, but comfortably under the monthly tolerance) is
+        // STILL refused by #departmentCoverageRuleOutcome, which runs after it in #autoRejectNote.
         // Neither gate's rejection message is swallowed by the other: this fixture never reaches the
         // certificate rejection at all (occasionsUsed=0 < tolerance=3), so the ONLY message that can
         // appear here is the department-coverage one.
@@ -2155,7 +2156,7 @@ class LeaveServiceTest {
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("nobody else in your department"), eq(null), eq(null), eq(null), eq(null), eq(null));
+            org.mockito.ArgumentMatchers.contains("ไม่มีพนักงานคนอื่นในแผนกมาทำงาน"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
     private SubmitLeaveRequest validSubmit(Long employeeId) {
@@ -2194,7 +2195,7 @@ class LeaveServiceTest {
         // submitProratesVacationQuotaForAnEmployeeUnderOneYearOfService friends), which construct a
         // LeaveTypeDto with proratedFirstYear=true explicitly rather than making every existing
         // VACATION test in this class newly depend on a stubbed hire date.
-        return new LeaveTypeDto("VACATION", "Vacation", "Vacation leave", new BigDecimal("6.00"), false,
+        return new LeaveTypeDto("VACATION", "ลาพักร้อน", "Vacation leave", new BigDecimal("6.00"), false,
             null, 7, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null, false);
     }
 
@@ -2205,17 +2206,17 @@ class LeaveServiceTest {
     // to vacationType()/leaveWithoutPayType()/ordinationType() above and below, which deliberately
     // use "no restriction" placeholders for fields not under test in THEIR tests).
     private LeaveTypeDto sickType() {
-        return new LeaveTypeDto("SICK", "Sick", "Sick leave", new BigDecimal("30.00"), true,
+        return new LeaveTypeDto("SICK", "ลาป่วย", "Sick leave", new BigDecimal("30.00"), true,
             null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, 3, 3, null, false);
     }
 
     private LeaveTypeDto leaveWithoutPayType() {
-        return new LeaveTypeDto("LEAVE_WITHOUT_PAY", "Leave without pay", "Leave without pay", BigDecimal.ZERO, false,
+        return new LeaveTypeDto("LEAVE_WITHOUT_PAY", "ลาไม่รับค่าจ้าง", "Leave without pay", BigDecimal.ZERO, false,
             BigDecimal.ZERO, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null, false);
     }
 
     private LeaveTypeDto ordinationType() {
-        return new LeaveTypeDto("ORDINATION", "Ordination", "Ordination leave", new BigDecimal("60.00"), false,
+        return new LeaveTypeDto("ORDINATION", "ลาอุปสมบท", "Ordination leave", new BigDecimal("60.00"), false,
             new BigDecimal("15.00"), 0, 12, null, true, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null, false);
     }
 
@@ -2227,7 +2228,7 @@ class LeaveServiceTest {
     // below, none of which are about defect 3. The real post-V120 PERSONAL shape (maxConsecutiveDays
     // null, firstYearMaxDays 3.00) is personalTypeProratedFirstYear() below.
     private LeaveTypeDto personalTypeWithMaxConsecutive() {
-        return new LeaveTypeDto("PERSONAL", "Personal", "Personal leave", new BigDecimal("7.00"), false,
+        return new LeaveTypeDto("PERSONAL", "ลากิจ", "Personal leave", new BigDecimal("7.00"), false,
             null, 0, 0, new BigDecimal("3.00"), false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null, false);
     }
 
@@ -2235,7 +2236,7 @@ class LeaveServiceTest {
     // CALENDAR_DAYS, used by the unit tests proving LeaveService#computeTotalDays and #submit select
     // the basis from the leave type, not a hardcoded assumption.
     private LeaveTypeDto maternityType() {
-        return new LeaveTypeDto("MATERNITY", "Maternity", "Maternity leave", new BigDecimal("98.00"), true,
+        return new LeaveTypeDto("MATERNITY", "ลาคลอดบุตร", "Maternity leave", new BigDecimal("98.00"), true,
             new BigDecimal("45.00"), 0, 0, null, false, LeaveDayCountBasis.CALENDAR_DAYS, false, null, null, 0, null, false);
     }
 
@@ -2245,7 +2246,7 @@ class LeaveServiceTest {
     // (which quota figure gets used) from the real calendar math LeaveDayMath performs elsewhere.
 
     private LeaveTypeDto vacationTypeProratedFirstYear() {
-        return new LeaveTypeDto("VACATION", "Vacation", "Vacation leave", new BigDecimal("6.00"), false,
+        return new LeaveTypeDto("VACATION", "ลาพักร้อน", "Vacation leave", new BigDecimal("6.00"), false,
             null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, true, null, null, 0, null, false);
     }
 
@@ -2255,7 +2256,7 @@ class LeaveServiceTest {
     // unlike personalTypeWithMaxConsecutive() above (which deliberately keeps the pre-defect-3 shape
     // for its own, unrelated tests).
     private LeaveTypeDto personalTypeProratedFirstYear() {
-        return new LeaveTypeDto("PERSONAL", "Personal", "Personal leave", new BigDecimal("7.00"), false,
+        return new LeaveTypeDto("PERSONAL", "ลากิจ", "Personal leave", new BigDecimal("7.00"), false,
             null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, true, new BigDecimal("3.00"), null, 0, null, false);
     }
 
@@ -2265,7 +2266,7 @@ class LeaveServiceTest {
     // (V124) stay at "no restriction" (null/0) -- irrelevant to a PERSONAL fixture (those two only
     // ever govern SICK), kept only for record-shape completeness.
     private LeaveTypeDto personalTypeForWeddingCap() {
-        return new LeaveTypeDto("PERSONAL", "Personal", "Personal leave", new BigDecimal("7.00"), false,
+        return new LeaveTypeDto("PERSONAL", "ลากิจ", "Personal leave", new BigDecimal("7.00"), false,
             null, 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null, false);
     }
 
@@ -2273,7 +2274,7 @@ class LeaveServiceTest {
     // matching weekdayWithinNotice()/weekdayAfterNotice() below) and emergencyMonthlyAllowance=3 (the
     // real seeded value). proratedFirstYear=false so pro-ration/first-year-cap never interferes.
     private LeaveTypeDto personalTypeWithEmergencyTolerance() {
-        return new LeaveTypeDto("PERSONAL", "Personal", "Personal leave", new BigDecimal("7.00"), false,
+        return new LeaveTypeDto("PERSONAL", "ลากิจ", "Personal leave", new BigDecimal("7.00"), false,
             null, 1, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, 3, false);
     }
 
@@ -2328,7 +2329,14 @@ class LeaveServiceTest {
             // helper, so they stay null/false -- tests that need a specific value construct their
             // own LeaveRequestDto or assert on the AutoRejectResult-driven repository calls instead.
             null,
-            false
+            false,
+            // Phase A0a (structured rejection outcome, V131): same reasoning as purpose/
+            // emergency-filing directly above -- no test in this class asserts on these via the
+            // helper (LeaveServiceTest is Mockito-level and never exercises the real
+            // LeaveRepository#recordAutoRejectReason write, so a helper-constructed DTO never carries
+            // a genuine code/params pair anyway).
+            null,
+            Map.of()
         );
     }
 
