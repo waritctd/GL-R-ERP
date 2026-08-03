@@ -6,6 +6,7 @@ This repository is a GL&R **HR + Sales/CRM portal** growing into an ERP platform
 1. **Read this file and `AGENTS.md` before starting.** They hold the product identity, the current priorities, and the non-negotiable rules. There is no longer a separate handoff corpus to read — it was retired in 2026-07 (see "Where the old docs went" below).
 2. **Always run `git status` before making any changes** and confirm which branch you are on.
 3. **Check you are not on a stale base.** With several worktrees in play, `git fetch` then `git rev-list --left-right --count HEAD...origin/main` before you build anything substantial — this repo has had a full feature built on a base that `main` had already moved past.
+4. **Check for concurrent activity before starting substantial work.** `git branch -a` / `git log --all --oneline -10` to see what other worktrees or agents have pushed recently, and list open PRs to see if another session is already on the same files or surface. Two agents silently touching the same area is how conflicting changes and repeated merge-fixups happen — see the branch-lifetime note below.
 
 ## Scope rules — non-negotiable
 - **Do not change business logic** (payroll/tax/commission/pricing math, etc.) unless explicitly requested. This is the one rule that never relaxes. **Exception, currently live:** the sales deal/pricing workflow is under an approved redesign — see below.
@@ -131,6 +132,12 @@ The frontend is migrating from the single global `frontend/src/styles.css` to a 
 - **One branch per task.** `main` must stay deployable; branch off `main`, open a PR, merge only after review.
 - **One implementation agent per branch.** Do not let two agents (e.g. Claude and Codex) edit the same branch at the same time.
 - **Reviewer agents do not implement** — except tiny, safe fixes (typos, obvious one-liners). Anything larger goes back to an implementation branch.
+- **If your work overlaps another active session's, tell that session — don't just note it and continue.**
+  If you find a branch, PR, or file another agent session is actively working (per the concurrent-activity
+  check above), and your task touches the same surface, message that session directly (the CCR
+  `SendMessage` tool if it's a sibling session, otherwise a comment on its PR) before you proceed, so the
+  two lines of work coordinate instead of silently diverging or colliding on merge. Silence here is what
+  turns into the review-fix and repeated-main-sync patterns above.
 - **Cap branch lifetime — sync with `main` at most once before opening the PR.** A branch that needs
   a second or third `git fetch origin main && git merge/rebase` mid-flight has grown too large or sat
   open too long; both cost real agent time re-reading diffs and re-resolving conflicts. `feat/leave-rules-tab`
