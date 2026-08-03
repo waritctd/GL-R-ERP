@@ -9,6 +9,7 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -88,6 +89,222 @@ public class WorkScheduleAssignmentRepository {
             ));
         });
         return assignments;
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Admin CRUD: catalogue read + assignment list/create/end. See WorkScheduleAssignmentAdminService
+    // for the validation/authorization/audit/cache-invalidation this layer deliberately does not do.
+    // ---------------------------------------------------------------------------------------
+
+    /** Every {@code hr.work_schedule} row, for a future admin UI's picker. Creating new schedules is
+     * out of scope for this branch — this is read-only. */
+    public List<WorkScheduleSummaryDto> listSchedules() {
+        List<WorkScheduleSummaryDto> result = new ArrayList<>();
+        jdbc.query("""
+            SELECT s.work_schedule_id, s.code, s.name_th, s.work_start, s.work_end, s.grace_minutes,
+                   s.requires_check_out,
+                   array_agg(d.day_of_week ORDER BY d.day_of_week) AS days
+              FROM hr.work_schedule s
+              LEFT JOIN hr.work_schedule_day d ON d.work_schedule_id = s.work_schedule_id
+             GROUP BY s.work_schedule_id, s.code, s.name_th, s.work_start, s.work_end,
+                      s.grace_minutes, s.requires_check_out
+             ORDER BY s.code
+            """, new MapSqlParameterSource(), rs -> {
+            result.add(new WorkScheduleSummaryDto(
+                rs.getInt("work_schedule_id"),
+                rs.getString("code"),
+                rs.getString("name_th"),
+                rs.getObject("work_start", LocalTime.class),
+                rs.getObject("work_end", LocalTime.class),
+                rs.getInt("grace_minutes"),
+                rs.getBoolean("requires_check_out"),
+                workdaysAsIsoInts(rs.getArray("days"))
+            ));
+        });
+        return result;
+    }
+
+    /** Every {@code hr.work_schedule_assignment} row, joined to its schedule's {@code code}, for the
+     * admin list view — unlike {@link #findAllAssignments()} this exposes {@code assignment_id} (so
+     * a caller can end a specific row) and is ordered for human reading, not resolver precedence. */
+    public List<WorkScheduleAssignmentDto> listAssignments() {
+        List<WorkScheduleAssignmentDto> result = new ArrayList<>();
+        jdbc.query("""
+            SELECT a.assignment_id, a.scope_type, a.scope_id, a.work_schedule_id, s.code,
+                   a.effective_from, a.effective_to
+              FROM hr.work_schedule_assignment a
+              JOIN hr.work_schedule s ON s.work_schedule_id = a.work_schedule_id
+             ORDER BY a.scope_type, a.scope_id, a.effective_from DESC, a.assignment_id DESC
+            """, new MapSqlParameterSource(), rs -> { result.add(toAssignmentDto(rs)); });
+        return result;
+    }
+
+    public Optional<WorkScheduleAssignmentDto> findAssignmentById(int assignmentId) {
+        List<WorkScheduleAssignmentDto> rows = jdbc.query("""
+            SELECT a.assignment_id, a.scope_type, a.scope_id, a.work_schedule_id, s.code,
+                   a.effective_from, a.effective_to
+              FROM hr.work_schedule_assignment a
+              JOIN hr.work_schedule s ON s.work_schedule_id = a.work_schedule_id
+             WHERE a.assignment_id = :id
+            """, new MapSqlParameterSource("id", assignmentId), (rs, rowNum) -> toAssignmentDto(rs));
+        return rows.stream().findFirst();
+    }
+
+    /** Bare row (no schedule join), for {@link WorkScheduleAssignmentAdminService#end} to validate
+     * the target exists and read its current {@code effective_from}/{@code effective_to}. */
+    public Optional<AssignmentWindow> findWindowById(int assignmentId) {
+        List<AssignmentWindow> rows = jdbc.query("""
+            SELECT assignment_id, scope_type, scope_id, effective_from, effective_to
+              FROM hr.work_schedule_assignment
+             WHERE assignment_id = :id
+            """,
+            new MapSqlParameterSource("id", assignmentId),
+            (rs, rowNum) -> new AssignmentWindow(
+                rs.getInt("assignment_id"),
+                ScopeType.valueOf(rs.getString("scope_type")),
+                rs.getLong("scope_id"),
+                rs.getObject("effective_from", LocalDate.class),
+                rs.getObject("effective_to", LocalDate.class)));
+        return rows.stream().findFirst();
+    }
+
+    public boolean scheduleExists(int workScheduleId) {
+        Boolean exists = jdbc.queryForObject(
+            "SELECT EXISTS(SELECT 1 FROM hr.work_schedule WHERE work_schedule_id = :id)",
+            new MapSqlParameterSource("id", workScheduleId), Boolean.class);
+        return Boolean.TRUE.equals(exists);
+    }
+
+    /** {@code scopeType} comes from a closed Java enum (never string-concatenated), so branching the
+     * table/column name per scope is not an injection risk. */
+    public boolean scopeExists(ScopeType scopeType, long scopeId) {
+        String sql = switch (scopeType) {
+            case EMPLOYEE -> "SELECT EXISTS(SELECT 1 FROM hr.employee WHERE employee_id = :id)";
+            case DEPARTMENT -> "SELECT EXISTS(SELECT 1 FROM hr.department WHERE department_id = :id)";
+            case DIVISION -> "SELECT EXISTS(SELECT 1 FROM hr.division WHERE division_id = :id)";
+        };
+        Boolean exists = jdbc.queryForObject(sql, new MapSqlParameterSource("id", scopeId), Boolean.class);
+        return Boolean.TRUE.equals(exists);
+    }
+
+    /**
+     * True when an assignment already exists for this scope starting on or after
+     * {@code newEffectiveFrom} that would still overlap the new window
+     * [{@code newEffectiveFrom}, {@code newEffectiveTo}] — i.e. a genuinely conflicting, separately
+     * planned future change. {@link WorkScheduleAssignmentAdminService#create} rejects the create
+     * when this is true rather than silently truncating someone else's already-planned assignment;
+     * see that method's javadoc for the full overlap policy (predecessors ARE auto-closed, successors
+     * are NOT).
+     */
+    public boolean hasConflictingSuccessor(
+            ScopeType scopeType, long scopeId, LocalDate newEffectiveFrom, LocalDate newEffectiveTo) {
+        Boolean exists = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1 FROM hr.work_schedule_assignment
+                 WHERE scope_type = :scopeType
+                   AND scope_id = :scopeId
+                   AND effective_from >= :newFrom
+                   AND (CAST(:newTo AS DATE) IS NULL OR effective_from <= CAST(:newTo AS DATE))
+            )
+            """,
+            new MapSqlParameterSource()
+                .addValue("scopeType", scopeType.name())
+                .addValue("scopeId", scopeId)
+                .addValue("newFrom", newEffectiveFrom)
+                .addValue("newTo", newEffectiveTo),
+            Boolean.class);
+        return Boolean.TRUE.equals(exists);
+    }
+
+    /**
+     * Closes (sets {@code effective_to = newEffectiveFrom - 1}) every predecessor assignment for
+     * this scope that is still live at {@code newEffectiveFrom} — i.e. {@code effective_from <
+     * newEffectiveFrom} and ({@code effective_to IS NULL} or {@code effective_to >= newEffectiveFrom}).
+     * This is the "normalise" half of the overlap policy: a routine schedule change (assign a new
+     * schedule, the old one closes automatically) is exactly the step V115's own migration comments
+     * call out as one a human can forget to do by hand. Returns the closed {@code assignment_id}s for
+     * the audit trail.
+     */
+    public List<Integer> closeOverlappingPredecessors(ScopeType scopeType, long scopeId, LocalDate newEffectiveFrom) {
+        return jdbc.query("""
+            UPDATE hr.work_schedule_assignment
+               SET effective_to = :newFrom - 1
+             WHERE scope_type = :scopeType
+               AND scope_id = :scopeId
+               AND effective_from < :newFrom
+               AND (effective_to IS NULL OR effective_to >= :newFrom)
+            RETURNING assignment_id
+            """,
+            new MapSqlParameterSource()
+                .addValue("scopeType", scopeType.name())
+                .addValue("scopeId", scopeId)
+                .addValue("newFrom", newEffectiveFrom),
+            (rs, rowNum) -> rs.getInt("assignment_id"));
+    }
+
+    public int insertAssignment(
+            ScopeType scopeType, long scopeId, int workScheduleId, LocalDate effectiveFrom, LocalDate effectiveTo) {
+        return jdbc.queryForObject("""
+            INSERT INTO hr.work_schedule_assignment
+                (scope_type, scope_id, work_schedule_id, effective_from, effective_to)
+            VALUES (:scopeType, :scopeId, :workScheduleId, :effectiveFrom, :effectiveTo)
+            RETURNING assignment_id
+            """,
+            new MapSqlParameterSource()
+                .addValue("scopeType", scopeType.name())
+                .addValue("scopeId", scopeId)
+                .addValue("workScheduleId", workScheduleId)
+                .addValue("effectiveFrom", effectiveFrom)
+                .addValue("effectiveTo", effectiveTo),
+            Integer.class);
+    }
+
+    /** Returns {@code false} if no row exists for {@code assignmentId} (caller turns that into 404). */
+    public boolean endAssignment(int assignmentId, LocalDate effectiveTo) {
+        int updated = jdbc.update("""
+            UPDATE hr.work_schedule_assignment
+               SET effective_to = :effectiveTo
+             WHERE assignment_id = :id
+            """,
+            new MapSqlParameterSource().addValue("effectiveTo", effectiveTo).addValue("id", assignmentId));
+        return updated > 0;
+    }
+
+    private static WorkScheduleAssignmentDto toAssignmentDto(java.sql.ResultSet rs) throws SQLException {
+        return new WorkScheduleAssignmentDto(
+            rs.getInt("assignment_id"),
+            ScopeType.valueOf(rs.getString("scope_type")),
+            rs.getLong("scope_id"),
+            rs.getInt("work_schedule_id"),
+            rs.getString("code"),
+            rs.getObject("effective_from", LocalDate.class),
+            rs.getObject("effective_to", LocalDate.class));
+    }
+
+    /** Bare {@code hr.work_schedule_assignment} row, no schedule join — see {@link #findWindowById}. */
+    public record AssignmentWindow(
+        int assignmentId, ScopeType scopeType, long scopeId, LocalDate effectiveFrom, LocalDate effectiveTo
+    ) {}
+
+    /** Same element-by-{@link Number} defensiveness as {@link #workdaysOf}, but returning the raw ISO
+     * day-of-week ints the catalogue DTO exposes rather than {@link DayOfWeek} — a future admin UI
+     * reads these directly, no {@code java.time} translation needed on either side. */
+    private static List<Integer> workdaysAsIsoInts(Array sqlArray) {
+        List<Integer> days = new ArrayList<>();
+        if (sqlArray == null) {
+            return days;
+        }
+        try {
+            Object[] elements = (Object[]) sqlArray.getArray();
+            for (Object element : elements) {
+                if (element instanceof Number isoDay) {
+                    days.add(isoDay.intValue());
+                }
+            }
+        } catch (SQLException ex) {
+            throw new IllegalStateException("Could not read hr.work_schedule_day array", ex);
+        }
+        return days;
     }
 
     /**

@@ -27,6 +27,20 @@ export const API_ROUTES = {
     importDat: '/api/attendance/imports/dat',
     devices: '/api/attendance/devices',
   },
+  holidays: {
+    list: '/api/holidays',
+    create: '/api/holidays',
+    fetch: '/api/holidays/fetch',
+    detail: (date) => `/api/holidays/${date}`,
+  },
+  workSchedules: {
+    list: '/api/work-schedules',
+  },
+  workScheduleAssignments: {
+    list: '/api/work-schedule-assignments',
+    create: '/api/work-schedule-assignments',
+    end: (assignmentId) => `/api/work-schedule-assignments/${assignmentId}/end`,
+  },
   overtime: {
     list: '/api/overtime',
     create: '/api/overtime',
