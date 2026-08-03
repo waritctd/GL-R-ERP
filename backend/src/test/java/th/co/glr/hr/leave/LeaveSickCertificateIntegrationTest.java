@@ -27,7 +27,7 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * coverage of {@code hr.leave_type.certificate_filing_window_days} /
  * {@code no_certificate_monthly_tolerance}, {@link LeaveRepository#countNoCertificateRequestsInMonth}'s
  * real SQL (the {@code attachment_id IS NULL} predicate and the {@code start_date BETWEEN} month
- * range), and {@link LeaveService#sickCertificateNote}'s combined decision through the real V124
+ * range), and {@link LeaveService#sickCertificateRuleOutcome}'s combined decision through the real V124
  * schema. {@code LeaveServiceTest} covers the same decision table against a Mockito-faked
  * repository; this class proves the real SQL -- a mocked repository would happily "pass" while the
  * SQL counted the wrong month, the wrong status set, or ignored {@code attachment_id} entirely.
@@ -99,7 +99,8 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(second.status()).isEqualTo("APPROVED");
         assertThat(third.status()).isEqualTo("APPROVED");
         assertThat(fourth.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(fourth.systemNote()).contains("3 occasion(s) per calendar month");
+        assertThat(fourth.systemNoteCode()).isEqualTo("SICK_NO_CERT_TOLERANCE_EXHAUSTED");
+        assertThat(fourth.systemNote()).isNotBlank();
         // Money-effect pin: the first three each granted a paid day (paid_days_cap is NULL for SICK,
         // well within the 30-day quota) -- today's pre-V124 code would have auto-rejected ALL FOUR.
         assertThat(first.paidDays()).isEqualByComparingTo("1.00");
@@ -200,7 +201,7 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
             sickRequest(employeeId, "2026-06-01"), certificate(), employee(employeeId));
 
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(result.systemNote()).contains("working day(s) of the leave start date");
+        assertThat(result.systemNoteCode()).isEqualTo("SICK_CERTIFICATE_WINDOW");
         assertThat(result.paidDays()).isEqualByComparingTo("0.00");
         // The late certificate is still recorded (LeaveService#submit's attach block is unconditional
         // on hasAttachment, not on the outcome) -- it just did not buy approval.

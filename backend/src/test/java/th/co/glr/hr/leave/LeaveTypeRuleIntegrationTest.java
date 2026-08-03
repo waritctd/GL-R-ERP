@@ -245,7 +245,10 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             employee(employeeId));
 
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(result.systemNote()).contains("hire date is not on file");
+        // VACATION is prorated_first_year (V120), so the categorical HIRE_DATE_MISSING_PRORATED gate
+        // fires here -- not the (narrower, min-service-only) HIRE_DATE_MISSING_MIN_SERVICE code.
+        assertThat(result.systemNoteCode()).isEqualTo("HIRE_DATE_MISSING_PRORATED");
+        assertThat(result.systemNote()).isNotBlank();
     }
 
     @Test
@@ -310,7 +313,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             submitRequest(employeeId, "PERSONAL", "2026-07-20", "2026-07-21"), // 2 working days
             employee(employeeId));
         assertThat(refused.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(refused.systemNote()).contains("day(s) total per year");
+        assertThat(refused.systemNoteCode()).isEqualTo("FIRST_YEAR_MAX_DAYS");
     }
 
     @Test
@@ -331,7 +334,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             submitRequest(employeeId, "PERSONAL", "2026-07-20", "2026-07-23"), // 4 working days
             employee(employeeId));
         assertThat(refused.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(refused.systemNote()).contains("day(s) total per year");
+        assertThat(refused.systemNoteCode()).isEqualTo("FIRST_YEAR_MAX_DAYS");
     }
 
     @Test
@@ -345,7 +348,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             employee(employeeId));
 
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(result.systemNote()).contains("at least 1 day(s)");
+        assertThat(result.systemNoteCode()).isEqualTo("ADVANCE_NOTICE");
     }
 
     @Test
@@ -364,7 +367,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             employee(employeeId));
 
         assertThat(second.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(second.systemNote()).contains("once during your employment");
+        assertThat(second.systemNoteCode()).isEqualTo("ONCE_PER_EMPLOYMENT");
     }
 
     @Test
@@ -426,7 +429,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             submitRequestWithPurpose(employeeId, "PERSONAL", "2026-07-20", "2026-07-23", "WEDDING"),
             employee(employeeId));
         assertThat(overCap.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(overCap.systemNote()).contains("Wedding leave");
+        assertThat(overCap.systemNoteCode()).isEqualTo("WEDDING_MAX_DAYS");
     }
 
     @Test
@@ -490,7 +493,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         LeaveRequestDto fourth = leaveService.submit(
             submitRequestAsEmergency(employeeId, "2026-06-22"), employee(employeeId));
         assertThat(fourth.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(fourth.systemNote()).contains("occasion(s) per calendar month");
+        assertThat(fourth.systemNoteCode()).isEqualTo("EMERGENCY_TOLERANCE_EXHAUSTED");
     }
 
     @Test
@@ -532,7 +535,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             employee(employeeId));
 
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(result.systemNote()).contains("passed probation");
+        assertThat(result.systemNoteCode()).isEqualTo("PROBATION_NOT_PASSED");
+        assertThat(result.systemNote()).isNotBlank();
     }
 
     @Test
@@ -587,7 +591,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             employee(employeeId));
 
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(result.systemNote()).contains("passed probation");
+        assertThat(result.systemNoteCode()).isEqualTo("PROBATION_NOT_PASSED");
     }
 
     @Test
@@ -603,7 +607,14 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             employee(employeeId));
 
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(result.systemNote()).contains("hire date is not on file");
+        // PERSONAL is ALSO prorated_first_year (V120), so the categorical
+        // HIRE_DATE_MISSING_PRORATED gate (autoRejectNote, runs before the PERSONAL-probation branch
+        // this test's name references) fires first -- personalProbationRuleOutcome's own,
+        // narrower NULL-hire_date branch (PROBATION_HIRE_DATE_MISSING) is unreachable in practice for
+        // this exact scenario; see autoRejectNote's own comment on that gate for why it is kept as a
+        // defensive fallback anyway. Both branches produced byte-identical English text before this
+        // phase, which is why this distinction was invisible under the old plain-String assertion.
+        assertThat(result.systemNoteCode()).isEqualTo("HIRE_DATE_MISSING_PRORATED");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -627,7 +638,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             employee(employeeId));
 
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(result.systemNote()).contains("passed probation");
+        assertThat(result.systemNoteCode()).isEqualTo("PROBATION_NOT_PASSED");
     }
 
     @Test
