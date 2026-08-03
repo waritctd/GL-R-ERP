@@ -166,6 +166,18 @@ export const api = {
       if (!res.ok) throw new Error('Download failed');
       return res.blob();
     },
+    // Phase A4: certificate download for a review row (ReviewQueueTab.jsx) or the requester's own
+    // expanded row (MyLeaveTab.jsx). Access (owning employee, or a canReviewEmployee reviewer of
+    // them) is enforced entirely server-side — see LeaveService#resolveAttachmentForDownload and
+    // LeaveController#downloadAttachment's own comment on why an unknown id 404s rather than 403s.
+    downloadAttachment: async (attachmentId) => {
+      const res = await fetch(API_ROUTES.leave.attachmentDownload(attachmentId), { credentials: 'include' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'ดาวน์โหลดเอกสารไม่สำเร็จ');
+      }
+      return res.blob();
+    },
     // Leave-request composer, Phase C: caller's own holiday + resolved work-schedule context for
     // { from, to } -- see routes.js's comment. `params` mirrors the shape of other range-taking
     // reads on this namespace (balances/list) rather than positional (from, to) args.

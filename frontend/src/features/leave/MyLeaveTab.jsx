@@ -12,13 +12,16 @@ import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FieldList } from '../../components/common/FieldList.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
+import { QuotaBar } from '../../components/common/QuotaBar.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { downloadBlob } from '../../utils/download.js';
 import { leaveStatusLabel as statusInfo } from '../../utils/format.js';
 import {
   formatDateRange, formatDays, monthStartIso, todayIso, yearFrom,
 } from './leaveFormatting.js';
+import { canSubmitOwnLeave } from './leaveSurfaceTabs.js';
 import {
   buildLeaveRequestColumns, LEAVE_REQUEST_TABLE_GRID, leaveRequestRowKey,
   renderLeaveRequestExpanded,
@@ -102,9 +105,24 @@ function retryLeaveRequestHref(request) {
  * (the request errored with a 403).
  */
 function OwnRequestsSection({
-  requestsQuery, rows, hasCustomFilters, onClearFilters, expandedId, onToggleExpand, onCancel, user,
+  requestsQuery, rows, hasCustomFilters, onClearFilters, expandedId, onToggleExpand, onCancel, user, showToast,
 }) {
   const navigate = useNavigate();
+  // Phase A4: the medical-certificate download for the requester's OWN expanded row -- the
+  // reviewer-side equivalent lives in ReviewQueueTab.jsx. Local to this section (not lifted to
+  // MyLeaveTab) since only this table's expanded row ever needs it.
+  const [downloadingAttachmentId, setDownloadingAttachmentId] = useState(null);
+  async function downloadAttachment(request) {
+    setDownloadingAttachmentId(request.id);
+    try {
+      const blob = await api.leave.downloadAttachment(request.attachmentId);
+      downloadBlob(blob, `leave-attachment-${request.id}`, 'pdf');
+    } catch (error) {
+      showToast('error', error.message || 'ดาวน์โหลดเอกสารไม่สำเร็จ');
+    } finally {
+      setDownloadingAttachmentId(null);
+    }
+  }
   const loading = requestsQuery.isPending;
   const denied = requestsQuery.isError && isPermissionError(requestsQuery.error);
   const hasError = requestsQuery.isError && !denied;
@@ -212,7 +230,14 @@ function OwnRequestsSection({
         state="empty"
         title="ยังไม่มีคำขอลา"
         description="ลาคือการหยุดงานที่ได้รับอนุมัติ กดปุ่ม “ยื่นคำขอลา” ด้านบนเพื่อเริ่ม เลือกประเภทและช่วงวันที่ ระบบจะตรวจโควตาและอนุมัติอัตโนมัติถ้าเข้าเงื่อนไข"
-        action={<Button type="button" onClick={() => navigate('/leave/new')}><Icon name="plus" />ยื่นคำขอลา</Button>}
+        // Leave HR-submit gate (2026-08-03): mirrors LeaveSurfacePage.jsx's page-header CTA --
+        // hr/ceo oversee leave but do not request it for themselves (owner ruling). This is the
+        // SECOND of the two "ยื่นคำขอลา" entry points on this page; hiding it here too keeps the
+        // UI coherent (no button that only leads to a server-side 403). Presentation only -- the
+        // real rule is LeaveService#resolveTargetEmployee.
+        action={canSubmitOwnLeave(user) ? (
+          <Button type="button" onClick={() => navigate('/leave/new')}><Icon name="plus" />ยื่นคำขอลา</Button>
+        ) : undefined}
       />
     );
   }
@@ -227,10 +252,42 @@ function OwnRequestsSection({
       error={hasError}
       onRetry={() => requestsQuery.refetch()}
       mobileCard={mobileCard}
-      renderExpanded={(request) => (expandedId === request.id ? renderLeaveRequestExpanded(request) : null)}
+      renderExpanded={(request) => {
+        if (expandedId !== request.id) return null;
+        return (
+          <>
+            {renderLeaveRequestExpanded(request)}
+            {request.attachmentId ? (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-surface px-3 py-2">
+                <span className="inline-flex min-w-0 items-center gap-2 text-sm text-text">
+                  <Icon name="fileText" size={16} className="text-icon-muted" />
+                  <span className="min-w-0 truncate">{request.attachmentFileName || 'เอกสารแนบ'}</span>
+                </span>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={downloadingAttachmentId === request.id}
+                  onClick={() => downloadAttachment(request)}
+                >
+                  <Icon name="fileText" size={14} />
+                  {downloadingAttachmentId === request.id ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด'}
+                </Button>
+              </div>
+            ) : null}
+          </>
+        );
+      }}
       showPagination
     />
   );
+}
+
+// QuotaBar's `formatValue` defaults to `formatMoney` (every other current caller is money); leave
+// balances are day counts, so this mirrors the plain-number formatter LeaveRequestPage.jsx's own
+// step-3 QuotaBar already uses -- unit-less, because the caption below spells out "(วัน)" itself.
+const daysNumberFormat = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 });
+function formatDaysNumber(value) {
+  return daysNumberFormat.format(Number(value) || 0);
 }
 
 /**
@@ -243,6 +300,22 @@ function OwnRequestsSection({
  * acting employee resolved yet" (balancesQuery is disabled until then) so this never flashes a
  * bare `0` before real data lands; a resolved-but-missing balance (the selected type has no row)
  * gets its own EmptyState rather than silently rendering zeros.
+ *
+ * Phase A5 (#489/#493 convergence): the everyday headline used to be a bespoke `<strong>` number
+ * with no visual proportion and no `role="progressbar"`. QuotaBar (promoted from the tax-allowance
+ * form, already adopted by the /leave/new composer's step 3) replaces it. `used` is exactly what
+ * the API already subtracts to produce `balance.remainingDays` (mockApi.js:
+ * `remainingDays = annualQuotaDays - approvedDays - pendingDays`) -- the bar's empty portion IS
+ * remainingDays, just shown as proportion instead of a lone digit, so this is a display change,
+ * not an arithmetic one. `cap` is `isEveryday ? balance.annualQuotaDays : null` -- reusing the
+ * same everyday/rare split this file already computes, rather than hand-rolling a fourth
+ * MILITARY-sentinel check (the balance card, the composer, and the rules tab each already needed
+ * one). QuotaBar itself renders nothing when `cap == null`, which is exactly the suppression rare
+ * types need: MILITARY's annualQuotaDays (366) is a sentinel ("no annual ceiling; the paid cap is
+ * the real rule", V120), and MATERNITY/ORDINATION are per-occasion entitlements, not a running
+ * balance -- none of the three have a cap a progress bar could meaningfully fill toward. The
+ * paid-cap headline + condition text that already existed for rare types renders unconditionally
+ * alongside it, unchanged.
  */
 function PrimaryLeaveBalanceCard({ loading, balance, leaveType, isEveryday }) {
   if (loading) {
@@ -260,19 +333,32 @@ function PrimaryLeaveBalanceCard({ loading, balance, leaveType, isEveryday }) {
   }
 
   const name = balance.leaveTypeNameTh || leaveType?.nameTh || balance.leaveTypeCode;
-  // Rare types never headline remainingDays/annualQuotaDays (MILITARY's 366 sentinel) -- the paid
-  // cap is the meaningful headline figure instead. See rareBalanceSummary's comment above.
-  const headlineLabel = isEveryday ? 'คงเหลือ' : 'สิทธิ์จ่ายค่าจ้างสูงสุด';
-  const headlineValue = isEveryday
-    ? formatDays(balance.remainingDays)
-    : (leaveType?.paidDaysCap != null ? formatDays(leaveType.paidDaysCap) : '-');
+  // Same arithmetic mockApi.js used to derive balance.remainingDays -- see the doc comment above.
+  const used = Number(balance.approvedDays || 0) + Number(balance.pendingDays || 0);
   const summary = isEveryday ? everydayBalanceSummary(balance) : rareBalanceSummary(balance, leaveType);
 
   return (
-    <div className="grid gap-1" data-testid="primary-balance-card">
+    <div className="grid gap-2" data-testid="primary-balance-card">
       <span className="block min-w-0 truncate text-base font-bold text-text-secondary">{name}</span>
-      <span className="mt-1 block text-xs font-bold uppercase tracking-wide text-text-muted">{headlineLabel}</span>
-      <strong className="block text-4xl font-extrabold leading-tight tabular-nums text-text">{headlineValue}</strong>
+      <QuotaBar
+        label={name}
+        caption={`โควตา${name} (วัน)`}
+        used={used}
+        cap={isEveryday ? balance.annualQuotaDays : null}
+        formatValue={formatDaysNumber}
+        overMessage="ใช้วันลาเกินโควตาประจำปีแล้ว ส่วนที่เกินอาจไม่ได้รับอนุมัติอัตโนมัติ"
+      />
+      {/* Rare types (MATERNITY/MILITARY/ORDINATION): QuotaBar renders nothing above (cap=null),
+          so the paid-cap headline is the meaningful figure instead. See rareBalanceSummary's
+          comment on why this never reads annualQuotaDays/remainingDays. */}
+      {!isEveryday ? (
+        <>
+          <span className="mt-1 block text-xs font-bold uppercase tracking-wide text-text-muted">สิทธิ์จ่ายค่าจ้างสูงสุด</span>
+          <strong className="block text-4xl font-extrabold leading-tight tabular-nums text-text">
+            {leaveType?.paidDaysCap != null ? formatDays(leaveType.paidDaysCap) : '-'}
+          </strong>
+        </>
+      ) : null}
       <small className="mt-1 block text-sm text-text-muted">{summary}</small>
     </div>
   );
@@ -588,6 +674,7 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
           onToggleExpand={(id) => setExpandedId((current) => (current === id ? null : id))}
           onCancel={requestCancel}
           user={user}
+          showToast={showToast}
         />
       </Panel>
 

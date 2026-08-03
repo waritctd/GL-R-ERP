@@ -10,7 +10,8 @@ import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Tabs, TabPanel } from '../../components/common/Tabs.jsx';
 import {
-  LEAVE_SURFACE_TABS, resolveLeaveSurfaceTab, visibleLeaveSurfaceTabIds,
+  canSubmitOwnLeave, defaultLeaveSurfaceTabId, LEAVE_SURFACE_TABS, resolveLeaveSurfaceTab,
+  visibleLeaveSurfaceTabIds,
 } from './leaveSurfaceTabs.js';
 import { MyLeaveTab } from './MyLeaveTab.jsx';
 import { ReviewQueueTab } from './ReviewQueueTab.jsx';
@@ -59,7 +60,10 @@ export function LeaveSurfacePage({ user, currentEmployee, showToast }) {
   // (unusable, non-primitive) dependency without saving any real work -- LEAVE_SURFACE_TABS has
   // at most 3 entries.
   const visibleTabs = LEAVE_SURFACE_TABS.filter((tab) => visibleTabIds.includes(tab.id));
-  const activeTab = resolveLeaveSurfaceTab(searchParams.get('tab'), visibleTabIds);
+  // Leave HR-submit gate (2026-08-03): hr/ceo actors land on "review" by default, not "me" --
+  // see defaultLeaveSurfaceTabId's own comment. Presentation only; the backend gate is the real
+  // rule (LeaveService#resolveTargetEmployee).
+  const activeTab = resolveLeaveSurfaceTab(searchParams.get('tab'), visibleTabIds, defaultLeaveSurfaceTabId(user));
 
   // The sticky header's "ยื่นคำขอลา" CTA (Phase A2, #485): navigates to the /leave/new composer,
   // carrying the currently-active tab so LeaveRequestPage can send the employee back to where they
@@ -122,10 +126,15 @@ export function LeaveSurfacePage({ user, currentEmployee, showToast }) {
           subtitle="ยื่นคำขอลา ตรวจโควตา และพิจารณาคำขอของทีมในที่เดียว"
           actions={(
             <>
-              <Button type="button" ref={requestCtaRef} onClick={openRequestForm}>
-                <Icon name="plus" />
-                ยื่นคำขอลา
-              </Button>
+              {/* Leave HR-submit gate (2026-08-03): hr/ceo oversee leave but do not request it
+                  for themselves (owner ruling) -- hiding this CTA is presentation only, not the
+                  rule; LeaveService#resolveTargetEmployee is what actually enforces it. */}
+              {canSubmitOwnLeave(user) ? (
+                <Button type="button" ref={requestCtaRef} onClick={openRequestForm}>
+                  <Icon name="plus" />
+                  ยื่นคำขอลา
+                </Button>
+              ) : null}
               <OverflowMenu
                 label="การดำเนินการเพิ่มเติม"
                 items={[

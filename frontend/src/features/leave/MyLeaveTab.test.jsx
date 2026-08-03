@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MyLeaveTab } from './MyLeaveTab.jsx';
 import { api } from '../../api/index.js';
+import { downloadBlob } from '../../utils/download.js';
 
 globalThis.React = React;
 
@@ -18,8 +19,13 @@ vi.mock('../../api/index.js', () => ({
       contactDefaults: vi.fn(),
       create: vi.fn(),
       cancel: vi.fn(),
+      downloadAttachment: vi.fn(),
     },
   },
+}));
+
+vi.mock('../../utils/download.js', () => ({
+  downloadBlob: vi.fn(),
 }));
 
 const user = {
@@ -48,7 +54,7 @@ const emptyContactDefaults = {
   },
 };
 
-function renderMyLeaveTab() {
+function renderMyLeaveTab(renderUser = user) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -59,7 +65,7 @@ function renderMyLeaveTab() {
   render(
     <MemoryRouter>
       <QueryClientProvider client={queryClient}>
-        <MyLeaveTab user={user} currentEmployee={currentEmployee} showToast={vi.fn()} />
+        <MyLeaveTab user={renderUser} currentEmployee={currentEmployee} showToast={vi.fn()} />
       </QueryClientProvider>
     </MemoryRouter>,
   );
@@ -286,6 +292,18 @@ describe('MyLeaveTab own-request table: the three state-defect fixes (Phase A1)'
     expect(screen.queryByRole('button', { name: 'ล้างตัวกรอง' })).toBeNull();
   });
 
+  // Leave HR-submit gate (2026-08-03): hr/ceo oversee leave but do not request it for
+  // themselves (owner ruling) -- the empty-state's own "ยื่นคำขอลา" action is the SECOND CTA
+  // this rule touches (LeaveSurfacePage.jsx's page-header CTA is the first). Presentation only;
+  // the real rule is LeaveService#resolveTargetEmployee's server-side 403.
+  it('DEFECT 3a (hr/ceo variant): the empty-state CTA does not render for hr or ceo', async () => {
+    api.leave.list.mockResolvedValue({ requests: [] });
+    renderMyLeaveTab({ employeeId: 99, name: 'ฝ่ายบุคคล', role: 'hr', manager: false });
+
+    expect(await screen.findByText('ยังไม่มีคำขอลา')).not.toBeNull();
+    expect(screen.queryByRole('button', { name: /ยื่นคำขอลา/ })).toBeNull();
+  });
+
   it('DEFECT 3b: a filtered-to-zero result offers a clear-filters action distinct from the empty-teaching copy', async () => {
     api.leave.list.mockResolvedValue({ requests: [] });
     renderMyLeaveTab();
@@ -309,5 +327,111 @@ describe('MyLeaveTab own-request table: the three state-defect fixes (Phase A1)'
     expect(await screen.findByText('ยังเปิดหน้านี้ไม่ได้')).not.toBeNull();
     expect(screen.queryByText('ยังไม่มีคำขอลา')).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('MyLeaveTab Phase A4: self-cancel confirmation + certificate download', () => {
+  const ownSubmittedRow = {
+    id: 3002,
+    employeeId: 1,
+    employeeName: 'พนักงาน ทดสอบ',
+    employeeCode: 'GLR-001',
+    leaveTypeCode: 'VACATION',
+    leaveTypeNameTh: 'ลาพักร้อน',
+    startDate: '2026-08-15',
+    endDate: '2026-08-15',
+    totalDays: 1,
+    quotaRemainingAfter: 5,
+    status: 'SUBMITTED',
+    reason: 'ธุระส่วนตัว',
+  };
+
+  const ownRowWithCertificate = {
+    id: 3003,
+    employeeId: 1,
+    employeeName: 'พนักงาน ทดสอบ',
+    employeeCode: 'GLR-001',
+    leaveTypeCode: 'SICK',
+    leaveTypeNameTh: 'ลาป่วย',
+    startDate: '2026-08-16',
+    endDate: '2026-08-16',
+    totalDays: 1,
+    quotaRemainingAfter: 29,
+    status: 'APPROVED',
+    reason: 'ไข้หวัด',
+    attachmentId: 8001,
+    attachmentFileName: 'ใบรับรองแพทย์.pdf',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.leave.employees.mockResolvedValue({
+      employees: [{
+        employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001', self: true, directReport: false,
+      }],
+    });
+    api.leave.types.mockResolvedValue({ leaveTypes: [] });
+    api.leave.balances.mockResolvedValue({ balances: [] });
+    api.leave.contactDefaults.mockResolvedValue(emptyContactDefaults);
+  });
+
+  it('clicking ยกเลิก on a SUBMITTED own request opens a ConfirmDialog and does NOT cancel until confirmed', async () => {
+    api.leave.list.mockResolvedValue({ requests: [ownSubmittedRow] });
+    renderMyLeaveTab();
+
+    await screen.findByText('ธุระส่วนตัว');
+    fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
+
+    // Still just the request -- clicking the row action alone must never cancel by itself.
+    expect(api.leave.cancel).not.toHaveBeenCalled();
+    const dialogConfirmButton = await screen.findByRole('button', { name: 'ยกเลิกคำขอ' });
+    // Optional reason -- an employee cancelling their own request is not held to the mandatory
+    // reason an approver's reject requires.
+    expect(dialogConfirmButton.disabled).toBe(false);
+
+    fireEvent.click(dialogConfirmButton);
+    await waitFor(() => expect(api.leave.cancel).toHaveBeenCalledWith(3002, { reviewerNote: null }));
+  });
+
+  it('a row with no attachment never renders a download button', async () => {
+    api.leave.list.mockResolvedValue({ requests: [ownSubmittedRow] });
+    renderMyLeaveTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: /ดูรายละเอียด/ }));
+    expect(screen.queryByRole('button', { name: /ดาวน์โหลด/ })).toBeNull();
+  });
+
+  it('downloads the requester\'s own attachment via GET /api/leave/attachments/{id}', async () => {
+    api.leave.list.mockResolvedValue({ requests: [ownRowWithCertificate] });
+    const blob = new Blob(['fake-pdf']);
+    api.leave.downloadAttachment.mockResolvedValue(blob);
+    renderMyLeaveTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: /ดูรายละเอียด/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'ดาวน์โหลด' }));
+
+    await waitFor(() => expect(api.leave.downloadAttachment).toHaveBeenCalledWith(8001));
+    await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(blob, 'leave-attachment-3003', 'pdf'));
+  });
+
+  it('a failed download shows an error toast, not a silent no-op', async () => {
+    const showToast = vi.fn();
+    api.leave.list.mockResolvedValue({ requests: [ownRowWithCertificate] });
+    api.leave.downloadAttachment.mockRejectedValue(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'));
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <MyLeaveTab user={user} currentEmployee={currentEmployee} showToast={showToast} />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /ดูรายละเอียด/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'ดาวน์โหลด' }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ไม่มีสิทธิ์เข้าถึงรายการนี้'));
+    expect(downloadBlob).not.toHaveBeenCalled();
   });
 });

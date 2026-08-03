@@ -4421,6 +4421,32 @@ export const api = {
       return delay({ request: buildLeaveRecord(request) });
     },
 
+    // Phase A4: certificate-download button in ReviewQueueTab.jsx/MyLeaveTab.jsx. Mirrors
+    // LeaveController#downloadAttachment's real access predicate
+    // (LeaveService#resolveAttachmentForDownload: the owning employee, or a canReviewEmployee
+    // reviewer of them). attachmentId is 1:1 with the owning leave_request's own id in this mock
+    // (see create() above, `attachmentId: hasAttachment ? id : null`) — there is no separate
+    // hr.leave_attachment table here. No real file bytes are ever kept (only attachmentFileName,
+    // the name string, for shape parity), so this returns the same kind of demo placeholder Blob
+    // every other document-download endpoint in this file already does (see
+    // mockDocPlaceholderBlob's own comment) rather than the honest-404 "not supported" stance a
+    // couple of newer attachment endpoints take (e.g. downloadTaxAllowanceAttachment) — the real
+    // backend always has real bytes once attachmentId is non-null, so a reviewer opening a
+    // legitimate certificate should see the download SUCCEED under mocks, not fail every time. Do
+    // not read a mock-mode download as proof the real file/mime type streams correctly — verify
+    // against the real Java service.
+    async downloadAttachment(attachmentId) {
+      const user = requireSession();
+      const request = db.leaveRequests.find((item) => item.attachmentId === Number(attachmentId));
+      if (!request) fail('ไม่พบเอกสารนี้', 404);
+      const allowed = request.employeeId === user.employeeId || canReviewLeave(user, request.employeeId);
+      if (!allowed) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      return mockDocPlaceholderBlob([
+        `เอกสารแนบคำขอลา #${request.id}`,
+        `ไฟล์: ${request.attachmentFileName || '-'}`,
+      ]);
+    },
+
     // Leave-surface IA rebuild, Phase A0 (not yet landed on the real backend): will back the
     // "รอพิจารณา" tab's badge/count with a per-manager summary of requests awaiting THIS user's
     // decision. Added here (Phase A1) ONLY so contract.test.js's hrApi<->mockApi method-surface

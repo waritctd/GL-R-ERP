@@ -22,12 +22,22 @@ import { hasPermission } from '../../app/permissions.js';
 // the real gate on every mutation regardless. See CLAUDE.md: verify against the real
 // Java service, never the mock.
 //
-// Phase A0 (not yet landed) adds a server-supplied `canReview` boolean to each request
-// row (GET /api/leave and the new GET /api/leave/review-summary) that will fold in the
-// real backend decision authoritatively. `canReviewRequest` below already prefers it
-// when present, falling back to the client-side approximation for a row that predates
-// it -- once A0 ships, every row will carry the field and the fallback branch simply
-// stops being exercised, with no call-site change needed here.
+// Phase A0 shipped (#485): LeaveService#list now runs every returned row through
+// withCanReviewFlag unconditionally (see LeaveRequestDto.canReview's own Javadoc), so the REAL
+// backend always supplies this field now -- `canReviewRequest` below already prefers it when
+// present.
+//
+// Phase A4 finding: the fallback branch is NOT dead and must stay. mockApi.js's `leave`
+// namespace (list/create/approve/reject/cancel) never sets a `canReview` field on any row it
+// returns -- there is no mirror of withCanReviewFlag there. Under `VITE_USE_MOCKS=true` (this
+// app's default verification surface, per CLAUDE.md) every request object therefore has
+// `canReview === undefined`, and this file's own test fixtures (leaveSurfaceTabs.test.js,
+// ReviewQueueTab.test.jsx) never set it either -- removing the fallback would make
+// `canReviewRequest` return `Boolean(undefined)` (always false) for every one of those rows,
+// silently emptying the "รอพิจารณา" tab under mocks and breaking both test suites. Keep this
+// branch until mockApi.js's leave namespace is updated to mirror withCanReviewFlag too.
+// `canManagerCancelRequest` below never read `canReview` in the first place (always the
+// client-side approximation) -- there is no fallback to remove there either.
 export function canReviewRequest(request, user, canReviewAll) {
   if (request?.canReview != null) return Boolean(request.canReview);
   return request?.status === 'SUBMITTED'
@@ -86,6 +96,35 @@ export const LEAVE_SURFACE_TABS = [
 
 export const DEFAULT_LEAVE_SURFACE_TAB_ID = 'me';
 
+// Leave HR-submit gate (2026-08-03), owner ruling: "HR and บริหาร oversee leave but do not
+// request it for themselves." Same role bucket LeaveService.SELF_SUBMIT_BLOCKED_ROLES gates on
+// server-side (`ผู้บริหาร` -> hr, `ผู้บริหารระดับสูง` -> ceo -- see frontend/src/app/roles.js).
+// This constant drives presentation ONLY (hiding the "ยื่นคำขอลา" CTA, defaulting the landing
+// tab to "review") -- it is not itself an authorization decision. The backend gate in
+// LeaveService#resolveTargetEmployee is what actually stops a self-submission; hiding a button
+// here cannot be bypassed-around into a false sense of enforcement (a direct POST, or reaching
+// the composer via a stale link/URL, still 403s server-side).
+const LEAVE_QUEUE_ONLY_ROLES = new Set(['hr', 'ceo']);
+
+/**
+ * Presentation-only check ("should this user see their own submit-leave entry points at all"),
+ * NOT the authorization rule -- see LEAVE_QUEUE_ONLY_ROLES's comment above. Used to hide the
+ * page-header "ยื่นคำขอลา" CTA (LeaveSurfacePage.jsx) and MyLeaveTab's empty-state CTA for
+ * hr/ceo actors, who oversee leave but do not file it for themselves.
+ */
+export function canSubmitOwnLeave(user) {
+  return !LEAVE_QUEUE_ONLY_ROLES.has(user?.role);
+}
+
+/**
+ * The tab an hr/ceo actor should land on absent an explicit (and currently visible) `?tab=` --
+ * "รอพิจารณา" (review), not "ของฉัน" (me), since they oversee leave rather than file their own.
+ * Every other role keeps the pre-existing DEFAULT_LEAVE_SURFACE_TAB_ID ("me").
+ */
+export function defaultLeaveSurfaceTabId(user) {
+  return LEAVE_QUEUE_ONLY_ROLES.has(user?.role) ? 'review' : DEFAULT_LEAVE_SURFACE_TAB_ID;
+}
+
 /**
  * The ordered list of tab ids `user` may see right now, given the currently-loaded
  * `requests` (used only by `review`'s isVisible -- see its own comment above).
@@ -101,13 +140,24 @@ export function visibleLeaveSurfaceTabIds(user, requests = []) {
 }
 
 /**
- * `requestedId` if it is one of `visibleIds`, else `DEFAULT_LEAVE_SURFACE_TAB_ID` -- an
- * absent, unknown, or currently-hidden `?tab=` value (a stale deep link from before a
- * role change, a typo, hand-editing the URL, or a link shared by someone who *can* see
- * `review`) never renders a blank/forbidden panel, it silently falls back to "ของฉัน".
- * Takes `visibleIds` directly (not `user`/`requests`) so a caller that already computed
- * them via `visibleLeaveSurfaceTabIds` above never pays for the computation twice.
+ * `requestedId` if it is one of `visibleIds`, else `preferredDefaultId` if THAT is visible,
+ * else `DEFAULT_LEAVE_SURFACE_TAB_ID` ("me", which is unconditionally visible to everyone --
+ * see LEAVE_SURFACE_TABS's own `isVisible: () => true`, so this final fallback can never itself
+ * resolve to a hidden tab). An absent, unknown, or currently-hidden `?tab=` value (a stale deep
+ * link from before a role change, a typo, hand-editing the URL, or a link shared by someone who
+ * *can* see `review`) never renders a blank/forbidden panel.
+ *
+ * <p>`preferredDefaultId` defaults to `DEFAULT_LEAVE_SURFACE_TAB_ID` (unchanged pre-A1
+ * behaviour for every existing caller) -- LeaveSurfacePage.jsx passes
+ * `defaultLeaveSurfaceTabId(user)` so an hr/ceo actor's own default resolves to "review", but
+ * still degrades to "me" for the rare case that tab isn't currently visible to them (e.g. a
+ * ceo actor -- not in ROLE_PERMISSIONS.canReviewLeave -- with zero actionable rows loaded yet).
+ *
+ * <p>Takes `visibleIds` directly (not `user`/`requests`) so a caller that already computed them
+ * via `visibleLeaveSurfaceTabIds` above never pays for the computation twice.
  */
-export function resolveLeaveSurfaceTab(requestedId, visibleIds) {
-  return visibleIds.includes(requestedId) ? requestedId : DEFAULT_LEAVE_SURFACE_TAB_ID;
+export function resolveLeaveSurfaceTab(requestedId, visibleIds, preferredDefaultId = DEFAULT_LEAVE_SURFACE_TAB_ID) {
+  if (visibleIds.includes(requestedId)) return requestedId;
+  if (visibleIds.includes(preferredDefaultId)) return preferredDefaultId;
+  return DEFAULT_LEAVE_SURFACE_TAB_ID;
 }
