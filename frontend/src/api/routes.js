@@ -71,6 +71,11 @@ export const API_ROUTES = {
     approve: (id) => `/api/leave/${id}/approve`,
     reject: (id) => `/api/leave/${id}/reject`,
     cancel: (id) => `/api/leave/${id}/cancel`,
+    // Leave-surface IA rebuild, Phase A0 (not yet landed): per-manager summary of requests
+    // awaiting THIS user's decision, backing the "รอพิจารณา" tab. Wired into routes/hrApi/mockApi/
+    // queryKeys now (Phase A1) only so contract.test.js's method-surface parity check stays green
+    // ahead of A0 -- no UI in this phase calls it yet. See mockApi.js's own comment on this route.
+    reviewSummary: '/api/leave/review-summary',
   },
   tickets: {
     list: '/api/tickets',

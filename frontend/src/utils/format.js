@@ -244,14 +244,26 @@ export function overtimeStatusLabel(status) {
   return map[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
-// Special-money (welfare) request status -> StatusBadge tone. Same status
-// shape as overtime (SUBMITTED -> MANAGER_APPROVED -> APPROVED, or
-// REJECTED/CANCELLED at either step) — see SpecialMoneyStatus.java. Canonical
-// source; do not re-add a page-local `statusInfo`/map elsewhere.
+// Special-money (welfare) request status -> StatusBadge tone. Canonical source;
+// do not re-add a page-local `statusInfo`/map elsewhere.
+//
+// Welfare does NOT share overtime's two-stage shape. Since #482 every welfare
+// request goes straight to the CEO in a single stage, so `SUBMITTED` *is*
+// "waiting for the CEO" — it was previously mislabelled 'รอผู้จัดการ', which
+// told every employee the wrong next holder.
+//
+// `MANAGER_APPROVED` is retained because `SpecialMoneyStatus` and the
+// `chk_smr_status` check constraint still carry it, and `SpecialMoneyService`
+// still clears rows written before the manager stage was removed. It is not
+// reachable for new requests. It reads the same to the employee — still the
+// CEO's queue — so it is labelled the same, qualified rather than made to look
+// like a distinct step.
+export const SPECIAL_MONEY_STATUSES = ['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED', 'REJECTED', 'CANCELLED'];
+
 export function specialMoneyStatusLabel(status) {
   const map = {
-    SUBMITTED: { label: 'รอผู้จัดการ', tone: 'warning' },
-    MANAGER_APPROVED: { label: 'รอ CEO', tone: 'info' },
+    SUBMITTED: { label: 'รอ CEO อนุมัติ', tone: 'warning' },
+    MANAGER_APPROVED: { label: 'รอ CEO อนุมัติ (คำขอเดิม)', tone: 'warning' },
     APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
     REJECTED: { label: 'ปฏิเสธ', tone: 'danger' },
     CANCELLED: { label: 'ยกเลิก', tone: 'neutral' },
