@@ -81,17 +81,20 @@ function mockAllData() {
     if (params.status === 'MANAGER_APPROVED') {
       return Promise.resolve({
         requests: [
-          { id: 201, employeeName: 'พนักงาน โอทีผ่านผู้จัดการ', workDate: '2026-07-20', managerEmployeeId: 55 },
+          { id: 201, employeeName: 'พนักงาน โอทีผ่านผู้จัดการ', workDate: '2026-07-20', managerEmployeeId: 55, hasManagerApprover: true },
         ],
       });
     }
     if (params.status === 'SUBMITTED') {
       return Promise.resolve({
         requests: [
-          // Manager-less division: reports straight to the CEO (managerEmployeeId === ceoUser.employeeId).
-          { id: 202, employeeName: 'พนักงาน ไม่มีผู้จัดการ', workDate: '2026-07-21', managerEmployeeId: 999 },
-          // Has a manager who is NOT the CEO — must be excluded from the CEO's worklist.
-          { id: 203, employeeName: 'พนักงาน มีผู้จัดการอื่น', workDate: '2026-07-21', managerEmployeeId: 55 },
+          // No manager stage at all -> the CEO reviews it directly. Note reports_to (55) is NOT the
+          // CEO: under the old reports_to-based rule this row was invisible to them, which is the
+          // regression the server-side routing change would otherwise have left in place.
+          { id: 202, employeeName: 'พนักงาน ไม่มีผู้จัดการ', workDate: '2026-07-21', managerEmployeeId: 55, hasManagerApprover: false },
+          // Has a ผู้จัดการ, so it is the manager's to review first — must stay off the CEO's list
+          // even though reports_to happens to point straight at the CEO.
+          { id: 203, employeeName: 'พนักงาน มีผู้จัดการอื่น', workDate: '2026-07-21', managerEmployeeId: 999, hasManagerApprover: true },
         ],
       });
     }

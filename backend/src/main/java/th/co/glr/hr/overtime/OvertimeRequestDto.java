@@ -39,6 +39,13 @@ public record OvertimeRequestDto(
     OffsetDateTime cancelledAt,
     Long managerEmployeeId,
     String managerName,
+    /**
+     * Whether a manager stage exists for this request at all. False means the CEO reviews it
+     * directly from SUBMITTED — see {@code ManagerApproverRepository}. Note this is unrelated to
+     * {@code managerEmployeeId}, which is reports-to and is display-only since approval became
+     * ฝ่าย-manager-only.
+     */
+    boolean hasManagerApprover,
     OffsetDateTime createdAt,
     OffsetDateTime updatedAt
 ) {

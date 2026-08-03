@@ -387,6 +387,8 @@ db.leaveTypes = db.leaveTypes || [
 db.leaveRequests = db.leaveRequests || [];
 db.overtimeRequests = db.overtimeRequests || [];
 db.specialMoneyRequests = db.specialMoneyRequests || [];
+// Evidence uploads live only for the life of the mock session -- there is no file store here.
+db.specialMoneyAttachments = db.specialMoneyAttachments || [];
 let sessionUser = null;
 
 // ── Mock in-memory document store ─────────────────────────────────────────────
@@ -2758,15 +2760,32 @@ function canReviewLeave(user, employeeId) {
 // These two gates look similar but encode genuinely different Java models
 // (active-check + no division term vs. no active-check + division term). Do
 // NOT merge them "for DRY" — that reintroduces exactly the #199 bug class.
+// Mirrors OvertimeService.managesEmployee(): ฝ่าย manager sharing the division, self excluded.
+// reports_to is deliberately NOT a branch here any more -- it stopped granting approval rights when
+// overtime moved to the division-only rule AttendanceService.resolveScope already used.
 function canReviewOvertime(user, employeeId) {
   if (!user.employeeId || employeeId === user.employeeId) return false;
   const employee = findEmployee(employeeId);
-  const directReport = managerIdForEmployee(employee) === user.employeeId;
-  const divisionManager = dashboardManager(user)
+  return Boolean(dashboardManager(user)
     && dashboardDivisionId(user) != null
-    && dashboardDivisionId(user) === employee.divisionId
-    && employeeId !== user.employeeId;
-  return directReport || divisionManager;
+    && dashboardDivisionId(user) === employee.divisionId);
+}
+
+// Mirrors ManagerApproverRepository.hasManagerApproverSql(). Two rules: a ผู้จัดการ's own request
+// has no manager stage, and otherwise there must be an ACTIVE ผู้จัดการ in the same ฝ่าย.
+// Position matching mirrors DivisionAccessPolicy.isManager -- strip whitespace, substring-match.
+function isManagerPosition(employee) {
+  return String(employee?.positionTh || '').replace(/\s+/g, '').includes('ผู้จัดการ');
+}
+
+function hasManagerApproverFor(employeeId) {
+  const employee = findEmployee(employeeId);
+  if (!employee) return true; // fail closed: withhold the CEO bypass rather than grant it
+  if (isManagerPosition(employee)) return false;
+  if (employee.divisionId == null) return false;
+  return db.employees.some((peer) => peer.divisionId === employee.divisionId
+    && peer.isActive !== false
+    && isManagerPosition(peer));
 }
 
 function leaveTypeByCode(code) {
@@ -2938,6 +2957,10 @@ function buildOvertimeRecord(record) {
     managerName: manager?.nameTh || null,
     managerApprovedByName: managerApprover?.nameTh || null,
     ceoApprovedByName: ceoApprover?.nameTh || null,
+    // Projected per row by OvertimeRepository.baseSelect(); the panel keys its approve button off
+    // it. Omitting it here would leave the field undefined, which the panel reads as "has a manager
+    // stage" -- the CEO would then never see the button on a manager-less request under mocks.
+    hasManagerApprover: hasManagerApproverFor(record.employeeId),
   };
 }
 
@@ -2963,20 +2986,19 @@ function specialMoneyType(requestType) {
   return SPECIAL_MONEY_TYPES.find((item) => item.requestType === requestType) || null;
 }
 
-// Mirrors SpecialMoneyService.managesEmployee(): direct report (stored FK) OR
-// division manager (position-derived user.manager() sharing the employee's
-// division, excluding self) -- NO hr/admin bypass here either, same shape as
-// canReviewOvertime and deliberately not shared with it (see that function's
-// comment: these gates encode distinct Java classes and must not be merged).
+// Mirrors SpecialMoneyService.managesEmployee(): ฝ่าย manager sharing the employee's division,
+// self excluded. reports_to is deliberately NOT a branch (dropped with the division-only rule).
+//
+// NOTE THE NAME IS NOW A MISNOMER IN ONE DIRECTION: this grants NO approval rights. Welfare is
+// CEO-only, so a manager passing this can only file on a team member's behalf and read their
+// requests and quota. Kept separate from canReviewOvertime on purpose -- these encode distinct
+// Java classes whose rules have now genuinely diverged, and merging them would re-couple them.
 function canReviewSpecialMoney(user, employeeId) {
   if (!user.employeeId || employeeId === user.employeeId) return false;
   const employee = findEmployee(employeeId);
-  const directReport = managerIdForEmployee(employee) === user.employeeId;
-  const divisionManager = dashboardManager(user)
+  return Boolean(dashboardManager(user)
     && dashboardDivisionId(user) != null
-    && dashboardDivisionId(user) === employee.divisionId
-    && employeeId !== user.employeeId;
-  return directReport || divisionManager;
+    && dashboardDivisionId(user) === employee.divisionId);
 }
 
 function canViewAllSpecialMoney(user) {
@@ -2987,6 +3009,10 @@ function canAccessSpecialMoneyEmployee(user, employeeId) {
   return canViewAllSpecialMoney(user)
     || employeeId === user.employeeId
     || canReviewSpecialMoney(user, employeeId);
+}
+
+function specialMoneyAttachmentsFor(requestId) {
+  return db.specialMoneyAttachments.filter((item) => item.specialMoneyRequestId === requestId);
 }
 
 function buildSpecialMoneyRecord(record) {
@@ -3007,6 +3033,9 @@ function buildSpecialMoneyRecord(record) {
     managerApprovedByName: managerApprover?.nameTh || null,
     ceoApprovedByName: ceoApprover?.nameTh || null,
     reviewedByName: reviewer?.nameTh || null,
+    // Projected per row by SpecialMoneyRepository.baseSelect(): a reviewer sees the document trail
+    // before opening the request, and the panel can warn before an approval the server will refuse.
+    attachmentCount: specialMoneyAttachmentsFor(record.id).length,
   };
 }
 
@@ -4437,8 +4466,27 @@ export const api = {
       if (!request) fail('ไม่พบคำขอทำงานล่วงเวลานี้', 404);
       const now = new Date().toISOString();
       if (request.status === 'SUBMITTED') {
-        if (!canReviewOvertime(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
         const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
+        // Manager-less route: SUBMITTED straight to APPROVED, doing the manager step's minute
+        // calculation as well as the CEO's status flip. Mirrors OvertimeService.ceoDirectApprove.
+        if (!hasManagerApproverFor(request.employeeId)) {
+          if (user.role !== 'ceo') {
+            fail('คำขอนี้ไม่มีขั้นอนุมัติของหัวหน้างาน (ฝ่ายนี้ไม่มีผู้จัดการ หรือผู้ยื่นเป็นผู้จัดการเอง) จึงต้องให้ CEO พิจารณาเท่านั้น', 403);
+          }
+          request.status = 'APPROVED';
+          request.actualMinutes = request.actualMinutes ?? request.plannedMinutes;
+          request.payableMinutes = Math.round(request.actualMinutes * multiplier);
+          // managerApprovedBy stays null: no manager reviewed this.
+          request.ceoApprovedBy = user.employeeId;
+          request.ceoApprovedAt = now;
+          request.reviewedById = user.employeeId;
+          request.reviewedByName = user.name;
+          request.reviewedAt = now;
+          request.reviewerNote = payload.reviewerNote || null;
+          request.updatedAt = now;
+          return delay({ request: buildOvertimeRecord(request) });
+        }
+        if (!canReviewOvertime(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
         request.status = 'MANAGER_APPROVED';
         request.actualMinutes = request.actualMinutes ?? request.plannedMinutes;
         request.payableMinutes = Math.round(request.actualMinutes * multiplier);
@@ -4472,7 +4520,14 @@ export const api = {
       if (!request) fail('ไม่พบคำขอทำงานล่วงเวลานี้', 404);
       const now = new Date().toISOString();
       if (request.status === 'SUBMITTED') {
-        if (!canReviewOvertime(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+        // Symmetric with approve(): the sole reviewer must be able to refuse as well as accept.
+        if (!hasManagerApproverFor(request.employeeId)) {
+          if (user.role !== 'ceo') {
+            fail('คำขอนี้ไม่มีขั้นอนุมัติของหัวหน้างาน (ฝ่ายนี้ไม่มีผู้จัดการ หรือผู้ยื่นเป็นผู้จัดการเอง) จึงต้องให้ CEO พิจารณาเท่านั้น', 403);
+          }
+        } else if (!canReviewOvertime(user, request.employeeId)) {
+          fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+        }
         request.status = 'REJECTED';
         request.reviewedById = user.employeeId;
         request.reviewedByName = user.name;
@@ -4511,9 +4566,10 @@ export const api = {
     },
   },
 
-  // Mirrors SpecialMoneyController + SpecialMoneyService (specialmoney/) --
-  // same manager/CEO gate shapes as overtime (see canReviewSpecialMoney's
-  // comment for why it is not shared with canReviewOvertime), but cancel is
+  // Mirrors SpecialMoneyController + SpecialMoneyService (specialmoney/). Approval is CEO-only in
+  // a SINGLE stage for every employee -- unlike overtime, which keeps a manager -> CEO pipeline
+  // wherever the employee's ฝ่าย has a ผู้จัดการ. canReviewSpecialMoney therefore gates only
+  // read-scoping and submit-on-behalf here, never approval. cancel is
   // stricter: only the employee or the person who filed on their behalf, and
   // only while still SUBMITTED (no manager-cancel across every active status
   // the way overtime allows). This mock does NOT reimplement the full policy
@@ -4645,24 +4701,59 @@ export const api = {
       return delay({ request: buildSpecialMoneyRecord(request) });
     },
 
+    // Mirrors SpecialMoneyController's attachment endpoints + SpecialMoneyService.requireCanAttach.
+    async attachments(id) {
+      const user = requireSession();
+      const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
+      if (!request) fail('ไม่พบคำขอเงินพิเศษนี้', 404);
+      if (!canAccessSpecialMoneyEmployee(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      return delay({ attachments: specialMoneyAttachmentsFor(request.id) });
+    },
+
+    async addAttachment(id, file) {
+      const user = requireSession();
+      const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
+      if (!request) fail('ไม่พบคำขอเงินพิเศษนี้', 404);
+      const isEmployee = request.employeeId === user.employeeId;
+      const isRequester = request.requestedById != null && request.requestedById === user.employeeId;
+      if (!isEmployee && !isRequester) fail('เฉพาะผู้ยื่นคำขอเท่านั้นที่แนบเอกสารได้', 403);
+      if (request.status !== 'SUBMITTED') {
+        fail('แนบเอกสารได้เฉพาะคำขอที่ยังไม่ได้รับการพิจารณาเท่านั้น', 409);
+      }
+      const attachment = {
+        id: Math.max(0, ...db.specialMoneyAttachments.map((item) => item.id)) + 1,
+        specialMoneyRequestId: request.id,
+        fileName: file?.name || 'evidence.pdf',
+        mimeType: file?.type || 'application/pdf',
+        sizeBytes: file?.size ?? 0,
+        uploadedById: user.employeeId,
+        uploadedByName: user.name,
+        uploadedAt: new Date().toISOString(),
+      };
+      db.specialMoneyAttachments.push(attachment);
+      return delay({ attachment });
+    },
+
+    attachmentDownloadUrl(attachmentId) {
+      return `/api/special-money/attachments/${attachmentId}`;
+    },
+
     async approve(id, payload = {}) {
       const user = requireSession();
       const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
       if (!request) fail('ไม่พบคำขอเงินพิเศษนี้', 404);
       const now = new Date().toISOString();
-      if (request.status === 'SUBMITTED') {
-        if (!canReviewSpecialMoney(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-        request.status = 'MANAGER_APPROVED';
-        request.managerApprovedBy = user.employeeId;
-        request.managerApprovedAt = now;
-        request.reviewedById = user.employeeId;
-        request.reviewedAt = now;
-        request.reviewerNote = payload.reviewerNote || null;
-        request.updatedAt = now;
-        return delay({ request: buildSpecialMoneyRecord(request) });
-      }
-      if (request.status === 'MANAGER_APPROVED') {
-        if (user.role !== 'ceo') fail('เฉพาะ CEO เท่านั้นที่สามารถอนุมัติคำขอเงินพิเศษที่หัวหน้างานอนุมัติแล้วได้', 403);
+      // Welfare is CEO-only in ONE stage for every employee -- no manager stage. MANAGER_APPROVED
+      // is still accepted so rows written before that rule can be cleared. Mirrors
+      // SpecialMoneyService.approve().
+      if (['SUBMITTED', 'MANAGER_APPROVED'].includes(request.status)) {
+        if (user.role !== 'ceo') fail('คำขอสวัสดิการทุกประเภทต้องได้รับการพิจารณาจาก CEO เท่านั้น', 403);
+        // Mirrors SpecialMoneyService.requireEvidence(): an evidence-required type cannot be
+        // approved with an empty document trail.
+        const typeMeta = SPECIAL_MONEY_TYPES.find((item) => item.requestType === request.requestType);
+        if (typeMeta?.evidenceRequired && specialMoneyAttachmentsFor(request.id).length === 0) {
+          fail(`คำขอประเภท ${typeMeta.thaiLabel} ต้องแนบเอกสารหลักฐานก่อนจึงจะอนุมัติได้`, 400);
+        }
         request.status = 'APPROVED';
         request.approvedAmount = payload.approvedAmount != null ? Number(payload.approvedAmount) : request.requestedAmount;
         request.capOverrideReason = payload.capOverrideReason || null;
@@ -4683,17 +4774,8 @@ export const api = {
       const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
       if (!request) fail('ไม่พบคำขอเงินพิเศษนี้', 404);
       const now = new Date().toISOString();
-      if (request.status === 'SUBMITTED') {
-        if (!canReviewSpecialMoney(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-        request.status = 'REJECTED';
-        request.reviewedById = user.employeeId;
-        request.reviewedAt = now;
-        request.reviewerNote = payload.reviewerNote || null;
-        request.updatedAt = now;
-        return delay({ request: buildSpecialMoneyRecord(request) });
-      }
-      if (request.status === 'MANAGER_APPROVED') {
-        if (user.role !== 'ceo') fail('เฉพาะ CEO เท่านั้นที่สามารถอนุมัติคำขอเงินพิเศษที่หัวหน้างานอนุมัติแล้วได้', 403);
+      if (['SUBMITTED', 'MANAGER_APPROVED'].includes(request.status)) {
+        if (user.role !== 'ceo') fail('คำขอสวัสดิการทุกประเภทต้องได้รับการพิจารณาจาก CEO เท่านั้น', 403);
         request.status = 'REJECTED';
         request.reviewedById = user.employeeId;
         request.reviewedAt = now;
