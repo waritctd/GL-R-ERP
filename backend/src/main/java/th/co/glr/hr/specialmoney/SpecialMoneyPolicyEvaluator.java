@@ -5,8 +5,10 @@ import java.time.LocalDate;
 import java.time.Month;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 
 /**
@@ -73,7 +75,15 @@ public class SpecialMoneyPolicyEvaluator {
         return !hireDate.plusDays(days).isAfter(asOf);
     }
 
-    static final String SALES_SUPPORT_DEPT_KEY = "sales_support_department_code";
+    /**
+     * §2.1.3's eligible job functions, as CSV lists of {@code hr.department.source_code} and
+     * {@code hr.position.source_code}. Plural and two-dimensional because the document's four
+     * functions do not sit at one level of the org data — verified against production 2026-08-03:
+     * สนับสนุนฝ่ายขาย is TWO departments (SALES, SALES2), while ขับรถ is a POSITION. The previous
+     * single {@code sales_support_department_code} could express neither.
+     */
+    static final String PREPROBATION_KIT_DEPARTMENT_CODES_KEY = "preprobation_kit_department_codes";
+    static final String PREPROBATION_KIT_POSITION_CODES_KEY = "preprobation_kit_position_codes";
     static final int PREPROBATION_KIT_MIN_TENURE_DAYS = 7;
 
     private static final Set<String> FUNERAL_ALLOWED_RELATIONS = Set.of("parent", "spouse", "child");
@@ -93,7 +103,7 @@ public class SpecialMoneyPolicyEvaluator {
         }
 
         if (type.eligibilityRule() == EligibilityRule.PREPROBATION_SALES_SUPPORT) {
-            evaluatePreprobationSalesSupportEligibility(employee, amounts, violations);
+            evaluatePreprobationKitEligibility(employee, amounts, violations);
         } else {
             evaluateStandardProbationEligibility(employee, violations);
         }
@@ -138,23 +148,35 @@ public class SpecialMoneyPolicyEvaluator {
         }
     }
 
-    private void evaluatePreprobationSalesSupportEligibility(
+    /**
+     * §2.1.3 — the pre-probation kit, restricted to four job functions: พนักงานขับรถ, พนักงานติดรถส่งของ,
+     * พนักงานฝ่ายโมเสค and พนักงานสนับสนุนฝ่ายขาย, each with at least 7 days of service.
+     *
+     * <p>Matches on EITHER an eligible department OR an eligible position, because the four
+     * functions genuinely live at different levels of the org data (see the key constants above).
+     * Either list being non-empty enables the type; both empty keeps it disabled, as it shipped.
+     *
+     * <p><b>Two of the four functions cannot be gated yet.</b> Production carries no department or
+     * position for พนักงานติดรถส่งของ or พนักงานฝ่ายโมเสค (checked 2026-08-03), so there is nothing to
+     * match them on. They are not silently included — an employee in one of those roles is refused
+     * until HR gives the role a department or position and adds its code here. Including them by
+     * widening to a whole division would hand the kit to everyone in it.
+     */
+    private void evaluatePreprobationKitEligibility(
             EmployeeEligibilitySnapshot employee, PolicyAmounts amounts, List<String> violations) {
-        // hr.department.source_code is a VARCHAR and need not be numeric, so this is compared as a
-        // string against special_money_policy.text_value. The seed ships it empty on purpose: the
-        // real code is only known in the production database, and the type stays disabled until
-        // someone fills it in.
-        String configuredCode = amounts.text(SALES_SUPPORT_DEPT_KEY);
-        if (configuredCode == null || configuredCode.isBlank()) {
+        Set<String> departmentCodes = csv(amounts.text(PREPROBATION_KIT_DEPARTMENT_CODES_KEY));
+        Set<String> positionCodes = csv(amounts.text(PREPROBATION_KIT_POSITION_CODES_KEY));
+
+        if (departmentCodes.isEmpty() && positionCodes.isEmpty()) {
             violations.add(
-                "ยังไม่เปิดใช้งาน UNIFORM_PREPROBATION_KIT: ยังไม่ได้ตั้งค่ารหัสแผนกสนับสนุนงานขาย"
-                    + " (เป็นค่าตัวอย่างชั่วคราว)");
+                "ยังไม่เปิดใช้งาน UNIFORM_PREPROBATION_KIT: ยังไม่ได้ตั้งค่ารหัสแผนกหรือตำแหน่งที่มีสิทธิ์");
             return;
         }
 
-        if (!configuredCode.trim().equals(
-                employee.departmentSourceCode() == null ? null : employee.departmentSourceCode().trim())) {
-            violations.add("พนักงานไม่ได้อยู่ในแผนกสนับสนุนงานขายตามที่ตั้งค่าไว้");
+        boolean departmentMatches = departmentCodes.contains(trimmed(employee.departmentSourceCode()));
+        boolean positionMatches = positionCodes.contains(trimmed(employee.positionSourceCode()));
+        if (!departmentMatches && !positionMatches) {
+            violations.add("พนักงานไม่ได้อยู่ในแผนกหรือตำแหน่งที่มีสิทธิ์เบิกชุดก่อนผ่านทดลองงาน");
         }
 
         if (employee.hireDate() == null
@@ -162,6 +184,21 @@ public class SpecialMoneyPolicyEvaluator {
             violations.add(
                 "พนักงานยังทำงานไม่ครบ " + PREPROBATION_KIT_MIN_TENURE_DAYS + " วันตามที่กำหนด");
         }
+    }
+
+    /** Splits a configured CSV list, dropping blanks. An unset/blank value yields an empty set. */
+    private static Set<String> csv(String value) {
+        if (value == null || value.isBlank()) {
+            return Set.of();
+        }
+        return Arrays.stream(value.split(","))
+            .map(String::trim)
+            .filter(entry -> !entry.isEmpty())
+            .collect(Collectors.toUnmodifiableSet());
+    }
+
+    private static String trimmed(String value) {
+        return value == null ? "" : value.trim();
     }
 
     // ---------------------------------------------------------------------
