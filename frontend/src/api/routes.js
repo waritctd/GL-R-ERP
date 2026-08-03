@@ -83,6 +83,11 @@ export const API_ROUTES = {
     // path serves both GET (download) and HEAD (RulesTab.jsx's availability probe) -- see
     // LeaveController#policyDocument's Javadoc.
     policyDocument: '/api/leave/policy-document',
+    // Phase A4: the medical-certificate/leave-attachment download an approver (or the owning
+    // employee) opens from ReviewQueueTab.jsx / MyLeaveTab.jsx's expanded row. Mirrors
+    // specialMoney.attachmentDownload's naming above — same "attachment id, not request id"
+    // shape as LeaveController#downloadAttachment (GET /api/leave/attachments/{attachmentId}).
+    attachmentDownload: (attachmentId) => `/api/leave/attachments/${attachmentId}`,
   },
   tickets: {
     list: '/api/tickets',
