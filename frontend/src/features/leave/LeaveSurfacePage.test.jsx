@@ -21,6 +21,8 @@ vi.mock('../../api/index.js', () => ({
       reject: vi.fn(),
       cancel: vi.fn(),
       reviewSummary: vi.fn(),
+      // Phase A3: RulesTab (rendered by the "กฎการลา" tab, mounted below) probes this on load.
+      policyDocumentAvailable: vi.fn(),
     },
   },
 }));
@@ -61,6 +63,7 @@ describe('LeaveSurfacePage', () => {
     api.leave.balances.mockResolvedValue({ balances: [] });
     api.leave.contactDefaults.mockResolvedValue({ contactDefaults: {} });
     api.leave.reviewSummary.mockResolvedValue({ pendingCount: 0, requests: [] });
+    api.leave.policyDocumentAvailable.mockResolvedValue(false);
   });
 
   it('defaults to the "ของฉัน" tab and hides "รอพิจารณา" for a plain employee', async () => {
@@ -82,8 +85,10 @@ describe('LeaveSurfacePage', () => {
 
     await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/leave?tab=rules'));
     expect(screen.getByRole('tab', { name: /กฎการลา/ }).getAttribute('aria-selected')).toBe('true');
-    // Placeholder panel, not real rule copy (Phase A1 deliberately adds none).
-    expect(await screen.findByText('หน้ากฎการลากำลังจะมา')).not.toBeNull();
+    // Phase A3: real rule disclosure now renders here (leavePolicySections.js/RulesTab.jsx) instead
+    // of Phase A1's placeholder — this mock's api.leave.types() (beforeEach above) seeds VACATION
+    // only, so its §5.3 section is what should appear.
+    expect(await screen.findByText('5.3 ลาพักร้อน')).not.toBeNull();
   });
 
   it('a stale/unknown ?tab= falls back to "ของฉัน"', async () => {

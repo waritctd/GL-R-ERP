@@ -27,6 +27,8 @@ export const queryKeys = {
   // API_ROUTES.leave.reviewSummary. Defined now for the same reason: keep the module stable ahead
   // of A0, even though no query in this phase constructs it yet.
   leaveReviewSummary: () => ['leave', 'reviewSummary'],
+  // Leave-surface IA rebuild, Phase A3: rules tab's policy-document link availability probe.
+  leavePolicyDocumentAvailable: () => ['leave', 'policyDocumentAvailable'],
   overtimeRequests: (filters = {}) => ['overtime', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   overtimeEmployees: () => ['overtime', 'employees'],
   // CommissionController#list only ever takes payrollMonth (no status param —

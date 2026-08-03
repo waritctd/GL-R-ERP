@@ -76,6 +76,10 @@ export const API_ROUTES = {
     // queryKeys now (Phase A1) only so contract.test.js's method-surface parity check stays green
     // ahead of A0 -- no UI in this phase calls it yet. See mockApi.js's own comment on this route.
     reviewSummary: '/api/leave/review-summary',
+    // Leave-surface IA rebuild, Phase A3: the §5 announcement PDF the "กฎการลา" tab links to. Same
+    // path serves both GET (download) and HEAD (RulesTab.jsx's availability probe) -- see
+    // LeaveController#policyDocument's Javadoc.
+    policyDocument: '/api/leave/policy-document',
   },
   tickets: {
     list: '/api/tickets',
