@@ -25,6 +25,11 @@ docker-compose.override.yml
 
 # Generated PDFs (source of truth is the .md)
 *.pdf
+# ...except signed policy documents the app serves as in-product reference material.
+# These are the inverse case: there is no .md behind them — the scanned, signed PDF IS
+# the source of truth, and the UI links to it so an employee can read the rule the
+# system enforced. Without this negation `git add` drops them silently.
+!frontend/public/policy/*.pdf
 
 # UAT/SIT operational deliverables — kept out of git (store externally)
 ERP Documentation/SIT Deliverables/
