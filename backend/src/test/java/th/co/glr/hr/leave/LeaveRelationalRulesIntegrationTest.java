@@ -88,7 +88,8 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
             submitRequest(activeEmployee, "VACATION", "2026-07-13", "2026-07-13"), employee(activeEmployee));
 
         assertThat(resignedResult.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(resignedResult.systemNote()).contains("resignation has been submitted");
+        assertThat(resignedResult.systemNoteCode()).isEqualTo("RESIGNATION_GATE");
+        assertThat(resignedResult.systemNote()).isNotBlank();
         assertThat(activeResult.status()).isEqualTo("APPROVED");
     }
 
@@ -104,7 +105,7 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
             submitRequest(activeEmployee, "PERSONAL", "2026-07-13", "2026-07-13"), employee(activeEmployee));
 
         assertThat(resignedResult.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(resignedResult.systemNote()).contains("resignation has been submitted");
+        assertThat(resignedResult.systemNoteCode()).isEqualTo("RESIGNATION_GATE");
         assertThat(activeResult.status()).isEqualTo("APPROVED");
     }
 
@@ -137,8 +138,12 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
             submitRequest(resignedEmployee, "SICK", "2026-07-13", "2026-07-13"), employee(resignedEmployee));
 
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(result.systemNote()).contains("occasion");
-        assertThat(result.systemNote()).doesNotContain("resignation");
+        // The stronger, code-based version of the original "not contaminated with resignation
+        // wording" claim: not merely that the (now-Thai) system_note text happens not to contain the
+        // word "resignation", but that the STRUCTURED reason is unambiguously the SICK tolerance gate,
+        // never RESIGNATION_GATE.
+        assertThat(result.systemNoteCode()).isEqualTo("SICK_NO_CERT_TOLERANCE_EXHAUSTED");
+        assertThat(result.systemNoteCode()).isNotEqualTo("RESIGNATION_GATE");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -158,7 +163,7 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
             submitRequest(employeeId, "VACATION", "2026-07-13", "2026-07-13"), employee(employeeId));
 
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(result.systemNote()).contains("immediately before or after");
+        assertThat(result.systemNoteCode()).isEqualTo("CONTIGUOUS_LEAVE_PAIR");
     }
 
     @Test
@@ -186,7 +191,7 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
             submitRequest(employeeId, "VACATION", "2026-07-13", "2026-07-13"), employee(employeeId));
 
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(result.systemNote()).contains("immediately before or after");
+        assertThat(result.systemNoteCode()).isEqualTo("CONTIGUOUS_LEAVE_PAIR");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -212,7 +217,7 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
         LeaveRequestDto blockedResult = leaveService.submit(
             submitRequest(requester, "VACATION", "2026-07-13", "2026-07-13"), employee(requester));
         assertThat(blockedResult.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(blockedResult.systemNote()).contains("nobody else in your department");
+        assertThat(blockedResult.systemNoteCode()).isEqualTo("DEPARTMENT_COVERAGE");
 
         LeaveRequestDto allowedResult = leaveService.submit(
             submitRequest(requester, "VACATION", "2026-07-20", "2026-07-20"), employee(requester));
@@ -295,7 +300,7 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
             Long.class);
     }
 
-    /** {@code hr.resignation} (V1): one row per employee -- see LeaveService#resignationRejectionNote. */
+    /** {@code hr.resignation} (V1): one row per employee -- see LeaveService#resignationRuleOutcome. */
     private void insertResignation(long employeeId) {
         jdbc.update("""
             INSERT INTO hr.resignation (employee_id, recorded_date, resign_date)

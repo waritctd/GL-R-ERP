@@ -204,7 +204,8 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
             submitRequest(employeeId, "SICK", "2026-08-27", "2026-08-27"), employee(employeeId)); // Thu
 
         assertThat(fourthOccasion.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(fourthOccasion.systemNote()).contains("3 occasion(s) per calendar month");
+        assertThat(fourthOccasion.systemNoteCode()).isEqualTo("SICK_NO_CERT_TOLERANCE_EXHAUSTED");
+        assertThat(fourthOccasion.systemNote()).isNotBlank();
         assertThat(fourthOccasion.paidDays()).isEqualByComparingTo("0.00");
         assertThat(fourthOccasion.unpaidDays()).isEqualByComparingTo("0.00");
     }
