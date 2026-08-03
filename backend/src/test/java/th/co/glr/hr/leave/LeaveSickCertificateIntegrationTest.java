@@ -249,11 +249,17 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
         return new MockMultipartFile("attachment", "cert.pdf", "application/pdf", "cert content".getBytes());
     }
 
-    /** Stubs FileStorageService.store to return a fixed StoredFile for ANY owner id / file. */
+    /**
+     * Stubs {@code FileStorageService.storeInDatabase} to return a fixed {@code StoredContent} for
+     * ANY owner id / file -- V132 storage-durability fix: {@code LeaveService#submit} now stores
+     * leave attachments to the database, not disk, so this stubs the DB-backed method {@code
+     * submit} actually calls.
+     */
     private void stubFileStorage() {
-        when(fileStorage.store(eq("leave"), org.mockito.ArgumentMatchers.anyLong(),
+        when(fileStorage.storeInDatabase(eq("leave"), org.mockito.ArgumentMatchers.anyLong(),
             any(), eq(LEAVE_ATTACHMENT_MIME_TYPES)))
-            .thenReturn(new FileStorageService.StoredFile("cert.pdf", "/uploads/leave/x/cert.pdf", "application/pdf", 4L));
+            .thenReturn(new FileStorageService.StoredContent(
+                "cert.pdf", "leave/x/cert.pdf", "application/pdf", 4L, "cert content".getBytes()));
     }
 
     private void assertRealAttachmentPersisted(long leaveRequestId) {

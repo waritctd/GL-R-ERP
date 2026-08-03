@@ -2,20 +2,52 @@ package th.co.glr.hr.leave;
 
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.attachment.FileAttachmentBlobRepository;
 
 @Repository
 public class LeaveAttachmentRepository {
     private static final String DOMAIN = "leave";
 
     private final NamedParameterJdbcTemplate jdbc;
+    private final FileAttachmentBlobRepository blobs;
 
-    public LeaveAttachmentRepository(NamedParameterJdbcTemplate jdbc) {
+    @Autowired
+    public LeaveAttachmentRepository(NamedParameterJdbcTemplate jdbc, FileAttachmentBlobRepository blobs) {
         this.jdbc = jdbc;
+        this.blobs = blobs;
+    }
+
+    /**
+     * Legacy/test convenience overload -- keeps every existing direct-construction call site (this
+     * class is built by hand, bypassing Spring DI, by a couple of integration tests) compiling
+     * unchanged. Builds its own {@link FileAttachmentBlobRepository} off the SAME {@code jdbc}, so
+     * in an integration test (a real Postgres connection) blob reads/writes through this instance
+     * are fully real, not a stub.
+     */
+    public LeaveAttachmentRepository(NamedParameterJdbcTemplate jdbc) {
+        this(jdbc, new FileAttachmentBlobRepository(jdbc));
+    }
+
+    /**
+     * V132 storage-durability fix: the leave domain writes ONLY to the database now -- {@code
+     * filePath} here is the bare correlation key {@link
+     * th.co.glr.hr.attachment.FileStorageService#storeInDatabase} computed (never a disk path), and
+     * {@code content} is inserted into {@code hr.file_attachment_blob} in the SAME transaction as
+     * the {@code hr.file_attachment} row (this method's caller, {@code LeaveService#submit}, is
+     * {@code @Transactional}), flipping {@code storage_state} straight to {@code DATABASE} -- a
+     * newly-created leave attachment is never briefly {@code DISK_LEGACY}.
+     */
+    public LeaveAttachmentDto saveWithContent(long leaveRequestId, String fileName, String storageKey,
+                                              String mimeType, Long fileSize, long uploadedBy, byte[] content) {
+        LeaveAttachmentDto saved = save(leaveRequestId, fileName, storageKey, mimeType, fileSize, uploadedBy);
+        blobs.saveContent(saved.id(), content);
+        return saved;
     }
 
     public LeaveAttachmentDto save(long leaveRequestId, String fileName, String filePath,
@@ -87,7 +119,7 @@ public class LeaveAttachmentRepository {
     public Optional<AttachmentLocation> findAttachmentLocation(long attachmentId) {
         try {
             return Optional.ofNullable(jdbc.queryForObject("""
-                SELECT owner_id, file_name, file_path, mime_type
+                SELECT owner_id, file_name, file_path, mime_type, storage_state
                   FROM hr.file_attachment
                  WHERE attachment_id = :id
                    AND domain = :domain
@@ -97,14 +129,24 @@ public class LeaveAttachmentRepository {
                     rs.getLong("owner_id"),
                     rs.getString("file_name"),
                     rs.getString("file_path"),
-                    rs.getString("mime_type"))));
+                    rs.getString("mime_type"),
+                    rs.getString("storage_state"))));
         } catch (EmptyResultDataAccessException exception) {
             return Optional.empty();
         }
     }
 
-    /** {@code leaveRequestId} is {@code hr.file_attachment.owner_id} for {@code domain = 'leave'}. */
-    public record AttachmentLocation(long leaveRequestId, String fileName, String storagePath, String mimeType) {
+    /**
+     * {@code leaveRequestId} is {@code hr.file_attachment.owner_id} for {@code domain = 'leave'}.
+     *
+     * <p>{@code storageState} is one of {@code DATABASE} (bytes in {@code hr.file_attachment_blob},
+     * read via {@link th.co.glr.hr.attachment.FileAttachmentBlobRepository#findContent}), {@code
+     * DISK_LEGACY} (bytes may still be at {@code storagePath} on disk -- check with {@code
+     * FileStorageService#existsOnDisk} before trusting it), or {@code MISSING} (bytes confirmed
+     * gone). See V132's migration comment for the full rationale.
+     */
+    public record AttachmentLocation(long leaveRequestId, String fileName, String storagePath, String mimeType,
+                                      String storageState) {
     }
 
     private static Long nullableLong(java.sql.ResultSet rs, String column) throws java.sql.SQLException {

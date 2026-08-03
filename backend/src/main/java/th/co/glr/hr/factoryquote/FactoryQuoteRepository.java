@@ -7,11 +7,13 @@ import java.time.Year;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.attachment.FileAttachmentBlobRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteAttachmentDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteItemDto;
@@ -28,9 +30,17 @@ public class FactoryQuoteRepository {
         """;
 
     private final NamedParameterJdbcTemplate jdbc;
+    private final FileAttachmentBlobRepository blobs;
 
-    public FactoryQuoteRepository(NamedParameterJdbcTemplate jdbc) {
+    @Autowired
+    public FactoryQuoteRepository(NamedParameterJdbcTemplate jdbc, FileAttachmentBlobRepository blobs) {
         this.jdbc = jdbc;
+        this.blobs = blobs;
+    }
+
+    /** Legacy/test convenience overload -- see LeaveAttachmentRepository's own dual-constructor javadoc for why. */
+    public FactoryQuoteRepository(NamedParameterJdbcTemplate jdbc) {
+        this(jdbc, new FileAttachmentBlobRepository(jdbc));
     }
 
     public String nextQuoteCode() {
@@ -654,6 +664,21 @@ public class FactoryQuoteRepository {
         return Boolean.TRUE.equals(exists);
     }
 
+    /**
+     * V132 storage-durability fix: {@code filePath} here is the bare correlation key {@code
+     * FileStorageService#storeInDatabase} computed, and {@code content} is inserted into {@code
+     * hr.file_attachment_blob} in the SAME transaction as the {@code hr.file_attachment} insert
+     * below ({@code FactoryQuoteService#uploadAttachment} is {@code @Transactional}), flipping
+     * {@code storage_state} straight to {@code DATABASE}.
+     */
+    public FactoryQuoteAttachmentDto saveAttachmentWithContent(long quoteId, String fileName, String filePath,
+                                                               String mimeType, Long fileSize, long uploadedBy,
+                                                               byte[] content) {
+        FactoryQuoteAttachmentDto saved = saveAttachment(quoteId, fileName, filePath, mimeType, fileSize, uploadedBy);
+        blobs.saveContent(saved.id(), content);
+        return saved;
+    }
+
     public FactoryQuoteAttachmentDto saveAttachment(long quoteId, String fileName, String filePath,
                                                     String mimeType, Long fileSize, long uploadedBy) {
         GeneratedKeyHolder key = new GeneratedKeyHolder();
@@ -689,17 +714,22 @@ public class FactoryQuoteRepository {
         }
     }
 
-    public String findAttachmentFilePath(long attachmentId) {
+    /** V132: {@code (filePath, storageState)} pair for the download path's availability check. */
+    public Optional<AttachmentFileLocation> findAttachmentFileLocation(long attachmentId) {
         try {
-            return jdbc.queryForObject("""
-                SELECT file_path
+            return Optional.ofNullable(jdbc.queryForObject("""
+                SELECT file_path, storage_state
                   FROM hr.file_attachment
                  WHERE attachment_id = :attachmentId
                    AND domain = 'factory_quote'
-                """, Map.of("attachmentId", attachmentId), String.class);
+                """, Map.of("attachmentId", attachmentId),
+                (rs, rowNum) -> new AttachmentFileLocation(rs.getString("file_path"), rs.getString("storage_state"))));
         } catch (EmptyResultDataAccessException e) {
-            return null;
+            return Optional.empty();
         }
+    }
+
+    public record AttachmentFileLocation(String filePath, String storageState) {
     }
 
     /**

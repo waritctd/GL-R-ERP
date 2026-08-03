@@ -2,6 +2,7 @@ package th.co.glr.hr.payroll.declaration;
 
 import jakarta.servlet.http.HttpSession;
 import java.util.Map;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ContentDisposition;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import th.co.glr.hr.attachment.FileAttachmentBlobRepository;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -41,20 +43,34 @@ import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowance
 public class TaxAllowanceAttachmentController {
     private final TaxAllowanceDeclarationService service;
     private final SessionContext sessions;
+    private final FileAttachmentBlobRepository attachmentBlobs;
 
-    public TaxAllowanceAttachmentController(TaxAllowanceDeclarationService service, SessionContext sessions) {
+    public TaxAllowanceAttachmentController(TaxAllowanceDeclarationService service, SessionContext sessions,
+                                            FileAttachmentBlobRepository attachmentBlobs) {
         this.service = service;
         this.sessions = sessions;
+        this.attachmentBlobs = attachmentBlobs;
     }
 
+    // V132 storage-durability fix: service#getAttachmentForDownload has ALREADY confirmed the
+    // bytes are available (DATABASE, or DISK_LEGACY with a file that still resolves), throwing 410
+    // itself otherwise -- see LeaveController#downloadAttachment's identical shape for the pattern
+    // this mirrors.
     @GetMapping("/tax-allowance-attachments/{attachmentId}/file")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<Resource> download(@PathVariable long attachmentId, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         TaxAllowanceAttachmentDownload download = service.getAttachmentForDownload(attachmentId, user);
-        Resource resource = new FileSystemResource(download.filePath());
-        if (!resource.exists()) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบนี้");
+        Resource resource;
+        if ("DATABASE".equals(download.storageState())) {
+            byte[] content = attachmentBlobs.findContent(attachmentId)
+                .orElseThrow(() -> new ApiException(HttpStatus.GONE, "ไฟล์เอกสารนี้สูญหายจากระบบจัดเก็บ กรุณาติดต่อฝ่ายบุคคล"));
+            resource = new ByteArrayResource(content);
+        } else {
+            resource = new FileSystemResource(download.filePath());
+            if (!resource.exists()) {
+                throw new ApiException(HttpStatus.GONE, "ไฟล์เอกสารนี้สูญหายจากระบบจัดเก็บ กรุณาติดต่อฝ่ายบุคคล");
+            }
         }
         String mime = download.attachment().mimeType() != null
             ? download.attachment().mimeType()

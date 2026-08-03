@@ -73,7 +73,7 @@ class CommissionServiceTest {
         when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
         when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
             .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
-        when(commissionAttachments.save(500L, "invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L, 30L))
+        when(commissionAttachments.saveWithContent(eq(500L), eq("invoice.pdf"), eq("/tmp/invoice.pdf"), eq("application/pdf"), eq(100L), eq(30L), any(byte[].class)))
             .thenReturn(700L);
         // FLAG-10 (2026-07-23): commission on money received in month M is paid in payroll month
         // M+1 -- invoiceDate June 15 lands payroll_month July 1, not June 1.
@@ -169,7 +169,7 @@ class CommissionServiceTest {
         when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
         when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
             .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
-        when(commissionAttachments.save(500L, "invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L, 30L))
+        when(commissionAttachments.saveWithContent(eq(500L), eq("invoice.pdf"), eq("/tmp/invoice.pdf"), eq("application/pdf"), eq(100L), eq(30L), any(byte[].class)))
             .thenReturn(700L);
         when(commissions.createCommissionRecord(eq(500L), eq(42L), eq(30L), eq(30L), any(),
                 eq(calculation), eq(new BigDecimal("1030.00")), eq(false)))
@@ -195,7 +195,7 @@ class CommissionServiceTest {
         when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
         when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
             .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
-        when(commissionAttachments.save(500L, "invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L, 30L))
+        when(commissionAttachments.saveWithContent(eq(500L), eq("invoice.pdf"), eq("/tmp/invoice.pdf"), eq("application/pdf"), eq(100L), eq(30L), any(byte[].class)))
             .thenReturn(700L);
         when(commissions.createCommissionRecord(eq(500L), eq(42L), eq(30L), eq(30L), any(),
                 eq(calculation), eq(new BigDecimal("1200.00")), eq(true)))
@@ -219,7 +219,7 @@ class CommissionServiceTest {
         when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
         when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
             .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
-        when(commissionAttachments.save(500L, "invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L, 30L))
+        when(commissionAttachments.saveWithContent(eq(500L), eq("invoice.pdf"), eq("/tmp/invoice.pdf"), eq("application/pdf"), eq(100L), eq(30L), any(byte[].class)))
             .thenReturn(700L);
         when(commissions.createCommissionRecord(eq(500L), eq((Long) null), eq(30L), eq(30L), any(),
                 eq(calculation), eq((BigDecimal) null), eq(false)))
@@ -307,7 +307,7 @@ class CommissionServiceTest {
         when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
         when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
             .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
-        when(commissionAttachments.save(eq(500L), any(), any(), any(), any(), anyLong())).thenReturn(700L);
+        when(commissionAttachments.saveWithContent(eq(500L), any(), any(), any(), any(), anyLong(), any())).thenReturn(700L);
         when(commissions.createCommissionRecord(eq(500L), eq(ticketId), eq(ownerId), eq(30L), any(),
                 eq(calculation), any(), eq(false))).thenReturn(900L);
         CommissionRecord created = record(900L, ownerId, CommissionKind.SALE, CommissionStatus.SUBMITTED);
@@ -339,7 +339,7 @@ class CommissionServiceTest {
         when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
         when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
             .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
-        when(commissionAttachments.save(eq(500L), any(), any(), any(), any(), anyLong())).thenReturn(700L);
+        when(commissionAttachments.saveWithContent(eq(500L), any(), any(), any(), any(), anyLong(), any())).thenReturn(700L);
         when(commissions.createCommissionRecord(eq(500L), eq(ticketId), eq(30L), eq(30L), any(),
                 eq(calculation), any(), any(Boolean.class))).thenReturn(900L);
         when(commissions.findById(900L)).thenReturn(
@@ -367,7 +367,7 @@ class CommissionServiceTest {
         when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
         when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
             .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
-        when(commissionAttachments.save(eq(500L), any(), any(), any(), any(), anyLong())).thenReturn(700L);
+        when(commissionAttachments.saveWithContent(eq(500L), any(), any(), any(), any(), anyLong(), any())).thenReturn(700L);
         when(commissions.createCommissionRecord(eq(500L), eq(ticketId), eq(30L), eq(30L), any(),
                 eq(calculation), any(), any(Boolean.class))).thenReturn(900L);
         when(commissions.findById(900L)).thenReturn(
@@ -396,7 +396,7 @@ class CommissionServiceTest {
         when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
         when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
             .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
-        when(commissionAttachments.save(eq(500L), any(), any(), any(), any(), anyLong())).thenReturn(700L);
+        when(commissionAttachments.saveWithContent(eq(500L), any(), any(), any(), any(), anyLong(), any())).thenReturn(700L);
         when(commissions.createCommissionRecord(eq(500L), eq((Long) null), eq(30L), eq(30L), eq(LocalDate.of(2026, 6, 1)),
                 eq(calculation), eq((BigDecimal) null), eq(false)))
             .thenReturn(900L);
@@ -426,7 +426,7 @@ class CommissionServiceTest {
         when(commissions.createInvoice(any(SubmitCommissionRequest.class))).thenReturn(500L);
         when(fileStorage.store(eq("commission-invoice"), eq(500L), any(), any()))
             .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
-        when(commissionAttachments.save(eq(500L), any(), any(), any(), any(), anyLong())).thenReturn(700L);
+        when(commissionAttachments.saveWithContent(eq(500L), any(), any(), any(), any(), anyLong(), any())).thenReturn(700L);
         when(commissions.createCommissionRecord(eq(500L), eq(ticketId), eq(30L), eq(30L), eq(LocalDate.of(2026, 6, 1)),
                 eq(calculation), any(), eq(false))).thenReturn(900L);
         when(commissions.findById(900L)).thenReturn(
