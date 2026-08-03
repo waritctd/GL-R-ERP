@@ -38,6 +38,13 @@ public class LeaveService {
     );
     private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo");
     private static final Set<String> REVIEW_ALL_ROLES = Set.of("hr");
+    // Leave HR-submit gate (2026-08-03), owner ruling: "HR and บริหาร oversee leave but do not
+    // request it for themselves." Same role bucket as VIEW_ALL_ROLES (`ผู้บริหาร` -> hr,
+    // `ผู้บริหารระดับสูง` -> ceo -- see frontend/src/app/roles.js), matching the "CEO/HR are
+    // queue-side, they never file their own requests" precedent already established for OT and
+    // welfare approvals in this codebase. Deliberately SELF-submission only -- see
+    // #resolveTargetEmployee's own comment for why HR-for-a-subordinate must keep working.
+    private static final Set<String> SELF_SUBMIT_BLOCKED_ROLES = Set.of("hr", "ceo");
     private static final Set<LeaveStatus> ACTIVE_QUOTA_STATUSES = Set.of(LeaveStatus.SUBMITTED, LeaveStatus.APPROVED);
     // Sub-day leave (2026-07-25): day-fraction = clock-hours(start,end) / 8, no lunch subtraction
     // (decided rule -- see docs/agent-handoffs), rounded HALF_UP to 2dp, capped at 1.00 whole day.
@@ -1753,9 +1760,28 @@ public class LeaveService {
             true);
     }
 
+    /**
+     * Leave HR-submit gate (2026-08-03): fires FIRST, before the subordinate-access check below and
+     * before {@code submit}/{@code preview} do any further work (validateEmployee, rule evaluation,
+     * DB write) -- this is the very first thing {@code submit} calls after basic request validation.
+     * Self-submission ({@code targetEmployeeId == actorEmployeeId}) by an hr/ceo actor is refused
+     * outright, regardless of {@code requestedEmployeeId} being explicit or defaulted from the
+     * actor's own id.
+     *
+     * <p>Deliberately role-gated on SELF only, not on role alone: an hr/ceo actor submitting for
+     * SOMEONE ELSE still falls through to the unchanged {@code canReviewEmployee} check below (HR's
+     * blanket {@code REVIEW_ALL_ROLES} reach, or a manager-of-record relationship for anyone else,
+     * ceo included) -- filing a paper form on a report's behalf is a real, still-supported HR
+     * workflow; only filing for THEMSELVES is what the owner ruling blocks.
+     */
     private long resolveTargetEmployee(Long requestedEmployeeId, UserPrincipal user) {
         long actorEmployeeId = requireEmployeeId(user);
         long targetEmployeeId = requestedEmployeeId == null ? actorEmployeeId : requestedEmployeeId;
+        if (targetEmployeeId == actorEmployeeId
+                && user != null && SELF_SUBMIT_BLOCKED_ROLES.contains(user.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN,
+                "ฝ่ายบุคคลและผู้บริหารไม่สามารถยื่นคำขอลาให้ตนเองได้ กรุณาให้ผู้อื่นดำเนินการแทน");
+        }
         if (targetEmployeeId != actorEmployeeId
                 && !canReviewEmployee(targetEmployeeId, actorEmployeeId, user)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "พนักงานสามารถขอลาให้ตนเองหรือผู้ใต้บังคับบัญชาที่มีสิทธิ์เท่านั้น");

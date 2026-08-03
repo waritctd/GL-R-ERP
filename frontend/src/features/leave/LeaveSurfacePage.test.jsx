@@ -128,6 +128,44 @@ describe('LeaveSurfacePage', () => {
   // context (anything other than `position: static`), or the input's containing
   // block bubbles past `.content-scroll` to the document and drags the whole
   // page (including this sticky tab bar) into an outer scroll with it.
+  // Leave HR-submit gate (2026-08-03): hr/ceo oversee leave but do not request it for
+  // themselves (owner ruling) -- presentation only, the real rule is
+  // LeaveService#resolveTargetEmployee's server-side 403. See leaveSurfaceTabs.js's
+  // canSubmitOwnLeave/defaultLeaveSurfaceTabId.
+  it('hr lands on "รอพิจารณา" by default and does not see the "ยื่นคำขอลา" CTA', async () => {
+    const hr = { employeeId: 99, name: 'ฝ่ายบุคคล', role: 'hr', manager: false };
+    renderLeaveSurfacePage(hr);
+
+    const reviewTab = await screen.findByRole('tab', { name: /รอพิจารณา/ });
+    expect(reviewTab.getAttribute('aria-selected')).toBe('true');
+    expect(screen.queryByRole('button', { name: 'ยื่นคำขอลา' })).toBeNull();
+  });
+
+  it('ceo lands on "รอพิจารณา" by default (once visible) and does not see the "ยื่นคำขอลา" CTA', async () => {
+    const ceo = { employeeId: 2, name: 'ผู้บริหารระดับสูง', role: 'ceo', manager: false };
+    // ceo is not in ROLE_PERMISSIONS.canReviewLeave (['hr'] only), so "review" is only visible
+    // once an actionable row loads -- seed one under the ceo's own direct management.
+    api.leave.list.mockResolvedValue({
+      requests: [{
+        id: 802, employeeId: 10, employeeName: 'ลูกทีมของ CEO', managerEmployeeId: 2, status: 'SUBMITTED',
+        leaveTypeCode: 'VACATION', leaveTypeNameTh: 'ลาพักร้อน', startDate: '2026-08-10', endDate: '2026-08-10',
+        totalDays: 1, quotaRemainingAfter: 5, reason: 'พักผ่อน',
+      }],
+    });
+    renderLeaveSurfacePage(ceo);
+
+    const reviewTab = await screen.findByRole('tab', { name: /รอพิจารณา/ });
+    await waitFor(() => expect(reviewTab.getAttribute('aria-selected')).toBe('true'));
+    expect(screen.queryByRole('button', { name: 'ยื่นคำขอลา' })).toBeNull();
+  });
+
+  it('a plain employee still sees the "ยื่นคำขอลา" CTA', async () => {
+    renderLeaveSurfacePage();
+
+    await screen.findAllByRole('tab');
+    expect(screen.getByRole('button', { name: 'ยื่นคำขอลา' })).not.toBeNull();
+  });
+
   it('the page root establishes a positioning context so the request form\'s absolutely-positioned file input stays contained by .content-scroll', async () => {
     const { container } = renderLeaveSurfacePage();
     await screen.findAllByRole('tab');
