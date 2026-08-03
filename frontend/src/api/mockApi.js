@@ -3227,6 +3227,41 @@ async function tryBackendBlob(url) {
   return null;
 }
 
+// Leave-request composer (Phase A2, #485): fixed fixtures for POST /api/leave/preview.
+// Not a rule engine — see CLAUDE.md "Mock API contract". This does NOT evaluate any of the 17
+// real gates LeaveService#autoRejectNote runs (probation, quota, attachment, notice window,
+// department coverage, etc.) — every one of those is a genuine per-request eligibility decision
+// this mock has never reimplemented (same stance as leave.create() below: see the db.leaveTypes
+// comment for why). Each entry here is a SMALL, FIXED, keyed-by-leaveTypeCode-only fixture: it
+// does not read the caller's employee, dates, attachment flag, or purpose — a real employee whose
+// actual hire date/probation/quota would legitimately block ORDINATION but is exempt from every
+// other type still sees the identical canned verdict below. Composer screens exercised only under
+// VITE_USE_MOCKS=true are demonstrating the UI's PLUMBING (does a blocked step 1 card render, does
+// a counter show up next to the right field) — never evidence that the real gate order, the real
+// 17 rejection reasons, or the real coverage/quota math behave a given way. Verify all of that
+// against the real backend (LeaveService#preview), per CLAUDE.md.
+const LEAVE_PREVIEW_COUNTERS_FIXTURE = {
+  // SICK: pretend 1 of 3 no-certificate occasions already used this month.
+  SICK: { emergencyFilingsRemaining: 0, noCertificateOccasionsRemaining: 2 },
+  // PERSONAL: pretend 1 of 3 emergency filings already used this month.
+  PERSONAL: { emergencyFilingsRemaining: 2, noCertificateOccasionsRemaining: 0 },
+};
+const LEAVE_PREVIEW_DEFAULT_COUNTERS = { emergencyFilingsRemaining: 0, noCertificateOccasionsRemaining: 0 };
+
+// Exactly one type renders "blocked before you type anything" in mock mode, so step 1 of the
+// composer has something to demonstrate — every other type's fixture is `null` (no gate hit),
+// which illustrates only "not blocked in this fixture", never a real verdict. messageTh below is
+// copied VERBATIM from LeaveRuleMessages' real ONCE_PER_EMPLOYMENT template (not re-worded here),
+// for the same reason CLAUDE.md gives for never hand-translating backend copy.
+const LEAVE_PREVIEW_BLOCKING_FIXTURE = {
+  ORDINATION: {
+    code: 'ONCE_PER_EMPLOYMENT',
+    params: { leaveTypeNameTh: 'ลาอุปสมบท' },
+    messageTh: 'การลาอุปสมบทสามารถใช้สิทธิ์ได้เพียงครั้งเดียวตลอดระยะเวลาที่เป็นพนักงาน '
+      + 'และมีคำขอที่ใช้สิทธิ์นี้ไปแล้ว กรุณาติดต่อฝ่ายบุคคลหากเป็นกรณียกเว้น',
+  },
+};
+
 export const api = {
   // Mirrors AuthController + AuthService (auth/).
   auth: {
@@ -4398,6 +4433,64 @@ export const api = {
     async reviewSummary() {
       requireSession();
       return delay({ pendingCount: 0, requests: [] });
+    },
+
+    // Leave-request composer (Phase A2, #485). See LEAVE_PREVIEW_BLOCKING_FIXTURE /
+    // LEAVE_PREVIEW_COUNTERS_FIXTURE above this namespace for the "not a rule engine" contract --
+    // this reads only `leaveTypeCode` (to pick a fixture) and whether dates were supplied (to
+    // decide `datesEvaluated`/`coverageEvaluated`, structural booleans the real DTO always
+    // carries, not a rule verdict). `options` is accepted for signature parity with hrApi's
+    // `(payload, options)` (real callers pass an AbortSignal there) -- honoured only for a
+    // caller that is ALREADY aborted at call time, since this mock's fixed `delay()` has no
+    // mechanism to reject mid-flight the way a real aborted fetch would.
+    async preview(payload = {}, options = {}) {
+      requireSession();
+      if (options.signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
+      const leaveType = leaveTypeByCode(payload.leaveTypeCode);
+      const counters = LEAVE_PREVIEW_COUNTERS_FIXTURE[leaveType.code] ?? LEAVE_PREVIEW_DEFAULT_COUNTERS;
+      const datesEvaluated = Boolean(payload.startDate && payload.endDate);
+      if (!datesEvaluated) {
+        return delay({
+          preview: {
+            blocking: LEAVE_PREVIEW_BLOCKING_FIXTURE[leaveType.code] ?? null,
+            datesEvaluated: false,
+            coverageEvaluated: false,
+            totalDays: null,
+            paidDays: null,
+            unpaidDays: null,
+            quotaYearSplits: [],
+            counters,
+          },
+        });
+      }
+      const blocking = LEAVE_PREVIEW_BLOCKING_FIXTURE[leaveType.code] ?? null;
+      const depth = payload.depth === 'QUICK' ? 'QUICK' : 'FULL';
+      const totalDays = workingDaysBetween(payload.startDate, payload.endDate);
+      const quotaYear = Number(String(payload.startDate).slice(0, 4));
+      return delay({
+        preview: {
+          blocking,
+          datesEvaluated: true,
+          // Mirrors the real coverageEvaluated contract structurally (false under QUICK, false
+          // once an earlier gate already blocked) without running any department-coverage fan-out
+          // of its own -- there is nothing here TO run; see this namespace's header comment.
+          coverageEvaluated: depth === 'FULL' && !blocking,
+          totalDays: blocking ? null : totalDays,
+          paidDays: blocking ? null : totalDays,
+          unpaidDays: blocking ? null : 0,
+          quotaYearSplits: blocking ? [] : [{
+            quotaYear,
+            totalDays,
+            paidDays: totalDays,
+            unpaidDays: 0,
+            quotaRemainingBefore: leaveType.annualQuotaDays,
+            quotaRemainingAfter: Math.max(0, leaveType.annualQuotaDays - totalDays),
+          }],
+          counters,
+        },
+      });
     },
   },
 

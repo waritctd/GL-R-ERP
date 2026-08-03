@@ -1,6 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MyLeaveTab } from './MyLeaveTab.jsx';
 import { api } from '../../api/index.js';
@@ -56,107 +57,20 @@ function renderMyLeaveTab() {
   });
 
   render(
-    <QueryClientProvider client={queryClient}>
-      <MyLeaveTab user={user} currentEmployee={currentEmployee} showToast={vi.fn()} formAnchorRef={{ current: null }} />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={queryClient}>
+        <MyLeaveTab user={user} currentEmployee={currentEmployee} showToast={vi.fn()} />
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
   return queryClient;
 }
 
-describe('MyLeaveTab form validation (ported from the pre-A1 LeavePage.jsx)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.leave.employees.mockResolvedValue({
-      employees: [{
-        employeeId: 1,
-        employeeName: 'พนักงาน ทดสอบ',
-        employeeCode: 'GLR-001',
-        self: true,
-        directReport: false,
-      }],
-    });
-    api.leave.types.mockResolvedValue({
-      leaveTypes: [
-        { code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation' },
-      ],
-    });
-    api.leave.list.mockResolvedValue({ requests: [] });
-    api.leave.balances.mockResolvedValue({ balances: [] });
-    api.leave.contactDefaults.mockResolvedValue(emptyContactDefaults);
-    api.leave.create.mockResolvedValue({ request: { id: 2001, status: 'SUBMITTED' } });
-  });
-
-  it('blocks submit when start date is before today', async () => {
-    renderMyLeaveTab();
-
-    const startInput = await screen.findByLabelText(/วันที่เริ่ม/);
-    fireEvent.change(startInput, { target: { value: '2020-01-01' } });
-
-    expect(await screen.findByText('วันที่เริ่มลาต้องไม่ก่อนวันนี้')).not.toBeNull();
-
-    const submitButton = screen.getByRole('button', { name: /ส่งคำขอ/ });
-    await waitFor(() => expect(submitButton.disabled).toBe(true));
-
-    fireEvent.click(submitButton);
-
-    expect(api.leave.create).not.toHaveBeenCalled();
-  });
-
-  it('sends the existing leave payload shape for a valid submit, unchanged by the IA relocation', async () => {
-    renderMyLeaveTab();
-
-    const futureDate = '2099-12-31';
-    const startInput = await screen.findByLabelText(/วันที่เริ่ม/);
-    fireEvent.change(startInput, { target: { value: futureDate } });
-    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
-    fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
-
-    await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
-    expect(api.leave.create).toHaveBeenCalledWith({
-      employeeId: 1,
-      leaveTypeCode: 'VACATION',
-      startDate: futureDate,
-      endDate: futureDate,
-      reason: 'ทดสอบระบบ',
-      startTime: null,
-      endTime: null,
-      contactHouseNo: null,
-      contactSubdistrict: null,
-      contactDistrict: null,
-      contactProvince: null,
-      contactPhone: null,
-      purposeCode: null,
-      requestedAsEmergency: null,
-      attachmentFile: null,
-    });
-  });
-
-  it('toggling sub-day leave forces endDate to startDate and sends the chosen times', async () => {
-    renderMyLeaveTab();
-
-    const futureDate = '2099-12-31';
-    const startInput = await screen.findByLabelText(/วันที่เริ่ม/);
-    fireEvent.change(startInput, { target: { value: futureDate } });
-    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'หาหมอครึ่งวัน' } });
-
-    fireEvent.click(screen.getByLabelText(/ลาบางส่วนของวัน/));
-
-    const endInput = screen.getByLabelText(/วันที่สิ้นสุด/);
-    expect(endInput.value).toBe(futureDate);
-
-    fireEvent.change(screen.getByLabelText(/เวลาเริ่ม/), { target: { value: '08:30' } });
-    fireEvent.change(screen.getByLabelText(/เวลาสิ้นสุด/), { target: { value: '12:30' } });
-
-    fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
-
-    await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
-    const payload = api.leave.create.mock.calls[0][0];
-    expect(payload.startDate).toBe(futureDate);
-    expect(payload.endDate).toBe(futureDate);
-    expect(payload.startTime).toBe('08:30');
-    expect(payload.endTime).toBe('12:30');
-  });
-});
+// The request-submission form (employee/type picker, dates, sub-day times, contact block,
+// attachment) moved to the /leave/new composer (LeaveRequestPage.jsx, Phase A2, #485) -- its own
+// test file (LeaveRequestPage.test.jsx) now owns the coverage the three tests that used to live
+// here (start-date-past validation, the create() payload shape, sub-day toggling) exercised.
+// MyLeaveTab is read-only from this phase on: balances browsing, request history, cancel.
 
 describe('MyLeaveTab balances: one primary card + a single disclosure (owner feedback, 2026-08)', () => {
   beforeEach(() => {
@@ -166,7 +80,10 @@ describe('MyLeaveTab balances: one primary card + a single disclosure (owner fee
         employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001', self: true, directReport: false,
       }],
     });
-    api.leave.types.mockResolvedValue({ leaveTypes: [] });
+    // The balance-preview select (Phase A2: decoupled from the removed submission form) seeds
+    // its default from THIS list, not from the balances fixture -- every test below needs at
+    // least VACATION here so that seeding effect has something to default to.
+    api.leave.types.mockResolvedValue({ leaveTypes: [{ code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation' }] });
     api.leave.list.mockResolvedValue({ requests: [] });
     api.leave.contactDefaults.mockResolvedValue(emptyContactDefaults);
   });
@@ -346,9 +263,11 @@ describe('MyLeaveTab own-request table: the three state-defect fixes (Phase A1)'
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
     render(
-      <QueryClientProvider client={queryClient}>
-        <MyLeaveTab user={user} currentEmployee={currentEmployee} showToast={showToast} formAnchorRef={{ current: null }} />
-      </QueryClientProvider>,
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <MyLeaveTab user={user} currentEmployee={currentEmployee} showToast={showToast} />
+        </QueryClientProvider>
+      </MemoryRouter>,
     );
 
     expect(await screen.findByRole('alert')).not.toBeNull();
@@ -363,7 +282,7 @@ describe('MyLeaveTab own-request table: the three state-defect fixes (Phase A1)'
     renderMyLeaveTab();
 
     expect(await screen.findByText('ยังไม่มีคำขอลา')).not.toBeNull();
-    expect(screen.getByText(/ยื่นคำขอที่ฟอร์ม/)).not.toBeNull();
+    expect(screen.getByRole('button', { name: /ยื่นคำขอลา/ })).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'ล้างตัวกรอง' })).toBeNull();
   });
 

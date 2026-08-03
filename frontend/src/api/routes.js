@@ -76,6 +76,9 @@ export const API_ROUTES = {
     // queryKeys now (Phase A1) only so contract.test.js's method-surface parity check stays green
     // ahead of A0 -- no UI in this phase calls it yet. See mockApi.js's own comment on this route.
     reviewSummary: '/api/leave/review-summary',
+    // Leave-request composer (Phase A2, #485): dry-run gate-chain preview, writes nothing --
+    // see LeaveService#preview's Javadoc for the FULL vs QUICK depth and nullable-dates contract.
+    preview: '/api/leave/preview',
   },
   tickets: {
     list: '/api/tickets',
