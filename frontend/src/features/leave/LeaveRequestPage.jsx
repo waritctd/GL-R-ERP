@@ -20,7 +20,7 @@ import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { EVERYDAY_LEAVE_TYPE_CODES } from './MyLeaveTab.jsx';
 import { LeaveRulePanel } from './LeaveRulePanel.jsx';
 import { LEAVE_PURPOSE_OPTIONS } from './leaveRequestTable.jsx';
-import { formatDays, todayIso } from './leaveFormatting.js';
+import { formatDate, formatDays, todayIso } from './leaveFormatting.js';
 
 // Leave-request composer, Phase A2 (#485). The owner's own framing of the problem this closes:
 // "employee if rejected, or when requesting, the rules should also be restated to them so they
@@ -334,6 +334,26 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
     ?? (eligibilityByCode.get(leaveTypeCode)?.data?.counters)
     ?? null;
 
+  // --- Step 2: calendar context (holidays + resolved schedule), so "why is this N days and not
+  // the full calendar span" is answered next to the date fields instead of only showing up as a
+  // smaller totalDays number. WINDOW CHOICE: exactly the currently-selected [startDate, endDate]
+  // -- not a fixed lookahead -- because the note only needs to explain the range the employee has
+  // actually picked; a wider window would show non-working days the request never touches. Debounced
+  // same as step2Params so a date still being typed doesn't fire one request per keystroke.
+  const calendarContextParams = useMemo(() => {
+    if (!startDate || !endDate || endDate < startDate) return null;
+    return { from: startDate, to: endDate };
+  }, [startDate, endDate]);
+  const debouncedCalendarContextParams = useDebouncedValue(calendarContextParams, 400);
+  const calendarContextQuery = useQuery({
+    queryKey: queryKeys.leaveCalendarContext(
+      debouncedCalendarContextParams?.from, debouncedCalendarContextParams?.to),
+    queryFn: () => api.leave.calendarContext(debouncedCalendarContextParams).then((r) => r.calendarContext),
+    enabled: step === 2 && Boolean(debouncedCalendarContextParams),
+  });
+  const nonWorkingDates = calendarContextQuery.data?.nonWorkingDates ?? [];
+  const holidaysInRange = calendarContextQuery.data?.holidays ?? [];
+
   async function advanceFromStep2() {
     const valid = await trigger(['startDate', 'endDate', 'reason', 'startTime', 'endTime']);
     if (!valid || startDateInPast) return;
@@ -574,6 +594,25 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
               {step2BlockingTarget === 'dates' && step2Blocking ? (
                 <div className={formGridSpan2}>
                   <LeaveRulePanel outcome={step2Blocking} tone="blocking" />
+                </div>
+              ) : null}
+
+              {/* Calendar context (#leave-calendar-context, Phase C): why totalDays can be smaller
+                  than the calendar span -- lists which selected dates are holidays/non-working per
+                  the employee's OWN resolved schedule, not a full calendar widget. */}
+              {calendarContextParams ? (
+                <div className={formGridSpan2}>
+                  {nonWorkingDates.length > 0 ? (
+                    <p className="m-0 rounded-lg border border-warning-border bg-warning-bg-soft px-3 py-2 text-xs text-warning-dark">
+                      ช่วงที่เลือกมี {nonWorkingDates.length} วันที่ไม่นับเป็นวันทำงาน (วันหยุด/วันหยุดประจำสัปดาห์
+                      ตามตารางเวลาทำงานของคุณ): {nonWorkingDates.map((date) => formatDate(date)).join(', ')}
+                      {holidaysInRange.length > 0 ? (
+                        <> — วันหยุด: {holidaysInRange.map((h) => `${formatDate(h.holidayDate)} (${h.nameTh})`).join(', ')}</>
+                      ) : null}
+                    </p>
+                  ) : !calendarContextQuery.isFetching && calendarContextQuery.data ? (
+                    <p className="m-0 text-xs text-muted">ทุกวันในช่วงที่เลือกเป็นวันทำงานตามตารางเวลาของคุณ</p>
+                  ) : null}
                 </div>
               ) : null}
 
