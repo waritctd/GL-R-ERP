@@ -178,6 +178,10 @@ export const api = {
       }
       return res.blob();
     },
+    // Leave-request composer, Phase C: caller's own holiday + resolved work-schedule context for
+    // { from, to } -- see routes.js's comment. `params` mirrors the shape of other range-taking
+    // reads on this namespace (balances/list) rather than positional (from, to) args.
+    calendarContext: (params) => apiRequest(withQuery(API_ROUTES.leave.calendarContext, params)),
   },
   tickets: {
     list: (params) => apiRequest(withQuery(API_ROUTES.tickets.list, params)),

@@ -37,6 +37,9 @@ export const queryKeys = {
     params.depth ?? 'FULL'],
   // Leave-surface IA rebuild, Phase A3: rules tab's policy-document link availability probe.
   leavePolicyDocumentAvailable: () => ['leave', 'policyDocumentAvailable'],
+  // Leave-request composer, Phase C (#leave-calendar-context): keyed on the exact { from, to }
+  // window fetched -- see LeaveRequestPage.jsx's own comment on the lookahead-window choice.
+  leaveCalendarContext: (from, to) => ['leave', 'calendarContext', from ?? '', to ?? ''],
   overtimeRequests: (filters = {}) => ['overtime', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   overtimeEmployees: () => ['overtime', 'employees'],
   // CommissionController#list only ever takes payrollMonth (no status param —
