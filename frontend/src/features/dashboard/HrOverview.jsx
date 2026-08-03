@@ -81,6 +81,20 @@ export function HrOverview({ employees, dashboardSummary }) {
   });
   const payrollPeriod = payrollQuery.data ?? null;
 
+  // Same queryKey and queryFn shape as TaxAllowanceReviewPage's own register query — deliberately,
+  // so this shares that one cache entry instead of adding a second fetch of the same rows. The
+  // count is derived client-side; GET /declarations already returns the year's rows and there is
+  // no count endpoint to add.
+  const currentTaxYear = new Date().getFullYear();
+  const taxAllowanceRegisterQuery = useQuery({
+    queryKey: queryKeys.taxAllowanceDeclarationsRegister({ year: currentTaxYear }),
+    queryFn: () => api.payroll.getTaxAllowanceDeclarations({ year: currentTaxYear })
+      .then((response) => response.items || [])
+      .catch(() => []),
+  });
+  const pendingTaxAllowance = (taxAllowanceRegisterQuery.data ?? [])
+    .filter((item) => item.status === 'PENDING').length;
+
   const stats = useMemo(() => {
     const headcountByDivision = new Map(divisions.map((division) => [division.id, { division, count: 0 }]));
     const extraDivisions = new Map();
@@ -205,6 +219,16 @@ export function HrOverview({ employees, dashboardSummary }) {
               detail={`${stats.pendingProfileRequests} รายการรอตรวจ`}
               cta="ตรวจคำขอ"
               onClick={() => navigate('/requests')}
+            />
+            {/* ล.ย.01 review is HR's own work, like the profile-change queue above it — approve/
+                reject/apply are hr-only — so it belongs here rather than in the read-only
+                monitor panel. It had no presence on this page at all before, which meant HR had
+                to remember to go looking for a queue nothing surfaced. */}
+            <HrTaskRow
+              label="แบบแจ้ง ล.ย.01 (ค่าลดหย่อนภาษี)"
+              detail={`${pendingTaxAllowance} รายการรอตรวจ`}
+              cta="ตรวจแบบแจ้ง"
+              onClick={() => navigate('/tax-allowance-review?status=PENDING')}
             />
             <HrTaskRow
               label="รอบเงินเดือน"
