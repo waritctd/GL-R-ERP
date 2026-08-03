@@ -17,6 +17,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
+import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.payroll.PayrollService;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceAttachmentDownload;
@@ -65,7 +66,8 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
             mock(AuditService.class),
             fileStorage,
             // The estimate endpoint is not exercised by this class — a mock is enough.
-            mock(PayrollService.class));
+            mock(PayrollService.class),
+            new NotificationRepository(jdbc));
 
         employeeA = seedEmployee("TAA-A");
         employeeB = seedEmployee("TAA-B");
