@@ -10,6 +10,8 @@ import {
   pricingCostingStatusLabel,
   pricingDecisionStatusLabel,
   quotationStatusLabel,
+  specialMoneyStatusLabel,
+  SPECIAL_MONEY_STATUSES,
 } from './format.js';
 
 describe('formatAddress', () => {
@@ -210,5 +212,37 @@ describe('formatShortDate', () => {
     // this is expected/correct for a real timestamp, unlike the date-only case above.
     globalThis.process.env.TZ = 'Pacific/Honolulu';
     expect(formatShortDate('2026-07-02T08:11:00+07:00')).toBe('01/07/2569');
+  });
+});
+
+describe('specialMoneyStatusLabel', () => {
+  // Welfare is CEO-only in a single stage (#482 removed the manager stage), so
+  // SUBMITTED means "waiting for the CEO". It used to read 'รอผู้จัดการ', which
+  // named a holder that no longer exists in the flow -- a wrong next-actor is
+  // worse than a vague one, because the employee chases the wrong person.
+  it('says the CEO holds a SUBMITTED request, not a manager', () => {
+    expect(specialMoneyStatusLabel('SUBMITTED').label).toBe('รอ CEO อนุมัติ');
+    expect(specialMoneyStatusLabel('SUBMITTED').label).not.toContain('ผู้จัดการ');
+  });
+
+  // MANAGER_APPROVED is unreachable for new requests but still in the enum and
+  // the chk_smr_status constraint, and SpecialMoneyService still clears such
+  // rows. It sits in the same queue as SUBMITTED, so it must not read as a
+  // further-along step -- only as an older request in the same place.
+  it('puts the legacy MANAGER_APPROVED state in the same CEO queue', () => {
+    expect(specialMoneyStatusLabel('MANAGER_APPROVED').label).toContain('รอ CEO');
+    expect(specialMoneyStatusLabel('MANAGER_APPROVED').tone)
+      .toBe(specialMoneyStatusLabel('SUBMITTED').tone);
+  });
+
+  // The panel's status filter renders straight from this list. Guards against
+  // the drift that caused this bug: an inline copy of the options in the panel
+  // that nobody updated when the flow changed.
+  it('covers every SpecialMoneyStatus enum value with a real Thai label', () => {
+    expect(SPECIAL_MONEY_STATUSES)
+      .toEqual(['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED', 'REJECTED', 'CANCELLED']);
+    SPECIAL_MONEY_STATUSES.forEach((status) => {
+      expect(specialMoneyStatusLabel(status).label).not.toBe(status);
+    });
   });
 });
