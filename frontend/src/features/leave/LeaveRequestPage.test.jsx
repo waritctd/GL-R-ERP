@@ -23,6 +23,14 @@ vi.mock('../../api/index.js', () => ({
   },
 }));
 
+// browser-image-compression genuinely returns a plain Blob with no `.name` -- this mock
+// reproduces that faithfully rather than a File, which is exactly the shape that exposed the
+// "blob" filename bug in #498/#504. A mock that quietly upgrades the library's real return type
+// would make this test pass whether or not the component re-wraps it.
+vi.mock('browser-image-compression', () => ({
+  default: vi.fn((file) => Promise.resolve(new Blob([file], { type: file.type }))),
+}));
+
 const user = { employeeId: 1, name: 'พนักงาน ทดสอบ', role: 'employee', manager: false };
 const currentEmployee = { id: 1, nameTh: 'พนักงาน ทดสอบ' };
 
@@ -215,6 +223,60 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
       requestedAsEmergency: null,
       attachmentFile: null,
     });
+  });
+
+  // Found in #498/#504 (same defect, different component): imageCompression() returns a Blob, and
+  // FormData built from a bare Blob has no filename to send, so the multipart part's filename
+  // defaults to the literal string "blob" per spec. Only JPG/PNG hit this -- PDFs skip
+  // compression entirely, which is why the bug reads as image-only.
+  it('re-wraps the compressed image so create() receives the original filename, not "blob"', async () => {
+    await goToStep2ForVacation();
+
+    const futureDate = '2099-12-31';
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
+
+    const original = new File(['fake-jpeg-bytes'], 'sick-note.jpg', { type: 'image/jpeg' });
+    fireEvent.change(document.getElementById('leave-attachment-file'), { target: { files: [original] } });
+
+    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
+    await screen.findByText(/ขั้นตอนที่ 3\/3/);
+    const submitButton = await screen.findByRole('button', { name: /ส่งคำขอ/ });
+    await waitFor(() => expect(submitButton.disabled).toBe(false));
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
+    const { attachmentFile } = api.leave.create.mock.calls[0][0];
+
+    // The regression this guards: without the File re-wrap, `attachmentFile.name` is undefined (a
+    // bare Blob has no `.name`), and FormData/fetch would send "blob" to the real backend.
+    expect(attachmentFile.name).toBe('sick-note.jpg');
+    expect(attachmentFile).toBeInstanceOf(File);
+    expect(attachmentFile.type).toBe('image/jpeg');
+  });
+
+  it('does not touch PDFs -- they skip compression and keep their name for a different reason', async () => {
+    const imageCompression = (await import('browser-image-compression')).default;
+    await goToStep2ForVacation();
+
+    const futureDate = '2099-12-31';
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
+
+    const pdf = new File(['fake-pdf-bytes'], 'sick-note.pdf', { type: 'application/pdf' });
+    fireEvent.change(document.getElementById('leave-attachment-file'), { target: { files: [pdf] } });
+
+    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
+    await screen.findByText(/ขั้นตอนที่ 3\/3/);
+    const submitButton = await screen.findByRole('button', { name: /ส่งคำขอ/ });
+    await waitFor(() => expect(submitButton.disabled).toBe(false));
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
+    const { attachmentFile } = api.leave.create.mock.calls[0][0];
+
+    expect(imageCompression).not.toHaveBeenCalled();
+    expect(attachmentFile.name).toBe('sick-note.pdf');
   });
 
   it('toggling sub-day leave forces endDate to startDate and sends the chosen times', async () => {
