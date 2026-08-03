@@ -1125,6 +1125,18 @@ public class LeaveRepository {
     }
 
     public int cancel(long id, Long reviewedById, String reviewerNote) {
+        // Found via a live real-backend click-through (self-cancel: an employee cancelling their
+        // OWN request, reviewedById == null): "could not determine data type of parameter $2".
+        // Unlike #approve/#reject, where :reviewedById binds directly into a typed assignment
+        // (reviewed_by_id = :reviewedById), here BOTH bind params appear only inside
+        // COALESCE(...)/CASE WHEN ... IS NULL -- never in a context with an inferable column type
+        // on their own. Postgres' extended query protocol cannot infer a type from that shape,
+        // and a NULL value at bind time gives it nothing else to go on either. approve/reject
+        // never hit this because their SET target IS the type hint; cancel's self-cancel path
+        // (the only caller that can legitimately pass reviewedById == null) is the one shape that
+        // was never covered -- mocks don't touch real SQL, and no existing test exercises a real
+        // Postgres self-cancel. Explicit SQL types make the driver's job possible regardless of
+        // value or position.
         return jdbc.update("""
             UPDATE hr.leave_request
                SET status = 'CANCELLED',
@@ -1137,8 +1149,8 @@ public class LeaveRepository {
                AND status IN ('SUBMITTED', 'APPROVED')
             """, new MapSqlParameterSource()
             .addValue("id", id)
-            .addValue("reviewedById", reviewedById)
-            .addValue("reviewerNote", clean(reviewerNote)));
+            .addValue("reviewedById", reviewedById, java.sql.Types.BIGINT)
+            .addValue("reviewerNote", clean(reviewerNote), java.sql.Types.VARCHAR));
     }
 
     private String baseSelect() {
