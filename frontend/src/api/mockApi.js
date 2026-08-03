@@ -4492,6 +4492,22 @@ export const api = {
         },
       });
     },
+
+    // Leave-surface IA rebuild, Phase A3: mirrors LeaveController#policyDocument's SHAPE only, not
+    // its authority. The real endpoint's answer depends on server-side storage this mock has no
+    // equivalent of and no file to actually serve — "not supported in mock mode" is the honest
+    // answer here (CLAUDE.md: prefer that over inventing a fake success path), so this always
+    // reports "not uploaded", exactly the state a fresh/unconfigured real deployment is in too. Do
+    // not read an "available" render under mocks as evidence the real endpoint works — verify a
+    // configured deployment against the real backend.
+    async policyDocumentAvailable() {
+      requireSession();
+      return delay(false);
+    },
+    async downloadPolicyDocument() {
+      requireSession();
+      fail('ยังไม่มีการอัปโหลดเอกสารประกาศฉบับนี้ กรุณาติดต่อฝ่ายบุคคล', 404);
+    },
   },
 
   // Mirrors OvertimeController + OvertimeService (overtime/) — see

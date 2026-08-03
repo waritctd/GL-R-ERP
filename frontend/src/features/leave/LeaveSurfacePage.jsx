@@ -8,13 +8,13 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageStack } from '../../components/common/Layout.jsx';
 import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
-import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { Tabs, TabPanel } from '../../components/common/Tabs.jsx';
 import {
   LEAVE_SURFACE_TABS, resolveLeaveSurfaceTab, visibleLeaveSurfaceTabIds,
 } from './leaveSurfaceTabs.js';
 import { MyLeaveTab } from './MyLeaveTab.jsx';
 import { ReviewQueueTab } from './ReviewQueueTab.jsx';
+import { RulesTab } from './RulesTab.jsx';
 
 const TAB_ID_PREFIX = 'leave-surface';
 
@@ -157,14 +157,7 @@ export function LeaveSurfacePage({ user, currentEmployee, showToast }) {
       </TabPanel>
 
       <TabPanel id="rules" idPrefix={TAB_ID_PREFIX} active={activeTab === 'rules'}>
-        {/* TODO(A3): replace this placeholder with the real per-leave-type rule disclosure
-            (quota, notice window, attachment requirement, etc). Phase A1 deliberately adds NO new
-            rule copy here -- see leaveSurfaceTabs.js's own comment on this tab. */}
-        <StatePanel
-          state="unavailable"
-          title="หน้ากฎการลากำลังจะมา"
-          description="เงื่อนไขการลาแต่ละประเภท (โควตา ระยะเวลาแจ้งล่วงหน้า เอกสารที่ต้องแนบ) จะแสดงที่นี่ในเวอร์ชันถัดไป"
-        />
+        <RulesTab />
       </TabPanel>
     </PageStack>
   );

@@ -153,6 +153,19 @@ export const api = {
     // see LeaveRequestPage.jsx's own comment on why that matters.
     preview: (payload, options = {}) =>
       apiRequest(API_ROUTES.leave.preview, { method: 'POST', body: payload, signal: options.signal }),
+    // Leave-surface IA rebuild, Phase A3: the §5 announcement PDF link on the "กฎการลา" tab.
+    // HEAD-probes first (no body transfer) so RulesTab.jsx can render a disabled/explained state
+    // when the backend has no path configured, instead of a broken link the user only discovers by
+    // clicking — see LeaveController#policyDocument's Javadoc for why the same route answers both.
+    policyDocumentAvailable: async () => {
+      const res = await fetch(API_ROUTES.leave.policyDocument, { method: 'HEAD', credentials: 'include' });
+      return res.ok;
+    },
+    downloadPolicyDocument: async () => {
+      const res = await fetch(API_ROUTES.leave.policyDocument, { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
   },
   tickets: {
     list: (params) => apiRequest(withQuery(API_ROUTES.tickets.list, params)),

@@ -35,6 +35,8 @@ export const queryKeys = {
     params.employeeId ?? '', params.leaveTypeCode ?? '', params.startDate ?? '', params.endDate ?? '',
     params.purposeCode ?? '', params.requestedAsEmergency ?? false, params.hasAttachment ?? false,
     params.depth ?? 'FULL'],
+  // Leave-surface IA rebuild, Phase A3: rules tab's policy-document link availability probe.
+  leavePolicyDocumentAvailable: () => ['leave', 'policyDocumentAvailable'],
   overtimeRequests: (filters = {}) => ['overtime', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   overtimeEmployees: () => ['overtime', 'employees'],
   // CommissionController#list only ever takes payrollMonth (no status param —
