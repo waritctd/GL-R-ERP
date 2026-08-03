@@ -12,7 +12,7 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { formGridSpan2, Panel, RowActions } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { specialMoneyStatusLabel as statusInfo } from '../../utils/format.js';
+import { specialMoneyStatusLabel as statusInfo, SPECIAL_MONEY_STATUSES } from '../../utils/format.js';
 import { THAI_PROVINCES, isExcludedProvince } from './thaiProvinces.js';
 import {
   AID_TYPES,
@@ -654,13 +654,14 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
       <Panel
         title="คำขอเงินสวัสดิการ"
         actions={(
+          // Options are derived from the canonical label map rather than
+          // duplicated inline — the inline copy is how this filter kept saying
+          // 'รอผู้จัดการ' after the manager stage was removed.
           <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="กรองตามสถานะ">
             <option value="">ทุกสถานะ</option>
-            <option value="SUBMITTED">รอผู้จัดการ</option>
-            <option value="MANAGER_APPROVED">รอ CEO</option>
-            <option value="APPROVED">อนุมัติแล้ว</option>
-            <option value="REJECTED">ปฏิเสธ</option>
-            <option value="CANCELLED">ยกเลิก</option>
+            {SPECIAL_MONEY_STATUSES.map((status) => (
+              <option key={status} value={status}>{statusInfo(status).label}</option>
+            ))}
           </select>
         )}
       >
