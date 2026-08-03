@@ -69,7 +69,13 @@ describe('RequestsPage tab bar', () => {
     api.specialMoney.types.mockResolvedValue({ types: [] });
     api.specialMoney.list.mockResolvedValue({ requests: [] });
     api.specialMoney.usage.mockResolvedValue({
-      usage: { employeeId: 1, year: 2026, approvedAmountThisYearByType: {}, approvedCountLifetimeByType: {} },
+      usage: {
+        employeeId: 1,
+        year: 2026,
+        approvedAmountThisYearByType: {},
+        approvedCountLifetimeByType: {},
+        activeCountThisYearByType: {},
+      },
     });
   });
 

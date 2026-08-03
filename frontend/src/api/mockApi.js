@@ -4635,19 +4635,40 @@ export const api = {
       if (!employeeId) fail('ต้องระบุรหัสพนักงาน', 400);
       if (!canAccessSpecialMoneyEmployee(user, employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const year = params.year ? Number(params.year) : new Date().getFullYear();
+      // Mirrors SpecialMoneyRepository#findUsage. The three maps are counted over DIFFERENT status
+      // sets and that difference is the whole point -- see UsageSnapshot's javadoc:
+      //   amounts -> APPROVED only (money; an undecided request has consumed no balance)
+      //   counts  -> SUBMITTED + MANAGER_APPROVED + APPROVED (the once-per-lifetime / once-per-year
+      //              guards must see in-flight rows, or the same claim can be filed twice before
+      //              either is decided and both become approvable)
+      // This mock previously filtered `status === 'APPROVED'` for BOTH maps, which is the dangerous
+      // direction: it under-reports usage, so mock-mode UI says "you may still claim" on a type the
+      // real backend refuses. `approvedCountLifetimeByType` is a misnomer on the DTO too -- it has
+      // always carried the in-flight-inclusive count. Do not "fix" it to match its name.
+      const ACTIVE_STATUSES = ['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED'];
       const approvedAmountThisYearByType = {};
       const approvedCountLifetimeByType = {};
+      const activeCountThisYearByType = {};
       db.specialMoneyRequests
-        .filter((item) => item.employeeId === employeeId && item.status === 'APPROVED')
+        .filter((item) => item.employeeId === employeeId && ACTIVE_STATUSES.includes(item.status))
         .forEach((item) => {
           approvedCountLifetimeByType[item.requestType] = (approvedCountLifetimeByType[item.requestType] || 0) + 1;
           if (new Date(item.eventDate).getFullYear() === year) {
-            approvedAmountThisYearByType[item.requestType] =
-              (approvedAmountThisYearByType[item.requestType] || 0) + Number(item.approvedAmount || 0);
+            activeCountThisYearByType[item.requestType] = (activeCountThisYearByType[item.requestType] || 0) + 1;
+            if (item.status === 'APPROVED') {
+              approvedAmountThisYearByType[item.requestType] =
+                (approvedAmountThisYearByType[item.requestType] || 0) + Number(item.approvedAmount || 0);
+            }
           }
         });
       return delay({
-        usage: { employeeId, year, approvedAmountThisYearByType, approvedCountLifetimeByType },
+        usage: {
+          employeeId,
+          year,
+          approvedAmountThisYearByType,
+          approvedCountLifetimeByType,
+          activeCountThisYearByType,
+        },
       });
     },
 
