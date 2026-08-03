@@ -68,8 +68,21 @@ export function TaxAllowanceEvidencePanel({ declarationId, canEdit, showToast })
     }
     setPendingFile(file);
     try {
+      // imageCompression() returns a plain Blob, not a File -- it does not carry `file.name`
+      // through. `uploadTaxAllowanceAttachment` appends this straight into a FormData, and per
+      // spec an unnamed Blob's multipart part defaults its filename to the literal string "blob":
+      // every compressed JPG/PNG landed in the backend, and every list/download UI thereafter,
+      // named "blob" instead of e.g. "receipt-medical.jpg". Re-wrapping in a File restores the
+      // name the compression step dropped. PDFs skip compression entirely and never hit this path.
+      // Confirmed live against the real backend and fixed identically in
+      // features/specialmoney/AttachmentList.jsx, which this file's docblock says this flow was
+      // modelled on -- this is that flagged follow-up.
       const prepared = file.type.startsWith('image/')
-        ? await imageCompression(file, { maxSizeMB: 2, maxWidthOrHeight: 1600, useWebWorker: true })
+        ? new File(
+          [await imageCompression(file, { maxSizeMB: 2, maxWidthOrHeight: 1600, useWebWorker: true })],
+          file.name,
+          { type: file.type },
+        )
         : file;
       uploadMutation.mutate(prepared);
     } catch (error) {
