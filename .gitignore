@@ -16,9 +16,12 @@ venv/
 __pycache__/
 *.pyc
 
-# Dev-local Claude config (keep launch.json shared with the team)
+# Dev-local Claude config (keep launch.json and the session-start hook shared with the team)
 .claude/*
 !.claude/launch.json
+!.claude/settings.json
+!.claude/hooks/
+!.claude/hooks/**
 
 # Local docker override (dev-only port/profile changes)
 docker-compose.override.yml
