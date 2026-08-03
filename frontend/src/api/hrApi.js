@@ -148,6 +148,11 @@ export const api = {
     cancel: (id, payload = {}) => apiRequest(API_ROUTES.leave.cancel(id), { method: 'POST', body: payload }),
     // Leave-surface IA rebuild, Phase A0 (not yet landed) — see routes.js's own comment.
     reviewSummary: () => apiRequest(API_ROUTES.leave.reviewSummary),
+    // Leave-request composer (Phase A2, #485): `options.signal` lets a caller abort an
+    // in-flight dry-run when a newer one supersedes it (the debounced step-2 QUICK preview) --
+    // see LeaveRequestPage.jsx's own comment on why that matters.
+    preview: (payload, options = {}) =>
+      apiRequest(API_ROUTES.leave.preview, { method: 'POST', body: payload, signal: options.signal }),
   },
   tickets: {
     list: (params) => apiRequest(withQuery(API_ROUTES.tickets.list, params)),

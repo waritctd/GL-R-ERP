@@ -76,6 +76,9 @@ export const API_ROUTES = {
     // queryKeys now (Phase A1) only so contract.test.js's method-surface parity check stays green
     // ahead of A0 -- no UI in this phase calls it yet. See mockApi.js's own comment on this route.
     reviewSummary: '/api/leave/review-summary',
+    // Leave-request composer (Phase A2, #485): dry-run gate-chain preview, writes nothing --
+    // see LeaveService#preview's Javadoc for the FULL vs QUICK depth and nullable-dates contract.
+    preview: '/api/leave/preview',
   },
   tickets: {
     list: '/api/tickets',
@@ -466,4 +469,11 @@ export const ROLE_PERMISSIONS = {
   // Step 7: Factory Purchase Order and Import Execution — Import/CEO only, mirrors
   // ProcurementService.RAW_PO_ROLES. Raw supplier PO detail is never shown to sales.
   canManageProcurement: ['import', 'ceo'],
+  // Attendance calendar admin UI (/settings/attendance-calendar — PR #480 shipped the write API
+  // with no UI at all). Mirrors HolidayController / WorkScheduleController /
+  // WorkScheduleAssignmentController's requireAnyRole(user, "hr", "ceo") exactly. FRONTEND GATING
+  // ONLY: the backend already enforces this role check independently on every endpoint — this key
+  // decides who sees the SCREEN, it grants nothing itself. See CLAUDE.md's "Mock API contract" on
+  // why a frontend permission key is never itself evidence of a backend authorization change.
+  canManageAttendanceCalendar: ['hr', 'ceo'],
 };
