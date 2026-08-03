@@ -18,18 +18,6 @@
   ],
   "allow": [
     {
-      "id": "GHSA-mh99-v99m-4gvg",
-      "package": "brace-expansion",
-      "severity": "high",
-      "scope": "dev",
-      "url": "https://github.com/advisories/GHSA-mh99-v99m-4gvg",
-      "reason": "DoS (unbounded brace expansion -> OOM) reached only through minimatch@3, which is pulled in exclusively by the ESLint toolchain (eslint, @eslint/config-array, @eslint/eslintrc, eslint-plugin-react, eslint-plugin-jsx-a11y). Nothing in this chain ships to the browser and nothing in it ever sees untrusted input -- the linter globs our own repo paths. Verified dev-only: `npm audit --omit=dev` reports zero of these 7 entries.",
-      "noFixAvailable": "brace-expansion is patched only in 5.0.8; the 1.x/2.x/3.x maintenance lines are all still affected. Overriding to ^5 breaks minimatch@3 at runtime -- 5.0.8's CJS entry exports { expand }, not a callable, so minimatch's `require('brace-expansion')(...)` throws. Overriding minimatch to ^10 fails the same way (object export, not callable). eslint-plugin-react@7.37.5 and eslint-plugin-jsx-a11y@6.10.2 -- both latest -- still declare minimatch@^3.1.2, so no upstream fix exists to upgrade to. Every fix `npm audit fix --force` proposes is a downgrade to a 2020-era plugin.",
-      "clearWhen": "eslint-plugin-react and eslint-plugin-jsx-a11y move to minimatch >=10.0.3, or brace-expansion backports the length guard to 1.x.",
-      "reviewedOn": "2026-07-25",
-      "reviewBy": "2026-10-23"
-    },
-    {
       "id": "GHSA-qwww-vcr4-c8h2",
       "package": "react-router",
       "severity": "high",
