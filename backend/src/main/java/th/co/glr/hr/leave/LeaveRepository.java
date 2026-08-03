@@ -122,6 +122,27 @@ public class LeaveRepository {
     private record EmployeeScheduleContext(Long divisionId, Long departmentId) {
     }
 
+    /**
+     * The caller's own resolved {@link WorkSchedule}, evaluated at {@code onDate} -- reuses the
+     * SAME division/department lookup ({@link #findScheduleContext}) and {@link WorkScheduleResolver}
+     * call {@link #workingDayPredicate} makes internally (EMPLOYEE&gt;DEPARTMENT&gt;DIVISION
+     * precedence, effective-dated), so {@code GET /api/leave/calendar-context}
+     * ({@code LeaveCalendarContextService}) can show an employee WHICH schedule governs their own
+     * leave-day counting without re-deriving division/department or re-implementing the tier
+     * precedence there.
+     *
+     * <p>{@code onDate} matters because a schedule assignment can change mid-range (a genuine
+     * reassignment, effective-dated) -- this single-date snapshot is for DISPLAY only (workStart/
+     * workEnd/graceMinutes/requiresCheckOut/workdays). The actual per-day working/non-working
+     * determination for a whole range still comes from {@link #workingDayPredicate}, which resolves
+     * per-date and stays the one source of truth for day flags; this method must never be used to
+     * derive those flags itself.
+     */
+    public WorkSchedule resolveOwnSchedule(long employeeId, LocalDate onDate) {
+        EmployeeScheduleContext context = findScheduleContext(employeeId);
+        return scheduleResolver.resolve(employeeId, context.divisionId(), context.departmentId(), onDate);
+    }
+
     public boolean employeeExists(long employeeId) {
         Boolean exists = jdbc.queryForObject("""
             SELECT EXISTS (

@@ -88,6 +88,12 @@ export const API_ROUTES = {
     // specialMoney.attachmentDownload's naming above — same "attachment id, not request id"
     // shape as LeaveController#downloadAttachment (GET /api/leave/attachments/{attachmentId}).
     attachmentDownload: (attachmentId) => `/api/leave/attachments/${attachmentId}`,
+    // Leave-request composer, Phase C (#leave-calendar-context): the caller's OWN holiday +
+    // resolved work-schedule context for a date range, so step 2 can show which days in the
+    // selected range are non-working. Self-scoped only (no employeeId param) -- see
+    // LeaveController#calendarContext's Javadoc for why this is deliberately not
+    // HolidayController/WorkScheduleController (both stay hr/ceo-gated, untouched).
+    calendarContext: '/api/leave/calendar-context',
   },
   tickets: {
     list: '/api/tickets',
