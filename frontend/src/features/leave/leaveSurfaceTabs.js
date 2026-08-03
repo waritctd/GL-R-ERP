@@ -27,16 +27,14 @@ import { hasPermission } from '../../app/permissions.js';
 // backend always supplies this field now -- `canReviewRequest` below already prefers it when
 // present.
 //
-// Phase A4 finding: the fallback branch is NOT dead and must stay. mockApi.js's `leave`
-// namespace (list/create/approve/reject/cancel) never sets a `canReview` field on any row it
-// returns -- there is no mirror of withCanReviewFlag there. Under `VITE_USE_MOCKS=true` (this
-// app's default verification surface, per CLAUDE.md) every request object therefore has
-// `canReview === undefined`, and this file's own test fixtures (leaveSurfaceTabs.test.js,
-// ReviewQueueTab.test.jsx) never set it either -- removing the fallback would make
-// `canReviewRequest` return `Boolean(undefined)` (always false) for every one of those rows,
-// silently emptying the "รอพิจารณา" tab under mocks and breaking both test suites. Keep this
-// branch until mockApi.js's leave namespace is updated to mirror withCanReviewFlag too.
-// `canManagerCancelRequest` below never read `canReview` in the first place (always the
+// mockApi.js's `leave` namespace (list/create/approve/reject/cancel, via buildLeaveRecord)
+// now mirrors withCanReviewFlag too -- it stamps `canReview` on every row using the same
+// canReviewLeave() predicate (hr bypass, else active-employee direct-manager FK match) the mock
+// already gates approve/reject/cancel on. So under `VITE_USE_MOCKS=true` the server-authoritative
+// branch above is exercised the same as against the real backend, and the fallback below is no
+// longer load-bearing for mock-driven testing -- it remains only as defence for any caller that
+// hands `canReviewRequest` a plain object with no `canReview` field at all (e.g. a hand-built
+// fixture). `canManagerCancelRequest` below never read `canReview` in the first place (always the
 // client-side approximation) -- there is no fallback to remove there either.
 export function canReviewRequest(request, user, canReviewAll) {
   if (request?.canReview != null) return Boolean(request.canReview);
