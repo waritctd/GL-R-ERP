@@ -71,9 +71,11 @@ public class SpecialMoneyRepository {
                    e.confirm_date,
                    e.probation_days,
                    d.source_code AS department_source_code,
+                   p.source_code AS position_source_code,
                    e.is_active
               FROM hr.employee e
               LEFT JOIN hr.department d ON d.department_id = e.department_id
+              LEFT JOIN hr.position p ON p.position_id = e.position_id
              WHERE e.employee_id = :employeeId
             """, Map.of("employeeId", employeeId), (rs, rowNum) -> new EmployeeEligibilitySnapshot(
                 rs.getLong("employee_id"),
@@ -81,6 +83,7 @@ public class SpecialMoneyRepository {
                 rs.getObject("confirm_date", LocalDate.class),
                 nullableInt(rs, "probation_days"),
                 rs.getString("department_source_code"),
+                rs.getString("position_source_code"),
                 rs.getBoolean("is_active"),
                 today
             ))

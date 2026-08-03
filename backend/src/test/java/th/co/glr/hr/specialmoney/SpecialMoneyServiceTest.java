@@ -436,12 +436,12 @@ class SpecialMoneyServiceTest {
 
     private EmployeeEligibilitySnapshot activeEligibility(long employeeId) {
         return new EmployeeEligibilitySnapshot(
-            employeeId, LocalDate.of(2020, 1, 1), null, null, null, true, LocalDate.now());
+            employeeId, LocalDate.of(2020, 1, 1), null, null, null, null, true, LocalDate.now());
     }
 
     private EmployeeEligibilitySnapshot inactiveEligibility(long employeeId) {
         return new EmployeeEligibilitySnapshot(
-            employeeId, LocalDate.of(2020, 1, 1), null, null, null, false, LocalDate.now());
+            employeeId, LocalDate.of(2020, 1, 1), null, null, null, null, false, LocalDate.now());
     }
 
     private UsageSnapshot emptyUsage() {
