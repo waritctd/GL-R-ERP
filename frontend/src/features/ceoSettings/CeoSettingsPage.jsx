@@ -5,8 +5,10 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
+import { Panel, PageStack } from '../../components/common/Layout.jsx';
 
 function pctDisplay(val) {
   return val != null ? `${(Number(val) * 100).toFixed(2)}%` : '-';
@@ -121,15 +123,15 @@ function ConfigEditModal({ config, saving, onClose, onSubmit }) {
       onClose={onClose}
       footer={
         <>
-          <button type="button" className="secondary-button" onClick={onClose}>ยกเลิก</button>
-          <button type="submit" form="config-edit-form" className="primary-button" disabled={saving}>
+          <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
+          <Button type="submit" form="config-edit-form" variant="primary" disabled={saving}>
             {saving ? 'กำลังบันทึก…' : 'บันทึกเวอร์ชันใหม่'}
-          </button>
+          </Button>
         </>
       }
     >
       <form id="config-edit-form" onSubmit={handleSubmit(submit)} noValidate>
-        <div style={{ display: 'grid', gap: 12 }}>
+        <div className="grid gap-3">
           {CONFIG_FIELDS.map(({ key, label, suffix }) => (
             <FormField key={key} label={label} htmlFor={`cfg-${key}`} error={errors[key]?.message}>
               {/*
@@ -139,16 +141,16 @@ function ConfigEditModal({ config, saving, onClose, onSubmit }) {
                 the unit suffix), so it's wired by hand instead, same as
                 FormField's other manual-wiring callers.
               */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div className="flex items-center gap-1.5">
                 <input
                   id={`cfg-${key}`}
                   type="number" step="0.01" min="0"
-                  style={{ flex: 1 }}
+                  className="flex-1"
                   aria-invalid={errors[key] ? true : undefined}
                   aria-describedby={errors[key] ? fieldErrorId(`cfg-${key}`) : undefined}
                   {...register(key)}
                 />
-                <span style={{ color: 'var(--color-text-muted)', fontSize: 12, minWidth: 70 }}>{suffix}</span>
+                <span className="text-text-muted text-xs min-w-[70px]">{suffix}</span>
               </div>
             </FormField>
           ))}
@@ -295,25 +297,25 @@ function FormulaConfigEditModal({ config, saving, onClose, onSubmit }) {
       onClose={onClose}
       footer={
         <>
-          <button type="button" className="secondary-button" onClick={onClose}>ยกเลิก</button>
-          <button type="submit" form="formula-config-edit-form" className="primary-button" disabled={saving}>
+          <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
+          <Button type="submit" form="formula-config-edit-form" variant="primary" disabled={saving}>
             {saving ? 'กำลังบันทึก…' : 'บันทึกเวอร์ชันใหม่'}
-          </button>
+          </Button>
         </>
       }
     >
       <form id="formula-config-edit-form" onSubmit={handleSubmit(submit)} noValidate>
-        <div style={{ display: 'grid', gap: 20 }}>
+        <div className="grid gap-5">
           <section>
-            <h3 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700 }}>ค่าคงที่ในสูตร</h3>
-            <div style={{ display: 'grid', gap: 12 }}>
+            <h3 className="m-0 mb-2 text-sm font-bold">ค่าคงที่ในสูตร</h3>
+            <div className="grid gap-3">
               {FORMULA_SCALAR_FIELDS.map(({ key, label, hint }) => (
                 <FormField key={key} label={label} htmlFor={`formula-${key}`} hint={hint} error={errors[key]?.message}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div className="flex items-center gap-1.5">
                     <input
                       id={`formula-${key}`}
                       type="number" step="0.0001"
-                      style={{ flex: 1 }}
+                      className="flex-1"
                       aria-invalid={errors[key] ? true : undefined}
                       aria-describedby={errors[key] ? fieldErrorId(`formula-${key}`) : undefined}
                       {...register(key)}
@@ -325,18 +327,18 @@ function FormulaConfigEditModal({ config, saving, onClose, onSubmit }) {
           </section>
 
           <section>
-            <h3 style={{ margin: '0 0 4px', fontSize: 13, fontWeight: 700 }}>ค่าขนส่ง (THB ต่อรอบขนส่งจากโรงงาน)</h3>
-            <p style={{ margin: '0 0 8px', fontSize: 11, color: 'var(--color-text-muted)' }}>
+            <h3 className="m-0 mb-1 text-sm font-bold">ค่าขนส่ง (THB ต่อรอบขนส่งจากโรงงาน)</h3>
+            <p className="m-0 mb-2 text-2xs text-text-muted">
               ช่อง &quot;— ว่าง&quot; หมายถึงไม่กำหนดค่าขนส่งไว้ในตารางของ CEO (ไม่ใช่ 0 บาท) และไม่สามารถแก้ไขในหน้านี้ได้
             </p>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-xs">
                 <thead>
-                  <tr style={{ background: 'var(--color-surface-muted)' }}>
-                    <th style={{ padding: '6px 10px', textAlign: 'left' }}>ประเทศ</th>
-                    <th style={{ padding: '6px 10px', textAlign: 'left' }}>ความหนา</th>
+                  <tr className="bg-surface-muted">
+                    <th className="px-2.5 py-1.5 text-left">ประเทศ</th>
+                    <th className="px-2.5 py-1.5 text-left">ความหนา</th>
                     {matrix.qtyBands.map((band) => (
-                      <th key={matrix.bandKey(band.min, band.max)} style={{ padding: '6px 10px', textAlign: 'left', whiteSpace: 'nowrap' }}>
+                      <th key={matrix.bandKey(band.min, band.max)} className="px-2.5 py-1.5 text-left whitespace-nowrap">
                         {qtyBandLabel(band.min, band.max)}
                       </th>
                     ))}
@@ -344,25 +346,25 @@ function FormulaConfigEditModal({ config, saving, onClose, onSubmit }) {
                 </thead>
                 <tbody>
                   {matrix.countries.flatMap((country) => matrix.thicknessBands.map((thickness) => (
-                    <tr key={`${country}|${matrix.bandKey(thickness.min, thickness.max)}`} style={{ borderBottom: '1px solid var(--color-surface-subtle)' }}>
-                      <td style={{ padding: '6px 10px', fontWeight: 600 }}>{country}</td>
-                      <td style={{ padding: '6px 10px', color: 'var(--color-text-muted)' }}>{thicknessBandLabel(thickness.min, thickness.max)}</td>
+                    <tr key={`${country}|${matrix.bandKey(thickness.min, thickness.max)}`} className="border-b border-surface-subtle">
+                      <td className="px-2.5 py-1.5 font-semibold">{country}</td>
+                      <td className="px-2.5 py-1.5 text-text-muted">{thicknessBandLabel(thickness.min, thickness.max)}</td>
                       {matrix.qtyBands.map((qty) => {
                         const cellKey = `${country}|${matrix.bandKey(thickness.min, thickness.max)}|${matrix.bandKey(qty.min, qty.max)}`;
                         const rate = matrix.byCell.get(cellKey);
                         if (!rate) {
                           return (
-                            <td key={cellKey} style={{ padding: '6px 10px', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
+                            <td key={cellKey} className="px-2.5 py-1.5 text-text-muted italic">
                               — ว่าง
                             </td>
                           );
                         }
                         const fieldName = `freight_${rate.freightRateId}`;
                         return (
-                          <td key={cellKey} style={{ padding: '6px 10px' }}>
+                          <td key={cellKey} className="px-2.5 py-1.5">
                             <input
                               type="number" step="1" min="0"
-                              style={{ width: 90 }}
+                              className="w-[90px]"
                               aria-label={`ค่าขนส่ง ${country} ${thicknessBandLabel(thickness.min, thickness.max)} ${qtyBandLabel(qty.min, qty.max)}`}
                               aria-invalid={errors[fieldName] ? true : undefined}
                               {...register(fieldName)}
@@ -378,62 +380,62 @@ function FormulaConfigEditModal({ config, saving, onClose, onSubmit }) {
           </section>
 
           <section>
-            <h3 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700 }}>อัตราภาษีนำเข้าตามประเภทสินค้า (T)</h3>
-            <div style={{ display: 'grid', gap: 8 }}>
+            <h3 className="m-0 mb-2 text-sm font-bold">อัตราภาษีนำเข้าตามประเภทสินค้า (T)</h3>
+            <div className="grid gap-2">
               {dutyFieldArray.fields.map((field, index) => (
-                <div key={field.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <div key={field.id} className="flex gap-2 items-start">
                   <FormField label="รหัสประเภท" htmlFor={`duty-type-${field.id}`} error={errors.dutyRates?.[index]?.productType?.message}>
-                    <input id={`duty-type-${field.id}`} style={{ width: 140 }} {...register(`dutyRates.${index}.productType`)} />
+                    <input id={`duty-type-${field.id}`} className="w-[140px]" {...register(`dutyRates.${index}.productType`)} />
                   </FormField>
                   <FormField label="ชื่อ (ไทย)" htmlFor={`duty-label-${field.id}`} error={errors.dutyRates?.[index]?.productLabel?.message}>
-                    <input id={`duty-label-${field.id}`} style={{ width: 160 }} {...register(`dutyRates.${index}.productLabel`)} />
+                    <input id={`duty-label-${field.id}`} className="w-[160px]" {...register(`dutyRates.${index}.productLabel`)} />
                   </FormField>
                   <FormField label="ภาษี %" htmlFor={`duty-pct-${field.id}`} error={errors.dutyRates?.[index]?.dutyPct?.message}>
-                    <input id={`duty-pct-${field.id}`} type="number" step="0.01" style={{ width: 90 }} {...register(`dutyRates.${index}.dutyPct`)} />
+                    <input id={`duty-pct-${field.id}`} type="number" step="0.01" className="w-[90px]" {...register(`dutyRates.${index}.dutyPct`)} />
                   </FormField>
-                  <button type="button" className="secondary-button" style={{ marginTop: 22, fontSize: 11, padding: '3px 8px' }}
+                  <Button type="button" variant="secondary" className="mt-[22px] text-2xs px-2 py-[3px]"
                     onClick={() => dutyFieldArray.remove(index)}>
                     ลบ
-                  </button>
+                  </Button>
                 </div>
               ))}
               {typeof errors.dutyRates?.message === 'string' && (
-                <p role="alert" style={{ margin: 0, color: 'var(--color-danger)', fontSize: 11, fontWeight: 600 }}>{errors.dutyRates.message}</p>
+                <p role="alert" className="m-0 text-danger text-2xs font-semibold">{errors.dutyRates.message}</p>
               )}
-              <button type="button" className="secondary-button" style={{ fontSize: 12, alignSelf: 'flex-start' }}
+              <Button type="button" variant="secondary" className="text-xs self-start"
                 onClick={() => dutyFieldArray.append({ productType: '', productLabel: '', dutyPct: '0' })}>
                 + เพิ่มประเภทสินค้า
-              </button>
+              </Button>
             </div>
           </section>
 
           <section>
-            <h3 style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700 }}>ค่าธรรมเนียมพิธีการศุลกากร (S)</h3>
-            <div style={{ display: 'grid', gap: 8 }}>
+            <h3 className="m-0 mb-2 text-sm font-bold">ค่าธรรมเนียมพิธีการศุลกากร (S)</h3>
+            <div className="grid gap-2">
               {clearanceFieldArray.fields.map((field, index) => (
-                <div key={field.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <div key={field.id} className="flex gap-2 items-start">
                   <FormField label="ตร.ม. ตั้งแต่" htmlFor={`clr-min-${field.id}`} error={errors.clearanceFees?.[index]?.qtyMinSqm?.message}>
-                    <input id={`clr-min-${field.id}`} type="number" step="1" style={{ width: 90 }} {...register(`clearanceFees.${index}.qtyMinSqm`)} />
+                    <input id={`clr-min-${field.id}`} type="number" step="1" className="w-[90px]" {...register(`clearanceFees.${index}.qtyMinSqm`)} />
                   </FormField>
                   <FormField label="ถึง (เว้นว่าง = ไม่จำกัด)" htmlFor={`clr-max-${field.id}`} error={errors.clearanceFees?.[index]?.qtyMaxSqm?.message}>
-                    <input id={`clr-max-${field.id}`} type="number" step="1" style={{ width: 90 }} {...register(`clearanceFees.${index}.qtyMaxSqm`)} />
+                    <input id={`clr-max-${field.id}`} type="number" step="1" className="w-[90px]" {...register(`clearanceFees.${index}.qtyMaxSqm`)} />
                   </FormField>
                   <FormField label="ค่าธรรมเนียม (บาท)" htmlFor={`clr-amt-${field.id}`} error={errors.clearanceFees?.[index]?.amountThb?.message}>
-                    <input id={`clr-amt-${field.id}`} type="number" step="1" style={{ width: 110 }} {...register(`clearanceFees.${index}.amountThb`)} />
+                    <input id={`clr-amt-${field.id}`} type="number" step="1" className="w-[110px]" {...register(`clearanceFees.${index}.amountThb`)} />
                   </FormField>
-                  <button type="button" className="secondary-button" style={{ marginTop: 22, fontSize: 11, padding: '3px 8px' }}
+                  <Button type="button" variant="secondary" className="mt-[22px] text-2xs px-2 py-[3px]"
                     onClick={() => clearanceFieldArray.remove(index)}>
                     ลบ
-                  </button>
+                  </Button>
                 </div>
               ))}
               {typeof errors.clearanceFees?.message === 'string' && (
-                <p role="alert" style={{ margin: 0, color: 'var(--color-danger)', fontSize: 11, fontWeight: 600 }}>{errors.clearanceFees.message}</p>
+                <p role="alert" className="m-0 text-danger text-2xs font-semibold">{errors.clearanceFees.message}</p>
               )}
-              <button type="button" className="secondary-button" style={{ fontSize: 12, alignSelf: 'flex-start' }}
+              <Button type="button" variant="secondary" className="text-xs self-start"
                 onClick={() => clearanceFieldArray.append({ qtyMinSqm: '0', qtyMaxSqm: '', amountThb: '0' })}>
                 + เพิ่มช่วง
-              </button>
+              </Button>
             </div>
           </section>
         </div>
@@ -593,30 +595,27 @@ export function CeoSettingsPage({ showToast }) {
     onError: (e) => showToast('error', e.message || 'บันทึกไม่สำเร็จ'),
   });
 
-  if (loading) return <div style={{ padding: 40, color: 'var(--color-text-muted)' }}>กำลังโหลดการตั้งค่าการคำนวณราคา…</div>;
+  if (loading) return <div className="p-10 text-text-muted">กำลังโหลดการตั้งค่าการคำนวณราคา…</div>;
 
   return (
-    <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
+    <PageStack>
       <header>
-        <h1 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 800 }}>ตั้งค่าการคำนวณราคา</h1>
-        <p style={{ margin: 0, color: 'var(--color-text-muted)', fontSize: 13 }}>CEO สามารถปรับค่าได้ตลอดเวลา — ระบบเก็บประวัติทุกเวอร์ชัน</p>
+        <h1 className="m-0 mb-1 text-xl font-extrabold">ตั้งค่าการคำนวณราคา</h1>
+        <p className="m-0 text-text-muted text-sm">CEO สามารถปรับค่าได้ตลอดเวลา — ระบบเก็บประวัติทุกเวอร์ชัน</p>
       </header>
 
       {/* FX Rates */}
-      <section className="table-panel">
-        <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid var(--color-border)' }}>
-          <h2>อัตราแลกเปลี่ยน (1 หน่วย = ? บาท)</h2>
-        </div>
-        <div style={{ padding: '8px 18px', fontSize: 11, color: 'var(--color-text-muted)', borderBottom: '1px solid var(--color-surface-subtle)', display: 'flex', gap: 12 }}>
+      <Panel flush title="อัตราแลกเปลี่ยน (1 หน่วย = ? บาท)">
+        <div className="px-[18px] py-2 text-2xs text-text-muted border-b border-surface-subtle flex gap-3">
           <span>ดึงอัตโนมัติจากธนาคารแห่งประเทศไทยทุกวัน 18:00 (เวลาไทย)</span>
-          <span style={{ color: 'var(--color-text-muted)' }}>• ติดต่อผู้ดูแลระบบหากยังไม่เปิดใช้งานการดึงอัตราอัตโนมัติ</span>
+          <span className="text-text-muted">• ติดต่อผู้ดูแลระบบหากยังไม่เปิดใช้งานการดึงอัตราอัตโนมัติ</span>
         </div>
-        <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-sm">
           <thead>
-            <tr style={{ background: 'var(--color-surface-muted)' }}>
+            <tr className="bg-surface-muted">
               {['สกุลเงิน', 'อัตรา (THB)', 'วันที่มีผล', 'แหล่งข้อมูล', 'แก้ไขเอง'].map((h) => (
-                <th key={h} style={{ padding: '8px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--color-icon-muted)', borderBottom: '1px solid var(--color-border)' }}>{h}</th>
+                <th key={h} className="px-4 py-2 text-left font-semibold text-icon-muted border-b border-border">{h}</th>
               ))}
             </tr>
           </thead>
@@ -628,14 +627,14 @@ export function CeoSettingsPage({ showToast }) {
               const fxInputId = `fx-rate-${fx.currency}`;
               const fxErrorId = `${fxInputId}-error`;
               return (
-                <tr key={fx.currency} style={{ borderBottom: '1px solid var(--color-surface-subtle)' }}>
-                  <td style={{ padding: '8px 16px', fontWeight: 700 }}>
-                    <code style={{ background: 'var(--color-surface-subtle)', padding: '2px 6px', borderRadius: 4 }}>{fx.currency}</code>
+                <tr key={fx.currency} className="border-b border-surface-subtle">
+                  <td className="px-4 py-2 font-bold">
+                    <code className="bg-surface-subtle px-1.5 py-0.5 rounded-[4px]">{fx.currency}</code>
                   </td>
-                  <td style={{ padding: '8px 16px' }}>
+                  <td className="px-4 py-2">
                     {isEditing ? (
                       <div>
-                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <div className="flex gap-1.5 items-center">
                           <input
                             id={fxInputId}
                             type="number" step="0.0001" min="0"
@@ -646,25 +645,23 @@ export function CeoSettingsPage({ showToast }) {
                             }}
                             aria-invalid={fxError ? true : undefined}
                             aria-describedby={fxError ? fxErrorId : undefined}
-                            style={{ width: 100, padding: '4px 8px', border: `1px solid ${fxError ? 'var(--color-danger)' : 'var(--color-info-border-strong)'}`, borderRadius: 4, fontSize: 13 }}
+                            className={`w-[100px] py-1 px-2 rounded-[4px] text-sm border ${fxError ? 'border-danger' : 'border-info-border-strong'}`}
                           />
-                          <button type="button" className="primary-button"
-                            style={{ fontSize: 12, padding: '4px 10px' }}
+                          <Button type="button" variant="primary" className="text-xs px-[10px] py-1"
                             disabled={isSavingFx(fx.currency)}
                             onClick={() => saveFxRate(fx.currency)}>
                             {isSavingFx(fx.currency) ? '…' : 'บันทึก'}
-                          </button>
-                          <button type="button" className="secondary-button"
-                            style={{ fontSize: 12, padding: '4px 10px' }}
+                          </Button>
+                          <Button type="button" variant="secondary" className="text-xs px-[10px] py-1"
                             onClick={() => {
                               setEditFx((p) => { const n = { ...p }; delete n[fx.currency]; return n; });
                               clearFxError(fx.currency);
                             }}>
                             ยกเลิก
-                          </button>
+                          </Button>
                         </div>
                         {fxError && (
-                          <p id={fxErrorId} role="alert" style={{ margin: '4px 0 0', color: 'var(--color-danger)', fontSize: 11, fontWeight: 600 }}>
+                          <p id={fxErrorId} role="alert" className="m-0 mt-1 text-danger text-2xs font-semibold">
                             {fxError}
                           </p>
                         )}
@@ -673,20 +670,19 @@ export function CeoSettingsPage({ showToast }) {
                       <strong>{fx.currency === 'THB' ? '1.0000' : moneyDisplay(fx.rateToThb)}</strong>
                     )}
                   </td>
-                  <td style={{ padding: '8px 16px', color: 'var(--color-text-muted)', fontSize: 12 }}>{fx.effectiveDate}</td>
-                  <td style={{ padding: '8px 16px' }}>
+                  <td className="px-4 py-2 text-text-muted text-xs">{fx.effectiveDate}</td>
+                  <td className="px-4 py-2">
                     {isBot
-                      ? <span style={{ background: 'var(--color-info-bg)', color: 'var(--color-info)', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600 }}>ธปท. อัตโนมัติ</span>
-                      : <span style={{ background: 'var(--color-surface-subtle)', color: 'var(--color-text-muted)', padding: '2px 8px', borderRadius: 10, fontSize: 11 }}>กรอกเอง</span>
+                      ? <span className="bg-info-bg text-info px-2 py-0.5 rounded-[10px] text-2xs font-semibold">ธปท. อัตโนมัติ</span>
+                      : <span className="bg-surface-subtle text-text-muted px-2 py-0.5 rounded-[10px] text-2xs">กรอกเอง</span>
                     }
                   </td>
-                  <td style={{ padding: '8px 16px' }}>
+                  <td className="px-4 py-2">
                     {fx.currency !== 'THB' && !isEditing && (
-                      <button type="button" className="secondary-button"
-                        style={{ fontSize: 11, padding: '3px 8px' }}
+                      <Button type="button" variant="secondary" className="text-2xs px-2 py-[3px]"
                         onClick={() => setEditFx((p) => ({ ...p, [fx.currency]: String(fx.rateToThb) }))}>
                         แก้ไขเอง
-                      </button>
+                      </Button>
                     )}
                   </td>
                 </tr>
@@ -695,131 +691,126 @@ export function CeoSettingsPage({ showToast }) {
           </tbody>
         </table>
         </div>
-      </section>
+      </Panel>
 
       {/* Price Calc Config */}
-      <section className="table-panel">
-        <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid var(--color-border)' }}>
-          <h2>สูตรคำนวณราคา (ต่อ ตร.ม.) แต่ละประเทศ</h2>
-        </div>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+      <Panel flush title="สูตรคำนวณราคา (ต่อ ตร.ม.) แต่ละประเทศ">
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-xs">
             <thead>
-              <tr style={{ background: 'var(--color-surface-muted)' }}>
+              <tr className="bg-surface-muted">
                 {['ประเทศ', 'เวอร์ชัน', 'ค่าเรือ/ตร.ม.', 'ประกัน/ตร.ม.', 'โรงงาน→ท่าเรือ', 'ท่าเรือ→โกดัง', 'ภาษีนำเข้า', 'อัตรากำไร', ''].map((h) => (
-                  <th key={h} style={{ padding: '8px 14px', textAlign: 'left', fontWeight: 600, color: 'var(--color-icon-muted)', borderBottom: '1px solid var(--color-border)', whiteSpace: 'nowrap' }}>{h}</th>
+                  <th key={h} className="px-[14px] py-2 text-left font-semibold text-icon-muted border-b border-border whitespace-nowrap">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {configs.map((cfg) => (
-                <tr key={cfg.configId} style={{ borderBottom: '1px solid var(--color-surface-subtle)' }}>
-                  <td style={{ padding: '8px 14px', fontWeight: 700 }}>{cfg.country}</td>
-                  <td style={{ padding: '8px 14px', color: 'var(--color-text-muted)' }}>เวอร์ชัน {cfg.version}</td>
-                  <td style={{ padding: '8px 14px' }}>{moneyDisplay(cfg.freightPerSqm)}</td>
-                  <td style={{ padding: '8px 14px' }}>{moneyDisplay(cfg.insurancePerSqm)}</td>
-                  <td style={{ padding: '8px 14px' }}>{moneyDisplay(cfg.inlandFactoryToPortPerSqm)}</td>
-                  <td style={{ padding: '8px 14px' }}>{moneyDisplay(cfg.inlandPortToWarehousePerSqm)}</td>
-                  <td style={{ padding: '8px 14px' }}>{pctDisplay(cfg.importDutyPct)}</td>
-                  <td style={{ padding: '8px 14px', fontWeight: 600, color: 'var(--color-success)' }}>{pctDisplay(cfg.marginPct)}</td>
-                  <td style={{ padding: '8px 14px' }}>
-                    <button type="button" className="secondary-button"
-                      style={{ fontSize: 11, padding: '3px 8px' }}
+                <tr key={cfg.configId} className="border-b border-surface-subtle">
+                  <td className="px-[14px] py-2 font-bold">{cfg.country}</td>
+                  <td className="px-[14px] py-2 text-text-muted">เวอร์ชัน {cfg.version}</td>
+                  <td className="px-[14px] py-2">{moneyDisplay(cfg.freightPerSqm)}</td>
+                  <td className="px-[14px] py-2">{moneyDisplay(cfg.insurancePerSqm)}</td>
+                  <td className="px-[14px] py-2">{moneyDisplay(cfg.inlandFactoryToPortPerSqm)}</td>
+                  <td className="px-[14px] py-2">{moneyDisplay(cfg.inlandPortToWarehousePerSqm)}</td>
+                  <td className="px-[14px] py-2">{pctDisplay(cfg.importDutyPct)}</td>
+                  <td className="px-[14px] py-2 font-semibold text-success">{pctDisplay(cfg.marginPct)}</td>
+                  <td className="px-[14px] py-2">
+                    <Button type="button" variant="secondary" className="text-2xs px-2 py-[3px]"
                       onClick={() => openConfigEdit(cfg)}>
                       แก้ไข
-                    </button>
+                    </Button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <div style={{ padding: '10px 16px', borderTop: '1px solid var(--color-surface-subtle)', fontSize: 11, color: 'var(--color-text-muted)' }}>
+        <div className="px-4 py-2.5 border-t border-surface-subtle text-2xs text-text-muted">
           สูตร: CIF = ค่าสินค้า(THB/ตร.ม.) + ค่าเรือ + ประกัน → ต้นทุน = CIF + ภาษี + ขนส่งภายใน → ราคาขาย = ต้นทุน × (1 + อัตรากำไร)
         </div>
-      </section>
+      </Panel>
 
       {/* BRANCH 1: สูตรคำนวณราคาขาย (ดีล) — sales.pricing_formula_config + its 3 child tables.
           Deliberately below the existing per-country price-calc table above; a distinct config
           from it and does not touch it. */}
-      <section className="table-panel">
-        <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2>สูตรคำนวณราคาขาย (ดีล)</h2>
-          {formulaConfig && (
-            <button type="button" className="secondary-button" style={{ fontSize: 11, padding: '3px 8px' }}
-              onClick={() => setEditingFormulaConfig(true)}>
-              แก้ไขสูตรคำนวณราคาขาย
-            </button>
-          )}
-        </div>
-
+      <Panel
+        flush
+        title="สูตรคำนวณราคาขาย (ดีล)"
+        actions={formulaConfig && (
+          <Button type="button" variant="secondary" className="text-2xs px-2 py-[3px]"
+            onClick={() => setEditingFormulaConfig(true)}>
+            แก้ไขสูตรคำนวณราคาขาย
+          </Button>
+        )}
+      >
         {formulaConfigQuery.isLoading && (
-          <div style={{ padding: 18, color: 'var(--color-text-muted)', fontSize: 12 }}>กำลังโหลดสูตรคำนวณราคาขาย…</div>
+          <div className="p-[18px] text-text-muted text-xs">กำลังโหลดสูตรคำนวณราคาขาย…</div>
         )}
         {!formulaConfigQuery.isLoading && !formulaConfig && (
-          <div style={{ padding: 18, color: 'var(--color-text-muted)', fontSize: 12 }}>ไม่พบสูตรคำนวณราคาขาย</div>
+          <div className="p-[18px] text-text-muted text-xs">ไม่พบสูตรคำนวณราคาขาย</div>
         )}
 
         {formulaConfig && (
           <>
-            <div style={{ padding: '8px 18px', fontSize: 11, color: 'var(--color-text-muted)', borderBottom: '1px solid var(--color-surface-subtle)', display: 'flex', gap: 12 }}>
+            <div className="px-[18px] py-2 text-2xs text-text-muted border-b border-surface-subtle flex gap-3">
               <span>เวอร์ชัน {formulaConfig.version}</span>
               <span>• มีผลตั้งแต่ {formulaConfig.effectiveFrom}</span>
             </div>
 
-            <div style={{ padding: '12px 18px' }}>
-              <h3 style={{ margin: '0 0 6px', fontSize: 12, fontWeight: 700, color: 'var(--color-icon-muted)' }}>ค่าคงที่ในสูตร</h3>
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <div className="px-[18px] py-3">
+              <h3 className="m-0 mb-1.5 text-xs font-bold text-icon-muted">ค่าคงที่ในสูตร</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-xs">
                   <tbody>
                     <tr>
-                      <td style={{ padding: '4px 10px', color: 'var(--color-text-muted)' }}>ตัวคูณมูลค่าประกันภัย (ตัวคูณดิบ)</td>
-                      <td style={{ padding: '4px 10px', fontWeight: 600 }}>{multiplierDisplay(formulaConfig.insuranceValueFactor)}</td>
-                      <td style={{ padding: '4px 10px', color: 'var(--color-text-muted)' }}>อัตราค่าประกันภัย (ตัวคูณดิบ)</td>
-                      <td style={{ padding: '4px 10px', fontWeight: 600 }}>{multiplierDisplay(formulaConfig.insuranceRate)}</td>
+                      <td className="px-2.5 py-1 text-text-muted">ตัวคูณมูลค่าประกันภัย (ตัวคูณดิบ)</td>
+                      <td className="px-2.5 py-1 font-semibold">{multiplierDisplay(formulaConfig.insuranceValueFactor)}</td>
+                      <td className="px-2.5 py-1 text-text-muted">อัตราค่าประกันภัย (ตัวคูณดิบ)</td>
+                      <td className="px-2.5 py-1 font-semibold">{multiplierDisplay(formulaConfig.insuranceRate)}</td>
                     </tr>
                     <tr>
-                      <td style={{ padding: '4px 10px', color: 'var(--color-text-muted)' }}>บัฟเฟอร์ประกันภัย B1 (ตัวคูณดิบ)</td>
-                      <td style={{ padding: '4px 10px', fontWeight: 600 }}>{multiplierDisplay(formulaConfig.insuranceBuffer)}</td>
-                      <td style={{ padding: '4px 10px', color: 'var(--color-text-muted)' }}>บัฟเฟอร์ต้นทุน B2 (ตัวคูณดิบ)</td>
-                      <td style={{ padding: '4px 10px', fontWeight: 600 }}>{multiplierDisplay(formulaConfig.costBuffer)}</td>
+                      <td className="px-2.5 py-1 text-text-muted">บัฟเฟอร์ประกันภัย B1 (ตัวคูณดิบ)</td>
+                      <td className="px-2.5 py-1 font-semibold">{multiplierDisplay(formulaConfig.insuranceBuffer)}</td>
+                      <td className="px-2.5 py-1 text-text-muted">บัฟเฟอร์ต้นทุน B2 (ตัวคูณดิบ)</td>
+                      <td className="px-2.5 py-1 font-semibold">{multiplierDisplay(formulaConfig.costBuffer)}</td>
                     </tr>
                     <tr>
-                      <td style={{ padding: '4px 10px', color: 'var(--color-text-muted)' }}>บัฟเฟอร์ราคาขาย B3 (ตัวคูณดิบ)</td>
-                      <td style={{ padding: '4px 10px', fontWeight: 600 }}>{multiplierDisplay(formulaConfig.sellingBuffer)}</td>
-                      <td style={{ padding: '4px 10px', color: 'var(--color-text-muted)' }}>อัตรากำไรเริ่มต้น</td>
-                      <td style={{ padding: '4px 10px', fontWeight: 600, color: 'var(--color-success)' }}>{pctDisplay(formulaConfig.defaultMarginPct)}</td>
+                      <td className="px-2.5 py-1 text-text-muted">บัฟเฟอร์ราคาขาย B3 (ตัวคูณดิบ)</td>
+                      <td className="px-2.5 py-1 font-semibold">{multiplierDisplay(formulaConfig.sellingBuffer)}</td>
+                      <td className="px-2.5 py-1 text-text-muted">อัตรากำไรเริ่มต้น</td>
+                      <td className="px-2.5 py-1 font-semibold text-success">{pctDisplay(formulaConfig.defaultMarginPct)}</td>
                     </tr>
                     <tr>
-                      <td style={{ padding: '4px 10px', color: 'var(--color-text-muted)' }}>ปัดราคาขายขึ้นเป็นทวีคูณของ</td>
-                      <td style={{ padding: '4px 10px', fontWeight: 600 }}>{moneyDisplay(formulaConfig.sellingPriceRoundUpTo)} บาท</td>
+                      <td className="px-2.5 py-1 text-text-muted">ปัดราคาขายขึ้นเป็นทวีคูณของ</td>
+                      <td className="px-2.5 py-1 font-semibold">{moneyDisplay(formulaConfig.sellingPriceRoundUpTo)} บาท</td>
                       <td />
                       <td />
                     </tr>
                   </tbody>
                 </table>
               </div>
-              <p style={{ margin: '6px 0 0', fontSize: 10, color: 'var(--color-text-muted)' }}>
+              <p className="m-0 mt-1.5 text-[10px] text-text-muted">
                 B1/B2/B3 และ 1.15/0.0045 เป็นตัวคูณดิบ (ไม่ใช่ % และไม่ใช่ VAT) — VAT 7% แยกคิดตอนออกใบเสนอราคาลูกค้าเสมอ
               </p>
             </div>
 
-            <div style={{ padding: '0 18px 12px' }}>
-              <h3 style={{ margin: '0 0 6px', fontSize: 12, fontWeight: 700, color: 'var(--color-icon-muted)' }}>ค่าขนส่ง (THB ต่อรอบขนส่งจากโรงงาน)</h3>
-              <p style={{ margin: '0 0 6px', fontSize: 10, color: 'var(--color-text-muted)' }}>
+            <div className="pt-0 px-[18px] pb-3">
+              <h3 className="m-0 mb-1.5 text-xs font-bold text-icon-muted">ค่าขนส่ง (THB ต่อรอบขนส่งจากโรงงาน)</h3>
+              <p className="m-0 mb-1.5 text-[10px] text-text-muted">
                 &quot;— ว่าง&quot; หมายถึงไม่กำหนดค่าไว้ในตารางของ CEO (ไม่ใช่ 0 บาท)
               </p>
               {(() => {
                 const matrix = buildFreightMatrixDims(formulaConfig.freightRates);
                 return (
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse text-xs">
                       <thead>
-                        <tr style={{ background: 'var(--color-surface-muted)' }}>
-                          <th style={{ padding: '6px 10px', textAlign: 'left' }}>ประเทศ</th>
-                          <th style={{ padding: '6px 10px', textAlign: 'left' }}>ความหนา</th>
+                        <tr className="bg-surface-muted">
+                          <th className="px-2.5 py-1.5 text-left">ประเทศ</th>
+                          <th className="px-2.5 py-1.5 text-left">ความหนา</th>
                           {matrix.qtyBands.map((band) => (
-                            <th key={matrix.bandKey(band.min, band.max)} style={{ padding: '6px 10px', textAlign: 'left', whiteSpace: 'nowrap' }}>
+                            <th key={matrix.bandKey(band.min, band.max)} className="px-2.5 py-1.5 text-left whitespace-nowrap">
                               {qtyBandLabel(band.min, band.max)}
                             </th>
                           ))}
@@ -827,14 +818,14 @@ export function CeoSettingsPage({ showToast }) {
                       </thead>
                       <tbody>
                         {matrix.countries.flatMap((country) => matrix.thicknessBands.map((thickness) => (
-                          <tr key={`${country}|${matrix.bandKey(thickness.min, thickness.max)}`} style={{ borderBottom: '1px solid var(--color-surface-subtle)' }}>
-                            <td style={{ padding: '6px 10px', fontWeight: 600 }}>{country}</td>
-                            <td style={{ padding: '6px 10px', color: 'var(--color-text-muted)' }}>{thicknessBandLabel(thickness.min, thickness.max)}</td>
+                          <tr key={`${country}|${matrix.bandKey(thickness.min, thickness.max)}`} className="border-b border-surface-subtle">
+                            <td className="px-2.5 py-1.5 font-semibold">{country}</td>
+                            <td className="px-2.5 py-1.5 text-text-muted">{thicknessBandLabel(thickness.min, thickness.max)}</td>
                             {matrix.qtyBands.map((qty) => {
                               const cellKey = `${country}|${matrix.bandKey(thickness.min, thickness.max)}|${matrix.bandKey(qty.min, qty.max)}`;
                               const rate = matrix.byCell.get(cellKey);
                               return (
-                                <td key={cellKey} style={rate ? { padding: '6px 10px' } : { padding: '6px 10px', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
+                                <td key={cellKey} className={rate ? 'px-2.5 py-1.5' : 'px-2.5 py-1.5 text-text-muted italic'}>
                                   {rate ? moneyDisplay(rate.amountThb) : '— ว่าง'}
                                 </td>
                               );
@@ -848,28 +839,28 @@ export function CeoSettingsPage({ showToast }) {
               })()}
             </div>
 
-            <div style={{ padding: '0 18px 12px', display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+            <div className="pt-0 px-[18px] pb-3 flex gap-6 flex-wrap">
               <div>
-                <h3 style={{ margin: '0 0 6px', fontSize: 12, fontWeight: 700, color: 'var(--color-icon-muted)' }}>อัตราภาษีนำเข้า (T)</h3>
-                <table style={{ borderCollapse: 'collapse', fontSize: 12 }}>
+                <h3 className="m-0 mb-1.5 text-xs font-bold text-icon-muted">อัตราภาษีนำเข้า (T)</h3>
+                <table className="border-collapse text-xs">
                   <tbody>
                     {formulaConfig.dutyRates.map((duty) => (
                       <tr key={duty.dutyRateId}>
-                        <td style={{ padding: '4px 10px', color: 'var(--color-text-muted)' }}>{duty.productLabel} ({duty.productType})</td>
-                        <td style={{ padding: '4px 10px', fontWeight: 600 }}>{pctDisplay(duty.dutyPct)}</td>
+                        <td className="px-2.5 py-1 text-text-muted">{duty.productLabel} ({duty.productType})</td>
+                        <td className="px-2.5 py-1 font-semibold">{pctDisplay(duty.dutyPct)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
               <div>
-                <h3 style={{ margin: '0 0 6px', fontSize: 12, fontWeight: 700, color: 'var(--color-icon-muted)' }}>ค่าธรรมเนียมพิธีการศุลกากร (S)</h3>
-                <table style={{ borderCollapse: 'collapse', fontSize: 12 }}>
+                <h3 className="m-0 mb-1.5 text-xs font-bold text-icon-muted">ค่าธรรมเนียมพิธีการศุลกากร (S)</h3>
+                <table className="border-collapse text-xs">
                   <tbody>
                     {formulaConfig.clearanceFees.map((fee) => (
                       <tr key={fee.clearanceFeeId}>
-                        <td style={{ padding: '4px 10px', color: 'var(--color-text-muted)' }}>{qtyBandLabel(fee.qtyMinSqm, fee.qtyMaxSqm)}</td>
-                        <td style={{ padding: '4px 10px', fontWeight: 600 }}>{moneyDisplay(fee.amountThb)} บาท</td>
+                        <td className="px-2.5 py-1 text-text-muted">{qtyBandLabel(fee.qtyMinSqm, fee.qtyMaxSqm)}</td>
+                        <td className="px-2.5 py-1 font-semibold">{moneyDisplay(fee.amountThb)} บาท</td>
                       </tr>
                     ))}
                   </tbody>
@@ -878,24 +869,21 @@ export function CeoSettingsPage({ showToast }) {
             </div>
           </>
         )}
-      </section>
+      </Panel>
 
       {/* Deal-estimate markup (V112) — the coarse ราคาตั้ง display multiplier the deal-create
           modal applies on top of the raw catalog price. Deliberately its own section, separate
           from "สูตรคำนวณราคา" above: that section IS the margin policy; this is a single bare
           number with no relationship to it beyond both being CEO-editable pricing inputs. */}
       {markup ? (
-        <section className="table-panel">
-          <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid var(--color-border)' }}>
-            <h2>ตัวคูณราคาตั้งประมาณการ (หน้าสร้างดีล)</h2>
-          </div>
-          <div style={{ padding: '8px 18px', fontSize: 11, color: 'var(--color-text-muted)', borderBottom: '1px solid var(--color-surface-subtle)' }}>
+        <Panel flush title="ตัวคูณราคาตั้งประมาณการ (หน้าสร้างดีล)">
+          <div className="px-[18px] py-2 text-2xs text-text-muted border-b border-surface-subtle">
             คูณกับราคาแคตตาล็อก (แปลงเป็นบาทแล้ว) เพื่อประมาณ &quot;ราคาตั้ง&quot; ในหน้าสร้างดีล — ไม่ใช่สูตรกำไรจริง ราคาขายจริงยังคำนวณจากขั้นคำขอราคา
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 18px' }}>
+          <div className="flex items-center gap-2.5 px-[18px] py-3">
             {editMarkup !== null ? (
               <div>
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <div className="flex gap-1.5 items-center">
                   <input
                     id="deal-estimate-markup-input"
                     type="number" step="0.1" min="0"
@@ -903,43 +891,40 @@ export function CeoSettingsPage({ showToast }) {
                     onChange={(e) => { setEditMarkup(e.target.value); setMarkupError(''); }}
                     aria-invalid={markupError ? true : undefined}
                     aria-describedby={markupError ? 'deal-estimate-markup-error' : undefined}
-                    style={{ width: 100, padding: '4px 8px', border: `1px solid ${markupError ? 'var(--color-danger)' : 'var(--color-info-border-strong)'}`, borderRadius: 4, fontSize: 13 }}
+                    className={`w-[100px] py-1 px-2 rounded-[4px] text-sm border ${markupError ? 'border-danger' : 'border-info-border-strong'}`}
                   />
-                  <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>เท่า</span>
-                  <button type="button" className="primary-button"
-                    style={{ fontSize: 12, padding: '4px 10px' }}
+                  <span className="text-xs text-text-muted">เท่า</span>
+                  <Button type="button" variant="primary" className="text-xs px-[10px] py-1"
                     disabled={saveMarkupMutation.isPending}
                     onClick={saveMarkup}>
                     {saveMarkupMutation.isPending ? '…' : 'บันทึก'}
-                  </button>
-                  <button type="button" className="secondary-button"
-                    style={{ fontSize: 12, padding: '4px 10px' }}
+                  </Button>
+                  <Button type="button" variant="secondary" className="text-xs px-[10px] py-1"
                     onClick={() => { setEditMarkup(null); setMarkupError(''); }}>
                     ยกเลิก
-                  </button>
+                  </Button>
                 </div>
                 {markupError && (
-                  <p id="deal-estimate-markup-error" role="alert" style={{ margin: '4px 0 0', color: 'var(--color-danger)', fontSize: 11, fontWeight: 600 }}>
+                  <p id="deal-estimate-markup-error" role="alert" className="m-0 mt-1 text-danger text-2xs font-semibold">
                     {markupError}
                   </p>
                 )}
               </div>
             ) : (
               <>
-                <strong style={{ fontSize: 15 }}>× {Number(markup.multiplier).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</strong>
+                <strong className="text-[15px]">× {Number(markup.multiplier).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</strong>
                 {/* "แก้ไขตัวคูณ", not the bare "แก้ไข" the ราคาสูตรคำนวณ table above uses — this
                     section can render at the same time as that table, and a shared accessible
                     name would make the two edit buttons indistinguishable to assistive tech
                     (and to a role-query test) once both are on screen. */}
-                <button type="button" className="secondary-button"
-                  style={{ fontSize: 11, padding: '3px 8px' }}
+                <Button type="button" variant="secondary" className="text-2xs px-2 py-[3px]"
                   onClick={() => setEditMarkup(String(markup.multiplier))}>
                   แก้ไขตัวคูณ
-                </button>
+                </Button>
               </>
             )}
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       {/* Config Edit Modal */}
@@ -961,6 +946,6 @@ export function CeoSettingsPage({ showToast }) {
           onSubmit={(payload) => saveFormulaConfigMutation.mutate(payload)}
         />
       )}
-    </div>
+    </PageStack>
   );
 }
