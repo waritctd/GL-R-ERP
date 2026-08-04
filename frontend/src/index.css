@@ -369,20 +369,50 @@
   /* Load-bearing well beyond form markup: pages rely on this to stack a
      label's own text above the control nested inside it (AttendancePage,
      CommissionPage, FormField.jsx — see the comment there about why the
-     required marker has to be wrapped in a single element to survive it). */
+     required marker has to be wrapped in a single element to survive it).
+
+     `align-content: start` is load-bearing too, not cosmetic (#528). ~185
+     hand-rolled field wrappers across src/features rely on this rule to stack
+     their label text above their control. Wherever such a label is itself a
+     stretched grid/flex item — the common case, since `align-items` defaults to
+     `stretch` — the spare height of the row was distributed into these auto
+     rows, growing the *control* rather than leaving whitespace below it. How
+     much it grew depended on how many rows that field happened to have, i.e.
+     whether it carried a hint line, so two fields side by side in one row ended
+     up different heights and different vertical positions. Packing the rows to
+     the start leaves the control at its natural height and the slack at the
+     bottom, where it belongs. Same fix as FormField.jsx's `content-start`. */
   label {
     display: grid;
+    align-content: start;
     gap: 7px;
     color: var(--color-text-secondary);
     font-size: var(--text-sm);
     font-weight: 700;
   }
 
-  input,
+  /* `height`, not `min-height` (#528): a fixed-height control cannot absorb a
+     stretched parent's spare height, so it stays aligned with its neighbour
+     even where a wrapper misses the `align-content: start` above. `textarea`
+     overrides this back to auto below — it is the one control that must grow.
+
+     The exclusion is wrapped in `:where()` for its zero specificity, which is
+     load-bearing. A bare `input:not([type='checkbox']):not([type='radio'])`
+     scores (0,2,1) — higher than `.currency-input input` (0,1,1) — so this
+     rule's `padding: 0 12px` started winning over the 34px left inset those
+     wrappers use to clear their symbol, and the ฿ glyph landed on top of the
+     value. `:where()` keeps the whole selector at (0,0,1), exactly what the
+     original bare `input` scored, so every `.currency-input` /
+     `.input-with-icon` / `.search-field` inset still wins as it always did.
+
+     That specificity reasoning survives the move into `@layer base` unchanged:
+     those wrapper rules live in `@layer legacy`, which is ordered AFTER `base`,
+     so they win on layer order regardless of selector weight. */
+  input:where(:not([type='checkbox'], [type='radio'])),
   select,
   textarea {
     width: 100%;
-    min-height: 40px;
+    height: 40px;
     /* 16px, not --text-md: anything below 16px makes iOS Safari zoom the
        viewport on focus. */
     font-size: 16px;
@@ -394,7 +424,38 @@
     padding: 0 12px;
   }
 
+  /* Native checkbox/radio are excluded from the box above and reset here
+     (#528): they were inheriting `width: 100%` and the 40px padded box, which
+     rendered a bare radio as a full-width bar with its label pushed off screen
+     (measured 668px on the ล.ย.01 form).
+
+     16px rather than the 13px UA default — 13px reads undersized beside 14px
+     Thai label text, and 16px is already what the three call sites that worked
+     around the old bug picked by hand (`h-4 w-4` in TypePicker.jsx,
+     SpecialMoneyPanel.jsx, LeaveRequestPage.jsx), so this makes the default
+     agree with them instead of leaving two sizes in the app.
+
+     Row heights are deliberately NOT raised to the 44px mobile floor that
+     buttons and status chips carry: these rows are `py-2 text-sm` by design,
+     they clear WCAG 2.2 SC 2.5.8 through the spacing exception, and the welfare
+     TypePicker stacks 12 of them — a floor there would cost ~108px of scrolling
+     at 375px for no accessibility gain (owner call, 2026-08-04).
+
+     They keep the shared `input:focus` ring below. `border: 0` is safe: with
+     `appearance` left at `auto` the browser paints the native widget, so the
+     old 1.5px border was never visible on them anyway. */
+  input[type='checkbox'],
+  input[type='radio'] {
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: 0;
+    accent-color: var(--color-primary);
+  }
+
   textarea {
+    height: auto;
+    min-height: 40px;
     padding: 10px 12px;
     resize: vertical;
   }
@@ -404,6 +465,31 @@
   textarea:focus {
     border-color: var(--color-primary-hover);
     box-shadow: var(--shadow-focus-ring);
+  }
+
+  /* Phone touch floor for text controls (#528, ported here with the rules it
+     overrides). Two reasons, and the second is why the rule exists at all:
+
+     1. They were below the floor. A 40px input is a touch target on a phone
+        exactly as much as the buttons beside it are.
+     2. They used to reach 44px by accident, and the base rule's fixed `height`
+        took that away. `align-items: stretch` only stretches a flex item whose
+        cross-size is `auto`, so under the old `min-height: 40px` an input
+        sharing a flex row with a 44px button was silently stretched to match
+        it. An explicit `height` opts out of stretch, which left
+        ProcurementDetailPage's four inline record-forms
+        (`/factory-purchase-orders/:id`, six inputs in `flex flex-wrap` rows
+        beside a `.primary-button`) with their inputs ending 4px above the
+        button — measured 699 vs 703 at 700px. Matching the floor restores a
+        flush row deliberately instead of by side effect.
+
+     `textarea` is excluded along with checkbox/radio: it is the growable
+     control, and pinning its height would undo `height: auto` above. */
+  @media (max-width: 720px) {
+    input:where(:not([type='checkbox'], [type='radio'])),
+    select {
+      height: 44px;
+    }
   }
 
   /* Zero-specificity (`:where`) focus foundation, so any component rule or

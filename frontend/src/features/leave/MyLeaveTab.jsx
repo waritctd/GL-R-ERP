@@ -664,7 +664,7 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
         </div>
       </Panel>
 
-      <Panel title="คำขอลาของฉัน" className="!p-0">
+      <Panel title="คำขอลาของฉัน" flush>
         <OwnRequestsSection
           requestsQuery={requestsQuery}
           rows={requests}

@@ -229,7 +229,19 @@
   padding: 20px;
 }
 
-.panel h2 {
+/* `.panel-header h2` is in this selector, not just `.panel h2`, and that is the
+   whole fix for the dead band under panel titles.
+
+   The reset was scoped to `.panel` only, so it never reached `.table-panel` —
+   the class every table-topped card uses. Those h2s therefore kept the UA
+   default `font-size: 1.5em` and `margin: 0.83em 0`: measured 24px text with
+   19.92px above and below, inside a 101px header, leaving 51–59px of empty
+   space between a title and the first row under it (`/ceo-settings`, all four
+   panels). Which meant a section title rendered at 16px or 24px depending only
+   on whether its card was a `.panel` or a `.table-panel` — never a decision
+   anyone made. */
+.panel h2,
+.panel-header h2 {
   margin: 0;
   font-size: var(--text-lg);
 }
@@ -261,6 +273,13 @@
    the header's own `min-height: 44px` already clears the top edge. */
 .table-panel > .panel-header {
   padding-inline: 16px;
+  /* No `margin-bottom` here. The 16px above suits a `.panel` header, whose
+     content follows immediately inside the card's own 20px padding. A
+     `.table-panel` body brings its own inset — `p-4`, or the `padding: 14px
+     18px` the table-topped ones set inline — so the margin stacked on top of
+     it and, on the headers that also draw a `border-bottom`, pushed the rule
+     16px away from the title it belongs to. */
+  margin-bottom: 0;
 }
 
 .bar-list,
