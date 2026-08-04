@@ -6,6 +6,7 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from '../../components/common/Icon.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { FormField } from '../../components/common/FormField.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
@@ -703,7 +704,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <section className="table-panel">
           <div className="panel-header"><h2>ขอข้อมูลจาก Sales</h2></div>
           <div className="flex flex-wrap gap-2 p-4">
-            <input className="form-input min-w-64" value={infoMessage} onChange={(e) => setInfoMessage(e.target.value)} placeholder="ข้อความถึง Sales" />
+            {/* aria-label rather than a visible one: the section heading above
+                already names this field on screen, so a label would just repeat
+                it — but the heading is not programmatically associated with the
+                input, so a screen reader still needs the name spelled out. */}
+            <input className="form-input min-w-64" aria-label="ข้อความถึง Sales" value={infoMessage} onChange={(e) => setInfoMessage(e.target.value)} placeholder="ข้อความถึง Sales" />
             <button type="button" className="secondary-button" disabled={!infoMessage || requestInfo.isPending} onClick={() => requestInfo.mutate()}>
               ส่งคำขอ
             </button>
@@ -715,7 +720,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <section className="table-panel">
           <div className="panel-header"><h2>ตอบข้อมูลเพิ่มเติม</h2></div>
           <div className="flex flex-wrap gap-2 p-4">
-            <input className="form-input min-w-64" value={salesResponse} onChange={(e) => setSalesResponse(e.target.value)} placeholder="ข้อมูลเพิ่มเติม" />
+            <input className="form-input min-w-64" aria-label="ข้อมูลเพิ่มเติม" value={salesResponse} onChange={(e) => setSalesResponse(e.target.value)} placeholder="ข้อมูลเพิ่มเติม" />
             <button type="button" className="secondary-button" disabled={!salesResponse || respondInfo.isPending} onClick={() => respondInfo.mutate()}>
               ส่งข้อมูล
             </button>
@@ -793,9 +798,38 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   ) : null}
                   {isImport(user) && quote.status === 'DRAFT' ? (
                     <div className="mt-3 grid gap-2 border-t border-border-subtle pt-3">
-                      <input className="form-input" value={emailDraft.emailTo} onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailTo: e.target.value } })} placeholder="อีเมลโรงงาน" />
-                      <input className="form-input" value={emailDraft.emailSubject} onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailSubject: e.target.value } })} placeholder="หัวข้ออีเมล" />
-                      <textarea className="form-input min-h-24" value={emailDraft.emailBody} onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailBody: e.target.value } })} placeholder="เนื้อหาอีเมล" />
+                      {/* Real labels, not placeholders. A placeholder disappears
+                          the moment the field has a value — which is the state
+                          these fields spend their whole life in — so the only
+                          thing naming them vanished exactly when a reader
+                          needed it, and a screen reader had nothing to announce
+                          at all. ids are keyed on quote.id because this block
+                          renders once per factory quote. */}
+                      <FormField label="อีเมลโรงงาน" htmlFor={`pcr-email-to-${quote.id}`}>
+                        <input
+                          id={`pcr-email-to-${quote.id}`}
+                          type="email"
+                          className="form-input"
+                          value={emailDraft.emailTo}
+                          onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailTo: e.target.value } })}
+                        />
+                      </FormField>
+                      <FormField label="หัวข้ออีเมล" htmlFor={`pcr-email-subject-${quote.id}`}>
+                        <input
+                          id={`pcr-email-subject-${quote.id}`}
+                          className="form-input"
+                          value={emailDraft.emailSubject}
+                          onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailSubject: e.target.value } })}
+                        />
+                      </FormField>
+                      <FormField label="เนื้อหาอีเมล" htmlFor={`pcr-email-body-${quote.id}`}>
+                        <textarea
+                          id={`pcr-email-body-${quote.id}`}
+                          className="form-input min-h-24"
+                          value={emailDraft.emailBody}
+                          onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailBody: e.target.value } })}
+                        />
+                      </FormField>
                       <button type="button" className="secondary-button" disabled={updateQuote.isPending} onClick={() => updateQuote.mutate({ quote, draft: emailDraft })}>
                         บันทึกร่างอีเมล
                       </button>
@@ -839,37 +873,87 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   {isImport(user) && quote.current && ['DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(quote.status) ? (
                     <div className="mt-3 flex flex-col gap-2 border-t border-border-subtle pt-3">
                       <div className="grid gap-2 md:grid-cols-4">
-                        <input className="form-input" value={draft.supplierQuoteRef} onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, supplierQuoteRef: e.target.value } })} placeholder="เลขอ้างอิงใบเสนอราคา" />
-                        <input className="form-input" value={draft.defaultCurrency} onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, defaultCurrency: e.target.value } })} placeholder="สกุลเงิน" />
-                        <input className="form-input" value={draft.paymentTerms} onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, paymentTerms: e.target.value } })} placeholder="เงื่อนไขการชำระเงิน" />
-                        <input className="form-input" value={draft.leadTimeText} onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, leadTimeText: e.target.value } })} placeholder="ระยะเวลาผลิต/ส่งมอบ" />
+                        <FormField label="เลขอ้างอิงใบเสนอราคา" htmlFor={`pcr-quote-ref-${quote.id}`}>
+                          <input
+                            id={`pcr-quote-ref-${quote.id}`}
+                            className="form-input"
+                            value={draft.supplierQuoteRef}
+                            onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, supplierQuoteRef: e.target.value } })}
+                          />
+                        </FormField>
+                        <FormField label="สกุลเงิน" htmlFor={`pcr-quote-currency-${quote.id}`}>
+                          <input
+                            id={`pcr-quote-currency-${quote.id}`}
+                            className="form-input"
+                            value={draft.defaultCurrency}
+                            onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, defaultCurrency: e.target.value } })}
+                          />
+                        </FormField>
+                        <FormField label="เงื่อนไขการชำระเงิน" htmlFor={`pcr-quote-terms-${quote.id}`}>
+                          <input
+                            id={`pcr-quote-terms-${quote.id}`}
+                            className="form-input"
+                            value={draft.paymentTerms}
+                            onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, paymentTerms: e.target.value } })}
+                          />
+                        </FormField>
+                        <FormField label="ระยะเวลาผลิต/ส่งมอบ" htmlFor={`pcr-quote-leadtime-${quote.id}`}>
+                          <input
+                            id={`pcr-quote-leadtime-${quote.id}`}
+                            className="form-input"
+                            value={draft.leadTimeText}
+                            onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, leadTimeText: e.target.value } })}
+                          />
+                        </FormField>
                       </div>
-                      {draft.items.map((line, index) => (
-                        <div key={line.pricingRequestItemId} className="grid gap-2 md:grid-cols-4">
-                          <input className="form-input" value={line.rawUnitPrice} onChange={(e) => {
-                            const items = [...draft.items];
-                            items[index] = { ...line, rawUnitPrice: e.target.value };
-                            setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
-                          }} placeholder="ราคาโรงงาน" />
-                          <input className="form-input" value={line.currency} onChange={(e) => {
-                            const items = [...draft.items];
-                            items[index] = { ...line, currency: e.target.value };
-                            setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
-                          }} placeholder="สกุลเงิน" />
-                          <select className="form-input" value={line.unitBasis} onChange={(e) => {
-                            const items = [...draft.items];
-                            items[index] = { ...line, quotedUnit: e.target.value, unitBasis: e.target.value };
-                            setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
-                          }}>
-                            {UNIT_OPTIONS.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}
-                          </select>
-                          <input className="form-input" value={line.sqmPerUnit} onChange={(e) => {
-                            const items = [...draft.items];
-                            items[index] = { ...line, sqmPerUnit: e.target.value };
-                            setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
-                          }} placeholder="ตร.ม./หน่วย" />
+                      {/* The per-line rows are a grid, so the column names are
+                          stated once as a header rather than repeated as a
+                          visible label on every row — four labels per row
+                          across N items would bury the values. Each control
+                          still carries its own `aria-label` naming the column
+                          AND the item, because a screen reader reads these
+                          linearly with no column header to fall back on: it
+                          announces "ราคาโรงงาน รายการ #6", not "edit text". */}
+                      {draft.items.length ? (
+                        <div
+                          aria-hidden="true"
+                          className="hidden gap-2 px-1 text-2xs font-bold uppercase tracking-wide text-text-muted md:grid md:grid-cols-4"
+                        >
+                          <span>ราคาโรงงาน</span>
+                          <span>สกุลเงิน</span>
+                          <span>หน่วยที่เสนอ</span>
+                          <span>ตร.ม./หน่วย</span>
                         </div>
-                      ))}
+                      ) : null}
+                      {draft.items.map((line, index) => {
+                        const itemRef = `รายการ #${line.pricingRequestItemId}`;
+                        return (
+                          <div key={line.pricingRequestItemId} className="grid gap-2 md:grid-cols-4">
+                            <input className="form-input" aria-label={`ราคาโรงงาน ${itemRef}`} value={line.rawUnitPrice} onChange={(e) => {
+                              const items = [...draft.items];
+                              items[index] = { ...line, rawUnitPrice: e.target.value };
+                              setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
+                            }} placeholder="ราคาโรงงาน" />
+                            <input className="form-input" aria-label={`สกุลเงิน ${itemRef}`} value={line.currency} onChange={(e) => {
+                              const items = [...draft.items];
+                              items[index] = { ...line, currency: e.target.value };
+                              setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
+                            }} placeholder="สกุลเงิน" />
+                            <select className="form-input" aria-label={`หน่วยที่เสนอ ${itemRef}`} value={line.unitBasis} onChange={(e) => {
+                              const items = [...draft.items];
+                              items[index] = { ...line, quotedUnit: e.target.value, unitBasis: e.target.value };
+                              setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
+                            }}>
+                              {UNIT_OPTIONS.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}
+                            </select>
+                            <input className="form-input" aria-label={`ตร.ม./หน่วย ${itemRef}`} value={line.sqmPerUnit} onChange={(e) => {
+                              const items = [...draft.items];
+                              items[index] = { ...line, sqmPerUnit: e.target.value };
+                              setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
+                            }} placeholder="ตร.ม./หน่วย" />
+                          </div>
+                        );
+                      })}
                       <button type="button" className="secondary-button" disabled={receiveQuote.isPending} data-testid="pcr-quote-save-response" onClick={() => {
                         const clientRequestId = receiveClientRequestIds[quote.id] ?? generateClientRequestId();
                         setReceiveClientRequestIds((cur) => ({ ...cur, [quote.id]: clientRequestId }));
@@ -894,7 +978,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
             {isImport(user) ? <button type="button" className="primary-button" onClick={() => createCosting.mutate()} data-testid="pcr-costing-create">สร้างร่างต้นทุน</button> : null}
           </div>
           <div className="flex flex-col gap-3 p-4">
-            {isImport(user) ? <input className="form-input" value={costingNote} onChange={(e) => setCostingNote(e.target.value)} placeholder="หมายเหตุต้นทุน" /> : null}
+            {isImport(user) ? (
+              <FormField label="หมายเหตุต้นทุน" htmlFor="pcr-costing-note">
+                <input
+                  id="pcr-costing-note"
+                  className="form-input"
+                  value={costingNote}
+                  onChange={(e) => setCostingNote(e.target.value)}
+                />
+              </FormField>
+            ) : null}
             {costings.map((costing) => (
               <div key={costing.id} className="rounded-md border border-border bg-surface p-3">
                 <div className="flex flex-wrap items-center gap-2">
