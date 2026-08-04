@@ -199,4 +199,42 @@ test.describe('filter rows align on the control, not the label stack', () => {
 
     expect(delta, `select and chips are ${delta}px out of centre`).toBeLessThanOrEqual(2);
   });
+
+  // The self-service filter bars are hand-rolled: each is a native <form> (for
+  // Enter-to-submit), so it reproduces FilterBar's utility string inline rather
+  // than using the component. That copy carried `items-center` long after #530
+  // fixed the component's own row, and the same stagger was live on the pages
+  // UAT phase 1 ships — a bare `<label>` stack next to an unlabelled submit
+  // Button, so the Button sat 11px high of the controls beside it.
+  //
+  // Asserted per-route rather than once, because each file owns its own copy of
+  // the string; fixing one says nothing about the others.
+  for (const { route, label } of [
+    { route: '/leave', label: 'วันลา' },
+    { route: '/employee-requests', label: 'คำขอ OT' },
+  ]) {
+    test(`${label}: the search button sits flush with the filters beside it`, async ({ page }) => {
+      await loginAs(page, 'employee');
+      await spaGoto(page, route);
+      await expect(page.getByRole('button', { name: /ค้นหา/ }).first()).toBeVisible();
+
+      const rows = await page.evaluate(() => {
+        const button = Array.from(document.querySelectorAll('button'))
+          .find((b) => /ค้นหา/.test(b.textContent));
+        const form = button.closest('form');
+        const controls = Array.from(form.querySelectorAll('input[type="date"], select'));
+        const bottom = (el) => Math.round(el.getBoundingClientRect().bottom);
+        return { button: bottom(button), controls: controls.map(bottom) };
+      });
+
+      expect(rows.controls.length, 'no date/select filters found to compare against')
+        .toBeGreaterThan(0);
+      for (const controlBottom of rows.controls) {
+        expect(
+          Math.abs(rows.button - controlBottom),
+          `search button ends at ${rows.button}, a filter beside it at ${controlBottom}`,
+        ).toBeLessThanOrEqual(2);
+      }
+    });
+  }
 });
