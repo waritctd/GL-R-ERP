@@ -9,7 +9,7 @@ import { Skeleton } from './Skeleton.jsx';
 export function RouteFallback() {
   return (
     <div
-      className="page-stack route-fallback"
+      className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] route-fallback"
       role="status"
       aria-live="polite"
       aria-busy="true"

@@ -462,7 +462,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
 
   if (loading) {
     return (
-      <div className="page-stack" aria-busy="true" aria-label="กำลังโหลดใบแจ้งยอดเงินรับมัดจำ">
+      <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]" aria-busy="true" aria-label="กำลังโหลดใบแจ้งยอดเงินรับมัดจำ">
         <header style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
           <Skeleton width={80} height={28} />
           <div style={{ flex: 1 }}>
@@ -488,7 +488,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   const isIssued = doc?.status === 'ISSUED';
 
   return (
-    <div className="page-stack">
+    <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
       <Breadcrumbs
         items={[
           { label: 'คำขอราคา', onClick: onNavigateTickets },

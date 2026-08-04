@@ -20,12 +20,18 @@ import {
 // see EVERYDAY_LEAVE_TYPE_CODES's own comment for why it is a hand-kept duplicate of
 // MyLeaveTab.jsx's identically-named constant rather than an import.
 
-// The sticky title+tabs bar this tab sits under (LeaveSurfacePage.jsx) is shorter than
-// TicketDetailPage's own sticky header, but the pattern — a focusable, offset-scrolled anchor
-// target per deep-linkable section — is copied from there verbatim (its own `#deal-tracking-panel`
-// etc.) rather than reinvented. CollapsibleSection itself has no `id` on its outer element (its
-// `id` prop only feeds `aria-controls`/`aria-labelledby`), so the anchor lives on this wrapper.
-const SECTION_ANCHOR_CLASS = 'scroll-mt-[132px] max-[720px]:scroll-mt-[168px] outline-none';
+// Part 3 (owner's explicit, repeated request): the title+tabs bar this tab
+// sits under (LeaveSurfacePage.jsx) is no longer sticky, so the 132px/168px
+// scroll-margin this used to carry — sized to clear that sticky bar's
+// measured height — no longer has anything to clear. `.content-scroll`'s own
+// `scroll-padding-top` (AppShell.jsx) already gives every scroll target in
+// this app a baseline top clearance (16px at ≤720px; a larger value on wider
+// viewports, shared with the ticket workspace's measured chrome), so no
+// per-section override is needed here any more. CollapsibleSection itself
+// has no `id` on its outer element (its `id` prop only feeds
+// `aria-controls`/`aria-labelledby`), so the anchor still lives on this
+// wrapper — only the scroll-margin was dropped.
+const SECTION_ANCHOR_CLASS = 'outline-none';
 
 const DAY_COUNT_BASIS_TEXT = {
   CALENDAR_DAYS: 'นับเป็นวันปฏิทิน (รวมวันหยุด)',

@@ -280,7 +280,7 @@ export function AccountOverview({ user, employee, showToast }) {
               <button
                 type="button"
                 onClick={() => navigate('/finance')}
-                className="bg-surface border border-border rounded-md shadow-sm p-4 w-full text-left cursor-pointer flex items-center justify-between gap-3 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
+                className="bg-surface border border-border rounded-md p-4 w-full text-left cursor-pointer flex items-center justify-between gap-3 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
               >
                 <span className="flex items-center gap-3">
                   <span className="stat-icon !mb-0 stat-indigo">

@@ -95,10 +95,10 @@ export function AccessDeniedPage() {
   const hasInAppHistory = location.key !== 'default';
 
   return (
-    <div className="page-stack">
-      <div className="page-heading">
+    <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-[18px] mobile:grid-cols-[minmax(0,1fr)] mobile:gap-2.5">
         <div>
-          <h1 ref={headingRef} tabIndex={-1} className="outline-none">
+          <h1 ref={headingRef} tabIndex={-1} className="m-0 text-2xl leading-[1.2] [overflow-wrap:anywhere] text-balance outline-none">
             ไม่มีสิทธิ์เข้าถึงหน้านี้
           </h1>
         </div>
@@ -118,7 +118,7 @@ export function AccessDeniedPage() {
         <span>
           หากคิดว่าคุณควรมีสิทธิ์เข้าถึงหน้านี้ กรุณาติดต่อหัวหน้างานหรือผู้ดูแลระบบเพื่อขอสิทธิ์เพิ่มเติม
         </span>
-        <div className="page-actions">
+        <div className="page-actions flex flex-wrap items-center justify-end gap-2.5 mobile:w-full mobile:justify-start">
           {hasInAppHistory ? (
             <Button type="button" variant="secondary" onClick={() => navigate(-1)}>
               ย้อนกลับ
