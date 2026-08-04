@@ -1,10 +1,53 @@
-/* Retiring stylesheet — see index.css.
-   The reset, `:root` document setup, bare-element defaults and the focus
-   foundation that used to open this file now live in index.css's `@layer
-   base`; the duplicated non-color token block went with them (deleted, not
-   moved — `@theme static` in index.css already declared identical values).
-   What is left below is the class-scoped component CSS still awaiting a
-   Tailwind port at its call site. */
+/* ============================================================
+   RETIRING STYLESHEET. Do not add to it — put new styling on the call site as
+   Tailwind utilities (CLAUDE.md, "Styling direction — Tailwind-first").
+
+   Already gone: the reset, `:root` document setup, bare-element defaults and
+   the focus foundation now live in index.css's `@layer base`; the duplicated
+   non-color token block went with them (deleted, not moved — `@theme static`
+   in index.css already declared identical values); and the shared UI
+   primitives (Avatar, Breadcrumbs, Button spinner, Skeleton, EmptyState,
+   StatCard, StatGrid, Modal, ConfirmDialog, FormField, InfoTip,
+   CollapsibleSection, StatusBadge tones) are ported at their components.
+
+   WHAT IS LEFT, roughly in the order it should go:
+     1. Feature-scoped blocks with 1-3 call sites each — login screen, form
+        input affixes, dashboard list primitives (.bar-*, .request-feed*,
+        .action-list, .editable-list, .timeline-list, .salary-history,
+        .profile-strip), attendance import, leave calendar, .ticket-* .
+     2. The legacy button classes (.primary-button / .secondary-button /
+        .danger-button / .icon-button) — ~50 call sites that predate <Button>;
+        each should become a <Button variant> rather than a class port.
+     3. .panel / .table-panel / .panel-header — Layout.jsx already exports the
+        Tailwind equivalents; these are call sites that never moved onto them.
+     4. LAST: the DataTable row system (.table-head / .data-row / the per-table
+        grid templates / .reflow-cards and the ≤720px card reflow with its
+        `content: attr(data-label)` labels) and the payroll table rules. This
+        is the hard part and the reason it is last — the rules are keyed off
+        CLASS COMBINATIONS on one element and reach into children the
+        components do not own.
+
+   TWO GOTCHAS THAT WILL BITE, both measured on this branch, not theorised:
+
+   a) This file loads into `@layer legacy`, which LOSES to `@layer utilities`
+      no matter the selector specificity. So the moment you move a property
+      onto an element as a utility, every rule in here that used to override
+      that property on that element silently stops working. Check for
+      overriding selectors BEFORE porting a class (this is why .status-badge's
+      geometry is still here while its tone colors are not).
+
+   b) Tailwind's `text-xs`/`-sm`/`-base`/`-lg`/`-xl`/`-2xl`/`-3xl` also set a
+      line-height, from Tailwind's own `--text-*--line-height` defaults which
+      this app's `@theme static` does not override. A rule in here that sets
+      `font-size` ONLY must port to the `text-xs/[inherit]` modifier form, not
+      a bare `text-xs`. (`leading-[inherit]` does not work — see the note in
+      StatusBadge.jsx.)
+
+   Prove each slice with the visual harness, which exists for exactly this:
+     VISUAL_BASELINE=1 npx playwright test visual-baseline --update-snapshots
+     # ...port a slice...
+     VISUAL_BASELINE=1 npx playwright test visual-baseline
+   ============================================================ */
 
 .login-screen {
   min-height: 100dvh;
