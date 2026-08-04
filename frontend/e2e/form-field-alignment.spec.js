@@ -174,3 +174,29 @@ test.describe('two-column form rows stay aligned', () => {
     expect(ragged, `controls on one row end at different heights: ${ragged.join(' | ')}`).toEqual([]);
   });
 });
+
+test.describe('filter rows align on the control, not the label stack', () => {
+  test('ล.ย.01 register: year select is centred against the status chips', async ({ page }) => {
+    await loginAs(page, 'hr');
+    await spaGoto(page, '/tax-allowance-review');
+    await expect(page.locator('#tax-allowance-year')).toBeVisible();
+
+    // A labelled field is a stack — label above control — so `items-center` on
+    // the row centres the STACK, not the control, and drops the select below
+    // the chips it sits beside (measured: 64px field vs 41px chip row, select
+    // ~12px low). `FilterRow`'s `items-end` bottom-aligns the boxes, which for
+    // a 33px pill beside a 40px select works out to optical centre.
+    //
+    // Centre, not bottom, is the assertion: the chip scroller carries 4px of
+    // symmetric padding so its focus ring is not clipped, so the visible pill's
+    // bottom edge legitimately sits 4px inside the row's bottom.
+    const delta = await page.evaluate(() => {
+      const sel = document.querySelector('#tax-allowance-year').getBoundingClientRect();
+      const chip = document.querySelector('[aria-label="กรองตามสถานะ"] button').getBoundingClientRect();
+      const mid = (r) => (r.top + r.bottom) / 2;
+      return Math.abs(mid(sel) - mid(chip));
+    });
+
+    expect(delta, `select and chips are ${delta}px out of centre`).toBeLessThanOrEqual(2);
+  });
+});

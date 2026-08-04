@@ -166,6 +166,30 @@ export function FilterBar({ className, children, ...props }) {
 }
 
 /**
+ * FilterRow — a horizontal row mixing labelled fields with unlabelled controls
+ * (chip rows, buttons, bare selects).
+ *
+ * `items-end`, never `items-center`. A labelled field is a *stack* — label
+ * above control — so centring the row centres that whole stack against its
+ * neighbour and pushes the control below it. On `/tax-allowance-review` the
+ * ปีภาษี field measured 64px beside a 41px status-chip row, which dropped the
+ * select ~12px below the chips it filters alongside. Aligning on the bottom
+ * edge lines the control up with the thing next to it, which is what the eye
+ * actually reads as "aligned" — the label just floats above.
+ *
+ * Reach for this whenever a `FormField` shares a flex row with something that
+ * has no label of its own. If every child is a labelled field, plain
+ * `items-end` is unnecessary — their labels align at the top by themselves.
+ */
+export function FilterRow({ className, children, ...props }) {
+  return (
+    <div className={cn('flex flex-wrap items-end gap-3', className)} {...props}>
+      {children}
+    </div>
+  );
+}
+
+/**
  * RowActions — reproduces `.row-actions`:
  *   display: flex; justify-content: flex-end; gap: 8px;
  */
