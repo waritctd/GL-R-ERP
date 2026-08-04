@@ -37,7 +37,8 @@ class LeaveControllerPolicyDocumentIntegrationTest extends AbstractPostgresInteg
     @BeforeEach
     void wireRealCollaborators() {
         repository = new LeavePolicyDocumentRepository(jdbc);
-        controller = new LeaveController(/* leaveService */ null, new SessionContext(), repository);
+        controller = new LeaveController(
+            /* leaveService */ null, new SessionContext(), repository, /* calendarContextService */ null);
     }
 
     // --- GET: read path, unchanged access (any authenticated user) -------------------------

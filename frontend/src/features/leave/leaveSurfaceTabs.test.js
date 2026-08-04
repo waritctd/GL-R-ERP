@@ -149,7 +149,16 @@ describe('canReviewRequest / canManagerCancelRequest (ported from LeavePage.jsx)
   });
 
   it('canReviewRequest prefers a present request.canReview over the client-side fallback', () => {
-    expect(canReviewRequest({ status: 'REJECTED', canReview: true }, employee, false)).toBe(true);
+    expect(canReviewRequest({ status: 'SUBMITTED', canReview: true }, employee, false)).toBe(true);
     expect(canReviewRequest({ status: 'SUBMITTED', managerEmployeeId: 5, canReview: false }, nonHrManager, false)).toBe(false);
+  });
+
+  it('canReviewRequest rejects a server-authoritative canReview=true on an already-decided request', () => {
+    // Mirrors LeaveService.withCanReviewFlag, which computes canReview independent of status by
+    // design -- callers must still gate on status themselves. Without this check, an
+    // already-decided (non-SUBMITTED) row would render Approve/Reject buttons in ReviewQueueTab.
+    expect(canReviewRequest({ status: 'REJECTED', canReview: true }, employee, false)).toBe(false);
+    expect(canReviewRequest({ status: 'APPROVED', canReview: true }, employee, false)).toBe(false);
+    expect(canReviewRequest({ status: 'CANCELLED', canReview: true }, employee, false)).toBe(false);
   });
 });

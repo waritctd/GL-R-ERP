@@ -132,9 +132,17 @@ export const api = {
       if (payload.contactProvince) formData.append('contactProvince', payload.contactProvince);
       if (payload.contactPhone) formData.append('contactPhone', payload.contactPhone);
       if (payload.attachmentFile) formData.append('attachment', payload.attachmentFile);
+      // Real-backend regression (found via a live click-through, not caught under mocks, which
+      // never enforce CSRF at all): every submission from LeaveRequestPage.jsx's payload object
+      // literal always sets `attachmentFile` (to `preparedAttachment`, null when no file was
+      // chosen), so `hasOwnProperty('attachmentFile')` above is ALWAYS true and every leave
+      // submit -- not just ones with a real attachment -- took this branch. This bare fetch()
+      // never attached the XSRF header the way `apiRequest()` and every other manual fetch() in
+      // this file already does, so every real submission 403'd with "Invalid CSRF token".
       const res = await fetch(API_ROUTES.leave.create, {
         method: 'POST',
         credentials: 'include',
+        headers: csrfHeaders('POST'),
         body: formData,
       });
       if (!res.ok) {
@@ -178,6 +186,10 @@ export const api = {
       }
       return res.blob();
     },
+    // Leave-request composer, Phase C: caller's own holiday + resolved work-schedule context for
+    // { from, to } -- see routes.js's comment. `params` mirrors the shape of other range-taking
+    // reads on this namespace (balances/list) rather than positional (from, to) args.
+    calendarContext: (params) => apiRequest(withQuery(API_ROUTES.leave.calendarContext, params)),
   },
   tickets: {
     list: (params) => apiRequest(withQuery(API_ROUTES.tickets.list, params)),
