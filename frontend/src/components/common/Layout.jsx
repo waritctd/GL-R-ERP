@@ -40,22 +40,32 @@ export function PageStack({ className, children, ...props }) {
  * PricingRequestCreateModal.jsx) was deliberately left on shadow-md/lg.
  * Optional `title`/`actions` render a `.panel-header` row; `Panel.Header` is
  * also exported for callers that need custom header content.
+ *
+ * `flush` is the Tailwind equivalent of the legacy `.table-panel` class: no
+ * body inset, so a table runs edge to edge, plus `overflow-hidden` so its
+ * corners follow the card radius. The header then takes its own inset and a
+ * rule beneath it, because without the card's padding a bare heading would sit
+ * flat against the border.
+ *
+ * It replaces a regex that sniffed `p-0` out of `className` to infer the same
+ * thing. That inference was invisible at the call site — nine callers spelled
+ * it `className="!p-0 overflow-hidden"` and nothing said why, and any caller
+ * that zeroed padding for an unrelated reason would have silently acquired a
+ * bordered header. A prop says what it means and cannot be triggered by
+ * accident.
  */
-export function Panel({ title, actions, className, children, ...props }) {
-  const isFlushPanel = typeof className === 'string' && /(?:^|\s)!?p-0(?:\s|$)/.test(className);
-
+export function Panel({ title, actions, flush = false, className, children, ...props }) {
   return (
     <section
       className={cn(
-        'bg-surface border border-border rounded-md p-5',
+        'bg-surface border border-border rounded-md',
+        flush ? 'overflow-hidden' : 'p-5',
         className,
       )}
       {...props}
     >
       {title || actions ? (
-        <PanelHeader
-          className={isFlushPanel ? 'px-5 pt-4 pb-4 mb-0 border-b border-border-subtle max-[720px]:px-4 max-[720px]:py-3.5' : undefined}
-        >
+        <PanelHeader bordered={flush}>
           {title ? <h2 className="m-0 min-w-0 text-lg break-words">{title}</h2> : null}
           {actions}
         </PanelHeader>
@@ -69,11 +79,24 @@ export function Panel({ title, actions, className, children, ...props }) {
  * Panel.Header — reproduces `.panel-header`:
  *   display: flex; align-items: center; justify-content: space-between;
  *   gap: 14px; margin-bottom: 16px;
+ *
+ * `bordered` is the header a `flush` panel needs: its own inset (the card has
+ * none to lend it) and a rule under it, with the bottom margin dropped —
+ * a flush body brings its own padding, so keeping the margin would double-space
+ * the rule away from the title. That is the same defect the legacy
+ * `.table-panel > .panel-header` rule carries, fixed here by construction
+ * rather than by override.
  */
-function PanelHeader({ className, children, ...props }) {
+function PanelHeader({ bordered = false, className, children, ...props }) {
   return (
     <div
-      className={cn('flex min-h-11 flex-wrap items-center justify-between gap-[14px] mb-4', className)}
+      className={cn(
+        'flex min-h-11 flex-wrap items-center justify-between gap-[14px]',
+        bordered
+          ? 'mb-0 border-b border-border-subtle px-5 py-4 max-[720px]:px-4 max-[720px]:py-3.5'
+          : 'mb-4',
+        className,
+      )}
       {...props}
     >
       {children}

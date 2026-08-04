@@ -215,7 +215,7 @@ export function AccountOverview({ user, employee, showToast }) {
 
           <div className="grid gap-[18px] items-start grid-cols-[1.6fr_1fr] max-[1040px]:grid-cols-1">
             {/* "สิ่งที่ต้องทำ" money worklist — overdue-first. */}
-            <Panel title="สิ่งที่ต้องทำ" className="!p-0 overflow-hidden">
+            <Panel title="สิ่งที่ต้องทำ" flush>
               {worklist.length === 0 ? (
                 <div className="flex items-center gap-3 p-5 text-text-muted">
                   <Icon name="check" size={18} />
