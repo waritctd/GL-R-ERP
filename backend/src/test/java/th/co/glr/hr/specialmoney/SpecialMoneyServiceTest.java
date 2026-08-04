@@ -20,7 +20,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
@@ -42,6 +45,16 @@ class SpecialMoneyServiceTest {
     private final AppProperties appProperties = new AppProperties();
     private final SpecialMoneyService service = new SpecialMoneyService(
         repository, evaluator, auditService, notificationService, appProperties);
+
+    /**
+     * Evidence-required types cannot be approved with nothing attached. Default the count to 1 so
+     * each approval case below stays about the rule it names; the gate itself is proven by
+     * {@link #approvalIsRefusedWhenAnEvidenceRequiredTypeHasNoAttachment()}.
+     */
+    @BeforeEach
+    void assumeEvidenceIsOnFile() {
+        when(repository.countAttachments(anyLong())).thenReturn(1);
+    }
 
     // ---------------------------------------------------------------------
     // submit()
@@ -103,65 +116,55 @@ class SpecialMoneyServiceTest {
     // approve() -- manager stage
     // ---------------------------------------------------------------------
 
-    @Test
-    void directManagerCanApproveSubmittedRequest() {
-        SpecialMoneyRequestDto submitted = dto(77L, 10L, "SUBMITTED", "AID_WEDDING");
-        SpecialMoneyRequestDto managerApproved = dto(77L, 10L, "MANAGER_APPROVED", "AID_WEDDING");
-        when(repository.findById(77L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(managerApproved));
-        when(repository.findEmployeeAccess(10L)).thenReturn(Optional.of(new SpecialMoneyEmployeeAccess(10L, 99L, null, true)));
-        when(repository.managerApprove(77L, 99L, "ok")).thenReturn(1);
-
-        SpecialMoneyRequestDto result = service.approve(77L, new ReviewSpecialMoneyRequest("ok", null, null), user("employee", 99L));
-
-        assertThat(result.status()).isEqualTo("MANAGER_APPROVED");
-        verify(auditService).record(any(), eq("MANAGER_APPROVE_SPECIAL_MONEY_REQUEST"), eq("special_money_request"), eq(77L), eq(submitted), eq(managerApproved));
-        verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_MANAGER_APPROVED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
-    }
-
-    @Test
-    void divisionManagerCanApproveDivisionPeerRequest() {
-        SpecialMoneyRequestDto submitted = dto(77L, 10L, "SUBMITTED", "AID_WEDDING");
-        SpecialMoneyRequestDto managerApproved = dto(77L, 10L, "MANAGER_APPROVED", "AID_WEDDING");
-        when(repository.findById(77L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(managerApproved));
-        when(repository.findEmployeeAccess(10L)).thenReturn(Optional.of(new SpecialMoneyEmployeeAccess(10L, null, 5L, true)));
-        when(repository.managerApprove(77L, 88L, null)).thenReturn(1);
-        when(repository.findCeoApproverEmployeeIds()).thenReturn(List.of());
-
-        SpecialMoneyRequestDto result = service.approve(77L, null, manager(88L, 5L));
-
-        assertThat(result.status()).isEqualTo("MANAGER_APPROVED");
-    }
-
-    @Test
-    void nonManagerCannotApproveSubmittedRequest() {
+    /**
+     * Welfare is CEO-only in ONE stage. These are the shapes that could each be mistaken for an
+     * approver: the requester's ผู้จัดการ (the tempting one -- it is the rule overtime uses), HR,
+     * and the requester themselves.
+     */
+    @ParameterizedTest(name = "{0} cannot approve a welfare request")
+    @MethodSource("nonCeoApprovers")
+    void nobodyBelowCeoCanApproveSubmittedRequest(String label, UserPrincipal caller) {
         when(repository.findById(77L)).thenReturn(Optional.of(dto(77L, 10L, "SUBMITTED", "AID_WEDDING")));
-        when(repository.findEmployeeAccess(10L)).thenReturn(Optional.of(new SpecialMoneyEmployeeAccess(10L, 99L, null, true)));
+        when(repository.findEmployeeAccess(10L)).thenReturn(Optional.of(new SpecialMoneyEmployeeAccess(10L, 99L, 5L, true)));
 
-        assertThatThrownBy(() -> service.approve(77L, null, user("employee", 10L)))
+        assertThatThrownBy(() -> service.approve(77L, null, caller))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.FORBIDDEN);
+        // No stage advanced and nothing was written -- a service that threw after writing would
+        // still satisfy a status-code-only assertion.
+        verify(repository, never()).ceoDirectApprove(anyLong(), anyLong(), any(), any(), any(), any());
+    }
+
+    static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> nonCeoApprovers() {
+        return java.util.stream.Stream.of(
+            org.junit.jupiter.params.provider.Arguments.of("the division manager",
+                new UserPrincipal(88L, "m@glr.co.th", "m", "employee", 88L, true, LocalDate.now(), false, 5L, true)),
+            org.junit.jupiter.params.provider.Arguments.of("hr",
+                new UserPrincipal(500L, "hr@glr.co.th", "hr", "hr", 500L, true, LocalDate.now(), false, null, false)),
+            org.junit.jupiter.params.provider.Arguments.of("the requester themselves",
+                new UserPrincipal(10L, "e@glr.co.th", "e", "employee", 10L, true, LocalDate.now(), false, 5L, false)));
     }
 
     @Test
-    void hrCannotApproveSubmittedRequest() {
-        when(repository.findById(77L)).thenReturn(Optional.of(dto(77L, 10L, "SUBMITTED", "AID_WEDDING")));
-        when(repository.findEmployeeAccess(10L)).thenReturn(Optional.of(new SpecialMoneyEmployeeAccess(10L, 99L, null, true)));
+    void ceoApprovesStraightFromSubmitted() {
+        SpecialMoneyRequestDto submitted = dto(77L, 10L, "SUBMITTED", "AID_WEDDING");
+        SpecialMoneyRequestDto approved = dto(77L, 10L, "APPROVED", "AID_WEDDING");
+        when(repository.findById(77L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(approved));
+        when(repository.findEligibility(eq(10L), any(LocalDate.class))).thenReturn(Optional.of(activeEligibility(10L)));
+        when(repository.findUsage(eq(10L), anyInt())).thenReturn(emptyUsage());
+        when(repository.findPolicyAmounts(eq("AID_WEDDING"), any(LocalDate.class))).thenReturn(weddingPolicy());
+        when(repository.findExcludedProvinces()).thenReturn(Set.of());
+        when(repository.ceoDirectApprove(eq(77L), eq(500L), any(), any(), isNull(), isNull())).thenReturn(1);
 
-        assertThatThrownBy(() -> service.approve(77L, null, user("hr", 500L)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.FORBIDDEN);
-    }
+        SpecialMoneyRequestDto result = service.approve(77L, null, user("ceo", 500L));
 
-    @Test
-    void managerCannotCeoApproveOwnManagerApprovedRequest() {
-        when(repository.findById(77L)).thenReturn(Optional.of(dto(77L, 10L, "MANAGER_APPROVED", "AID_WEDDING")));
-
-        assertThatThrownBy(() -> service.approve(77L, null, manager(88L, 5L)))
-            .isInstanceOf(ApiException.class)
-            .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(result.status()).isEqualTo("APPROVED");
+        // The SUBMITTED-guarded statement, not the MANAGER_APPROVED-guarded one: picking the wrong
+        // statement would update zero rows and surface as a spurious 409.
+        verify(repository).ceoDirectApprove(eq(77L), eq(500L), any(), any(), isNull(), isNull());
+        verify(repository, never()).ceoApprove(anyLong(), anyLong(), any(), any(), any(), any());
+        verify(auditService).record(any(), eq("CEO_APPROVE_SPECIAL_MONEY_REQUEST"), eq("special_money_request"), eq(77L), eq(submitted), eq(approved));
     }
 
     @Test
@@ -278,28 +281,112 @@ class SpecialMoneyServiceTest {
     // reject()
     // ---------------------------------------------------------------------
 
+    /**
+     * The regression test for gap #4. OTHER is a DISCRETIONARY type: its "eligible amount" IS the
+     * requested amount, so when the cap re-check was fed the CEO's own figure the comparison
+     * `approved > eligible` reduced to `approved > approved` and could never fire. A CEO could
+     * approve ฿50,000 against a ฿5,000 request and never be asked why.
+     */
     @Test
-    void managerRejectionTransitionsSubmittedToRejected() {
+    void approvingMoreThanRequestedOnAnUncappedTypeNeedsAReason() {
+        SpecialMoneyRequestDto submitted = dto(77L, 10L, "SUBMITTED", "OTHER");
+        when(repository.findById(77L)).thenReturn(Optional.of(submitted));
+        when(repository.findEligibility(eq(10L), any(LocalDate.class))).thenReturn(Optional.of(activeEligibility(10L)));
+        when(repository.findUsage(eq(10L), anyInt())).thenReturn(emptyUsage());
+        when(repository.findPolicyAmounts(eq("OTHER"), any(LocalDate.class))).thenReturn(new PolicyAmounts(Map.of(), 1));
+        when(repository.findExcludedProvinces()).thenReturn(Set.of());
+
+        // Requested ฿5,000 (see dto()); approving ฿50,000 with no reason must be refused.
+        assertThatThrownBy(() -> service.approve(
+                77L, new ReviewSpecialMoneyRequest(null, new BigDecimal("50000"), null), user("ceo", 500L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.BAD_REQUEST);
+        verify(repository, never()).ceoDirectApprove(anyLong(), anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void approvingMoreThanRequestedOnAnUncappedTypeSucceedsWithAReason() {
+        SpecialMoneyRequestDto submitted = dto(77L, 10L, "SUBMITTED", "OTHER");
+        when(repository.findById(77L)).thenReturn(Optional.of(submitted))
+            .thenReturn(Optional.of(dto(77L, 10L, "APPROVED", "OTHER")));
+        when(repository.findEligibility(eq(10L), any(LocalDate.class))).thenReturn(Optional.of(activeEligibility(10L)));
+        when(repository.findUsage(eq(10L), anyInt())).thenReturn(emptyUsage());
+        when(repository.findPolicyAmounts(eq("OTHER"), any(LocalDate.class))).thenReturn(new PolicyAmounts(Map.of(), 1));
+        when(repository.findExcludedProvinces()).thenReturn(Set.of());
+        when(repository.ceoDirectApprove(eq(77L), eq(500L), any(), any(), eq("ค่าใช้จ่ายจริงสูงกว่าที่ประเมินไว้"), any()))
+            .thenReturn(1);
+
+        SpecialMoneyRequestDto result = service.approve(
+            77L,
+            new ReviewSpecialMoneyRequest(null, new BigDecimal("50000"), "ค่าใช้จ่ายจริงสูงกว่าที่ประเมินไว้"),
+            user("ceo", 500L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+    }
+
+    @Test
+    void approvalIsRefusedWhenAnEvidenceRequiredTypeHasNoAttachment() {
+        when(repository.findById(77L)).thenReturn(Optional.of(dto(77L, 10L, "SUBMITTED", "AID_WEDDING")));
+        when(repository.countAttachments(77L)).thenReturn(0);
+
+        assertThatThrownBy(() -> service.approve(77L, null, user("ceo", 500L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.BAD_REQUEST);
+        // Refused BEFORE any write -- approving money with no document trail is the whole failure
+        // this gate exists to stop.
+        verify(repository, never()).ceoDirectApprove(anyLong(), anyLong(), any(), any(), any(), any());
+    }
+
+    @Test
+    void approvalIsAllowedWithoutEvidenceForATypeThatDoesNotRequireIt() {
+        // TRAVEL_PER_DIEM is the one evidenceRequired=false type; the gate must not block it, or
+        // the rule would read as "always require evidence" and the flag would be decoration.
+        Map<String, String> driverInBangkok = Map.of("destination", "DOMESTIC", "role", "driver", "province", "ตาก");
+        SpecialMoneyRequestDto submitted = dto(77L, 10L, "SUBMITTED", "TRAVEL_PER_DIEM", driverInBangkok);
+        when(repository.findById(77L)).thenReturn(Optional.of(submitted))
+            .thenReturn(Optional.of(dto(77L, 10L, "APPROVED", "TRAVEL_PER_DIEM", driverInBangkok)));
+        when(repository.countAttachments(77L)).thenReturn(0);
+        when(repository.findEligibility(eq(10L), any(LocalDate.class))).thenReturn(Optional.of(activeEligibility(10L)));
+        when(repository.findUsage(eq(10L), anyInt())).thenReturn(emptyUsage());
+        when(repository.findPolicyAmounts(eq("TRAVEL_PER_DIEM"), any(LocalDate.class)))
+            .thenReturn(new PolicyAmounts(Map.of("rate_driver", new BigDecimal("400")), 1));
+        when(repository.findExcludedProvinces()).thenReturn(Set.of());
+        when(repository.ceoDirectApprove(eq(77L), eq(500L), any(), any(), any(), any())).thenReturn(1);
+
+        // ฿400/day x 1 day; approving exactly the policy figure needs no override reason.
+        SpecialMoneyRequestDto result = service.approve(
+            77L, new ReviewSpecialMoneyRequest(null, new BigDecimal("400"), null), user("ceo", 500L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+    }
+
+    @Test
+    void ceoRejectionTransitionsSubmittedToRejected() {
         SpecialMoneyRequestDto submitted = dto(77L, 10L, "SUBMITTED", "AID_WEDDING");
         SpecialMoneyRequestDto rejected = dto(77L, 10L, "REJECTED", "AID_WEDDING");
         when(repository.findById(77L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(rejected));
-        when(repository.findEmployeeAccess(10L)).thenReturn(Optional.of(new SpecialMoneyEmployeeAccess(10L, 99L, null, true)));
-        when(repository.reject(77L, 99L, "no budget")).thenReturn(1);
+        when(repository.reject(77L, 500L, "no budget")).thenReturn(1);
 
-        SpecialMoneyRequestDto result = service.reject(77L, new ReviewSpecialMoneyRequest("no budget", null, null), user("employee", 99L));
+        SpecialMoneyRequestDto result = service.reject(77L, new ReviewSpecialMoneyRequest("no budget", null, null), user("ceo", 500L));
 
         assertThat(result.status()).isEqualTo("REJECTED");
         verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_REJECTED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
     }
 
     @Test
-    void managerCannotCeoRejectManagerApprovedRequest() {
-        when(repository.findById(77L)).thenReturn(Optional.of(dto(77L, 10L, "MANAGER_APPROVED", "AID_WEDDING")));
+    void managerCannotRejectASubmittedRequest() {
+        when(repository.findById(77L)).thenReturn(Optional.of(dto(77L, 10L, "SUBMITTED", "AID_WEDDING")));
+        when(repository.findEmployeeAccess(10L)).thenReturn(Optional.of(new SpecialMoneyEmployeeAccess(10L, 99L, 5L, true)));
 
+        // Reject must be gated exactly as approve is; a manager who can refuse but not approve
+        // still controls the outcome.
         assertThatThrownBy(() -> service.reject(77L, null, manager(88L, 5L)))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.FORBIDDEN);
+        verify(repository, never()).reject(anyLong(), anyLong(), any());
     }
 
     // ---------------------------------------------------------------------
@@ -349,16 +436,16 @@ class SpecialMoneyServiceTest {
 
     private EmployeeEligibilitySnapshot activeEligibility(long employeeId) {
         return new EmployeeEligibilitySnapshot(
-            employeeId, LocalDate.of(2020, 1, 1), null, null, null, true, LocalDate.now());
+            employeeId, LocalDate.of(2020, 1, 1), null, null, null, null, true, LocalDate.now());
     }
 
     private EmployeeEligibilitySnapshot inactiveEligibility(long employeeId) {
         return new EmployeeEligibilitySnapshot(
-            employeeId, LocalDate.of(2020, 1, 1), null, null, null, false, LocalDate.now());
+            employeeId, LocalDate.of(2020, 1, 1), null, null, null, null, false, LocalDate.now());
     }
 
     private UsageSnapshot emptyUsage() {
-        return new UsageSnapshot(Map.of(), Map.of());
+        return new UsageSnapshot(Map.of(), Map.of(), Map.of());
     }
 
     private PolicyAmounts weddingPolicy() {
@@ -366,6 +453,11 @@ class SpecialMoneyServiceTest {
     }
 
     private SpecialMoneyRequestDto dto(long id, long employeeId, String status, String requestType) {
+        return dto(id, employeeId, status, requestType, Map.of());
+    }
+
+    private SpecialMoneyRequestDto dto(
+            long id, long employeeId, String status, String requestType, Map<String, String> detail) {
         boolean managerApproved = "MANAGER_APPROVED".equals(status) || "APPROVED".equals(status);
         boolean ceoApproved = "APPROVED".equals(status);
         return new SpecialMoneyRequestDto(
@@ -383,7 +475,7 @@ class SpecialMoneyServiceTest {
             "AID",
             1,
             "Getting married",
-            Map.of(),
+            detail,
             status,
             ceoApproved ? LocalDate.of(2026, 7, 1) : null,
             null,
@@ -403,9 +495,38 @@ class SpecialMoneyServiceTest {
             null,
             99L,
             "Test Manager",
+            0,
             OffsetDateTime.parse("2026-06-14T10:00:00+07:00"),
             OffsetDateTime.parse("2026-06-14T10:00:00+07:00")
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // usage()
+    // ---------------------------------------------------------------------
+
+    /**
+     * The snapshot has always carried a per-year count (the once-per-year uniform gate needs it),
+     * but {@code usage()} built the DTO from only two of the three maps and silently dropped it. The
+     * UI therefore could not warn "you already filed this year" and the employee learned it from the
+     * 400 on submit. The three maps here hold three different values on purpose: copying the wrong
+     * one through fails this test rather than passing by coincidence.
+     */
+    @Test
+    void usageCarriesThePerYearCountThroughToTheDtoInsteadOfDroppingIt() {
+        when(repository.findUsage(10L, 2026)).thenReturn(new UsageSnapshot(
+            Map.of(SpecialMoneyType.MEDICAL, new BigDecimal("1500")),
+            Map.of(SpecialMoneyType.MEDICAL, 3, SpecialMoneyType.UNIFORM_ANNUAL, 2),
+            Map.of(SpecialMoneyType.MEDICAL, 2, SpecialMoneyType.UNIFORM_ANNUAL, 1)));
+
+        SpecialMoneyUsageDto dto = service.usage(10L, 2026, user("employee", 10L));
+
+        assertThat(dto.activeCountThisYearByType())
+            .containsEntry("MEDICAL", 2)
+            .containsEntry("UNIFORM_ANNUAL", 1);
+        // ...and it is not just an alias of one of the other two maps.
+        assertThat(dto.approvedCountLifetimeByType()).containsEntry("MEDICAL", 3);
+        assertThat(dto.approvedAmountThisYearByType().get("MEDICAL")).isEqualByComparingTo("1500");
     }
 
     private UserPrincipal user(String role, Long employeeId) {

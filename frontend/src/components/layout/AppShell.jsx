@@ -119,6 +119,9 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // (canViewTaxAllowanceRegister: hr+ceo) so CEO's read-only visibility into the register
     // still gets a nav entry, even though only hr can act on a row (canReviewTaxAllowances).
     { path: '/tax-allowance-review', label: 'ตรวจสอบค่าลดหย่อนภาษี', helper: 'Tax allowance review (ล.ย.01)', icon: 'badgeCheck', group: 'hr', show: hasPermission(user.role, 'canViewTaxAllowanceRegister') },
+    // Attendance calendar admin (PR #480's API, this branch's UI): hr.holiday CRUD + the manual
+    // BOT-fetch trigger, hr.work_schedule_assignment CRUD. HR/CEO only.
+    { path: '/settings/attendance-calendar', label: 'ปฏิทินวันหยุด & ตารางงาน', helper: 'Holiday & work-schedule calendar', icon: 'calendar', group: 'hr', show: hasPermission(user.role, 'canManageAttendanceCalendar') },
     // Split (issue #390): nav visibility follows read access (hr+ceo); CEO lands on a read-only
     // view of the same page (PayrollPage.jsx gates writes on canManagePayroll internally).
     { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canViewPayroll') },

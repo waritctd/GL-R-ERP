@@ -17,9 +17,20 @@ import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.notification.NotificationService;
 
 /**
- * Modelled closely on {@code th.co.glr.hr.overtime.OvertimeService}: same manager/CEO gate shapes,
- * same dispatch-on-status approve()/reject(), same notification fan-out. See that class for the
- * pattern this mirrors.
+ * Welfare ("สวัสดิการ") requests. <b>Every type is approved by the CEO and only the CEO, in a single
+ * stage, for every employee</b> — there is no manager stage and no per-type exception. That is an
+ * owner ruling, and it is the one way this class deliberately does NOT mirror
+ * {@code th.co.glr.hr.overtime.OvertimeService}, which keeps a manager → CEO pipeline wherever the
+ * employee's ฝ่าย has a ผู้จัดการ.
+ *
+ * <p>Note this is stricter than the signed 2018 welfare policy, which lets a driver or loader claim
+ * travel per-diem straight from หัวหน้าฝ่าย. The stricter rule is intentional.
+ *
+ * <p>{@code MANAGER_APPROVED} survives in {@link SpecialMoneyStatus} and in {@code chk_smr_status}
+ * only for rows written before the manager stage was removed; nothing can enter that state now.
+ *
+ * <p>{@code managesEmployee} still exists here, but only for <em>read scoping and submit-on-behalf</em>
+ * — a ฝ่าย manager may file for their team and see their team's requests. It grants no approval.
  */
 @Service
 public class SpecialMoneyService {
@@ -94,9 +105,14 @@ public class SpecialMoneyService {
         UsageSnapshot snapshot = repository.findUsage(employeeId, year);
         Map<String, BigDecimal> amounts = new LinkedHashMap<>();
         snapshot.approvedAmountThisYearByType().forEach((type, amount) -> amounts.put(type.name(), amount));
-        Map<String, Integer> counts = new LinkedHashMap<>();
-        snapshot.approvedCountLifetimeByType().forEach((type, count) -> counts.put(type.name(), count));
-        return new SpecialMoneyUsageDto(employeeId, year, amounts, counts);
+        Map<String, Integer> lifetimeCounts = new LinkedHashMap<>();
+        snapshot.activeCountLifetimeByType().forEach((type, count) -> lifetimeCounts.put(type.name(), count));
+        // The snapshot has always carried the per-year count for the once-per-year uniform rule;
+        // it was simply dropped here, so the UI could not warn "you already filed this year" and
+        // the employee only found out from the 400 on submit.
+        Map<String, Integer> yearCounts = new LinkedHashMap<>();
+        snapshot.activeCountThisYearByType().forEach((type, count) -> yearCounts.put(type.name(), count));
+        return new SpecialMoneyUsageDto(employeeId, year, amounts, lifetimeCounts, yearCounts);
     }
 
     @Transactional
@@ -131,39 +147,36 @@ public class SpecialMoneyService {
         SpecialMoneyRequestDto existing = requireRequest(id);
         SpecialMoneyStatus status = parseStatus(existing.status());
         if (status == SpecialMoneyStatus.SUBMITTED) {
-            return managerApprove(id, request, user, actorEmployeeId, existing);
+            return ceoApproveFrom(SpecialMoneyStatus.SUBMITTED, id, request, user, actorEmployeeId, existing);
         }
         if (status == SpecialMoneyStatus.MANAGER_APPROVED) {
-            return ceoApprove(id, request, user, actorEmployeeId, existing);
+            // Legacy rows only. Welfare no longer has a manager stage (see the class Javadoc), so
+            // nothing new can enter this state -- but rows parked here before the change still need
+            // a way out, and it is the same CEO decision either way.
+            return ceoApproveFrom(SpecialMoneyStatus.MANAGER_APPROVED, id, request, user, actorEmployeeId, existing);
         }
         throw new ApiException(HttpStatus.CONFLICT, "คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว");
     }
 
-    private SpecialMoneyRequestDto managerApprove(
+    /**
+     * The CEO's approval — the only approval welfare has.
+     *
+     * <p>{@code from == SUBMITTED} is the live route for every request. {@code from ==
+     * MANAGER_APPROVED} exists only to clear rows written before the manager stage was removed. The
+     * amount, cap-override and payroll-month logic is identical for both; only the status the
+     * UPDATE accepts differs, so a legacy row cannot be approved under a different policy than a
+     * fresh one.
+     */
+    private SpecialMoneyRequestDto ceoApproveFrom(
+            SpecialMoneyStatus from,
             long id,
             ReviewSpecialMoneyRequest request,
             UserPrincipal user,
             Long actorEmployeeId,
             SpecialMoneyRequestDto existing) {
-        requireManager(existing.employeeId(), user);
-
-        int updated = repository.managerApprove(id, actorEmployeeId, note(request));
-        if (updated != 1) {
-            throw new ApiException(HttpStatus.CONFLICT, "คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว");
-        }
-        SpecialMoneyRequestDto after = requireRequest(id);
-        auditService.record(user, "MANAGER_APPROVE_SPECIAL_MONEY_REQUEST", "special_money_request", id, existing, after);
-        notifyManagerApproved(after);
-        return after;
-    }
-
-    private SpecialMoneyRequestDto ceoApprove(
-            long id,
-            ReviewSpecialMoneyRequest request,
-            UserPrincipal user,
-            Long actorEmployeeId,
-            SpecialMoneyRequestDto existing) {
+        boolean direct = from == SpecialMoneyStatus.SUBMITTED;
         requireCeo(user);
+        requireEvidence(existing);
 
         BigDecimal approvedAmount = request != null && request.approvedAmount() != null
             ? request.approvedAmount()
@@ -178,17 +191,29 @@ public class SpecialMoneyService {
         PolicyAmounts amounts = repository.findPolicyAmounts(type.name(), today);
         Set<String> excludedProvinces = repository.findExcludedProvinces();
 
-        // Re-run the evaluator with the CEO's chosen amount substituted in, purely to learn what the
-        // policy cap allows for this type/employee -- we deliberately do not gate on the recheck's
-        // eligibility violations (e.g. once-per-lifetime) here, since this same MANAGER_APPROVED
-        // request is itself counted in "usage" and would otherwise trip its own guard.
+        // Re-run the evaluator to learn the policy ceiling for this type/employee.
+        //
+        // The recheck is built from what the EMPLOYEE asked for, not from the CEO's chosen amount.
+        // Substituting the CEO's figure -- as this did until 2026-08-03 -- made the guard below
+        // structurally dead for every uncapped type: UNIFORM_NEW_STAFF, TRAVEL_LODGING, TRAINING
+        // and OTHER all return `requestedAmount` as their eligible amount, so feeding in the
+        // approved amount made eligibleAmount == approvedAmount and the comparison could never be
+        // true. A CEO could approve ฿50,000 against a ฿5,000 request and never be asked why.
+        //
+        // Reading from the original request makes the ceiling mean "the cap, or failing a cap, what
+        // was actually requested" -- so approving MORE than the policy allows, or more than the
+        // employee asked for, both now require a written reason.
+        //
+        // We deliberately do not gate on the recheck's eligibility violations (e.g.
+        // once-per-lifetime): this request is itself counted in "usage" (which spans SUBMITTED,
+        // MANAGER_APPROVED and APPROVED alike) and would otherwise trip its own guard.
         SubmitSpecialMoneyRequest recheckRequest = new SubmitSpecialMoneyRequest(
             existing.employeeId(),
             existing.eventDate(),
             existing.eventEndDate(),
             existing.receiptDate(),
             existing.quantity(),
-            approvedAmount,
+            existing.requestedAmount(),
             existing.reason(),
             existing.detail());
         PolicyDecision recheck = evaluator.evaluate(type, recheckRequest, eligibility, usage, amounts, excludedProvinces);
@@ -197,7 +222,7 @@ public class SpecialMoneyService {
         if (exceedsCap && capOverrideReason == null) {
             throw new ApiException(
                 HttpStatus.BAD_REQUEST,
-                "ต้องระบุเหตุผลเมื่อจำนวนเงินที่อนุมัติเกินเพดานตามนโยบาย");
+                "ต้องระบุเหตุผลเมื่อจำนวนเงินที่อนุมัติเกินเพดานตามนโยบายหรือเกินจำนวนที่พนักงานขอเบิก");
         }
 
         // The 25th-of-month payroll cutoff. Rolling forward past an already-PROCESSED month is
@@ -212,12 +237,22 @@ public class SpecialMoneyService {
             payrollMonth = payrollMonth.plusMonths(1);
         }
 
-        int updated = repository.ceoApprove(id, actorEmployeeId, approvedAmount, payrollMonth, capOverrideReason, note(request));
+        int updated = direct
+            ? repository.ceoDirectApprove(
+                id, actorEmployeeId, approvedAmount, payrollMonth, capOverrideReason, note(request))
+            : repository.ceoApprove(
+                id, actorEmployeeId, approvedAmount, payrollMonth, capOverrideReason, note(request));
         if (updated != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว");
         }
         SpecialMoneyRequestDto after = requireRequest(id);
-        auditService.record(user, "CEO_APPROVE_SPECIAL_MONEY_REQUEST", "special_money_request", id, existing, after);
+        auditService.record(
+            user,
+            direct ? "CEO_APPROVE_SPECIAL_MONEY_REQUEST" : "CEO_APPROVE_LEGACY_MANAGER_APPROVED_SPECIAL_MONEY_REQUEST",
+            "special_money_request",
+            id,
+            existing,
+            after);
         notifyCeoApproved(after);
         return after;
     }
@@ -228,39 +263,35 @@ public class SpecialMoneyService {
         SpecialMoneyRequestDto existing = requireRequest(id);
         SpecialMoneyStatus status = parseStatus(existing.status());
         if (status == SpecialMoneyStatus.SUBMITTED) {
-            return managerReject(id, request, user, actorEmployeeId, existing);
+            // Symmetric with approve(): the sole reviewer must be able to refuse as well as accept,
+            // or a request could only ever be approved.
+            return ceoRejectFrom(SpecialMoneyStatus.SUBMITTED, id, request, user, actorEmployeeId, existing);
         }
         if (status == SpecialMoneyStatus.MANAGER_APPROVED) {
-            return ceoReject(id, request, user, actorEmployeeId, existing);
+            return ceoRejectFrom(SpecialMoneyStatus.MANAGER_APPROVED, id, request, user, actorEmployeeId, existing);
         }
         throw new ApiException(HttpStatus.CONFLICT, "คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว");
     }
 
-    private SpecialMoneyRequestDto managerReject(
-            long id,
-            ReviewSpecialMoneyRequest request,
-            UserPrincipal user,
-            Long actorEmployeeId,
-            SpecialMoneyRequestDto existing) {
-        requireManager(existing.employeeId(), user);
-        int updated = repository.reject(id, actorEmployeeId, note(request));
-        if (updated != 1) {
-            throw new ApiException(HttpStatus.CONFLICT, "คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว");
-        }
-        SpecialMoneyRequestDto after = requireRequest(id);
-        auditService.record(user, "REJECT_SPECIAL_MONEY_REQUEST", "special_money_request", id, existing, after);
-        notifyRejected(after);
-        return after;
-    }
-
-    private SpecialMoneyRequestDto ceoReject(
+    /**
+     * The CEO's rejection. As with {@link #ceoApproveFrom}, {@code MANAGER_APPROVED} is reachable
+     * only for rows written before welfare's manager stage was removed.
+     *
+     * <p>{@code repository.reject} is guarded on {@code status = 'SUBMITTED'} and
+     * {@code repository.ceoReject} on {@code status = 'MANAGER_APPROVED'}; neither writes approver
+     * columns, so the two differ only in which row they will touch.
+     */
+    private SpecialMoneyRequestDto ceoRejectFrom(
+            SpecialMoneyStatus from,
             long id,
             ReviewSpecialMoneyRequest request,
             UserPrincipal user,
             Long actorEmployeeId,
             SpecialMoneyRequestDto existing) {
         requireCeo(user);
-        int updated = repository.ceoReject(id, actorEmployeeId, note(request));
+        int updated = from == SpecialMoneyStatus.SUBMITTED
+            ? repository.reject(id, actorEmployeeId, note(request))
+            : repository.ceoReject(id, actorEmployeeId, note(request));
         if (updated != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว");
         }
@@ -311,15 +342,110 @@ public class SpecialMoneyService {
         }
     }
 
-    private void requireManager(long employeeId, UserPrincipal user) {
-        if (!managesEmployee(employeeId, user)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะหัวหน้างานของพนักงานเท่านั้นที่สามารถพิจารณาคำขอเงินพิเศษได้");
+    /**
+     * Refuses to approve an evidence-required type with nothing attached.
+     *
+     * <p>{@code SpecialMoneyType.evidenceRequired()} existed since 2018 but was only ever returned
+     * to the UI as a display flag — nothing enforced it, and there was no upload endpoint at all, so
+     * the CEO approved money with no document trail whatsoever.
+     *
+     * <p><b>Presence is all this can check.</b> The policy document names a specific document per
+     * type (บัตรเชิญ, รูปถ่าย, ใบสุทธิ, สูติบัตร, ใบมรณบัตร, ใบเสร็จ); no server can verify that an
+     * uploaded file IS that document. The type-specific requirement is surfaced to the uploader in
+     * the UI and is the reviewer's job to check — this gate only guarantees there is something to
+     * check.
+     */
+    private void requireEvidence(SpecialMoneyRequestDto existing) {
+        SpecialMoneyType type = parseType(existing.requestType());
+        if (!type.evidenceRequired()) {
+            return;
+        }
+        if (repository.countAttachments(existing.id()) == 0) {
+            throw new ApiException(
+                HttpStatus.BAD_REQUEST,
+                "คำขอประเภท " + type.thaiLabel() + " ต้องแนบเอกสารหลักฐานก่อนจึงจะอนุมัติได้");
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Evidence attachments
+    // ---------------------------------------------------------------------
+
+    /**
+     * Attaches a piece of evidence. Only the employee or whoever filed on their behalf may upload,
+     * and only while the request is still SUBMITTED — once a decision is recorded the evidence it
+     * was based on must not change underneath it.
+     */
+    /**
+     * The upload gate, split out so the controller can authorize BEFORE writing the file to disk.
+     * Called again inside {@link #addAttachment} — the two calls are cheap, and leaving the write
+     * path unguarded on the assumption that the caller checked first is how that guarantee decays.
+     */
+    public void requireCanAttach(long id, UserPrincipal user) {
+        Long actorEmployeeId = requireEmployeeId(user);
+        SpecialMoneyRequestDto existing = requireRequest(id);
+
+        boolean isEmployee = existing.employeeId() == actorEmployeeId;
+        boolean isRequester = existing.requestedById() != null && existing.requestedById() == actorEmployeeId;
+        if (!isEmployee && !isRequester) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะผู้ยื่นคำขอเท่านั้นที่แนบเอกสารได้");
+        }
+        if (!"SUBMITTED".equals(existing.status())) {
+            throw new ApiException(
+                HttpStatus.CONFLICT, "แนบเอกสารได้เฉพาะคำขอที่ยังไม่ได้รับการพิจารณาเท่านั้น");
+        }
+    }
+
+    @Transactional
+    public SpecialMoneyAttachmentDto addAttachment(
+            long id, String fileName, String storagePath, String mimeType, Long sizeBytes, UserPrincipal user) {
+        requireCanAttach(id, user);
+        Long actorEmployeeId = requireEmployeeId(user);
+
+        long attachmentId =
+            repository.addAttachment(id, actorEmployeeId, fileName, storagePath, mimeType, sizeBytes);
+        auditService.record(
+            user, "ADD_SPECIAL_MONEY_ATTACHMENT", "special_money_request_attachment", attachmentId, null, fileName);
+        return repository.findAttachments(id).stream()
+            .filter(attachment -> attachment.id() == attachmentId)
+            .findFirst()
+            .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "ไม่พบเอกสารที่เพิ่งแนบ"));
+    }
+
+    /** Evidence is readable by anyone who may read the request itself. */
+    public List<SpecialMoneyAttachmentDto> listAttachments(long id, UserPrincipal user) {
+        SpecialMoneyRequestDto existing = requireRequest(id);
+        if (!canAccessEmployee(user, existing.employeeId())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        return repository.findAttachments(id);
+    }
+
+    /**
+     * Resolves an attachment for download, authorizing against its OWNING REQUEST rather than the
+     * attachment id. An attachment id is guessable; without this the file store would be a way to
+     * read other people's medical receipts and death certificates by incrementing a number.
+     */
+    public SpecialMoneyRepository.AttachmentLocation resolveAttachmentForDownload(
+            long attachmentId, UserPrincipal user) {
+        SpecialMoneyRepository.AttachmentLocation location = repository.findAttachmentLocation(attachmentId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบเอกสารนี้"));
+        SpecialMoneyRequestDto owningRequest = requireRequest(location.requestId());
+        if (!canAccessEmployee(user, owningRequest.employeeId())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        return location;
+    }
+
+    /**
+     * The single approval gate for welfare. A ฝ่าย manager gets no say here — they may file for
+     * their team and see their team's requests, but only the CEO decides.
+     */
     private void requireCeo(UserPrincipal user) {
         if (user == null || !"ceo".equals(user.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะ CEO เท่านั้นที่สามารถอนุมัติคำขอเงินพิเศษที่หัวหน้างานอนุมัติแล้วได้");
+            throw new ApiException(
+                HttpStatus.FORBIDDEN,
+                "คำขอสวัสดิการทุกประเภทต้องได้รับการพิจารณาจาก CEO เท่านั้น");
         }
     }
 
@@ -330,25 +456,26 @@ public class SpecialMoneyService {
     }
 
     /**
-     * True when {@code user} manages the given employee -- either as the employee's direct
-     * reports-to manager, or as a ฝ่าย manager sharing the employee's division (excluding self).
-     * Mirrors {@code OvertimeService.managesEmployee}. HR is not special-cased here: it gets no
-     * manager-shaped access to submit or review on someone else's behalf.
+     * True when {@code user} is a ฝ่าย manager sharing the employee's division (excluding self).
+     *
+     * <p><b>This grants no approval rights</b> — welfare is CEO-only. It gates two lesser things:
+     * filing a request on a team member's behalf ({@code resolveTargetEmployee}) and seeing a team
+     * member's requests and quota ({@code canAccessEmployee}).
+     *
+     * <p>{@code reports_to_employee_id} is deliberately not consulted; it used to be, and was
+     * dropped on the owner's instruction so this matches {@code AttendanceService.resolveScope},
+     * which has always been division-only. HR is not special-cased either: it gets no
+     * manager-shaped access to file on someone else's behalf.
      */
     private boolean managesEmployee(long employeeId, UserPrincipal user) {
         if (user == null || user.employeeId() == null) {
             return false;
         }
         return repository.findEmployeeAccess(employeeId)
-            .map(access -> {
-                boolean directReport = access.managerEmployeeId() != null
-                    && access.managerEmployeeId().equals(user.employeeId());
-                boolean divisionManager = user.manager()
-                    && user.divisionId() != null
-                    && user.divisionId().equals(access.divisionId())
-                    && employeeId != user.employeeId();
-                return directReport || divisionManager;
-            })
+            .map(access -> user.manager()
+                && user.divisionId() != null
+                && user.divisionId().equals(access.divisionId())
+                && employeeId != user.employeeId())
             .orElse(false);
     }
 
@@ -360,37 +487,21 @@ public class SpecialMoneyService {
     // Notifications
     // ---------------------------------------------------------------------
 
+    /**
+     * Goes to the CEO, not to the requester's ผู้จัดการ. Notifying the manager would be worse than
+     * useless now that they cannot act on it — it would put a request in front of someone whose
+     * only possible response is to wait for someone else.
+     */
     private void notifySubmitted(SpecialMoneyRequestDto request) {
         String title = "ส่งคำขอเงินสวัสดิการแล้ว";
-        String message = "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ถูกส่งให้ผู้จัดการตรวจสอบแล้ว";
+        String message = "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ถูกส่งให้ CEO พิจารณาแล้ว";
         notificationService.notify(request.employeeId(), "SPECIAL_MONEY_SUBMITTED", title, message, "/employee-requests", true);
-        if (request.managerEmployeeId() != null) {
-            notificationService.notify(
-                request.managerEmployeeId(),
-                "SPECIAL_MONEY_PENDING_MANAGER",
-                "มีคำขอเงินสวัสดิการรออนุมัติ",
-                request.employeeName() + " ส่งคำขอ " + request.requestType() + " วันที่ " + request.eventDate(),
-                "/employee-requests",
-                true
-            );
-        }
-    }
-
-    private void notifyManagerApproved(SpecialMoneyRequestDto request) {
-        notificationService.notify(
-            request.employeeId(),
-            "SPECIAL_MONEY_MANAGER_APPROVED",
-            "ผู้จัดการอนุมัติคำขอเงินสวัสดิการแล้ว",
-            "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ผ่านผู้จัดการแล้ว และรอ CEO อนุมัติขั้นสุดท้าย",
-            "/employee-requests",
-            true
-        );
         for (Long ceoEmployeeId : repository.findCeoApproverEmployeeIds()) {
             notificationService.notify(
                 ceoEmployeeId,
                 "SPECIAL_MONEY_PENDING_CEO",
                 "มีคำขอเงินสวัสดิการรอ CEO อนุมัติ",
-                request.employeeName() + " มีคำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ที่ผู้จัดการอนุมัติแล้ว",
+                request.employeeName() + " ส่งคำขอ " + request.requestType() + " วันที่ " + request.eventDate(),
                 "/employee-requests",
                 true
             );

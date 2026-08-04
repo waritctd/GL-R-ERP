@@ -98,6 +98,21 @@ public enum PayrollComponent {
     BONUS_PAY,
     OTHER_ONE_OFF_PAY,
 
+    /**
+     * สวัสดิการที่อนุมัติแล้ว — approved welfare claims (เงินช่วยเหลือ, ค่ารักษาพยาบาล, ชุดฟอร์ม,
+     * เบี้ยเลี้ยงเดินทาง) summed from {@code hr.special_money_request} for the payroll month. V128.
+     *
+     * <p><b>Auto-fed, exactly like {@link #OVERTIME_PAY} and {@link #COMMISSION_PAY}</b>, and for the
+     * same reason those are not พิเศษ slots: {@link #SPECIAL_PAY_9} is labelled
+     * เงินรางวัล/เงินช่วยเหลืออื่นๆ and is the obvious-looking home, but it is a MANUAL entry slot.
+     * Sharing it would make the double-payment undetectable — there would be no way to tell the
+     * computed figure from the hand-keyed one. See {@link #SPECIAL_PAY_7}, which records the same
+     * distinction for commission.
+     *
+     * <p>SSO-excluded: ค่าจ้าง under พ.ร.บ.ประกันสังคม ม.5 is money paid in return for work, and
+     * welfare is not.
+     */
+    WELFARE_PAY,
     /** ค่าตอบแทนกรรมการ. SSO-excluded by default (not wages under the Social Security Act). */
     DIRECTOR_REMUNERATION,
     /** รายได้ไม่คิดภาษี. SSO-excluded by default and out of scope for tax treatment. */

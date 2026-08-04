@@ -6,6 +6,7 @@ This repository is a GL&R **HR + Sales/CRM portal** growing into an ERP platform
 1. **Read this file and `AGENTS.md` before starting.** They hold the product identity, the current priorities, and the non-negotiable rules. There is no longer a separate handoff corpus to read — it was retired in 2026-07 (see "Where the old docs went" below).
 2. **Always run `git status` before making any changes** and confirm which branch you are on.
 3. **Check you are not on a stale base.** With several worktrees in play, `git fetch` then `git rev-list --left-right --count HEAD...origin/main` before you build anything substantial — this repo has had a full feature built on a base that `main` had already moved past.
+4. **Check for concurrent activity before starting substantial work.** `git branch -a` / `git log --all --oneline -10` to see what other worktrees or agents have pushed recently, and list open PRs to see if another session is already on the same files or surface. Two agents silently touching the same area is how conflicting changes and repeated merge-fixups happen — see the branch-lifetime note below.
 
 ## Scope rules — non-negotiable
 - **Do not change business logic** (payroll/tax/commission/pricing math, etc.) unless explicitly requested. This is the one rule that never relaxes. **Exception, currently live:** the sales deal/pricing workflow is under an approved redesign — see below.
@@ -127,15 +128,50 @@ The frontend is migrating from the single global `frontend/src/styles.css` to a 
 - **Tailwind breakpoints drive responsive behavior.** Remove dead CSS carefully, and never at the cost of a visual regression.
 - Migrating existing CSS is expected and allowed, but do it in reviewable slices with screenshots — not as one blind rewrite.
 
+## Frontend design skills — use before/during UI work
+- **Use the `information-architecture` skill** whenever frontend work involves navigation, page/content structure, URL patterns, or user flows — plan the structural layer before touching visual design. This applies to new pages/sections and to any restructuring of existing ones, not just net-new features.
+- **Use the `frontend-design` skill/plugin** when implementing the actual UI. Hold implementation to an impeccable bar: no generic/placeholder-looking output, consistent with the Tailwind-first direction above and the existing design tokens in `frontend/src/index.css`.
+- Both are installed locally (`.agents/skills/information-architecture`, `.agents/skills/frontend-design`, and the `frontend-design@claude-plugins-official` Claude Code plugin) — invoke them rather than freehanding IA or visual design decisions.
+
 ## Branch & agent discipline
 - **One branch per task.** `main` must stay deployable; branch off `main`, open a PR, merge only after review.
 - **One implementation agent per branch.** Do not let two agents (e.g. Claude and Codex) edit the same branch at the same time.
 - **Reviewer agents do not implement** — except tiny, safe fixes (typos, obvious one-liners). Anything larger goes back to an implementation branch.
+- **If your work overlaps another active session's, tell that session — don't just note it and continue.**
+  If you find a branch, PR, or file another agent session is actively working (per the concurrent-activity
+  check above), and your task touches the same surface, message that session directly (the CCR
+  `SendMessage` tool if it's a sibling session, otherwise a comment on its PR) before you proceed, so the
+  two lines of work coordinate instead of silently diverging or colliding on merge. Silence here is what
+  turns into the review-fix and repeated-main-sync patterns above.
+- **Cap branch lifetime — sync with `main` at most once before opening the PR.** A branch that needs
+  a second or third `git fetch origin main && git merge/rebase` mid-flight has grown too large or sat
+  open too long; both cost real agent time re-reading diffs and re-resolving conflicts. `feat/leave-rules-tab`
+  synced `main` four times before merging — that pattern is the thing to avoid, not repeat.
+- **Use a PR stack instead of one long branch when a task naturally has sequential parts** (e.g. "add
+  the composer" → "wire it to the API" → "add the calendar admin UI"). Branch each step off the
+  previous step's branch (`git checkout -b feat/x-step2 feat/x-step1`) and open each as its own PR
+  targeting the previous branch, so each is small, reviewable, and only ever merges forward — never
+  re-synced against a moving `main` mid-task. If a stacking CLI (Graphite `gt`, `git-spice`) is
+  installed and configured for this repo, use it instead of hand-rolled stacked branches; check for
+  it (`which gt`, `which git-spice` / `gs`) before assuming plain git is the only option. Land and
+  merge the bottom of the stack first — don't let the whole stack sit unmerged waiting on the top PR.
+- **Rework costs a full second pass — verify before handing off, not after review flags it.** Commits
+  like `review fixes for V116` (a second pass on quota bookkeeping and probation resolution after
+  review) are exactly the pattern to prevent: for business-logic-sensitive surfaces (leave/payroll
+  math, permission gates), re-check the diff against the spec/migration yourself before opening the
+  PR, rather than relying on review to catch it.
 
 ## Before you finish an implementation task
 - **Always run the relevant tests/builds** and record the results:
   - Frontend: `cd frontend && npm run lint && npm test && npm run build` (there is no `typecheck` script)
   - Backend: `cd backend && ./mvnw -B clean verify` (integration tests need Postgres — either `TEST_DB_URL` **or** a running Docker for Testcontainers; note if they were skipped)
+- **Don't pay full-suite cost on every edit.** While iterating, run only the targeted test
+  (`npx vitest run <file>`, a single Maven `-Dtest=ClassName`) against the file you're changing.
+  Reserve the full commands above — and a full `mvnw verify` — for the pre-PR check, run once, after
+  the change has settled.
+- **If neither `TEST_DB_URL` nor Docker is available, don't retry Testcontainers.** Note once that
+  integration tests were skipped for lack of a DB and move on — repeated attempts just burn time on a
+  precondition that isn't going to change mid-session.
 - **Did the change touch authorization?** (a role gate, a scope/filter, who may read or write whose
   rows.) If yes, a real-DB integration test through the real Java service is **required** — see
   "Permission changes must ship evidence" above. If it ran on mocks only, report the permission

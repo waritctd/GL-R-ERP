@@ -42,7 +42,7 @@ function setupMocks({ days = [], balances = [], leaveRequests = [], overtimeRequ
   overtimeList.mockResolvedValue({ requests: overtimeRequests });
 }
 
-function renderSelfService({ user = employeeUser, dashboardSummary, profileRequests = [] } = {}) {
+function renderSelfService({ user = employeeUser, dashboardSummary, profileRequests = [], taxAllowanceSummary } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -54,6 +54,7 @@ function renderSelfService({ user = employeeUser, dashboardSummary, profileReque
           employee={employee}
           profileRequests={profileRequests}
           dashboardSummary={dashboardSummary}
+          taxAllowanceSummary={taxAllowanceSummary}
           showToast={vi.fn()}
         />
       </MemoryRouter>
@@ -146,5 +147,41 @@ describe('EmployeeSelfService — self-service landing', () => {
     await screen.findByText('คำขอของฉัน');
     expect(screen.getByText('ขอลา').closest('button')).not.toBeNull();
     expect(screen.getByText('ขอ OT').closest('button')).not.toBeNull();
+  });
+
+  describe('ล.ย.01', () => {
+    it('nudges an employee who has not filed', async () => {
+      setupMocks({});
+      renderSelfService({
+        taxAllowanceSummary: { statusInfo: { key: 'NONE', label: 'ยังไม่ได้ยื่น', tone: 'neutral' }, declaration: null },
+      });
+      await screen.findByText('คำขอของฉัน');
+      expect(screen.getByText('ยังไม่ได้ยื่นแบบแจ้ง ล.ย.01')).not.toBeNull();
+    });
+
+    it('tracks a filed declaration in the คำขอของฉัน feed instead of nagging', async () => {
+      setupMocks({});
+      renderSelfService({
+        taxAllowanceSummary: {
+          statusInfo: { key: 'PENDING', label: 'รอ HR ตรวจสอบ', tone: 'warning' },
+          declaration: { declarationId: 55, status: 'PENDING', submittedAt: '2026-03-01T00:00:00.000Z' },
+        },
+      });
+      const feed = (await screen.findByText('คำขอของฉัน')).closest('section');
+      expect(within(feed).getByText('แบบแจ้ง ล.ย.01 (ค่าลดหย่อนภาษี)')).not.toBeNull();
+      // The three-step chain, not leave's two-step one: HR approval and payroll application are
+      // separate, and an approved-but-unapplied declaration is not yet reducing anyone's tax.
+      expect(within(feed).getByText('ใช้กับเงินเดือน')).not.toBeNull();
+      // Nothing to act on, so the action row stays away.
+      expect(screen.queryByText('ยังไม่ได้ยื่นแบบแจ้ง ล.ย.01')).toBeNull();
+    });
+
+    it('shows neither prompt nor feed row when the summary has not loaded', async () => {
+      setupMocks({});
+      renderSelfService();
+      await screen.findByText('คำขอของฉัน');
+      expect(screen.queryByText('ยังไม่ได้ยื่นแบบแจ้ง ล.ย.01')).toBeNull();
+      expect(screen.queryByText('แบบแจ้ง ล.ย.01 (ค่าลดหย่อนภาษี)')).toBeNull();
+    });
   });
 });

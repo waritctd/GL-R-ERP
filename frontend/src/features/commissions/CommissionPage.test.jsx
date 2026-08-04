@@ -21,11 +21,23 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       commissions: {
         list: vi.fn(),
         payrollReady: vi.fn(),
+        createFromDeal: vi.fn(),
       },
-      tickets: { list: vi.fn().mockResolvedValue({ tickets: [] }) },
+      tickets: {
+        list: vi.fn().mockResolvedValue({ tickets: [] }),
+        get: vi.fn(),
+      },
     },
   };
 });
+
+// browser-image-compression genuinely returns a plain Blob with no `.name` -- this mock
+// reproduces that faithfully rather than a File, which is exactly the shape that exposed the
+// "blob" filename bug in #498/#504. A mock that quietly upgrades the library's real return type
+// would make this test pass whether or not the component re-wraps it.
+vi.mock('browser-image-compression', () => ({
+  default: vi.fn((file) => Promise.resolve(new Blob([file], { type: file.type }))),
+}));
 
 function renderPage(user) {
   const queryClient = new QueryClient({
@@ -253,5 +265,103 @@ describe('CommissionPage — sales rep monthly incentive line (issue #405)', () 
 
     expect(await screen.findByText('ขั้นบันไดค่าคอมเดือนนี้ (ประมาณการ)')).not.toBeNull();
     expect(screen.queryByText('อินเซนทีฟ (นอกขั้นบันได)')).toBeNull();
+  });
+});
+
+const accountUser = { id: 20, employeeId: 20, name: 'บัญชี ทดสอบ', role: 'account' };
+
+function closedPaidTicket(overrides = {}) {
+  return {
+    id: 42,
+    code: 'TCK-0042',
+    customerName: 'บริษัท ทดสอบ จำกัด',
+    salesStage: 'CLOSED_PAID',
+    amountPayable: 3210000,
+    ...overrides,
+  };
+}
+
+async function loadEligibleDeal(ticketId = '42') {
+  fireEvent.change(screen.getByLabelText(/เลขที่ Ticket ID/), { target: { value: ticketId } });
+  fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลดีล/ }));
+  await screen.findByText('TCK-0042');
+}
+
+// Found in #498/#504 (same client-side Blob-vs-File defect, different feature): imageCompression()
+// returns a plain Blob, and FormData built from a bare Blob has no filename to send, so the
+// multipart part's filename defaults to the literal string "blob" per spec. This one matters more
+// than the other instances: createFromDeal dual-writes the uploaded file as the ticket's real tax
+// invoice attachment (AttachType.INVOICE), which gates CONFIRM_CLOSE -- so the corrupted filename
+// hit an actual business document, not just a photo used for internal reference.
+describe('CommissionPage — account create-from-deal tax invoice upload', () => {
+  let showToast;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    showToast = vi.fn();
+    api.tickets.get.mockResolvedValue({ ticket: { summary: closedPaidTicket() } });
+    api.commissions.createFromDeal.mockResolvedValue({ commission: { id: 900, invoiceDetails: invoiceDetails() } });
+  });
+
+  function renderAccountPage() {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    return render(
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <CommissionPage user={accountUser} showToast={showToast} />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it('re-wraps the compressed invoice image so createFromDeal receives the original filename, not "blob"', async () => {
+    renderAccountPage();
+    await loadEligibleDeal();
+
+    fireEvent.change(screen.getByLabelText('Invoice Number *'), { target: { value: 'INV-0042' } });
+    const original = new File(['fake-jpeg-bytes'], 'tax-invoice-0042.jpg', { type: 'image/jpeg' });
+    fireEvent.change(document.getElementById('commission-invoice-file'), { target: { files: [original] } });
+    fireEvent.change(screen.getByLabelText(/Gross Amount/), { target: { value: '3210000' } });
+
+    // fireEvent.click on the submit button runs jsdom's native constraint validation first,
+    // which (unlike a real browser) does not reliably see the file input as satisfied after a
+    // synthetic fireEvent.change -- dispatching submit directly on the form exercises the same
+    // onSubmit={submitFromDeal} handler without that jsdom-only false negative.
+    fireEvent.submit(screen.getByRole('button', { name: 'บันทึกและสร้างคำขอค่าคอม' }).closest('form'));
+
+    await waitFor(() => expect(api.commissions.createFromDeal).toHaveBeenCalledTimes(1));
+    const { invoiceAttachment } = api.commissions.createFromDeal.mock.calls[0][0];
+
+    // The regression this guards: without the File re-wrap, `invoiceAttachment.name` is undefined
+    // (a bare Blob has no `.name`), and FormData/fetch would send "blob" to the real backend --
+    // corrupting the filename of the ticket's actual tax invoice attachment, not a cosmetic label.
+    expect(invoiceAttachment.name).toBe('tax-invoice-0042.jpg');
+    expect(invoiceAttachment).toBeInstanceOf(File);
+    expect(invoiceAttachment.type).toBe('image/jpeg');
+  });
+
+  it('does not touch PDFs -- they skip compression and keep their name for a different reason', async () => {
+    const imageCompression = (await import('browser-image-compression')).default;
+    renderAccountPage();
+    await loadEligibleDeal();
+
+    fireEvent.change(screen.getByLabelText('Invoice Number *'), { target: { value: 'INV-0042' } });
+    const pdf = new File(['fake-pdf-bytes'], 'tax-invoice-0042.pdf', { type: 'application/pdf' });
+    fireEvent.change(document.getElementById('commission-invoice-file'), { target: { files: [pdf] } });
+    fireEvent.change(screen.getByLabelText(/Gross Amount/), { target: { value: '3210000' } });
+
+    // fireEvent.click on the submit button runs jsdom's native constraint validation first,
+    // which (unlike a real browser) does not reliably see the file input as satisfied after a
+    // synthetic fireEvent.change -- dispatching submit directly on the form exercises the same
+    // onSubmit={submitFromDeal} handler without that jsdom-only false negative.
+    fireEvent.submit(screen.getByRole('button', { name: 'บันทึกและสร้างคำขอค่าคอม' }).closest('form'));
+
+    await waitFor(() => expect(api.commissions.createFromDeal).toHaveBeenCalledTimes(1));
+    const { invoiceAttachment } = api.commissions.createFromDeal.mock.calls[0][0];
+
+    expect(imageCompression).not.toHaveBeenCalled();
+    expect(invoiceAttachment.name).toBe('tax-invoice-0042.pdf');
   });
 });

@@ -24,6 +24,35 @@ class HolidayRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         repository = new HolidayRepository(jdbc);
     }
 
+    /**
+     * V129: {@code name_th} was {@code VARCHAR(120)} and production's reconcile write failed with
+     * {@code value too long for type character varying(120)} on a real BOT holiday. This is a
+     * genuine Thai holiday name -- a substitution-day prefix plus the King's full formal royal
+     * title, the exact combination that triggered the production failure -- not padding, since the
+     * point is that the column must now accept what BOT actually sends, not merely accept 120
+     * arbitrary characters. Round-trips through the real upsert so both the {@code INSERT} and the
+     * {@code ON CONFLICT ... DO UPDATE} branch are proven, not just whichever one a mocked
+     * repository would have let through either way.
+     */
+    @Test
+    void aHolidayNameLongerThan120CharactersRoundTripsThroughReconcile() {
+        wire();
+        String longName = "วันหยุดชดเชยวันเฉลิมพระชนมพรรษาพระบาทสมเด็จพระปรเมนทรรามาธิบดีศรีสินทรมหาวชิราลงกรณ "
+            + "พระวชิรเกล้าเจ้าอยู่หัว และวันหยุดราชการเป็นกรณีพิเศษ";
+        assertThat(longName.length()).isGreaterThan(120);
+        LocalDate date = LocalDate.of(2026, 7, 28);
+
+        repository.reconcileBankHolidaysForYear(2026, List.of(new BankHoliday(date, longName)));
+        Map<String, Object> inserted = rowFor(date).orElseThrow();
+        assertThat(inserted.get("name_th")).isEqualTo(longName);
+
+        // Also exercise the ON CONFLICT ... DO UPDATE branch with the same long value, not only the
+        // plain INSERT -- V129 widened the column type, and both write paths reference it.
+        repository.reconcileBankHolidaysForYear(2026, List.of(new BankHoliday(date, longName)));
+        Map<String, Object> updated = rowFor(date).orElseThrow();
+        assertThat(updated.get("name_th")).isEqualTo(longName);
+    }
+
     @Test
     void reRunningTheSameYearWithTheSameFetchIsIdempotent() {
         wire();

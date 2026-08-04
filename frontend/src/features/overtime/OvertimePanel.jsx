@@ -364,22 +364,29 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
     rejectMutation.mutate({ id: confirmState.id, reviewerNote: reviewerNote.trim() });
   }
 
-  // A ฝ่าย manager's list is already scoped server-side to their division, so any request
-  // they see (other than their own) is one they may review; direct reports-to managers too.
+  // A ฝ่าย manager's list is already scoped server-side to their division, so any request they see
+  // (other than their own) is one they may review. reports_to is NOT consulted: it stopped granting
+  // approval rights when overtime moved to the division-only rule attendance already used, and a
+  // button shown on the strength of it would just 403.
   function managesRequest(request) {
-    const directManager = request.managerEmployeeId
-      && Number(request.managerEmployeeId) === Number(user.employeeId);
-    const divisionManager = user.manager
-      && Number(request.employeeId) !== Number(user.employeeId);
-    return Boolean(directManager || divisionManager);
+    return Boolean(user.manager && Number(request.employeeId) !== Number(user.employeeId));
+  }
+
+  // hasManagerApprover === false means the server will route SUBMITTED straight to the CEO: either
+  // the employee's ฝ่าย has no ผู้จัดการ, or they are one themselves. Mirrors
+  // OvertimeService.approve()'s dispatch -- offering the wrong button here is a guaranteed 403.
+  function hasManagerStage(request) {
+    return request.hasManagerApprover !== false;
   }
 
   function canManagerApprove(request) {
-    return request.status === 'SUBMITTED' && managesRequest(request);
+    return request.status === 'SUBMITTED' && hasManagerStage(request) && managesRequest(request);
   }
 
   function canCeoApprove(request) {
-    return request.status === 'MANAGER_APPROVED' && user.role === 'ceo';
+    if (user.role !== 'ceo') return false;
+    return request.status === 'MANAGER_APPROVED'
+      || (request.status === 'SUBMITTED' && !hasManagerStage(request));
   }
 
   function canReviewRequest(request) {
@@ -668,14 +675,23 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           const request = requests.find((item) => item.id === confirmState?.id);
           if (!request) return 'ยืนยันการอนุมัติคำขอ OT นี้?';
           const isCeoStep = canCeoApprove(request);
-          // Next-step copy quoted from api.overtime.approve (src/api/mockApi.js
-          // ~L1656-1689): the SUBMITTED->MANAGER_APPROVED step computes
-          // payableMinutes = round(actualMinutes * multiplier) right there;
-          // the MANAGER_APPROVED->APPROVED (CEO) step only flips status and
-          // keeps the payable minutes already computed by the manager step.
-          const nextStep = isCeoStep
-            ? 'สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว" พร้อมชั่วโมงจ่ายได้ที่คำนวณไว้'
-            : `สถานะจะเปลี่ยนเป็น "รอ CEO" และคำนวณชั่วโมงจ่ายได้ตามอัตรา ${request.dayType === 'HOLIDAY' ? '3x (วันหยุด)' : '1.5x (วันทำงานปกติ)'}`;
+          // Three outcomes, because there are three routes. Quoted from api.overtime.approve
+          // (src/api/mockApi.js): the SUBMITTED->MANAGER_APPROVED step computes
+          // payableMinutes = round(actualMinutes * multiplier) right there; the
+          // MANAGER_APPROVED->APPROVED (CEO) step only flips status and keeps the minutes the
+          // manager step already computed. The manager-less route does BOTH at once, so its copy
+          // has to promise the calculation as well as the final status -- telling a CEO their
+          // one click "only flips the status" would be wrong on the one route that pays out.
+          const rateLabel = request.dayType === 'HOLIDAY' ? '3x (วันหยุด)' : '1.5x (วันทำงานปกติ)';
+          const isDirectCeoStep = isCeoStep && request.status === 'SUBMITTED';
+          let nextStep;
+          if (isDirectCeoStep) {
+            nextStep = `คำขอนี้ไม่มีขั้นอนุมัติของหัวหน้างาน สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว" และคำนวณชั่วโมงจ่ายได้ตามอัตรา ${rateLabel}`;
+          } else if (isCeoStep) {
+            nextStep = 'สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว" พร้อมชั่วโมงจ่ายได้ที่คำนวณไว้';
+          } else {
+            nextStep = `สถานะจะเปลี่ยนเป็น "รอ CEO" และคำนวณชั่วโมงจ่ายได้ตามอัตรา ${rateLabel}`;
+          }
           return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <p className="confirm-dialog-message" style={{ margin: 0 }}>

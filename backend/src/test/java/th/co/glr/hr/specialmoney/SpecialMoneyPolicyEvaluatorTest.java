@@ -59,17 +59,24 @@ class SpecialMoneyPolicyEvaluatorTest {
      * The department code is a VARCHAR (hr.department.source_code) carried in
      * special_money_policy.text_value, not in the numeric amount column — it need not be numeric.
      */
+    /** Configures the kit's eligible DEPARTMENT list (V129 replaced the old singular key). */
     private static PolicyAmounts amountsWithConfiguredSalesSupportCode(String code) {
         return new PolicyAmounts(
-            defaultAmountsMap(), Map.of("sales_support_department_code", code), 1);
+            defaultAmountsMap(), Map.of("preprobation_kit_department_codes", code), 1);
+    }
+
+    /** Configures the kit's eligible POSITION list -- e.g. พนักงานขับรถ, which is not a department. */
+    private static PolicyAmounts amountsWithConfiguredKitPositionCodes(String codes) {
+        return new PolicyAmounts(
+            defaultAmountsMap(), Map.of("preprobation_kit_position_codes", codes), 1);
     }
 
     private static EmployeeEligibilitySnapshot activeEmployeePastProbation() {
-        return new EmployeeEligibilitySnapshot(1L, TODAY.minusYears(5), TODAY.minusYears(5), null, "010", true, TODAY);
+        return new EmployeeEligibilitySnapshot(1L, TODAY.minusYears(5), TODAY.minusYears(5), null, "010", null, true, TODAY);
     }
 
     private static UsageSnapshot noUsage() {
-        return new UsageSnapshot(Map.of(), Map.of());
+        return new UsageSnapshot(Map.of(), Map.of(), Map.of());
     }
 
     private static BigDecimal bd(int value) {
@@ -84,7 +91,7 @@ class SpecialMoneyPolicyEvaluatorTest {
     void medicalOverYtdCapClampsToRemainingBalance() {
         UsageSnapshot usage =
             new UsageSnapshot(
-                new EnumMap<>(Map.of(SpecialMoneyType.MEDICAL, bd(2000))), Map.of());
+                new EnumMap<>(Map.of(SpecialMoneyType.MEDICAL, bd(2000))), Map.of(), Map.of());
         SubmitSpecialMoneyRequest request =
             new SubmitSpecialMoneyRequest(
                 1L, TODAY, null, TODAY.minusDays(5), BigDecimal.ONE, bd(1500), "clinic visit", Map.of());
@@ -123,7 +130,7 @@ class SpecialMoneyPolicyEvaluatorTest {
     @Test
     void probationerRejectedForMedicalButAcceptedForTheKit() {
         EmployeeEligibilitySnapshot probationer =
-            new EmployeeEligibilitySnapshot(2L, TODAY.minusDays(30), null, null, "17", true, TODAY);
+            new EmployeeEligibilitySnapshot(2L, TODAY.minusDays(30), null, null, "17", null, true, TODAY);
 
         SubmitSpecialMoneyRequest medicalRequest =
             new SubmitSpecialMoneyRequest(
@@ -152,6 +159,92 @@ class SpecialMoneyPolicyEvaluatorTest {
         assertThat(kitDecision.violations()).isEmpty();
     }
 
+    // ---------------------------------------------------------------------
+    // Shared probation resolution (owner ruling, 2026-08-03): confirm_date, when present, is
+    // authoritative and the employee is eligible the day AFTER it -- NOT on confirm_date itself.
+    // Both sides pinned on the SAME fixture so a boundary bug (e.g. reverting to "eligible on
+    // confirm_date") cannot pass silently on only one direction.
+    // ---------------------------------------------------------------------
+
+    @Test
+    void confirmDateBoundaryIsNotEligibleOnConfirmDateButEligibleTheDayAfter() {
+        LocalDate confirmDate = TODAY.minusDays(10);
+
+        EmployeeEligibilitySnapshot onConfirmDate =
+            new EmployeeEligibilitySnapshot(2L, TODAY.minusYears(1), confirmDate, null, "010", null, true, confirmDate);
+        EmployeeEligibilitySnapshot dayAfterConfirmDate =
+            new EmployeeEligibilitySnapshot(
+                2L, TODAY.minusYears(1), confirmDate, null, "010", null, true, confirmDate.plusDays(1));
+
+        PolicyDecision onConfirmDateDecision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.MEDICAL,
+                new SubmitSpecialMoneyRequest(
+                    2L, confirmDate, null, confirmDate, BigDecimal.ONE, bd(500), "clinic visit", Map.of()),
+                onConfirmDate,
+                noUsage(),
+                amounts(Map.of()),
+                EXCLUDED_PROVINCES);
+        assertThat(onConfirmDateDecision.violations()).anyMatch(v -> v.contains("ยังไม่พ้นทดลองงาน"));
+
+        PolicyDecision dayAfterDecision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.MEDICAL,
+                new SubmitSpecialMoneyRequest(
+                    2L, confirmDate.plusDays(1), null, confirmDate.plusDays(1), BigDecimal.ONE, bd(500),
+                    "clinic visit", Map.of()),
+                dayAfterConfirmDate,
+                noUsage(),
+                amounts(Map.of()),
+                EXCLUDED_PROVINCES);
+        assertThat(dayAfterDecision.violations()).noneMatch(v -> v.contains("ยังไม่พ้นทดลองงาน"));
+    }
+
+    @Test
+    void hasPassedProbationPrefersConfirmDateOverHireDatePlusProbationDays() {
+        LocalDate confirmDate = LocalDate.of(2026, 6, 1);
+
+        // confirm_date wins even though hire_date + probation_days would say otherwise.
+        assertThat(SpecialMoneyPolicyEvaluator.hasPassedProbation(
+            LocalDate.of(2026, 5, 20), 90, confirmDate, confirmDate))
+            .as("not eligible ON confirm_date itself")
+            .isFalse();
+        assertThat(SpecialMoneyPolicyEvaluator.hasPassedProbation(
+            LocalDate.of(2026, 5, 20), 90, confirmDate, confirmDate.plusDays(1)))
+            .as("eligible the day AFTER confirm_date")
+            .isTrue();
+    }
+
+    @Test
+    void hasPassedProbationFallsBackToHireDatePlusProbationDaysWhenConfirmDateIsNull() {
+        LocalDate hireDate = LocalDate.of(2026, 1, 1);
+
+        assertThat(SpecialMoneyPolicyEvaluator.hasPassedProbation(
+            hireDate, 90, null, hireDate.plusDays(89)))
+            .as("one day short of the per-employee probation_days")
+            .isFalse();
+        assertThat(SpecialMoneyPolicyEvaluator.hasPassedProbation(
+            hireDate, 90, null, hireDate.plusDays(90)))
+            .isTrue();
+    }
+
+    @Test
+    void hasPassedProbationFallsBackToTheDefaultProbationDaysWhenBothConfirmDateAndProbationDaysAreNull() {
+        LocalDate hireDate = LocalDate.of(2026, 1, 1);
+
+        assertThat(SpecialMoneyPolicyEvaluator.hasPassedProbation(
+            hireDate, null, null, hireDate.plusDays(SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS - 1)))
+            .isFalse();
+        assertThat(SpecialMoneyPolicyEvaluator.hasPassedProbation(
+            hireDate, null, null, hireDate.plusDays(SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS)))
+            .isTrue();
+    }
+
+    @Test
+    void hasPassedProbationFailsClosedWhenHireDateAndConfirmDateAreBothNull() {
+        assertThat(SpecialMoneyPolicyEvaluator.hasPassedProbation(null, 90, null, TODAY)).isFalse();
+    }
+
     /**
      * hr.department.source_code is a VARCHAR(10) and is not guaranteed to be numeric, so the gate
      * compares strings. An earlier implementation parsed both sides as BigDecimal, which silently
@@ -160,7 +253,7 @@ class SpecialMoneyPolicyEvaluatorTest {
     @Test
     void preprobationKitAcceptsANonNumericDepartmentCode() {
         EmployeeEligibilitySnapshot probationer =
-            new EmployeeEligibilitySnapshot(2L, TODAY.minusDays(30), null, null, "SLS-01", true, TODAY);
+            new EmployeeEligibilitySnapshot(2L, TODAY.minusDays(30), null, null, "SLS-01", null, true, TODAY);
 
         PolicyDecision decision =
             EVALUATOR.evaluate(
@@ -179,7 +272,7 @@ class SpecialMoneyPolicyEvaluatorTest {
     @Test
     void preprobationKitDoesNotTreatLeadingZeroCodesAsEqual() {
         EmployeeEligibilitySnapshot probationer =
-            new EmployeeEligibilitySnapshot(2L, TODAY.minusDays(30), null, null, "017", true, TODAY);
+            new EmployeeEligibilitySnapshot(2L, TODAY.minusDays(30), null, null, "017", null, true, TODAY);
 
         PolicyDecision decision =
             EVALUATOR.evaluate(
@@ -192,7 +285,80 @@ class SpecialMoneyPolicyEvaluatorTest {
                 EXCLUDED_PROVINCES);
 
         assertThat(decision.violations())
-            .anySatisfy(v -> assertThat(v).contains("แผนกสนับสนุนงานขาย"));
+            .anySatisfy(v -> assertThat(v).contains("แผนกหรือตำแหน่งที่มีสิทธิ์"));
+    }
+
+    /**
+     * §2.1.3's สนับสนุนฝ่ายขาย is TWO departments in production (SALES "Sales Support 1" and SALES2
+     * "Sales Support 2"), which the retired singular key could not express -- it would have covered
+     * whichever one was configured and silently refused the other half of the staff.
+     */
+    @Test
+    void preprobationKitAcceptsAnyOfSeveralConfiguredDepartments() {
+        for (String department : new String[] {"SALES", "SALES2"}) {
+            EmployeeEligibilitySnapshot employee = new EmployeeEligibilitySnapshot(
+                3L, TODAY.minusDays(8), null, null, department, null, true, TODAY);
+            SubmitSpecialMoneyRequest request = new SubmitSpecialMoneyRequest(
+                3L, TODAY, null, null, BigDecimal.ONE, bd(1960), "kit", Map.of());
+
+            PolicyDecision decision = EVALUATOR.evaluate(
+                SpecialMoneyType.UNIFORM_PREPROBATION_KIT, request, employee, noUsage(),
+                amountsWithConfiguredSalesSupportCode("SALES,SALES2"), EXCLUDED_PROVINCES);
+
+            assertThat(decision.violations()).isEmpty();
+        }
+    }
+
+    /**
+     * พนักงานขับรถ is a POSITION in production, not a department -- the retired key could not have
+     * gated it at all, whatever value it held.
+     */
+    @Test
+    void preprobationKitAcceptsAnEligiblePositionEvenWhenTheDepartmentDoesNotMatch() {
+        EmployeeEligibilitySnapshot driver = new EmployeeEligibilitySnapshot(
+            4L, TODAY.minusDays(8), null, null, "WH", "POS11", true, TODAY);
+        SubmitSpecialMoneyRequest request = new SubmitSpecialMoneyRequest(
+            4L, TODAY, null, null, BigDecimal.ONE, bd(1960), "kit", Map.of());
+
+        PolicyDecision decision = EVALUATOR.evaluate(
+            SpecialMoneyType.UNIFORM_PREPROBATION_KIT, request, driver, noUsage(),
+            amountsWithConfiguredKitPositionCodes("POS11,0023"), EXCLUDED_PROVINCES);
+
+        assertThat(decision.violations()).isEmpty();
+    }
+
+    /**
+     * The wrong-way-round half: a colleague in the SAME department as an eligible driver, but not
+     * holding an eligible position, is still refused. Matching on position must not leak to the
+     * whole department -- that is exactly the over-broad gate V129's comment refuses to write.
+     */
+    @Test
+    void preprobationKitStillRefusesANonEligiblePositionInTheSameDepartment() {
+        EmployeeEligibilitySnapshot warehouseClerk = new EmployeeEligibilitySnapshot(
+            5L, TODAY.minusDays(8), null, null, "WH", "POS10", true, TODAY);
+        SubmitSpecialMoneyRequest request = new SubmitSpecialMoneyRequest(
+            5L, TODAY, null, null, BigDecimal.ONE, bd(1960), "kit", Map.of());
+
+        PolicyDecision decision = EVALUATOR.evaluate(
+            SpecialMoneyType.UNIFORM_PREPROBATION_KIT, request, warehouseClerk, noUsage(),
+            amountsWithConfiguredKitPositionCodes("POS11,0023"), EXCLUDED_PROVINCES);
+
+        assertThat(decision.violations()).anyMatch(v -> v.contains("แผนกหรือตำแหน่งที่มีสิทธิ์"));
+    }
+
+    /** Both lists unset keeps the type disabled, exactly as it shipped in V66. */
+    @Test
+    void preprobationKitStaysDisabledWhenNeitherListIsConfigured() {
+        EmployeeEligibilitySnapshot employee = new EmployeeEligibilitySnapshot(
+            6L, TODAY.minusDays(8), null, null, "SALES", "POS11", true, TODAY);
+        SubmitSpecialMoneyRequest request = new SubmitSpecialMoneyRequest(
+            6L, TODAY, null, null, BigDecimal.ONE, bd(1960), "kit", Map.of());
+
+        PolicyDecision decision = EVALUATOR.evaluate(
+            SpecialMoneyType.UNIFORM_PREPROBATION_KIT, request, employee, noUsage(),
+            amounts(Map.of()), EXCLUDED_PROVINCES);
+
+        assertThat(decision.violations()).anyMatch(v -> v.contains("ยังไม่เปิดใช้งาน"));
     }
 
     // ---------------------------------------------------------------------
@@ -200,7 +366,7 @@ class SpecialMoneyPolicyEvaluatorTest {
     // ---------------------------------------------------------------------
 
     @Test
-    void uniformAprilReceiptRejected() {
+    void uniformSelfBuyAprilReceiptRejected() {
         SubmitSpecialMoneyRequest request =
             new SubmitSpecialMoneyRequest(
                 1L,
@@ -210,7 +376,7 @@ class SpecialMoneyPolicyEvaluatorTest {
                 BigDecimal.ONE,
                 bd(1000),
                 "annual uniform",
-                Map.of());
+                Map.of("uniformMode", "SELF_BUY", "shirtCount", "2", "trouserCount", "0"));
 
         PolicyDecision decision =
             EVALUATOR.evaluate(
@@ -222,6 +388,91 @@ class SpecialMoneyPolicyEvaluatorTest {
                 EXCLUDED_PROVINCES);
 
         assertThat(decision.violations()).anyMatch(v -> v.contains("เดือนพฤษภาคม"));
+    }
+
+    /**
+     * The other half of the May rule: it binds the SELF_BUY route only. The document ties May to
+     * buying it yourself; it says nothing about when the ร้านคุณลำพอง tailor bills. Requiring May of
+     * both -- as this used to -- refused a perfectly valid tailored claim receipted in June.
+     */
+    @Test
+    void uniformTailoredJuneReceiptAccepted() {
+        SubmitSpecialMoneyRequest request =
+            new SubmitSpecialMoneyRequest(
+                1L,
+                LocalDate.of(2026, 6, 15),
+                null,
+                LocalDate.of(2026, 6, 10),
+                BigDecimal.ONE,
+                bd(1000),
+                "annual uniform, tailored",
+                Map.of("shirtCount", "2", "trouserCount", "2"));
+
+        PolicyDecision decision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.UNIFORM_ANNUAL,
+                request,
+                activeEmployeePastProbation(),
+                noUsage(),
+                amounts(Map.of()),
+                EXCLUDED_PROVINCES);
+
+        assertThat(decision.violations()).isEmpty();
+        assertThat(decision.eligibleAmount()).isEqualByComparingTo(bd(1000));
+    }
+
+    @Test
+    void uniformTailoredOverFourPiecesRejected() {
+        // The 4-piece limit used to be checked in SELF_BUY only, so a tailored claim for 10 pieces
+        // under the ฿1,300 cap sailed through.
+        SubmitSpecialMoneyRequest request =
+            new SubmitSpecialMoneyRequest(
+                1L,
+                LocalDate.of(2026, 6, 15),
+                null,
+                LocalDate.of(2026, 6, 10),
+                BigDecimal.ONE,
+                bd(1200),
+                "annual uniform, tailored",
+                Map.of("shirtCount", "6", "trouserCount", "4"));
+
+        PolicyDecision decision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.UNIFORM_ANNUAL,
+                request,
+                activeEmployeePastProbation(),
+                noUsage(),
+                amounts(Map.of()),
+                EXCLUDED_PROVINCES);
+
+        assertThat(decision.violations()).anyMatch(v -> v.contains("ไม่เกิน 4 ชิ้น"));
+    }
+
+    @Test
+    void uniformSecondClaimInTheSameYearRejected() {
+        // "ปีละ 1 ครั้ง". The June-only window alone leaves the whole month open for a second claim.
+        SubmitSpecialMoneyRequest request =
+            new SubmitSpecialMoneyRequest(
+                1L,
+                LocalDate.of(2026, 6, 20),
+                null,
+                LocalDate.of(2026, 6, 10),
+                BigDecimal.ONE,
+                bd(500),
+                "second uniform claim",
+                Map.of("shirtCount", "1", "trouserCount", "0"));
+
+        PolicyDecision decision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.UNIFORM_ANNUAL,
+                request,
+                activeEmployeePastProbation(),
+                new UsageSnapshot(Map.of(), Map.of(),
+                    new EnumMap<>(Map.of(SpecialMoneyType.UNIFORM_ANNUAL, 1))),
+                amounts(Map.of()),
+                EXCLUDED_PROVINCES);
+
+        assertThat(decision.violations()).anyMatch(v -> v.contains("ปีละ 1 ครั้ง"));
     }
 
     @Test
@@ -285,7 +536,7 @@ class SpecialMoneyPolicyEvaluatorTest {
                 amounts(Map.of()),
                 EXCLUDED_PROVINCES);
 
-        assertThat(decision.violations()).anyMatch(v -> v.contains("จำนวนสูงสุด 4 ชิ้น"));
+        assertThat(decision.violations()).anyMatch(v -> v.contains("ไม่เกิน 4 ชิ้น"));
         assertThat(decision.eligibleAmount()).isEqualByComparingTo(bd(1200));
     }
 
@@ -296,9 +547,10 @@ class SpecialMoneyPolicyEvaluatorTest {
     @Test
     void preprobationKitAcceptedForSalesSupportAfterSevenDays() {
         EmployeeEligibilitySnapshot employee =
-            new EmployeeEligibilitySnapshot(3L, TODAY.minusDays(10), null, null, "17", true, TODAY);
+            new EmployeeEligibilitySnapshot(3L, TODAY.minusDays(10), null, null, "17", null, true, TODAY);
         SubmitSpecialMoneyRequest request =
-            new SubmitSpecialMoneyRequest(3L, TODAY, null, null, BigDecimal.ONE, bd(2660), "kit", Map.of());
+            new SubmitSpecialMoneyRequest(3L, TODAY, null, null, BigDecimal.ONE, bd(2660), "kit",
+                Map.of("needsBackSupport", "true"));
 
         PolicyDecision decision =
             EVALUATOR.evaluate(
@@ -313,12 +565,13 @@ class SpecialMoneyPolicyEvaluatorTest {
         assertThat(decision.eligibleAmount()).isEqualByComparingTo(bd(2660));
     }
 
+    /** สายรัดหลัง is "กรณีของเดิมที่มีไม่เพียงพอ" -- omitted, the kit is ฿700 cheaper. */
     @Test
-    void preprobationKitRejectedForNonSalesSupportDepartment() {
-        EmployeeEligibilitySnapshot employee =
-            new EmployeeEligibilitySnapshot(3L, TODAY.minusDays(10), null, null, "99", true, TODAY);
+    void preprobationKitExcludesTheBackSupportUnlessRequested() {
+        EmployeeEligibilitySnapshot employee = new EmployeeEligibilitySnapshot(
+            3L, TODAY.minusDays(8), null, null, "17", null, true, TODAY);
         SubmitSpecialMoneyRequest request =
-            new SubmitSpecialMoneyRequest(3L, TODAY, null, null, BigDecimal.ONE, bd(2660), "kit", Map.of());
+            new SubmitSpecialMoneyRequest(3L, TODAY, null, null, BigDecimal.ONE, bd(1960), "kit", Map.of());
 
         PolicyDecision decision =
             EVALUATOR.evaluate(
@@ -329,15 +582,102 @@ class SpecialMoneyPolicyEvaluatorTest {
                 amountsWithConfiguredSalesSupportCode("17"),
                 EXCLUDED_PROVINCES);
 
-        assertThat(decision.violations()).anyMatch(v -> v.contains("แผนกสนับสนุนงานขาย"));
+        assertThat(decision.violations()).isEmpty();
+        // 220x3 + 300x3 + 400x1 = 1,960 -- the belt's ฿700 is NOT added.
+        assertThat(decision.eligibleAmount()).isEqualByComparingTo(bd(1960));
+    }
+
+    // ---------------------------------------------------------------------
+    // UNIFORM_NEW_STAFF (§2.1.2)
+    // ---------------------------------------------------------------------
+
+    @Test
+    void newStaffUniformOverSixPiecesRejected() {
+        // max_pieces=6 was seeded in V66 and then ignored entirely: this type used to pass the
+        // requested amount straight through with no checks at all.
+        SubmitSpecialMoneyRequest request =
+            new SubmitSpecialMoneyRequest(1L, TODAY, null, null, BigDecimal.ONE, bd(3000), "new staff uniform",
+                Map.of("shirtCount", "5", "trouserCount", "4"));
+
+        PolicyDecision decision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.UNIFORM_NEW_STAFF,
+                request,
+                activeEmployeePastProbation(),
+                noUsage(),
+                amounts(Map.of("max_pieces", bd(6))),
+                EXCLUDED_PROVINCES);
+
+        assertThat(decision.violations()).anyMatch(v -> v.contains("ไม่เกิน 6 ชิ้น"));
+    }
+
+    @Test
+    void newStaffUniformRejectedAfterTheFirstYear() {
+        EmployeeEligibilitySnapshot longServing = new EmployeeEligibilitySnapshot(
+            1L, TODAY.minusYears(4), TODAY.minusYears(4).plusDays(119), null, null, null, true, TODAY);
+        SubmitSpecialMoneyRequest request =
+            new SubmitSpecialMoneyRequest(1L, TODAY, null, null, BigDecimal.ONE, bd(1000), "new staff uniform",
+                Map.of("shirtCount", "3", "trouserCount", "3"));
+
+        PolicyDecision decision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.UNIFORM_NEW_STAFF,
+                request,
+                longServing,
+                noUsage(),
+                amounts(Map.of("max_pieces", bd(6))),
+                EXCLUDED_PROVINCES);
+
+        assertThat(decision.violations()).anyMatch(v -> v.contains("ปีแรกที่เข้าทำงาน"));
+    }
+
+    @Test
+    void newStaffUniformAcceptedWithinTheFirstYear() {
+        EmployeeEligibilitySnapshot recentJoiner = new EmployeeEligibilitySnapshot(
+            1L, TODAY.minusMonths(4), TODAY.minusMonths(4).plusDays(119), null, null, null, true, TODAY);
+        SubmitSpecialMoneyRequest request =
+            new SubmitSpecialMoneyRequest(1L, TODAY, null, null, BigDecimal.ONE, bd(1000), "new staff uniform",
+                Map.of("shirtCount", "3", "trouserCount", "3"));
+
+        PolicyDecision decision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.UNIFORM_NEW_STAFF,
+                request,
+                recentJoiner,
+                noUsage(),
+                amounts(Map.of("max_pieces", bd(6))),
+                EXCLUDED_PROVINCES);
+
+        assertThat(decision.violations()).isEmpty();
+    }
+
+    @Test
+    void preprobationKitRejectedForNonSalesSupportDepartment() {
+        EmployeeEligibilitySnapshot employee =
+            new EmployeeEligibilitySnapshot(3L, TODAY.minusDays(10), null, null, "99", null, true, TODAY);
+        SubmitSpecialMoneyRequest request =
+            new SubmitSpecialMoneyRequest(3L, TODAY, null, null, BigDecimal.ONE, bd(2660), "kit",
+                Map.of("needsBackSupport", "true"));
+
+        PolicyDecision decision =
+            EVALUATOR.evaluate(
+                SpecialMoneyType.UNIFORM_PREPROBATION_KIT,
+                request,
+                employee,
+                noUsage(),
+                amountsWithConfiguredSalesSupportCode("17"),
+                EXCLUDED_PROVINCES);
+
+        assertThat(decision.violations()).anyMatch(v -> v.contains("แผนกหรือตำแหน่งที่มีสิทธิ์"));
     }
 
     @Test
     void preprobationKitRejectedBeforeDaySeven() {
         EmployeeEligibilitySnapshot employee =
-            new EmployeeEligibilitySnapshot(3L, TODAY.minusDays(3), null, null, "17", true, TODAY);
+            new EmployeeEligibilitySnapshot(3L, TODAY.minusDays(3), null, null, "17", null, true, TODAY);
         SubmitSpecialMoneyRequest request =
-            new SubmitSpecialMoneyRequest(3L, TODAY, null, null, BigDecimal.ONE, bd(2660), "kit", Map.of());
+            new SubmitSpecialMoneyRequest(3L, TODAY, null, null, BigDecimal.ONE, bd(2660), "kit",
+                Map.of("needsBackSupport", "true"));
 
         PolicyDecision decision =
             EVALUATOR.evaluate(
@@ -358,7 +698,7 @@ class SpecialMoneyPolicyEvaluatorTest {
     @Test
     void weddingRejectedWhenAlreadyClaimedOnce() {
         UsageSnapshot usage =
-            new UsageSnapshot(Map.of(), new EnumMap<>(Map.of(SpecialMoneyType.AID_WEDDING, 1)));
+            new UsageSnapshot(Map.of(), new EnumMap<>(Map.of(SpecialMoneyType.AID_WEDDING, 1)), Map.of());
         SubmitSpecialMoneyRequest request =
             new SubmitSpecialMoneyRequest(
                 1L, TODAY.minusDays(10), null, null, BigDecimal.ONE, bd(5000), "wedding aid", Map.of());
@@ -378,7 +718,7 @@ class SpecialMoneyPolicyEvaluatorTest {
     @Test
     void childbirthAllowedTwice() {
         UsageSnapshot usage =
-            new UsageSnapshot(Map.of(), new EnumMap<>(Map.of(SpecialMoneyType.AID_CHILDBIRTH, 2)));
+            new UsageSnapshot(Map.of(), new EnumMap<>(Map.of(SpecialMoneyType.AID_CHILDBIRTH, 2)), Map.of());
         SubmitSpecialMoneyRequest request =
             new SubmitSpecialMoneyRequest(
                 1L, TODAY.minusDays(10), null, null, BigDecimal.ONE, bd(5000), "childbirth aid", Map.of());
@@ -491,7 +831,7 @@ class SpecialMoneyPolicyEvaluatorTest {
     @EnumSource(SpecialMoneyType.class)
     void inactiveEmployeeAlwaysRejected(SpecialMoneyType type) {
         EmployeeEligibilitySnapshot inactiveEmployee =
-            new EmployeeEligibilitySnapshot(9L, null, null, null, null, false, TODAY);
+            new EmployeeEligibilitySnapshot(9L, null, null, null, null, null, false, TODAY);
         SubmitSpecialMoneyRequest request =
             new SubmitSpecialMoneyRequest(9L, TODAY, null, TODAY, BigDecimal.ONE, bd(100), "test", Map.of());
 

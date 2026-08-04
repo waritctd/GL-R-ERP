@@ -10,6 +10,11 @@ import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.config.AppProperties;
 
@@ -53,8 +58,16 @@ class TieredWorkScheduleResolverTest {
     private TieredWorkScheduleResolver resolverWith(ScheduleAssignment... assignments) {
         WorkScheduleAssignmentRepository repository = mock(WorkScheduleAssignmentRepository.class);
         when(repository.findAllAssignments()).thenReturn(List.of(assignments));
+        // Default AppProperties -> 5-minute TTL, comfortably longer than any of these tests run, so
+        // precedence/effective-dating tests below are not accidentally exercising cache expiry.
         return new TieredWorkScheduleResolver(
-            repository, new CompanyWideWorkScheduleResolver(new AppProperties()));
+            repository, new CompanyWideWorkScheduleResolver(new AppProperties()), new AppProperties());
+    }
+
+    private static AppProperties withTtlMs(long ttlMs) {
+        AppProperties properties = new AppProperties();
+        properties.getAttendance().getSchedule().setAssignmentCacheTtlMs(ttlMs);
+        return properties;
     }
 
     private static ScheduleAssignment assignment(
@@ -230,12 +243,162 @@ class TieredWorkScheduleResolverTest {
             assignment(ScopeType.DIVISION, DIVISION_ID, DIVISION_SCHEDULE, LocalDate.of(2024, 10, 1), null)
         ));
         TieredWorkScheduleResolver resolver = new TieredWorkScheduleResolver(
-            repository, new CompanyWideWorkScheduleResolver(new AppProperties()));
+            repository, new CompanyWideWorkScheduleResolver(new AppProperties()), new AppProperties());
 
         resolver.resolve(EMPLOYEE_ID, DIVISION_ID, DEPARTMENT_ID, SOME_DATE);
         resolver.resolve(EMPLOYEE_ID + 1, DIVISION_ID, DEPARTMENT_ID, SOME_DATE.plusDays(1));
         resolver.resolve(EMPLOYEE_ID + 2, DIVISION_ID, DEPARTMENT_ID, SOME_DATE.plusDays(2));
 
+        org.mockito.Mockito.verify(repository, org.mockito.Mockito.times(1)).findAllAssignments();
+    }
+
+    // --- invalidation ---------------------------------------------------------------------------
+
+    /**
+     * Both sides on ONE fixture, same resolver instance: a stale read before {@link
+     * TieredWorkScheduleResolver#invalidate()}, then a fresh one after — reusing the same mock
+     * across both calls, switching what it returns, is what proves the second read is a genuine
+     * reload and not the test's fixture never having changed in the first place (the "vacuous
+     * fixture" trap: a cache test that never varies the underlying data passes even with caching
+     * removed entirely).
+     */
+    @Test
+    void invalidateForcesTheNextResolveToReloadRatherThanServeTheStaleCache() {
+        WorkScheduleAssignmentRepository repository = mock(WorkScheduleAssignmentRepository.class);
+        WorkSchedule oldSchedule = schedule(8, 0, 17, 0);
+        WorkSchedule newSchedule = schedule(9, 0, 18, 0);
+        when(repository.findAllAssignments())
+            .thenReturn(List.of(assignment(
+                ScopeType.DIVISION, DIVISION_ID, oldSchedule, LocalDate.of(2024, 10, 1), null)))
+            .thenReturn(List.of(assignment(
+                ScopeType.DIVISION, DIVISION_ID, newSchedule, LocalDate.of(2024, 10, 1), null)));
+        TieredWorkScheduleResolver resolver = new TieredWorkScheduleResolver(
+            repository, new CompanyWideWorkScheduleResolver(new AppProperties()), new AppProperties());
+
+        assertThat(resolver.resolve(EMPLOYEE_ID, DIVISION_ID, DEPARTMENT_ID, SOME_DATE))
+            .as("stale: served from the cache loaded on the first resolve() call")
+            .isEqualTo(oldSchedule);
+        // A second resolve() with no invalidate() must still be stale -- otherwise the TTL test
+        // below (which relies on time, not an explicit call) would be the only thing distinguishing
+        // "expired" from "just reloads every time", and a resolver with no caching at all would pass
+        // this test for the wrong reason.
+        assertThat(resolver.resolve(EMPLOYEE_ID, DIVISION_ID, DEPARTMENT_ID, SOME_DATE))
+            .as("still stale: invalidate() has not been called yet")
+            .isEqualTo(oldSchedule);
+
+        resolver.invalidate();
+
+        assertThat(resolver.resolve(EMPLOYEE_ID, DIVISION_ID, DEPARTMENT_ID, SOME_DATE))
+            .as("fresh: invalidate() forced the next resolve() to reload")
+            .isEqualTo(newSchedule);
+        org.mockito.Mockito.verify(repository, org.mockito.Mockito.times(2)).findAllAssignments();
+    }
+
+    /**
+     * Same shape as the invalidate() test above (both sides on one fixture, mock switched between
+     * calls) but proving the OTHER half of the design: a TTL expiry with no explicit call at all.
+     */
+    @Test
+    void aCachedScheduleGoesStaleThenAutomaticallyRefreshesOnceTheTtlElapses() throws InterruptedException {
+        WorkScheduleAssignmentRepository repository = mock(WorkScheduleAssignmentRepository.class);
+        WorkSchedule oldSchedule = schedule(8, 0, 17, 0);
+        WorkSchedule newSchedule = schedule(9, 0, 18, 0);
+        when(repository.findAllAssignments())
+            .thenReturn(List.of(assignment(
+                ScopeType.DIVISION, DIVISION_ID, oldSchedule, LocalDate.of(2024, 10, 1), null)))
+            .thenReturn(List.of(assignment(
+                ScopeType.DIVISION, DIVISION_ID, newSchedule, LocalDate.of(2024, 10, 1), null)));
+        TieredWorkScheduleResolver resolver = new TieredWorkScheduleResolver(
+            repository, new CompanyWideWorkScheduleResolver(new AppProperties()), withTtlMs(20));
+
+        assertThat(resolver.resolve(EMPLOYEE_ID, DIVISION_ID, DEPARTMENT_ID, SOME_DATE))
+            .as("stale: served from the cache loaded on the first resolve() call, well within the TTL")
+            .isEqualTo(oldSchedule);
+
+        Thread.sleep(200); // comfortably outlives the 20ms TTL
+
+        assertThat(resolver.resolve(EMPLOYEE_ID, DIVISION_ID, DEPARTMENT_ID, SOME_DATE))
+            .as("fresh: the TTL elapsed, so this resolve() reloaded with no explicit invalidate() call")
+            .isEqualTo(newSchedule);
+        org.mockito.Mockito.verify(repository, org.mockito.Mockito.times(2)).findAllAssignments();
+    }
+
+    /**
+     * A cache entry within its TTL must still be served without reloading — otherwise the previous
+     * test would pass even for a resolver that reloads on literally every call, which is exactly the
+     * "no query per resolve()" regression this whole exercise exists to prevent (see
+     * {@link #theAssignmentTableIsLoadedAtMostOncePerResolverInstance} for the no-TTL case).
+     */
+    @Test
+    void aCacheEntryStillWithinItsTtlIsNotReloaded() {
+        WorkScheduleAssignmentRepository repository = mock(WorkScheduleAssignmentRepository.class);
+        when(repository.findAllAssignments()).thenReturn(List.of(
+            assignment(ScopeType.DIVISION, DIVISION_ID, DIVISION_SCHEDULE, LocalDate.of(2024, 10, 1), null)
+        ));
+        // A TTL long enough that this fast in-memory test cannot plausibly outlive it.
+        TieredWorkScheduleResolver resolver = new TieredWorkScheduleResolver(
+            repository, new CompanyWideWorkScheduleResolver(new AppProperties()), withTtlMs(60_000));
+
+        resolver.resolve(EMPLOYEE_ID, DIVISION_ID, DEPARTMENT_ID, SOME_DATE);
+        resolver.resolve(EMPLOYEE_ID, DIVISION_ID, DEPARTMENT_ID, SOME_DATE.plusDays(1));
+        resolver.resolve(EMPLOYEE_ID, DIVISION_ID, DEPARTMENT_ID, SOME_DATE.plusDays(2));
+
+        org.mockito.Mockito.verify(repository, org.mockito.Mockito.times(1)).findAllAssignments();
+    }
+
+    // --- thread safety ----------------------------------------------------------------------------
+
+    /**
+     * Many threads call {@link TieredWorkScheduleResolver#resolve} concurrently, released at once via
+     * a latch to maximise the chance of a race. A naive cache (a plain non-volatile field, or a
+     * check-then-act with no lock) can, under this pressure, either throw ({@code
+     * ConcurrentModificationException} / a torn read of a partially published list) or call the
+     * repository far more than once as multiple threads all lose the same race — this test's
+     * assertion (repository invoked exactly once, and every thread agrees on the result) would fail
+     * under that naive implementation but passes under the double-checked-locking-plus-immutable-
+     * snapshot design actually used.
+     */
+    @Test
+    void concurrentResolveCallsAreThreadSafeAndLoadTheAssignmentTableOnlyOnce() throws InterruptedException {
+        WorkScheduleAssignmentRepository repository = mock(WorkScheduleAssignmentRepository.class);
+        when(repository.findAllAssignments()).thenReturn(List.of(
+            assignment(ScopeType.DIVISION, DIVISION_ID, DIVISION_SCHEDULE, LocalDate.of(2024, 10, 1), null)
+        ));
+        TieredWorkScheduleResolver resolver = new TieredWorkScheduleResolver(
+            repository, new CompanyWideWorkScheduleResolver(new AppProperties()), new AppProperties());
+
+        int threadCount = 50;
+        ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+        CountDownLatch ready = new CountDownLatch(threadCount);
+        CountDownLatch start = new CountDownLatch(1);
+        AtomicBoolean sawWrongResult = new AtomicBoolean(false);
+        try {
+            for (int i = 0; i < threadCount; i++) {
+                pool.submit(() -> {
+                    ready.countDown();
+                    try {
+                        start.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                    WorkSchedule resolved =
+                        resolver.resolve(EMPLOYEE_ID, DIVISION_ID, DEPARTMENT_ID, SOME_DATE);
+                    if (!DIVISION_SCHEDULE.equals(resolved)) {
+                        sawWrongResult.set(true);
+                    }
+                });
+            }
+            assertThat(ready.await(5, TimeUnit.SECONDS)).as("all threads reached the start line").isTrue();
+            start.countDown();
+        } finally {
+            pool.shutdown();
+            assertThat(pool.awaitTermination(5, TimeUnit.SECONDS)).as("all threads finished").isTrue();
+        }
+
+        assertThat(sawWrongResult)
+            .as("no thread observed a torn/partial read of the cached assignment list")
+            .isFalse();
         org.mockito.Mockito.verify(repository, org.mockito.Mockito.times(1)).findAllAssignments();
     }
 }

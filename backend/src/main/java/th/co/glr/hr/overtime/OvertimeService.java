@@ -16,6 +16,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.employee.ManagerApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 
 @Service
@@ -27,6 +28,7 @@ public class OvertimeService {
     private static final int BACKDATED_REASON_MIN_LENGTH = 20;
 
     private final OvertimeRepository overtimeRepository;
+    private final ManagerApproverRepository managerApproverRepository;
     private final AuditService auditService;
     private final NotificationService notificationService;
     private final AppProperties appProperties;
@@ -34,11 +36,13 @@ public class OvertimeService {
 
     public OvertimeService(
             OvertimeRepository overtimeRepository,
+            ManagerApproverRepository managerApproverRepository,
             AuditService auditService,
             NotificationService notificationService,
             AppProperties appProperties,
             AttendanceDailyService attendanceDailyService) {
         this.overtimeRepository = overtimeRepository;
+        this.managerApproverRepository = managerApproverRepository;
         this.auditService = auditService;
         this.notificationService = notificationService;
         this.appProperties = appProperties;
@@ -118,12 +122,31 @@ public class OvertimeService {
         OvertimeRequestDto existing = requireRequest(id);
         OvertimeStatus status = parseStatus(existing.status());
         if (status == OvertimeStatus.SUBMITTED) {
+            // No manager stage exists for this employee (manager-less ฝ่าย, or the requester is a
+            // ผู้จัดการ) -- the CEO is the only approver, and approving takes the request all the
+            // way to APPROVED rather than parking it in a MANAGER_APPROVED nobody would clear.
+            if (!hasManagerStage(existing.employeeId())) {
+                return ceoDirectApprove(id, request, user, actorEmployeeId, existing);
+            }
             return managerApprove(id, request, user, actorEmployeeId, existing);
         }
         if (status == OvertimeStatus.MANAGER_APPROVED) {
             return ceoApprove(id, request, user, actorEmployeeId, existing);
         }
         throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว");
+    }
+
+    /**
+     * Whether a manager stage exists for this employee at all. Read inside the approving
+     * transaction, so it reflects the org chart as at the moment of the decision.
+     *
+     * <p>Not folded into the {@code UPDATE ... WHERE} guard: reassigning a division's ผู้จัดการ
+     * between this read and the write would, at worst, let the CEO approve in one step something
+     * they were entitled to approve in two a moment earlier. The CEO outranks the manager stage, so
+     * the race costs a review step, never an unauthorized approval.
+     */
+    private boolean hasManagerStage(long employeeId) {
+        return managerApproverRepository.hasManagerApprover(employeeId);
     }
 
     private OvertimeRequestDto managerApprove(
@@ -144,6 +167,36 @@ public class OvertimeService {
         OvertimeRequestDto after = requireRequest(id);
         auditService.record(user, "MANAGER_APPROVE_OVERTIME_REQUEST", "overtime_request", id, existing, after);
         notifyManagerApproved(after);
+        return after;
+    }
+
+    /**
+     * SUBMITTED straight to APPROVED, for a request with no manager stage.
+     *
+     * <p>Does the manager step's work as well as the CEO's: the attendance-derived calculation and
+     * the salary basis are what {@link #managerApprove} writes in the two-step flow, and payroll
+     * reads them off an APPROVED row whichever route produced it. Skipping them here would approve
+     * an overtime request worth zero minutes at a zero salary basis.
+     */
+    private OvertimeRequestDto ceoDirectApprove(
+            long id,
+            ReviewOvertimeRequest request,
+            UserPrincipal user,
+            Long actorEmployeeId,
+            OvertimeRequestDto existing) {
+        requireCeoForManagerlessRequest(user);
+        requirePayrollMonthOpen(existing.workDate());
+
+        OvertimeCalculation calculation = calculate(existing);
+        BigDecimal salaryBasis = overtimeRepository.findSalaryBasisAsOf(existing.employeeId(), existing.workDate());
+        int updated = overtimeRepository.ceoDirectApprove(id, actorEmployeeId, calculation, salaryBasis, note(request));
+        if (updated != 1) {
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว");
+        }
+        OvertimeRequestDto after = requireRequest(id);
+        auditService.record(user, "CEO_DIRECT_APPROVE_OVERTIME_REQUEST", "overtime_request", id, existing, after);
+        notifyCeoApproved(after);
+        syncAttendanceDay(after);
         return after;
     }
 
@@ -186,12 +239,36 @@ public class OvertimeService {
         OvertimeRequestDto existing = requireRequest(id);
         OvertimeStatus status = parseStatus(existing.status());
         if (status == OvertimeStatus.SUBMITTED) {
+            // Symmetric with approve(): whoever is the only possible reviewer must be able to
+            // refuse as well as accept, or a manager-less request can only ever be approved.
+            if (!hasManagerStage(existing.employeeId())) {
+                return ceoDirectReject(id, request, user, actorEmployeeId, existing);
+            }
             return managerReject(id, request, user, actorEmployeeId, existing);
         }
         if (status == OvertimeStatus.MANAGER_APPROVED) {
             return ceoReject(id, request, user, actorEmployeeId, existing);
         }
         throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว");
+    }
+
+    private OvertimeRequestDto ceoDirectReject(
+            long id,
+            ReviewOvertimeRequest request,
+            UserPrincipal user,
+            Long actorEmployeeId,
+            OvertimeRequestDto existing) {
+        requireCeoForManagerlessRequest(user);
+        // reject() is already guarded on status = 'SUBMITTED' and writes no approver columns, so it
+        // is the correct statement for this path; only the audit action distinguishes the route.
+        int updated = overtimeRepository.reject(id, actorEmployeeId, note(request));
+        if (updated != 1) {
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว");
+        }
+        OvertimeRequestDto after = requireRequest(id);
+        auditService.record(user, "CEO_DIRECT_REJECT_OVERTIME_REQUEST", "overtime_request", id, existing, after);
+        notifyRejected(after);
+        return after;
     }
 
     private OvertimeRequestDto managerReject(
@@ -395,28 +472,46 @@ public class OvertimeService {
         }
     }
 
+    /**
+     * Same role gate as {@link #requireCeo}, different message: on this path there is no manager
+     * stage to have passed, so telling the caller the request is "waiting for a manager" would send
+     * them looking for an approver who does not exist.
+     */
+    private void requireCeoForManagerlessRequest(UserPrincipal user) {
+        if (user == null || !"ceo".equals(user.role())) {
+            throw new ApiException(
+                HttpStatus.FORBIDDEN,
+                "คำขอนี้ไม่มีขั้นอนุมัติของหัวหน้างาน (ฝ่ายนี้ไม่มีผู้จัดการ หรือผู้ยื่นเป็นผู้จัดการเอง)"
+                    + " จึงต้องให้ CEO พิจารณาเท่านั้น");
+        }
+    }
+
     private boolean canAccessEmployee(UserPrincipal user, long employeeId) {
         return (user.employeeId() != null && user.employeeId() == employeeId) || managesEmployee(employeeId, user);
     }
 
     /**
-     * True when {@code user} manages the given employee — either as the employee's direct
-     * reports-to manager, or as a ฝ่าย manager sharing the employee's division (excluding self).
+     * True when {@code user} manages the given employee: a ฝ่าย manager sharing the employee's
+     * division, excluding self.
+     *
+     * <p>{@code reports_to_employee_id} deliberately does NOT grant approval rights. It used to,
+     * and was removed on the owner's instruction so that overtime matches
+     * {@code AttendanceService.resolveScope}, which has always been division-only. The self
+     * exclusion is what sends a ผู้จัดการ's own request straight to the CEO.
+     *
+     * <p>Must stay in lockstep with {@code ManagerApproverRepository}: that class answers "does any
+     * such user exist" in SQL, and the two are pinned to each other by
+     * {@code ManagerApproverInvariantIntegrationTest}.
      */
     private boolean managesEmployee(long employeeId, UserPrincipal user) {
         if (user == null || user.employeeId() == null) {
             return false;
         }
         return overtimeRepository.findEmployeeAccess(employeeId)
-            .map(access -> {
-                boolean directReport = access.managerEmployeeId() != null
-                    && access.managerEmployeeId().equals(user.employeeId());
-                boolean divisionManager = user.manager()
-                    && user.divisionId() != null
-                    && user.divisionId().equals(access.divisionId())
-                    && employeeId != user.employeeId();
-                return directReport || divisionManager;
-            })
+            .map(access -> user.manager()
+                && user.divisionId() != null
+                && user.divisionId().equals(access.divisionId())
+                && employeeId != user.employeeId())
             .orElse(false);
     }
 
@@ -435,13 +530,42 @@ public class OvertimeService {
         return user != null && VIEW_ALL_ROLES.contains(user.role());
     }
 
+    /**
+     * Notifies whoever can actually act on the new request — the employee's ฝ่าย manager(s), or the
+     * CEO when there is no manager stage.
+     *
+     * <p>This used to notify {@code reports_to_employee_id}. That became wrong the moment approval
+     * went division-only: it put the request in front of someone who cannot clear it, while the
+     * person who can never heard about it. Reading the approver list from the same place the routing
+     * decision comes from is what keeps the two in step.
+     */
     private void notifySubmitted(OvertimeRequestDto request) {
+        List<Long> managerApprovers =
+            managerApproverRepository.findManagerApproverEmployeeIds(request.employeeId());
+        boolean goesToCeo = managerApprovers.isEmpty();
+
         String title = "ส่งคำขอ OT แล้ว";
-        String message = "คำขอ OT วันที่ " + request.workDate() + " ถูกส่งให้ผู้จัดการตรวจสอบแล้ว";
+        String message = "คำขอ OT วันที่ " + request.workDate()
+            + (goesToCeo ? " ถูกส่งให้ CEO พิจารณาแล้ว (ไม่มีขั้นอนุมัติของหัวหน้างาน)" : " ถูกส่งให้ผู้จัดการตรวจสอบแล้ว");
         notificationService.notify(request.employeeId(), "OVERTIME_SUBMITTED", title, message, "/overtime", true);
-        if (request.managerEmployeeId() != null) {
+
+        if (goesToCeo) {
+            for (Long ceoEmployeeId : overtimeRepository.findCeoApproverEmployeeIds()) {
+                notificationService.notify(
+                    ceoEmployeeId,
+                    "OVERTIME_PENDING_CEO",
+                    "มีคำขอ OT รอ CEO อนุมัติ",
+                    request.employeeName() + " ส่งคำขอ OT วันที่ " + request.workDate()
+                        + " ซึ่งไม่มีขั้นอนุมัติของหัวหน้างาน",
+                    "/overtime",
+                    true
+                );
+            }
+            return;
+        }
+        for (Long managerEmployeeId : managerApprovers) {
             notificationService.notify(
-                request.managerEmployeeId(),
+                managerEmployeeId,
                 "OVERTIME_PENDING_MANAGER",
                 "มีคำขอ OT รออนุมัติ",
                 request.employeeName() + " ส่งคำขอ OT วันที่ " + request.workDate(),

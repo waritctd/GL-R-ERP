@@ -1,29 +1,146 @@
 package th.co.glr.hr.leave;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.Collection;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.attendance.schedule.HolidayCalendar;
+import th.co.glr.hr.attendance.schedule.WorkSchedule;
+import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
 
 @Repository
 public class LeaveRepository {
-    private final NamedParameterJdbcTemplate jdbc;
+    // Legacy fallback (2026-08-03): the hardcoded Mon-Fri/no-holiday assumption LeaveDayMath used
+    // to carry everywhere, now scoped to ONLY the 1-arg constructor below -- see that constructor's
+    // javadoc. Built through the SAME WorkScheduleResolver/HolidayCalendar interfaces the real
+    // schedule/holiday-aware path uses, so #workingDayPredicate needs no legacy-vs-real branch.
+    private static final WorkSchedule LEGACY_MON_FRI_SCHEDULE = new WorkSchedule(
+        ZoneId.of("Asia/Bangkok"), LocalTime.of(8, 30), LocalTime.of(17, 30), 5,
+        EnumSet.of(DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY, DayOfWeek.THURSDAY, DayOfWeek.FRIDAY));
+    private static final WorkScheduleResolver LEGACY_SCHEDULE_RESOLVER =
+        (employeeId, divisionId, departmentId, workDate) -> LEGACY_MON_FRI_SCHEDULE;
+    private static final HolidayCalendar LEGACY_NO_HOLIDAYS = new HolidayCalendar() {
+        @Override
+        public boolean isHoliday(LocalDate date) {
+            return false;
+        }
 
+        @Override
+        public Set<LocalDate> holidaysBetween(LocalDate fromDate, LocalDate toDate) {
+            return Set.of();
+        }
+    };
+    // Phase A0a (structured rejection outcome, V131): serializes/deserializes
+    // hr.leave_request.system_note_params (a flat Map<String,String>) to/from jsonb -- see #toJson/
+    // #fromJson below. A private, LOCAL ObjectMapper instance (not Spring-injected, unlike
+    // SpecialMoneyRepository's identical-shape precedent) is a DELIBERATE choice: injecting one
+    // would add a constructor parameter to BOTH LeaveRepository constructors, and this repository is
+    // constructed directly (bypassing Spring DI) by ~40 payroll/leave integration tests across this
+    // codebase (see the 1-arg constructor's own Javadoc) -- every one of those call sites would need
+    // editing for a change wholly unrelated to what they test. A flat String-to-String map needs
+    // nothing from Spring's configured ObjectMapper (no custom modules, no date types), so a plain
+    // instance is equivalent in behaviour and keeps this phase's diff to the files it is actually
+    // about.
+    private static final ObjectMapper SYSTEM_NOTE_PARAMS_MAPPER = new ObjectMapper();
+
+    private final NamedParameterJdbcTemplate jdbc;
+    private final WorkScheduleResolver scheduleResolver;
+    private final HolidayCalendar holidayCalendar;
+
+    /**
+     * Test-convenience overload (2026-08-03): defaults to {@link #LEGACY_SCHEDULE_RESOLVER}/
+     * {@link #LEGACY_NO_HOLIDAYS} -- Mon-Fri counts as working, no date is ever a holiday, exactly
+     * {@code LeaveDayMath}'s pre-schedule-aware behaviour. This exists ONLY so the ~30 payroll/leave
+     * integration tests that construct {@code new LeaveRepository(jdbc)} directly (they need SOME
+     * working repository to satisfy PayrollService/LeaveService's constructor, but do not exercise
+     * six-day-schedule or holiday day-counting) are not forced into an unrelated diff. Production
+     * wiring always goes through the schedule-aware constructor below via Spring DI (note the single
+     * {@code @Autowired} there) -- see CLAUDE.md's note on Spring only auto-selecting a constructor
+     * when exactly one candidate is annotated.
+     */
     public LeaveRepository(NamedParameterJdbcTemplate jdbc) {
+        this(jdbc, LEGACY_SCHEDULE_RESOLVER, LEGACY_NO_HOLIDAYS);
+    }
+
+    @Autowired
+    public LeaveRepository(NamedParameterJdbcTemplate jdbc, WorkScheduleResolver scheduleResolver,
+            HolidayCalendar holidayCalendar) {
         this.jdbc = jdbc;
+        this.scheduleResolver = scheduleResolver;
+        this.holidayCalendar = holidayCalendar;
+    }
+
+    /**
+     * Schedule/holiday-aware "is this date a working day for this employee" predicate (2026-08-03)
+     * -- see {@code LeaveDayMath}'s javadoc for the six-day-department and holiday defects this
+     * closes. {@code LeaveService#submit}/{@code #cancel} call this ONCE per request (not per day)
+     * to build the predicate every {@code LeaveDayMath} day-counting call for that request then
+     * shares. Costs exactly two queries regardless of the range's length: the employee's
+     * division/department (for schedule resolution) and the range's holidays, both batch reads --
+     * see {@link LeaveDayMath#workingDayPredicate} for why per-date schedule resolution beyond that
+     * is free (no further query).
+     */
+    public Predicate<LocalDate> workingDayPredicate(long employeeId, LocalDate fromDate, LocalDate toDate) {
+        EmployeeScheduleContext context = findScheduleContext(employeeId);
+        Set<LocalDate> holidays = holidayCalendar.holidaysBetween(fromDate, toDate);
+        return LeaveDayMath.workingDayPredicate(
+            scheduleResolver, employeeId, context.divisionId(), context.departmentId(), holidays);
+    }
+
+    private EmployeeScheduleContext findScheduleContext(long employeeId) {
+        List<EmployeeScheduleContext> rows = jdbc.query("""
+            SELECT division_id, department_id
+              FROM hr.employee
+             WHERE employee_id = :employeeId
+            """, Map.of("employeeId", employeeId),
+            (rs, rowNum) -> new EmployeeScheduleContext(
+                nullableLong(rs, "division_id"), nullableLong(rs, "department_id")));
+        return rows.isEmpty() ? new EmployeeScheduleContext(null, null) : rows.get(0);
+    }
+
+    private record EmployeeScheduleContext(Long divisionId, Long departmentId) {
+    }
+
+    /**
+     * The caller's own resolved {@link WorkSchedule}, evaluated at {@code onDate} -- reuses the
+     * SAME division/department lookup ({@link #findScheduleContext}) and {@link WorkScheduleResolver}
+     * call {@link #workingDayPredicate} makes internally (EMPLOYEE&gt;DEPARTMENT&gt;DIVISION
+     * precedence, effective-dated), so {@code GET /api/leave/calendar-context}
+     * ({@code LeaveCalendarContextService}) can show an employee WHICH schedule governs their own
+     * leave-day counting without re-deriving division/department or re-implementing the tier
+     * precedence there.
+     *
+     * <p>{@code onDate} matters because a schedule assignment can change mid-range (a genuine
+     * reassignment, effective-dated) -- this single-date snapshot is for DISPLAY only (workStart/
+     * workEnd/graceMinutes/requiresCheckOut/workdays). The actual per-day working/non-working
+     * determination for a whole range still comes from {@link #workingDayPredicate}, which resolves
+     * per-date and stays the one source of truth for day flags; this method must never be used to
+     * derive those flags itself.
+     */
+    public WorkSchedule resolveOwnSchedule(long employeeId, LocalDate onDate) {
+        EmployeeScheduleContext context = findScheduleContext(employeeId);
+        return scheduleResolver.resolve(employeeId, context.divisionId(), context.departmentId(), onDate);
     }
 
     public boolean employeeExists(long employeeId) {
@@ -128,7 +245,9 @@ public class LeaveRepository {
     private static final String LEAVE_TYPE_COLUMNS = """
         leave_type_code, name_th, name_en, annual_quota_days, requires_attachment,
         paid_days_cap, advance_notice_days, min_service_months, max_consecutive_days,
-        once_per_employment, day_count_basis
+        once_per_employment, day_count_basis, prorated_first_year, first_year_max_days,
+        certificate_filing_window_days, no_certificate_monthly_tolerance,
+        emergency_monthly_allowance, carries_forward
         """;
 
     public List<LeaveTypeDto> findLeaveTypes() {
@@ -189,6 +308,24 @@ public class LeaveRepository {
     }
 
     /**
+     * HR's recorded {@code hr.employee.confirm_date}, consulted by §5.2 PERSONAL's "passed
+     * probation" gate (see {@code LeaveService#personalProbationRuleOutcome}) ahead of the
+     * computed {@code hire_date + probation_days} fallback, per {@link
+     * th.co.glr.hr.specialmoney.SpecialMoneyPolicyEvaluator#hasPassedProbation}. Nullable, so same
+     * List#get(0) pattern as findHireDate/findProbationDays above -- Stream#findFirst() would NPE
+     * the moment the single row's confirm_date IS null.
+     */
+    public Optional<LocalDate> findConfirmDate(long employeeId) {
+        List<LocalDate> rows = jdbc.query("""
+            SELECT confirm_date
+              FROM hr.employee
+             WHERE employee_id = :employeeId
+            """, Map.of("employeeId", employeeId),
+            (rs, rowNum) -> rs.getObject("confirm_date", LocalDate.class));
+        return rows.isEmpty() ? Optional.empty() : Optional.ofNullable(rows.get(0));
+    }
+
+    /**
      * §5.6 ORDINATION once-per-employment gate (V116), Java-level pre-check paired with the
      * race-proof {@code ux_leave_once_per_employment} partial unique index (see V116's migration
      * comment). Matches the index's own status scope exactly: SUBMITTED/APPROVED count as an
@@ -208,6 +345,104 @@ public class LeaveRepository {
             .addValue("leaveTypeCode", leaveTypeCode),
             Boolean.class);
         return Boolean.TRUE.equals(exists);
+    }
+
+    /**
+     * §5.3.4 (ประกาศ "วันเวลาทำงาน และการหยุดงาน" eff. 1 ต.ค. 2567): does {@code hr.resignation} (V1)
+     * carry a row for this employee at all -- see {@link LeaveService}'s resignation-gate Javadoc for
+     * why mere presence, not {@code resign_date}, is what this gate reads. {@code employee_id} is
+     * that table's PRIMARY KEY (1:1), so this is a plain existence check.
+     */
+    public boolean hasSubmittedResignation(long employeeId) {
+        Boolean exists = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                  FROM hr.resignation
+                 WHERE employee_id = :employeeId
+            )
+            """, Map.of("employeeId", employeeId), Boolean.class);
+        return Boolean.TRUE.equals(exists);
+    }
+
+    /**
+     * §5.3.3 contiguous-leave-type gate: SUBMITTED/APPROVED {@code leaveTypeCode} requests for
+     * {@code employeeId} whose range overlaps [{@code fromDate}, {@code toDate}] -- a small padding
+     * window around the new request's own dates (see {@code LeaveService#CONTIGUOUS_CHECK_WINDOW_DAYS}),
+     * not the employee's whole history. Same SUBMITTED/APPROVED scope as {@link
+     * #hasOutstandingOrGrantedRequest} -- a still-pending request counts as taken for this gate too.
+     */
+    public List<LeaveRequestSpan> findActiveRequestsByType(
+            long employeeId, String leaveTypeCode, LocalDate fromDate, LocalDate toDate) {
+        return jdbc.query("""
+            SELECT start_date, end_date
+              FROM hr.leave_request
+             WHERE employee_id = :employeeId
+               AND leave_type_code = :leaveTypeCode
+               AND status IN ('SUBMITTED', 'APPROVED')
+               AND start_date <= :toDate
+               AND end_date >= :fromDate
+             ORDER BY start_date
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("leaveTypeCode", leaveTypeCode)
+            .addValue("fromDate", fromDate)
+            .addValue("toDate", toDate),
+            (rs, rowNum) -> new LeaveRequestSpan(
+                rs.getObject("start_date", LocalDate.class),
+                rs.getObject("end_date", LocalDate.class)));
+    }
+
+    /**
+     * §5.3.2 department-coverage gate: the employee_id of every OTHER active employee in {@code
+     * employeeId}'s own department (excluding {@code employeeId} itself) -- see {@code
+     * LeaveService#departmentCoverageRuleOutcome}, which resolves each one's own working-day
+     * predicate via {@link #workingDayPredicate} rather than this method carrying schedule columns.
+     *
+     * <p>Returns an EMPTY list -- not an error -- when {@code employeeId} has no {@code
+     * department_id} on file, or has no active colleagues at all. {@code LeaveService} derives the
+     * department's total active size directly from this list's length ({@code colleagueIds.size() +
+     * 1} for the requester themself, see {@code LeaveService#MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE})
+     * rather than issuing a separate headcount query -- so this one list answers both "who else is
+     * there" and "how many active people does this department have".
+     */
+    public List<Long> findActiveDepartmentColleagues(long employeeId) {
+        return jdbc.query("""
+            SELECT e.employee_id
+              FROM hr.employee e
+             WHERE e.is_active = TRUE
+               AND e.employee_id <> :employeeId
+               AND e.department_id IS NOT NULL
+               AND e.department_id = (SELECT department_id FROM hr.employee WHERE employee_id = :employeeId)
+            """, Map.of("employeeId", employeeId), (rs, rowNum) -> rs.getLong("employee_id"));
+    }
+
+    /**
+     * §5.3.2 department-coverage gate: SUBMITTED/APPROVED requests of ANY leave type, for the given
+     * {@code employeeIds} (a department's OTHER active employees), overlapping [{@code fromDate},
+     * {@code toDate}]. {@code employeeIds} empty short-circuits to an empty list without querying --
+     * an empty SQL {@code IN (...)} list is invalid, and {@link #findActiveDepartmentColleagues}
+     * already guarantees this is only ever called with a non-empty set in practice.
+     */
+    public List<EmployeeLeaveSpan> findActiveLeaveSpans(
+            Collection<Long> employeeIds, LocalDate fromDate, LocalDate toDate) {
+        if (employeeIds.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.query("""
+            SELECT employee_id, start_date, end_date
+              FROM hr.leave_request
+             WHERE employee_id IN (:employeeIds)
+               AND status IN ('SUBMITTED', 'APPROVED')
+               AND start_date <= :toDate
+               AND end_date >= :fromDate
+            """, new MapSqlParameterSource()
+            .addValue("employeeIds", employeeIds)
+            .addValue("fromDate", fromDate)
+            .addValue("toDate", toDate),
+            (rs, rowNum) -> new EmployeeLeaveSpan(
+                rs.getLong("employee_id"),
+                rs.getObject("start_date", LocalDate.class),
+                rs.getObject("end_date", LocalDate.class)));
     }
 
     /**
@@ -266,6 +501,36 @@ public class LeaveRepository {
     }
 
     /**
+     * §5.1 SICK no-certificate monthly tolerance (V124): counts EXISTING certificate-less
+     * ({@code attachment_id IS NULL}) requests of this type, in the given status set, whose {@code
+     * start_date} falls within {@code [monthStart, monthEndInclusive]} -- the SAME start_date-only
+     * month attribution {@code quota_year} already uses (see {@link LeaveService#submit}). Counts
+     * REQUESTS (occasions), not days -- see {@link LeaveService#sickCertificateRuleOutcome}'s Javadoc for
+     * why. Does NOT include the request currently being submitted (it does not exist yet at the time
+     * this is called, since {@link LeaveService#submit} evaluates {@code autoRejectNote} before
+     * {@link #create}).
+     */
+    public int countNoCertificateRequestsInMonth(long employeeId, String leaveTypeCode,
+            LocalDate monthStart, LocalDate monthEndInclusive, Collection<LeaveStatus> statuses) {
+        Integer value = jdbc.queryForObject("""
+            SELECT count(*)
+              FROM hr.leave_request
+             WHERE employee_id = :employeeId
+               AND leave_type_code = :leaveTypeCode
+               AND attachment_id IS NULL
+               AND start_date BETWEEN :monthStart AND :monthEndInclusive
+               AND status IN (:statuses)
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("leaveTypeCode", leaveTypeCode)
+            .addValue("monthStart", monthStart)
+            .addValue("monthEndInclusive", monthEndInclusive)
+            .addValue("statuses", statuses.stream().map(LeaveStatus::name).toList()),
+            Integer.class);
+        return value == null ? 0 : value;
+    }
+
+    /**
      * V118 cross-year quota fix: persists the per-calendar-year attribution {@code LeaveService#submit}
      * computed for a just-created leave request -- one row per year in {@code splits}, always at
      * least one (every request touches at least its own start year). Called in the same transaction
@@ -319,6 +584,59 @@ public class LeaveRepository {
     }
 
     /**
+     * §5.3.5 VACATION carry-forward (V127): the persisted grant for (employeeId, leaveTypeCode,
+     * earnedYear), if {@link LeaveService#ensureCarryoverGrant} has already computed and memoized
+     * it -- {@code Optional.empty()} means "not computed yet" (either the year has not fully
+     * elapsed yet, or nothing has needed this figure yet), NOT "computed as zero". A computed-zero
+     * grant is still a present row (carried_days = 0.00).
+     */
+    public Optional<BigDecimal> findCarryover(long employeeId, String leaveTypeCode, int earnedYear) {
+        List<BigDecimal> rows = jdbc.query("""
+            SELECT carried_days
+              FROM hr.leave_carryover
+             WHERE employee_id = :employeeId
+               AND leave_type_code = :leaveTypeCode
+               AND earned_year = :earnedYear
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("leaveTypeCode", leaveTypeCode)
+            .addValue("earnedYear", earnedYear),
+            (rs, rowNum) -> rs.getObject("carried_days", BigDecimal.class));
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
+    }
+
+    /**
+     * §5.3.5 VACATION carry-forward (V127): memoizes a just-computed grant. {@code ON CONFLICT DO
+     * NOTHING} makes this race-safe against a concurrent call computing the same
+     * (employeeId, leaveTypeCode, earnedYear) grant at the same time -- whichever commits first
+     * wins, the loser's (identical, since both derive from the same finalized-year data) figure is
+     * simply discarded rather than erroring. See {@link LeaveService#ensureCarryoverGrant}.
+     */
+    public void insertCarryoverIfAbsent(
+            long employeeId, String leaveTypeCode, int earnedYear, int usableYear,
+            BigDecimal ownQuotaDays, BigDecimal usedDays, BigDecimal carriedInDays, BigDecimal carriedDays) {
+        jdbc.update("""
+            INSERT INTO hr.leave_carryover (
+                employee_id, leave_type_code, earned_year, usable_year,
+                own_quota_days, used_days, carried_in_days, carried_days
+            )
+            VALUES (
+                :employeeId, :leaveTypeCode, :earnedYear, :usableYear,
+                :ownQuotaDays, :usedDays, :carriedInDays, :carriedDays
+            )
+            ON CONFLICT (employee_id, leave_type_code, earned_year) DO NOTHING
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("leaveTypeCode", leaveTypeCode)
+            .addValue("earnedYear", earnedYear)
+            .addValue("usableYear", usableYear)
+            .addValue("ownQuotaDays", ownQuotaDays)
+            .addValue("usedDays", usedDays)
+            .addValue("carriedInDays", carriedInDays)
+            .addValue("carriedDays", carriedDays));
+    }
+
+    /**
      * Leave -&gt; payroll unpaid-day deduction (2026-07-23): per employee, the unpaid WORKING days of
      * APPROVED leave that fall inside payroll month {@code monthStart} (a first-of-month date). Reads
      * every APPROVED, unpaid-day-bearing request whose date range overlaps the month, then attributes
@@ -349,18 +667,28 @@ public class LeaveRepository {
      * counted as consumed leave, breaking the {@code paidDays + unpaidDays == totalDays} invariant
      * this method's ranking logic depends on. For every WORKING_DAYS type (everything except
      * MATERNITY) this is byte-identical to the pre-V119 behaviour.
+     *
+     * <p>Schedule/holiday-aware working-day counting (2026-08-03): also joins {@code hr.employee}
+     * for {@code division_id}/{@code department_id} (schedule resolution) and batch-loads the
+     * MONTH's holidays ONCE via {@code holidayCalendar.holidaysBetween} -- not once per span, and
+     * definitely not once per day -- then builds one {@link LeaveDayMath#workingDayPredicate} per
+     * span from that employee's own division/department. A WORKING_DAYS-basis span for a
+     * {@code OPS_6D} (six-day) employee now correctly counts an unpaid Saturday inside it; a span
+     * overlapping a seeded {@code hr.holiday} row no longer counts that date at all, for any
+     * employee. MATERNITY (CALENDAR_DAYS) is unaffected -- see {@link LeaveDayCountBasis}.
      */
     public Map<Long, BigDecimal> findUnpaidLeaveDaysByEmployeeForMonth(LocalDate monthStart) {
         LocalDate monthEndInclusive = monthStart.plusMonths(1).minusDays(1);
         int year = monthStart.getYear();
         List<UnpaidLeaveSpan> spans = jdbc.query("""
             SELECT lr.employee_id, lr.start_date, lr.end_date, lrqy.paid_days, lrqy.total_days,
-                   lt.day_count_basis
+                   lt.day_count_basis, e.division_id, e.department_id
               FROM hr.leave_request lr
               JOIN hr.leave_request_quota_year lrqy
                 ON lrqy.leave_request_id = lr.leave_request_id
                AND lrqy.quota_year = :year
               JOIN hr.leave_type lt ON lt.leave_type_code = lr.leave_type_code
+              JOIN hr.employee e ON e.employee_id = lr.employee_id
              WHERE lr.status = 'APPROVED'
                AND lrqy.unpaid_days > 0
                AND lr.start_date <= :monthEndInclusive
@@ -376,8 +704,15 @@ public class LeaveRepository {
                 rs.getObject("end_date", LocalDate.class),
                 rs.getObject("paid_days", BigDecimal.class),
                 rs.getObject("total_days", BigDecimal.class),
-                LeaveDayCountBasis.valueOf(rs.getString("day_count_basis"))
+                LeaveDayCountBasis.valueOf(rs.getString("day_count_basis")),
+                nullableLong(rs, "division_id"),
+                nullableLong(rs, "department_id")
             ));
+
+        // One holiday read for the WHOLE month, shared by every span/employee below -- see this
+        // method's javadoc. A payroll month is at most 31 days, so this is one bounded query no
+        // matter how many employees have an unpaid span inside it.
+        Set<LocalDate> holidaysThisMonth = holidayCalendar.holidaysBetween(monthStart, monthEndInclusive);
 
         Map<Long, BigDecimal> byEmployee = new LinkedHashMap<>();
         for (UnpaidLeaveSpan span : spans) {
@@ -385,10 +720,13 @@ public class LeaveRepository {
             if (clipped == null) {
                 continue;
             }
+            Predicate<LocalDate> isWorkingDay = LeaveDayMath.workingDayPredicate(
+                scheduleResolver, span.employeeId(), span.divisionId(), span.departmentId(), holidaysThisMonth);
             // Sub-day leave (2026-07-25): reads the BigDecimal LeaveDayMath computes directly --
             // no more setScale(0, DOWN) floor, which used to discard a sub-day fraction entirely.
             BigDecimal unpaidInMonth = LeaveDayMath
-                .unpaidWorkingDaysByMonth(clipped[0], clipped[1], span.paidDays(), span.totalDays(), span.basis())
+                .unpaidWorkingDaysByMonth(
+                    clipped[0], clipped[1], span.paidDays(), span.totalDays(), span.basis(), isWorkingDay)
                 .get(monthStart);
             if (unpaidInMonth != null && unpaidInMonth.signum() > 0) {
                 byEmployee.merge(span.employeeId(), unpaidInMonth, BigDecimal::add);
@@ -511,7 +849,7 @@ public class LeaveRepository {
 
     private record UnpaidLeaveSpan(
         long employeeId, LocalDate startDate, LocalDate endDate, BigDecimal paidDays, BigDecimal totalDays,
-        LeaveDayCountBasis basis) {
+        LeaveDayCountBasis basis, Long divisionId, Long departmentId) {
     }
 
     public long create(
@@ -537,14 +875,16 @@ public class LeaveRepository {
                 total_days, paid_days, unpaid_days,
                 quota_year, reason, status, quota_remaining_before,
                 quota_remaining_after, system_note, requested_by_id,
-                contact_house_no, contact_subdistrict, contact_district, contact_province, contact_phone
+                contact_house_no, contact_subdistrict, contact_district, contact_province, contact_phone,
+                purpose_code
             )
             VALUES (
                 :employeeId, :leaveTypeCode, :startDate, :endDate, :startTime, :endTime,
                 :totalDays, :paidDays, :unpaidDays,
                 :quotaYear, :reason, :status, :quotaRemainingBefore,
                 :quotaRemainingAfter, :systemNote, :requestedById,
-                :contactHouseNo, :contactSubdistrict, :contactDistrict, :contactProvince, :contactPhone
+                :contactHouseNo, :contactSubdistrict, :contactDistrict, :contactProvince, :contactPhone,
+                :purposeCode
             )
             RETURNING leave_request_id
             """, new MapSqlParameterSource()
@@ -568,8 +908,89 @@ public class LeaveRepository {
             .addValue("contactSubdistrict", contactSubdistrict)
             .addValue("contactDistrict", contactDistrict)
             .addValue("contactProvince", contactProvince)
-            .addValue("contactPhone", contactPhone), Long.class);
+            .addValue("contactPhone", contactPhone)
+            // §5.2 leave purpose (V125): same trim/uppercase normalization as leaveTypeCode above --
+            // the whitelist check itself already ran in LeaveService#normalizePurposeCode before this
+            // was ever called, so no re-validation happens here (matches leaveTypeCode's own split of
+            // concerns: Java validates, the repository just persists the normalized form).
+            .addValue("purposeCode", request.purposeCode() == null || request.purposeCode().isBlank()
+                ? null : request.purposeCode().trim().toUpperCase()),
+            Long.class);
         return id == null ? 0 : id;
+    }
+
+    /**
+     * §5.2 emergency-filing exception (V125): marks a just-created request as having been approved
+     * via the emergency tolerance rather than by meeting its type's ordinary advance notice. Called
+     * conditionally after {@link #create}, in the same transaction -- mirrors {@link #attachFile}'s
+     * shape (a small follow-up UPDATE by id, kept OUT of {@link #create}'s own parameter list so
+     * every existing caller/test of that method is unaffected by this addition).
+     */
+    public int markEmergencyFiling(long leaveRequestId) {
+        return jdbc.update("""
+            UPDATE hr.leave_request
+               SET emergency_filing = TRUE,
+                   updated_at = now()
+             WHERE leave_request_id = :leaveRequestId
+            """, new MapSqlParameterSource().addValue("leaveRequestId", leaveRequestId));
+    }
+
+    /**
+     * Phase A0a (structured rejection outcome, V131): persists the structured
+     * {@code (LeaveRuleCode, params)} pair behind an AUTO_REJECTED request's {@code system_note} --
+     * a small follow-up UPDATE by id, called ONLY for a rejected outcome, same shape as {@link
+     * #markEmergencyFiling}/{@link #attachFile} above and for the identical reason: kept OUT of
+     * {@link #create}'s own parameter list so every pre-existing caller/test of that method is
+     * unaffected by this addition. {@code system_note_code}/{@code system_note_params} stay NULL for
+     * an APPROVED request -- {@link #create} never sets them to anything but their SQL default, so
+     * there is no separate "clear" path to write.
+     */
+    public void recordAutoRejectReason(long leaveRequestId, LeaveRuleCode code, Map<String, String> params) {
+        jdbc.update("""
+            UPDATE hr.leave_request
+               SET system_note_code = :code,
+                   system_note_params = CAST(:params AS jsonb),
+                   updated_at = now()
+             WHERE leave_request_id = :leaveRequestId
+            """, new MapSqlParameterSource()
+            .addValue("leaveRequestId", leaveRequestId)
+            .addValue("code", code.name())
+            .addValue("params", toJson(params)));
+    }
+
+    /**
+     * §5.2 emergency-filing exception (V125): rolling monthly count of this employee's PRIOR
+     * requests of {@code leaveTypeCode} that were themselves approved via the emergency exception
+     * ({@code emergency_filing = TRUE}), for the calendar month containing {@code requestStartDate}
+     * -- see LeaveService#autoRejectNote for how a NEW request's own eligibility for the exception is
+     * bounded by this count. A plain COUNT over existing rows, never a separately-maintained counter
+     * -- see V125's migration comment for why.
+     *
+     * <p>Scoped to {@code statuses} the same way {@link #sumUsedDays} is scoped to
+     * ACTIVE_QUOTA_STATUSES (SUBMITTED/APPROVED): a CANCELLED emergency filing releases its slot for
+     * the month, mirroring {@code ux_leave_once_per_employment}'s identical "cancelling releases the
+     * claim" precedent (V116).
+     */
+    public int countEmergencyFilings(long employeeId, String leaveTypeCode, LocalDate requestStartDate, Collection<LeaveStatus> statuses) {
+        LocalDate monthStart = requestStartDate.withDayOfMonth(1);
+        LocalDate monthStartNext = monthStart.plusMonths(1);
+        Integer count = jdbc.queryForObject("""
+            SELECT COUNT(*)
+              FROM hr.leave_request
+             WHERE employee_id = :employeeId
+               AND leave_type_code = :leaveTypeCode
+               AND emergency_filing = TRUE
+               AND status IN (:statuses)
+               AND start_date >= :monthStart
+               AND start_date < :monthStartNext
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("leaveTypeCode", leaveTypeCode)
+            .addValue("statuses", statuses.stream().map(LeaveStatus::name).toList())
+            .addValue("monthStart", monthStart)
+            .addValue("monthStartNext", monthStartNext),
+            Integer.class);
+        return count == null ? 0 : count;
     }
 
     public int attachFile(long leaveRequestId, long attachmentId) {
@@ -617,6 +1038,60 @@ public class LeaveRepository {
         return jdbc.query(sql.toString(), params, this::mapRequest);
     }
 
+    /**
+     * GET /api/leave/review-summary (Phase A0b): whether {@code employeeId} is the {@code
+     * reports_to_employee_id} of at least one ACTIVE employee -- i.e. whether they are a reviewer AT
+     * ALL, independent of whether anything is currently SUBMITTED. This is the filter-INDEPENDENT
+     * half of {@code LeaveReviewSummaryDto} ({@code isReviewer}); {@link #countReviewableSubmitted}
+     * below is the filter-DEPENDENT half ({@code pendingCount}). Deliberately separate queries, not
+     * "count > 0 implies reviewer" reasoning from the pending count -- a manager whose whole team is
+     * currently caught up (zero SUBMITTED rows) must still read as a reviewer, or the frontend cannot
+     * tell "empty queue" from "no permission" (see {@code LeaveService#reviewSummary}'s Javadoc).
+     */
+    public boolean hasActiveDirectReports(long employeeId) {
+        Boolean exists = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                  FROM hr.employee
+                 WHERE reports_to_employee_id = :employeeId
+                   AND is_active = TRUE
+            )
+            """, Map.of("employeeId", employeeId), Boolean.class);
+        return Boolean.TRUE.equals(exists);
+    }
+
+    /**
+     * GET /api/leave/review-summary (Phase A0b): count of SUBMITTED requests {@code
+     * managerEmployeeId} may actually act on -- mirrors {@code LeaveService#canReviewEmployee}'s OWN
+     * decision ({@code canReviewAll(user)} OR direct-manager), NOT a role check: {@code
+     * REVIEW_ALL_ROLES} is {@code {hr}} only, but any ฝ่าย manager may review their own direct
+     * reports too (see {@code LeaveService#isDirectManager}). {@code includeAll = true} bypasses the
+     * manager filter entirely (HR/CEO see every SUBMITTED request, {@code managerEmployeeId} ignored
+     * -- pass {@code null}); otherwise {@code managerEmployeeId} is required and matches ONLY ACTIVE
+     * direct reports ({@code e.is_active = TRUE AND e.reports_to_employee_id = :managerEmployeeId}),
+     * the SAME two conditions {@code LeaveService#isDirectManager} checks via {@link
+     * #findEmployeeAccess}. Deliberately does NOT also match {@code lr.employee_id =
+     * :managerEmployeeId} (the manager's OWN submitted requests) -- a manager cannot review their own
+     * leave, and {@code isDirectManager} never returns true for one's own employeeId either (it would
+     * require the employee to be their own manager), so including that clause here would silently
+     * inflate the count beyond what {@code canReviewEmployee} actually grants.
+     */
+    public int countReviewableSubmitted(Long managerEmployeeId, boolean includeAll) {
+        StringBuilder sql = new StringBuilder("""
+            SELECT count(*)
+              FROM hr.leave_request lr
+              JOIN hr.employee e ON e.employee_id = lr.employee_id
+             WHERE lr.status = 'SUBMITTED'
+            """);
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        if (!includeAll) {
+            sql.append(" AND e.reports_to_employee_id = :managerEmployeeId AND e.is_active = TRUE");
+            params.addValue("managerEmployeeId", managerEmployeeId);
+        }
+        Integer count = jdbc.queryForObject(sql.toString(), params, Integer.class);
+        return count == null ? 0 : count;
+    }
+
     public int approve(long id, Long reviewedById, String reviewerNote) {
         return jdbc.update("""
             UPDATE hr.leave_request
@@ -650,6 +1125,18 @@ public class LeaveRepository {
     }
 
     public int cancel(long id, Long reviewedById, String reviewerNote) {
+        // Found via a live real-backend click-through (self-cancel: an employee cancelling their
+        // OWN request, reviewedById == null): "could not determine data type of parameter $2".
+        // Unlike #approve/#reject, where :reviewedById binds directly into a typed assignment
+        // (reviewed_by_id = :reviewedById), here BOTH bind params appear only inside
+        // COALESCE(...)/CASE WHEN ... IS NULL -- never in a context with an inferable column type
+        // on their own. Postgres' extended query protocol cannot infer a type from that shape,
+        // and a NULL value at bind time gives it nothing else to go on either. approve/reject
+        // never hit this because their SET target IS the type hint; cancel's self-cancel path
+        // (the only caller that can legitimately pass reviewedById == null) is the one shape that
+        // was never covered -- mocks don't touch real SQL, and no existing test exercises a real
+        // Postgres self-cancel. Explicit SQL types make the driver's job possible regardless of
+        // value or position.
         return jdbc.update("""
             UPDATE hr.leave_request
                SET status = 'CANCELLED',
@@ -662,8 +1149,8 @@ public class LeaveRepository {
                AND status IN ('SUBMITTED', 'APPROVED')
             """, new MapSqlParameterSource()
             .addValue("id", id)
-            .addValue("reviewedById", reviewedById)
-            .addValue("reviewerNote", clean(reviewerNote)));
+            .addValue("reviewedById", reviewedById, java.sql.Types.BIGINT)
+            .addValue("reviewerNote", clean(reviewerNote), java.sql.Types.VARCHAR));
     }
 
     private String baseSelect() {
@@ -706,7 +1193,11 @@ public class LeaveRepository {
                    lr.contact_subdistrict,
                    lr.contact_district,
                    lr.contact_province,
-                   lr.contact_phone
+                   lr.contact_phone,
+                   lr.purpose_code,
+                   lr.emergency_filing,
+                   lr.system_note_code,
+                   lr.system_note_params
               FROM hr.leave_request lr
               JOIN hr.employee e ON e.employee_id = lr.employee_id
               JOIN hr.leave_type lt ON lt.leave_type_code = lr.leave_type_code
@@ -729,7 +1220,13 @@ public class LeaveRepository {
             rs.getInt("min_service_months"),
             rs.getObject("max_consecutive_days", BigDecimal.class),
             rs.getBoolean("once_per_employment"),
-            LeaveDayCountBasis.valueOf(rs.getString("day_count_basis"))
+            LeaveDayCountBasis.valueOf(rs.getString("day_count_basis")),
+            rs.getBoolean("prorated_first_year"),
+            rs.getObject("first_year_max_days", BigDecimal.class),
+            rs.getObject("certificate_filing_window_days", Integer.class),
+            rs.getInt("no_certificate_monthly_tolerance"),
+            rs.getObject("emergency_monthly_allowance", Integer.class),
+            rs.getBoolean("carries_forward")
         );
     }
 
@@ -773,7 +1270,14 @@ public class LeaveRepository {
             rs.getString("contact_subdistrict"),
             rs.getString("contact_district"),
             rs.getString("contact_province"),
-            rs.getString("contact_phone")
+            rs.getString("contact_phone"),
+            rs.getString("purpose_code"),
+            rs.getBoolean("emergency_filing"),
+            rs.getString("system_note_code"),
+            fromJson(rs.getString("system_note_params")),
+            // Phase A0b: placeholder -- this mapper has no actor to check "can review" against.
+            // LeaveService#withCanReviewFlag overwrites this on every DTO it returns; see its Javadoc.
+            false
         );
     }
 
@@ -788,5 +1292,36 @@ public class LeaveRepository {
 
     private String clean(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    /**
+     * Phase A0a (structured rejection outcome, V131): serializes {@code params} for
+     * {@code system_note_params}, matching {@code SpecialMoneyRepository#toJson}'s identical
+     * shape/precedent (empty map for {@code null}, never a NULL jsonb value for a rejected request).
+     */
+    private String toJson(Map<String, String> params) {
+        try {
+            return SYSTEM_NOTE_PARAMS_MAPPER.writeValueAsString(params == null ? Map.of() : params);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Failed to serialize leave rule params", exception);
+        }
+    }
+
+    /**
+     * Phase A0a (structured rejection outcome, V131): the read-side counterpart of {@link #toJson}
+     * for {@code system_note_params} -- {@code null}/blank (an APPROVED request, or any historical
+     * pre-V131 row, since V131 deliberately backfills nothing) maps to {@link Map#of()}, never
+     * {@code null}, matching {@link LeaveRequestDto#systemNoteParams}'s null-safe contract.
+     */
+    private Map<String, String> fromJson(String json) {
+        if (json == null || json.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return SYSTEM_NOTE_PARAMS_MAPPER.readValue(json, new TypeReference<Map<String, String>>() {
+            });
+        } catch (JsonProcessingException exception) {
+            return Map.of();
+        }
     }
 }

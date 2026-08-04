@@ -8,6 +8,9 @@ import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Predicate;
+import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
 
 /**
  * Leave -&gt; payroll unpaid-day deduction (2026-07-23): shared weekday-counting math used both to
@@ -16,10 +19,28 @@ import java.util.Map;
  * days a cancelled leave owes back when it is cancelled after payroll has processed ({@link
  * LeaveService#cancel}).
  *
- * <p><b>Company-policy caveat (needs HR/legal sign-off before this drives a real payroll run):</b>
- * weekends (Sat/Sun) never count as working days; there is no holiday calendar in v1, so a public
- * holiday inside a leave range still counts as a working day today (tracked as an out-of-scope
- * follow-up). {@code paidDays} is always treated as consumed from the request's earliest working
+ * <p><b>Schedule/holiday-aware working-day counting (2026-08-03):</b> "is this date a working day"
+ * used to be a single hardcoded Mon-Fri check ({@link #isWorkingDay(LocalDate)}), which was wrong in
+ * two directions the class's own javadoc used to flag as known gaps: it treated every Saturday as a
+ * non-working day even for six-day departments (คลังสินค้า/แม่บ้าน, V115/V117/V121's {@code OPS_6D}),
+ * understating their unpaid-day counts; and it had no holiday calendar, so a public holiday inside a
+ * leave range counted as a working day, over-counting (and over-deducting) leave across it. Every
+ * method below that decides "does this date count" now takes a {@code Predicate<LocalDate>
+ * isWorkingDay} built by the caller via {@link #workingDayPredicate} -- combining the employee's
+ * resolved {@code WorkSchedule} (V115's {@code TieredWorkScheduleResolver}: EMPLOYEE > DEPARTMENT >
+ * DIVISION > company default, effective-dated) with {@code hr.holiday} (V115's
+ * {@code HolidayCalendar}). This class stays free of direct DB access: callers batch-load the
+ * range's holidays once (via {@link th.co.glr.hr.attendance.schedule.HolidayCalendar#holidaysBetween})
+ * before building the predicate, so a long request (e.g. an uncapped MILITARY leave, V120) never
+ * costs one query per day -- the resolver itself is then called once per date inside the predicate,
+ * which is a pure in-memory lookup ({@code TieredWorkScheduleResolver} caches its whole assignment
+ * table for the bean's lifetime), not a query. Resolving per-date (rather than once for the whole
+ * request) is deliberate: it is the only way to get a mid-request schedule reassignment right, and
+ * costs nothing extra given the resolver is already O(1) DB-free. {@link LeaveDayCountBasis#CALENDAR_DAYS}
+ * (MATERNITY) never invokes the predicate at all -- see that enum's javadoc for why this must not
+ * change.
+ *
+ * <p>{@code paidDays} is always treated as consumed from the request's earliest working
  * days first -- {@code hr.leave_request.paid_days}/{@code unpaid_days} are aggregate totals, not a
  * per-day flag, so chronological consumption is the only ordering they can represent, and it matches
  * the natural reading of "day N onward went unpaid".
@@ -33,10 +54,9 @@ import java.util.Map;
  * multi-day branch is unchanged (still whole-day-only), now simply emitting {@code BigDecimal("1.00")}
  * per unpaid weekday instead of {@code 1}.
  *
- * <p><b>§5.4 MATERNITY calendar-day counting (V119, 2026-08-02):</b> every method below now has a
- * {@link LeaveDayCountBasis}-aware overload alongside its original working-day-only signature,
- * which is UNCHANGED and simply delegates to the new overload with {@code WORKING_DAYS} -- this
- * class's Mon-Fri assumption for every leave type except MATERNITY is untouched. See {@link
+ * <p><b>§5.4 MATERNITY calendar-day counting (V119, 2026-08-02):</b> every method below has a
+ * {@link LeaveDayCountBasis}-aware overload alongside its original no-basis signature, which is
+ * UNCHANGED and simply delegates to the new overload with {@code WORKING_DAYS}. See {@link
  * LeaveDayCountBasis} for the announcement text this implements and {@link LeaveService#submit}/
  * {@link LeaveService#computeTotalDays} for where the basis is selected.
  */
@@ -49,17 +69,55 @@ final class LeaveDayMath {
     private LeaveDayMath() {
     }
 
-    /** Total working days (Mon-Fri) in the inclusive range [startDate, endDate]. */
-    static int countWorkingDays(LocalDate startDate, LocalDate endDate) {
+    /**
+     * Builds the schedule/holiday-aware {@code isWorkingDay} predicate every basis-aware method
+     * below takes (2026-08-03). A date counts as a working day when it is NOT in {@code holidays}
+     * AND the employee's {@code WorkSchedule}, resolved for that specific date via {@code
+     * scheduleResolver}, has it as a workday -- i.e. holiday beats schedule (a holiday is never a
+     * working day regardless of a six-day schedule), mirroring {@code AttendanceDailyService}'s own
+     * {@code schedule.isWorkday(date) && !holiday} rule for the same two collaborators.
+     *
+     * <p>{@code holidays} MUST be pre-loaded by the caller (via {@code
+     * HolidayCalendar#holidaysBetween}) for the whole date range this predicate will be tested
+     * against -- one query, not one per day. {@code scheduleResolver.resolve} is called once per
+     * tested date (not batched): that is intentional, not an oversight -- see this class's javadoc
+     * for why resolving per-date is both correct (respects a schedule reassignment mid-request) and
+     * free of any additional query ({@code TieredWorkScheduleResolver} caches its whole assignment
+     * table for the bean's lifetime).
+     */
+    static Predicate<LocalDate> workingDayPredicate(
+            WorkScheduleResolver scheduleResolver, long employeeId, Long divisionId, Long departmentId,
+            Set<LocalDate> holidays) {
+        return date -> !holidays.contains(date)
+            && scheduleResolver.resolve(employeeId, divisionId, departmentId, date).isWorkday(date);
+    }
+
+    /**
+     * Total working days in the inclusive range [startDate, endDate], per the caller-supplied
+     * {@code isWorkingDay} predicate (see {@link #workingDayPredicate}).
+     */
+    static int countWorkingDays(LocalDate startDate, LocalDate endDate, Predicate<LocalDate> isWorkingDay) {
         int days = 0;
         LocalDate cursor = startDate;
         while (!cursor.isAfter(endDate)) {
-            if (isWorkingDay(cursor)) {
+            if (isWorkingDay.test(cursor)) {
                 days++;
             }
             cursor = cursor.plusDays(1);
         }
         return days;
+    }
+
+    /**
+     * Legacy/test convenience overload: Mon-Fri only, no holiday calendar -- the hardcoded
+     * assumption this class used before it became schedule/holiday-aware (2026-08-03). Every
+     * production call site now goes through the 3-arg overload above with a real predicate (see
+     * {@link LeaveRepository#workingDayPredicate}); this overload survives only because
+     * {@code LeaveDayMathTest} pins the pure Mon-Fri math directly, with no schedule/holiday fixture
+     * to build.
+     */
+    static int countWorkingDays(LocalDate startDate, LocalDate endDate) {
+        return countWorkingDays(startDate, endDate, LeaveDayMath::isWorkingDay);
     }
 
     /**
@@ -92,19 +150,29 @@ final class LeaveDayMath {
 
     /**
      * §5.4 MATERNITY calendar-day counting (V119): basis-aware overload of {@link
-     * #unpaidWorkingDaysByMonth(LocalDate, LocalDate, BigDecimal, BigDecimal)}. Behaviour for
-     * {@link LeaveDayCountBasis#WORKING_DAYS} is BYTE-IDENTICAL to the 4-arg overload above (which
-     * now just delegates here) -- nothing about existing working-day counting changes. {@link
-     * LeaveDayCountBasis#CALENDAR_DAYS} runs the exact same chronological-rank algorithm, just
-     * ranking every day in the range instead of only Mon-Fri ones -- so a weekend or (weekday)
-     * holiday falling in the UNPAID tail of the range is bucketed into its month's deduction the
-     * same way a working day would be. See LeaveService's decision note on why the payroll
-     * deduction path (LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth) uses this same basis
-     * as the leave type's quota counting, not always WORKING_DAYS.
+     * #unpaidWorkingDaysByMonth(LocalDate, LocalDate, BigDecimal, BigDecimal)}, using the legacy
+     * Mon-Fri/no-holiday predicate -- see the 6-arg overload below (now the real implementation)
+     * for the schedule/holiday-aware version every production call site uses.
      */
     static Map<LocalDate, BigDecimal> unpaidWorkingDaysByMonth(
             LocalDate startDate, LocalDate endDate, BigDecimal paidDays, BigDecimal totalDays,
             LeaveDayCountBasis basis) {
+        return unpaidWorkingDaysByMonth(startDate, endDate, paidDays, totalDays, basis, LeaveDayMath::isWorkingDay);
+    }
+
+    /**
+     * Schedule/holiday-aware canonical implementation (2026-08-03). {@link
+     * LeaveDayCountBasis#WORKING_DAYS} ranks a date only when {@code isWorkingDay} (see {@link
+     * #workingDayPredicate}) says it counts for THIS employee on THIS date -- a Saturday counts for
+     * a six-day-schedule employee and not for a five-day one on the identical calendar date, and a
+     * seeded {@code hr.holiday} row removes a date from counting for everyone regardless of
+     * schedule. {@link LeaveDayCountBasis#CALENDAR_DAYS} (MATERNITY) is UNCHANGED by this overload
+     * -- it ranks every day exactly as before, never consulting {@code isWorkingDay} at all (see
+     * that enum's javadoc for why this must stay true).
+     */
+    static Map<LocalDate, BigDecimal> unpaidWorkingDaysByMonth(
+            LocalDate startDate, LocalDate endDate, BigDecimal paidDays, BigDecimal totalDays,
+            LeaveDayCountBasis basis, Predicate<LocalDate> isWorkingDay) {
         Map<LocalDate, BigDecimal> byMonth = new LinkedHashMap<>();
         BigDecimal paid = paidDays == null ? BigDecimal.ZERO : paidDays;
 
@@ -121,7 +189,7 @@ final class LeaveDayMath {
         int rank = 0;
         LocalDate cursor = startDate;
         while (!cursor.isAfter(endDate)) {
-            if (basis.counts(cursor)) {
+            if (basis.counts(cursor, isWorkingDay)) {
                 rank++;
                 if (rank > paidWholeDays) {
                     LocalDate month = cursor.withDayOfMonth(1);
@@ -133,9 +201,39 @@ final class LeaveDayMath {
         return byMonth;
     }
 
+    /**
+     * The hardcoded Mon-Fri assumption this class carried before it became schedule/holiday-aware
+     * (2026-08-03). Kept only as the default predicate for the legacy overloads above (and for
+     * {@code LeaveDayMathTest}'s pure-math coverage) -- every production call site now builds a
+     * real predicate via {@link #workingDayPredicate} instead. Do not add a new production call
+     * site against this method; it does not know about six-day schedules or {@code hr.holiday}.
+     */
     static boolean isWorkingDay(LocalDate date) {
         DayOfWeek day = date.getDayOfWeek();
         return day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY;
+    }
+
+    /**
+     * §5.1 SICK certificate filing-window (V124): returns the date reached by walking forward from
+     * {@code from}, counting only WORKING days ({@link #isWorkingDay}, Mon-Fri -- same known
+     * no-holiday-calendar limitation as the rest of this class, see the class Javadoc and CLAUDE.md;
+     * NOT fixed here), until {@code workingDays} of them have been counted. {@code from} itself is
+     * NEVER counted, even when it is itself a working day -- "file within N working days of X" reads
+     * as N days AFTER X, not X itself as day one (mirrors the ordinary "N business days from today"
+     * reading a filing deadline states). {@code workingDays <= 0} returns {@code from} unchanged
+     * (defensive; every caller today passes a positive filing-window value, enforced by {@code
+     * chk_leave_type_certificate_filing_window_positive}).
+     */
+    static LocalDate addWorkingDays(LocalDate from, int workingDays) {
+        LocalDate date = from;
+        int counted = 0;
+        while (counted < workingDays) {
+            date = date.plusDays(1);
+            if (isWorkingDay(date)) {
+                counted++;
+            }
+        }
+        return date;
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -161,15 +259,24 @@ final class LeaveDayMath {
     }
 
     /**
-     * §5.4 MATERNITY calendar-day counting (V119): basis-aware overload. {@link
-     * LeaveDayCountBasis#WORKING_DAYS} is byte-identical to the 3-arg overload above (which now
-     * delegates here); {@link LeaveDayCountBasis#CALENDAR_DAYS} buckets every day in the range by
-     * year, not just Mon-Fri ones -- required so a cross-year MATERNITY request (§5.4, up to 98
-     * CALENDAR days) splits its calendar days per year, matching how {@link LeaveService#submit}
-     * now computes {@code totalDays} for a CALENDAR_DAYS type in the first place.
+     * §5.4 MATERNITY calendar-day counting (V119): basis-aware overload, using the legacy Mon-Fri/
+     * no-holiday predicate -- see the 5-arg overload below (now the real implementation) for the
+     * schedule/holiday-aware version every production call site uses.
      */
     static Map<Integer, BigDecimal> totalDaysByYear(
             LocalDate startDate, LocalDate endDate, BigDecimal totalDays, LeaveDayCountBasis basis) {
+        return totalDaysByYear(startDate, endDate, totalDays, basis, LeaveDayMath::isWorkingDay);
+    }
+
+    /**
+     * Schedule/holiday-aware canonical implementation (2026-08-03) -- see {@link
+     * #unpaidWorkingDaysByMonth(LocalDate, LocalDate, BigDecimal, BigDecimal, LeaveDayCountBasis, Predicate)}
+     * for the identical {@code basis}/{@code isWorkingDay} interaction, just bucketed by year instead
+     * of by month.
+     */
+    static Map<Integer, BigDecimal> totalDaysByYear(
+            LocalDate startDate, LocalDate endDate, BigDecimal totalDays, LeaveDayCountBasis basis,
+            Predicate<LocalDate> isWorkingDay) {
         Map<Integer, BigDecimal> byYear = new LinkedHashMap<>();
         if (startDate.equals(endDate)) {
             BigDecimal total = totalDays == null ? BigDecimal.ZERO : totalDays;
@@ -179,7 +286,7 @@ final class LeaveDayMath {
 
         LocalDate cursor = startDate;
         while (!cursor.isAfter(endDate)) {
-            if (basis.counts(cursor)) {
+            if (basis.counts(cursor, isWorkingDay)) {
                 byYear.merge(cursor.getYear(), ONE_DAY, BigDecimal::add);
             }
             cursor = cursor.plusDays(1);
@@ -227,23 +334,32 @@ final class LeaveDayMath {
     }
 
     /**
-     * §5.4 MATERNITY calendar-day counting (V119): basis-aware overload of {@link
-     * #unpaidWorkingDaysByMonthAcrossYears(LocalDate, LocalDate, List)}. The SAME basis applies to
-     * every year in {@code perYear} -- a leave TYPE's counting basis does not change from one
-     * calendar year to the next, only the request's date range does. {@link
-     * LeaveDayCountBasis#WORKING_DAYS} is byte-identical to the 3-arg overload above (which now
-     * delegates here).
+     * §5.4 MATERNITY calendar-day counting (V119): basis-aware overload, using the legacy Mon-Fri/
+     * no-holiday predicate -- see the 5-arg overload below (now the real implementation) for the
+     * schedule/holiday-aware version every production call site uses.
      */
     static Map<LocalDate, BigDecimal> unpaidWorkingDaysByMonthAcrossYears(
             LocalDate startDate, LocalDate endDate, List<LeaveQuotaYearSplit> perYear, LeaveDayCountBasis basis) {
+        return unpaidWorkingDaysByMonthAcrossYears(startDate, endDate, perYear, basis, LeaveDayMath::isWorkingDay);
+    }
+
+    /**
+     * Schedule/holiday-aware canonical implementation (2026-08-03). The SAME basis AND the SAME
+     * {@code isWorkingDay} predicate apply to every year in {@code perYear} -- a leave TYPE's
+     * counting basis (and an employee's resolved schedule/holiday awareness) does not change from
+     * one calendar year to the next, only the request's date range does.
+     */
+    static Map<LocalDate, BigDecimal> unpaidWorkingDaysByMonthAcrossYears(
+            LocalDate startDate, LocalDate endDate, List<LeaveQuotaYearSplit> perYear, LeaveDayCountBasis basis,
+            Predicate<LocalDate> isWorkingDay) {
         Map<LocalDate, BigDecimal> combined = new LinkedHashMap<>();
         for (LeaveQuotaYearSplit year : perYear) {
             LocalDate[] clipped = clipToYear(startDate, endDate, year.quotaYear());
             if (clipped == null) {
                 continue;
             }
-            Map<LocalDate, BigDecimal> yearly =
-                unpaidWorkingDaysByMonth(clipped[0], clipped[1], year.paidDays(), year.totalDays(), basis);
+            Map<LocalDate, BigDecimal> yearly = unpaidWorkingDaysByMonth(
+                clipped[0], clipped[1], year.paidDays(), year.totalDays(), basis, isWorkingDay);
             yearly.forEach((month, days) -> combined.merge(month, days, BigDecimal::add));
         }
         return combined;

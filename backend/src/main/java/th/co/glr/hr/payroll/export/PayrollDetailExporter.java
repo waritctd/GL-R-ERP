@@ -229,6 +229,9 @@ public class PayrollDetailExporter {
         columns.add(new Column("พิเศษ 1 (ค่าครองชีพ)", ctx -> ctx.special(0)));
         columns.add(new Column("พิเศษ 2 (ค่าเช่าบ้าน)", ctx -> ctx.special(1)));
         columns.add(new Column("ค่าอาหาร", ctx -> ctx.nz(ctx.line().mealAllowance())));
+        // V128: its own column, not folded into พิเศษ 9 -- the whole point of the separate component
+        // is that the accountant can see auto-fed welfare apart from any hand-keyed เงินรางวัล.
+        columns.add(new Column("สวัสดิการ", ctx -> ctx.nz(ctx.line().welfarePay())));
         columns.add(new Column("พิเศษ 3 (เบี้ยเลี้ยงประจำ)", ctx -> ctx.special(2)));
         columns.add(new Column("พิเศษ 4 (ค่าตำแหน่ง)", ctx -> ctx.special(3)));
         columns.add(new Column("พิเศษ 5 (เบี้ยขยันประจำ)", ctx -> ctx.special(4)));

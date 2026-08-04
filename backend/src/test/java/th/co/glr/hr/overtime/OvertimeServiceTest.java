@@ -3,6 +3,7 @@ package th.co.glr.hr.overtime;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -17,11 +18,13 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
 import th.co.glr.hr.audit.AuditService;
+import th.co.glr.hr.employee.ManagerApproverRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
@@ -35,13 +38,26 @@ class OvertimeServiceTest {
     // Approving/cancelling overtime re-derives that attendance day; stubbed here so these cases
     // stay about the overtime rules. The real sync is covered by the integration tests.
     private final AttendanceDailyService attendanceDailyService = mock(AttendanceDailyService.class);
+    private final ManagerApproverRepository managerApproverRepository = mock(ManagerApproverRepository.class);
     private final OvertimeService overtimeService = new OvertimeService(
         overtimeRepository,
+        managerApproverRepository,
         auditService,
         notificationService,
         appProperties,
         attendanceDailyService
     );
+
+    /**
+     * A Mockito boolean stub defaults to {@code false}, which here would mean "no manager stage"
+     * and would silently route every SUBMITTED approval in this class down the CEO-direct path —
+     * the manager-approval cases would then pass while testing something else entirely. Default to
+     * {@code true} so each test exercises the two-stage flow unless it opts out explicitly.
+     */
+    @BeforeEach
+    void assumeAManagerStageExists() {
+        when(managerApproverRepository.hasManagerApprover(anyLong())).thenReturn(true);
+    }
 
     @Test
     void employeesCanSubmitOwnOvertime() {
@@ -51,6 +67,9 @@ class OvertimeServiceTest {
         when(overtimeRepository.create(eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY), eq(request.workDate().withDayOfMonth(1))))
             .thenReturn(55L);
         when(overtimeRepository.findById(55L)).thenReturn(Optional.of(created));
+        // The submit notification now goes to whoever can approve, read from the same source as
+        // the routing decision -- NOT to reports_to, who no longer approves anything.
+        when(managerApproverRepository.findManagerApproverEmployeeIds(10L)).thenReturn(List.of(99L));
         UserPrincipal employee = user("employee", 10L);
 
         OvertimeRequestDto result = overtimeService.submit(request, employee);
@@ -60,6 +79,25 @@ class OvertimeServiceTest {
         verify(auditService).record(employee, "SUBMIT_OVERTIME_REQUEST", "overtime_request", 55L, null, created);
         verify(notificationService).notify(eq(10L), eq("OVERTIME_SUBMITTED"), anyString(), anyString(), eq("/overtime"), eq(true));
         verify(notificationService).notify(eq(99L), eq("OVERTIME_PENDING_MANAGER"), anyString(), anyString(), eq("/overtime"), eq(true));
+    }
+
+    @Test
+    void submittingAManagerlessRequestNotifiesTheCeoNotAManager() {
+        SubmitOvertimeRequest request = validSubmit(null);
+        OvertimeRequestDto created = requestDto(55L, 10L, "SUBMITTED");
+        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
+        when(overtimeRepository.create(anyLong(), any(), any(), anyInt(), any(), any())).thenReturn(55L);
+        when(overtimeRepository.findById(55L)).thenReturn(Optional.of(created));
+        when(managerApproverRepository.findManagerApproverEmployeeIds(10L)).thenReturn(List.of());
+        when(overtimeRepository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
+
+        overtimeService.submit(request, user("employee", 10L));
+
+        // The failure this guards against is silent: a request routed to the CEO while only a
+        // manager -- who cannot clear it -- is told about it, so it sits unreviewed with everyone
+        // believing someone else has it.
+        verify(notificationService).notify(eq(500L), eq("OVERTIME_PENDING_CEO"), anyString(), anyString(), eq("/overtime"), eq(true));
+        verify(notificationService, never()).notify(anyLong(), eq("OVERTIME_PENDING_MANAGER"), anyString(), anyString(), anyString(), anyBoolean());
     }
 
     @Test
@@ -112,7 +150,7 @@ class OvertimeServiceTest {
     }
 
     @Test
-    void directManagersCanSubmitOvertimeForReports() {
+    void divisionManagersCanSubmitOvertimeForTheirTeam() {
         LocalDate workDate = LocalDate.now().plusDays(4);
         OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
         SubmitOvertimeRequest request = new SubmitOvertimeRequest(
@@ -123,13 +161,13 @@ class OvertimeServiceTest {
             "HOLIDAY",
             "Urgent delivery"
         );
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, null, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
         when(overtimeRepository.employeeExists(10L)).thenReturn(true);
         when(overtimeRepository.create(eq(10L), eq(99L), eq(request), eq(120), eq(OvertimeDayType.HOLIDAY), eq(workDate.withDayOfMonth(1))))
             .thenReturn(56L);
         when(overtimeRepository.findById(56L)).thenReturn(Optional.of(requestDto(56L, 10L, "SUBMITTED")));
 
-        OvertimeRequestDto result = overtimeService.submit(request, user("employee", 99L));
+        OvertimeRequestDto result = overtimeService.submit(request, manager(99L, 5L));
 
         assertThat(result.id()).isEqualTo(56L);
         verify(overtimeRepository).create(eq(10L), eq(99L), eq(request), eq(120), eq(OvertimeDayType.HOLIDAY), eq(workDate.withDayOfMonth(1)));
@@ -200,10 +238,10 @@ class OvertimeServiceTest {
     void managerApprovalIntoProcessedPayrollMonthIsRejected() {
         OvertimeRequestDto submitted = requestDto(78L, 10L, "SUBMITTED");
         when(overtimeRepository.findById(78L)).thenReturn(Optional.of(submitted));
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, null, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
         when(overtimeRepository.payrollMonthProcessed(submitted.workDate().withDayOfMonth(1))).thenReturn(true);
 
-        assertThatThrownBy(() -> overtimeService.approve(78L, new ReviewOvertimeRequest("ok"), user("employee", 99L)))
+        assertThatThrownBy(() -> overtimeService.approve(78L, new ReviewOvertimeRequest("ok"), manager(99L, 5L)))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.CONFLICT);
@@ -254,11 +292,11 @@ class OvertimeServiceTest {
     void managerApprovalIntoASeedCoveredPayrollMonthIsRejected() {
         OvertimeRequestDto submitted = requestDto(78L, 10L, "SUBMITTED");
         when(overtimeRepository.findById(78L)).thenReturn(Optional.of(submitted));
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, null, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
         when(overtimeRepository.payrollMonthProcessed(submitted.workDate().withDayOfMonth(1))).thenReturn(false);
         when(overtimeRepository.payrollMonthSeedCovered(submitted.workDate().withDayOfMonth(1))).thenReturn(true);
 
-        assertThatThrownBy(() -> overtimeService.approve(78L, new ReviewOvertimeRequest("ok"), user("employee", 99L)))
+        assertThatThrownBy(() -> overtimeService.approve(78L, new ReviewOvertimeRequest("ok"), manager(99L, 5L)))
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("จ่ายนอกระบบ")
             .satisfies(exception -> assertThat(((ApiException) exception).getStatus())
@@ -286,7 +324,7 @@ class OvertimeServiceTest {
         when(overtimeRepository.findById(77L))
             .thenReturn(Optional.of(submitted))
             .thenReturn(Optional.of(managerApproved));
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, null, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
         when(overtimeRepository.findAttendanceBounds(eq(10L), any(OffsetDateTime.class), any(OffsetDateTime.class)))
             .thenReturn(Optional.of(new OvertimeAttendanceBounds(
                 OffsetDateTime.parse("2026-07-15T08:05:00+07:00"),
@@ -298,7 +336,7 @@ class OvertimeServiceTest {
                 eq(77L), eq(99L), any(OvertimeCalculation.class), eq(new BigDecimal("30000.00")), eq("ok")))
             .thenReturn(1);
         when(overtimeRepository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
-        UserPrincipal actor = user("employee", 99L);
+        UserPrincipal actor = manager(99L, 5L);
 
         OvertimeRequestDto result = overtimeService.approve(77L, new ReviewOvertimeRequest("ok"), actor);
 
@@ -342,9 +380,9 @@ class OvertimeServiceTest {
         when(overtimeRepository.findById(77L))
             .thenReturn(Optional.of(submitted))
             .thenReturn(Optional.of(rejected));
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, null, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
         when(overtimeRepository.reject(77L, 99L, "no budget")).thenReturn(1);
-        UserPrincipal manager = user("employee", 99L);
+        UserPrincipal manager = manager(99L, 5L);
 
         OvertimeRequestDto result = overtimeService.reject(77L, new ReviewOvertimeRequest("no budget"), manager);
 
@@ -385,7 +423,7 @@ class OvertimeServiceTest {
     @Test
     void employeesCannotApproveOvertime() {
         when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "SUBMITTED")));
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, null, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
 
         assertThatThrownBy(() -> overtimeService.approve(77L, new ReviewOvertimeRequest(null), user("employee", 10L)))
             .isInstanceOf(ApiException.class)
@@ -552,6 +590,7 @@ class OvertimeServiceTest {
             null,
             99L,
             "Test Manager",
+            true,
             OffsetDateTime.parse("2026-06-14T10:00:00+07:00"),
             OffsetDateTime.parse("2026-06-14T10:00:00+07:00")
         );

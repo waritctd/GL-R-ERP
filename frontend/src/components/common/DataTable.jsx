@@ -95,6 +95,20 @@ function isInteractiveTarget(target, boundary) {
   return match !== boundary && typeof boundary?.contains === 'function' && boundary.contains(match);
 }
 
+// Leave-surface IA rebuild Phase A1: every existing `renderExpanded` caller (AttendancePage,
+// CommissionPage, TaxAllowanceReviewPage) sets `aria-expanded` on its own toggle button but has no
+// way to also set `aria-controls`, because the expanded region DataTable renders (the desktop `<tr
+// class="data-table-expanded-row">`'s `<td>`, and the mobile card's own expanded wrapper) never
+// carried an `id` for the button to point at -- so the disclosure relationship was only ever half
+// wired. Exporting one deterministic id-from-row-key formula, applied to BOTH the desktop and mobile
+// expanded wrappers below, lets every caller (present and future) do
+// `aria-controls={expandedRowRegionId(getRowKey(row))}` on its own toggle without DataTable needing
+// to know anything about how that toggle is rendered. Fixed here once, in the shared primitive, so
+// every consumer benefits instead of each page re-deriving its own id scheme.
+export function expandedRowRegionId(rowKey) {
+  return `data-table-expanded-${String(rowKey).replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+}
+
 function csvEscape(value) {
   const stringValue = value == null ? '' : String(value);
   if (!/[",\r\n]/.test(stringValue)) return stringValue;
@@ -593,7 +607,7 @@ export function DataTable({
                 >
                   {mobileCard(row)}
                   {expanded ? (
-                    <div className="rounded-b-md border border-t-0 border-border bg-surface-subtle px-4 py-3">
+                    <div id={expandedRowRegionId(key)} className="rounded-b-md border border-t-0 border-border bg-surface-subtle px-4 py-3">
                       {expanded}
                     </div>
                   ) : null}
@@ -715,7 +729,7 @@ export function DataTable({
                       {expanded ? (
                         <tr className="data-table-expanded-row">
                           <td colSpan={columns.length}>
-                            <div className="border-b border-border bg-surface-subtle px-4 py-3">
+                            <div id={expandedRowRegionId(key)} className="border-b border-border bg-surface-subtle px-4 py-3">
                               {expanded}
                             </div>
                           </td>

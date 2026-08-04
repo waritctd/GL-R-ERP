@@ -5,8 +5,10 @@ import java.time.LocalDate;
 import java.time.Month;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 
 /**
@@ -27,6 +29,10 @@ public class SpecialMoneyPolicyEvaluator {
      * This company treats 119 days since hire as "probation passed" absent an explicit confirm
      * date; do not cite this as a legal requirement.
      *
+     * <p>NOT the company norm: real production {@code hr.employee.probation_days} is populated for
+     * almost every active row and is mostly {@code 90}. This 119-day figure only ever applies to
+     * the rare row where {@code probation_days} itself is NULL -- see {@link #hasPassedProbation}.
+     *
      * <p>Public (not package-private) so {@code LeaveService}'s §5.2 PERSONAL-leave
      * "passed probation" gate (V116) can reference this exact constant instead of duplicating the
      * literal 119 -- the two eligibility rules resolve "passed probation" identically on purpose,
@@ -35,7 +41,49 @@ public class SpecialMoneyPolicyEvaluator {
      */
     public static final int DEFAULT_PROBATION_DAYS = 119;
 
-    static final String SALES_SUPPORT_DEPT_KEY = "sales_support_department_code";
+    /**
+     * Single definition of "has this employee passed probation", shared by {@code LeaveService}'s
+     * §5.2 PERSONAL-leave gate and this evaluator's own {@link #evaluateStandardProbationEligibility}
+     * -- putting the resolution here (rather than two copies agreeing by convention) is what
+     * actually prevents the two rules drifting apart the way {@link #DEFAULT_PROBATION_DAYS} being
+     * shared already prevented the fallback constant from drifting.
+     *
+     * <p>Owner ruling (2026-08-03): HR's recorded {@code hr.employee.confirm_date}, when present, is
+     * authoritative -- read it rather than re-deriving probation from {@code hire_date +
+     * probation_days}. The employee becomes eligible the day AFTER {@code confirm_date}: verified
+     * against production, {@code confirm_date} counts the hire date as day 1, while the computed
+     * {@code hire_date + probationDays} form below counts it as day 0, so the two disagree by
+     * exactly one day if {@code confirm_date} itself were treated as already-passed. When {@code
+     * confirm_date} is NULL, falls back to {@code hire_date + probationDays}, where {@code
+     * probationDays} defaults to {@link #DEFAULT_PROBATION_DAYS} only when NULL on the employee row.
+     *
+     * <p>Fails closed (returns {@code false}) when both {@code confirmDate} and {@code hireDate} are
+     * NULL -- the caller must treat that as "cannot verify", never as passed.
+     *
+     * @param asOf the date probation status is evaluated as of -- the request's start/event date for
+     *     leave, or the submission date for special-money aid; not necessarily the clock's "today".
+     */
+    public static boolean hasPassedProbation(
+            LocalDate hireDate, Integer probationDays, LocalDate confirmDate, LocalDate asOf) {
+        if (confirmDate != null) {
+            return asOf.isAfter(confirmDate);
+        }
+        if (hireDate == null) {
+            return false;
+        }
+        int days = probationDays != null ? probationDays : DEFAULT_PROBATION_DAYS;
+        return !hireDate.plusDays(days).isAfter(asOf);
+    }
+
+    /**
+     * §2.1.3's eligible job functions, as CSV lists of {@code hr.department.source_code} and
+     * {@code hr.position.source_code}. Plural and two-dimensional because the document's four
+     * functions do not sit at one level of the org data — verified against production 2026-08-03:
+     * สนับสนุนฝ่ายขาย is TWO departments (SALES, SALES2), while ขับรถ is a POSITION. The previous
+     * single {@code sales_support_department_code} could express neither.
+     */
+    static final String PREPROBATION_KIT_DEPARTMENT_CODES_KEY = "preprobation_kit_department_codes";
+    static final String PREPROBATION_KIT_POSITION_CODES_KEY = "preprobation_kit_position_codes";
     static final int PREPROBATION_KIT_MIN_TENURE_DAYS = 7;
 
     private static final Set<String> FUNERAL_ALLOWED_RELATIONS = Set.of("parent", "spouse", "child");
@@ -55,7 +103,7 @@ public class SpecialMoneyPolicyEvaluator {
         }
 
         if (type.eligibilityRule() == EligibilityRule.PREPROBATION_SALES_SUPPORT) {
-            evaluatePreprobationSalesSupportEligibility(employee, amounts, violations);
+            evaluatePreprobationKitEligibility(employee, amounts, violations);
         } else {
             evaluateStandardProbationEligibility(employee, violations);
         }
@@ -64,12 +112,9 @@ public class SpecialMoneyPolicyEvaluator {
             switch (type.capRule()) {
                 case FIXED_AID -> evaluateFixedAid(type, request, employee, usage, amounts, violations);
                 case MEDICAL_ANNUAL -> evaluateMedical(request, employee, usage, amounts, violations);
-                case UNIFORM_ANNUAL -> evaluateUniformAnnual(request, amounts, violations);
+                case UNIFORM_ANNUAL -> evaluateUniformAnnual(request, usage, amounts, violations);
                 case UNIFORM_NEW_STAFF ->
-                    // No per-piece rate shape was specified for this type beyond the max_pieces=6
-                    // seed -- see class Javadoc / handoff for this gap. Passed through uncapped
-                    // rather than inventing a rate.
-                    request.requestedAmount();
+                    evaluateUniformNewStaff(request, employee, usage, amounts, violations);
                 case UNIFORM_PREPROBATION_KIT -> evaluateUniformPreprobationKit(request, amounts, violations);
                 case PER_DIEM_RATE -> evaluateTravelPerDiem(request, amounts, excludedProvinces, violations);
                 case DISCRETIONARY -> request.requestedAmount();
@@ -82,39 +127,56 @@ public class SpecialMoneyPolicyEvaluator {
     // Eligibility
     // ---------------------------------------------------------------------
 
+    /**
+     * The หมายเหตุ's eligibility conditions: (1) เป็นพนักงานประจำ, (2) ผ่านการทดลองงาน.
+     *
+     * <p><b>Condition (1) is intentionally folded into (2), on the owner's ruling of 2026-08-03:
+     * passing probation is treated as sufficient evidence of being พนักงานประจำ.</b> {@code
+     * hr.employment_status} exists and is ETL-populated, so a stricter gate is possible later, but
+     * it is not applied today. This is a deliberate simplification, recorded here rather than left
+     * as a silent gap — if the company starts employing contract staff who pass probation without
+     * becoming ประจำ, this method is where that has to change.
+     *
+     * <p>(3) หัวหน้าฝ่ายอนุมัติ is not a policy rule and is not evaluated here — welfare approval is
+     * CEO-only, enforced in {@code SpecialMoneyService}.
+     */
     private void evaluateStandardProbationEligibility(EmployeeEligibilitySnapshot employee, List<String> violations) {
-        boolean passedProbation;
-        if (employee.confirmDate() != null) {
-            passedProbation = !employee.confirmDate().isAfter(employee.today());
-        } else {
-            int probationDays =
-                employee.probationDays() != null ? employee.probationDays() : DEFAULT_PROBATION_DAYS;
-            passedProbation =
-                employee.hireDate() != null
-                    && !employee.hireDate().plusDays(probationDays).isAfter(employee.today());
-        }
+        boolean passedProbation = hasPassedProbation(
+            employee.hireDate(), employee.probationDays(), employee.confirmDate(), employee.today());
         if (!passedProbation) {
             violations.add("พนักงานยังไม่พ้นทดลองงาน");
         }
     }
 
-    private void evaluatePreprobationSalesSupportEligibility(
+    /**
+     * §2.1.3 — the pre-probation kit, restricted to four job functions: พนักงานขับรถ, พนักงานติดรถส่งของ,
+     * พนักงานฝ่ายโมเสค and พนักงานสนับสนุนฝ่ายขาย, each with at least 7 days of service.
+     *
+     * <p>Matches on EITHER an eligible department OR an eligible position, because the four
+     * functions genuinely live at different levels of the org data (see the key constants above).
+     * Either list being non-empty enables the type; both empty keeps it disabled, as it shipped.
+     *
+     * <p><b>Two of the four functions cannot be gated yet.</b> Production carries no department or
+     * position for พนักงานติดรถส่งของ or พนักงานฝ่ายโมเสค (checked 2026-08-03), so there is nothing to
+     * match them on. They are not silently included — an employee in one of those roles is refused
+     * until HR gives the role a department or position and adds its code here. Including them by
+     * widening to a whole division would hand the kit to everyone in it.
+     */
+    private void evaluatePreprobationKitEligibility(
             EmployeeEligibilitySnapshot employee, PolicyAmounts amounts, List<String> violations) {
-        // hr.department.source_code is a VARCHAR and need not be numeric, so this is compared as a
-        // string against special_money_policy.text_value. The seed ships it empty on purpose: the
-        // real code is only known in the production database, and the type stays disabled until
-        // someone fills it in.
-        String configuredCode = amounts.text(SALES_SUPPORT_DEPT_KEY);
-        if (configuredCode == null || configuredCode.isBlank()) {
+        Set<String> departmentCodes = csv(amounts.text(PREPROBATION_KIT_DEPARTMENT_CODES_KEY));
+        Set<String> positionCodes = csv(amounts.text(PREPROBATION_KIT_POSITION_CODES_KEY));
+
+        if (departmentCodes.isEmpty() && positionCodes.isEmpty()) {
             violations.add(
-                "ยังไม่เปิดใช้งาน UNIFORM_PREPROBATION_KIT: ยังไม่ได้ตั้งค่ารหัสแผนกสนับสนุนงานขาย"
-                    + " (เป็นค่าตัวอย่างชั่วคราว)");
+                "ยังไม่เปิดใช้งาน UNIFORM_PREPROBATION_KIT: ยังไม่ได้ตั้งค่ารหัสแผนกหรือตำแหน่งที่มีสิทธิ์");
             return;
         }
 
-        if (!configuredCode.trim().equals(
-                employee.departmentSourceCode() == null ? null : employee.departmentSourceCode().trim())) {
-            violations.add("พนักงานไม่ได้อยู่ในแผนกสนับสนุนงานขายตามที่ตั้งค่าไว้");
+        boolean departmentMatches = departmentCodes.contains(trimmed(employee.departmentSourceCode()));
+        boolean positionMatches = positionCodes.contains(trimmed(employee.positionSourceCode()));
+        if (!departmentMatches && !positionMatches) {
+            violations.add("พนักงานไม่ได้อยู่ในแผนกหรือตำแหน่งที่มีสิทธิ์เบิกชุดก่อนผ่านทดลองงาน");
         }
 
         if (employee.hireDate() == null
@@ -122,6 +184,21 @@ public class SpecialMoneyPolicyEvaluator {
             violations.add(
                 "พนักงานยังทำงานไม่ครบ " + PREPROBATION_KIT_MIN_TENURE_DAYS + " วันตามที่กำหนด");
         }
+    }
+
+    /** Splits a configured CSV list, dropping blanks. An unset/blank value yields an empty set. */
+    private static Set<String> csv(String value) {
+        if (value == null || value.isBlank()) {
+            return Set.of();
+        }
+        return Arrays.stream(value.split(","))
+            .map(String::trim)
+            .filter(entry -> !entry.isEmpty())
+            .collect(Collectors.toUnmodifiableSet());
+    }
+
+    private static String trimmed(String value) {
+        return value == null ? "" : value.trim();
     }
 
     // ---------------------------------------------------------------------
@@ -137,17 +214,13 @@ public class SpecialMoneyPolicyEvaluator {
             List<String> violations) {
         BigDecimal cap = amounts.amountOrZero("cap");
 
-        // NOT in the source welfare-policy document -- three months from event_date is an
-        // assumption pending confirmation. See ClaimWindow.THREE_MONTHS_FROM_EVENT.
-        if (request.eventDate() != null && employee.today() != null) {
-            LocalDate windowEnd = request.eventDate().plusMonths(3);
-            if (employee.today().isAfter(windowEnd)) {
-                violations.add("เลยกำหนดระยะเวลาเบิก (3 เดือนนับจากวันที่เกิดเหตุ) แล้ว");
-            }
-        }
+        // There is deliberately NO claim deadline for aid. A three-months-from-event window used to
+        // live here; it was never in the welfare document -- which states a deadline only for
+        // ค่ารักษาพยาบาล (2.3, one month from the receipt) -- and it was refusing genuine claims.
+        // Removed on the owner's ruling, 2026-08-03. Do not reintroduce one without a written rule.
 
         if (type == SpecialMoneyType.AID_WEDDING || type == SpecialMoneyType.AID_ORDINATION) {
-            if (usage.approvedCountLifetime(type) >= 1) {
+            if (usage.activeCountLifetime(type) >= 1) {
                 violations.add(type.name() + " เบิกได้เพียงครั้งเดียวตลอดการเป็นพนักงาน");
             }
         }
@@ -186,12 +259,27 @@ public class SpecialMoneyPolicyEvaluator {
         return request.requestedAmount();
     }
 
+    /**
+     * §2.1.1 — one claim per year, filed in June.
+     *
+     * <p>The May receipt date applies to the SELF_BUY route ONLY. The document ties May to the
+     * self-buy case ("ซื้อ...ในเดือนพฤษภาคม...แล้วนำใบเสร็จมาเบิก...ในเดือนมิถุนายน") and says nothing
+     * about when the tailor bills for the ร้านคุณลำพอง route. Requiring May of both used to refuse a
+     * perfectly valid tailored claim receipted in June.
+     */
     private BigDecimal evaluateUniformAnnual(
-            SubmitSpecialMoneyRequest request, PolicyAmounts amounts, List<String> violations) {
-        if (request.receiptDate() == null) {
-            violations.add("คำขอเบิกเครื่องแบบประจำปีต้องระบุวันที่ในใบเสร็จ");
-        } else if (request.receiptDate().getMonth() != Month.MAY) {
-            violations.add("ใบเสร็จเครื่องแบบประจำปีต้องลงวันที่ในเดือนพฤษภาคม");
+            SubmitSpecialMoneyRequest request,
+            UsageSnapshot usage,
+            PolicyAmounts amounts,
+            List<String> violations) {
+        boolean selfBuy = "SELF_BUY".equalsIgnoreCase(request.detailValue("uniformMode"));
+
+        if (selfBuy) {
+            if (request.receiptDate() == null) {
+                violations.add("คำขอเบิกเครื่องแบบประจำปี (ซื้อเอง) ต้องระบุวันที่ในใบเสร็จ");
+            } else if (request.receiptDate().getMonth() != Month.MAY) {
+                violations.add("ใบเสร็จการซื้อเครื่องแบบเองต้องลงวันที่ในเดือนพฤษภาคม");
+            }
         }
 
         if (request.eventDate() == null) {
@@ -200,17 +288,25 @@ public class SpecialMoneyPolicyEvaluator {
             violations.add("การเบิกเครื่องแบบประจำปีต้องยื่นภายในเดือนมิถุนายน");
         }
 
-        String mode = request.detailValue("uniformMode");
-        if ("SELF_BUY".equalsIgnoreCase(mode)) {
-            int maxPieces = amounts.intAmountOrZero("max_pieces");
+        // "ให้พนักงานเบิกชุดฟอร์มได้ปีละ 1 ครั้ง". The June-only window alone does not enforce this --
+        // it leaves the whole of June open for a second claim.
+        if (usage.activeCountThisYear(SpecialMoneyType.UNIFORM_ANNUAL) >= 1) {
+            violations.add("เบิกเครื่องแบบประจำปีได้ปีละ 1 ครั้งเท่านั้น");
+        }
+
+        int maxPieces = amounts.intAmountOrZero("max_pieces");
+        int shirtCount = parseIntOrZero(request.detailValue("shirtCount"));
+        int trouserCount = parseIntOrZero(request.detailValue("trouserCount"));
+        // The 4-piece limit is the document's, not the self-buy route's: "เสื้อหรือกางเกงหรือกระโปรง
+        // ก็ได้รวมกัน 4 ชิ้น" is stated for the tailored route and repeated for self-buy. It used to
+        // be checked in SELF_BUY only, so a tailored claim for 10 pieces under ฿1,300 passed.
+        if (shirtCount + trouserCount > maxPieces) {
+            violations.add("เบิกเครื่องแบบประจำปีได้ไม่เกิน " + maxPieces + " ชิ้น");
+        }
+
+        if (selfBuy) {
             BigDecimal shirtRate = amounts.amountOrZero("per_piece_shirt");
             BigDecimal trouserRate = amounts.amountOrZero("per_piece_trouser");
-            int shirtCount = parseIntOrZero(request.detailValue("shirtCount"));
-            int trouserCount = parseIntOrZero(request.detailValue("trouserCount"));
-
-            if (shirtCount + trouserCount > maxPieces) {
-                violations.add("การซื้อเครื่องแบบเองเกินจำนวนสูงสุด " + maxPieces + " ชิ้น");
-            }
             int cappedShirts = Math.min(shirtCount, maxPieces);
             int cappedTrousers = Math.min(trouserCount, Math.max(0, maxPieces - cappedShirts));
 
@@ -228,6 +324,51 @@ public class SpecialMoneyPolicyEvaluator {
         return request.requestedAmount();
     }
 
+    /**
+     * §2.1.2 — "เริ่มตัดชุดฟอร์มให้ตัดได้ 3 ชุด (หรือ 6 ชิ้น) สำหรับปีแรกที่เข้าทำงาน".
+     *
+     * <p>Both limits are now enforced. This used to pass the requested amount straight through with
+     * no checks at all: the seeded {@code max_pieces = 6} was ignored, and nothing tied the claim to
+     * the first year of employment, so it was reachable forever and for any number of pieces.
+     *
+     * <p>No baht figure is given for new staff anywhere in the document, so the amount stays
+     * uncapped rather than borrowing §2.1.1's rates — but it is no longer unguarded either: the CEO
+     * must now justify approving more than was requested (see {@code SpecialMoneyService}).
+     */
+    private BigDecimal evaluateUniformNewStaff(
+            SubmitSpecialMoneyRequest request,
+            EmployeeEligibilitySnapshot employee,
+            UsageSnapshot usage,
+            PolicyAmounts amounts,
+            List<String> violations) {
+        int maxPieces = amounts.intAmountOrZero("max_pieces");
+        int pieces = parseIntOrZero(request.detailValue("shirtCount"))
+            + parseIntOrZero(request.detailValue("trouserCount"));
+        if (pieces > maxPieces) {
+            violations.add("ชุดฟอร์มพนักงานใหม่เบิกได้ไม่เกิน " + maxPieces + " ชิ้น");
+        }
+
+        LocalDate claimDate = request.eventDate() != null ? request.eventDate() : employee.today();
+        if (employee.hireDate() == null) {
+            violations.add("ไม่พบวันที่เริ่มงานของพนักงาน จึงตรวจสอบสิทธิ์ชุดฟอร์มพนักงานใหม่ไม่ได้");
+        } else if (claimDate != null && claimDate.isAfter(employee.hireDate().plusYears(1))) {
+            violations.add("ชุดฟอร์มพนักงานใหม่เบิกได้เฉพาะปีแรกที่เข้าทำงานเท่านั้น");
+        }
+
+        if (usage.activeCountLifetime(SpecialMoneyType.UNIFORM_NEW_STAFF) >= 1) {
+            violations.add("ชุดฟอร์มพนักงานใหม่เบิกได้เพียงครั้งเดียว");
+        }
+
+        return request.requestedAmount();
+    }
+
+    /**
+     * §2.1.3 — the fixed pre-probation kit: เสื้อยืด ×3, กางเกง ×3, รองเท้า ×1, and สายรัดหลัง ×1.
+     *
+     * <p>สายรัดหลัง is conditional in the document — "กรณีของเดิมที่มีไม่เพียงพอ" — so it is added only
+     * when the request says one is needed. It used to be added unconditionally, which over-stated
+     * every kit by the belt's ฿700 whether or not one was issued.
+     */
     private BigDecimal evaluateUniformPreprobationKit(
             SubmitSpecialMoneyRequest request, PolicyAmounts amounts, List<String> violations) {
         BigDecimal total =
@@ -235,8 +376,11 @@ public class SpecialMoneyPolicyEvaluator {
                 .amountOrZero("tshirt")
                 .multiply(amounts.amountOrZero("tshirt_qty"))
                 .add(amounts.amountOrZero("trouser").multiply(amounts.amountOrZero("trouser_qty")))
-                .add(amounts.amountOrZero("shoes").multiply(amounts.amountOrZero("shoes_qty")))
-                .add(amounts.amountOrZero("belt").multiply(amounts.amountOrZero("belt_qty")));
+                .add(amounts.amountOrZero("shoes").multiply(amounts.amountOrZero("shoes_qty")));
+
+        if (Boolean.parseBoolean(request.detailValue("needsBackSupport"))) {
+            total = total.add(amounts.amountOrZero("belt").multiply(amounts.amountOrZero("belt_qty")));
+        }
         return total;
     }
 
