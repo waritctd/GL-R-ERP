@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { SkeletonText } from '../../components/common/Skeleton.jsx';
@@ -217,14 +218,14 @@ export function DealMoneyTimeline({
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {canRecordPayment && (
-            <button type="button" className="primary-button" disabled={actionLoading} onClick={onRecordPayment}>
+            <Button type="button" variant="primary" disabled={actionLoading} onClick={onRecordPayment}>
               บันทึกรับชำระเงิน
-            </button>
+            </Button>
           )}
           {canSetBilling && (
-            <button type="button" className="secondary-button" disabled={actionLoading} onClick={onSetBilling}>
+            <Button type="button" variant="secondary" disabled={actionLoading} onClick={onSetBilling}>
               ตั้งค่าการวางบิล
-            </button>
+            </Button>
           )}
         </div>
 

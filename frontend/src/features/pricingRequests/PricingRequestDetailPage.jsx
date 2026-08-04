@@ -5,6 +5,7 @@ import { hasPermission } from '../../app/permissions.js';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -539,9 +540,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
             title="ไม่พบคำขอราคานี้"
             description="ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้"
             action={(
-              <button type="button" className="primary-button" onClick={returnToSafeList}>
+              <Button type="button" variant="primary" onClick={returnToSafeList}>
                 {canReturnToPricingQueue ? 'กลับไปที่คิวคำขอราคา' : 'กลับ'}
-              </button>
+              </Button>
             )}
           />
         </div>
@@ -556,9 +557,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
             title="ยังเปิดคำขอราคานี้ไม่ได้"
             description="ระบบไม่เปิดเผยรายละเอียดของคำขอราคาที่คุณไม่มีสิทธิ์เข้าถึง"
             action={(
-              <button type="button" className="primary-button" onClick={returnToSafeList}>
+              <Button type="button" variant="primary" onClick={returnToSafeList}>
                 {canReturnToPricingQueue ? 'กลับไปที่คิวคำขอราคา' : 'กลับ'}
-              </button>
+              </Button>
             )}
           />
         </div>
@@ -572,15 +573,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
           title={toUserErrorMessage(detailQuery.error, 'โหลดคำขอราคาไม่สำเร็จ')}
           description={toUserErrorDescription(detailQuery.error, 'ลองใหม่อีกครั้ง หรือกลับไปที่รายการคำขอ')}
           action={(
-            <button type="button" className="secondary-button" onClick={() => detailQuery.refetch()}>
+            <Button type="button" variant="secondary" onClick={() => detailQuery.refetch()}>
               <Icon name="refresh" size={14} />
               ลองใหม่
-            </button>
+            </Button>
           )}
           secondaryAction={(
-            <button type="button" className="primary-button" onClick={returnToSafeList}>
+            <Button type="button" variant="primary" onClick={returnToSafeList}>
               {canReturnToPricingQueue ? 'กลับไปที่คิวคำขอราคา' : 'กลับ'}
-            </button>
+            </Button>
           )}
         />
       </div>
@@ -595,9 +596,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
           title="ไม่พบคำขอราคานี้"
           description="ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้"
           action={(
-            <button type="button" className="primary-button" onClick={returnToSafeList}>
+            <Button type="button" variant="primary" onClick={returnToSafeList}>
               {canReturnToPricingQueue ? 'กลับไปที่คิวคำขอราคา' : 'กลับ'}
-            </button>
+            </Button>
           )}
         />
       </div>
@@ -610,10 +611,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
         title={summary.requestCode}
         subtitle={`${summary.customerName ?? '-'}${summary.projectName ? ` · ${summary.projectName}` : ''}`}
         actions={(
-          <button type="button" className="secondary-button" onClick={() => navigate(-1)}>
+          <Button type="button" variant="secondary" onClick={() => navigate(-1)}>
             <Icon name="chevronLeft" size={14} />
             กลับ
-          </button>
+          </Button>
         )}
       />
 
@@ -654,6 +655,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <div className="panel-header">
           <h2>ไฟล์แนบประกอบคำขอราคา</h2>
           {canEditPricingRequestAttachments ? (
+            // Left as a <label> wrapping the hidden file input, not <Button>: a
+            // <button> cannot open the native file picker the way a <label>
+            // wrapping its <input type="file"> does.
             <label className="secondary-button cursor-pointer">
               <input type="file" className="hidden" onChange={(event) => {
                 const file = event.target.files?.[0];
@@ -685,14 +689,14 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 <StatusBadge tone="neutral">แนบไปกับอีเมลโรงงาน</StatusBadge>
               ) : null}
               {canEditPricingRequestAttachments ? (
-                <button
+                <Button
                   type="button"
-                  className="icon-button"
+                  variant="icon"
                   aria-label={`ลบไฟล์แนบ ${attachment.fileName}`}
                   onClick={() => deletePricingRequestAttachment.mutate(attachment.id)}
                 >
                   <Icon name="close" size={13} />
-                </button>
+                </Button>
               ) : null}
             </div>
           ))}
@@ -709,9 +713,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 it — but the heading is not programmatically associated with the
                 input, so a screen reader still needs the name spelled out. */}
             <input className="form-input min-w-64" aria-label="ข้อความถึง Sales" value={infoMessage} onChange={(e) => setInfoMessage(e.target.value)} placeholder="ข้อความถึง Sales" />
-            <button type="button" className="secondary-button" disabled={!infoMessage || requestInfo.isPending} onClick={() => requestInfo.mutate()}>
+            <Button type="button" variant="secondary" disabled={!infoMessage || requestInfo.isPending} onClick={() => requestInfo.mutate()}>
               ส่งคำขอ
-            </button>
+            </Button>
           </div>
         </section>
       ) : null}
@@ -721,9 +725,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
           <div className="panel-header"><h2>ตอบข้อมูลเพิ่มเติม</h2></div>
           <div className="flex flex-wrap gap-2 p-4">
             <input className="form-input min-w-64" aria-label="ข้อมูลเพิ่มเติม" value={salesResponse} onChange={(e) => setSalesResponse(e.target.value)} placeholder="ข้อมูลเพิ่มเติม" />
-            <button type="button" className="secondary-button" disabled={!salesResponse || respondInfo.isPending} onClick={() => respondInfo.mutate()}>
+            <Button type="button" variant="secondary" disabled={!salesResponse || respondInfo.isPending} onClick={() => respondInfo.mutate()}>
               ส่งข้อมูล
-            </button>
+            </Button>
           </div>
         </section>
       ) : null}
@@ -732,9 +736,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <section className="table-panel">
           <div className="panel-header"><h2>รอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า</h2></div>
           <div className="flex flex-wrap gap-2 p-4">
-            <button type="button" className="secondary-button" onClick={() => setRevisionModalOpen(true)}>
+            <Button type="button" variant="secondary" onClick={() => setRevisionModalOpen(true)}>
               สร้างรอบแก้ไข
-            </button>
+            </Button>
           </div>
         </section>
       ) : null}
@@ -744,9 +748,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
           <div className="panel-header">
             <h2>ราคาโรงงาน</h2>
             {isImport(user) ? (
-              <button type="button" className="primary-button" disabled={generateDrafts.isPending} onClick={() => generateDrafts.mutate()} data-testid="pcr-generate-drafts">
+              <Button type="button" variant="primary" disabled={generateDrafts.isPending} onClick={() => generateDrafts.mutate()} data-testid="pcr-generate-drafts">
                 สร้างร่างอีเมล
-              </button>
+              </Button>
             ) : null}
           </div>
           <div className="flex flex-col gap-3 p-4">
@@ -775,7 +779,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     <StatusBadge tone={quote.current ? quoteStatus.tone : 'neutral'}>{quoteStatus.label}</StatusBadge>
                     {dispatchStatusBadge(quote)}
                     {isImport(user) && quote.status === 'DRAFT' && quote.dispatchStatus !== 'PENDING' && quote.dispatchStatus !== 'SENDING' ? (
-                      <button type="button" className="secondary-button" onClick={() => {
+                      <Button type="button" variant="secondary" onClick={() => {
                         // A FAILED dispatch has permanently exhausted its own clientRequestId (the
                         // backend's unique (created_by, client_request_id) index would just replay
                         // that same dead row), so a manual retry must mint a fresh idempotency key
@@ -787,10 +791,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         setConfirmAction({ type: 'sendQuote', quote, emailDraft });
                       }}>
                         {quote.dispatchStatus === 'FAILED' ? 'ส่งอีกครั้ง' : 'ส่ง'}
-                      </button>
+                      </Button>
                     ) : null}
-                    {isImport(user) && ['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) && quote.current ? <button type="button" className="secondary-button" onClick={() => readyQuote.mutate(quote)} data-testid="pcr-quote-ready">พร้อมคำนวณต้นทุน</button> : null}
-                    {isImport(user) && quote.status === 'RESPONSE_RECEIVED' && quote.current ? <button type="button" className="secondary-button" onClick={() => negotiateQuote.mutate(quote)}>เจรจา</button> : null}
+                    {isImport(user) && ['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) && quote.current ? <Button type="button" variant="secondary" onClick={() => readyQuote.mutate(quote)} data-testid="pcr-quote-ready">พร้อมคำนวณต้นทุน</Button> : null}
+                    {isImport(user) && quote.status === 'RESPONSE_RECEIVED' && quote.current ? <Button type="button" variant="secondary" onClick={() => negotiateQuote.mutate(quote)}>เจรจา</Button> : null}
                   </div>
                   <div className="mt-2 text-xs text-text-muted">{quote.emailTo ?? '-'} · {quote.supplierQuoteRef ?? '-'}</div>
                   {quote.dispatchStatus === 'FAILED' && quote.dispatchFailureMessage ? (
@@ -830,9 +834,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailBody: e.target.value } })}
                         />
                       </FormField>
-                      <button type="button" className="secondary-button" disabled={updateQuote.isPending} onClick={() => updateQuote.mutate({ quote, draft: emailDraft })}>
+                      <Button type="button" variant="secondary" disabled={updateQuote.isPending} onClick={() => updateQuote.mutate({ quote, draft: emailDraft })}>
                         บันทึกร่างอีเมล
-                      </button>
+                      </Button>
                     </div>
                   ) : null}
                   {quote.items?.length ? (
@@ -849,6 +853,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       <div className="mb-2 flex flex-wrap items-center gap-2">
                         <span className="text-xs font-semibold text-text-muted">ไฟล์แนบ</span>
                         {isImport(user) ? (
+                          // Left as a <label> wrapping the hidden file input, not <Button>: a
+                          // <button> cannot open the native file picker the way a <label>
+                          // wrapping its <input type="file"> does.
                           <label className="secondary-button cursor-pointer">
                             <input type="file" className="hidden" onChange={(event) => {
                               const file = event.target.files?.[0];
@@ -954,13 +961,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           </div>
                         );
                       })}
-                      <button type="button" className="secondary-button" disabled={receiveQuote.isPending} data-testid="pcr-quote-save-response" onClick={() => {
+                      <Button type="button" variant="secondary" disabled={receiveQuote.isPending} data-testid="pcr-quote-save-response" onClick={() => {
                         const clientRequestId = receiveClientRequestIds[quote.id] ?? generateClientRequestId();
                         setReceiveClientRequestIds((cur) => ({ ...cur, [quote.id]: clientRequestId }));
                         receiveQuote.mutate({ quote, draft, clientRequestId });
                       }}>
                         บันทึกคำตอบ/รอบแก้ไข
-                      </button>
+                      </Button>
                     </div>
                   ) : null}
                 </div>
@@ -975,7 +982,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <section className="table-panel">
           <div className="panel-header">
             <h2>ต้นทุนนำเข้า</h2>
-            {isImport(user) ? <button type="button" className="primary-button" onClick={() => createCosting.mutate()} data-testid="pcr-costing-create">สร้างร่างต้นทุน</button> : null}
+            {isImport(user) ? <Button type="button" variant="primary" onClick={() => createCosting.mutate()} data-testid="pcr-costing-create">สร้างร่างต้นทุน</Button> : null}
           </div>
           <div className="flex flex-col gap-3 p-4">
             {isImport(user) ? (
@@ -1000,8 +1007,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <span className="text-xs text-text-muted">{costing.totalLandedCostThb != null ? formatCurrency(costing.totalLandedCostThb, 'THB') : '-'}</span>
                   {isImport(user) && costing.id === latestOpenCosting?.id ? (
                     <Fragment key={`costing-actions-${costing.id}`}>
-                      <button type="button" className="secondary-button" onClick={() => recalculateCosting.mutate(costing)} data-testid="pcr-costing-recalculate">คำนวณใหม่</button>
-                      <button type="button" className="secondary-button" disabled={costing.status !== 'CALCULATED' || costing.stale} onClick={() => setConfirmAction({ type: 'submitCosting', costing })} data-testid="pcr-costing-submit">ส่งให้ CEO ตรวจ</button>
+                      <Button type="button" variant="secondary" onClick={() => recalculateCosting.mutate(costing)} data-testid="pcr-costing-recalculate">คำนวณใหม่</Button>
+                      <Button type="button" variant="secondary" disabled={costing.status !== 'CALCULATED' || costing.stale} onClick={() => setConfirmAction({ type: 'submitCosting', costing })} data-testid="pcr-costing-submit">ส่งให้ CEO ตรวจ</Button>
                     </Fragment>
                   ) : null}
                 </div>
@@ -1036,9 +1043,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     placeholder="0.20"
                   />
                 </label>
-                <button type="button" className="primary-button" disabled={startCeoReview.isPending} onClick={() => startCeoReview.mutate()} data-testid="pcr-ceo-start-review">
+                <Button type="button" variant="primary" disabled={startCeoReview.isPending} onClick={() => startCeoReview.mutate()} data-testid="pcr-ceo-start-review">
                   เริ่มพิจารณาราคาขาย
-                </button>
+                </Button>
               </div>
             ) : null}
             {!currentDecision && !canStartCeoReview(user, summary) ? (
@@ -1119,32 +1126,32 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   </div>
                   {editable ? (
                     <div className="mt-3 flex flex-wrap gap-2 border-t border-border-subtle pt-3">
-                      <button
+                      <Button
                         type="button"
-                        className="secondary-button"
+                        variant="secondary"
                         disabled={saveDecisionItems.isPending}
                         onClick={() => saveDecisionItems.mutate({ decision, items: decision.items })}
                         data-testid="pcr-ceo-save-decision-items"
                       >
                         บันทึกการเปลี่ยนแปลง
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="primary-button"
+                        variant="primary"
                         disabled={approveDecision.isPending || missingBeforeApprove.length > 0}
                         onClick={() => setConfirmAction({ type: 'approveDecision', decision })}
                         data-testid="pcr-ceo-approve"
                       >
                         อนุมัติราคาขาย
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="secondary-button"
+                        variant="secondary"
                         disabled={returnDecisionToImport.isPending}
                         onClick={() => setConfirmAction({ type: 'returnDecision', decision })}
                       >
                         ตีกลับให้ฝ่ายนำเข้าแก้ไข
-                      </button>
+                      </Button>
                       {missingBeforeApprove.length > 0 ? (
                         <span className="self-center text-xs text-danger">ทุกรายการต้องมีอัตรากำไรและราคาขั้นต่ำก่อนอนุมัติ</span>
                       ) : null}
@@ -1200,9 +1207,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
           </div>
           <div className="flex flex-col gap-3 p-4">
             {!currentCustomerQuotation && canCreateCustomerQuotation(user, summary) ? (
-              <button type="button" className="primary-button self-start" onClick={() => createQuotation.mutate()} disabled={createQuotation.isPending}>
+              <Button type="button" variant="primary" className="self-start" onClick={() => createQuotation.mutate()} disabled={createQuotation.isPending}>
                 สร้างร่างใบเสนอราคาลูกค้า
-              </button>
+              </Button>
             ) : null}
             {!currentCustomerQuotation && !canCreateCustomerQuotation(user, summary) ? (
               <p className="text-sm text-text-muted">
@@ -1314,41 +1321,41 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   )}
 
                   <div className="flex flex-wrap gap-2">
-                    <button type="button" className="secondary-button" disabled={downloadingQuotationFormat === 'pdf'}
+                    <Button type="button" variant="secondary" disabled={downloadingQuotationFormat === 'pdf'}
                       onClick={() => handleDownloadCustomerQuotation(quotation, 'pdf')}>
                       ดูตัวอย่าง PDF
-                    </button>
-                    <button type="button" className="secondary-button" disabled={downloadingQuotationFormat === 'xlsx'}
+                    </Button>
+                    <Button type="button" variant="secondary" disabled={downloadingQuotationFormat === 'xlsx'}
                       onClick={() => handleDownloadCustomerQuotation(quotation, 'xlsx')}>
                       ดูตัวอย่าง XLSX
-                    </button>
+                    </Button>
                     {editable ? (
                       <Fragment key={`quotation-actions-${quotation.id}`}>
-                        <button type="button" className="secondary-button" onClick={() => saveQuotation.mutate(quotation)} disabled={saveQuotation.isPending}>
+                        <Button type="button" variant="secondary" onClick={() => saveQuotation.mutate(quotation)} disabled={saveQuotation.isPending}>
                           บันทึก
-                        </button>
-                        <button type="button" className="primary-button" disabled={issueQuotation.isPending}
+                        </Button>
+                        <Button type="button" variant="primary" disabled={issueQuotation.isPending}
                           onClick={() => setConfirmAction({ type: 'issueQuotation', quotation })}>
                           ออกใบเสนอราคา
-                        </button>
-                        <button type="button" className="danger-button" disabled={cancelQuotation.isPending}
+                        </Button>
+                        <Button type="button" variant="danger" disabled={cancelQuotation.isPending}
                           onClick={() => cancelQuotation.mutate(quotation)}>
                           ยกเลิกร่าง
-                        </button>
+                        </Button>
                       </Fragment>
                     ) : null}
                     {/* Widened per design correction 3: reachable once REVISION_REQUESTED too,
                         not only ISSUED — same guard the backend's createRevision now enforces. */}
                     {canCreateCommercialOnlyRevision(user, summary, quotation) ? (
-                      <button type="button" className="secondary-button" disabled={createQuotationRevision.isPending}
+                      <Button type="button" variant="secondary" disabled={createQuotationRevision.isPending}
                         onClick={() => createQuotationRevision.mutate(quotation)}>
                         {quotation.docStatus === 'REVISION_REQUESTED' ? 'สร้างรอบแก้ไขราคา/เงื่อนไข' : 'สร้างรอบแก้ไขใหม่'}
-                      </button>
+                      </Button>
                     ) : null}
                     {quotation.docStatus === 'REVISION_REQUESTED' && canManageCustomerQuotation(user, summary) ? (
-                      <button type="button" className="secondary-button" onClick={() => setRevisionModalOpen(true)}>
+                      <Button type="button" variant="secondary" onClick={() => setRevisionModalOpen(true)}>
                         สร้างรอบแก้ไขสินค้า/จำนวน/โรงงาน
-                      </button>
+                      </Button>
                     ) : null}
                   </div>
 
@@ -1363,18 +1370,18 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         onChange={(e) => setOutcomeNote(e.target.value)}
                       />
                       <div className="flex flex-wrap gap-2">
-                        <button type="button" className="primary-button" disabled={recordQuotationOutcome.isPending}
+                        <Button type="button" variant="primary" disabled={recordQuotationOutcome.isPending}
                           onClick={() => recordQuotationOutcome.mutate({ quotation, outcome: 'ACCEPTED' })}>
                           ลูกค้ายอมรับ
-                        </button>
-                        <button type="button" className="danger-button" disabled={recordQuotationOutcome.isPending}
+                        </Button>
+                        <Button type="button" variant="danger" disabled={recordQuotationOutcome.isPending}
                           onClick={() => recordQuotationOutcome.mutate({ quotation, outcome: 'REJECTED' })}>
                           ลูกค้าปฏิเสธ
-                        </button>
-                        <button type="button" className="secondary-button" disabled={recordQuotationOutcome.isPending}
+                        </Button>
+                        <Button type="button" variant="secondary" disabled={recordQuotationOutcome.isPending}
                           onClick={() => recordQuotationOutcome.mutate({ quotation, outcome: 'REVISION_REQUESTED' })}>
                           ลูกค้าขอแก้ไข
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   ) : null}
@@ -1419,10 +1426,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 <p className="text-sm text-text-muted">
                   ลูกค้ายอมรับใบเสนอราคาแล้ว — ยืนยันคำสั่งซื้อเพื่อเริ่มขั้นตอนรับมัดจำและนำเข้าสินค้า
                 </p>
-                <button type="button" className="primary-button self-start" disabled={confirmOrder.isPending}
+                <Button type="button" variant="primary" className="self-start" disabled={confirmOrder.isPending}
                   onClick={() => confirmOrder.mutate()}>
                   ยืนยันคำสั่งซื้อ
-                </button>
+                </Button>
               </div>
             ) : null}
             {canCreateDepositNoticeFromQuotation(user, summary) ? (
@@ -1435,10 +1442,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <input type="number" min="0" max="1" step="0.05" className="w-24 rounded border border-border p-1 text-sm"
                     value={depositPercentInput} onChange={(e) => setDepositPercentInput(e.target.value)} />
                 </label>
-                <button type="button" className="primary-button self-start" disabled={createDepositNoticeFromQuotation.isPending}
+                <Button type="button" variant="primary" className="self-start" disabled={createDepositNoticeFromQuotation.isPending}
                   onClick={() => createDepositNoticeFromQuotation.mutate()}>
                   สร้างใบแจ้งยอดเงินรับมัดจำ
-                </button>
+                </Button>
               </div>
             ) : null}
             {!canConfirmOrder(user, summary) && !canCreateDepositNoticeFromQuotation(user, summary) ? (

@@ -1,4 +1,5 @@
 import { forwardRef, useImperativeHandle, useState } from 'react';
+import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
@@ -153,14 +154,14 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
       title="สถานะดีล (Pipeline)"
       data-testid="deal-stage-panel"
       actions={(
-        <button
+        <Button
           type="button"
-          className="secondary-button"
+          variant="secondary"
           style={{ fontSize: 12 }}
           onClick={() => setShowSteps((v) => !v)}
         >
           {showSteps ? 'ซ่อนขั้นตอนทั้งหมด' : 'ดูขั้นตอนทั้งหมด (14 ขั้น)'}
-        </button>
+        </Button>
       )}
     >
       <div className="flex flex-col gap-4 px-4 py-4 sm:px-5">
@@ -181,14 +182,14 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
               </div>
             </div>
             {canResume ? (
-              <button type="button" className="primary-button" disabled={actionLoading} onClick={() => setNoteAction('resume')}>
+              <Button type="button" variant="primary" disabled={actionLoading} onClick={() => setNoteAction('resume')}>
                 ดำเนินการต่อ
-              </button>
+              </Button>
             ) : null}
             {canDormant && lifecycle === 'ON_HOLD' ? (
-              <button type="button" className="secondary-button" disabled={actionLoading} onClick={() => setNoteAction('dormant')}>
+              <Button type="button" variant="secondary" disabled={actionLoading} onClick={() => setNoteAction('dormant')}>
                 พัก dormant
-              </button>
+              </Button>
             ) : null}
           </div>
         ) : lost ? (
@@ -202,9 +203,9 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
               </div>
             </div>
             {canMarkLost(user, summary) ? (
-              <button type="button" className="secondary-button" disabled={actionLoading} onClick={onReopen}>
+              <Button type="button" variant="secondary" disabled={actionLoading} onClick={onReopen}>
                 เปิดดีลอีกครั้ง
-              </button>
+              </Button>
             ) : null}
           </div>
         ) : (
@@ -338,8 +339,8 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
           onClose={() => { setNoteAction(null); setNote(''); }}
           footer={(
             <>
-              <button type="button" className="secondary-button" onClick={() => { setNoteAction(null); setNote(''); }}>ยกเลิก</button>
-              <button type="button" className="primary-button" disabled={actionLoading} onClick={submitNoteAction}>บันทึก</button>
+              <Button type="button" variant="secondary" onClick={() => { setNoteAction(null); setNote(''); }}>ยกเลิก</Button>
+              <Button type="button" variant="primary" disabled={actionLoading} onClick={submitNoteAction}>บันทึก</Button>
             </>
           )}
         >

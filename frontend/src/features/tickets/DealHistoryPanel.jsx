@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
@@ -299,13 +300,13 @@ export function DealHistoryPanel({
             placeholder="เพิ่มความคิดเห็น…"
             style={{ resize: 'vertical' }}
           />
-          <button
-            type="button" className="secondary-button self-end"
+          <Button
+            type="button" variant="secondary" className="self-end"
             onClick={onSubmitComment}
             disabled={commentSubmitting || !commentText.trim()}
           >
             ส่งความคิดเห็น
-          </button>
+          </Button>
         </div>
       ) : null}
 
@@ -343,14 +344,14 @@ export function DealHistoryPanel({
               placeholder="รายละเอียดการติดต่อ / ผลที่ได้"
             />
           </label>
-          <button
-            type="button" className="secondary-button self-end"
+          <Button
+            type="button" variant="secondary" className="self-end"
             disabled={addingActivity || !activityDraft.activityDate}
             onClick={submitActivity}
           >
             <Icon name="plus" size={14} />
             บันทึกกิจกรรม
-          </button>
+          </Button>
         </div>
       ) : null}
     </Panel>

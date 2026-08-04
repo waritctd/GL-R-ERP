@@ -1,3 +1,4 @@
+import { Button } from '../../components/common/Button.jsx';
 import { expandedRowRegionId } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -110,9 +111,9 @@ export function buildLeaveRequestColumns({ expandedId, onToggleExpand, renderAct
         const expanded = expandedId === request.id;
         const subject = request.employeeName || request.employeeCode || request.employeeId;
         return (
-          <button
+          <Button
             type="button"
-            className="icon-button"
+            variant="icon"
             aria-expanded={expanded}
             aria-controls={expandedRowRegionId(leaveRequestRowKey(request))}
             title={expanded ? 'ซ่อนรายละเอียด' : 'ดูรายละเอียด'}
@@ -120,7 +121,7 @@ export function buildLeaveRequestColumns({ expandedId, onToggleExpand, renderAct
             onClick={() => onToggleExpand(request.id)}
           >
             <Icon name={expanded ? 'chevronUp' : 'chevronDown'} size={14} />
-          </button>
+          </Button>
         );
       },
     },

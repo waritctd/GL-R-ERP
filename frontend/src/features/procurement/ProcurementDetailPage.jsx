@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -213,14 +214,14 @@ export function ProcurementDetailPage({ showToast }) {
                 onChange={(e) => setProformaNote(e.target.value)}
                 aria-label="เงื่อนไขการชำระเงิน"
               />
-              <button
+              <Button
                 type="button"
-                className="primary-button"
+                variant="primary"
                 disabled={!proformaRef.trim() || recordProforma.isPending}
                 onClick={() => recordProforma.mutate()}
               >
                 <Icon name="save" /> บันทึก
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -257,14 +258,14 @@ export function ProcurementDetailPage({ showToast }) {
                 onChange={(e) => setCustomsStatus(e.target.value)}
                 aria-label="สถานะศุลกากร"
               />
-              <button
+              <Button
                 type="button"
-                className="primary-button"
+                variant="primary"
                 disabled={recordShipping.isPending}
                 onClick={() => recordShipping.mutate()}
               >
                 <Icon name="save" /> บันทึก
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -281,22 +282,22 @@ export function ProcurementDetailPage({ showToast }) {
                 onChange={(e) => setActualLandedCost(e.target.value)}
                 aria-label="ต้นทุนนำเข้าจริง (บาท)"
               />
-              <button
+              <Button
                 type="button"
-                className="primary-button"
+                variant="primary"
                 disabled={actualLandedCost === '' || recordGoodsReceived.isPending}
                 onClick={() => recordGoodsReceived.mutate()}
               >
                 <Icon name="check" /> รับสินค้าแล้ว
-              </button>
+              </Button>
             </div>
           </div>
 
           <div className="rounded-lg border border-border bg-surface p-4">
             {!showCancelForm ? (
-              <button type="button" className="secondary-button" onClick={() => setShowCancelForm(true)}>
+              <Button type="button" variant="secondary" onClick={() => setShowCancelForm(true)}>
                 <Icon name="x" /> ยกเลิกใบสั่งซื้อ
-              </button>
+              </Button>
             ) : (
               <div className="flex flex-wrap gap-2">
                 <input
@@ -307,26 +308,26 @@ export function ProcurementDetailPage({ showToast }) {
                   onChange={(e) => setCancelReason(e.target.value)}
                   aria-label="เหตุผลการยกเลิก"
                 />
-                <button
+                <Button
                   type="button"
-                  className="danger-button"
+                  variant="danger"
                   disabled={!cancelReason.trim() || cancelPo.isPending}
                   onClick={() => cancelPo.mutate()}
                 >
                   ยืนยันยกเลิก
-                </button>
-                <button type="button" className="secondary-button" onClick={() => setShowCancelForm(false)}>
+                </Button>
+                <Button type="button" variant="secondary" onClick={() => setShowCancelForm(false)}>
                   ยกเลิก
-                </button>
+                </Button>
               </div>
             )}
           </div>
         </>
       ) : null}
 
-      <button type="button" className="secondary-button" onClick={() => navigate('/factory-purchase-orders')}>
+      <Button type="button" variant="secondary" onClick={() => navigate('/factory-purchase-orders')}>
         <Icon name="chevronLeft" /> กลับไปรายการใบสั่งซื้อโรงงาน
-      </button>
+      </Button>
     </div>
   );
 }

@@ -8,6 +8,7 @@
 // holds NO state of its own: `quotationGroups` is computed by the parent,
 // and the download click still calls back into the parent's
 // `downloadingQuotationKey`/`handleDownloadQuotation` state and mutation.
+import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -70,16 +71,16 @@ export function DealLegacyQuotations({ quotationGroups, downloadingQuotationKey,
                   )}
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                  <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                  <Button type="button" variant="secondary" style={{ fontSize: 12, padding: '4px 10px' }}
                     disabled={downloadingQuotationKey === `${q.id}-xlsx`}
                     onClick={() => handleDownloadQuotation(q.id, q.number, 'xlsx')}>
                     <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-xlsx` ? 'กำลังดาวน์โหลด…' : 'Excel'}
-                  </button>
-                  <button type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+                  </Button>
+                  <Button type="button" variant="secondary" style={{ fontSize: 12, padding: '4px 10px' }}
                     disabled={downloadingQuotationKey === `${q.id}-pdf`}
                     onClick={() => handleDownloadQuotation(q.id, q.number, 'pdf')}>
                     <Icon name="fileText" size={12} /> {downloadingQuotationKey === `${q.id}-pdf` ? 'กำลังดาวน์โหลด…' : 'PDF'}
-                  </button>
+                  </Button>
                 </div>
               </div>
             );
