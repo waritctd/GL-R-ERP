@@ -23,6 +23,14 @@ vi.mock('../../api/index.js', () => ({
   },
 }));
 
+// browser-image-compression genuinely returns a plain Blob with no `.name` -- this mock
+// reproduces that faithfully rather than a File, which is exactly the shape that exposed the
+// "blob" filename bug in #498/#504. A mock that quietly upgrades the library's real return type
+// would make this test pass whether or not the component re-wraps it.
+vi.mock('browser-image-compression', () => ({
+  default: vi.fn((file) => Promise.resolve(new Blob([file], { type: file.type }))),
+}));
+
 const user = { employeeId: 1, name: 'พนักงาน ทดสอบ', role: 'employee', manager: false };
 const currentEmployee = { id: 1, nameTh: 'พนักงาน ทดสอบ' };
 
@@ -148,6 +156,29 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(await screen.findByText(/ใช้สิทธิ์ได้เพียงครั้งเดียวตลอดระยะเวลาที่เป็นพนักงาน/)).not.toBeNull();
   });
 
+  // Real-backend gap found via click-through testing (not visible under mocks -- LeaveService's
+  // resolveTargetEmployee() gate has no mock-mode equivalent): a preview call can fail outright
+  // with a plain 403 instead of returning a LeaveRuleOutcome, e.g. HR/CEO requesting leave for
+  // themselves. That has no `code` for LeaveRulePanel's RULE_META, so before this fix it silently
+  // read as "not blocking" (an errored query's `data` is undefined) and left the type looking
+  // available with a permanently unresolved skeleton -- see PreviewErrorNotice's own comment.
+  it('step 1: a preview call that fails outright (not a LeaveRuleOutcome) disables the type with the real error message', async () => {
+    api.leave.preview.mockImplementation((payload) => {
+      if (payload?.leaveTypeCode === 'PERSONAL') {
+        return Promise.reject(new Error('ฝ่ายบุคคลและผู้บริหารไม่สามารถยื่นคำขอลาให้ตนเองได้ กรุณาให้ผู้อื่นดำเนินการแทน'));
+      }
+      return Promise.resolve(dateless_ok_preview);
+    });
+
+    renderComposer();
+
+    await waitFor(() => {
+      const button = screen.getByRole('button', { name: /ลากิจ/ });
+      expect(button.disabled).toBe(true);
+    });
+    expect(await screen.findByText(/ฝ่ายบุคคลและผู้บริหารไม่สามารถยื่นคำขอลาให้ตนเองได้/)).not.toBeNull();
+  });
+
   it('step 1 -> 2: blocks advancing until a type is chosen, and moves focus to the step-2 heading', async () => {
     renderComposer();
     const nextButton = await screen.findByRole('button', { name: 'ถัดไป' });
@@ -217,6 +248,60 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     });
   });
 
+  // Found in #498/#504 (same defect, different component): imageCompression() returns a Blob, and
+  // FormData built from a bare Blob has no filename to send, so the multipart part's filename
+  // defaults to the literal string "blob" per spec. Only JPG/PNG hit this -- PDFs skip
+  // compression entirely, which is why the bug reads as image-only.
+  it('re-wraps the compressed image so create() receives the original filename, not "blob"', async () => {
+    await goToStep2ForVacation();
+
+    const futureDate = '2099-12-31';
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
+
+    const original = new File(['fake-jpeg-bytes'], 'sick-note.jpg', { type: 'image/jpeg' });
+    fireEvent.change(document.getElementById('leave-attachment-file'), { target: { files: [original] } });
+
+    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
+    await screen.findByText(/ขั้นตอนที่ 3\/3/);
+    const submitButton = await screen.findByRole('button', { name: /ส่งคำขอ/ });
+    await waitFor(() => expect(submitButton.disabled).toBe(false));
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
+    const { attachmentFile } = api.leave.create.mock.calls[0][0];
+
+    // The regression this guards: without the File re-wrap, `attachmentFile.name` is undefined (a
+    // bare Blob has no `.name`), and FormData/fetch would send "blob" to the real backend.
+    expect(attachmentFile.name).toBe('sick-note.jpg');
+    expect(attachmentFile).toBeInstanceOf(File);
+    expect(attachmentFile.type).toBe('image/jpeg');
+  });
+
+  it('does not touch PDFs -- they skip compression and keep their name for a different reason', async () => {
+    const imageCompression = (await import('browser-image-compression')).default;
+    await goToStep2ForVacation();
+
+    const futureDate = '2099-12-31';
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
+
+    const pdf = new File(['fake-pdf-bytes'], 'sick-note.pdf', { type: 'application/pdf' });
+    fireEvent.change(document.getElementById('leave-attachment-file'), { target: { files: [pdf] } });
+
+    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
+    await screen.findByText(/ขั้นตอนที่ 3\/3/);
+    const submitButton = await screen.findByRole('button', { name: /ส่งคำขอ/ });
+    await waitFor(() => expect(submitButton.disabled).toBe(false));
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
+    const { attachmentFile } = api.leave.create.mock.calls[0][0];
+
+    expect(imageCompression).not.toHaveBeenCalled();
+    expect(attachmentFile.name).toBe('sick-note.pdf');
+  });
+
   it('toggling sub-day leave forces endDate to startDate and sends the chosen times', async () => {
     await goToStep2ForVacation();
 
@@ -277,6 +362,30 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
 
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toMatch(/ไม่มีพนักงานคนอื่นในแผนกทำงานในวันที่เลือก/);
+    expect(screen.getByRole('button', { name: /ส่งคำขอ/ }).disabled).toBe(true);
+  });
+
+  // The safety-relevant half of the same gap as the step-1 test above: before this fix,
+  // `step3Blocking` read null on an errored FULL preview (undefined `data`), so the submit button
+  // fell back to enabled with no explanation -- an errored authorization check must gate submit
+  // exactly like a real blocking verdict, not silently read as a clean pass.
+  it('step 3: a preview call that fails outright (not a LeaveRuleOutcome) renders role="alert" and disables submit', async () => {
+    api.leave.preview.mockImplementation((payload) => {
+      if (!payload?.startDate) return Promise.resolve(dateless_ok_preview);
+      if (payload.depth === 'FULL') {
+        return Promise.reject(new Error('ฝ่ายบุคคลและผู้บริหารไม่สามารถยื่นคำขอลาให้ตนเองได้ กรุณาให้ผู้อื่นดำเนินการแทน'));
+      }
+      return Promise.resolve(approvedPreview(payload));
+    });
+
+    await goToStep2ForVacation();
+    const futureDate = '2099-12-31';
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบ' } });
+    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/ฝ่ายบุคคลและผู้บริหารไม่สามารถยื่นคำขอลาให้ตนเองได้/);
     expect(screen.getByRole('button', { name: /ส่งคำขอ/ }).disabled).toBe(true);
   });
 

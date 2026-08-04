@@ -34,6 +34,7 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.leave.LeaveResponses.LeaveBalancesResponse;
+import th.co.glr.hr.leave.LeaveResponses.LeaveCalendarContextResponse;
 import th.co.glr.hr.leave.LeaveResponses.LeaveContactDefaultsResponse;
 import th.co.glr.hr.leave.LeaveResponses.LeaveDetailResponse;
 import th.co.glr.hr.leave.LeaveResponses.LeaveEmployeeOptionsResponse;
@@ -54,14 +55,17 @@ public class LeaveController {
     private final LeaveService leaveService;
     private final SessionContext sessions;
     private final LeavePolicyDocumentRepository leavePolicyDocuments;
+    private final LeaveCalendarContextService calendarContextService;
 
     public LeaveController(
             LeaveService leaveService,
             SessionContext sessions,
-            LeavePolicyDocumentRepository leavePolicyDocuments) {
+            LeavePolicyDocumentRepository leavePolicyDocuments,
+            LeaveCalendarContextService calendarContextService) {
         this.leaveService = leaveService;
         this.sessions = sessions;
         this.leavePolicyDocuments = leavePolicyDocuments;
+        this.calendarContextService = calendarContextService;
     }
 
     @GetMapping
@@ -212,6 +216,41 @@ public class LeaveController {
             HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new LeaveContactDefaultsResponse(leaveService.contactDefaults(user, employeeId));
+    }
+
+    /**
+     * The CALLING employee's own holiday + resolved work-schedule context for {@code [from, to]}
+     * -- so the leave composer can show why {@code LeaveDayMath}'s schedule/holiday-aware count
+     * differs from the plain calendar span. {@code sessions.requireUser} only, same access as
+     * {@link #leaveTypes}/{@link #policyDocument}: unlike {@code HolidayController}/
+     * {@code WorkScheduleController} (hr/ceo only, admin surfaces this deliberately does not
+     * widen -- see {@link LeaveCalendarContextService}'s javadoc), this is inherently self-scoped.
+     * There is no {@code employeeId} request parameter: the employee id always comes from the
+     * session, never from the caller, so there is no code path by which this can return anyone
+     * else's schedule -- including for HR/CEO callers, who get their own data here same as anyone
+     * else (an admin wanting someone ELSE's resolved schedule is what
+     * {@code WorkScheduleController} is for, and that stays hr/ceo-gated, untouched).
+     *
+     * <p>{@code from}/{@code to} validated the same way as {@code HolidayController}'s admin GET
+     * (both required, {@code to} not before {@code from}) -- see
+     * {@link LeaveCalendarContextService#get}.
+     */
+    @GetMapping("/calendar-context")
+    LeaveCalendarContextResponse calendarContext(
+            @RequestParam("from") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam("to") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        long employeeId = requireOwnEmployeeId(user);
+        return new LeaveCalendarContextResponse(calendarContextService.get(employeeId, from, to));
+    }
+
+    /** Same "account not linked to an employee record" message as {@code LeaveService#requireEmployeeId}. */
+    private static long requireOwnEmployeeId(UserPrincipal user) {
+        if (user.employeeId() == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล");
+        }
+        return user.employeeId();
     }
 
     @GetMapping("/balances")
