@@ -27,7 +27,17 @@ export function PageStack({ className, children, ...props }) {
 /**
  * Panel — reproduces `.panel`:
  *   background: var(--color-surface); border: 1px solid var(--color-border);
- *   border-radius: var(--radius-md); box-shadow: var(--shadow-sm); padding: 20px;
+ *   border-radius: var(--radius-md); padding: 20px;
+ * Item 3 (owner-approved polish): dropped the legacy rule's `box-shadow:
+ * var(--shadow-sm)` — at that token's near-invisible 1px/3%-opacity value, a
+ * bordered card gained nothing visible from also carrying a shadow, so cards
+ * are border-only now. Other hardcoded `shadow-sm` card surfaces across the
+ * app — including the legacy `.panel`/`.table-panel`/`.profile-strip`/
+ * `.stat-card` CSS rule itself (styles.css), which the ~20 call sites still
+ * on the bare class name (not this component) resolve to — were brought in
+ * line with this same call; genuinely floating chrome
+ * (Modal, OverflowMenu, Toast, the autocomplete panel in
+ * PricingRequestCreateModal.jsx) was deliberately left on shadow-md/lg.
  * Optional `title`/`actions` render a `.panel-header` row; `Panel.Header` is
  * also exported for callers that need custom header content.
  */
@@ -37,7 +47,7 @@ export function Panel({ title, actions, className, children, ...props }) {
   return (
     <section
       className={cn(
-        'bg-surface border border-border rounded-md shadow-sm p-5',
+        'bg-surface border border-border rounded-md p-5',
         className,
       )}
       {...props}

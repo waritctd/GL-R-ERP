@@ -47,12 +47,12 @@ export function StatePanel({
   const role = stateRole(state);
   const classes = compact
     ? cn(
-      'grid min-h-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center justify-stretch gap-3 rounded-md border px-[14px] py-3 text-left text-text-muted shadow-sm',
+      'grid min-h-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center justify-stretch gap-3 rounded-md border px-[14px] py-3 text-left text-text-muted',
       panelTone(state),
       className,
     )
     : cn(
-      'grid min-h-[220px] place-items-center content-center gap-[10px] rounded-md border p-6 text-center text-text-muted shadow-sm',
+      'grid min-h-[220px] place-items-center content-center gap-[10px] rounded-md border p-6 text-center text-text-muted',
       panelTone(state),
       className,
     );

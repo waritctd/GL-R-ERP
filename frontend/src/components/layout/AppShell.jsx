@@ -3,6 +3,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { SALES_ENABLED } from '../../app/features.js';
 import { hasPermission, isDivisionManager } from '../../app/permissions.js';
 import { PRODUCT_NAME } from '../../app/product.js';
+import { cn } from '../../utils/cn.js';
 import { roleLabel } from '../../utils/format.js';
 import { Button } from '../common/Button.jsx';
 import { ErrorBoundary } from '../common/ErrorBoundary.jsx';
@@ -12,16 +13,69 @@ import { NotificationBell } from '../common/NotificationBell.jsx';
 import { Sidebar } from './Sidebar.jsx';
 import { UserMenu } from './UserMenu.jsx';
 
+// Tailwind port of `.content-scroll` (styles.css): the gutters are CSS custom
+// properties (not plain utilities) because `.content-scroll`'s own padding
+// references them, TicketDetailPage.jsx overwrites `--deal-header-h` via
+// ResizeObserver, and DepositNoticePage.jsx measures scrollWidth against this
+// same padding — every one of those call sites keys off these exact
+// custom-property names, so the names themselves must survive the port
+// unchanged even though the declarations move from a CSS rule to inline
+// arbitrary-property utilities.
+const CONTENT_SCROLL_CLASS = cn(
+  // `content-scroll` carries no CSS of its own (the rule was deleted with the
+  // rest of the legacy shell) — kept only because e2e/shared-shell.spec.js's
+  // assertNoShellOverflow() selects it via `document.querySelector`.
+  'content-scroll',
+  'min-w-0 max-w-full flex-1 overflow-auto [scrollbar-gutter:stable]',
+  '[--deal-scroll-pad-y:28px] [--deal-scroll-pad-x:max(32px,env(safe-area-inset-right))] [--deal-scroll-pad-left:max(32px,env(safe-area-inset-left))]',
+  'pt-[var(--deal-scroll-pad-y)] pr-[var(--deal-scroll-pad-x)] pb-[42px] pl-[var(--deal-scroll-pad-left)]',
+  'scroll-pt-[calc(var(--deal-header-h,18rem)_+_var(--space-4))] scroll-pb-8',
+  'mobile:[--deal-scroll-pad-y:16px] mobile:[--deal-scroll-pad-x:max(16px,env(safe-area-inset-right))] mobile:[--deal-scroll-pad-left:max(16px,env(safe-area-inset-left))]',
+  'mobile:pb-[32px] mobile:scroll-pt-4 mobile:scroll-pb-[calc(112px_+_env(safe-area-inset-bottom))]',
+  // Item 5 (owner-approved polish): the content gutter widens from 32px to
+  // 40px at the 1366px desktop band — nothing between 721-1365px changes.
+  'min-[1366px]:[--deal-scroll-pad-x:max(40px,env(safe-area-inset-right))]',
+  'min-[1366px]:[--deal-scroll-pad-left:max(40px,env(safe-area-inset-left))]',
+);
+
 export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [activeTopbarPopover, setActiveTopbarPopover] = useState(null);
+  const [isContentScrolled, setIsContentScrolled] = useState(false);
   const drawerRef = useRef(null);
   const menuButtonRef = useRef(null);
   const mainRef = useRef(null);
+  const contentScrollRef = useRef(null);
   const location = useLocation();
   const navigate = useNavigate();
   const drawerId = 'mobile-navigation-drawer';
   const mainContentId = 'main-content';
+
+  // Item 2 (owner-approved polish): the topbar's bottom border is chrome that
+  // should only announce itself once there is content scrolled underneath it
+  // — a permanent 1px line reads as static decoration, an on-scroll one reads
+  // as "there's more above". Tracks `.content-scroll`'s own scrollTop rather
+  // than the window's, since that inner div is the app's real scroll
+  // container (see its own comment below).
+  const updateContentScrolled = useCallback(() => {
+    setIsContentScrolled((contentScrollRef.current?.scrollTop ?? 0) > 0);
+  }, []);
+
+  useEffect(() => {
+    const el = contentScrollRef.current;
+    if (!el) return undefined;
+    updateContentScrolled();
+    el.addEventListener('scroll', updateContentScrolled, { passive: true });
+    return () => el.removeEventListener('scroll', updateContentScrolled);
+  }, [updateContentScrolled]);
+
+  // A route change swaps `.content-scroll`'s children (this div itself never
+  // remounts), which does not reset scrollTop on its own — without this, a
+  // border "stuck on" from a long, scrolled page would wrongly persist onto
+  // the next, shorter page until the user next scrolled.
+  useEffect(() => {
+    updateContentScrolled();
+  }, [location.pathname, updateContentScrolled]);
 
   // WCAG 2.2 §2.4.1 Bypass Blocks: a bare `href="#main-content"` moves the
   // viewport but focus-follows-fragment behaviour is inconsistent across
@@ -213,7 +267,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   }, [closeDrawer, isDrawerOpen]);
 
   return (
-    <div className="app-shell">
+    <div className="flex h-dvh w-full max-w-full overflow-hidden">
       {/* WCAG 2.2 §2.4.1 Bypass Blocks: the first focusable element in the
           shell, ahead of the sidebar's ~10 nav items + group headers, so
           keyboard/screen-reader users don't re-traverse the nav on every
@@ -234,7 +288,12 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       />
       <button
         type="button"
-        className={`mobile-drawer-backdrop ${isDrawerOpen ? 'is-open' : ''}`}
+        className={cn(
+          'hidden nav-drawer:block nav-drawer:fixed nav-drawer:inset-0 nav-drawer:z-30 nav-drawer:w-full nav-drawer:min-h-dvh',
+          'nav-drawer:border-0 nav-drawer:bg-overlay-drawer nav-drawer:p-0 nav-drawer:opacity-0 nav-drawer:pointer-events-none',
+          'nav-drawer:transition-opacity nav-drawer:duration-[160ms] nav-drawer:ease-[ease] motion-reduce:transition-none',
+          isDrawerOpen && 'nav-drawer:opacity-100 nav-drawer:pointer-events-auto',
+        )}
         aria-label="ปิดเมนู"
         onClick={closeDrawer}
         tabIndex={-1}
@@ -242,16 +301,27 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       {/* tabIndex={-1}: focusable via the skip link's .focus() call, but not
           part of the normal Tab sequence. The global `:focus-visible`
           outline rule in styles.css excludes `[tabindex="-1"]`, and an
-          outset outline would clip against `.app-shell`'s `overflow:
-          hidden`, so an inset ring (reusing the same focus-ring token) is
-          used here to confirm the landing without changing layout. */}
+          outset outline would clip against this shell's `overflow-hidden`,
+          so an inset ring (reusing the same focus-ring token) is used here
+          to confirm the landing without changing layout. */}
       <main
         id={mainContentId}
         ref={mainRef}
         tabIndex={-1}
-        className="app-main outline-none focus-visible:shadow-[inset_0_0_0_3px_var(--color-indigo-ring)]"
+        className="flex min-w-0 flex-1 flex-col outline-none focus-visible:shadow-[inset_0_0_0_3px_var(--color-indigo-ring)]"
       >
-        <header className="topbar">
+        <header
+          className={cn(
+            // `topbar`/`topbar-title` below carry no CSS of their own — kept
+            // only because e2e/shared-shell.spec.js selects them directly.
+            'topbar',
+            'h-[var(--app-topbar-h)] max-w-full flex-none flex items-center justify-between gap-4',
+            'pr-[max(28px,env(safe-area-inset-right))] pl-[max(28px,env(safe-area-inset-left))]',
+            'mobile:gap-[10px] mobile:pr-[max(16px,env(safe-area-inset-right))] mobile:pl-[max(16px,env(safe-area-inset-left))]',
+            'bg-surface border-b transition-colors duration-[var(--motion-standard)]',
+            isContentScrolled ? 'border-border' : 'border-transparent',
+          )}
+        >
           <Button
             ref={menuButtonRef}
             variant="icon"
@@ -267,14 +337,14 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
           >
             <Icon name="menu" />
           </Button>
-          <div className="topbar-title" aria-label="พื้นที่ทำงานปัจจุบัน">
-            <span translate="no">{PRODUCT_NAME}</span>
-            <small>{roleLabel(user.role)}</small>
+          <div className="topbar-title grid min-w-0 flex-1 gap-0.5" aria-label="พื้นที่ทำงานปัจจุบัน">
+            <span className="overflow-hidden text-ellipsis whitespace-nowrap font-extrabold" translate="no">{PRODUCT_NAME}</span>
+            <small className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-text-muted">{roleLabel(user.role)}</small>
           </div>
-          <div className="topbar-user">
-            <div className="topbar-user-text">
-              <strong>{employee?.nameTh || user.name}</strong>
-              <span>{user.email}</span>
+          <div className="flex flex-none items-center gap-2.5 mobile:gap-1">
+            <div className="text-right mobile:hidden">
+              <strong className="text-text">{employee?.nameTh || user.name}</strong>
+              <span className="block text-xs font-medium text-text-muted">{user.email}</span>
             </div>
             <NotificationBell
               open={activeTopbarPopover === 'notifications'}
@@ -292,7 +362,9 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
             />
           </div>
         </header>
-        <div className="content-scroll"><ErrorBoundary key={location.pathname}><Suspense fallback={<RouteFallback />}><Outlet /></Suspense></ErrorBoundary></div>
+        <div ref={contentScrollRef} className={CONTENT_SCROLL_CLASS}>
+          <ErrorBoundary key={location.pathname}><Suspense fallback={<RouteFallback />}><Outlet /></Suspense></ErrorBoundary>
+        </div>
       </main>
     </div>
   );

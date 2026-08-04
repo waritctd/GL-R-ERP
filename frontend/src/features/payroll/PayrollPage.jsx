@@ -25,7 +25,7 @@ import { formatMoney, formatShortDate, formatThaiMonthYearFromMonthInputValue, p
 // element (semantic landmark) — Layout.jsx's Panel always renders a <section>
 // and has no `as` prop, so the exact utility string is duplicated here rather
 // than wrapping a <section> inside an <aside> or changing the shared primitive.
-const PANEL_CLASS = 'bg-surface border border-border rounded-md shadow-sm p-5';
+const PANEL_CLASS = 'bg-surface border border-border rounded-md p-5';
 
 // The payroll export files HR can generate for a processed period. `value` is the backend export
 // slug (/api/payroll/{id}/export/{value}); `filePrefix` names the downloaded blob; `extension`

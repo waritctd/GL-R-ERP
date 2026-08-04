@@ -17,8 +17,12 @@ describe('Panel', () => {
 
     expect(panel.tagName).toBe('SECTION');
     expect(panel.className).toContain('bg-surface');
+    expect(panel.className).toContain('border-border');
     expect(panel.className).toContain('rounded-md');
-    expect(panel.className).toContain('shadow-sm');
+    // Item 3 (owner-approved polish): cards are border-only now — a
+    // `shadow-sm` alongside the border was visually redundant at that
+    // token's 1px/3%-opacity value. See Layout.jsx's Panel doc comment.
+    expect(panel.className).not.toContain('shadow-sm');
   });
 
   it('renders a title and actions via Panel.Header when provided', () => {
