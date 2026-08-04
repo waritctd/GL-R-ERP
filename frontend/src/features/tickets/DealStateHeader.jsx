@@ -204,7 +204,7 @@ export function DealStateHeader({
   }
 
   return (
-    <section data-testid="deal-state-header" data-condensed="false" className="flex flex-col gap-4 bg-surface p-4 sm:p-5 mobile:gap-3 mobile:rounded-lg mobile:border mobile:border-border mobile:p-3 mobile:shadow-sm">
+    <section data-testid="deal-state-header" data-condensed="false" className="flex flex-col gap-4 bg-surface p-4 sm:p-5 mobile:gap-3 mobile:rounded-lg mobile:border mobile:border-border mobile:p-3">
       <div className="relative flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 mobile:pr-12">
           <div className="flex flex-wrap items-center gap-2">

@@ -297,7 +297,7 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
         <button
           type="button"
           onClick={() => navigate('/attendance')}
-          className="bg-surface border border-border rounded-md shadow-sm p-5 w-full text-left cursor-pointer flex items-center justify-between gap-4 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-2"
+          className="bg-surface border border-border rounded-md p-5 w-full text-left cursor-pointer flex items-center justify-between gap-4 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-2"
         >
           <span className="flex items-center gap-3 min-w-0">
             <span className={`stat-icon !mb-0 stat-${dashboardSummary?.attendance?.todayStatus === 'PRESENT' ? 'teal' : 'amber'}`}>

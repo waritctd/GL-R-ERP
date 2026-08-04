@@ -113,8 +113,9 @@ describe('design tokens — Phase 3.4 infrastructure', () => {
       // this app's actual light surfaces — workspace, surface-subtle,
       // #efefef) to #5c6b80, which clears 4.5+ on every light surface it's
       // used on. Still fails on the dark sidebar rail (~3.45:1) — text
-      // there uses --color-text-faint instead (see designTokens usage in
-      // Sidebar.jsx / styles.css `.brand small`).
+      // there uses --color-text-faint instead (Sidebar.jsx's inline
+      // `text-text-faint` utility on the PRODUCT_PORTAL_LABEL `<small>`,
+      // ported off styles.css's former `.brand small` rule).
       ['text-muted floor on surface-panel (white)', token('--color-text-muted'), token('--color-surface'), 4.5],
       ['text-muted floor on surface-muted', token('--color-text-muted'), token('--color-surface-muted'), 4.5],
       ['text-muted floor on surface-subtle', token('--color-text-muted'), token('--color-surface-subtle'), 4.5],

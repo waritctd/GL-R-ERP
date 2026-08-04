@@ -139,8 +139,7 @@ code {
   border-bottom: 1px solid var(--color-border);
 }
 
-.login-brand strong,
-.brand strong {
+.login-brand strong {
   display: block;
   font-size: var(--text-xl);
   line-height: 1;
@@ -151,42 +150,6 @@ code {
   font-size: var(--text-xs);
 }
 
-/* WCAG AA fix (fix/ui-contrast-tokens): `.brand` is the sidebar's dark-rail
-   brand mark ("HR Portal" under the GL&R logo) — it was grouped with
-   `.login-brand small` (a LIGHT surface) and inherited --color-text-muted,
-   which measures only 3.93:1 on --color-sidebar-bg (#0b1220), a straight
-   AA failure. Split out so `.brand small` matches the sidebar's existing,
-   already-verified-safe convention (`.nav-item small`, `.nav-group-header`
-   below both use --color-text-faint on this surface, 7.30:1) instead of
-   introducing a new sidebar-scoped token for a value the app already has
-   under another name. */
-.brand small {
-  color: var(--color-text-faint);
-  font-size: var(--text-xs);
-}
-
-.brand-mark {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 3px;
-  flex: 0 0 auto;
-}
-
-.brand-mark i {
-  border-radius: var(--radius-sm);
-  background: var(--color-accent);
-}
-
-.brand-mark i:nth-child(2) {
-  background: var(--color-primary-hover);
-}
-
-.brand-mark i:nth-child(3) {
-  background: var(--color-icon-muted);
-}
-
 .login-form {
   padding: 28px 34px 34px;
   display: flex;
@@ -194,8 +157,7 @@ code {
   gap: 18px;
 }
 
-.login-form h1,
-.page-heading h1 {
+.login-form h1 {
   margin: 0;
   font-size: var(--text-2xl);
   line-height: 1.2;
@@ -203,8 +165,7 @@ code {
   text-wrap: balance;
 }
 
-.login-form p,
-.page-heading p {
+.login-form p {
   margin: 4px 0 0;
   color: var(--color-text-muted);
   max-width: 72ch;
@@ -344,19 +305,7 @@ textarea:focus {
   font-size: var(--text-sm);
 }
 
-/* .nav-item small renders on the dark sidebar rail (Sidebar Navy #0b1220)
-   where Ink Faint clears ~7.3:1 contrast — verified, not a Muted Floor
-   violation. The rest of this group renders on white surfaces where Faint
-   only clears ~2.6:1, so it is split out below. */
-.nav-item small {
-  display: block;
-  color: var(--color-text-faint);
-  font-size: var(--text-xs);
-  font-weight: 500;
-}
-
 .employee-cell small,
-.topbar-user span,
 .request-feed small,
 .editable-list > div > span > small,
 .data-row small {
@@ -374,285 +323,6 @@ textarea:focus {
   color: var(--color-text-muted);
   font-size: var(--text-xs);
   font-weight: 500;
-}
-
-.app-shell {
-  width: 100%;
-  max-width: 100%;
-  height: 100dvh;
-  display: flex;
-  overflow: hidden;
-}
-
-.sidebar {
-  width: 260px;
-  flex: 0 0 260px;
-  display: flex;
-  flex-direction: column;
-  padding: 20px 14px 14px;
-  background: var(--color-sidebar-bg);
-  color: var(--color-sidebar-text);
-}
-
-.brand {
-  border: 0;
-  background: transparent;
-  color: var(--color-surface);
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  padding: 4px 8px 22px;
-  text-align: left;
-  text-decoration: none;
-}
-
-.nav-list {
-  display: grid;
-  gap: 4px;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding-right: 2px;
-}
-
-.nav-item {
-  width: 100%;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: 22px 1fr auto;
-  align-items: center;
-  gap: 11px;
-  min-height: 48px;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-sidebar-text);
-  padding: 8px 10px;
-  text-align: left;
-  text-decoration: none;
-}
-
-/* The Thai label leads; the English helper below it stays muted and smaller. */
-.nav-item > span {
-  min-width: 0;
-  font-weight: 600;
-}
-
-.nav-item.active {
-  background: rgba(20, 184, 166, 0.13);
-  color: var(--color-surface);
-}
-
-.nav-item b {
-  min-width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-pill);
-  /* WCAG AA fix (fix/ui-contrast-tokens): white text on --color-accent
-     (#14b8a6) measures 2.49:1 here (12px/700 — not "large text", needs
-     4.5:1). Found by an automated contrast scan, not in the original
-     manual audit. --color-accent-dark (#0f766e) clears 5.47:1 and is
-     already this app's "text-safe teal" — --color-accent itself is left
-     unchanged since its other consumers (progress fills, decorative
-     dots) are backgrounds/fills, not text-bearing. */
-  background: var(--color-accent-dark);
-  color: var(--color-surface);
-  font-size: var(--text-xs);
-}
-
-/* Focus rings everywhere else in the app use the indigo ring token, tuned
-   for white surfaces (rgba(99,102,241,0.13) barely registers on Sidebar Navy).
-   --color-teal-focus is this codebase's one existing "bright accent for a
-   dark surface" token (already used for toast-success icons on the dark
-   toast bg), so the sidebar rail reuses it here for the same reason. */
-.nav-item:focus-visible,
-.nav-group-header:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--color-sidebar-bg), 0 0 0 4px var(--color-teal-focus);
-}
-
-/* Section labels grouping the nav rail (งานขาย, บุคคล, …). Mirrors
-   .nav-item's rhythm (same radius, horizontal padding, 44px+ touch target)
-   but reads as a label, not a destination: Overline type (11px/800/uppercase),
-   Ink Faint by
-   default — verified safe on Sidebar Navy, see the .nav-item small comment
-   above — brightening to full white on hover/focus so the affordance reads
-   as interactive. */
-.nav-group,
-.nav-group-panel {
-  display: grid;
-  gap: 4px;
-}
-
-.nav-group-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  width: 100%;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-text-faint);
-  padding: 8px 10px;
-  text-align: left;
-  font-size: var(--text-2xs);
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0;
-}
-
-.nav-group-header:hover {
-  color: var(--color-surface);
-}
-
-.nav-group-header-helper {
-  margin-left: 4px;
-  font-weight: 600;
-  text-transform: none;
-  letter-spacing: normal;
-  opacity: 0.7;
-}
-
-.nav-group-chevron {
-  margin-left: auto;
-  flex: none;
-  transition: transform 0.15s ease;
-}
-
-.nav-group-chevron.is-collapsed {
-  transform: rotate(-90deg);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .nav-group-chevron {
-    transition: none;
-  }
-}
-
-.app-main {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-.topbar {
-  height: var(--app-topbar-h);
-  max-width: 100%;
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 max(28px, env(safe-area-inset-right)) 0 max(28px, env(safe-area-inset-left));
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface);
-}
-
-/* Takes the slack between the menu button and the actions, and truncates
-   rather than forcing the header wider than the viewport. */
-.topbar-title {
-  min-width: 0;
-  flex: 1 1 auto;
-  display: grid;
-  gap: 2px;
-}
-
-.topbar-title span {
-  overflow: hidden;
-  font-weight: 800;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.topbar-title small {
-  overflow: hidden;
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.topbar-user {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.topbar-user-text {
-  text-align: right;
-}
-
-.mobile-drawer-backdrop {
-  display: none;
-}
-
-.content-scroll {
-  --deal-scroll-pad-y: 28px;
-  --deal-scroll-pad-x: max(32px, env(safe-area-inset-right));
-  --deal-scroll-pad-left: max(32px, env(safe-area-inset-left));
-  min-width: 0;
-  max-width: 100%;
-  flex: 1;
-  overflow: auto;
-  padding: var(--deal-scroll-pad-y) var(--deal-scroll-pad-x) 42px var(--deal-scroll-pad-left);
-  scroll-padding-top: calc(var(--deal-header-h, 18rem) + var(--space-4));
-  scroll-padding-bottom: var(--space-8);
-  scrollbar-gutter: stable;
-}
-
-.page-stack {
-  display: grid;
-  gap: 18px;
-  width: min(100%, 1320px);
-  min-width: 0;
-  max-width: 1320px;
-}
-
-/* Grid items default to min-width:auto, so a child refuses to shrink below its
-   min-content width and silently stretches the page past the viewport — Thai
-   labels have no spaces to break on, so they hit this constantly. */
-.page-stack > * {
-  min-width: 0;
-}
-
-.page-heading {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 18px;
-}
-
-.page-heading-copy {
-  min-width: 0;
-}
-
-.page-heading-eyebrow {
-  display: block;
-  margin-bottom: 4px;
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  font-weight: 800;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-.page-heading-context {
-  margin-top: 8px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.page-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 10px;
 }
 
 .primary-button,
@@ -778,7 +448,6 @@ textarea:focus {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-sm);
 }
 
 .stat-card {
@@ -1089,12 +758,37 @@ textarea:focus {
 .table-head {
   background: var(--color-surface-muted);
   border-bottom: 1px solid var(--color-border);
-  padding: 12px 18px;
+  /* Item 4 fix (owner-reported bug): horizontal padding raised from 18px to
+     20px to match the Panel title convention (Layout.jsx's PanelHeader,
+     `.panel-header` — both 20px). Vertical stays compact (12px) — only the
+     inset needed to line up. */
+  padding: 12px 20px;
   color: var(--color-text-muted);
   font-size: var(--text-2xs);
   font-weight: 800;
   text-align: left;
   text-transform: uppercase;
+}
+
+/* Item 4 fix, continued: `.table-head` sits 1px inside an 8px-rounded card
+   border, so its square corners poked into the card's rounded ones. Scoped to
+   `:first-child` rather than a blanket rule — several call sites render
+   `.table-head` AFTER a `.panel-header`/title bar inside the same card
+   (ProfilePage.jsx's "คำขอแก้ไขของฉัน" section, TicketDashboard.jsx's
+   "คำขอราคาล่าสุด" section, TicketDetailPage.jsx's "รายการสินค้า" section) —
+   rounding it there would float a rounded corner mid-card, a regression in
+   the other direction. `:first-child` correctly excludes all three: each has
+   a header <div> as an actual preceding sibling, so `.table-head` is never
+   its parent's first child there. Verified against every current call site
+   (`grep -rn "table-head" frontend/src`): DataTable.jsx, OvertimePanel.jsx,
+   CommissionPage.jsx, ProfileRequestsPage.jsx, AccountFinancePage.jsx all
+   render it first and pick up the rounding; SpecialMoneyPanel.jsx's sits
+   inside a padded `<Panel>` after its title row, so `:first-child` correctly
+   leaves it unrounded there too (moot either way — 20px of Panel padding
+   already separates it from the card's actual corner). */
+.table-head:first-child {
+  border-top-left-radius: var(--radius-md);
+  border-top-right-radius: var(--radius-md);
 }
 
 .table-head th {
@@ -1915,8 +1609,7 @@ textarea:focus {
 }
 
 .employee-cell strong,
-.data-row strong,
-.topbar-user strong {
+.data-row strong {
   color: var(--color-text);
 }
 
@@ -2515,8 +2208,9 @@ a.status-badge {
 }
 
 /* Tablet band (721–1040px): the persistent sidebar is GONE — navigation is
-   the same off-canvas drawer used at ≤720px (see the ≤1040px drawer rules
-   further down, next to `.mobile-drawer-backdrop`). This block only holds
+   the same off-canvas drawer used at ≤720px (Sidebar.jsx's `nav-drawer:`
+   utilities and AppShell.jsx's backdrop button, both gated on the ≤1040px
+   `@custom-variant nav-drawer` in index.css). This block only holds
    what is left over for this band: content still renders in *table* mode
    here (DataTable's card/table switch is driven by useIsMobile.js, which
    stays at ≤720px — untouched by the nav change), but the ticket worklist
@@ -2808,81 +2502,16 @@ a.status-badge {
     padding: 5px 16px;
   }
 
-  .topbar {
-    gap: 10px;
-    padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
-  }
-
-  .topbar-user-text {
-    display: none;
-  }
-
-  /* The avatar stays visible on mobile: it is the trigger for the user menu
-     (ข้อมูลของฉัน / ออกจากระบบ), so hiding it would strip profile access from
-     the phone — the surface employees actually use. It is affordable because
-     the standalone 44px logout button moved into that menu, so the header is
-     net narrower than before. */
-
-  .topbar-user {
-    gap: 4px;
-  }
-
-  .content-scroll {
-    --deal-scroll-pad-y: 16px;
-    --deal-scroll-pad-x: max(16px, env(safe-area-inset-right));
-    --deal-scroll-pad-left: max(16px, env(safe-area-inset-left));
-    padding: var(--deal-scroll-pad-y) var(--deal-scroll-pad-x) 32px var(--deal-scroll-pad-left);
-    scroll-padding-top: var(--space-4);
-    scroll-padding-bottom: calc(112px + env(safe-area-inset-bottom));
-  }
-
   .ticket-list-page {
     max-width: 100%;
     gap: 10px;
     overflow-x: clip;
   }
 
-  .ticket-list-page .page-heading {
-    gap: 10px;
-  }
-
-  .ticket-list-page .page-heading h1 {
-    font-size: var(--text-2xl);
-    line-height: 1.15;
-  }
-
-  .ticket-list-page .page-heading p {
-    margin-top: 2px;
-    font-size: var(--text-sm);
-    line-height: 1.35;
-  }
-
-  .ticket-list-page .page-actions {
-    display: grid;
-    grid-template-columns: 44px minmax(0, 1fr);
-    width: 100%;
-    gap: 8px;
-  }
-
-  .ticket-list-page .page-actions > :only-child {
-    grid-column: 1;
-  }
-
-  .page-heading,
   .profile-strip,
   .pagination {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .page-heading {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 10px;
-  }
-
-  .page-actions {
-    width: 100%;
-    justify-content: flex-start;
   }
 
   .ticket-pipeline-summary {
@@ -3013,72 +2642,13 @@ a.status-badge {
   }
 }
 
-/* Navigation drawer (≤1040px): the persistent sidebar is replaced by an
-   off-canvas drawer across the whole mobile + tablet band, triggered by the
-   hamburger button in AppShell (gated there by the `nav-drawer` custom
-   variant — index.css — which compiles to this exact `(max-width: 1040px)`
-   query, so the two sides can never disagree). This used to be scoped to
-   ≤720px only, with a separate compact rail for 721–1040px — the rail is
-   gone (see the 721–1040px block above, now table-content-only) and the
-   drawer takes over its place unchanged, all the way up to 1040px. */
-@media (max-width: 1040px) {
-  .app-main {
-    width: 100%;
-    min-width: 0;
-  }
-
-  .mobile-drawer-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 30;
-    display: block;
-    width: 100%;
-    min-height: 100dvh;
-    padding: 0;
-    border: 0;
-    background: rgba(15, 23, 42, 0.48);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 160ms ease;
-  }
-
-  .mobile-drawer-backdrop.is-open {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  .sidebar {
-    position: fixed;
-    inset: 0 auto 0 0;
-    z-index: 40;
-    display: flex;
-    /* 280px at a 320px viewport, 300px everywhere above it (this still holds
-       at 1040px — min(300px, calc(100vw - 40px)) resolves to a flat 300px for
-       every viewport width in the 721–1040px band too). */
-    width: min(300px, calc(100vw - 40px));
-    max-width: 100%;
-    flex-basis: auto;
-    overflow-y: auto;
-    transform: translateX(-100%);
-    visibility: hidden;
-    box-shadow: var(--shadow-lg-heavy);
-    transition:
-      transform 180ms ease,
-      visibility 0s linear 180ms;
-  }
-
-  .sidebar.is-mobile-drawer-open {
-    transform: translateX(0);
-    visibility: visible;
-    transition: transform 180ms ease;
-  }
-}
-
-/* Phone-only content layout (≤720px, unchanged): the drawer above now spans
-   721–1040px too, but these table→card fallbacks are a *content* layout
-   decision (same family as useIsMobile.js / DataTable's card-vs-table
-   switch), not a navigation one, so they stay at the original ≤720px
-   breakpoint — tablet keeps rendering these as tables. */
+/* Phone-only content layout (≤720px, unchanged): the off-canvas nav drawer
+   (Sidebar.jsx's `nav-drawer:` utilities, gated on the same ≤1040px
+   `@custom-variant` in index.css) spans 721–1040px too, but these
+   table→card fallbacks are a *content* layout decision (same family as
+   useIsMobile.js / DataTable's card-vs-table switch), not a navigation one,
+   so they stay at the original ≤720px breakpoint — tablet keeps rendering
+   these as tables. */
 @media (max-width: 720px) {
   /* --- HR-core list card fallback (branch 2) ---
      Below 720px the six HR-core grid tables become stacked label→value cards
@@ -3248,16 +2818,5 @@ a.status-badge {
     letter-spacing: 0.02em;
     text-transform: uppercase;
     color: var(--color-text-secondary);
-  }
-}
-
-/* The drawer slide and its backdrop fade convey open/closed state, so they
-   resolve instantly rather than disappearing — the drawer still opens, it just
-   does not travel. */
-@media (prefers-reduced-motion: reduce) {
-  .sidebar,
-  .sidebar.is-mobile-drawer-open,
-  .mobile-drawer-backdrop {
-    transition: none;
   }
 }

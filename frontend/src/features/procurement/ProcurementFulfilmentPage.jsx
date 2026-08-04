@@ -72,7 +72,7 @@ export function ProcurementFulfilmentPage({ user, showToast }) {
   }, [tickets]);
 
   return (
-    <div className="page-stack">
+    <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
       <PageHeader
         title="จัดซื้อ & นำเข้า"
         subtitle="งานส่งมอบ/รับเข้าคลังของดีลที่รับผิดชอบ + ใบสั่งซื้อโรงงานทั้งหมด"
