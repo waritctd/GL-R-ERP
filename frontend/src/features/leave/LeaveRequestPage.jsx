@@ -156,12 +156,42 @@ function StepHeading({ innerRef, step, total, title }) {
   );
 }
 
+// A preview call can fail outright instead of returning a LeaveRuleOutcome -- most notably
+// LeaveService#resolveTargetEmployee's plain 403 ApiException when the acting employee is HR/CEO
+// requesting for themselves (SELF_SUBMIT_BLOCKED_ROLES). That has no `code` to look up in
+// LeaveRulePanel's RULE_META and no §5 section to link to, so it is never routed through
+// LeaveRulePanel -- doing so would render an "undefined" heading and a rules-tab link that goes
+// nowhere useful. `error.message` is already the backend's own Thai sentence (ApiExceptionHandler
+// serializes ApiException.getMessage() verbatim), so this only decides where/how to show it.
+function previewErrorMessage(error) {
+  return error?.message || 'ไม่สามารถตรวจสอบคำขอลานี้ได้ กรุณาลองใหม่อีกครั้ง';
+}
+
+function PreviewErrorNotice({ message, className }) {
+  if (!message) return null;
+  return (
+    <div className={`rounded-md border border-danger-border bg-surface p-3 ${className || ''}`}>
+      <div className="flex items-start gap-2.5">
+        <Icon name="triangleAlert" size={16} className="mt-0.5 shrink-0 text-danger" />
+        <div className="grid min-w-0 gap-1">
+          <strong className="text-sm font-bold text-danger">ไม่สามารถตรวจสอบคำขอนี้ได้</strong>
+          <p className="m-0 text-sm text-text">{message}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Step 1's type button -- a blocked type is disabled and shows the real backend verdict instead
 // of a guess; an unresolved (still-loading) type shows a skeleton rather than a false "available".
+// A type whose preview call errored outright (see PreviewErrorNotice above) stays disabled too,
+// with its own real reason -- never falls through to looking selectable just because `blocking`
+// happens to read null on an errored query.
 function TypeChoice({ type, outcomeQuery, selected, onSelect, showCondition }) {
   const loading = outcomeQuery.isPending;
   const blocking = outcomeQuery.data?.blocking ?? null;
-  const disabled = loading || Boolean(blocking);
+  const previewError = outcomeQuery.isError ? previewErrorMessage(outcomeQuery.error) : null;
+  const disabled = loading || Boolean(blocking) || Boolean(previewError);
   return (
     <div className="grid gap-2">
       <button
@@ -184,6 +214,7 @@ function TypeChoice({ type, outcomeQuery, selected, onSelect, showCondition }) {
         )}
       </button>
       {!loading && blocking ? <LeaveRulePanel outcome={blocking} tone="blocking" /> : null}
+      {!loading && previewError ? <PreviewErrorNotice message={previewError} /> : null}
     </div>
   );
 }
@@ -329,6 +360,9 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   const step2Blocking = step2Preview?.blocking ?? null;
   const step2BlockingTarget = step2Blocking ? step2FieldTarget(step2Blocking.code) : null;
   const step2Fetching = step2PreviewQuery.isFetching;
+  // Same "not every failure is a LeaveRuleOutcome" gap as step 1's TypeChoice -- see
+  // previewErrorMessage's own comment.
+  const step2Error = step2PreviewQuery.isError ? previewErrorMessage(step2PreviewQuery.error) : null;
 
   const previewCounters = step2Preview?.counters
     ?? (eligibilityByCode.get(leaveTypeCode)?.data?.counters)
@@ -397,6 +431,11 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   });
   const step3Preview = step3PreviewQuery.data ?? null;
   const step3Blocking = step3Preview?.blocking ?? null;
+  // Same "not every failure is a LeaveRuleOutcome" gap as step 1/2 -- see previewErrorMessage's
+  // own comment. This is the terminal, submit-gating checkpoint: an errored FULL preview must
+  // keep the submit button disabled exactly like a real `blocking` verdict would, not silently
+  // read as a clean pass because `step3Blocking` happens to be null on an errored query.
+  const step3Error = step3PreviewQuery.isError ? previewErrorMessage(step3PreviewQuery.error) : null;
 
   const balance = useMemo(() => {
     const type = leaveTypes.find((t) => t.code === leaveTypeCode);
@@ -574,6 +613,11 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                   ตรวจแบบเร็ว: ยังไม่ตรวจภาระงานของแผนก (coverageEvaluated) — จะตรวจครั้งสุดท้ายในขั้นตอน “ตรวจสอบก่อนส่ง”
                 </p>
               </div>
+              {step2Error ? (
+                <div className={formGridSpan2}>
+                  <PreviewErrorNotice message={step2Error} />
+                </div>
+              ) : null}
 
               <div className="grid grid-cols-2 gap-4 max-[720px]:grid-cols-1">
                 <FormField label="วันที่เริ่ม" htmlFor="leave-start-date" error={startDateError} required>
@@ -762,6 +806,12 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                 </div>
               ) : null}
 
+              {step3Error ? (
+                <div role="alert">
+                  <PreviewErrorNotice message={step3Error} />
+                </div>
+              ) : null}
+
               {!step3Blocking && step3Preview ? (
                 <div className="grid gap-3 rounded-md border border-border-subtle bg-surface-subtle p-3">
                   <div className="grid grid-cols-2 gap-3 text-sm max-[720px]:grid-cols-1">
@@ -848,7 +898,7 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
               <Button type="button" variant="secondary" onClick={() => setStep(2)}>ย้อนกลับ</Button>
               <Button
                 type="submit"
-                disabled={createMutation.isPending || Boolean(step3Blocking) || step3PreviewQuery.isFetching}
+                disabled={createMutation.isPending || Boolean(step3Blocking) || Boolean(step3Error) || step3PreviewQuery.isFetching}
               >
                 <Icon name="plus" />
                 ส่งคำขอ
