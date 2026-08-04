@@ -118,7 +118,7 @@ export function AccessDeniedPage() {
         <span>
           หากคิดว่าคุณควรมีสิทธิ์เข้าถึงหน้านี้ กรุณาติดต่อหัวหน้างานหรือผู้ดูแลระบบเพื่อขอสิทธิ์เพิ่มเติม
         </span>
-        <div className="flex flex-wrap items-center justify-end gap-2.5 mobile:w-full mobile:justify-start">
+        <div className="page-actions flex flex-wrap items-center justify-end gap-2.5 mobile:w-full mobile:justify-start">
           {hasInAppHistory ? (
             <Button type="button" variant="secondary" onClick={() => navigate(-1)}>
               ย้อนกลับ

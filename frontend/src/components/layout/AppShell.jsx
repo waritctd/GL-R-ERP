@@ -22,6 +22,10 @@ import { UserMenu } from './UserMenu.jsx';
 // unchanged even though the declarations move from a CSS rule to inline
 // arbitrary-property utilities.
 const CONTENT_SCROLL_CLASS = cn(
+  // `content-scroll` carries no CSS of its own (the rule was deleted with the
+  // rest of the legacy shell) — kept only because e2e/shared-shell.spec.js's
+  // assertNoShellOverflow() selects it via `document.querySelector`.
+  'content-scroll',
   'min-w-0 max-w-full flex-1 overflow-auto [scrollbar-gutter:stable]',
   '[--deal-scroll-pad-y:28px] [--deal-scroll-pad-x:max(32px,env(safe-area-inset-right))] [--deal-scroll-pad-left:max(32px,env(safe-area-inset-left))]',
   'pt-[var(--deal-scroll-pad-y)] pr-[var(--deal-scroll-pad-x)] pb-[42px] pl-[var(--deal-scroll-pad-left)]',
@@ -308,6 +312,9 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       >
         <header
           className={cn(
+            // `topbar`/`topbar-title` below carry no CSS of their own — kept
+            // only because e2e/shared-shell.spec.js selects them directly.
+            'topbar',
             'h-[var(--app-topbar-h)] max-w-full flex-none flex items-center justify-between gap-4',
             'pr-[max(28px,env(safe-area-inset-right))] pl-[max(28px,env(safe-area-inset-left))]',
             'mobile:gap-[10px] mobile:pr-[max(16px,env(safe-area-inset-right))] mobile:pl-[max(16px,env(safe-area-inset-left))]',
@@ -330,7 +337,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
           >
             <Icon name="menu" />
           </Button>
-          <div className="grid min-w-0 flex-1 gap-0.5" aria-label="พื้นที่ทำงานปัจจุบัน">
+          <div className="topbar-title grid min-w-0 flex-1 gap-0.5" aria-label="พื้นที่ทำงานปัจจุบัน">
             <span className="overflow-hidden text-ellipsis whitespace-nowrap font-extrabold" translate="no">{PRODUCT_NAME}</span>
             <small className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-text-muted">{roleLabel(user.role)}</small>
           </div>

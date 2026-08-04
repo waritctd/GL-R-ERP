@@ -59,7 +59,10 @@ export function PageHeader({
         {context ? <div className="mt-2 flex flex-wrap gap-2">{context}</div> : null}
       </div>
       {actions ? (
-        <div className={cn('flex flex-wrap items-center justify-end gap-2.5 mobile:w-full mobile:justify-start', actionsClassName)}>{actions}</div>
+        // `page-actions` carries no CSS of its own — kept only because
+        // e2e/hr.spec.js scopes a button query to it to disambiguate from an
+        // EmptyState action with the same accessible name.
+        <div className={cn('page-actions flex flex-wrap items-center justify-end gap-2.5 mobile:w-full mobile:justify-start', actionsClassName)}>{actions}</div>
       ) : null}
     </header>
   );

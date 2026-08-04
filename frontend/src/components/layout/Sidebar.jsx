@@ -111,12 +111,16 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items }) {
       id={id}
       ref={drawerRef}
       className={cn(
+        // `sidebar`/`is-mobile-drawer-open` carry no CSS of their own — kept
+        // only because e2e/shared-shell.spec.js selects the drawer via
+        // `.sidebar.is-mobile-drawer-open` and asserts its absence when closed.
+        'sidebar',
         'flex w-[260px] flex-none flex-col pt-5 px-[14px] pb-[14px] bg-sidebar-bg text-sidebar-text',
         'nav-drawer:fixed nav-drawer:inset-y-0 nav-drawer:left-0 nav-drawer:right-auto nav-drawer:z-40',
         'nav-drawer:w-[min(300px,calc(100vw-40px))] nav-drawer:max-w-full nav-drawer:basis-auto nav-drawer:overflow-y-auto',
         'nav-drawer:shadow-[var(--shadow-lg-heavy)] motion-reduce:transition-none',
         isDrawerOpen
-          ? 'nav-drawer:translate-x-0 nav-drawer:visible nav-drawer:transition-[transform_180ms_ease]'
+          ? 'is-mobile-drawer-open nav-drawer:translate-x-0 nav-drawer:visible nav-drawer:transition-[transform_180ms_ease]'
           : 'nav-drawer:-translate-x-full nav-drawer:invisible nav-drawer:transition-[transform_180ms_ease,visibility_0s_linear_180ms]',
       )}
       tabIndex={-1}
