@@ -5,6 +5,7 @@ import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
@@ -110,11 +111,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
   }));
 
   return (
-    <section className="table-panel">
-      <div className="panel-header">
-        <h2>คำขอราคา</h2>
-      </div>
-
+    <Panel flush title="คำขอราคา">
       {requests.length === 0 ? (
         <EmptyState
           icon="fileText"
@@ -372,6 +369,6 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
           </label>
         </Modal>
       ) : null}
-    </section>
+    </Panel>
   );
 });

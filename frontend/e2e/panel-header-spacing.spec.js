@@ -18,9 +18,17 @@ import { loginAs, spaGoto } from './helpers/auth.js';
 //
 // Both mechanisms are covered on purpose, because only testing one leaves the
 // other unguarded:
-//   /ceo-settings          → migrated, sized by <Panel> (Tailwind utilities)
-//   /pricing-requests/:id  → still legacy `.panel-header` markup, sized by the
-//                            styles.css rule that ~25 call sites still resolve to
+//   /ceo-settings  → migrated, sized by <Panel> (Tailwind utilities)
+//   /commissions   → still legacy `.panel-header` markup, sized by the
+//                    styles.css rule the remaining call sites resolve to
+//
+// The legacy half is deliberately temporary and has already moved once: it
+// pointed at /pricing-requests/:id until that page was migrated too. Any page
+// named here is a page someone is queued up to migrate, so expect to re-point
+// it — and when the LAST `.panel-header` call site goes (CommissionPage,
+// TicketDetailPage, DepositNoticePage, TicketDashboard are what remain), the
+// styles.css rule gets deleted and this half of the spec should be deleted
+// with it rather than re-pointed at nothing.
 
 async function headingMetrics(page) {
   return page.evaluate(() => {
@@ -54,10 +62,12 @@ function assertTitlesOnScale({ expected, rows }, label) {
   }
 }
 
-async function openFirstPricingRequest(page) {
-  await loginAs(page, 'import');
-  await spaGoto(page, '/pricing-requests');
-  await page.getByRole('link', { name: /PCR-/ }).first().click();
+async function openLegacyPanelPage(page) {
+  // /commissions rather than a deal page: the Deal* panels were migrated onto
+  // <Panel> already, so ticket detail no longer renders `.panel-header` on its
+  // default tab. CommissionPage still does, at the top level.
+  await loginAs(page, 'sales');
+  await spaGoto(page, '/commissions');
   await expect(page.locator('.panel-header h2').first()).toBeVisible();
 }
 
@@ -73,30 +83,58 @@ test.describe('panel headers do not strand their title', () => {
 
   test('legacy .panel-header markup keeps titles on the same type scale', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await openFirstPricingRequest(page);
+    await openLegacyPanelPage(page);
 
     // This is the guard on the styles.css rule itself. If `.panel h2,
     // .panel-header h2` is ever re-scoped back to `.panel` alone, the headings
     // here revert to the 24px UA default and this fails — which the
     // /ceo-settings test cannot detect, because <Panel> sets the size with a
     // Tailwind class regardless of what styles.css says.
-    assertTitlesOnScale(await headingMetrics(page), '/pricing-requests/:id');
+    assertTitlesOnScale(await headingMetrics(page), '/commissions');
   });
 
-  test('a legacy table-panel header does not double-space against its body', async ({ page }) => {
+  test('the .table-panel > .panel-header override still zeroes the bottom margin', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await openFirstPricingRequest(page);
+    await openLegacyPanelPage(page);
 
-    // `.panel-header`'s 16px `margin-bottom` suits a `.panel`, whose content
-    // follows inside the card's own padding. A `.table-panel` body brings its
-    // own inset, so the margin stacked on top of it — and on headers that also
-    // draw a `border-bottom`, it pushed the rule away from its title.
-    const margin = await page.evaluate(() => {
-      const header = document.querySelector('.table-panel > .panel-header');
-      return header ? parseFloat(getComputedStyle(header).marginBottom) : null;
+    // Probed against a constructed element rather than found on the page.
+    //
+    // What is under test here is a CSS RULE, not any particular markup:
+    // `.panel-header` carries a 16px `margin-bottom` that suits a `.panel`
+    // (whose content follows inside the card's own padding), and
+    // `.table-panel > .panel-header` overrides it to 0 because a table-panel
+    // body brings its own inset — without the override the margin stacked on
+    // top of it and, on headers that also draw a `border-bottom`, pushed the
+    // rule away from the title it belongs to.
+    //
+    // Binding that to a page meant the test evaporated as pages migrated: it
+    // has already had to move once, and the pages still rendering this exact
+    // combination render it only in states the mock seed does not reach. The
+    // rule is live for every remaining call site regardless, so it is measured
+    // directly and the assertion stops depending on migration progress.
+    const margins = await page.evaluate(() => {
+      const panel = document.createElement('section');
+      panel.className = 'table-panel';
+      const header = document.createElement('div');
+      header.className = 'panel-header';
+      panel.appendChild(header);
+
+      const plain = document.createElement('div');
+      plain.className = 'panel-header';
+
+      document.body.append(panel, plain);
+      const result = {
+        inTablePanel: parseFloat(getComputedStyle(header).marginBottom),
+        standalone: parseFloat(getComputedStyle(plain).marginBottom),
+      };
+      panel.remove();
+      plain.remove();
+      return result;
     });
 
-    expect(margin, 'no legacy .table-panel > .panel-header found to check').not.toBeNull();
-    expect(margin, 'table-panel header re-introduced its bottom margin').toBe(0);
+    expect(margins.inTablePanel, 'table-panel header re-introduced its bottom margin').toBe(0);
+    // The control: a `.panel-header` OUTSIDE a table-panel must keep its 16px.
+    // Without this, deleting the base rule entirely would also pass.
+    expect(margins.standalone, 'the base .panel-header margin was lost').toBe(16);
   });
 });

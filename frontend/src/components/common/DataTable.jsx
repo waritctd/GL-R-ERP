@@ -12,6 +12,7 @@ import { Button } from './Button.jsx';
 import { EmptyState } from './EmptyState.jsx';
 import { Icon } from './Icon.jsx';
 import { Skeleton } from './Skeleton.jsx';
+import { Panel } from './Layout.jsx';
 
 /**
  * Formalized `SortHeader` (lifted from TicketListPage) — a clickable
@@ -567,7 +568,7 @@ export function DataTable({
 
   function renderMobileList() {
     return (
-      <section className="table-panel" aria-busy={loading ? 'true' : undefined}>
+      <Panel flush aria-busy={loading ? 'true' : undefined}>
         {loading ? (
           <ul className="record-card-list" aria-label="กำลังโหลดข้อมูล">
             {Array.from({ length: skeletonRowCount }, (_, index) => (
@@ -617,13 +618,13 @@ export function DataTable({
           </ul>
         )}
         {showPagination ? renderPagination() : null}
-      </section>
+      </Panel>
     );
   }
 
   function renderTable() {
     return (
-      <section className="table-panel" aria-busy={loading ? 'true' : undefined}>
+      <Panel flush aria-busy={loading ? 'true' : undefined}>
         {(loading || sortedRows.length > 0) ? (
           <table className="data-table-table">
             {caption ? <caption className="sr-only">{caption}</caption> : null}
@@ -757,7 +758,7 @@ export function DataTable({
           )
         )}
         {showPagination ? renderPagination() : null}
-      </section>
+      </Panel>
     );
   }
 

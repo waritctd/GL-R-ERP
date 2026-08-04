@@ -8,6 +8,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
@@ -618,21 +619,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
         )}
       />
 
-      <section className="table-panel">
-        <div className="panel-header">
-          <h2>ภาพรวม</h2>
-          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-        </div>
+      <Panel flush title="ภาพรวม" actions={<StatusBadge tone={status.tone}>{status.label}</StatusBadge>}>
         <div className="grid gap-3 p-4 md:grid-cols-2">
           <div className="text-sm"><strong>ดีล</strong> <Link to={`/tickets/${summary.ticketId}`} className="text-info underline">{summary.ticketCode}</Link></div>
           <div className="text-sm"><strong>ผู้รับ</strong> {pricingRequestRecipientLabel(summary.recipientType)}{summary.recipientLabel ? ` · ${summary.recipientLabel}` : ''}</div>
           <div className="text-sm"><strong>ต้องการภายใน</strong> {formatThaiDate(summary.requiredDate)}</div>
           <div className="text-sm"><strong>ฝ่ายนำเข้า</strong> ผู้รับเรื่องและประสานราคาโรงงาน</div>
         </div>
-      </section>
+      </Panel>
 
-      <section className="table-panel">
-        <div className="panel-header"><h2>รายการสินค้าและราคาตั้งต้น</h2></div>
+      <Panel flush title="รายการสินค้าและราคาตั้งต้น">
         <div className="flex flex-col gap-2 p-4">
           {(request.items ?? []).map((item) => (
             <div key={item.id} className="rounded-md border border-border bg-surface p-3">
@@ -649,26 +645,26 @@ export function PricingRequestDetailPage({ user, showToast }) {
             </div>
           ))}
         </div>
-      </section>
+      </Panel>
 
-      <section className="table-panel">
-        <div className="panel-header">
-          <h2>ไฟล์แนบประกอบคำขอราคา</h2>
-          {canEditPricingRequestAttachments ? (
-            // Left as a <label> wrapping the hidden file input, not <Button>: a
-            // <button> cannot open the native file picker the way a <label>
-            // wrapping its <input type="file"> does.
-            <label className="secondary-button cursor-pointer">
-              <input type="file" className="hidden" onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) uploadPricingRequestAttachment.mutate(file);
-                event.target.value = '';
-              }} />
-              <Icon name="upload" size={13} />
-              แนบไฟล์
-            </label>
-          ) : null}
-        </div>
+      <Panel
+        flush
+        title="ไฟล์แนบประกอบคำขอราคา"
+        actions={canEditPricingRequestAttachments ? (
+          // Left as a <label> wrapping the hidden file input, not <Button>: a
+          // <button> cannot open the native file picker the way a <label>
+          // wrapping its <input type="file"> does.
+          <label className="secondary-button cursor-pointer">
+            <input type="file" className="hidden" onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) uploadPricingRequestAttachment.mutate(file);
+              event.target.value = '';
+            }} />
+            <Icon name="upload" size={13} />
+            แนบไฟล์
+          </label>
+        ) : null}
+      >
         <div className="flex flex-col gap-1 p-4 text-xs text-text-muted">
           {pricingRequestAttachments.map((attachment) => (
             <div key={attachment.id} className="flex flex-wrap items-center gap-2">
@@ -702,11 +698,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
           ))}
           {pricingRequestAttachments.length === 0 ? <span>ยังไม่มีไฟล์แนบ</span> : null}
         </div>
-      </section>
+      </Panel>
 
       {canRequestInformation(user, summary) ? (
-        <section className="table-panel">
-          <div className="panel-header"><h2>ขอข้อมูลจาก Sales</h2></div>
+        <Panel flush title="ขอข้อมูลจาก Sales">
           <div className="flex flex-wrap gap-2 p-4">
             {/* aria-label rather than a visible one: the section heading above
                 already names this field on screen, so a label would just repeat
@@ -717,42 +712,40 @@ export function PricingRequestDetailPage({ user, showToast }) {
               ส่งคำขอ
             </Button>
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       {canRespondInformation(user, summary) ? (
-        <section className="table-panel">
-          <div className="panel-header"><h2>ตอบข้อมูลเพิ่มเติม</h2></div>
+        <Panel flush title="ตอบข้อมูลเพิ่มเติม">
           <div className="flex flex-wrap gap-2 p-4">
             <input className="form-input min-w-64" aria-label="ข้อมูลเพิ่มเติม" value={salesResponse} onChange={(e) => setSalesResponse(e.target.value)} placeholder="ข้อมูลเพิ่มเติม" />
             <Button type="button" variant="secondary" disabled={!salesResponse || respondInfo.isPending} onClick={() => respondInfo.mutate()}>
               ส่งข้อมูล
             </Button>
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       {canCreateCustomerRevision ? (
-        <section className="table-panel">
-          <div className="panel-header"><h2>รอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า</h2></div>
+        <Panel flush title="รอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า">
           <div className="flex flex-wrap gap-2 p-4">
             <Button type="button" variant="secondary" onClick={() => setRevisionModalOpen(true)}>
               สร้างรอบแก้ไข
             </Button>
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       {canSeeRaw(user) ? (
-        <section className="table-panel">
-          <div className="panel-header">
-            <h2>ราคาโรงงาน</h2>
-            {isImport(user) ? (
-              <Button type="button" variant="primary" disabled={generateDrafts.isPending} onClick={() => generateDrafts.mutate()} data-testid="pcr-generate-drafts">
-                สร้างร่างอีเมล
-              </Button>
-            ) : null}
-          </div>
+        <Panel
+          flush
+          title="ราคาโรงงาน"
+          actions={isImport(user) ? (
+            <Button type="button" variant="primary" disabled={generateDrafts.isPending} onClick={() => generateDrafts.mutate()} data-testid="pcr-generate-drafts">
+              สร้างร่างอีเมล
+            </Button>
+          ) : null}
+        >
           <div className="flex flex-col gap-3 p-4">
             {factoryQuotes.map((quote) => {
               const quoteStatus = factoryQuoteStatusLabel(quote.status);
@@ -975,15 +968,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
             })}
             {factoryQuotes.length === 0 ? <p className="text-sm text-text-muted">ยังไม่มีราคาโรงงาน</p> : null}
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       {canSeeRaw(user) ? (
-        <section className="table-panel">
-          <div className="panel-header">
-            <h2>ต้นทุนนำเข้า</h2>
-            {isImport(user) ? <Button type="button" variant="primary" onClick={() => createCosting.mutate()} data-testid="pcr-costing-create">สร้างร่างต้นทุน</Button> : null}
-          </div>
+        <Panel
+          flush
+          title="ต้นทุนนำเข้า"
+          actions={isImport(user) ? <Button type="button" variant="primary" onClick={() => createCosting.mutate()} data-testid="pcr-costing-create">สร้างร่างต้นทุน</Button> : null}
+        >
           <div className="flex flex-col gap-3 p-4">
             {isImport(user) ? (
               <FormField label="หมายเหตุต้นทุน" htmlFor="pcr-costing-note">
@@ -1023,14 +1016,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
             ))}
             {costings.length === 0 ? <p className="text-sm text-text-muted">ยังไม่มีต้นทุนนำเข้า</p> : null}
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       {canSeeRawPricingDecision(user) ? (
-        <section className="table-panel">
-          <div className="panel-header">
-            <h2>การพิจารณาราคาขายของ CEO</h2>
-          </div>
+        <Panel flush title="การพิจารณาราคาขายของ CEO">
           <div className="flex flex-col gap-3 p-4">
             {!currentDecision && canStartCeoReview(user, summary) ? (
               <div className="flex flex-wrap items-center gap-2">
@@ -1169,12 +1159,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
               </div>
             ) : null}
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       {!canSeeRawPricingDecision(user) && canSeePricingDecisionSalesView(user, summary) && decisionSalesView ? (
-        <section className="table-panel">
-          <div className="panel-header"><h2>ราคาขายที่อนุมัติ</h2></div>
+        <Panel flush title="ราคาขายที่อนุมัติ">
           <div className="flex flex-col gap-2 p-4">
             {decisionSalesView.items.map((item) => (
               <div key={item.pricingRequestItemId} className="rounded-md border border-border bg-surface p-3 text-sm">
@@ -1187,24 +1176,24 @@ export function PricingRequestDetailPage({ user, showToast }) {
               </div>
             ))}
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       {canViewCustomerQuotation(user, summary) ? (
-        <section className="table-panel">
-          <div className="panel-header">
-            <h2>ใบเสนอราคาลูกค้า</h2>
-            {currentCustomerQuotation ? (
-              (() => {
-                const status = quotationStatusLabel(currentCustomerQuotation.docStatus);
-                return (
-                  <StatusBadge tone={status.tone}>
-                    {status.label} · ครั้งที่ {currentCustomerQuotation.quotationRevisionNo}
-                  </StatusBadge>
-                );
-              })()
-            ) : null}
-          </div>
+        <Panel
+          flush
+          title="ใบเสนอราคาลูกค้า"
+          actions={currentCustomerQuotation ? (
+            (() => {
+              const status = quotationStatusLabel(currentCustomerQuotation.docStatus);
+              return (
+                <StatusBadge tone={status.tone}>
+                  {status.label} · ครั้งที่ {currentCustomerQuotation.quotationRevisionNo}
+                </StatusBadge>
+              );
+            })()
+          ) : null}
+        >
           <div className="flex flex-col gap-3 p-4">
             {!currentCustomerQuotation && canCreateCustomerQuotation(user, summary) ? (
               <Button type="button" variant="primary" className="self-start" onClick={() => createQuotation.mutate()} disabled={createQuotation.isPending}>
@@ -1410,7 +1399,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
               );
             })() : null}
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       {/* Step 6: Deposit, Payment, and Order Confirmation — only once the customer has accepted
@@ -1418,8 +1407,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           dual-track payment pipeline (TicketService.confirmCustomer/DepositNoticeService) rather
           than inventing a new one — see OrderConfirmationService's own class Javadoc. */}
       {summary.status === 'QUOTATION_ACCEPTED' ? (
-        <section className="table-panel">
-          <div className="panel-header"><h2>ยืนยันคำสั่งซื้อและออกใบแจ้งยอดเงินรับมัดจำ</h2></div>
+        <Panel flush title="ยืนยันคำสั่งซื้อและออกใบแจ้งยอดเงินรับมัดจำ">
           <div className="flex flex-col gap-3 p-4">
             {canConfirmOrder(user, summary) ? (
               <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
@@ -1456,7 +1444,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
               </p>
             ) : null}
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       <ConfirmDialog
