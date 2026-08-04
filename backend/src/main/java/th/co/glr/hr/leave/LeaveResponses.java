@@ -23,4 +23,20 @@ public final class LeaveResponses {
 
     public record LeaveContactDefaultsResponse(LeaveContactDefaultsDto contactDefaults) {
     }
+
+    /** POST /api/leave/preview (Phase A0b dry-run) -- see {@link LeaveService#preview}. */
+    public record LeavePreviewResponse(LeavePreviewDto preview) {
+    }
+
+    /** GET /api/leave/review-summary (Phase A0b) -- see {@link LeaveService#reviewSummary}. */
+    public record LeaveReviewSummaryResponse(LeaveReviewSummaryDto reviewSummary) {
+    }
+
+    /**
+     * GET /api/leave/calendar-context -- see {@link LeaveCalendarContextService}. A new record
+     * (not reusing {@code HolidaysResponse}/{@code WorkSchedulesResponse} from
+     * attendance/schedule/) because this wraps one combined DTO, not a bare list.
+     */
+    public record LeaveCalendarContextResponse(LeaveCalendarContextDto calendarContext) {
+    }
 }

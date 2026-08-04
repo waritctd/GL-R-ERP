@@ -81,6 +81,9 @@ export function useHrData({ user, showToast }) {
     declaredTotal: declaredAllowanceTotal(currentTaxAllowanceDeclaration),
     evidenceCount: (taxAllowanceEvidenceQuery.data ?? []).filter((item) => !item.deletedAt).length,
     expiresOn: currentTaxAllowanceDeclaration?.expiresOn ?? null,
+    // The row itself, so a landing page can sort a ล.ย.01 entry into its "คำขอของฉัน" feed by
+    // `submittedAt` alongside leave/OT/profile requests. Null when nothing has been filed.
+    declaration: currentTaxAllowanceDeclaration,
   }), [currentTaxAllowanceDeclaration, taxAllowanceEvidenceQuery.data]);
 
   // --- Mutations (exposed as same-signature async wrappers) ---

@@ -59,7 +59,7 @@ class KBankPctExporterGoldenTest {
             id, "E" + id, null, firstNameTh, null, firstNameEn,
             null, null, null, bankAccount,
             null, null, null,
-            net, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+            net, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null, BigDecimal.ZERO, null);
     }
 
     private static LocalDate yymmdd(String s) {

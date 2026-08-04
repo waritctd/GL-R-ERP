@@ -250,19 +250,21 @@ db.taxAllowanceAttachments = db.taxAllowanceAttachments?.length
 db.deductionObligations = db.deductionObligations?.length
   ? db.deductionObligations : buildDemoDeductionObligations(db.employees);
 db.deductionObligationRemittances = db.deductionObligationRemittances || [];
-// §5 leave-rules-as-data (V116): paidDaysCap/advanceNoticeDays/minServiceMonths/
-// maxConsecutiveDays/oncePerEmployment mirror the new hr.leave_type columns for SHAPE parity only
-// (contract.test.js checks method surface + arity, not field-level DTO shape, but a leaveTypes()
-// response missing these fields would still be a lie about what the real endpoint returns). Per
-// CLAUDE.md ("mock authz/behaviour is NOT authoritative" -- and see the file-level note above on
-// mirroring a backend computation being the dangerous direction): the mock's create() flow below
-// does NOT enforce minServiceMonths, maxConsecutiveDays, or oncePerEmployment, and does not
-// replicate the paid_days_cap split -- those are real per-request eligibility/business-rule
-// decisions the mock has never modelled fully (it already predates the paid/unpaid quota-split
-// redesign; it still auto-rejects on insufficient quota outright rather than approving-with-split,
-// a PRE-EXISTING gap this migration does not attempt to fix). advanceNoticeDays IS read below
-// (mechanical 1:1 mirror of the column), since leaving the old hardcoded 7-day check in place would
-// have positively contradicted the real per-type values this migration introduces.
+// §5 leave-rules-as-data (V116, extended V119/V120): paidDaysCap/advanceNoticeDays/
+// minServiceMonths/maxConsecutiveDays/oncePerEmployment/dayCountBasis/proratedFirstYear/
+// firstYearMaxDays mirror the hr.leave_type columns for SHAPE parity only (contract.test.js checks
+// method surface + arity, not field-level DTO shape, but a leaveTypes() response missing these
+// fields would still be a lie about what the real endpoint returns). Per CLAUDE.md ("mock
+// authz/behaviour is NOT authoritative" -- and see the file-level note above on mirroring a backend
+// computation being the dangerous direction): the mock's create() flow below does NOT enforce
+// minServiceMonths, maxConsecutiveDays, oncePerEmployment, proratedFirstYear, or firstYearMaxDays,
+// and does not replicate the paid_days_cap split -- those are real per-request eligibility/
+// business-rule decisions the mock has never modelled fully (it already predates the paid/unpaid
+// quota-split redesign; it still auto-rejects on insufficient quota outright rather than
+// approving-with-split, a PRE-EXISTING gap this migration does not attempt to fix).
+// advanceNoticeDays IS read below (mechanical 1:1 mirror of the column), since leaving the old
+// hardcoded 7-day check in place would have positively contradicted the real per-type values this
+// migration introduces.
 //
 // dayCountBasis (V119, 2026-08-02): §5.4 MATERNITY calendar-day counting -- SHAPE parity only, same
 // as the rest of this block. create() below still ALWAYS calls workingDaysBetween() for a whole-day
@@ -271,6 +273,26 @@ db.deductionObligationRemittances = db.deductionObligationRemittances || [];
 // does not reimplement (see the file-level note on why: a shared algorithmic error would be
 // invisible on both sides). Anyone testing the §5.4 calendar-day behaviour itself must do so against
 // the real backend, not VITE_USE_MOCKS=true.
+//
+// certificateFilingWindowDays / noCertificateMonthlyTolerance (V124, §5.1 SICK): SHAPE parity only,
+// same "not enforced" caveat as every other field in this block. create() below still uses the OLD
+// unconditional "SICK + no attachment -> reject" rule -- it does NOT grant the 3-times-a-month
+// no-certificate tolerance, nor the certificate filing-window deadline. This is a genuine, real,
+// money-moving business-rule decision (see LeaveService#sickCertificateNote's combined decision
+// table on the real backend) exactly the kind this mock deliberately declines to reimplement (a
+// shared algorithmic error between mock and backend would be invisible on both sides -- see the
+// file-level note). Anyone testing the §5.1 tolerance/filing-window behaviour itself must do so
+// against the real backend, not VITE_USE_MOCKS=true. Note this is the SAFE divergence direction
+// (mock is now STRICTER than production, not more permissive -- CLAUDE.md's "more permissive than
+// prod" is the dangerous one).
+//
+// §5.3.2/§5.3.3/§5.3.4 relational rules (2026-08, backend-only): "whole department not absent at
+// once", "no PERSONAL/VACATION back to back", and "no VACATION/PERSONAL after a submitted
+// resignation" are pure LeaveService#submit gates with no DTO/method-surface change (systemNote is
+// already a free-text field), so contract.test.js needs no update. They are NOT modelled here --
+// each depends on OTHER employees' schedules/leave/hr.resignation rows, exactly the "real
+// per-request eligibility decision" category this block already declines to reimplement. Testing
+// them requires the real backend.
 db.leaveTypes = db.leaveTypes || [
   // PERSONAL quota fix (2026-07-25): seeded at 3, company rule (§5.2) grants 7 paid personal
   // days/year -- see V90__leave_subday_and_contact.sql for the backend-side correction.
@@ -282,35 +304,73 @@ db.leaveTypes = db.leaveTypes || [
   // replicate (see the file-level note above) -- db.employees has no probation_days field to
   // resolve it from, so leaving PERSONAL unrestricted here is the honest "not supported in mock
   // mode" option rather than inventing a different, wrong approximation.
+  //
+  // maxConsecutiveDays: null / firstYearMaxDays: 3 (V120, defect 3 fix) -- the old blanket
+  // 3-CONSECUTIVE-day rule for everyone is gone; the real 3-day figure is now a first-year-only
+  // TOTAL annual cap (see LeaveService#autoRejectNote's Javadoc on the real backend). Not enforced
+  // in mock mode, same "shape only" caveat as every other field here.
+  // emergencyMonthlyAllowance: 3 (V125) -- §5.2's emergency-filing exception ("อนุโลมให้ได้ไม่เกิน
+  // เดือนละ 3 ครั้ง โดยไม่หักเงิน"). SHAPE parity only, same caveat as every other field in this
+  // block: create() below does not implement the notice-bypass/monthly-tolerance decision at all
+  // (see the leave.create() comment further down) -- a late PERSONAL request is auto-rejected in
+  // mock mode exactly as it always was, regardless of purposeCode/requestedAsEmergency.
   {
     code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal leave', annualQuotaDays: 7, requiresAttachment: false,
-    paidDaysCap: null, advanceNoticeDays: 1, minServiceMonths: 0, maxConsecutiveDays: 3, oncePerEmployment: false,
-    dayCountBasis: 'WORKING_DAYS',
+    paidDaysCap: null, advanceNoticeDays: 1, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
+    dayCountBasis: 'WORKING_DAYS', proratedFirstYear: true, firstYearMaxDays: 3,
+    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0, emergencyMonthlyAllowance: 3,
+    carriesForward: false,
   },
+  // certificateFilingWindowDays: 3 / noCertificateMonthlyTolerance: 3 (V124, §5.1) -- SHAPE parity
+  // only, see the file-level note above this array: create() below does NOT enforce either of these.
   {
     code: 'SICK', nameTh: 'ลาป่วย', nameEn: 'Sick leave', annualQuotaDays: 30, requiresAttachment: true,
     paidDaysCap: null, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
-    dayCountBasis: 'WORKING_DAYS',
+    dayCountBasis: 'WORKING_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
+    certificateFilingWindowDays: 3, noCertificateMonthlyTolerance: 3, emergencyMonthlyAllowance: null,
+    carriesForward: false,
   },
+  // minServiceMonths: 0 / proratedFirstYear: true (V120, defect 1 fix) -- V116's original
+  // min_service_months=12 refused ALL vacation leave under a year of service outright, contradicting
+  // §5.3's pro-rated entitlement; the real backend now scales the quota instead (see
+  // LeaveService#employeeAnnualQuota). Not enforced in mock mode.
+  //
+  // carriesForward: true (V127, §5.3.5) -- SHAPE parity only, same caveat as every other field in
+  // this block. The mock's leaveBalance() below always reports carriedInDays: 0 -- computing the
+  // real grant needs hr.leave_carryover's year-end memoization (LeaveService#ensureCarryoverGrant),
+  // a genuine business computation this mock deliberately does not reimplement (see the file-level
+  // note: a shared algorithmic error in a mirrored computation is invisible on both sides). Anyone
+  // testing carry-forward itself must do so against the real backend, not VITE_USE_MOCKS=true.
   {
     code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation leave', annualQuotaDays: 6, requiresAttachment: false,
-    paidDaysCap: null, advanceNoticeDays: 3, minServiceMonths: 12, maxConsecutiveDays: null, oncePerEmployment: false,
-    dayCountBasis: 'WORKING_DAYS',
+    paidDaysCap: null, advanceNoticeDays: 3, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
+    dayCountBasis: 'WORKING_DAYS', proratedFirstYear: true, firstYearMaxDays: null,
+    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0, emergencyMonthlyAllowance: null,
+    carriesForward: true,
   },
   {
     code: 'MATERNITY', nameTh: 'ลาคลอดบุตร', nameEn: 'Maternity leave', annualQuotaDays: 98, requiresAttachment: true,
     paidDaysCap: 45, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
-    dayCountBasis: 'CALENDAR_DAYS',
+    dayCountBasis: 'CALENDAR_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
+    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0, emergencyMonthlyAllowance: null,
+    carriesForward: false,
   },
+  // annualQuotaDays: 366 (sentinel, not a real policy number) / paidDaysCap: 60 (V120, defect 2 fix)
+  // -- V116 wrongly capped the LEAVE ITSELF at 60 days; §5.5 only caps the PAY. See
+  // V120__leave_type_proration_and_military_cap_fix.sql for the full writeup.
   {
-    code: 'MILITARY', nameTh: 'ลารับราชการทหาร', nameEn: 'Military service leave', annualQuotaDays: 60, requiresAttachment: true,
-    paidDaysCap: null, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
-    dayCountBasis: 'WORKING_DAYS',
+    code: 'MILITARY', nameTh: 'ลารับราชการทหาร', nameEn: 'Military service leave', annualQuotaDays: 366, requiresAttachment: true,
+    paidDaysCap: 60, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
+    dayCountBasis: 'WORKING_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
+    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0, emergencyMonthlyAllowance: null,
+    carriesForward: false,
   },
   {
     code: 'ORDINATION', nameTh: 'ลาอุปสมบท', nameEn: 'Ordination leave', annualQuotaDays: 60, requiresAttachment: false,
     paidDaysCap: 15, advanceNoticeDays: 0, minServiceMonths: 12, maxConsecutiveDays: null, oncePerEmployment: true,
-    dayCountBasis: 'WORKING_DAYS',
+    dayCountBasis: 'WORKING_DAYS', proratedFirstYear: false, firstYearMaxDays: null,
+    certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0, emergencyMonthlyAllowance: null,
+    carriesForward: false,
   },
 ];
 // leaveRequests/overtimeRequests/specialMoneyRequests are seeded by demoHr.js, wired
@@ -327,6 +387,8 @@ db.leaveTypes = db.leaveTypes || [
 db.leaveRequests = db.leaveRequests || [];
 db.overtimeRequests = db.overtimeRequests || [];
 db.specialMoneyRequests = db.specialMoneyRequests || [];
+// Evidence uploads live only for the life of the mock session -- there is no file store here.
+db.specialMoneyAttachments = db.specialMoneyAttachments || [];
 let sessionUser = null;
 
 // ── Mock in-memory document store ─────────────────────────────────────────────
@@ -769,6 +831,23 @@ function pushPricingRequestEvent(pr, actor, eventKind, fromStatus, toStatus, mes
 
 function round2(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
+// "Today" in the business zone, as "YYYY-MM-DD" -- the mock stand-in for the backend's
+// `LocalDate.now(ZoneId.of("Asia/Bangkok"))`.
+//
+// Deliberately NOT `new Date().toISOString().slice(0, 10)`, which is the convention elsewhere in
+// this file: that is UTC, and UTC runs up to 7 hours behind Bangkok. Any endpoint whose default
+// window is derived from "today" (see specialMoney.list) would otherwise pick a different day --
+// and on the 1st of a month before 07:00 Bangkok, a different MONTH -- than the service it mirrors.
+// Uses en-CA because it formats as ISO "YYYY-MM-DD".
+function bangkokTodayIso() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Bangkok',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
 }
 
 // Step 6: mirrors OrderConfirmationService's own private unitLabel(), used when building a
@@ -1587,6 +1666,10 @@ function mockPayrollLine(employee) {
     leaveDeductionRefund: 0,
     withholdingTaxOverride: null,
     mealAllowance: 0,
+    // V128: auto-fed from approved welfare in production (PayrollRepository
+    // #findApprovedWelfarePayByEmployee). The mock has no welfare->payroll pipeline, so this stays
+    // 0 rather than pretending to compute it -- see this file's header on not mirroring backend math.
+    welfarePay: 0,
     perDiemExempt: 0,
     perDiemTaxable: 0,
     perDiemBasis: null,
@@ -2698,15 +2781,32 @@ function canReviewLeave(user, employeeId) {
 // These two gates look similar but encode genuinely different Java models
 // (active-check + no division term vs. no active-check + division term). Do
 // NOT merge them "for DRY" — that reintroduces exactly the #199 bug class.
+// Mirrors OvertimeService.managesEmployee(): ฝ่าย manager sharing the division, self excluded.
+// reports_to is deliberately NOT a branch here any more -- it stopped granting approval rights when
+// overtime moved to the division-only rule AttendanceService.resolveScope already used.
 function canReviewOvertime(user, employeeId) {
   if (!user.employeeId || employeeId === user.employeeId) return false;
   const employee = findEmployee(employeeId);
-  const directReport = managerIdForEmployee(employee) === user.employeeId;
-  const divisionManager = dashboardManager(user)
+  return Boolean(dashboardManager(user)
     && dashboardDivisionId(user) != null
-    && dashboardDivisionId(user) === employee.divisionId
-    && employeeId !== user.employeeId;
-  return directReport || divisionManager;
+    && dashboardDivisionId(user) === employee.divisionId);
+}
+
+// Mirrors ManagerApproverRepository.hasManagerApproverSql(). Two rules: a ผู้จัดการ's own request
+// has no manager stage, and otherwise there must be an ACTIVE ผู้จัดการ in the same ฝ่าย.
+// Position matching mirrors DivisionAccessPolicy.isManager -- strip whitespace, substring-match.
+function isManagerPosition(employee) {
+  return String(employee?.positionTh || '').replace(/\s+/g, '').includes('ผู้จัดการ');
+}
+
+function hasManagerApproverFor(employeeId) {
+  const employee = findEmployee(employeeId);
+  if (!employee) return true; // fail closed: withhold the CEO bypass rather than grant it
+  if (isManagerPosition(employee)) return false;
+  if (employee.divisionId == null) return false;
+  return db.employees.some((peer) => peer.divisionId === employee.divisionId
+    && peer.isActive !== false
+    && isManagerPosition(peer));
 }
 
 function leaveTypeByCode(code) {
@@ -2778,6 +2878,11 @@ function leaveUsedDays(employeeId, leaveTypeCode, quotaYear, statuses) {
 function leaveBalance(employeeId, type, quotaYear) {
   const approvedDays = leaveUsedDays(employeeId, type.code, quotaYear, ['APPROVED']);
   const pendingDays = leaveUsedDays(employeeId, type.code, quotaYear, ['SUBMITTED']);
+  // §5.3.5 VACATION carry-forward (V127): carriedInDays is SHAPE parity only, always 0 in mock
+  // mode -- see the db.leaveTypes carriesForward comment above for why (the real grant needs
+  // hr.leave_carryover's year-end memoization, a business computation this mock does not
+  // reimplement). remainingDays below is therefore also always the un-boosted figure in mock mode,
+  // never reflecting a real carry-in even for VACATION.
   return {
     leaveTypeCode: type.code,
     leaveTypeNameTh: type.nameTh,
@@ -2787,6 +2892,7 @@ function leaveBalance(employeeId, type, quotaYear) {
     pendingDays,
     remainingDays: Math.max(0, Number(type.annualQuotaDays || 0) - approvedDays - pendingDays),
     requiresAttachment: type.requiresAttachment,
+    carriedInDays: 0,
   };
 }
 
@@ -2872,6 +2978,10 @@ function buildOvertimeRecord(record) {
     managerName: manager?.nameTh || null,
     managerApprovedByName: managerApprover?.nameTh || null,
     ceoApprovedByName: ceoApprover?.nameTh || null,
+    // Projected per row by OvertimeRepository.baseSelect(); the panel keys its approve button off
+    // it. Omitting it here would leave the field undefined, which the panel reads as "has a manager
+    // stage" -- the CEO would then never see the button on a manager-less request under mocks.
+    hasManagerApprover: hasManagerApproverFor(record.employeeId),
   };
 }
 
@@ -2897,20 +3007,19 @@ function specialMoneyType(requestType) {
   return SPECIAL_MONEY_TYPES.find((item) => item.requestType === requestType) || null;
 }
 
-// Mirrors SpecialMoneyService.managesEmployee(): direct report (stored FK) OR
-// division manager (position-derived user.manager() sharing the employee's
-// division, excluding self) -- NO hr/admin bypass here either, same shape as
-// canReviewOvertime and deliberately not shared with it (see that function's
-// comment: these gates encode distinct Java classes and must not be merged).
+// Mirrors SpecialMoneyService.managesEmployee(): ฝ่าย manager sharing the employee's division,
+// self excluded. reports_to is deliberately NOT a branch (dropped with the division-only rule).
+//
+// NOTE THE NAME IS NOW A MISNOMER IN ONE DIRECTION: this grants NO approval rights. Welfare is
+// CEO-only, so a manager passing this can only file on a team member's behalf and read their
+// requests and quota. Kept separate from canReviewOvertime on purpose -- these encode distinct
+// Java classes whose rules have now genuinely diverged, and merging them would re-couple them.
 function canReviewSpecialMoney(user, employeeId) {
   if (!user.employeeId || employeeId === user.employeeId) return false;
   const employee = findEmployee(employeeId);
-  const directReport = managerIdForEmployee(employee) === user.employeeId;
-  const divisionManager = dashboardManager(user)
+  return Boolean(dashboardManager(user)
     && dashboardDivisionId(user) != null
-    && dashboardDivisionId(user) === employee.divisionId
-    && employeeId !== user.employeeId;
-  return directReport || divisionManager;
+    && dashboardDivisionId(user) === employee.divisionId);
 }
 
 function canViewAllSpecialMoney(user) {
@@ -2921,6 +3030,10 @@ function canAccessSpecialMoneyEmployee(user, employeeId) {
   return canViewAllSpecialMoney(user)
     || employeeId === user.employeeId
     || canReviewSpecialMoney(user, employeeId);
+}
+
+function specialMoneyAttachmentsFor(requestId) {
+  return db.specialMoneyAttachments.filter((item) => item.specialMoneyRequestId === requestId);
 }
 
 function buildSpecialMoneyRecord(record) {
@@ -2941,6 +3054,9 @@ function buildSpecialMoneyRecord(record) {
     managerApprovedByName: managerApprover?.nameTh || null,
     ceoApprovedByName: ceoApprover?.nameTh || null,
     reviewedByName: reviewer?.nameTh || null,
+    // Projected per row by SpecialMoneyRepository.baseSelect(): a reviewer sees the document trail
+    // before opening the request, and the panel can warn before an approval the server will refuse.
+    attachmentCount: specialMoneyAttachmentsFor(record.id).length,
   };
 }
 
@@ -3110,6 +3226,41 @@ async function tryBackendBlob(url) {
   } catch { /* backend offline or not authed */ }
   return null;
 }
+
+// Leave-request composer (Phase A2, #485): fixed fixtures for POST /api/leave/preview.
+// Not a rule engine — see CLAUDE.md "Mock API contract". This does NOT evaluate any of the 17
+// real gates LeaveService#autoRejectNote runs (probation, quota, attachment, notice window,
+// department coverage, etc.) — every one of those is a genuine per-request eligibility decision
+// this mock has never reimplemented (same stance as leave.create() below: see the db.leaveTypes
+// comment for why). Each entry here is a SMALL, FIXED, keyed-by-leaveTypeCode-only fixture: it
+// does not read the caller's employee, dates, attachment flag, or purpose — a real employee whose
+// actual hire date/probation/quota would legitimately block ORDINATION but is exempt from every
+// other type still sees the identical canned verdict below. Composer screens exercised only under
+// VITE_USE_MOCKS=true are demonstrating the UI's PLUMBING (does a blocked step 1 card render, does
+// a counter show up next to the right field) — never evidence that the real gate order, the real
+// 17 rejection reasons, or the real coverage/quota math behave a given way. Verify all of that
+// against the real backend (LeaveService#preview), per CLAUDE.md.
+const LEAVE_PREVIEW_COUNTERS_FIXTURE = {
+  // SICK: pretend 1 of 3 no-certificate occasions already used this month.
+  SICK: { emergencyFilingsRemaining: 0, noCertificateOccasionsRemaining: 2 },
+  // PERSONAL: pretend 1 of 3 emergency filings already used this month.
+  PERSONAL: { emergencyFilingsRemaining: 2, noCertificateOccasionsRemaining: 0 },
+};
+const LEAVE_PREVIEW_DEFAULT_COUNTERS = { emergencyFilingsRemaining: 0, noCertificateOccasionsRemaining: 0 };
+
+// Exactly one type renders "blocked before you type anything" in mock mode, so step 1 of the
+// composer has something to demonstrate — every other type's fixture is `null` (no gate hit),
+// which illustrates only "not blocked in this fixture", never a real verdict. messageTh below is
+// copied VERBATIM from LeaveRuleMessages' real ONCE_PER_EMPLOYMENT template (not re-worded here),
+// for the same reason CLAUDE.md gives for never hand-translating backend copy.
+const LEAVE_PREVIEW_BLOCKING_FIXTURE = {
+  ORDINATION: {
+    code: 'ONCE_PER_EMPLOYMENT',
+    params: { leaveTypeNameTh: 'ลาอุปสมบท' },
+    messageTh: 'การลาอุปสมบทสามารถใช้สิทธิ์ได้เพียงครั้งเดียวตลอดระยะเวลาที่เป็นพนักงาน '
+      + 'และมีคำขอที่ใช้สิทธิ์นี้ไปแล้ว กรุณาติดต่อฝ่ายบุคคลหากเป็นกรณียกเว้น',
+  },
+};
 
 export const api = {
   // Mirrors AuthController + AuthService (auth/).
@@ -4149,6 +4300,15 @@ export const api = {
       // mirrors LeaveService#autoRejectNote's notice branch, in CALENDAR days, same as the real
       // service. minServiceMonths/maxConsecutiveDays/oncePerEmployment are NOT enforced here -- see
       // the db.leaveTypes comment above for why.
+      //
+      // §5.2 purpose/emergency-filing (V125): purposeCode is stored verbatim below for SHAPE parity
+      // (plain passthrough, not a computation -- safe to mirror). The wedding-leave 3-day cap and
+      // the emergency-filing monthly-tolerance exception are NOT implemented here, same "not
+      // reimplementing a per-request eligibility decision" stance as every other gap in this
+      // function: a late PERSONAL request is auto-rejected below exactly as it always was,
+      // regardless of purposeCode or requestedAsEmergency, and a WEDDING-purpose request longer than
+      // 3 days is NOT refused in mock mode. Do not read a mock-mode APPROVED as proof either rule
+      // was honoured -- test both against the real backend.
       const noticeDays = Math.max(0, Number(leaveType.advanceNoticeDays || 0));
       const noticeCutoff = new Date(Date.now() + noticeDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       const hasAttachment = Boolean(payload.attachmentFile);
@@ -4200,6 +4360,12 @@ export const api = {
         contactDistrict: pickContact(payload.contactDistrict, contactDefaults.contactDistrict),
         contactProvince: pickContact(payload.contactProvince, contactDefaults.contactProvince),
         contactPhone: pickContact(payload.contactPhone, contactDefaults.contactPhone),
+        // §5.2 purpose/emergency-filing (V125): purposeCode passthrough (shape parity only -- see
+        // the comment above). emergencyFiling is always false here -- the mock never grants the
+        // emergency exception, so it can never legitimately be true; a late request stays
+        // AUTO_REJECTED above regardless of requestedAsEmergency.
+        purposeCode: payload.purposeCode || null,
+        emergencyFiling: false,
       };
       request.employeeCode = employee.code;
       request.employeeName = employee.nameTh;
@@ -4253,6 +4419,167 @@ export const api = {
       request.reviewerNote = payload.reviewerNote || request.reviewerNote;
       request.updatedAt = now;
       return delay({ request: buildLeaveRecord(request) });
+    },
+
+    // Phase A4: certificate-download button in ReviewQueueTab.jsx/MyLeaveTab.jsx. Mirrors
+    // LeaveController#downloadAttachment's real access predicate
+    // (LeaveService#resolveAttachmentForDownload: the owning employee, or a canReviewEmployee
+    // reviewer of them). attachmentId is 1:1 with the owning leave_request's own id in this mock
+    // (see create() above, `attachmentId: hasAttachment ? id : null`) — there is no separate
+    // hr.leave_attachment table here. No real file bytes are ever kept (only attachmentFileName,
+    // the name string, for shape parity), so this returns the same kind of demo placeholder Blob
+    // every other document-download endpoint in this file already does (see
+    // mockDocPlaceholderBlob's own comment) rather than the honest-404 "not supported" stance a
+    // couple of newer attachment endpoints take (e.g. downloadTaxAllowanceAttachment) — the real
+    // backend always has real bytes once attachmentId is non-null, so a reviewer opening a
+    // legitimate certificate should see the download SUCCEED under mocks, not fail every time. Do
+    // not read a mock-mode download as proof the real file/mime type streams correctly — verify
+    // against the real Java service.
+    async downloadAttachment(attachmentId) {
+      const user = requireSession();
+      const request = db.leaveRequests.find((item) => item.attachmentId === Number(attachmentId));
+      if (!request) fail('ไม่พบเอกสารนี้', 404);
+      const allowed = request.employeeId === user.employeeId || canReviewLeave(user, request.employeeId);
+      if (!allowed) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      return mockDocPlaceholderBlob([
+        `เอกสารแนบคำขอลา #${request.id}`,
+        `ไฟล์: ${request.attachmentFileName || '-'}`,
+      ]);
+    },
+
+    // Leave-surface IA rebuild, Phase A0 (not yet landed on the real backend): will back the
+    // "รอพิจารณา" tab's badge/count with a per-manager summary of requests awaiting THIS user's
+    // decision. Added here (Phase A1) ONLY so contract.test.js's hrApi<->mockApi method-surface
+    // parity check stays green ahead of that work landing -- no page in this phase calls it yet,
+    // and `review.isVisible` (leaveSurfaceTabs.js) still derives visibility from the already-loaded
+    // `list()` response, not from this endpoint. This is a small FIXED fixture, not a rule engine:
+    // it does not recompute canReviewLeave() or scan db.leaveRequests, so its shape AND its
+    // authorization are not authoritative -- verify the real endpoint against LeaveService once A0
+    // actually lands.
+    async reviewSummary() {
+      requireSession();
+      return delay({ pendingCount: 0, requests: [] });
+    },
+
+    // Leave-request composer (Phase A2, #485). See LEAVE_PREVIEW_BLOCKING_FIXTURE /
+    // LEAVE_PREVIEW_COUNTERS_FIXTURE above this namespace for the "not a rule engine" contract --
+    // this reads only `leaveTypeCode` (to pick a fixture) and whether dates were supplied (to
+    // decide `datesEvaluated`/`coverageEvaluated`, structural booleans the real DTO always
+    // carries, not a rule verdict). `options` is accepted for signature parity with hrApi's
+    // `(payload, options)` (real callers pass an AbortSignal there) -- honoured only for a
+    // caller that is ALREADY aborted at call time, since this mock's fixed `delay()` has no
+    // mechanism to reject mid-flight the way a real aborted fetch would.
+    async preview(payload = {}, options = {}) {
+      requireSession();
+      if (options.signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
+      const leaveType = leaveTypeByCode(payload.leaveTypeCode);
+      const counters = LEAVE_PREVIEW_COUNTERS_FIXTURE[leaveType.code] ?? LEAVE_PREVIEW_DEFAULT_COUNTERS;
+      const datesEvaluated = Boolean(payload.startDate && payload.endDate);
+      if (!datesEvaluated) {
+        return delay({
+          preview: {
+            blocking: LEAVE_PREVIEW_BLOCKING_FIXTURE[leaveType.code] ?? null,
+            datesEvaluated: false,
+            coverageEvaluated: false,
+            totalDays: null,
+            paidDays: null,
+            unpaidDays: null,
+            quotaYearSplits: [],
+            counters,
+          },
+        });
+      }
+      const blocking = LEAVE_PREVIEW_BLOCKING_FIXTURE[leaveType.code] ?? null;
+      const depth = payload.depth === 'QUICK' ? 'QUICK' : 'FULL';
+      const totalDays = workingDaysBetween(payload.startDate, payload.endDate);
+      const quotaYear = Number(String(payload.startDate).slice(0, 4));
+      return delay({
+        preview: {
+          blocking,
+          datesEvaluated: true,
+          // Mirrors the real coverageEvaluated contract structurally (false under QUICK, false
+          // once an earlier gate already blocked) without running any department-coverage fan-out
+          // of its own -- there is nothing here TO run; see this namespace's header comment.
+          coverageEvaluated: depth === 'FULL' && !blocking,
+          totalDays: blocking ? null : totalDays,
+          paidDays: blocking ? null : totalDays,
+          unpaidDays: blocking ? null : 0,
+          quotaYearSplits: blocking ? [] : [{
+            quotaYear,
+            totalDays,
+            paidDays: totalDays,
+            unpaidDays: 0,
+            quotaRemainingBefore: leaveType.annualQuotaDays,
+            quotaRemainingAfter: Math.max(0, leaveType.annualQuotaDays - totalDays),
+          }],
+          counters,
+        },
+      });
+    },
+
+    // Leave-surface IA rebuild, Phase A3: mirrors LeaveController#policyDocument's SHAPE only, not
+    // its authority. The real endpoint's answer depends on server-side storage this mock has no
+    // equivalent of and no file to actually serve — "not supported in mock mode" is the honest
+    // answer here (CLAUDE.md: prefer that over inventing a fake success path), so this always
+    // reports "not uploaded", exactly the state a fresh/unconfigured real deployment is in too. Do
+    // not read an "available" render under mocks as evidence the real endpoint works — verify a
+    // configured deployment against the real backend.
+    async policyDocumentAvailable() {
+      requireSession();
+      return delay(false);
+    },
+    async downloadPolicyDocument() {
+      requireSession();
+      fail('ยังไม่มีการอัปโหลดเอกสารประกาศฉบับนี้ กรุณาติดต่อฝ่ายบุคคล', 404);
+    },
+
+    // Leave-request composer, Phase C: mirrors LeaveController#calendarContext's SHAPE only, NOT
+    // real schedule resolution. This is a SMALL FIXED FIXTURE -- Mon-Fri/08:30-17:30, no six-day
+    // (OPS_6D) awareness, and `holidays` is always empty (same "no persisted hr.holiday store"
+    // stance as the holidays.list() stub above) -- it does NOT call TieredWorkScheduleResolver or
+    // read hr.work_schedule_assignment. `nonWorkingDates` here is plain Sat/Sun arithmetic, not
+    // LeaveDayMath's schedule/holiday-aware predicate. Do NOT read a mock-mode render of this as
+    // evidence a six-day employee or a real holiday shows up correctly -- verify against the real
+    // backend (LeaveCalendarContextIntegrationTest).
+    async calendarContext(params = {}) {
+      requireSession();
+      const { from, to } = params;
+      if (!from || !to) fail('ต้องระบุวันที่เริ่มต้นและวันที่สิ้นสุด', 400);
+      if (to < from) fail('วันที่สิ้นสุดต้องไม่มาก่อนวันที่เริ่มต้น', 400);
+      const nonWorkingDates = [];
+      const cursor = new Date(`${from}T00:00:00`);
+      const end = new Date(`${to}T00:00:00`);
+      while (cursor <= end) {
+        const day = cursor.getDay();
+        // LOCAL date components, not toISOString() (UTC) -- see bangkokTodayIso's comment above
+        // on why that conversion silently shifts a date backward for any positive UTC offset
+        // (Bangkok is UTC+7): local midnight becomes the previous UTC day, which would report the
+        // wrong non-working dates here.
+        if (day === 0 || day === 6) {
+          const y = cursor.getFullYear();
+          const m = String(cursor.getMonth() + 1).padStart(2, '0');
+          const d = String(cursor.getDate()).padStart(2, '0');
+          nonWorkingDates.push(`${y}-${m}-${d}`);
+        }
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      return delay({
+        calendarContext: {
+          from,
+          to,
+          holidays: [],
+          schedule: {
+            workStart: LEAVE_WORKDAY_START,
+            workEnd: LEAVE_WORKDAY_END,
+            graceMinutes: 5,
+            requiresCheckOut: true,
+            workdays: [1, 2, 3, 4, 5],
+          },
+          nonWorkingDates,
+        },
+      });
     },
   },
 
@@ -4356,8 +4683,27 @@ export const api = {
       if (!request) fail('ไม่พบคำขอทำงานล่วงเวลานี้', 404);
       const now = new Date().toISOString();
       if (request.status === 'SUBMITTED') {
-        if (!canReviewOvertime(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
         const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
+        // Manager-less route: SUBMITTED straight to APPROVED, doing the manager step's minute
+        // calculation as well as the CEO's status flip. Mirrors OvertimeService.ceoDirectApprove.
+        if (!hasManagerApproverFor(request.employeeId)) {
+          if (user.role !== 'ceo') {
+            fail('คำขอนี้ไม่มีขั้นอนุมัติของหัวหน้างาน (ฝ่ายนี้ไม่มีผู้จัดการ หรือผู้ยื่นเป็นผู้จัดการเอง) จึงต้องให้ CEO พิจารณาเท่านั้น', 403);
+          }
+          request.status = 'APPROVED';
+          request.actualMinutes = request.actualMinutes ?? request.plannedMinutes;
+          request.payableMinutes = Math.round(request.actualMinutes * multiplier);
+          // managerApprovedBy stays null: no manager reviewed this.
+          request.ceoApprovedBy = user.employeeId;
+          request.ceoApprovedAt = now;
+          request.reviewedById = user.employeeId;
+          request.reviewedByName = user.name;
+          request.reviewedAt = now;
+          request.reviewerNote = payload.reviewerNote || null;
+          request.updatedAt = now;
+          return delay({ request: buildOvertimeRecord(request) });
+        }
+        if (!canReviewOvertime(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
         request.status = 'MANAGER_APPROVED';
         request.actualMinutes = request.actualMinutes ?? request.plannedMinutes;
         request.payableMinutes = Math.round(request.actualMinutes * multiplier);
@@ -4391,7 +4737,14 @@ export const api = {
       if (!request) fail('ไม่พบคำขอทำงานล่วงเวลานี้', 404);
       const now = new Date().toISOString();
       if (request.status === 'SUBMITTED') {
-        if (!canReviewOvertime(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+        // Symmetric with approve(): the sole reviewer must be able to refuse as well as accept.
+        if (!hasManagerApproverFor(request.employeeId)) {
+          if (user.role !== 'ceo') {
+            fail('คำขอนี้ไม่มีขั้นอนุมัติของหัวหน้างาน (ฝ่ายนี้ไม่มีผู้จัดการ หรือผู้ยื่นเป็นผู้จัดการเอง) จึงต้องให้ CEO พิจารณาเท่านั้น', 403);
+          }
+        } else if (!canReviewOvertime(user, request.employeeId)) {
+          fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+        }
         request.status = 'REJECTED';
         request.reviewedById = user.employeeId;
         request.reviewedByName = user.name;
@@ -4430,9 +4783,10 @@ export const api = {
     },
   },
 
-  // Mirrors SpecialMoneyController + SpecialMoneyService (specialmoney/) --
-  // same manager/CEO gate shapes as overtime (see canReviewSpecialMoney's
-  // comment for why it is not shared with canReviewOvertime), but cancel is
+  // Mirrors SpecialMoneyController + SpecialMoneyService (specialmoney/). Approval is CEO-only in
+  // a SINGLE stage for every employee -- unlike overtime, which keeps a manager -> CEO pipeline
+  // wherever the employee's ฝ่าย has a ผู้จัดการ. canReviewSpecialMoney therefore gates only
+  // read-scoping and submit-on-behalf here, never approval. cancel is
   // stricter: only the employee or the person who filed on their behalf, and
   // only while still SUBMITTED (no manager-cancel across every active status
   // the way overtime allows). This mock does NOT reimplement the full policy
@@ -4480,22 +4834,56 @@ export const api = {
       if (!employeeId) fail('ต้องระบุรหัสพนักงาน', 400);
       if (!canAccessSpecialMoneyEmployee(user, employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const year = params.year ? Number(params.year) : new Date().getFullYear();
+      // Mirrors SpecialMoneyRepository#findUsage. The three maps are counted over DIFFERENT status
+      // sets and that difference is the whole point -- see UsageSnapshot's javadoc:
+      //   amounts -> APPROVED only (money; an undecided request has consumed no balance)
+      //   counts  -> SUBMITTED + MANAGER_APPROVED + APPROVED (the once-per-lifetime / once-per-year
+      //              guards must see in-flight rows, or the same claim can be filed twice before
+      //              either is decided and both become approvable)
+      // This mock previously filtered `status === 'APPROVED'` for BOTH maps, which is the dangerous
+      // direction: it under-reports usage, so mock-mode UI says "you may still claim" on a type the
+      // real backend refuses. `approvedCountLifetimeByType` is a misnomer on the DTO too -- it has
+      // always carried the in-flight-inclusive count. Do not "fix" it to match its name.
+      const ACTIVE_STATUSES = ['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED'];
       const approvedAmountThisYearByType = {};
       const approvedCountLifetimeByType = {};
+      const activeCountThisYearByType = {};
       db.specialMoneyRequests
-        .filter((item) => item.employeeId === employeeId && item.status === 'APPROVED')
+        .filter((item) => item.employeeId === employeeId && ACTIVE_STATUSES.includes(item.status))
         .forEach((item) => {
           approvedCountLifetimeByType[item.requestType] = (approvedCountLifetimeByType[item.requestType] || 0) + 1;
           if (new Date(item.eventDate).getFullYear() === year) {
-            approvedAmountThisYearByType[item.requestType] =
-              (approvedAmountThisYearByType[item.requestType] || 0) + Number(item.approvedAmount || 0);
+            activeCountThisYearByType[item.requestType] = (activeCountThisYearByType[item.requestType] || 0) + 1;
+            if (item.status === 'APPROVED') {
+              approvedAmountThisYearByType[item.requestType] =
+                (approvedAmountThisYearByType[item.requestType] || 0) + Number(item.approvedAmount || 0);
+            }
           }
         });
       return delay({
-        usage: { employeeId, year, approvedAmountThisYearByType, approvedCountLifetimeByType },
+        usage: {
+          employeeId,
+          year,
+          approvedAmountThisYearByType,
+          approvedCountLifetimeByType,
+          activeCountThisYearByType,
+        },
       });
     },
 
+    // Mirrors SpecialMoneyService.list() + SpecialMoneyRepository.findRequests().
+    //
+    // The date window is NOT optional on the real backend: omitting `from`/`to` does not mean
+    // "everything", it means "this calendar month". SpecialMoneyService.list() computes
+    //     effectiveTo   = to   ?? LocalDate.now(Asia/Bangkok)
+    //     effectiveFrom = from ?? effectiveTo.withDayOfMonth(1)
+    // and findRequests filters `WHERE s.event_date BETWEEN :fromDate AND :toDate`.
+    //
+    // This mock previously applied NO window when the params were absent, which is the dangerous
+    // direction CLAUDE.md names: it returned MORE rows than production, so a screen that silently
+    // depends on the month scoping looks correct in mock mode and is empty in prod. That is exactly
+    // how the CEO review queue shipped scoped to the current month while claiming "ไม่มีคำขอรออนุมัติ"
+    // for anything dated outside it.
     async list(params = {}) {
       const user = requireSession();
       let list = db.specialMoneyRequests;
@@ -4504,12 +4892,33 @@ export const api = {
         if (params.employeeId && !canAccessSpecialMoneyEmployee(user, Number(params.employeeId))) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
         list = list.filter((item) => item.employeeId === user.employeeId || canReviewSpecialMoney(user, item.employeeId));
       }
+
+      // Asia/Bangkok, not `new Date().toISOString()`: the backend reads the business zone, and UTC
+      // runs up to 7 hours behind it. On the 1st of a month before 07:00 Bangkok the two disagree
+      // about which month "today" is in, so a UTC default would silently window a different month
+      // than production.
+      const effectiveTo = params.to || bangkokTodayIso();
+      const effectiveFrom = params.from || `${effectiveTo.slice(0, 7)}-01`;
+      // SpecialMoneyService.list() throws 400 before touching the repository.
+      if (effectiveTo < effectiveFrom) fail('วันที่สิ้นสุดต้องไม่มาก่อนวันที่เริ่มต้น', 400);
+
       if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
       if (params.status) list = list.filter((item) => item.status === params.status);
       if (params.type) list = list.filter((item) => item.requestType === params.type);
-      if (params.from) list = list.filter((item) => item.eventDate >= params.from);
-      if (params.to) list = list.filter((item) => item.eventDate <= params.to);
-      return delay({ requests: list.map(buildSpecialMoneyRecord) });
+      list = list.filter((item) => item.eventDate >= effectiveFrom && item.eventDate <= effectiveTo);
+
+      // Mirrors findRequests' trailing
+      //   ORDER BY s.event_date DESC, s.requested_at DESC, s.special_money_request_id DESC
+      // Ordering is part of the contract, not a detail: `contract.test.js` compares parameter
+      // COUNTS only and cannot see it, and the same rows in a different order is how #434's
+      // truncation bug hid. Sorted on a copy -- `db.specialMoneyRequests` is the live store and
+      // create() relies on its own unshift order.
+      const sorted = [...list].sort((a, b) => (
+        (a.eventDate < b.eventDate ? 1 : a.eventDate > b.eventDate ? -1 : 0)
+        || (String(a.requestedAt) < String(b.requestedAt) ? 1 : String(a.requestedAt) > String(b.requestedAt) ? -1 : 0)
+        || (b.id - a.id)
+      ));
+      return delay({ requests: sorted.map(buildSpecialMoneyRecord) });
     },
 
     async create(payload) {
@@ -4564,24 +4973,59 @@ export const api = {
       return delay({ request: buildSpecialMoneyRecord(request) });
     },
 
+    // Mirrors SpecialMoneyController's attachment endpoints + SpecialMoneyService.requireCanAttach.
+    async attachments(id) {
+      const user = requireSession();
+      const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
+      if (!request) fail('ไม่พบคำขอเงินพิเศษนี้', 404);
+      if (!canAccessSpecialMoneyEmployee(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      return delay({ attachments: specialMoneyAttachmentsFor(request.id) });
+    },
+
+    async addAttachment(id, file) {
+      const user = requireSession();
+      const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
+      if (!request) fail('ไม่พบคำขอเงินพิเศษนี้', 404);
+      const isEmployee = request.employeeId === user.employeeId;
+      const isRequester = request.requestedById != null && request.requestedById === user.employeeId;
+      if (!isEmployee && !isRequester) fail('เฉพาะผู้ยื่นคำขอเท่านั้นที่แนบเอกสารได้', 403);
+      if (request.status !== 'SUBMITTED') {
+        fail('แนบเอกสารได้เฉพาะคำขอที่ยังไม่ได้รับการพิจารณาเท่านั้น', 409);
+      }
+      const attachment = {
+        id: Math.max(0, ...db.specialMoneyAttachments.map((item) => item.id)) + 1,
+        specialMoneyRequestId: request.id,
+        fileName: file?.name || 'evidence.pdf',
+        mimeType: file?.type || 'application/pdf',
+        sizeBytes: file?.size ?? 0,
+        uploadedById: user.employeeId,
+        uploadedByName: user.name,
+        uploadedAt: new Date().toISOString(),
+      };
+      db.specialMoneyAttachments.push(attachment);
+      return delay({ attachment });
+    },
+
+    attachmentDownloadUrl(attachmentId) {
+      return `/api/special-money/attachments/${attachmentId}`;
+    },
+
     async approve(id, payload = {}) {
       const user = requireSession();
       const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
       if (!request) fail('ไม่พบคำขอเงินพิเศษนี้', 404);
       const now = new Date().toISOString();
-      if (request.status === 'SUBMITTED') {
-        if (!canReviewSpecialMoney(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-        request.status = 'MANAGER_APPROVED';
-        request.managerApprovedBy = user.employeeId;
-        request.managerApprovedAt = now;
-        request.reviewedById = user.employeeId;
-        request.reviewedAt = now;
-        request.reviewerNote = payload.reviewerNote || null;
-        request.updatedAt = now;
-        return delay({ request: buildSpecialMoneyRecord(request) });
-      }
-      if (request.status === 'MANAGER_APPROVED') {
-        if (user.role !== 'ceo') fail('เฉพาะ CEO เท่านั้นที่สามารถอนุมัติคำขอเงินพิเศษที่หัวหน้างานอนุมัติแล้วได้', 403);
+      // Welfare is CEO-only in ONE stage for every employee -- no manager stage. MANAGER_APPROVED
+      // is still accepted so rows written before that rule can be cleared. Mirrors
+      // SpecialMoneyService.approve().
+      if (['SUBMITTED', 'MANAGER_APPROVED'].includes(request.status)) {
+        if (user.role !== 'ceo') fail('คำขอสวัสดิการทุกประเภทต้องได้รับการพิจารณาจาก CEO เท่านั้น', 403);
+        // Mirrors SpecialMoneyService.requireEvidence(): an evidence-required type cannot be
+        // approved with an empty document trail.
+        const typeMeta = SPECIAL_MONEY_TYPES.find((item) => item.requestType === request.requestType);
+        if (typeMeta?.evidenceRequired && specialMoneyAttachmentsFor(request.id).length === 0) {
+          fail(`คำขอประเภท ${typeMeta.thaiLabel} ต้องแนบเอกสารหลักฐานก่อนจึงจะอนุมัติได้`, 400);
+        }
         request.status = 'APPROVED';
         request.approvedAmount = payload.approvedAmount != null ? Number(payload.approvedAmount) : request.requestedAmount;
         request.capOverrideReason = payload.capOverrideReason || null;
@@ -4602,17 +5046,8 @@ export const api = {
       const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
       if (!request) fail('ไม่พบคำขอเงินพิเศษนี้', 404);
       const now = new Date().toISOString();
-      if (request.status === 'SUBMITTED') {
-        if (!canReviewSpecialMoney(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-        request.status = 'REJECTED';
-        request.reviewedById = user.employeeId;
-        request.reviewedAt = now;
-        request.reviewerNote = payload.reviewerNote || null;
-        request.updatedAt = now;
-        return delay({ request: buildSpecialMoneyRecord(request) });
-      }
-      if (request.status === 'MANAGER_APPROVED') {
-        if (user.role !== 'ceo') fail('เฉพาะ CEO เท่านั้นที่สามารถอนุมัติคำขอเงินพิเศษที่หัวหน้างานอนุมัติแล้วได้', 403);
+      if (['SUBMITTED', 'MANAGER_APPROVED'].includes(request.status)) {
+        if (user.role !== 'ceo') fail('คำขอสวัสดิการทุกประเภทต้องได้รับการพิจารณาจาก CEO เท่านั้น', 403);
         request.status = 'REJECTED';
         request.reviewedById = user.employeeId;
         request.reviewedAt = now;
@@ -5766,6 +6201,66 @@ export const api = {
     async importDat() {
       hasRole('hr', 'ceo');
       throw new Error('นำเข้าข้อมูลจากเครื่องสแกนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+  },
+
+  // Mirrors HolidayController (attendance/schedule/) -- hr.holiday admin CRUD, HR/CEO only.
+  // AUTHZ IS NOT AUTHORITATIVE HERE -- see CLAUDE.md "Mock API contract". No persisted hr.holiday
+  // store exists in the mock, so reads return empty rather than faking data that was never written,
+  // and writes throw the same "not supported in mock mode" stub already used above for
+  // markPresent/backfillCards/importDat -- a fake success would look verified without proving
+  // anything about the real write path or the real role gate.
+  holidays: {
+    async list(params) {
+      void params;
+      hasRole('hr', 'ceo');
+      return delay({ holidays: [] });
+    },
+    async create(payload) {
+      void payload;
+      hasRole('hr', 'ceo');
+      throw new Error('เพิ่มวันหยุดไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async update(date, payload) {
+      void date; void payload;
+      hasRole('hr', 'ceo');
+      throw new Error('แก้ไขวันหยุดไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async remove(date) {
+      void date;
+      hasRole('hr', 'ceo');
+      throw new Error('ลบวันหยุดไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async fetch() {
+      hasRole('hr', 'ceo');
+      return delay({ outcomes: [] });
+    },
+  },
+
+  // Mirrors WorkScheduleController (attendance/schedule/) -- read-only hr.work_schedule catalogue.
+  workSchedules: {
+    async list() {
+      hasRole('hr', 'ceo');
+      return delay({ schedules: [] });
+    },
+  },
+
+  // Mirrors WorkScheduleAssignmentController (attendance/schedule/) -- hr.work_schedule_assignment
+  // admin CRUD, HR/CEO only. Same "no persisted store, honest stub" rationale as holidays above.
+  workScheduleAssignments: {
+    async list() {
+      hasRole('hr', 'ceo');
+      return delay({ assignments: [] });
+    },
+    async create(payload) {
+      void payload;
+      hasRole('hr', 'ceo');
+      throw new Error('กำหนดตารางเวลาทำงานไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async end(assignmentId, payload) {
+      void assignmentId; void payload;
+      hasRole('hr', 'ceo');
+      throw new Error('สิ้นสุดการกำหนดตารางเวลาทำงานไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
   },
 

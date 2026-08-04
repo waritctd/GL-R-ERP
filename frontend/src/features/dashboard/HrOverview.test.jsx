@@ -14,6 +14,13 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     api: {
       payroll: {
         current: vi.fn().mockResolvedValue({ period: null }),
+        getTaxAllowanceDeclarations: vi.fn().mockResolvedValue({
+          items: [
+            { declarationId: 1, employeeId: 9, status: 'PENDING' },
+            { declarationId: 2, employeeId: 10, status: 'PENDING' },
+            { declarationId: 3, employeeId: 11, status: 'APPROVED' },
+          ],
+        }),
       },
     },
   };
@@ -117,6 +124,15 @@ describe('HrOverview', () => {
     const rows = within(panel);
     expect(rows.getByText('HR-ฝ่ายบุคคล')).not.toBeNull();
     expect(rows.getByText('SA-ฝ่ายขาย')).not.toBeNull();
+  });
+
+  it('surfaces the ล.ย.01 review queue as HR work, counting only PENDING rows', async () => {
+    renderOverview();
+    const panel = screen.getByText('งานของฝ่ายบุคคล').closest('section');
+    expect(within(panel).getByText('แบบแจ้ง ล.ย.01 (ค่าลดหย่อนภาษี)')).not.toBeNull();
+    // Two PENDING out of three declarations — the APPROVED row must not be counted. Awaited: the
+    // label renders synchronously, the count only once the register query resolves.
+    expect(await within(panel).findByText('2 รายการรอตรวจ')).not.toBeNull();
   });
 
   it('does not render a leave/OT queue row in the ต้องดำเนินการ action queue', () => {

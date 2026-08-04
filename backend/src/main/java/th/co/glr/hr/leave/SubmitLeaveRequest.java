@@ -22,10 +22,17 @@ public record SubmitLeaveRequest(
     @Size(max = 120) String contactSubdistrict,
     @Size(max = 120) String contactDistrict,
     @Size(max = 120) String contactProvince,
-    @Size(max = 40) String contactPhone
+    @Size(max = 40) String contactPhone,
+    // §5.2 leave purpose (V125): optional, open-ended -- see LeaveService#normalizePurposeCode.
+    @Size(max = 30) String purposeCode,
+    // §5.2 emergency-filing exception (V125): the requester's own declaration that a late request
+    // should be considered under the "อนุโลมให้ได้ไม่เกินเดือนละ 3 ครั้ง" tolerance. Only consulted
+    // when the type's own advance-notice gate would otherwise reject -- see
+    // LeaveService#autoRejectNote. null/false are equivalent (treated as "not requested").
+    Boolean requestedAsEmergency
 ) {
     /** Convenience constructor for the pre-sub-day/contact call sites (whole-day leave only). */
     public SubmitLeaveRequest(Long employeeId, String leaveTypeCode, LocalDate startDate, LocalDate endDate, String reason) {
-        this(employeeId, leaveTypeCode, startDate, endDate, reason, null, null, null, null, null, null, null);
+        this(employeeId, leaveTypeCode, startDate, endDate, reason, null, null, null, null, null, null, null, null, null);
     }
 }

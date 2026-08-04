@@ -23,6 +23,23 @@ export const queryKeys = {
   leaveEmployees: () => ['leave', 'employees'],
   leaveTypes: () => ['leave', 'types'],
   leaveContactDefaults: (employeeId) => ['leave', 'contactDefaults', employeeId],
+  // Leave-surface IA rebuild, Phase A0 (not yet landed) — see routes.js's own comment on
+  // API_ROUTES.leave.reviewSummary. Defined now for the same reason: keep the module stable ahead
+  // of A0, even though no query in this phase constructs it yet.
+  leaveReviewSummary: () => ['leave', 'reviewSummary'],
+  // Leave-request composer (Phase A2, #485): keyed on every field the dry-run gate chain
+  // actually branches on (see LeaveService#preview's Javadoc) so distinct inputs never share a
+  // cache entry -- `depth` is included because a QUICK and FULL call for the identical
+  // employee/type/dates can legitimately return different `coverageEvaluated`/`blocking`.
+  leavePreview: (params = {}) => ['leave', 'preview',
+    params.employeeId ?? '', params.leaveTypeCode ?? '', params.startDate ?? '', params.endDate ?? '',
+    params.purposeCode ?? '', params.requestedAsEmergency ?? false, params.hasAttachment ?? false,
+    params.depth ?? 'FULL'],
+  // Leave-surface IA rebuild, Phase A3: rules tab's policy-document link availability probe.
+  leavePolicyDocumentAvailable: () => ['leave', 'policyDocumentAvailable'],
+  // Leave-request composer, Phase C (#leave-calendar-context): keyed on the exact { from, to }
+  // window fetched -- see LeaveRequestPage.jsx's own comment on the lookahead-window choice.
+  leaveCalendarContext: (from, to) => ['leave', 'calendarContext', from ?? '', to ?? ''],
   overtimeRequests: (filters = {}) => ['overtime', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   overtimeEmployees: () => ['overtime', 'employees'],
   // CommissionController#list only ever takes payrollMonth (no status param —
@@ -48,6 +65,10 @@ export const queryKeys = {
   specialMoneyEmployees: () => ['specialMoney', 'employees'],
   specialMoneyTypes: () => ['specialMoney', 'types'],
   specialMoneyUsage: (employeeId, year) => ['specialMoney', 'usage', employeeId, year],
+  // Attachment list (welfare page IA redesign, 2026-08) — mirrors SpecialMoneyController's nested
+  // .../{id}/attachments endpoint, same shape as taxAllowanceAttachments above. None existed
+  // before this: AttachmentList.jsx is the first caller of api.specialMoney.attachments().
+  specialMoneyAttachments: (id) => ['specialMoney', 'attachments', id ?? ''],
   // ticketDetail/ticketAttachments are for slice B (TicketDetailPage) — defined
   // now so the key module is stable across both slices; only ticketList is used here.
   ticketList: (status) => ['tickets', 'list', status ?? ''],
@@ -90,4 +111,11 @@ export const queryKeys = {
   factoryPurchaseOrderList: (status) => ['factoryPurchaseOrders', 'list', status ?? ''],
   factoryPurchaseOrdersForPricingRequest: (pricingRequestId) => ['pricingRequests', 'factoryPurchaseOrders', pricingRequestId],
   factoryPurchaseOrderDetail: (id) => ['factoryPurchaseOrders', 'detail', id],
+  // Attendance calendar admin (PR #480's API, this branch's UI). `holidays` is per year-range
+  // (mirrors GET /api/holidays?from&to) since the tab's year selector re-queries per year; the
+  // other two have no filters yet (workSchedules is the whole read-only catalogue,
+  // workScheduleAssignments is the whole admin list).
+  holidays: (from, to) => ['holidays', from ?? '', to ?? ''],
+  workSchedules: () => ['workSchedules'],
+  workScheduleAssignments: () => ['workScheduleAssignments'],
 };

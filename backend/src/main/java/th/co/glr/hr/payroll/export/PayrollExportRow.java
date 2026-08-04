@@ -28,5 +28,9 @@ public record PayrollExportRow(
     BigDecimal grossTaxableIncome, // → PND1 income
     BigDecimal withholdingTax,     // → PND1 tax withheld
     BigDecimal ssoWageBase,        // capped SSO wage base
-    BigDecimal socialSecurity      // employee SSO contribution (0 for directors)
+    BigDecimal ssoWageGross,       // payroll_line.sso_wage_gross — uncapped wage actually paid,
+                                    // PayrollCalculator's ssoWageBaseRaw; NULL on rows processed
+                                    // before V123 (fall back to ssoWageBase — see SsoExporter)
+    BigDecimal socialSecurity,     // employee SSO contribution (0 for directors)
+    String ssoBranchCode           // employee.sso_branch_code (ลำดับที่สาขา) — null = employer default
 ) {}
