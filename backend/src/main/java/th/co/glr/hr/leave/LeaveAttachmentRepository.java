@@ -35,7 +35,7 @@ public class LeaveAttachmentRepository {
     }
 
     /**
-     * V132 storage-durability fix: the leave domain writes ONLY to the database now -- {@code
+     * V134 storage-durability fix: the leave domain writes ONLY to the database now -- {@code
      * filePath} here is the bare correlation key {@link
      * th.co.glr.hr.attachment.FileStorageService#storeInDatabase} computed (never a disk path), and
      * {@code content} is inserted into {@code hr.file_attachment_blob} in the SAME transaction as
@@ -143,7 +143,7 @@ public class LeaveAttachmentRepository {
      * read via {@link th.co.glr.hr.attachment.FileAttachmentBlobRepository#findContent}), {@code
      * DISK_LEGACY} (bytes may still be at {@code storagePath} on disk -- check with {@code
      * FileStorageService#existsOnDisk} before trusting it), or {@code MISSING} (bytes confirmed
-     * gone). See V132's migration comment for the full rationale.
+     * gone). See V134's migration comment for the full rationale.
      */
     public record AttachmentLocation(long leaveRequestId, String fileName, String storagePath, String mimeType,
                                       String storageState) {

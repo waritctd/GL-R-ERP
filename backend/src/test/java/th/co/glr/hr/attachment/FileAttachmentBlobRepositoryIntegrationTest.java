@@ -9,7 +9,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
- * V132 storage-durability fix: real-Postgres coverage of {@link FileAttachmentBlobRepository} --
+ * V134 storage-durability fix: real-Postgres coverage of {@link FileAttachmentBlobRepository} --
  * the byte round-trip through {@code hr.file_attachment_blob}, and the structural guarantee the
  * migration's whole point depends on: listing/resolving an {@code hr.file_attachment} row never
  * loads its payload, because the payload lives in a SIBLING table, not a column on that row.

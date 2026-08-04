@@ -99,7 +99,7 @@ class LeaveAttachmentDownloadAuthzIntegrationTest extends AbstractPostgresIntegr
             .isEqualTo(HttpStatus.NOT_FOUND);
     }
 
-    // --- V132 storage-durability fix: availability (410) must never leak past authz (403) --------
+    // --- V134 storage-durability fix: availability (410) must never leak past authz (403) --------
     //
     // This is the existence-leak guard the ordering in LeaveService#resolveAttachmentForDownload
     // exists for: if availability were checked before authorization, an unauthorized caller could
@@ -207,7 +207,7 @@ class LeaveAttachmentDownloadAuthzIntegrationTest extends AbstractPostgresIntegr
             """, new MapSqlParameterSource("employeeId", employeeId), Long.class);
     }
 
-    // V132: the shared fixture attachment is DATABASE-backed (a real blob row, not a disk path
+    // V134: the shared fixture attachment is DATABASE-backed (a real blob row, not a disk path
     // pointing at a file this test never creates) -- matching what every NEW leave attachment
     // actually looks like post-migration, and avoiding a spurious 410 from the new availability
     // check for every regression test below that expects a plain successful download.
@@ -216,7 +216,7 @@ class LeaveAttachmentDownloadAuthzIntegrationTest extends AbstractPostgresIntegr
     }
 
     /**
-     * V132: inserts a leave attachment already in the given {@code storage_state}. For {@code
+     * V134: inserts a leave attachment already in the given {@code storage_state}. For {@code
      * DATABASE}, also inserts the matching {@code hr.file_attachment_blob} row -- a real
      * DATABASE-state row can never exist without one, and a fixture that skipped it would prove
      * nothing about the real write path.

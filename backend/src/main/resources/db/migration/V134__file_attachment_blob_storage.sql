@@ -39,7 +39,7 @@ CREATE TABLE hr.file_attachment_blob (
 );
 
 COMMENT ON TABLE hr.file_attachment_blob IS
-    'V132: byte payload for an hr.file_attachment row, kept in a sibling table so listing/resolving an attachment never loads its content -- bytes are read here only on download, after authorization.';
+    'V134: byte payload for an hr.file_attachment row, kept in a sibling table so listing/resolving an attachment never loads its content -- bytes are read here only on download, after authorization.';
 
 -- storage_state tracks where a given row's bytes actually live, across three states:
 --   DATABASE    - bytes are in hr.file_attachment_blob (the target state for every row going
@@ -59,4 +59,4 @@ ALTER TABLE hr.file_attachment
         CHECK (storage_state IN ('DATABASE', 'DISK_LEGACY', 'MISSING'));
 
 COMMENT ON COLUMN hr.file_attachment.storage_state IS
-    'V132: DATABASE = bytes in hr.file_attachment_blob; DISK_LEGACY = pre-migration row, bytes may still be on disk; MISSING = bytes confirmed gone, row kept for the audit trail.';
+    'V134: DATABASE = bytes in hr.file_attachment_blob; DISK_LEGACY = pre-migration row, bytes may still be on disk; MISSING = bytes confirmed gone, row kept for the audit trail.';

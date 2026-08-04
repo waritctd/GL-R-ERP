@@ -9,8 +9,8 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.Map;
 // Both resource kinds now serve from Postgres: ByteArrayResource for the leave POLICY DOCUMENT
-// (V133) and, as of V132, for ATTACHMENTS too (hr.file_attachment_blob) -- FileSystemResource only
-// remains live here for pre-V132 DISK_LEGACY attachment rows whose bytes still resolve on disk. See
+// (V133) and, as of V134, for ATTACHMENTS too (hr.file_attachment_blob) -- FileSystemResource only
+// remains live here for pre-V134 DISK_LEGACY attachment rows whose bytes still resolve on disk. See
 // #downloadAttachment below for the storage_state branch.
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.FileSystemResource;
@@ -315,7 +315,7 @@ public class LeaveController {
     // unknown id so this cannot be used to probe which ids exist. See
     // LeaveService#resolveAttachmentForDownload for the access predicate.
     //
-    // V132 storage-durability fix: resolveAttachmentForDownload has ALREADY confirmed the bytes are
+    // V134 storage-durability fix: resolveAttachmentForDownload has ALREADY confirmed the bytes are
     // available (DATABASE, or DISK_LEGACY with a file that still resolves) before returning --
     // throwing 410 GONE itself when they are not, strictly after its 404/403 checks (see that
     // method's javadoc for why the ordering matters). This method only needs to pick the right

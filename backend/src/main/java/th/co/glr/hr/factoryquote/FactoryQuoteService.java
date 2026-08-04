@@ -349,7 +349,7 @@ public class FactoryQuoteService {
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
         requireMutablePricingRequest(summary, MUTABLE_STATUSES);
         requireActiveDeal(summary.ticketId());
-        // V132 storage-durability fix: this evidence file goes straight to the database now -- see
+        // V134 storage-durability fix: this evidence file goes straight to the database now -- see
         // FileStorageService#storeInDatabase's javadoc.
         FileStorageService.StoredContent stored = fileStorage.storeInDatabase("factory-quotes", quoteId, file, Set.of());
         FactoryQuoteAttachmentDto attachment = quotes.saveAttachmentWithContent(quoteId, stored.fileName(),
@@ -368,7 +368,7 @@ public class FactoryQuoteService {
     }
 
     /**
-     * V132 storage-durability fix: resolves the attachment's storage location AND confirms its
+     * V134 storage-durability fix: resolves the attachment's storage location AND confirms its
      * bytes are actually available (DATABASE, or DISK_LEGACY with a file that still resolves),
      * throwing 410 GONE otherwise -- checked only AFTER {@link #getAttachment}'s own 404/role
      * checks above, mirroring {@code LeaveService#resolveAttachmentForDownload}'s ordering (see

@@ -48,7 +48,7 @@ class FileStorageServiceTest {
             .isEqualTo(HttpStatus.BAD_REQUEST);
     }
 
-    // --- V132 storage-durability fix: explicit app.uploads-max-bytes cap, checked before any byte
+    // --- V134 storage-durability fix: explicit app.uploads-max-bytes cap, checked before any byte
     // is read into memory (see FileStorageService's constructor javadoc for why this is separate
     // from spring.servlet.multipart.max-file-size). -----------------------------------------------
 

@@ -24,7 +24,7 @@ public class FileStorageService {
     private final long maxUploadBytes;
 
     /**
-     * V132 storage-durability fix: {@code app.uploads-max-bytes} is an explicit server-side cap,
+     * V134 storage-durability fix: {@code app.uploads-max-bytes} is an explicit server-side cap,
      * separate from {@code spring.servlet.multipart.max-file-size} ({@code
      * ${APP_MAX_FILE_SIZE:10MB}} in application.yml). The multipart property is env-overridable and
      * therefore not a reliable cap on its own -- anyone who changes {@code APP_MAX_FILE_SIZE} for
@@ -72,7 +72,7 @@ public class FileStorageService {
     }
 
     /**
-     * V132 storage-durability fix: computes the same {@code domain/ownerId/uuid.ext} storage KEY
+     * V134 storage-durability fix: computes the same {@code domain/ownerId/uuid.ext} storage KEY
      * {@link #store} would, WITHOUT writing anything to disk, and returns the file's bytes so the
      * caller can insert them into {@code hr.file_attachment_blob}. Used by the four {@code
      * hr.file_attachment} domains this branch converts (leave, commission-invoice evidence,
@@ -174,7 +174,7 @@ public class FileStorageService {
     ) {
     }
 
-    /** V132: the DB-backed counterpart of {@link StoredFile} -- carries bytes instead of a disk path. */
+    /** V134: the DB-backed counterpart of {@link StoredFile} -- carries bytes instead of a disk path. */
     public record StoredContent(
         String fileName,
         String storageKey,

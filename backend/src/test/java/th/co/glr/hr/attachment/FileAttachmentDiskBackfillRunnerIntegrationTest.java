@@ -15,7 +15,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
- * V132 storage-durability fix, step 3: real-Postgres coverage of {@link
+ * V134 storage-durability fix, step 3: real-Postgres coverage of {@link
  * FileAttachmentDiskBackfillRunner} -- the one-shot Java migrator that moves {@code DISK_LEGACY}
  * rows' bytes into {@code hr.file_attachment_blob} because Flyway/pg_read_binary_file cannot reach
  * the app container's filesystem from the database server.

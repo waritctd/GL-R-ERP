@@ -251,7 +251,7 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
 
     /**
      * Stubs {@code FileStorageService.storeInDatabase} to return a fixed {@code StoredContent} for
-     * ANY owner id / file -- V132 storage-durability fix: {@code LeaveService#submit} now stores
+     * ANY owner id / file -- V134 storage-durability fix: {@code LeaveService#submit} now stores
      * leave attachments to the database, not disk, so this stubs the DB-backed method {@code
      * submit} actually calls.
      */

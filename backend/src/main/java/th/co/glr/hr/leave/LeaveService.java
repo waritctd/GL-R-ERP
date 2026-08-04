@@ -334,7 +334,7 @@ public class LeaveService {
         // above (this method is @Transactional).
         leaveRepository.insertQuotaYearSplits(id, quotaYearSplits);
         if (hasAttachment) {
-            // V132 storage-durability fix: leave attachments (e.g. a SICK medical certificate) go
+            // V134 storage-durability fix: leave attachments (e.g. a SICK medical certificate) go
             // straight to the database now -- never to the app container's ephemeral disk. See
             // FileStorageService#storeInDatabase's javadoc for why, and LeaveAttachmentRepository
             // #saveWithContent for how the blob insert and the storage_state flip land in this same
@@ -2089,7 +2089,7 @@ public class LeaveService {
      * integration test ({@code LeaveAttachmentDownloadAuthzIntegrationTest}) this phase ships
      * alongside it, written wrong-way-round (asserting what each caller CANNOT reach).
      *
-     * <p><b>V132 storage-durability fix -- ordering is itself a security property, do not
+     * <p><b>V134 storage-durability fix -- ordering is itself a security property, do not
      * reorder:</b> this method now ALSO reports whether the attachment's bytes are actually
      * available ({@link LeaveAttachmentRepository.AttachmentLocation#storageState()} {@code
      * DATABASE}, or {@code DISK_LEGACY} with a file that still resolves), and throws {@code 410

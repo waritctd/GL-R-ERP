@@ -131,7 +131,7 @@ public class FactoryQuoteController {
         return Map.of("attachment", factoryQuotes.uploadAttachment(factoryQuoteId, file, user));
     }
 
-    // V132 storage-durability fix: factoryQuotes#attachmentFileLocation has ALREADY confirmed the
+    // V134 storage-durability fix: factoryQuotes#attachmentFileLocation has ALREADY confirmed the
     // bytes are available (DATABASE, or DISK_LEGACY with a file that still resolves), throwing 410
     // itself otherwise -- see LeaveController#downloadAttachment's identical shape for the pattern
     // this mirrors.

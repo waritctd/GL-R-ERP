@@ -665,7 +665,7 @@ public class FactoryQuoteRepository {
     }
 
     /**
-     * V132 storage-durability fix: {@code filePath} here is the bare correlation key {@code
+     * V134 storage-durability fix: {@code filePath} here is the bare correlation key {@code
      * FileStorageService#storeInDatabase} computed, and {@code content} is inserted into {@code
      * hr.file_attachment_blob} in the SAME transaction as the {@code hr.file_attachment} insert
      * below ({@code FactoryQuoteService#uploadAttachment} is {@code @Transactional}), flipping
@@ -714,7 +714,7 @@ public class FactoryQuoteRepository {
         }
     }
 
-    /** V132: {@code (filePath, storageState)} pair for the download path's availability check. */
+    /** V134: {@code (filePath, storageState)} pair for the download path's availability check. */
     public Optional<AttachmentFileLocation> findAttachmentFileLocation(long attachmentId) {
         try {
             return Optional.ofNullable(jdbc.queryForObject("""

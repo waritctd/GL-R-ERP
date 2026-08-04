@@ -95,7 +95,7 @@ app:
   special-money:
     payroll-cutoff-day: ${APP_SPECIAL_MONEY_PAYROLL_CUTOFF_DAY:25}
   uploads-dir: ${APP_UPLOADS_DIR:./uploads}
-  # V132 storage-durability fix: explicit server-side cap enforced in FileStorageService, checked
+  # V134 storage-durability fix: explicit server-side cap enforced in FileStorageService, checked
   # before any byte is read into memory. Deliberately separate from
   # spring.servlet.multipart.max-file-size (${APP_MAX_FILE_SIZE:10MB} above) -- that property is
   # env-overridable for unrelated reasons (e.g. a larger ticket attachment) and must not silently

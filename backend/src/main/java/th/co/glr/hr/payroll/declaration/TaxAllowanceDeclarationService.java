@@ -454,7 +454,7 @@ public class TaxAllowanceDeclarationService {
     @Transactional
     public TaxAllowanceAttachmentDto uploadAttachment(long declarationId, MultipartFile file, UserPrincipal actor) {
         requireOwnerOrHr(declarationId, actor);
-        // V132 storage-durability fix: this evidence file goes straight to the database now -- see
+        // V134 storage-durability fix: this evidence file goes straight to the database now -- see
         // FileStorageService#storeInDatabase's javadoc.
         FileStorageService.StoredContent stored =
             fileStorage.storeInDatabase("tax-allowance-declaration", declarationId, file, EVIDENCE_MIME_TYPES);
@@ -488,7 +488,7 @@ public class TaxAllowanceDeclarationService {
         TaxAllowanceDeclarationRepository.AttachmentFileLocation location =
             repository.findAttachmentFileLocation(attachmentId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบนี้"));
-        // V132 storage-durability fix: availability is checked only AFTER the 404/ownership/
+        // V134 storage-durability fix: availability is checked only AFTER the 404/ownership/
         // tombstone checks above, matching LeaveService#resolveAttachmentForDownload's ordering --
         // see that method's javadoc for why the order itself is a security property.
         if (!bytesAvailable(location)) {

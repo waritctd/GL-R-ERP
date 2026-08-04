@@ -252,7 +252,7 @@ class LeaveServiceTest {
             .thenReturn(60L);
         when(leaveRepository.findById(60L)).thenReturn(Optional.of(
             requestDto(60L, 10L, "APPROVED", start, start, "1.00", "0.00")));
-        // V132 storage-durability fix: LeaveService#submit stores attachments to the database now,
+        // V134 storage-durability fix: LeaveService#submit stores attachments to the database now,
         // via FileStorageService#storeInDatabase + LeaveAttachmentRepository#saveWithContent.
         when(fileStorage.storeInDatabase(eq("leave"), eq(60L), eq(certificate), any(Set.class)))
             .thenReturn(new FileStorageService.StoredContent(

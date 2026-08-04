@@ -57,7 +57,7 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         // certificate, and LeaveService#submit's attachment path does a REAL FK-constrained UPDATE
         // (hr.leave_request.attachment_id -> hr.file_attachment.attachment_id) -- so the stubbed
         // LeaveAttachmentDto must point at a real row, not a fabricated id.
-        // V132 storage-durability fix: LeaveService#submit stores attachments to the database now,
+        // V134 storage-durability fix: LeaveService#submit stores attachments to the database now,
         // via FileStorageService#storeInDatabase + LeaveAttachmentRepository#saveWithContent.
         FileStorageService fileStorage = mock(FileStorageService.class);
         when(fileStorage.storeInDatabase(anyString(), anyLong(), any(), any()))

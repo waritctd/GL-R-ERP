@@ -9,7 +9,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 /**
- * V132 storage-durability fix: CRUD against {@code hr.file_attachment_blob} (the byte payload,
+ * V134 storage-durability fix: CRUD against {@code hr.file_attachment_blob} (the byte payload,
  * kept in a table sibling to {@code hr.file_attachment} so that listing/resolving an attachment
  * never loads its content) and the {@code storage_state} column on {@code hr.file_attachment}
  * itself.

@@ -141,7 +141,7 @@ public class CommissionService {
 
         try {
             long invoiceId = commissions.createInvoice(safeRequest);
-            // V132 storage-durability fix -- TRANSITIONAL dual-write: bytes go to
+            // V134 storage-durability fix -- TRANSITIONAL dual-write: bytes go to
             // hr.file_attachment_blob (via saveWithContent below) AND the file still goes to disk
             // (via store, unchanged) because the SAME file_path string is also registered into
             // sales.attachment, which is out of this branch's scope and still disk-only. See
@@ -183,7 +183,7 @@ public class CommissionService {
     }
 
     /**
-     * V132 storage-durability fix: reads the SAME upload's bytes a second time for the database
+     * V134 storage-durability fix: reads the SAME upload's bytes a second time for the database
      * dual-write, after {@code fileStorage.store} already validated/cap-checked and wrote it to
      * disk. Safe to call twice on one {@code MultipartFile} -- both Spring's real servlet-backed
      * implementation and {@code MockMultipartFile} (used throughout this codebase's tests) support
@@ -281,7 +281,7 @@ public class CommissionService {
 
         try {
             long invoiceId = commissions.createInvoice(request);
-            // V132 storage-durability fix -- TRANSITIONAL dual-write, same rationale as #submit
+            // V134 storage-durability fix -- TRANSITIONAL dual-write, same rationale as #submit
             // above: see CommissionAttachmentRepository#saveWithContent's javadoc.
             FileStorageService.StoredFile storedFile = fileStorage.store(
                 "commission-invoice",

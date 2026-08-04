@@ -68,7 +68,7 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
         // fileStorage/leaveAttachments are mocked (attachment storage is not under test here), but
         // MATERNITY requires a real certificate attachment (requires_attachment = TRUE) -- same
         // technique as LeaveUnpaidDeductionIntegrationTest#sickLeaveBeyondQuotaStillAutoRejects...
-        // V132 storage-durability fix: LeaveService#submit stores attachments to the database now,
+        // V134 storage-durability fix: LeaveService#submit stores attachments to the database now,
         // via FileStorageService#storeInDatabase + LeaveAttachmentRepository#saveWithContent.
         FileStorageService fileStorage = mock(FileStorageService.class);
         when(fileStorage.storeInDatabase(anyString(), anyLong(), any(), any()))

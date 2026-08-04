@@ -17,7 +17,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * V132 storage-durability fix, step 3 of the migration plan: moves every {@code DISK_LEGACY} {@code
+ * V134 storage-durability fix, step 3 of the migration plan: moves every {@code DISK_LEGACY} {@code
  * hr.file_attachment} row's bytes into {@code hr.file_attachment_blob}.
  *
  * <p>This CANNOT be a Flyway SQL migration: the bytes live on the APP container's filesystem, and

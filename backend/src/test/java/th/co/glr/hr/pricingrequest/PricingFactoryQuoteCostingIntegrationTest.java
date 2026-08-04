@@ -1067,7 +1067,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
         FactoryQuoteAttachmentDto attachment = factoryQuoteService.uploadAttachment(draft.id(),
             new MockMultipartFile("file", "factory-a.pdf", "application/pdf", "quote".getBytes()), importActor);
-        // V132 storage-durability fix: factory-quote attachments are database-backed now (see
+        // V134 storage-durability fix: factory-quote attachments are database-backed now (see
         // FactoryQuoteService#uploadAttachment) -- the old "file survives a tombstone" assertion
         // checked disk existence; the equivalent check is now that the blob row survives.
         assertThat(new th.co.glr.hr.attachment.FileAttachmentBlobRepository(jdbc).findContent(attachment.id()))
