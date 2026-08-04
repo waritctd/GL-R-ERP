@@ -1067,15 +1067,19 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
         FactoryQuoteAttachmentDto attachment = factoryQuoteService.uploadAttachment(draft.id(),
             new MockMultipartFile("file", "factory-a.pdf", "application/pdf", "quote".getBytes()), importActor);
-        String filePath = jdbc.queryForObject("""
-            SELECT file_path FROM hr.file_attachment WHERE attachment_id = :id
-            """, Map.of("id", attachment.id()), String.class);
-        assertThat(java.nio.file.Files.exists(java.nio.file.Paths.get(filePath))).isTrue();
+        // V134 storage-durability fix: factory-quote attachments are database-backed now (see
+        // FactoryQuoteService#uploadAttachment) -- the old "file survives a tombstone" assertion
+        // checked disk existence; the equivalent check is now that the blob row survives.
+        assertThat(new th.co.glr.hr.attachment.FileAttachmentBlobRepository(jdbc).findContent(attachment.id()))
+            .as("the attachment's bytes must exist right after upload")
+            .isPresent();
 
         factoryQuoteService.deleteAttachment(attachment.id(), "duplicate upload", importActor);
 
-        // The row and file are both KEPT — this is the tombstone, not a hard delete.
-        assertThat(java.nio.file.Files.exists(java.nio.file.Paths.get(filePath))).isTrue();
+        // The row and its bytes are both KEPT — this is the tombstone, not a hard delete.
+        assertThat(new th.co.glr.hr.attachment.FileAttachmentBlobRepository(jdbc).findContent(attachment.id()))
+            .as("the attachment's bytes must survive a refused/tombstoned delete")
+            .isPresent();
         FactoryQuoteAttachmentDto tombstoned = factoryQuoteService.get(draft.id(), ceoActor).attachments().stream()
             .filter(a -> a.id() == attachment.id()).findFirst().orElseThrow();
         assertThat(tombstoned.deletedAt()).isNotNull();

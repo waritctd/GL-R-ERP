@@ -252,9 +252,13 @@ class LeaveServiceTest {
             .thenReturn(60L);
         when(leaveRepository.findById(60L)).thenReturn(Optional.of(
             requestDto(60L, 10L, "APPROVED", start, start, "1.00", "0.00")));
-        when(fileStorage.store(eq("leave"), eq(60L), eq(certificate), any(Set.class)))
-            .thenReturn(new FileStorageService.StoredFile("cert.pdf", "/uploads/leave/60/x.pdf", "application/pdf", 4L));
-        when(leaveAttachments.save(eq(60L), eq("cert.pdf"), eq("/uploads/leave/60/x.pdf"), eq("application/pdf"), eq(4L), eq(10L)))
+        // V134 storage-durability fix: LeaveService#submit stores attachments to the database now,
+        // via FileStorageService#storeInDatabase + LeaveAttachmentRepository#saveWithContent.
+        when(fileStorage.storeInDatabase(eq("leave"), eq(60L), eq(certificate), any(Set.class)))
+            .thenReturn(new FileStorageService.StoredContent(
+                "cert.pdf", "leave/60/x.pdf", "application/pdf", 4L, "cert".getBytes()));
+        when(leaveAttachments.saveWithContent(eq(60L), eq("cert.pdf"), eq("leave/60/x.pdf"), eq("application/pdf"),
+                eq(4L), eq(10L), any(byte[].class)))
             .thenReturn(new LeaveAttachmentDto(900L, "leave", 60L, "cert.pdf", "application/pdf", 4L, 10L, Instant.now()));
 
         LeaveRequestDto result = leaveService.submit(request, certificate, user("employee", 10L));
@@ -285,9 +289,11 @@ class LeaveServiceTest {
         // block runs after #create regardless of `status`) -- the late-filed certificate is still
         // recorded for HR to see when reviewing the rejection, it just does not buy the request
         // approval.
-        when(fileStorage.store(eq("leave"), eq(61L), eq(certificate), any(Set.class)))
-            .thenReturn(new FileStorageService.StoredFile("cert.pdf", "/uploads/leave/61/x.pdf", "application/pdf", 4L));
-        when(leaveAttachments.save(eq(61L), eq("cert.pdf"), eq("/uploads/leave/61/x.pdf"), eq("application/pdf"), eq(4L), eq(10L)))
+        when(fileStorage.storeInDatabase(eq("leave"), eq(61L), eq(certificate), any(Set.class)))
+            .thenReturn(new FileStorageService.StoredContent(
+                "cert.pdf", "leave/61/x.pdf", "application/pdf", 4L, "cert".getBytes()));
+        when(leaveAttachments.saveWithContent(eq(61L), eq("cert.pdf"), eq("leave/61/x.pdf"), eq("application/pdf"),
+                eq(4L), eq(10L), any(byte[].class)))
             .thenReturn(new LeaveAttachmentDto(901L, "leave", 61L, "cert.pdf", "application/pdf", 4L, 10L, Instant.now()));
 
         LeaveRequestDto result = leaveService.submit(request, certificate, user("employee", 10L));
