@@ -71,6 +71,12 @@ frontend/test-results/
 frontend/blob-report/
 frontend/playwright/.cache/
 
+# Visual-regression baselines (e2e/visual-baseline.spec.js, opt-in via
+# VISUAL_BASELINE=1). Large PNGs of payroll/employee/commission screens — this
+# repository is PUBLIC, same reason frontend/screenshots/ is ignored below.
+# Regenerate locally with `--update-snapshots` before each migration slice.
+frontend/e2e/*.spec.js-snapshots/
+
 # Untracked design-review tooling output (impeccable skill) — not source
 .impeccable/
 
