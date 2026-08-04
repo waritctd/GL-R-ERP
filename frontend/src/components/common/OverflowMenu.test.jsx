@@ -1,6 +1,6 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OverflowMenu } from './OverflowMenu.jsx';
 
 globalThis.React = React;
@@ -14,7 +14,23 @@ function items(overrides = []) {
   ];
 }
 
+// Matches useIsMobile.test.js's own mock shape — OverflowMenu's mobile flip
+// is backed by that same shared `useIsMobile` hook.
+function mockMobileMatchMedia() {
+  window.matchMedia = vi.fn().mockReturnValue({
+    matches: true,
+    media: '(max-width: 720px)',
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  });
+}
+
 describe('OverflowMenu', () => {
+  afterEach(() => {
+    delete window.matchMedia;
+  });
+
+
   it('renders no trigger at all when there are no items', () => {
     const { container } = render(<OverflowMenu items={[]} />);
     expect(container.firstChild).toBeNull();
@@ -56,13 +72,27 @@ describe('OverflowMenu', () => {
   });
 
   it('can flip upward on mobile for fixed bottom action bars', () => {
+    mockMobileMatchMedia();
+    render(<OverflowMenu items={items()} mobilePlacement="up" />);
+    fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+
+    // Position moved from the `mobile:` Tailwind variant to a JS-computed
+    // inline style (see OverflowMenu.jsx's doc comment on `createPortal`) —
+    // flipping up now means `bottom` is set and `top` isn't, rather than a
+    // `mobile:bottom-full` class.
+    const menu = screen.getByRole('menu');
+    expect(menu.style.bottom).not.toBe('');
+    expect(menu.style.top).toBe('');
+    expect(menu.className).toContain('mobile:max-h-[calc(100dvh-7rem)]');
+  });
+
+  it('anchors downward from the trigger when not on mobile', () => {
     render(<OverflowMenu items={items()} mobilePlacement="up" />);
     fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
 
     const menu = screen.getByRole('menu');
-    expect(menu.className).toContain('mobile:bottom-full');
-    expect(menu.className).toContain('mobile:top-auto');
-    expect(menu.className).toContain('mobile:max-h-[calc(100dvh-7rem)]');
+    expect(menu.style.top).not.toBe('');
+    expect(menu.style.bottom).toBe('');
   });
 
   it('invokes the item\'s onSelect and closes the menu on click', () => {
