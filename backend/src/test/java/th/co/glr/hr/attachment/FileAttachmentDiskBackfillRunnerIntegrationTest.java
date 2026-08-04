@@ -98,6 +98,36 @@ class FileAttachmentDiskBackfillRunnerIntegrationTest extends AbstractPostgresIn
     }
 
     @Test
+    void unexpectedFailureAfterFileIsConfirmedPresentLeavesRowDiskLegacyNotMissing() throws Exception {
+        // The bug this guards against: a file that genuinely exists and is readable on disk must
+        // never be marked MISSING just because persisting its bytes failed for an unrelated reason
+        // (a DB timeout, a transient connection failure, ...). Simulated here by a saveContent that
+        // always throws, standing in for that class of failure -- migrateOne has already confirmed
+        // the file is present and readable by the time this fires, exactly like the real failure
+        // mode (blobs.saveContent's INSERT itself failing after a successful disk read).
+        byte[] content = "content that genuinely exists on disk".getBytes(StandardCharsets.UTF_8);
+        Path file = uploadsDir.resolve("leave").resolve("4");
+        Files.createDirectories(file);
+        Path leafFile = file.resolve("cert.pdf");
+        Files.write(leafFile, content);
+        long attachmentId = insertLegacyRow("leave", 4L, leafFile.toString());
+
+        FileAttachmentBlobRepository blobsThatFailToPersist = new FileAttachmentBlobRepository(jdbc) {
+            @Override
+            public void saveContent(long id, byte[] bytes) {
+                throw new RuntimeException("simulated: DB write failed after the file was already confirmed readable");
+            }
+        };
+
+        new FileAttachmentDiskBackfillRunner(blobsThatFailToPersist, fileStorage, txManager).run(null);
+
+        // Not MISSING: the file is still sitting right there on disk, unread by anything else.
+        assertThat(stateOf(attachmentId)).isEqualTo("DISK_LEGACY");
+        assertThat(blobs.findContent(attachmentId)).isEmpty();
+        assertThat(Files.exists(leafFile)).isTrue();
+    }
+
+    @Test
     void oversizedFileIsSkippedAndLeftDiskLegacyNotReadIntoMemory() throws Exception {
         // Cap tiny on purpose so a small file still counts as "oversized" without allocating a
         // large buffer in this test.

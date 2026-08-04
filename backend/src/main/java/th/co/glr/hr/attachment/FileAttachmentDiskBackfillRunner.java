@@ -77,7 +77,15 @@ public class FileAttachmentDiskBackfillRunner implements ApplicationRunner {
             counts[Outcome.SKIPPED_OVERSIZED.ordinal()], counts[Outcome.UNRESOLVED.ordinal()]));
     }
 
-    /** UNRESOLVED = still DISK_LEGACY in the database (its state update itself failed) -- retried on the next boot. */
+    /**
+     * UNRESOLVED = still {@code DISK_LEGACY} in the database -- retried on the next boot. This
+     * covers two cases: the row's state update itself failed, OR {@link #migrateOne} threw an
+     * unexpected exception (e.g. a database timeout while writing the blob) AFTER already
+     * confirming the file is genuinely present and readable on disk. The second case is the whole
+     * reason this is a distinct outcome from {@code MISSING} rather than folded into it: a file we
+     * know exists must never be declared lost just because persisting it failed this one time --
+     * see {@link #migrateOneRowInItsOwnTransaction}'s catch block.
+     */
     private enum Outcome { MIGRATED, MISSING, SKIPPED_OVERSIZED, UNRESOLVED }
 
     private Outcome migrateOneRowInItsOwnTransaction(FileAttachmentBlobRepository.LegacyRow row) {
@@ -85,25 +93,23 @@ public class FileAttachmentDiskBackfillRunner implements ApplicationRunner {
             Outcome outcome = perRowTransaction.execute(status -> migrateOne(row));
             return outcome == null ? Outcome.UNRESOLVED : outcome;
         } catch (Exception exception) {
-            log.warn("File-attachment disk backfill: attachment_id={} domain={} failed unexpectedly, "
-                + "attempting to mark MISSING: {}", row.attachmentId(), row.domain(), exception.toString());
-            return markMissingBestEffort(row);
-        }
-    }
-
-    private Outcome markMissingBestEffort(FileAttachmentBlobRepository.LegacyRow row) {
-        try {
-            perRowTransaction.execute(status -> {
-                blobs.markState(row.attachmentId(), FileAttachmentBlobRepository.MISSING);
-                return null;
-            });
-            return Outcome.MISSING;
-        } catch (Exception exception) {
-            log.error("File-attachment disk backfill: could not even mark attachment_id={} domain={} "
-                + "MISSING, leaving it DISK_LEGACY for the next run: {}",
+            // Deliberately does NOT mark the row MISSING here. By the time an exception can reach
+            // this catch, migrateOne has already confirmed the file exists and is readable (every
+            // genuine "file's gone" case is handled INLINE inside migrateOne's own transaction,
+            // which marks MISSING and returns normally without throwing -- see that method). The
+            // only way execution reaches here is an unexpected failure AFTER that point, most
+            // plausibly blobs.saveContent's INSERT itself (a pooler timeout on a large row, a
+            // transient connection failure, ...). REQUIRES_NEW means this row's transaction has
+            // already rolled back, so the row's true state (DISK_LEGACY) is already correctly
+            // preserved in the database -- there is nothing to undo. Marking it MISSING here would
+            // turn a transient failure into permanent, irrecoverable data loss for a file that is
+            // sitting right there on disk (findDiskLegacyRows only ever selects DISK_LEGACY rows,
+            // so a MISSING row is never reconsidered on a later boot). Leaving it DISK_LEGACY costs
+            // nothing but a retry on the next boot.
+            log.warn("File-attachment disk backfill: attachment_id={} domain={} failed unexpectedly "
+                + "after the file was confirmed present on disk -- leaving it DISK_LEGACY for the "
+                + "next boot rather than risk marking a recoverable file MISSING: {}",
                 row.attachmentId(), row.domain(), exception.toString());
-            // Row stays DISK_LEGACY in the database -- picked up again on the next boot. Not counted
-            // as MISSING since it genuinely is not, yet.
             return Outcome.UNRESOLVED;
         }
     }
