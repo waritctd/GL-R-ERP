@@ -140,7 +140,7 @@ export function ProcurementListPage({ showToast }) {
   ], [navigate]);
 
   return (
-    <div className="page-stack">
+    <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
       <PageHeader
         title="ใบสั่งซื้อโรงงาน"
         subtitle="ใบสั่งซื้อแยกตามโรงงาน ใช้ข้อมูลสินค้าและราคาต้นทุนที่ได้รับอนุมัติแล้วเท่านั้น"

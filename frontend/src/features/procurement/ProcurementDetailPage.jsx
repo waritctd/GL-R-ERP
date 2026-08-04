@@ -91,7 +91,7 @@ export function ProcurementDetailPage({ showToast }) {
 
   if (poQuery.isLoading || !po) {
     return (
-      <div className="page-stack">
+      <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
         <PageHeader title="ใบสั่งซื้อโรงงาน" subtitle="กำลังโหลดรายละเอียดใบสั่งซื้อโรงงาน…" />
       </div>
     );
@@ -101,7 +101,7 @@ export function ProcurementDetailPage({ showToast }) {
   const closed = po.status === 'RECEIVED' || po.status === 'CANCELLED';
 
   return (
-    <div className="page-stack">
+    <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
       <PageHeader
         title={po.poNumber}
         subtitle={po.factoryName}

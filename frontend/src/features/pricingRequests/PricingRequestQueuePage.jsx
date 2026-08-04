@@ -165,7 +165,7 @@ export function PricingRequestQueuePage({ user, showToast }) {
   ];
 
   return (
-    <div className="page-stack">
+    <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
       <SalesTabs role={user.role} />
       <PageHeader
         title="คิวขอราคา"

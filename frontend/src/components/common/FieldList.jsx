@@ -53,7 +53,8 @@ export function InfoGrid({ two = false, className, children, ...props }) {
 /**
  * DetailHero — reproduces `.detail-hero` (+ `.detail-hero.compact`):
  *   display: flex; align-items: center; gap: 18px; padding: 20px;
- *   background/border/radius/shadow via the shared `.panel` surface rule.
+ *   background/border/radius via the shared `.panel` surface rule (border-only
+ *   as of item 3's shadow-sm cleanup — see Layout.jsx's Panel doc comment).
  *   2nd child: flex: 1; min-width: 0.
  *   compact: max-width: 980px.
  *   ≤720px: flex-direction: column; align-items: flex-start.
@@ -71,7 +72,7 @@ export function DetailHero({ compact = false, className, children, ...props }) {
   return (
     <section
       className={cn(
-        'bg-surface border border-border rounded-md shadow-sm',
+        'bg-surface border border-border rounded-md',
         'flex items-center gap-[18px] p-5',
         'max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-2.5 max-[720px]:p-3.5',
         'max-[720px]:[&_h1]:m-0 max-[720px]:[&_h1]:text-lg max-[720px]:[&_h1]:leading-snug',
