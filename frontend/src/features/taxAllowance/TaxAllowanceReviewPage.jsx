@@ -9,7 +9,7 @@ import { DataTable } from '../../components/common/DataTable.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
-import { PageStack } from '../../components/common/Layout.jsx';
+import { FilterRow, PageStack } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -362,7 +362,7 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
           : 'เฉพาะแบบแจ้ง ล.ย.01 ที่ยื่นเข้ามาแล้ว — พนักงานที่ยังไม่ได้ยื่นจะไม่ปรากฏในตารางนี้'}
       />
 
-      <div className="flex flex-wrap items-center gap-3">
+      <FilterRow>
         <FormField label="ปีภาษี" htmlFor="tax-allowance-year">
           <select
             id="tax-allowance-year"
@@ -385,7 +385,7 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
             ariaLabel="กรองตามสถานะ"
           />
         </div>
-      </div>
+      </FilterRow>
 
       <DataTable
         columns={columns}
