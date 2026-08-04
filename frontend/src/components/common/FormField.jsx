@@ -35,6 +35,15 @@ export function fieldErrorId(id) {
   return `${id}-error`;
 }
 
+/**
+ * Tailwind port of `.form-field input.is-invalid` (styles.css, retired).
+ * Exported because the invalid state is applied by the CALLER on its own
+ * control (ChangePasswordModal, OvertimePanel), not by this wrapper.
+ * The focus ring deliberately keeps the danger tint rather than the shared
+ * indigo one, matching the rule this replaces.
+ */
+export const invalidFieldClass = 'border-danger focus:border-danger focus:shadow-[0_0_0_3px_var(--color-danger-bg)]';
+
 function fieldHintId(id) {
   return `${id}-hint`;
 }
@@ -97,7 +106,7 @@ export function FormField({ label, htmlFor, id, error, hint, required = false, c
   }));
 
   return (
-    <div className="form-field">
+    <div className="form-field grid gap-[7px]">
       {label ? (
         <label htmlFor={fieldId}>
           {/*
@@ -115,7 +124,7 @@ export function FormField({ label, htmlFor, id, error, hint, required = false, c
           */}
           <span className="form-field__label-text">
             {label}
-            {required ? <span className="field-required" aria-hidden="true"> *</span> : null}
+            {required ? <span className="field-required text-danger ml-0.5" aria-hidden="true"> *</span> : null}
           </span>
         </label>
       ) : null}

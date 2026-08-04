@@ -20,6 +20,7 @@ import { useDialogFocus } from '../../hooks/useDialogFocus.js';
 import { useIsMobile, useMediaQuery } from '../../hooks/useIsMobile.js';
 import { cn } from '../../utils/cn.js';
 import { formatMoney, formatShortDate, formatThaiMonthYearFromMonthInputValue, payrollStatusLabel as statusInfo } from '../../utils/format.js';
+import { confirmDialogMessageClass } from '../../components/common/ConfirmDialog.jsx';
 
 // Reproduces `.panel` for the detail sidebar, which must stay a real <aside>
 // element (semantic landmark) — Layout.jsx's Panel always renders a <section>
@@ -2325,14 +2326,14 @@ export function PayrollPage({ user, showToast }) {
         title="ประมวลผลเงินเดือน"
         message={(
           <div>
-            <p className="confirm-dialog-message">
+            <p className={confirmDialogMessageClass}>
               ยืนยันประมวลผลเงินเดือนรอบ {formatThaiMonthYearFromMonthInputValue(month)} สำหรับพนักงาน {period?.lineCount || 0} คน?
               การดำเนินการนี้ไม่สามารถย้อนกลับได้
             </p>
-            <p className="confirm-dialog-message">
+            <p className={confirmDialogMessageClass}>
               หลังยืนยัน การอนุมัติ OT ของเดือนนี้จะปิดทันที และไม่มีทางยกเลิกการประมวลผล
             </p>
-            <p className="confirm-dialog-message">
+            <p className={confirmDialogMessageClass}>
               รายได้รวม {formatMoney(period?.totalGross)} · เงินหักรวม {formatMoney(period?.totalDeductions)} · ยอดโอนสุทธิ {formatMoney(period?.totalNet)}
             </p>
           </div>

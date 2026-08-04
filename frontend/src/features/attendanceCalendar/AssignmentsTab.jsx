@@ -13,6 +13,7 @@ import { formatShortDate } from '../../utils/format.js';
 import { AssignmentFormModal } from './AssignmentFormModal.jsx';
 import { todayIso } from './dateHelpers.js';
 import { SCOPE_TYPES, scopeTypeLabel } from './scopeTypes.js';
+import { confirmDialogMessageClass } from '../../components/common/ConfirmDialog.jsx';
 
 const GRID = 'grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,0.8fr)] max-[1040px]:min-w-[760px] reflow-cards';
 
@@ -223,7 +224,7 @@ export function AssignmentsTab({ showToast }) {
         onCancel={() => { setEndTarget(null); setEndError(''); }}
         message={endTarget ? (
           <div className="grid gap-3">
-            <p className="confirm-dialog-message">
+            <p className={confirmDialogMessageClass}>
               สิ้นสุดการมอบหมาย {scopeTypeLabel(endTarget.scopeType)} รหัส {endTarget.scopeId} ({endTarget.scheduleCode})
               ที่เริ่มมีผลตั้งแต่ {formatShortDate(endTarget.effectiveFrom)}
             </p>

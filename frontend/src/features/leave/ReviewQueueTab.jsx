@@ -16,6 +16,7 @@ import {
   buildLeaveRequestColumns, LEAVE_REQUEST_TABLE_GRID, leaveRequestRowKey, renderLeaveRequestExpanded,
 } from './leaveRequestTable.jsx';
 import { canManagerCancelRequest, canReviewRequest } from './leaveSurfaceTabs.js';
+import { confirmDialogMessageClass } from '../../components/common/ConfirmDialog.jsx';
 
 // Leave-surface IA rebuild, Phase A1. This tab is the fix for the Context section's headline
 // complaint: an approver used to see the submit form sitting directly above the queue they were
@@ -385,7 +386,7 @@ export function ReviewQueueTab({ user, showToast }) {
           if (!confirmRequest) return 'ยืนยันการอนุมัติคำขอลานี้?';
           return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <p className="confirm-dialog-message" style={{ margin: 0 }}>
+              <p className={confirmDialogMessageClass} style={{ margin: 0 }}>
                 ตรวจสอบคำขอลาของ <strong>{confirmRequest.employeeName || confirmRequest.employeeCode || confirmRequest.employeeId}</strong> ก่อนอนุมัติ
               </p>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid var(--color-border)', paddingTop: 8 }}>

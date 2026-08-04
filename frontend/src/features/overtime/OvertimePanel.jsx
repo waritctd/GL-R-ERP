@@ -9,11 +9,12 @@ import { Button } from '../../components/common/Button.jsx';
 import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
-import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
+import { FormField, fieldErrorId, invalidFieldClass } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { formGridSpan2, Panel, PageStack, RowActions } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { overtimeStatusLabel as statusInfo } from '../../utils/format.js';
+import { confirmDialogMessageClass } from '../../components/common/ConfirmDialog.jsx';
 
 const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,0.75fr)] max-[1040px]:min-w-[940px] reflow-cards';
 // FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
@@ -533,7 +534,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               id="ot-planned-start"
               type="datetime-local"
               {...register('plannedStartAt')}
-              className={errors.plannedStartAt ? 'is-invalid' : ''}
+              className={errors.plannedStartAt ? invalidFieldClass : ''}
               aria-invalid={Boolean(errors.plannedStartAt)}
               aria-describedby={errors.plannedStartAt ? fieldErrorId('ot-planned-start') : undefined}
               required
@@ -549,7 +550,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               id="ot-planned-end"
               type="datetime-local"
               {...register('plannedEndAt')}
-              className={plannedEndError ? 'is-invalid' : ''}
+              className={plannedEndError ? invalidFieldClass : ''}
               aria-invalid={Boolean(plannedEndError)}
               aria-describedby={plannedEndError ? fieldErrorId('ot-planned-end') : undefined}
               required
@@ -559,7 +560,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
             <FormField label="เหตุผลความจำเป็น" htmlFor="ot-reason" error={errors.reason?.message} required>
               <textarea
                 id="ot-reason"
-                className={errors.reason ? 'is-invalid' : ''}
+                className={errors.reason ? invalidFieldClass : ''}
                 rows={3}
                 {...register('reason')}
                 aria-invalid={Boolean(errors.reason)}
@@ -694,7 +695,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           }
           return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <p className="confirm-dialog-message" style={{ margin: 0 }}>
+              <p className={confirmDialogMessageClass} style={{ margin: 0 }}>
                 ตรวจสอบแผน OT ของ <strong>{request.employeeName || request.employeeCode || request.employeeId}</strong> ก่อนอนุมัติ
               </p>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid var(--color-border)', paddingTop: 8 }}>

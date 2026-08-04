@@ -5,7 +5,9 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { StatCard } from '../../components/common/StatCard.jsx';
+import { StatCard, statIconClass, statToneClass } from '../../components/common/StatCard.jsx';
+import { emptyStateClass } from '../../components/common/EmptyState.jsx';
+import { cn } from '../../utils/cn.js';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
@@ -231,7 +233,7 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], dash
         className="bg-surface border border-border rounded-md p-5 w-full text-left cursor-pointer flex items-center justify-between gap-4 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-3"
       >
         <span className="flex items-center gap-3 min-w-0">
-          <span className={`stat-icon !mb-0 stat-${hasCheckedIn ? 'teal' : 'amber'}`}>
+          <span className={cn(statIconClass, '!mb-0', statToneClass(hasCheckedIn ? 'teal' : 'amber'))}>
             <Icon name="badgeCheck" size={21} />
           </span>
           <span className="min-w-0">
@@ -305,7 +307,7 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], dash
       >
         <div className="request-feed">
           {myRequests.length === 0 ? (
-            <div className="empty-state">ยังไม่มีคำขอล่าสุด</div>
+            <div className={emptyStateClass}>ยังไม่มีคำขอล่าสุด</div>
           ) : myRequests.map((row) => <MyRequestRow key={row.id} row={row} />)}
         </div>
       </Panel>

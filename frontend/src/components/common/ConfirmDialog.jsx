@@ -2,6 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { Modal } from './Modal.jsx';
 
 /**
+ * Tailwind port of `.confirm-dialog-message` (styles.css, retired). Exported
+ * because ~13 call sites across the app render their own richer message body
+ * (multiple paragraphs, inline totals) instead of passing a plain string, and
+ * must keep matching this component's own message typography exactly.
+ */
+export const confirmDialogMessageClass = 'text-text-secondary leading-normal';
+
+/**
  * Branded confirmation dialog built on top of `Modal` (focus trap + Escape +
  * focus restore already handled there). Replaces `window.confirm`/`window.prompt`
  * call sites across the app.
@@ -88,9 +96,9 @@ export function ConfirmDialog({
         </>
       }
     >
-      {typeof message === 'string' ? <p className="confirm-dialog-message">{message}</p> : message}
+      {typeof message === 'string' ? <p className={confirmDialogMessageClass}>{message}</p> : message}
       {requireReason ? (
-        <label className="confirm-dialog-reason" htmlFor="confirm-dialog-reason">
+        <label className="grid gap-[7px] mt-[14px] text-text-secondary text-sm/[inherit] font-bold" htmlFor="confirm-dialog-reason">
           {reasonLabel}
           <textarea
             id="confirm-dialog-reason"
@@ -99,6 +107,7 @@ export function ConfirmDialog({
             onChange={(event) => setReason(event.target.value)}
             placeholder={reasonPlaceholder}
             disabled={busy}
+            className="min-h-[84px]"
           />
           {reasonInvalid && reasonInvalidMessage ? (
             <small className="block text-danger">{reasonInvalidMessage}</small>

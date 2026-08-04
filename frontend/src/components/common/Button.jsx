@@ -111,7 +111,16 @@ export const Button = forwardRef(function Button({
       <span className={cn('inline-flex items-center justify-center gap-[7px]', loading && 'opacity-0')}>
         {children}
       </span>
-      {loading ? <span className="button-loading-spinner" aria-hidden="true" /> : null}
+      {/* Tailwind port of `.button-loading-spinner` (styles.css, retired).
+          `@keyframes button-loading-spin` lives in index.css; `motion-reduce:`
+          replaces the stylesheet's own prefers-reduced-motion block. The class
+          name stays with no rule behind it — Button.test.jsx selects on it. */}
+      {loading ? (
+        <span
+          className="button-loading-spinner absolute w-4 h-4 border-2 border-solid border-current border-r-transparent rounded-pill animate-[button-loading-spin_700ms_linear_infinite] motion-reduce:animate-none"
+          aria-hidden="true"
+        />
+      ) : null}
     </button>
   );
 });

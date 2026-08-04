@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { StatCard } from '../../components/common/StatCard.jsx';
+import { StatCard, statIconClass, statToneClass } from '../../components/common/StatCard.jsx';
+import { cn } from '../../utils/cn.js';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { Avatar } from '../../components/common/Avatar.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -13,6 +14,7 @@ import { hasPermission, canAccessPath } from '../../app/permissions.js';
 import { SALES_ENABLED } from '../../app/features.js';
 import { TaxAllowanceActionRow } from '../taxAllowance/TaxAllowanceActionRow.jsx';
 import { ActionQueue } from './ActionQueue.jsx';
+import { emptyStateClass } from '../../components/common/EmptyState.jsx';
 
 /**
  * Reproduces `.dashboard-grid`: grid-template-columns: 1.15fr 0.85fr; gap: 18px;
@@ -300,7 +302,7 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
           className="bg-surface border border-border rounded-md p-5 w-full text-left cursor-pointer flex items-center justify-between gap-4 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-2"
         >
           <span className="flex items-center gap-3 min-w-0">
-            <span className={`stat-icon !mb-0 stat-${dashboardSummary?.attendance?.todayStatus === 'PRESENT' ? 'teal' : 'amber'}`}>
+            <span className={cn(statIconClass, '!mb-0', statToneClass(dashboardSummary?.attendance?.todayStatus === 'PRESENT' ? 'teal' : 'amber'))}>
               <Icon name="badgeCheck" size={21} />
             </span>
             <span className="min-w-0">
@@ -373,7 +375,7 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
         >
           <div className="request-feed">
             {profileRequests.length === 0 ? (
-              <div className="empty-state">ยังไม่มีคำขอล่าสุด</div>
+              <div className={emptyStateClass}>ยังไม่มีคำขอล่าสุด</div>
             ) : profileRequests.slice(0, 5).map((request) => {
               const status = requestStatus(request.status);
               return (

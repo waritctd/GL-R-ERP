@@ -249,14 +249,30 @@ describe('payroll detail panel close button touch target (Item 4b regression gua
 // circle (there are ~11 of these in the payroll detail panel; a 44px glyph on every field label
 // would be visual noise), so the touch-target fix has to grow the CLICKABLE area via an invisible
 // hit-slop rather than the visible badge itself.
+//
+// The rule moved off styles.css onto InfoTip.jsx's own Tailwind utilities during that stylesheet's
+// retirement, so the guard follows it there. Still a source-text assertion for the same reason as
+// the blocks above: jsdom has no layout engine, so neither the 16px badge nor the pseudo-element's
+// 44x44 hit area is measurable from a component render.
 describe('InfoTip trigger hit-slop (Item 4c regression guard)', () => {
+  const infoTipJsx = fs
+    .readFileSync(path.resolve(__dirname, '../../components/common/InfoTip.jsx'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+
   it('keeps the visible badge small (16x16) and anchors an invisible hit-slop to it', () => {
-    expect(stylesCss).toMatch(/\.info-tip-trigger\s*{[^}]*position:\s*relative;[^}]*width:\s*16px;[^}]*height:\s*16px;/);
+    // `w-4 h-4` is 16x16 at this app's 4px spacing scale; `relative` is what the `before:` inset
+    // below is measured from.
+    expect(infoTipJsx).toContain("'info-tip-trigger relative w-4 h-4 p-0 inline-flex items-center justify-center'");
   });
 
-  it('grows the clickable area to >=44x44 via an invisible ::before, not a bigger visible circle', () => {
-    // 16px visible + 14px inset on each side = 44px hit area.
-    expect(stylesCss).toMatch(/\.info-tip-trigger::before\s*{[^}]*content:\s*'';[^}]*position:\s*absolute;[^}]*inset:\s*-14px;/);
+  it('grows the clickable area to >=44x44 via an invisible before:, not a bigger visible circle', () => {
+    // 16px visible + 14px inset on each side = 44px hit area. A pseudo-element's rendered area is
+    // not a separate event target, so the click still lands on the <button> itself.
+    expect(infoTipJsx).toContain("before:content-[''] before:absolute before:inset-[-14px]");
+  });
+
+  it('no longer keeps a copy of the rule in styles.css', () => {
+    expect(stylesCss).not.toMatch(/\.info-tip-trigger\b/);
   });
 });
 

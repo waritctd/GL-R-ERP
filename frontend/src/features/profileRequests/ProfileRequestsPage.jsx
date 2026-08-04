@@ -8,6 +8,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, RowActions } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
+import { confirmDialogMessageClass } from '../../components/common/ConfirmDialog.jsx';
 
 export function ProfileRequestsPage({ profileRequests, onReview, showToast }) {
   const pendingCount = profileRequests.filter((request) => request.status === 'pending').length;
@@ -109,7 +110,7 @@ export function ProfileRequestsPage({ profileRequests, onReview, showToast }) {
         title="ยืนยันการอนุมัติคำขอแก้ไขข้อมูล"
         message={confirmRequest ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <p className="confirm-dialog-message" style={{ margin: 0 }}>
+            <p className={confirmDialogMessageClass} style={{ margin: 0 }}>
               การอนุมัติจะบันทึกข้อมูลนี้ลงในทะเบียนพนักงานของ{' '}
               <strong>{confirmRequest.employee?.nameTh || confirmRequest.employeeId}</strong> ทันที
             </p>
@@ -131,7 +132,7 @@ export function ProfileRequestsPage({ profileRequests, onReview, showToast }) {
         open={confirmState?.kind === 'reject'}
         title="ปฏิเสธคำขอแก้ไขข้อมูล"
         message={confirmRequest ? (
-          <p className="confirm-dialog-message" style={{ margin: 0 }}>
+          <p className={confirmDialogMessageClass} style={{ margin: 0 }}>
             ยืนยันการปฏิเสธคำขอแก้ไข <strong>{confirmRequest.fieldLabel}</strong> ของ{' '}
             <strong>{confirmRequest.employee?.nameTh || confirmRequest.employeeId}</strong>?
             สถานะจะเปลี่ยนเป็น &quot;ปฏิเสธแล้ว&quot; และไม่สามารถอนุมัติย้อนหลังได้

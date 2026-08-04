@@ -12,6 +12,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
+import { confirmDialogMessageClass } from '../../components/common/ConfirmDialog.jsx';
 
 const DEPOSIT_OPTIONS = [
   { value: 0.3,  label: '30%' },
@@ -888,7 +889,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
         title="ยืนยันการออกเอกสาร"
         message={(
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <p className="confirm-dialog-message" style={{ margin: 0 }}>
+            <p className={confirmDialogMessageClass} style={{ margin: 0 }}>
               ตรวจสอบยอดเงินก่อนออกเอกสารให้ <strong>{form.customerName || 'ลูกค้า'}</strong> — <strong>หลังจากนี้จะไม่สามารถแก้ไขได้</strong>
             </p>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid var(--color-border)', paddingTop: 8 }}>

@@ -7,6 +7,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { SalesTabs } from '../sales/SalesTabs.jsx';
 import { Skeleton, SkeletonCard } from '../../components/common/Skeleton.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
+import { StatGrid } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { formatThaiDate, ticketStatusLabel } from '../../utils/format.js';
@@ -151,18 +152,18 @@ export function TicketDashboard({ user, employee, showToast }) {
 
       {loading ? (
         <div aria-busy="true" aria-label="กำลังโหลดข้อมูลแดชบอร์ด">
-          <div className="stat-grid">
+          <StatGrid>
             <SkeletonCard lines={1} />
             <SkeletonCard lines={1} />
             <SkeletonCard lines={1} />
             <SkeletonCard lines={1} />
-          </div>
-          <div className="stat-grid" style={{ marginTop: 14 }}>
+          </StatGrid>
+          <StatGrid className="mt-[14px]">
             <SkeletonCard lines={1} />
             <SkeletonCard lines={1} />
             <SkeletonCard lines={1} />
             <SkeletonCard lines={1} />
-          </div>
+          </StatGrid>
           <section className="panel" style={{ padding: 0, overflow: 'hidden', marginTop: 14 }}>
             <div className="panel-header" style={{ padding: '14px 18px' }}>
               <Skeleton width="30%" height={16} />
@@ -183,7 +184,7 @@ export function TicketDashboard({ user, employee, showToast }) {
         <>
           <ActionQueue items={queueItems} />
 
-          <div className="stat-grid">
+          <StatGrid>
             <StatCard icon="fileText"  label="เปิดอยู่ทั้งหมด"   value={summary.totalOpen}       helper="ดีลเปิดอยู่"         tone="indigo" onClick={() => navigate('/tickets')} />
             {/* Same reason as the ActionQueue entry above: summary.submitted is
                 permanently 0 for new deals since ticket creation stopped
@@ -199,21 +200,21 @@ export function TicketDashboard({ user, employee, showToast }) {
                 "Known risks" #1. Not the same oversight as the tile above; there is
                 genuinely nothing else for this one to read yet. */}
             <StatCard icon="clipboard" label="รอการอนุมัติ"        value={summary.priceProposed}   helper="Awaiting approval"  tone="amber"  onClick={canApprove ? () => navigate('/tickets') : undefined} />
-          </div>
+          </StatGrid>
 
-          <div className="stat-grid">
+          <StatGrid>
             <StatCard icon="check"     label="อนุมัติแล้ว"         value={summary.approved}        helper="Approved"           tone="teal"   onClick={() => navigate('/tickets')} />
             <StatCard icon="fileText"  label="ออกใบเสนอราคาแล้ว"  value={summary.quotationIssued} helper="Quotation issued"   tone="teal"   onClick={() => navigate('/tickets')} />
             <StatCard icon="badge"     label="ปิดแล้วเดือนนี้"    value={summary.closedThisMonth} helper="Closed this month"  tone="indigo" onClick={() => navigate('/tickets')} />
             <StatCard icon="close"     label="ยกเลิกเดือนนี้"     value={summary.cancelledThisMonth} helper="Cancelled this month" tone="neutral" onClick={() => navigate('/tickets')} />
-          </div>
+          </StatGrid>
 
-          <div className="stat-grid">
+          <StatGrid>
             <StatCard icon="clock"     label="พักไว้ชั่วคราว"      value={summary.onHold ?? 0}             helper="On hold"             tone="amber"  onClick={() => navigate('/tickets?life=ON_HOLD')} />
             <StatCard icon="clock"     label="ดีลเงียบ"            value={summary.dormant ?? 0}            helper="Dormant"             tone="neutral" onClick={() => navigate('/tickets?life=DORMANT')} />
             <StatCard icon="badge"     label="เกินกำหนดชำระ"       value={summary.paymentOverdue ?? 0}     helper="Payment overdue"     tone="rose"   onClick={() => navigate('/tickets?flag=overdue')} />
             <StatCard icon="clipboard" label="ส่งมอบบางส่วน"       value={summary.partiallyDelivered ?? 0} helper="Partially delivered" tone="amber"  onClick={() => navigate('/tickets?flag=partial_delivery')} />
-          </div>
+          </StatGrid>
 
           {recent.length > 0 && (
             <section className="panel" style={{ padding: 0, overflow: 'hidden' }}>

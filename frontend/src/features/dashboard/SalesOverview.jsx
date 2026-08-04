@@ -12,6 +12,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { bangkokMonthStartIso, bangkokTodayIso, formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
 import { monthlyTierBase, round2, tierBreakdown } from '../commissions/commissionCalc.js';
 import { followUpStatus, nextSalesAction, sortWorklist, SALES_ACTION } from '../tickets/salesActions.js';
+import { emptyStateClass } from '../../components/common/EmptyState.jsx';
 
 // Mirrors CommissionPage.jsx's local MANUAL_KIND_LABELS keys, which in turn
 // mirror backend CommissionKind.java's manual-entry constants exactly. Kept
@@ -192,7 +193,7 @@ export function SalesOverview({ user, employee }) {
           {loading ? (
             <p className="m-0 text-sm text-text-muted">กำลังโหลดงานที่ต้องทำ…</p>
           ) : worklist.length === 0 ? (
-            <div className="empty-state">ไม่มีสิ่งที่ต้องดำเนินการตอนนี้</div>
+            <div className={emptyStateClass}>ไม่มีสิ่งที่ต้องดำเนินการตอนนี้</div>
           ) : (
             <div className="flex flex-col">
               {worklist.map(({ deal, action }) => (

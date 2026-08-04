@@ -43,6 +43,7 @@ import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
 import { resolveWorkState } from './workState.js';
+import { confirmDialogMessageClass } from '../../components/common/ConfirmDialog.jsx';
 
 // Thai copy for dealEstimatePricing.js's `reason` codes, mirroring TicketCreateModal.jsx's own
 // ESTIMATE_REASON_LABELS so the two ราคาตั้ง display sites read the same to a rep — copied rather
@@ -2316,7 +2317,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           const hasOutstanding = outstanding > 0;
           return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <p className="confirm-dialog-message" style={{ margin: 0 }}>
+              <p className={confirmDialogMessageClass} style={{ margin: 0 }}>
                 {hasOutstanding
                   ? 'ระบบจะบันทึกรับชำระส่วนที่เหลือเต็มจำนวนเป็นรายการ BALANCE แล้วทำเครื่องหมายดีลนี้ว่าชำระครบแล้ว'
                   : 'ยอดคงเหลือเป็นศูนย์อยู่แล้ว ระบบจะทำเครื่องหมายดีลนี้ว่าชำระครบแล้วโดยไม่บันทึกรายการรับชำระใหม่'}

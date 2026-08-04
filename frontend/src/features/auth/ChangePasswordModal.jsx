@@ -3,9 +3,16 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import { Button } from '../../components/common/Button.jsx';
-import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
+import { FormField, fieldErrorId, invalidFieldClass } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { FormGrid } from '../../components/common/Layout.jsx';
+import {
+  modalBackdropClass,
+  modalBodyClass,
+  modalFooterClass,
+  modalHeaderClass,
+  modalPanelClass,
+} from '../../components/common/Modal.jsx';
 
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
 
@@ -139,21 +146,21 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
   }
 
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={forced ? undefined : onClose}>
+    <div className={modalBackdropClass} role="presentation" onMouseDown={forced ? undefined : onClose}>
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- dialog only stops backdrop click-through; it is not an interactive control */}
       <section
         ref={panelRef}
-        className="modal-panel"
+        className={modalPanelClass}
         role="dialog"
         aria-modal="true"
         aria-label="เปลี่ยนรหัสผ่าน"
         tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header className="modal-header">
+        <header className={modalHeaderClass}>
           <div>
-            <h2>เปลี่ยนรหัสผ่าน</h2>
-            <p>{forced ? 'กรุณาตั้งรหัสผ่านใหม่เพื่อความปลอดภัยก่อนเริ่มใช้งาน' : 'อัปเดตรหัสผ่านของคุณ'}</p>
+            <h2 className="m-0">เปลี่ยนรหัสผ่าน</h2>
+            <p className="m-0 text-text-muted text-sm/[inherit]">{forced ? 'กรุณาตั้งรหัสผ่านใหม่เพื่อความปลอดภัยก่อนเริ่มใช้งาน' : 'อัปเดตรหัสผ่านของคุณ'}</p>
           </div>
           {!forced && onClose ? (
             <Button type="button" variant="icon" onClick={onClose} title="ปิด" aria-label="ปิด">
@@ -161,7 +168,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
             </Button>
           ) : null}
         </header>
-        <div className="modal-body">
+        <div className={modalBodyClass}>
           <FormGrid as="form" single id="change-password-form" onSubmit={handleSubmit(submitPassword)} noValidate>
             <FormField
               label="รหัสผ่านปัจจุบัน"
@@ -174,7 +181,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
                 type="password"
                 {...register('currentPassword')}
                 autoComplete="current-password"
-                className={errors.currentPassword ? 'is-invalid' : ''}
+                className={errors.currentPassword ? invalidFieldClass : ''}
                 aria-invalid={Boolean(errors.currentPassword)}
                 aria-describedby={errors.currentPassword ? fieldErrorId('change-password-current') : undefined}
                 required
@@ -192,7 +199,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
                 {...register('newPassword')}
                 autoComplete="new-password"
                 minLength={8}
-                className={newPasswordTooShort ? 'is-invalid' : ''}
+                className={newPasswordTooShort ? invalidFieldClass : ''}
                 aria-invalid={newPasswordTooShort}
                 aria-describedby={newPasswordTooShort ? fieldErrorId('change-password-new') : undefined}
                 required
@@ -209,7 +216,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
                 type="password"
                 {...register('confirmPassword')}
                 autoComplete="new-password"
-                className={confirmPasswordFieldError ? 'is-invalid' : ''}
+                className={confirmPasswordFieldError ? invalidFieldClass : ''}
                 aria-invalid={Boolean(confirmPasswordFieldError)}
                 aria-describedby={confirmPasswordFieldError ? fieldErrorId('change-password-confirm') : undefined}
                 required
@@ -218,7 +225,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
             {(formError || submitError) ? <div className="form-error" role="alert">{formError || submitError}</div> : null}
           </FormGrid>
         </div>
-        <footer className="modal-footer">
+        <footer className={modalFooterClass}>
           {forced ? (
             <Button type="button" variant="secondary" onClick={onLogout}>ออกจากระบบ</Button>
           ) : (

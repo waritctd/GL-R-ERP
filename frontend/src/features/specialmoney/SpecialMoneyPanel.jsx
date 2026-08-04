@@ -714,7 +714,7 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
                 setValue(), same as every other controlled field in this form. */}
             <input type="hidden" {...register('requestType')} />
             <span id="smr-type-label" className="mb-1.5 block text-sm font-bold text-text">
-              ประเภทคำขอ<span className="field-required" aria-hidden="true"> *</span>
+              ประเภทคำขอ<span className="field-required text-danger ml-0.5" aria-hidden="true"> *</span>
             </span>
             {/* `role="group"` is required for `aria-labelledby` to mean anything here -- a bare
                 `<div>` has no role that exposes an accessible-name slot, so the label

@@ -20,6 +20,7 @@ import { TaxAllowanceEvidenceCount } from './TaxAllowanceEvidenceCount.jsx';
 import { TaxAllowanceForm } from './TaxAllowanceForm.jsx';
 import { buildAllowanceSubmitBody, declaredAllowanceTotal, defaultAllowanceValues } from './taxAllowanceSchema.js';
 import { taxAllowanceStatusInfo } from './taxAllowanceStatus.js';
+import { confirmDialogMessageClass } from '../../components/common/ConfirmDialog.jsx';
 
 const REGISTER_GRID = 'grid-cols-[minmax(0,0.4fr)_minmax(0,1.4fr)_minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.7fr)] max-[1040px]:min-w-[900px] reflow-cards';
 
@@ -55,7 +56,7 @@ function ApplyDialog({ row, onClose, onConfirm, busy }) {
         </>
       )}
     >
-      <p className="confirm-dialog-message">
+      <p className={confirmDialogMessageClass}>
         จะเริ่มลดภาษีของ <strong>{row.employeeName}</strong> ตั้งแต่งวดเดือน {month}
       </p>
       <FormField label="งวดเดือนที่มีผล" htmlFor="apply-effective-month">

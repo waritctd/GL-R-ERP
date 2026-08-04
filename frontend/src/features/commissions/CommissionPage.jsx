@@ -12,6 +12,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { commissionStatusLabel as statusInfo, dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
+import { confirmDialogMessageClass } from '../../components/common/ConfirmDialog.jsx';
 import {
   invoiceCalculation,
   monthlyTierBase,
@@ -1064,7 +1065,7 @@ export function CommissionPage({ user, showToast }) {
           if (isManualKind(record.kind)) {
             return (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <p className="confirm-dialog-message" style={{ margin: 0 }}>
+                <p className={confirmDialogMessageClass} style={{ margin: 0 }}>
                   ตรวจสอบก่อนอนุมัติค่าคอมแบบ <strong>{MANUAL_KIND_LABELS[record.kind] || record.kind}</strong> ของ <strong>{record.salesRepName || record.salesRepId}</strong>
                 </p>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700, borderTop: '1px solid #e6eaf0', paddingTop: 8 }}>
@@ -1080,7 +1081,7 @@ export function CommissionPage({ user, showToast }) {
           }
           return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <p className="confirm-dialog-message" style={{ margin: 0 }}>
+              <p className={confirmDialogMessageClass} style={{ margin: 0 }}>
                 ตรวจสอบยอดก่อนอนุมัติใบกำกับ <strong>{record.invoiceDetails.invoiceNumber}</strong> ของ <strong>{record.salesRepName || record.salesRepId}</strong>
               </p>
               {record.dealAmountMismatch && (

@@ -276,6 +276,30 @@
   }
 }
 
+/* Keyframes for the two animations the app owns. CLAUDE.md keeps "rare
+   keyframes" in global CSS, and they have to be top-level (not inside a
+   cascade layer) so the Tailwind arbitrary `animate-[...]` utilities that
+   reference them by name resolve the same regardless of layer order:
+     - button-loading-spin -> Button.jsx's loading spinner
+     - skeleton-shimmer    -> Skeleton.jsx
+   Both call sites pair the animation with `motion-reduce:animate-none`, which
+   replaces the `prefers-reduced-motion` blocks these used to carry in
+   styles.css. */
+@keyframes button-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
 /* ============================================================
    Base layer — reset, page/document setup, and bare-element defaults.
 

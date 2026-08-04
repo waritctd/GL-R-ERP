@@ -5,6 +5,15 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import {
+  statCardClass,
+  statHelperClass,
+  statIconClass,
+  statLabelClass,
+  statToneClass,
+  statValueClass,
+} from '../../components/common/StatCard.jsx';
+import { cn } from '../../utils/cn.js';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Panel, PageStack } from '../../components/common/Layout.jsx';
 import { SkeletonCard, SkeletonText } from '../../components/common/Skeleton.jsx';
@@ -195,18 +204,18 @@ export function AccountOverview({ user, employee, showToast }) {
               {MONEY_BUCKETS.map((b) => {
                 const bucket = buckets[b.key];
                 return (
-                  <div key={b.key} className={`stat-card ${b.tone === 'rose' && bucket.count > 0 ? '!border-danger-border' : ''}`}>
-                    <div className={`stat-icon stat-${b.tone}`}>
+                  <div key={b.key} className={cn(statCardClass, b.tone === 'rose' && bucket.count > 0 && '!border-danger-border')}>
+                    <div className={cn(statIconClass, statToneClass(b.tone))}>
                       <Icon name={b.icon} size={21} />
                     </div>
-                    <div className="stat-value tabular-nums">{formatMoney(bucket.amount)}</div>
-                    <div className="stat-label flex items-center gap-1.5">
+                    <div className={cn(statValueClass, 'tabular-nums')}>{formatMoney(bucket.amount)}</div>
+                    <div className={cn(statLabelClass, 'flex items-center gap-1.5')}>
                       {b.label}
                       {/* DESIGN.md "Rationed Teal Rule": teal marks what is live — here,
                           the one bucket in active money-motion right now. */}
                       {b.live ? <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden="true" /> : null}
                     </div>
-                    <div className="stat-helper">{bucket.count} ดีล</div>
+                    <div className={statHelperClass}>{bucket.count} ดีล</div>
                   </div>
                 );
               })}
@@ -283,7 +292,7 @@ export function AccountOverview({ user, employee, showToast }) {
                 className="bg-surface border border-border rounded-md p-4 w-full text-left cursor-pointer flex items-center justify-between gap-3 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
               >
                 <span className="flex items-center gap-3">
-                  <span className="stat-icon !mb-0 stat-indigo">
+                  <span className={cn(statIconClass, '!mb-0', statToneClass('indigo'))}>
                     <Icon name="badgeDollar" size={19} />
                   </span>
                   <span>
