@@ -39,7 +39,7 @@ import { hasPermission } from '../../app/permissions.js';
 // `canManagerCancelRequest` below never read `canReview` in the first place (always the
 // client-side approximation) -- there is no fallback to remove there either.
 export function canReviewRequest(request, user, canReviewAll) {
-  if (request?.canReview != null) return Boolean(request.canReview);
+  if (request?.canReview != null) return Boolean(request.canReview) && request?.status === 'SUBMITTED';
   return request?.status === 'SUBMITTED'
     && (canReviewAll || (request?.managerEmployeeId && Number(request.managerEmployeeId) === Number(user?.employeeId)));
 }
