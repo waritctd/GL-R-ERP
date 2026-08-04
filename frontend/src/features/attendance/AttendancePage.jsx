@@ -704,17 +704,17 @@ function MarkPresentModal({ employees, defaultDate, minDate, maxDate, submitting
       onClose={submitting ? undefined : onClose}
       footer={(
         <>
-          <button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>
+          <Button type="button" variant="secondary" onClick={onClose} disabled={submitting}>
             ยกเลิก
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="primary-button"
+            variant="primary"
             disabled={submitting}
             onClick={() => onSubmit({ date, employeeIds: [...selected], notes: notes.trim() || undefined })}
           >
             {submitting ? 'กำลังบันทึก…' : `บันทึก (${selected.size} คน)`}
-          </button>
+          </Button>
         </>
       )}
     >

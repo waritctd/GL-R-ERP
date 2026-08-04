@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { LOST_REASONS } from './stageMeta.js';
 
@@ -18,15 +19,15 @@ export function MarkLostModal({ onClose, onSubmit, submitting }) {
       onClose={onClose}
       footer={(
         <>
-          <button type="button" className="secondary-button" onClick={onClose}>ยกเลิก</button>
-          <button
+          <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
+          <Button
             type="button"
-            className="danger-button"
+            variant="danger"
             disabled={!reason || submitting}
             onClick={() => onSubmit({ reason, note: note.trim() || undefined })}
           >
             {submitting ? 'กำลังบันทึก…' : 'ยืนยันเสียงาน'}
-          </button>
+          </Button>
         </>
       )}
     >

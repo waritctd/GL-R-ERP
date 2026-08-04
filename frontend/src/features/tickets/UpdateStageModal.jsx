@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { dealStageLabel } from '../../utils/format.js';
 import { allowedTargetStages, isRoutineBackwardMove, stageIndex } from './stageMeta.js';
@@ -27,15 +28,15 @@ export function UpdateStageModal({ user, deal, onClose, onSubmit, submitting }) 
       onClose={onClose}
       footer={(
         <>
-          <button type="button" className="secondary-button" onClick={onClose}>ยกเลิก</button>
-          <button
+          <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
+          <Button
             type="button"
-            className="primary-button"
+            variant="primary"
             disabled={!canSave}
             onClick={() => onSubmit({ stage, note: note.trim() || undefined })}
           >
             {submitting ? 'กำลังบันทึก…' : 'บันทึก'}
-          </button>
+          </Button>
         </>
       )}
     >

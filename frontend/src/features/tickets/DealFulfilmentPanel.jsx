@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
@@ -275,33 +276,33 @@ export function DealFulfilmentPanel({
 
           <div className="flex flex-wrap gap-2">
             {can.issueImportRequest ? (
-              <button type="button" className="primary-button" disabled={issueIrMutation.isPending}
+              <Button type="button" variant="primary" disabled={issueIrMutation.isPending}
                 onClick={() => issueIrMutation.mutate()} data-testid="deal-fulfilment-issue-ir">
                 ออกคำขอนำเข้า (IR)
-              </button>
+              </Button>
             ) : can.markIrSent ? (
-              <button type="button" className="primary-button" disabled={markIrSentMutation.isPending}
+              <Button type="button" variant="primary" disabled={markIrSentMutation.isPending}
                 onClick={() => markIrSentMutation.mutate()} data-testid="deal-fulfilment-mark-ir-sent">
                 ส่งคำขอนำเข้าแล้ว
-              </button>
+              </Button>
             ) : can.markShipping ? (
-              <button type="button" className="primary-button" disabled={markShippingMutation.isPending}
+              <Button type="button" variant="primary" disabled={markShippingMutation.isPending}
                 onClick={() => markShippingMutation.mutate()} data-testid="deal-fulfilment-mark-shipping">
                 สินค้าออกเดินทาง
-              </button>
+              </Button>
             ) : can.markGoodsReceived ? (
-              <button type="button" className="primary-button" disabled={markGoodsReceivedMutation.isPending}
+              <Button type="button" variant="primary" disabled={markGoodsReceivedMutation.isPending}
                 onClick={() => markGoodsReceivedMutation.mutate()} data-testid="deal-fulfilment-mark-goods-received">
                 รับสินค้าแล้ว
-              </button>
+              </Button>
             ) : fs == null ? (
               <p className="text-xs text-text-muted">ยังไม่ออกคำขอนำเข้า</p>
             ) : null}
             {can.reserveStock ? (
-              <button type="button" className="secondary-button" disabled={reserveStockMutation.isPending}
+              <Button type="button" variant="secondary" disabled={reserveStockMutation.isPending}
                 onClick={openStockModal} data-testid="deal-fulfilment-reserve-stock">
                 จองสินค้าจากสต็อก
-              </button>
+              </Button>
             ) : null}
           </div>
         </div>
@@ -326,16 +327,16 @@ export function DealFulfilmentPanel({
             </div>
             <div className="flex flex-wrap gap-2">
               {can.recordDelivery ? (
-                <button type="button" className="primary-button" disabled={recordDeliveryMutation.isPending}
+                <Button type="button" variant="primary" disabled={recordDeliveryMutation.isPending}
                   onClick={openDeliveryModal} data-testid="deal-fulfilment-record-delivery">
                   บันทึกการส่งสินค้า
-                </button>
+                </Button>
               ) : null}
               {can.completeDelivery ? (
-                <button type="button" className="secondary-button" disabled={completeDeliveryMutation.isPending}
+                <Button type="button" variant="secondary" disabled={completeDeliveryMutation.isPending}
                   onClick={() => completeDeliveryMutation.mutate()} data-testid="deal-fulfilment-complete">
                   ส่งมอบครบ
-                </button>
+                </Button>
               ) : null}
             </div>
           </div>
@@ -442,11 +443,11 @@ export function DealFulfilmentPanel({
           onClose={() => setDeliveryOpen(false)}
           footer={(
             <>
-              <button type="button" className="secondary-button" onClick={() => setDeliveryOpen(false)}>ยกเลิก</button>
-              <button type="button" className="primary-button" disabled={recordDeliveryMutation.isPending}
+              <Button type="button" variant="secondary" onClick={() => setDeliveryOpen(false)}>ยกเลิก</Button>
+              <Button type="button" variant="primary" disabled={recordDeliveryMutation.isPending}
                 onClick={handleRecordDelivery} data-testid="deal-fulfilment-record-delivery-submit">
                 บันทึก
-              </button>
+              </Button>
             </>
           )}
         >
@@ -497,11 +498,11 @@ export function DealFulfilmentPanel({
           onClose={() => setStockOpen(false)}
           footer={(
             <>
-              <button type="button" className="secondary-button" onClick={() => setStockOpen(false)}>ยกเลิก</button>
-              <button type="button" className="primary-button" disabled={reserveStockMutation.isPending}
+              <Button type="button" variant="secondary" onClick={() => setStockOpen(false)}>ยกเลิก</Button>
+              <Button type="button" variant="primary" disabled={reserveStockMutation.isPending}
                 onClick={handleReserveStock}>
                 บันทึก
-              </button>
+              </Button>
             </>
           )}
         >

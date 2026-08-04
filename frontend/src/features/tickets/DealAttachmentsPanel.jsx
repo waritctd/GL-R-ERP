@@ -68,6 +68,10 @@ export function DealAttachmentsPanel({
             onChange={onUploadAttachment}
             accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
           />
+          {/* Not a <Button>: this <span> is the visible face of the <label>
+              above, which forwards clicks to the hidden file input by
+              htmlFor. Nesting a real <button> inside that label would add a
+              second interactive control competing for the same click. */}
           <span
             className="secondary-button max-[720px]:min-h-11 max-[720px]:w-full"
             style={{ fontSize: 12, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}

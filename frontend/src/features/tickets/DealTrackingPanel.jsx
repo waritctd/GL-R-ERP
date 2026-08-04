@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -129,12 +130,12 @@ export function DealTrackingPanel({
               </label>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <button type="button" className="primary-button" disabled={updating} onClick={submitTracking}>
+              <Button type="button" variant="primary" disabled={updating} onClick={submitTracking}>
                 บันทึก
-              </button>
-              <button type="button" className="secondary-button" disabled={updating} onClick={() => setEditOpen(false)}>
+              </Button>
+              <Button type="button" variant="secondary" disabled={updating} onClick={() => setEditOpen(false)}>
                 ยกเลิก
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
@@ -167,10 +168,10 @@ export function DealTrackingPanel({
               </div>
             </div>
             {canEdit ? (
-              <button type="button" className="secondary-button self-start" onClick={openEdit}>
+              <Button type="button" variant="secondary" className="self-start" onClick={openEdit}>
                 <Icon name="pencil" size={14} />
                 แก้ไขข้อมูลติดตาม
-              </button>
+              </Button>
             ) : null}
           </div>
         )}

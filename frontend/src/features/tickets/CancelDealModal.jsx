@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { CANCEL_REASONS } from './stageMeta.js';
 
@@ -22,15 +23,15 @@ export function CancelDealModal({ onClose, onSubmit, submitting }) {
       onClose={onClose}
       footer={(
         <>
-          <button type="button" className="secondary-button" onClick={onClose}>ปิด</button>
-          <button
+          <Button type="button" variant="secondary" onClick={onClose}>ปิด</Button>
+          <Button
             type="button"
-            className="danger-button"
+            variant="danger"
             disabled={!reason || submitting}
             onClick={() => onSubmit({ reason, note: note.trim() || undefined })}
           >
             {submitting ? 'กำลังบันทึก…' : 'ยืนยันยกเลิกดีล'}
-          </button>
+          </Button>
         </>
       )}
     >

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
@@ -315,14 +316,16 @@ function DocumentRow({ icon, title, meta, status, actions = [] }) {
       </div>
       <div className="flex shrink-0 flex-wrap gap-1.5">
         {actions.map((action) => (action.href ? (
+          // Not a <Button>: this is a real navigation link (target="_blank" to
+          // a file URL) — Button renders a <button>, which has no href.
           <a key={action.label} href={action.href} target="_blank" rel="noreferrer" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}>
             {action.label}
           </a>
         ) : (
-          <button key={action.label} type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+          <Button key={action.label} type="button" variant="secondary" style={{ fontSize: 12, padding: '4px 10px' }}
             disabled={action.busy} onClick={action.onClick}>
             {action.busy ? 'กำลังดาวน์โหลด…' : action.label}
-          </button>
+          </Button>
         )))}
       </div>
     </div>

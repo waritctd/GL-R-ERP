@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
+import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { QUANTITY_TYPE_OPTIONS, RECIPIENT_OPTIONS, UNIT_BASIS_OPTIONS, unitBasisLabel } from './pricingRequestMeta.js';
@@ -696,30 +697,30 @@ export function PricingRequestCreateModal({
       onClose={onClose}
       footer={isEdit ? (
         <>
-          <button type="button" className="secondary-button" onClick={onClose} disabled={saving}>ยกเลิก</button>
-          <button type="button" className="primary-button" disabled={saving} onClick={handleUpdate}>
+          <Button type="button" variant="secondary" onClick={onClose} disabled={saving}>ยกเลิก</Button>
+          <Button type="button" variant="primary" disabled={saving} onClick={handleUpdate}>
             <Icon name="check" size={14} />
             {saving ? 'กำลังบันทึก…' : 'บันทึกการแก้ไข'}
-          </button>
+          </Button>
         </>
       ) : isRevision ? (
         <>
-          <button type="button" className="secondary-button" onClick={onClose} disabled={saving}>ยกเลิก</button>
-          <button type="button" className="primary-button" disabled={saving || !revisionReason.trim()} onClick={handleCreateRevision}>
+          <Button type="button" variant="secondary" onClick={onClose} disabled={saving}>ยกเลิก</Button>
+          <Button type="button" variant="primary" disabled={saving || !revisionReason.trim()} onClick={handleCreateRevision}>
             <Icon name="check" size={14} />
             {saving ? 'กำลังสร้าง…' : 'สร้างรอบแก้ไข'}
-          </button>
+          </Button>
         </>
       ) : (
         <>
-          <button type="button" className="secondary-button" onClick={onClose} disabled={saving}>ยกเลิก</button>
-          <button type="button" className="secondary-button" disabled={saving} onClick={handleSaveDraft}>
+          <Button type="button" variant="secondary" onClick={onClose} disabled={saving}>ยกเลิก</Button>
+          <Button type="button" variant="secondary" disabled={saving} onClick={handleSaveDraft}>
             {saving ? 'กำลังบันทึก…' : 'บันทึกร่าง'}
-          </button>
-          <button type="button" className="primary-button" disabled={saving} onClick={handleSubmitToImport}>
+          </Button>
+          <Button type="button" variant="primary" disabled={saving} onClick={handleSubmitToImport}>
             <Icon name="check" size={14} />
             {saving ? 'กำลังส่ง…' : 'ส่งให้ฝ่ายนำเข้า'}
-          </button>
+          </Button>
         </>
       )}
     >
@@ -792,9 +793,9 @@ export function PricingRequestCreateModal({
         <div>
           <div className="mb-2 flex items-center justify-between">
             <span className="text-sm font-bold text-text-secondary">รายการสินค้า *</span>
-            <button type="button" className="secondary-button" style={{ fontSize: 12 }} onClick={addItem}>
+            <Button type="button" variant="secondary" style={{ fontSize: 12 }} onClick={addItem}>
               <Icon name="plus" size={13} /> เพิ่มรายการ
-            </button>
+            </Button>
           </div>
           <div className="flex flex-col gap-2">
             {items.map((item, index) => (
@@ -805,9 +806,9 @@ export function PricingRequestCreateModal({
                     {item.sourceTicketItemId ? ` · อ้างอิงจากรายการสินค้าในดีล #${item.sourceTicketItemId}` : ''}
                   </span>
                   {items.length > 1 ? (
-                    <button type="button" className="icon-button" aria-label={`ลบรายการที่ ${index + 1}`} onClick={() => removeItem(index)}>
+                    <Button type="button" variant="icon" aria-label={`ลบรายการที่ ${index + 1}`} onClick={() => removeItem(index)}>
                       <Icon name="close" size={13} />
-                    </button>
+                    </Button>
                   ) : null}
                 </div>
                 {itemErrors[index] ? (
@@ -936,15 +937,15 @@ export function PricingRequestCreateModal({
                   onChange={handleUploadAttachment}
                   disabled={uploadingAttachment}
                 />
-                <button
+                <Button
                   type="button"
-                  className="secondary-button"
+                  variant="secondary"
                   style={{ fontSize: 12 }}
                   disabled={uploadingAttachment}
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <Icon name="plus" size={13} /> {uploadingAttachment ? 'กำลังแนบไฟล์…' : 'แนบไฟล์'}
-                </button>
+                </Button>
               </>
             ) : null}
           </div>
@@ -960,14 +961,14 @@ export function PricingRequestCreateModal({
                   className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-subtle px-3 py-1.5 text-xs"
                 >
                   <span className="truncate">{attachment.fileName}</span>
-                  <button
+                  <Button
                     type="button"
-                    className="icon-button"
+                    variant="icon"
                     aria-label={`ลบไฟล์แนบ ${attachment.fileName}`}
                     onClick={() => handleDeleteAttachment(attachment.id)}
                   >
                     <Icon name="close" size={13} />
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>

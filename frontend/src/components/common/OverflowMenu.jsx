@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../../utils/cn.js';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
+import { Button } from './Button.jsx';
 import { Icon } from './Icon.jsx';
 
 /**
@@ -163,24 +164,42 @@ export function OverflowMenu({
 
   return (
     <div className="relative inline-block">
-      <button
-        type="button"
-        ref={triggerRef}
-        className={cn(
-          triggerLabel
-            ? 'inline-flex min-h-[38px] items-center justify-center gap-[7px] rounded-md border-[1.5px] border-solid border-border-input bg-surface px-[13px] py-0 font-bold text-icon-muted mobile:min-h-[44px]'
-            : 'icon-button',
-          triggerClassName,
-        )}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={label}
-        title={label}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <Icon name={triggerIcon} size={18} />
-        {triggerLabel ? <span>{triggerLabel}</span> : null}
-      </button>
+      {/* Two distinct render paths, not one <Button> with a conditional
+          variant: the labeled path's classes are a hand-rolled style that
+          predates Button.jsx and isn't built from the icon-button legacy
+          class, so it's left untouched rather than guessed into a variant. */}
+      {triggerLabel ? (
+        <button
+          type="button"
+          ref={triggerRef}
+          className={cn(
+            'inline-flex min-h-[38px] items-center justify-center gap-[7px] rounded-md border-[1.5px] border-solid border-border-input bg-surface px-[13px] py-0 font-bold text-icon-muted mobile:min-h-[44px]',
+            triggerClassName,
+          )}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={label}
+          title={label}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <Icon name={triggerIcon} size={18} />
+          <span>{triggerLabel}</span>
+        </button>
+      ) : (
+        <Button
+          type="button"
+          ref={triggerRef}
+          variant="icon"
+          className={triggerClassName}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={label}
+          title={label}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <Icon name={triggerIcon} size={18} />
+        </Button>
+      )}
       {open && menuPosition ? createPortal(
         <div
           ref={menuRef}
