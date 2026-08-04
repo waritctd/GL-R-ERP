@@ -653,7 +653,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   if (loading) {
     return (
-      <div className="page-stack" aria-busy="true" aria-label="กำลังโหลดข้อมูลดีล">
+      <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]" aria-busy="true" aria-label="กำลังโหลดข้อมูลดีล">
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between' }}>
           <div style={{ flex: 1 }}>
             <Skeleton width={80} height={28} radius="var(--radius-md)" className="skeleton" />
@@ -687,7 +687,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   if (!ticket) {
     return (
-      <div className="page-stack">
+      <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
         <EmptyState icon="fileText" title="ไม่พบดีล" description="กลับไปหน้ารายการ" />
         <button type="button" className="secondary-button" onClick={onBack}>
           <Icon name="chevronLeft" />
@@ -1297,7 +1297,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // DealFulfilmentPanel (Phase 3 Slice S4).
 
   return (
-    <div className={`page-stack ${bannerText || stickyPrimaryAction || overflowItems.length > 0 ? 'mobile:pb-28' : ''}`}>
+    <div className={`grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] ${bannerText || stickyPrimaryAction || overflowItems.length > 0 ? 'mobile:pb-28' : ''}`}>
       {/* F-14 (ticket-detail IA rebuild Phase 1): the breadcrumb is the single
           up-nav — a full-width "กลับ" bar underneath it just repeated the same
           affordance as page chrome. Verified safe to drop: every e2e "กลับ"
@@ -1317,7 +1317,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         data-testid="ticket-detail-sticky-chrome"
         className="sticky top-[calc(var(--deal-scroll-pad-y)*-1)] z-10 bg-surface pt-[var(--deal-scroll-pad-y)] mobile:static mobile:bg-transparent mobile:pt-0"
       >
-        <div className="overflow-hidden rounded-lg border border-border bg-surface shadow-sm mobile:overflow-visible mobile:border-0 mobile:bg-transparent mobile:shadow-none">
+        <div className="overflow-hidden rounded-lg border border-border bg-surface mobile:overflow-visible mobile:border-0 mobile:bg-transparent">
           <DealStateHeader
             summary={summary}
             pricingRequests={pricingRequests}
@@ -1425,7 +1425,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               the now-deleted TicketContextPanel.jsx sticky rail — same fields,
               same labels, same assignedImport role-scoped readout. */}
           <div className="grid gap-4 sm:grid-cols-2">
-            <section className="rounded-lg border border-border bg-surface p-4 shadow-sm">
+            <section className="rounded-lg border border-border bg-surface p-4">
               <ContextSection title="วันสำคัญ" helper="Key dates" icon="calendar">
                 <dl className="m-0">
                   <FieldRow label="ติดตามครั้งถัดไป" value={formatThaiDate(summary.nextFollowUpAt)} />
@@ -1436,7 +1436,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 </dl>
               </ContextSection>
             </section>
-            <section className="rounded-lg border border-border bg-surface p-4 shadow-sm">
+            <section className="rounded-lg border border-border bg-surface p-4">
               <ContextSection title="ผู้เกี่ยวข้อง" helper="ทีมที่เกี่ยวข้อง" icon="users">
                 <dl className="m-0">
                   <FieldRow label="เจ้าของดีล" value={summary.createdByName} />

@@ -82,7 +82,7 @@ function dispatchStatusBadge(quote) {
 function PricingRequestDetailSkeleton() {
   return (
     <div className="grid w-[min(760px,100%)] gap-3" aria-hidden="true">
-      <div className="grid gap-2 rounded-md border border-border bg-surface p-4 shadow-sm">
+      <div className="grid gap-2 rounded-md border border-border bg-surface p-4">
         <Skeleton height={24} width="42%" />
         <Skeleton height={14} width="64%" />
         <div className="grid gap-2 pt-2 sm:grid-cols-2">
@@ -92,12 +92,12 @@ function PricingRequestDetailSkeleton() {
           <Skeleton height={16} />
         </div>
       </div>
-      <div className="grid gap-2 rounded-md border border-border bg-surface p-4 shadow-sm">
+      <div className="grid gap-2 rounded-md border border-border bg-surface p-4">
         <Skeleton height={18} width="34%" />
         <Skeleton height={58} />
         <Skeleton height={58} />
       </div>
-      <div className="grid gap-2 rounded-md border border-border bg-surface p-4 shadow-sm">
+      <div className="grid gap-2 rounded-md border border-border bg-surface p-4">
         <Skeleton height={18} width="28%" />
         <SkeletonText lines={2} />
       </div>
@@ -517,7 +517,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
   if (detailQuery.isLoading) {
     return (
-      <div className="page-stack">
+      <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
         <StatePanel
           state="loading"
           title="กำลังโหลดคำขอราคา"
@@ -532,7 +532,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   if (detailQuery.isError) {
     if (detailErrorStatus === 404) {
       return (
-        <div className="page-stack">
+        <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
           <StatePanel
             state="notFound"
             title="ไม่พบคำขอราคานี้"
@@ -549,7 +549,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
     if (detailErrorStatus === 403) {
       return (
-        <div className="page-stack">
+        <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
           <StatePanel
             state="denied"
             title="ยังเปิดคำขอราคานี้ไม่ได้"
@@ -565,7 +565,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
     }
 
     return (
-      <div className="page-stack">
+      <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
         <StatePanel
           state="error"
           title={toUserErrorMessage(detailQuery.error, 'โหลดคำขอราคาไม่สำเร็จ')}
@@ -588,7 +588,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
   if (!summary) {
     return (
-      <div className="page-stack">
+      <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
         <StatePanel
           state="notFound"
           title="ไม่พบคำขอราคานี้"
@@ -604,7 +604,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   }
 
   return (
-    <div className="page-stack">
+    <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
       <PageHeader
         title={summary.requestCode}
         subtitle={`${summary.customerName ?? '-'}${summary.projectName ? ` · ${summary.projectName}` : ''}`}

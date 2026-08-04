@@ -120,7 +120,17 @@ export function LeaveSurfacePage({ user, currentEmployee, showToast }) {
     // 1015 back to exactly 900 (== clientHeight) at 1440x900, with the input
     // still at the same in-page position -- just clipped/scrolled locally.
     <PageStack className="relative">
-      <div className="sticky top-0 z-10 -mx-4 border-b border-border bg-surface px-4 sm:mx-0 sm:border-0 sm:px-0">
+      {/* Part 3 bug fix (owner's explicit, repeated request): this used to be
+          `sticky top-0`. `.content-scroll` has `padding-top: 28px`, and
+          `position: sticky; top: 0` pins to that *content* box — so the
+          header parked 28px BELOW the scroll container's real top edge, and
+          that 28px band had no background of its own, letting scrolled
+          content show through above the "pinned" header. Reproduced exactly
+          in the browser (container top y=66, sticky pinned at y=94,
+          elementFromPoint in the band returned page content, not the
+          header). Now plain flow content — no sticky, no bleed
+          compensation. */}
+      <div>
         <PageHeader
           title="การลา"
           subtitle="ยื่นคำขอลา ตรวจโควตา และพิจารณาคำขอของทีมในที่เดียว"

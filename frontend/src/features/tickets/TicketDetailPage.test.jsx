@@ -366,8 +366,9 @@ describe('TicketDetailPage', () => {
     // measured `--deal-header-h` sticky-offset classes) is retired — there is
     // no second column any more, so no `data-testid="ticket-context-rail"`
     // element exists at all. `--deal-header-h` itself stays defined (index.css)
-    // and consumed by `styles.css`'s `scroll-padding-top` for mobile focus
-    // scrolling — see ticketWorkspaceLayout.test.js, unaffected by this.
+    // and consumed by AppShell.jsx's `scroll-pt-[...]` (Tailwind port of the
+    // old `.content-scroll` rule) for mobile focus scrolling — see
+    // ticketWorkspaceLayout.test.js, unaffected by this.
     expect(screen.queryByTestId('ticket-context-rail')).toBeNull();
   });
 

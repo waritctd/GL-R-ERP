@@ -596,7 +596,7 @@ export function CeoSettingsPage({ showToast }) {
   if (loading) return <div style={{ padding: 40, color: 'var(--color-text-muted)' }}>กำลังโหลดการตั้งค่าการคำนวณราคา…</div>;
 
   return (
-    <div className="page-stack">
+    <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
       <header>
         <h1 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 800 }}>ตั้งค่าการคำนวณราคา</h1>
         <p style={{ margin: 0, color: 'var(--color-text-muted)', fontSize: 13 }}>CEO สามารถปรับค่าได้ตลอดเวลา — ระบบเก็บประวัติทุกเวอร์ชัน</p>
