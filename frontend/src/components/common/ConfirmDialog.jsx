@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Modal } from './Modal.jsx';
+import { Button } from './Button.jsx';
 
 /**
  * Branded confirmation dialog built on top of `Modal` (focus trap + Escape +
@@ -65,7 +66,7 @@ export function ConfirmDialog({
     }
   }
 
-  const confirmButtonClass = tone === 'danger' ? 'danger-button' : 'primary-button';
+  const confirmVariant = tone === 'danger' ? 'danger' : 'primary';
 
   return (
     <Modal
@@ -73,18 +74,17 @@ export function ConfirmDialog({
       onClose={busy ? undefined : onCancel}
       footer={
         <>
-          <button type="button" className="secondary-button" onClick={onCancel} disabled={busy}>
+          <Button variant="secondary" onClick={onCancel} disabled={busy}>
             {cancelLabel}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
             ref={confirmButtonRef}
-            className={confirmButtonClass}
+            variant={confirmVariant}
             onClick={handleConfirm}
             disabled={confirmDisabled}
           >
             {busy ? 'กำลังดำเนินการ...' : confirmLabel}
-          </button>
+          </Button>
         </>
       }
     >

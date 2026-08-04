@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Button } from './Button.jsx';
 import { Icon } from './Icon.jsx';
+import { Panel } from './Layout.jsx';
 
 // Thai labels for the guarded routes in app/permissions.js's PATH_GUARDS —
 // copy only, used to name the refused page in the message below. Mirrors the
@@ -103,7 +104,7 @@ export function AccessDeniedPage() {
           </h1>
         </div>
       </div>
-      <section className="panel empty-state">
+      <Panel className="empty-state">
         <Icon name="lock" size={34} />
         <p>
           บัญชีของคุณไม่มีสิทธิ์เข้าถึงหน้า
@@ -128,7 +129,7 @@ export function AccessDeniedPage() {
             ไปที่แดชบอร์ด
           </Button>
         </div>
-      </section>
+      </Panel>
     </div>
   );
 }
