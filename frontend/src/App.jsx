@@ -282,6 +282,7 @@ export function App() {
                   employee={currentEmployee}
                   profileRequests={dashboardRequests}
                   dashboardSummary={dashboardSummary}
+                  taxAllowanceSummary={taxAllowanceSummary}
                   showToast={showToast}
                 />
               ) : (
@@ -290,6 +291,7 @@ export function App() {
                   employee={currentEmployee}
                   profileRequests={dashboardRequests}
                   dashboardSummary={dashboardSummary}
+                  taxAllowanceSummary={taxAllowanceSummary}
                   showToast={showToast}
                 />
               )

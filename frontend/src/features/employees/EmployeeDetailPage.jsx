@@ -15,6 +15,7 @@ import { PageStack } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { formatAddress, formatMoney, formatThaiDate } from '../../utils/format.js';
+import { TaxAllowanceDrilldown } from '../taxAllowance/TaxAllowanceDrilldown.jsx';
 import { EmployeeFormModal } from './EmployeeFormModal.jsx';
 
 const tabDefs = [
@@ -215,18 +216,33 @@ function HistoryTab({ employee, canSeeSalary }) {
 
 function SensitiveTab({ employee }) {
   return (
-    <CollapsibleSection
-      title="ข้อมูลอ่อนไหว"
-      collapsible={false}
-      headerRight={<StatusBadge tone="teal">PDPA</StatusBadge>}
-    >
-      <FieldList columns={3}>
-        <div><dt>เลขบัตรประชาชน</dt><dd><code>{employee.sensitive.nationalId}</code></dd></div>
-        <div><dt>เลขประจำตัวผู้เสียภาษี</dt><dd><code>{employee.sensitive.taxId}</code></dd></div>
-        <div><dt>เลขประกันสังคม</dt><dd><code>{employee.sensitive.socialSecurityNo}</code></dd></div>
-        <div><dt>โรงพยาบาลประกันสังคม</dt><dd>{employee.sensitive.socialSecurityHospital}</dd></div>
-        <div><dt>กองทุนสำรองเลี้ยงชีพ</dt><dd><code>{employee.sensitive.providentFundNo}</code></dd></div>
-      </FieldList>
-    </CollapsibleSection>
+    <>
+      <CollapsibleSection
+        title="ข้อมูลอ่อนไหว"
+        collapsible={false}
+        headerRight={<StatusBadge tone="teal">PDPA</StatusBadge>}
+      >
+        <FieldList columns={3}>
+          <div><dt>เลขบัตรประชาชน</dt><dd><code>{employee.sensitive.nationalId}</code></dd></div>
+          <div><dt>เลขประจำตัวผู้เสียภาษี</dt><dd><code>{employee.sensitive.taxId}</code></dd></div>
+          <div><dt>เลขประกันสังคม</dt><dd><code>{employee.sensitive.socialSecurityNo}</code></dd></div>
+          <div><dt>โรงพยาบาลประกันสังคม</dt><dd>{employee.sensitive.socialSecurityHospital}</dd></div>
+          <div><dt>กองทุนสำรองเลี้ยงชีพ</dt><dd><code>{employee.sensitive.providentFundNo}</code></dd></div>
+        </FieldList>
+      </CollapsibleSection>
+
+      {/* ล.ย.01 lives in this tab, not in "การจ้างงาน": a declaration names dependants, health
+          and life insurance, and disability status — the same PDPA-shaped material as the block
+          above, and a stricter audience than the page itself (canViewSensitiveEmployeeData is
+          hr-only, canViewEmployees is too). Reuses TaxAllowanceDrilldown wholesale — the same
+          component PayrollPage embeds — rather than a second copy of status + breakdown. */}
+      <CollapsibleSection title="ค่าลดหย่อนภาษี (ล.ย.01)" collapsible={false}>
+        <TaxAllowanceDrilldown
+          employeeId={employee.id}
+          employeeCode={employee.code}
+          taxYear={new Date().getFullYear()}
+        />
+      </CollapsibleSection>
+    </>
   );
 }
