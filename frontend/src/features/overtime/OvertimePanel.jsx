@@ -577,7 +577,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
         </form>
       </Panel>
 
-      <section className="table-panel">
+      <Panel flush>
         <div className={`${OVERTIME_TABLE_GRID} table-head`}>
           <span>วันที่ / พนักงาน</span>
           <span>แผน OT</span>
@@ -666,7 +666,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
             </div>
           );
         })}
-      </section>
+      </Panel>
 
       <ConfirmDialog
         open={confirmState?.kind === 'approve'}

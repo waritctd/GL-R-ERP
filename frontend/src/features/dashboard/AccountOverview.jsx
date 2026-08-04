@@ -161,9 +161,9 @@ export function AccountOverview({ user, employee, showToast }) {
           <div className="grid grid-cols-5 gap-3 max-[1040px]:grid-cols-3 max-[720px]:grid-cols-2">
             {MONEY_BUCKETS.map((b) => <SkeletonCard key={b.key} lines={1} />)}
           </div>
-          <section className="panel" style={{ marginTop: 14 }}>
+          <Panel className="mt-[14px]">
             <SkeletonText lines={5} />
-          </section>
+          </Panel>
         </div>
       ) : (
         <>
