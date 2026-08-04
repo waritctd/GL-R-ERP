@@ -13,6 +13,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
+import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.payroll.PayrollAllowanceEstimateResult;
 import th.co.glr.hr.payroll.PayrollPeriodDto;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
@@ -64,6 +65,7 @@ public class TaxAllowanceDeclarationService {
     private final AuditService auditService;
     private final FileStorageService fileStorage;
     private final PayrollService payrollService;
+    private final NotificationRepository notifications;
 
     public TaxAllowanceDeclarationService(
         TaxAllowanceDeclarationRepository repository,
@@ -72,7 +74,8 @@ public class TaxAllowanceDeclarationService {
         TaxAllowanceCapCatalog capCatalog,
         AuditService auditService,
         FileStorageService fileStorage,
-        PayrollService payrollService
+        PayrollService payrollService,
+        NotificationRepository notifications
     ) {
         this.repository = repository;
         this.payrollRepository = payrollRepository;
@@ -81,6 +84,7 @@ public class TaxAllowanceDeclarationService {
         this.auditService = auditService;
         this.fileStorage = fileStorage;
         this.payrollService = payrollService;
+        this.notifications = notifications;
     }
 
     // ---- Employee self-service ------------------------------------------------------------
@@ -216,6 +220,9 @@ public class TaxAllowanceDeclarationService {
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after approve"));
         auditService.record(actor, "APPROVE_TAX_ALLOWANCE_DECLARATION", "tax_allowance_declaration",
             declarationId, existing, updated);
+        notifyOwner(existing.employeeId(), "TAX_ALLOWANCE_APPROVED",
+            "แบบแจ้ง ล.ย.01 ได้รับการอนุมัติ",
+            "ฝ่ายบุคคลอนุมัติแบบแจ้งค่าลดหย่อนภาษีปี " + existing.taxYear() + " แล้ว");
         return updated;
     }
 
@@ -240,6 +247,11 @@ public class TaxAllowanceDeclarationService {
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after reject"));
         auditService.record(actor, "REJECT_TAX_ALLOWANCE_DECLARATION", "tax_allowance_declaration",
             declarationId, existing, updated);
+        // The reason travels in the notification body: it is the only thing that tells the employee
+        // what to change, and re-opening the page to find it is exactly the round trip this avoids.
+        notifyOwner(existing.employeeId(), "TAX_ALLOWANCE_REJECTED",
+            "แบบแจ้ง ล.ย.01 ถูกปฏิเสธ",
+            "ฝ่ายบุคคลปฏิเสธแบบแจ้งค่าลดหย่อนภาษีปี " + existing.taxYear() + ": " + reviewerNote);
         return updated;
     }
 
@@ -356,6 +368,13 @@ public class TaxAllowanceDeclarationService {
             int rows = repository.expireApplied(candidate.declarationId());
             if (rows > 0) {
                 payrollRepository.expireTaxAllowanceVerification(candidate.employeeId(), candidate.taxYear());
+                // Notified per row, inside the `rows > 0` guard: a candidate whose conditional
+                // UPDATE matched nothing (a concurrent sweep already flipped it) must not produce a
+                // second notification for the same expiry.
+                notifyOwner(candidate.employeeId(), "TAX_ALLOWANCE_EXPIRED",
+                    "แบบแจ้ง ล.ย.01 หมดอายุ",
+                    "แบบแจ้งค่าลดหย่อนภาษีปี " + candidate.taxYear()
+                        + " หมดอายุแล้ว กรุณายื่นฉบับใหม่เพื่อคงสิทธิลดหย่อน");
                 expiredCount++;
             }
         }
@@ -506,6 +525,23 @@ public class TaxAllowanceDeclarationService {
     }
 
     // ---- helpers ----------------------------------------------------------------------------
+
+    /**
+     * Notifies the declaration's OWNER — never the acting reviewer. Every caller below passes the
+     * declaration's own {@code employeeId}, not {@code actor.employeeId()}: HR approving on behalf
+     * of someone must not send itself the notice.
+     *
+     * <p>Uses the generic {@link NotificationRepository#insert} rather than {@code notifyEmployee}/
+     * {@code notifyEmployeeForPricingRequest}: those hardcode a ticket/pricing-request link and
+     * resolve their title through the ticket-scoped {@code TICKET_EVENT_TITLES} map, neither of
+     * which fits ล.ย.01. The link is the employee's own declaration page.
+     *
+     * <p>Joins the caller's transaction, like {@link AuditService#record} — an approve that rolls
+     * back must not leave a notification claiming it happened.
+     */
+    private void notifyOwner(long ownerEmployeeId, String type, String title, String message) {
+        notifications.insert(ownerEmployeeId, type, title, message, "/tax-allowance");
+    }
 
     private void requireEmployeeActor(UserPrincipal actor) {
         if (actor == null || actor.employeeId() == null) {

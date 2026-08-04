@@ -139,13 +139,28 @@ public class AppProperties {
         private String workEnd = "17:30";
         /**
          * Minutes after {@code workStart} before a check-in counts as late. This is a
-         * <strong>threshold, not an allowance</strong>: with a 5-minute grace, arriving 08:34 is 0
-         * late minutes, but arriving 08:40 is <em>10</em> late minutes measured from 08:30 — not 4.
+         * <strong>threshold, not an allowance</strong>: with a 15-minute grace, arriving 08:44 is 0
+         * late minutes, but arriving 08:46 is <em>16</em> late minutes measured from 08:30 — not 1.
+         * Owner ruling 2026-08-02 (V121__org_normalize_approvers_and_schedules.sql) raised this from
+         * 5 to 15 to match hr.work_schedule.grace_minutes for every seeded schedule, so an employee
+         * with no {@code hr.work_schedule_assignment} row (falling through to this default) gets the
+         * same grace as an assigned one.
          */
-        private int graceMinutes = 5;
+        private int graceMinutes = 15;
         private List<String> workdays = new ArrayList<>(
             List.of("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY")
         );
+        /**
+         * How long {@code TieredWorkScheduleResolver} may serve a cached copy of
+         * {@code hr.work_schedule_assignment} before reloading it from the database. Assignments are
+         * edited by hand-written SQL today (there is deliberately no admin CRUD UI in this branch —
+         * see {@code WorkScheduleAssignmentRepository}'s javadoc), so a TTL is the only mechanism
+         * that reliably makes such a change take effect without an application restart: an explicit
+         * invalidation hook only helps callers that go through the app, and today none do. Five
+         * minutes balances staleness (acceptable for an HR-edited config table that changes rarely)
+         * against reload cost (the assignment table is small, so even a full reload is cheap).
+         */
+        private long assignmentCacheTtlMs = 300_000;
 
         public String getZone() {
             return zone;
@@ -185,6 +200,14 @@ public class AppProperties {
 
         public void setWorkdays(List<String> workdays) {
             this.workdays = workdays;
+        }
+
+        public long getAssignmentCacheTtlMs() {
+            return assignmentCacheTtlMs;
+        }
+
+        public void setAssignmentCacheTtlMs(long assignmentCacheTtlMs) {
+            this.assignmentCacheTtlMs = assignmentCacheTtlMs;
         }
     }
 

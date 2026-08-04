@@ -20,4 +20,10 @@ public final class SpecialMoneyResponses {
 
     public record SpecialMoneyEmployeeOptionsResponse(List<SpecialMoneyEmployeeOption> employees) {
     }
+
+    public record SpecialMoneyAttachmentResponse(SpecialMoneyAttachmentDto attachment) {
+    }
+
+    public record SpecialMoneyAttachmentsResponse(List<SpecialMoneyAttachmentDto> attachments) {
+    }
 }

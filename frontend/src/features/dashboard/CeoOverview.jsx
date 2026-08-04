@@ -162,16 +162,19 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
     [commissions],
   );
 
-  // ── OT: MANAGER_APPROVED (normal 2-step chain) PLUS SUBMITTED requests
-  // whose employee has no manager in between (managerEmployeeId points
-  // straight at the CEO's own employeeId) — mirrors OvertimeService's
-  // managesEmployee()/canReviewOvertime's directReport branch, the same FK
-  // the reconciled approval model calls "manager-less division goes straight
-  // to CEO". Real code-supported case, not an invented bypass — see
-  // docs/role-scoped-views.md "CEO" section for the full derivation.
+  // ── OT: MANAGER_APPROVED (normal 2-step chain) PLUS SUBMITTED requests with
+  // no manager stage at all — the employee's ฝ่าย has no ผู้จัดการ, or they are
+  // one themselves. Keyed off the server's own `hasManagerApprover`, which is
+  // the same expression OvertimeService.approve() routes on.
+  //
+  // This previously approximated the case as "reports_to points at the CEO",
+  // which is wrong in BOTH directions now that approval is division-only: it
+  // missed manager-less requests whose reports_to is someone else (the CEO
+  // never saw work only they could clear), and it listed requests whose ฝ่าย
+  // does have a ผู้จัดการ, where the CEO would just get a 403.
   const otDirectToCeo = useMemo(
-    () => otSubmitted.filter((r) => r.managerEmployeeId != null && Number(r.managerEmployeeId) === Number(user?.employeeId)),
-    [otSubmitted, user?.employeeId],
+    () => otSubmitted.filter((r) => r.hasManagerApprover === false),
+    [otSubmitted],
   );
   const otRows = useMemo(() => [...otManagerApproved, ...otDirectToCeo], [otManagerApproved, otDirectToCeo]);
 

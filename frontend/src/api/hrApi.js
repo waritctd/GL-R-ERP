@@ -45,6 +45,27 @@ export const api = {
     importDat: (payload) => apiRequest(API_ROUTES.attendance.importDat, { method: 'POST', body: payload }),
     devices: () => apiRequest(API_ROUTES.attendance.devices),
   },
+  // Mirrors HolidayController (attendance/schedule/) — hr.holiday admin CRUD, HR/CEO only.
+  holidays: {
+    list: (params) => apiRequest(withQuery(API_ROUTES.holidays.list, params)),
+    create: (payload) => apiRequest(API_ROUTES.holidays.create, { method: 'POST', body: payload }),
+    update: (date, payload) => apiRequest(API_ROUTES.holidays.detail(date), { method: 'PUT', body: payload }),
+    remove: (date) => apiRequest(API_ROUTES.holidays.detail(date), { method: 'DELETE' }),
+    fetch: () => apiRequest(API_ROUTES.holidays.fetch, { method: 'POST' }),
+  },
+  // Mirrors WorkScheduleController (attendance/schedule/) — read-only hr.work_schedule catalogue.
+  workSchedules: {
+    list: () => apiRequest(API_ROUTES.workSchedules.list),
+  },
+  // Mirrors WorkScheduleAssignmentController (attendance/schedule/) — hr.work_schedule_assignment
+  // admin CRUD, HR/CEO only.
+  workScheduleAssignments: {
+    list: () => apiRequest(API_ROUTES.workScheduleAssignments.list),
+    create: (payload) =>
+      apiRequest(API_ROUTES.workScheduleAssignments.create, { method: 'POST', body: payload }),
+    end: (assignmentId, payload) =>
+      apiRequest(API_ROUTES.workScheduleAssignments.end(assignmentId), { method: 'POST', body: payload }),
+  },
   overtime: {
     list: (params) => apiRequest(withQuery(API_ROUTES.overtime.list, params)),
     employees: () => apiRequest(API_ROUTES.overtime.employees),
@@ -62,6 +83,25 @@ export const api = {
     approve: (id, payload = {}) => apiRequest(API_ROUTES.specialMoney.approve(id), { method: 'POST', body: payload }),
     reject: (id, payload = {}) => apiRequest(API_ROUTES.specialMoney.reject(id), { method: 'POST', body: payload }),
     cancel: (id, payload = {}) => apiRequest(API_ROUTES.specialMoney.cancel(id), { method: 'POST', body: payload }),
+    attachments: (id) => apiRequest(API_ROUTES.specialMoney.attachments(id)),
+    // Evidence upload. Multipart, so it bypasses apiRequest's JSON body handling the same way
+    // leave.create does for its attachment.
+    addAttachment: async (id, file) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const response = await fetch(API_ROUTES.specialMoney.attachments(id), {
+        method: 'POST',
+        credentials: 'include',
+        headers: csrfHeaders(),
+        body: formData,
+      });
+      if (!response.ok) {
+        const problem = await response.json().catch(() => ({}));
+        throw new Error(problem.message || 'อัปโหลดเอกสารไม่สำเร็จ');
+      }
+      return response.json();
+    },
+    attachmentDownloadUrl: (attachmentId) => API_ROUTES.specialMoney.attachmentDownload(attachmentId),
   },
   leave: {
     list: (params) => apiRequest(withQuery(API_ROUTES.leave.list, params)),
@@ -92,9 +132,17 @@ export const api = {
       if (payload.contactProvince) formData.append('contactProvince', payload.contactProvince);
       if (payload.contactPhone) formData.append('contactPhone', payload.contactPhone);
       if (payload.attachmentFile) formData.append('attachment', payload.attachmentFile);
+      // Real-backend regression (found via a live click-through, not caught under mocks, which
+      // never enforce CSRF at all): every submission from LeaveRequestPage.jsx's payload object
+      // literal always sets `attachmentFile` (to `preparedAttachment`, null when no file was
+      // chosen), so `hasOwnProperty('attachmentFile')` above is ALWAYS true and every leave
+      // submit -- not just ones with a real attachment -- took this branch. This bare fetch()
+      // never attached the XSRF header the way `apiRequest()` and every other manual fetch() in
+      // this file already does, so every real submission 403'd with "Invalid CSRF token".
       const res = await fetch(API_ROUTES.leave.create, {
         method: 'POST',
         credentials: 'include',
+        headers: csrfHeaders('POST'),
         body: formData,
       });
       if (!res.ok) {
@@ -106,6 +154,42 @@ export const api = {
     approve: (id, payload = {}) => apiRequest(API_ROUTES.leave.approve(id), { method: 'POST', body: payload }),
     reject: (id, payload = {}) => apiRequest(API_ROUTES.leave.reject(id), { method: 'POST', body: payload }),
     cancel: (id, payload = {}) => apiRequest(API_ROUTES.leave.cancel(id), { method: 'POST', body: payload }),
+    // Leave-surface IA rebuild, Phase A0 (not yet landed) — see routes.js's own comment.
+    reviewSummary: () => apiRequest(API_ROUTES.leave.reviewSummary),
+    // Leave-request composer (Phase A2, #485): `options.signal` lets a caller abort an
+    // in-flight dry-run when a newer one supersedes it (the debounced step-2 QUICK preview) --
+    // see LeaveRequestPage.jsx's own comment on why that matters.
+    preview: (payload, options = {}) =>
+      apiRequest(API_ROUTES.leave.preview, { method: 'POST', body: payload, signal: options.signal }),
+    // Leave-surface IA rebuild, Phase A3: the §5 announcement PDF link on the "กฎการลา" tab.
+    // HEAD-probes first (no body transfer) so RulesTab.jsx can render a disabled/explained state
+    // when the backend has no path configured, instead of a broken link the user only discovers by
+    // clicking — see LeaveController#policyDocument's Javadoc for why the same route answers both.
+    policyDocumentAvailable: async () => {
+      const res = await fetch(API_ROUTES.leave.policyDocument, { method: 'HEAD', credentials: 'include' });
+      return res.ok;
+    },
+    downloadPolicyDocument: async () => {
+      const res = await fetch(API_ROUTES.leave.policyDocument, { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+    // Phase A4: certificate download for a review row (ReviewQueueTab.jsx) or the requester's own
+    // expanded row (MyLeaveTab.jsx). Access (owning employee, or a canReviewEmployee reviewer of
+    // them) is enforced entirely server-side — see LeaveService#resolveAttachmentForDownload and
+    // LeaveController#downloadAttachment's own comment on why an unknown id 404s rather than 403s.
+    downloadAttachment: async (attachmentId) => {
+      const res = await fetch(API_ROUTES.leave.attachmentDownload(attachmentId), { credentials: 'include' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'ดาวน์โหลดเอกสารไม่สำเร็จ');
+      }
+      return res.blob();
+    },
+    // Leave-request composer, Phase C: caller's own holiday + resolved work-schedule context for
+    // { from, to } -- see routes.js's comment. `params` mirrors the shape of other range-taking
+    // reads on this namespace (balances/list) rather than positional (from, to) args.
+    calendarContext: (params) => apiRequest(withQuery(API_ROUTES.leave.calendarContext, params)),
   },
   tickets: {
     list: (params) => apiRequest(withQuery(API_ROUTES.tickets.list, params)),

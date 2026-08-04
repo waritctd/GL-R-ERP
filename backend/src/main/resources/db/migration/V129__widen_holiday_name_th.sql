@@ -1,0 +1,33 @@
+-- Bug fix: hr.holiday.name_th (V115) was created VARCHAR(120). The BOT holiday
+-- integration (#478) now parses successfully end to end, but the reconcile write
+-- in HolidayRepository fails in production with "value too long for type
+-- character varying(120)" -- confirmed against a real 2026 BOT response. Thai
+-- official holiday names routinely exceed 120 characters once a substitution-day
+-- prefix ("วันหยุดชดเชย...") and/or a full royal title are included; 120 was never
+-- a deliberate bound, just whatever V115 happened to pick for a table it seeded
+-- with zero rows.
+--
+-- TEXT, not a larger VARCHAR(n): in Postgres, TEXT and VARCHAR(n) share the same
+-- storage and performance characteristics (VARCHAR(n) is TEXT plus a length check
+-- enforced on write) -- https://www.postgresql.org/docs/current/datatype-character.html.
+-- Picking another arbitrary bound (200? 300?) only moves the same failure further
+-- out the next time a longer name appears; TEXT removes the failure mode entirely
+-- rather than relocating it. NOT NULL is preserved unchanged -- V115 never added a
+-- non-blank CHECK constraint on this column, so there is nothing else to carry
+-- forward; blank-name rejection already happens at the application layer
+-- (BotHolidayFetchService#toHoliday skips entries with no description before a row
+-- is ever built, and HolidayAdminService#create/#update reject a blank nameTh).
+--
+-- Safe on a populated table: ALTER COLUMN ... TYPE from VARCHAR(120) to TEXT is a
+-- widening cast (no data can fail to convert) and, per the Postgres docs above,
+-- requires no table rewrite -- safe to run against UAT or the demo environment
+-- even if the BOT fetch has already written rows there. Production currently has
+-- zero rows (the failed insert rolled back), but this migration does not depend on
+-- that.
+ALTER TABLE hr.holiday
+    ALTER COLUMN name_th TYPE TEXT;
+
+-- hr.holiday.source stays VARCHAR(10): its only values are 'BANK' (4 chars) and
+-- 'COMPANY' (7 chars), both well inside the bound, and it is already
+-- CHECK-constrained (chk_holiday_source, V115) to exactly those two values -- no
+-- latent truncation risk here, unlike name_th above.

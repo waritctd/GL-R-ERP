@@ -66,7 +66,12 @@ class SpecialMoneyRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(usage.approvedAmountThisYear(SpecialMoneyType.MEDICAL)).isEqualByComparingTo("1500");
         // Lifetime count is NOT year-scoped by design (it backs the once-per-lifetime AID gate,
         // which must see every prior claim regardless of year): all 3 rows count.
-        assertThat(usage.approvedCountLifetime(SpecialMoneyType.MEDICAL)).isEqualTo(3);
+        assertThat(usage.activeCountLifetime(SpecialMoneyType.MEDICAL)).isEqualTo(3);
+        // The per-year count backs the once-per-year uniform gate, so it is year-scoped like the
+        // amount but in-flight-inclusive like the lifetime count. This fixture separates all three:
+        // 2 (2026 approved + 2026 submitted) is neither the lifetime 3 nor the approved-only 1, so
+        // an implementation that copied either of the other two maps fails here.
+        assertThat(usage.activeCountThisYear(SpecialMoneyType.MEDICAL)).isEqualTo(2);
     }
 
     @Test

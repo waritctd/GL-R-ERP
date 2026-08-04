@@ -208,6 +208,15 @@ public class AttendanceDailyService {
      * <p>Keeps the labels in one place and keeps the schema unchanged — every persisted column
      * already existed in V7. It also means a corrected schedule (or a holiday added after the
      * fact) reclassifies history on the next read without a migration.
+     *
+     * <p>Because this re-derives rather than reads back what {@link AttendanceDailyCalculator}
+     * decided at write time, it must apply exactly the same rules that method does or the two paths
+     * disagree about the same row — this happened for real once already (the division/department
+     * null-resolution bug V115 fixed, see {@link #list}'s javadoc) and again for V117's
+     * {@code requiresCheckOut} exemption (fixed alongside this comment): the MISSING_CHECK_OUT
+     * branch below must consult {@code schedule.requiresCheckOut()} the same way
+     * {@code AttendanceDailyCalculator#statusOf} does, or a sales employee's compliant lone check-in
+     * reads as a compliance problem that the stored row never actually had.
      */
     private AttendanceDailyDto toDto(
             AttendanceDailyRow row,
@@ -253,7 +262,12 @@ public class AttendanceDailyService {
             } else if (row.checkIn() == null) {
                 flags.add(AttendanceDayFlag.MISSING_CHECK_IN);
                 status = AttendanceDayStatus.MISSING_CHECK_IN;
-            } else if (row.checkOut() == null) {
+            } else if (row.checkOut() == null && schedule.requiresCheckOut()) {
+                // V117: ฝ่ายขาย's SALES_5D sets requiresCheckOut = false, so a lone check-in is a
+                // complete, compliant day for them (AttendanceDailyCalculator#statusOf already knows
+                // this on write) — mirror that here so a re-read doesn't re-flag a day the write path
+                // considered fine. Before this check, every read of a sales employee's normal day
+                // showed MISSING_CHECK_OUT regardless of what recalculateRange had stored.
                 flags.add(AttendanceDayFlag.MISSING_CHECK_OUT);
                 status = AttendanceDayStatus.MISSING_CHECK_OUT;
             } else {

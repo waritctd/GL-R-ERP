@@ -38,8 +38,15 @@ public record SpecialMoneyRequestDto(
     OffsetDateTime reviewedAt,
     String reviewerNote,
     OffsetDateTime cancelledAt,
+    /** Reports-to, for display only: welfare has no manager stage, so this grants nothing. */
     Long managerEmployeeId,
     String managerName,
+    /**
+     * How many pieces of evidence are attached. Projected so a reviewer sees the document trail
+     * before opening the request — and so the UI can warn before an approval the server will refuse
+     * for an evidence-required type.
+     */
+    int attachmentCount,
     OffsetDateTime createdAt,
     OffsetDateTime updatedAt) {
 }

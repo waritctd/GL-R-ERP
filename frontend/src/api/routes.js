@@ -27,6 +27,20 @@ export const API_ROUTES = {
     importDat: '/api/attendance/imports/dat',
     devices: '/api/attendance/devices',
   },
+  holidays: {
+    list: '/api/holidays',
+    create: '/api/holidays',
+    fetch: '/api/holidays/fetch',
+    detail: (date) => `/api/holidays/${date}`,
+  },
+  workSchedules: {
+    list: '/api/work-schedules',
+  },
+  workScheduleAssignments: {
+    list: '/api/work-schedule-assignments',
+    create: '/api/work-schedule-assignments',
+    end: (assignmentId) => `/api/work-schedule-assignments/${assignmentId}/end`,
+  },
   overtime: {
     list: '/api/overtime',
     create: '/api/overtime',
@@ -44,6 +58,8 @@ export const API_ROUTES = {
     approve: (id) => `/api/special-money/${id}/approve`,
     reject: (id) => `/api/special-money/${id}/reject`,
     cancel: (id) => `/api/special-money/${id}/cancel`,
+    attachments: (id) => `/api/special-money/${id}/attachments`,
+    attachmentDownload: (attachmentId) => `/api/special-money/attachments/${attachmentId}`,
   },
   leave: {
     list: '/api/leave',
@@ -55,6 +71,29 @@ export const API_ROUTES = {
     approve: (id) => `/api/leave/${id}/approve`,
     reject: (id) => `/api/leave/${id}/reject`,
     cancel: (id) => `/api/leave/${id}/cancel`,
+    // Leave-surface IA rebuild, Phase A0 (not yet landed): per-manager summary of requests
+    // awaiting THIS user's decision, backing the "รอพิจารณา" tab. Wired into routes/hrApi/mockApi/
+    // queryKeys now (Phase A1) only so contract.test.js's method-surface parity check stays green
+    // ahead of A0 -- no UI in this phase calls it yet. See mockApi.js's own comment on this route.
+    reviewSummary: '/api/leave/review-summary',
+    // Leave-request composer (Phase A2, #485): dry-run gate-chain preview, writes nothing --
+    // see LeaveService#preview's Javadoc for the FULL vs QUICK depth and nullable-dates contract.
+    preview: '/api/leave/preview',
+    // Leave-surface IA rebuild, Phase A3: the §5 announcement PDF the "กฎการลา" tab links to. Same
+    // path serves both GET (download) and HEAD (RulesTab.jsx's availability probe) -- see
+    // LeaveController#policyDocument's Javadoc.
+    policyDocument: '/api/leave/policy-document',
+    // Phase A4: the medical-certificate/leave-attachment download an approver (or the owning
+    // employee) opens from ReviewQueueTab.jsx / MyLeaveTab.jsx's expanded row. Mirrors
+    // specialMoney.attachmentDownload's naming above — same "attachment id, not request id"
+    // shape as LeaveController#downloadAttachment (GET /api/leave/attachments/{attachmentId}).
+    attachmentDownload: (attachmentId) => `/api/leave/attachments/${attachmentId}`,
+    // Leave-request composer, Phase C (#leave-calendar-context): the caller's OWN holiday +
+    // resolved work-schedule context for a date range, so step 2 can show which days in the
+    // selected range are non-working. Self-scoped only (no employeeId param) -- see
+    // LeaveController#calendarContext's Javadoc for why this is deliberately not
+    // HolidayController/WorkScheduleController (both stay hr/ceo-gated, untouched).
+    calendarContext: '/api/leave/calendar-context',
   },
   tickets: {
     list: '/api/tickets',
@@ -445,4 +484,11 @@ export const ROLE_PERMISSIONS = {
   // Step 7: Factory Purchase Order and Import Execution — Import/CEO only, mirrors
   // ProcurementService.RAW_PO_ROLES. Raw supplier PO detail is never shown to sales.
   canManageProcurement: ['import', 'ceo'],
+  // Attendance calendar admin UI (/settings/attendance-calendar — PR #480 shipped the write API
+  // with no UI at all). Mirrors HolidayController / WorkScheduleController /
+  // WorkScheduleAssignmentController's requireAnyRole(user, "hr", "ceo") exactly. FRONTEND GATING
+  // ONLY: the backend already enforces this role check independently on every endpoint — this key
+  // decides who sees the SCREEN, it grants nothing itself. See CLAUDE.md's "Mock API contract" on
+  // why a frontend permission key is never itself evidence of a backend authorization change.
+  canManageAttendanceCalendar: ['hr', 'ceo'],
 };

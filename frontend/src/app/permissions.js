@@ -105,7 +105,9 @@ const PATH_GUARDS = [
     test: (p) => p === '/employee-requests' || p === '/overtime',
     can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllOvertime') || hasPermission(u.role, 'canViewAllSpecialMoney'),
   },
-  { test: (p) => p === '/leave', can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllLeave') },
+  // /leave/new (Phase A2, #485): the composer files a request for the SAME "self or an
+  // employeeId-bearing acting employee" audience as /leave itself -- same guard.
+  { test: (p) => p === '/leave' || p === '/leave/new', can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllLeave') },
   { test: (p) => p === '/price-import', can: (u) => hasPermission(u.role, 'canManagePriceImport') },
   // The bare queue (`/pricing-requests`) is Import's work list — canViewPricingRequestQueue
   // only (import/ceo/sales_manager), never sales. Detail sub-paths are a separate rule: a sales
@@ -125,6 +127,11 @@ const PATH_GUARDS = [
   // (ProcurementFulfilmentPage) — same audience as the raw PO list above,
   // since it embeds ProcurementListPage as its second section.
   { test: (p) => p === '/procurement', can: (u) => hasPermission(u.role, 'canManageProcurement') },
+  // Attendance calendar admin (hr.holiday / hr.work_schedule / hr.work_schedule_assignment CRUD —
+  // PR #480's API, this branch's UI). Mirrors the three controllers' requireAnyRole(user, "hr",
+  // "ceo") exactly. This is frontend gating only — see ROLE_PERMISSIONS.canManageAttendanceCalendar
+  // in routes.js for the same caveat.
+  { test: (p) => p === '/settings/attendance-calendar', can: (u) => hasPermission(u.role, 'canManageAttendanceCalendar') },
 ];
 
 export function canAccessPath(path, user) {

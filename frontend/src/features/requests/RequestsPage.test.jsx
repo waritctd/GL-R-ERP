@@ -27,6 +27,9 @@ vi.mock('../../api/index.js', () => ({
       approve: vi.fn(),
       reject: vi.fn(),
       cancel: vi.fn(),
+      attachments: vi.fn(),
+      addAttachment: vi.fn(),
+      attachmentDownloadUrl: vi.fn((id) => `/api/special-money/attachments/${id}`),
     },
   },
 }));
@@ -69,8 +72,15 @@ describe('RequestsPage tab bar', () => {
     api.specialMoney.types.mockResolvedValue({ types: [] });
     api.specialMoney.list.mockResolvedValue({ requests: [] });
     api.specialMoney.usage.mockResolvedValue({
-      usage: { employeeId: 1, year: 2026, approvedAmountThisYearByType: {}, approvedCountLifetimeByType: {} },
+      usage: {
+        employeeId: 1,
+        year: 2026,
+        approvedAmountThisYearByType: {},
+        approvedCountLifetimeByType: {},
+        activeCountThisYearByType: {},
+      },
     });
+    api.specialMoney.attachments.mockResolvedValue({ attachments: [] });
   });
 
   it('renders both tabs and defaults to the overtime tab', async () => {

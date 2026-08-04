@@ -165,6 +165,12 @@ public final class PayrollClassifiedCalculationDtos {
         BigDecimal unpaidLeaveDeduction,
         BigDecimal grossTaxableIncome,
         BigDecimal ssoWageBase,
+        // V123 (defect-2 fix): the UNCAPPED sum this same method computes before clamping it into
+        // ssoWageBase above (see PayrollCalculator#calculateClassified's own comment on
+        // ssoWageBaseRaw). Persisted to payroll_line.sso_wage_gross so SsoExporter can report the
+        // real เงินค่าจ้างทั้งสิ้น instead of the capped figure -- does not change ssoWageBase or
+        // socialSecurity, which are computed exactly as before.
+        BigDecimal ssoWageBaseRaw,
         BigDecimal socialSecurity,
         BigDecimal projectedAnnualIncome,
         BigDecimal taxExpenseDeduction,

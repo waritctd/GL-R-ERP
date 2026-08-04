@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../api/index.js';
@@ -23,9 +23,13 @@ import { taxAllowanceStatusInfo } from './taxAllowanceStatus.js';
 
 const REGISTER_GRID = 'grid-cols-[minmax(0,0.4fr)_minmax(0,1.4fr)_minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.7fr)] max-[1040px]:min-w-[900px] reflow-cards';
 
+// `NONE` is the one chip that is NOT a backend status — it is the synthesized "this employee has
+// no declaration" row, which only exists when the employee list can be enumerated. It is filtered
+// out for a viewer without that access (see `visibleStatusChips` below), because for them it can
+// only ever match zero rows.
 const STATUS_CHIPS = [
   { key: '', label: 'ทั้งหมด' },
-  { key: 'NONE', label: 'ยังไม่ได้ยื่น' },
+  { key: 'NONE', label: 'ยังไม่ได้ยื่น', requiresEmployeeList: true },
   { key: 'PENDING', label: 'รอ HR ตรวจสอบ' },
   { key: 'APPROVED_UNAPPLIED', label: 'ยังไม่ใช้กับเงินเดือน' },
   { key: 'APPLIED', label: 'ใช้กับเงินเดือนแล้ว' },
@@ -93,6 +97,12 @@ function OnBehalfModal({ row, caps, onClose, onSubmit, submitting }) {
  * lets this page load and its register read still works; CEO simply cannot enumerate every
  * employee, so CEO's table shows exactly the declarations that exist (no synthesized "ยังไม่ได้ยื่น"
  * rows) rather than silently 403ing.
+ *
+ * <p>That degradation is now <em>stated</em> rather than left implicit. It previously kept HR's
+ * subtitle ("...ของพนักงานทุกคน") and HR's "ยังไม่ได้ยื่น" filter chip — a chip that, without the
+ * employee list, can only ever match zero rows — so the one question this view cannot answer
+ * ("who hasn't filed?") was the one it appeared to answer with an empty table. The subtitle, the
+ * chip row and the empty state all key off `canListEmployees` now.
  */
 export function TaxAllowanceReviewPage({ user, showToast }) {
   const queryClient = useQueryClient();
@@ -100,9 +110,47 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
   // screen filtered to that employee", issue #387 screen 3) — there is no employeeId filter on
   // GET /declarations to route-param instead, so this reuses the table's own search box.
   const [searchParams, setSearchParams] = useSearchParams();
-  const [search, setSearch] = useState(searchParams.get('q') || '');
-  const [taxYear, setTaxYear] = useState(new Date().getFullYear());
-  const [statusFilter, setStatusFilter] = useState('');
+
+  const canReview = hasPermission(user.role, 'canReviewTaxAllowances');
+  const canListEmployees = hasPermission(user.role, 'canViewEmployees');
+
+  // Year / status / search live in the URL rather than component state, so a filtered register is
+  // shareable and survives a reload. The drill-down link already carried `?q=`; it now carries
+  // `?year=` too (TaxAllowanceDrilldown.jsx), which this page previously ignored — drilling in
+  // from a prior-year payroll period silently landed on the current year's register.
+  const currentYear = new Date().getFullYear();
+  const yearOptions = useMemo(
+    () => [currentYear + 1, currentYear, currentYear - 1, currentYear - 2],
+    [currentYear],
+  );
+  const requestedYear = Number(searchParams.get('year'));
+  // An out-of-range or garbage `?year=` falls back to the current year instead of leaving the
+  // <select> on a blank option that matches nothing in the list.
+  const taxYear = yearOptions.includes(requestedYear) ? requestedYear : currentYear;
+  const search = searchParams.get('q') || '';
+
+  const visibleStatusChips = useMemo(
+    () => STATUS_CHIPS.filter((chip) => canListEmployees || !chip.requiresEmployeeList),
+    [canListEmployees],
+  );
+  const requestedStatus = searchParams.get('status') || '';
+  // A `?status=NONE` deep-link handed to a viewer whose chip row does not offer NONE would
+  // otherwise pin them to a permanently empty table with no visible chip to clear.
+  const statusFilter = visibleStatusChips.some((chip) => chip.key === requestedStatus)
+    ? requestedStatus
+    : '';
+
+  const updateParams = useCallback((patch) => {
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous);
+      Object.entries(patch).forEach(([key, value]) => {
+        if (value === '' || value == null) next.delete(key);
+        else next.set(key, String(value));
+      });
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
   const [rejectTarget, setRejectTarget] = useState(null);
   const [approveTarget, setApproveTarget] = useState(null);
   const [applyTarget, setApplyTarget] = useState(null);
@@ -113,9 +161,6 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
   // unconditionally, so omitting this state would permanently expand every row instead of making
   // the breakdown opt-in per issue #387 ("an expandable row body").
   const [expandedEmployeeId, setExpandedEmployeeId] = useState(null);
-
-  const canReview = hasPermission(user.role, 'canReviewTaxAllowances');
-  const canListEmployees = hasPermission(user.role, 'canViewEmployees');
 
   const capsQuery = useQuery({
     queryKey: queryKeys.taxAllowanceCaps(taxYear),
@@ -307,8 +352,14 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
   return (
     <PageStack>
       <PageHeader
-        title="ตรวจสอบแบบแจ้งค่าลดหย่อนภาษี (ล.ย.01)"
-        subtitle="ใครมีค่าลดหย่อนอะไรบ้าง — ต่อการยื่นแบบ ล.ย.01 ของพนักงานทุกคน"
+        title="ตรวจสอบแบบแจ้ง ล.ย.01 (ค่าลดหย่อนภาษี)"
+        // The two audiences are looking at genuinely different tables, so they are told so. HR
+        // sees one row per active employee (non-filers included, synthesized below); a viewer
+        // without employee-list access sees only declarations that exist. Same honesty the
+        // evidence column already practises for a viewer who cannot open attachments.
+        subtitle={canListEmployees
+          ? 'ใครมีค่าลดหย่อนอะไรบ้าง — ต่อการยื่นแบบ ล.ย.01 ของพนักงานทุกคน'
+          : 'เฉพาะแบบแจ้ง ล.ย.01 ที่ยื่นเข้ามาแล้ว — พนักงานที่ยังไม่ได้ยื่นจะไม่ปรากฏในตารางนี้'}
       />
 
       <div className="flex flex-wrap items-center gap-3">
@@ -316,14 +367,24 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
           <select
             id="tax-allowance-year"
             value={taxYear}
-            onChange={(event) => setTaxYear(Number(event.target.value))}
+            onChange={(event) => updateParams({ year: Number(event.target.value) })}
           >
-            {[taxYear + 1, taxYear, taxYear - 1, taxYear - 2].filter((year, index, arr) => arr.indexOf(year) === index).sort((a, b) => b - a).map((year) => (
+            {yearOptions.map((year) => (
               <option key={year} value={year}>{year}</option>
             ))}
           </select>
         </FormField>
-        <WorklistFilters items={STATUS_CHIPS} activeKey={statusFilter} onSelect={setStatusFilter} ariaLabel="กรองตามสถานะ" />
+        {/* `min-w-0 flex-1` so the chip row keeps its own horizontal scroller (WorklistFilters
+            handles overflow + 44px touch targets internally) instead of forcing the whole
+            filter row wide at 360px. */}
+        <div className="min-w-0 flex-1">
+          <WorklistFilters
+            items={visibleStatusChips}
+            activeKey={statusFilter}
+            onSelect={(key) => updateParams({ status: key })}
+            ariaLabel="กรองตามสถานะ"
+          />
+        </div>
       </div>
 
       <DataTable
@@ -334,14 +395,16 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
         searchable
         searchPlaceholder="ค้นหาพนักงาน…"
         searchValue={search}
-        onSearchChange={(value) => {
-          setSearch(value);
-          setSearchParams(value ? { q: value } : {}, { replace: true });
-        }}
+        // Merges into the existing params instead of replacing them, so typing in the search box
+        // no longer wipes the year/status the viewer just chose.
+        onSearchChange={(value) => updateParams({ q: value })}
         loading={declarationsQuery.isLoading || (canListEmployees && employeesQuery.isLoading)}
         error={declarationsQuery.error}
         onRetry={() => declarationsQuery.refetch()}
-        emptyState={{ icon: 'clipboard', title: 'ไม่มีข้อมูลพนักงานในปีนี้' }}
+        emptyState={{
+          icon: 'clipboard',
+          title: canListEmployees ? 'ไม่มีข้อมูลพนักงานในปีนี้' : 'ยังไม่มีแบบแจ้ง ล.ย.01 ในปีนี้',
+        }}
         renderExpanded={(row) => (row.employeeId === expandedEmployeeId
           ? <TaxAllowanceBreakdown declaration={row.declaration} caps={caps} />
           : null)}

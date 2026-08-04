@@ -40,7 +40,7 @@ class Pnd1ExporterGoldenTest {
                 dataLines, "E" + dataLines, t[7], t[8], t[9], null,
                 t[5], t[6], null, null,
                 t[10], t[11], t[12],
-                BigDecimal.ZERO, new BigDecimal(t[18]), new BigDecimal(t[19]), BigDecimal.ZERO, BigDecimal.ZERO);
+                BigDecimal.ZERO, new BigDecimal(t[18]), new BigDecimal(t[19]), BigDecimal.ZERO, null, BigDecimal.ZERO, null);
 
             byte[] produced = exporter.formatLine(
                 row, Integer.parseInt(t[1]), t[15], t[3], t[4], t[13], t[14], t[16]);
@@ -89,7 +89,7 @@ class Pnd1ExporterGoldenTest {
             1, "E1", title, first, last, null,
             nationalId, taxId, null, null,
             "99", " ถ.เทส", "10110",
-            BigDecimal.ZERO, new BigDecimal(income), new BigDecimal(tax), BigDecimal.ZERO, BigDecimal.ZERO);
+            BigDecimal.ZERO, new BigDecimal(income), new BigDecimal(tax), BigDecimal.ZERO, null, BigDecimal.ZERO, null);
     }
 
     private byte[] readGolden() throws IOException {

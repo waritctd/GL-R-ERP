@@ -42,8 +42,11 @@ export function TaxAllowanceDrilldown({ employeeId, employeeCode, taxYear }) {
         {declaration?.expiresOn ? <span className="text-xs text-text-muted">หมดอายุ {formatShortDate(declaration.expiresOn)}</span> : null}
       </div>
       <TaxAllowanceBreakdown declaration={declaration} caps={capsQuery.data ?? []} />
+      {/* `year` travels with the link: this component is rendered for whatever payroll period is
+          open, and without it the register always opened on the CURRENT year — so drilling in
+          from a prior-year period landed on a table that could not contain the row just clicked. */}
       <Link
-        to={`/tax-allowance-review?q=${encodeURIComponent(employeeCode || '')}`}
+        to={`/tax-allowance-review?q=${encodeURIComponent(employeeCode || '')}&year=${taxYear}`}
         className="text-sm font-bold text-primary"
       >
         ดูในหน้าตรวจสอบของ HR
