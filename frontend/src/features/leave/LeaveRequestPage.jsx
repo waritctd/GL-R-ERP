@@ -20,7 +20,7 @@ import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { EVERYDAY_LEAVE_TYPE_CODES } from './MyLeaveTab.jsx';
 import { LeaveRulePanel } from './LeaveRulePanel.jsx';
 import { LEAVE_PURPOSE_OPTIONS } from './leaveRequestTable.jsx';
-import { formatDays, todayIso } from './leaveFormatting.js';
+import { formatDate, formatDays, todayIso } from './leaveFormatting.js';
 
 // Leave-request composer, Phase A2 (#485). The owner's own framing of the problem this closes:
 // "employee if rejected, or when requesting, the rules should also be restated to them so they
@@ -156,12 +156,42 @@ function StepHeading({ innerRef, step, total, title }) {
   );
 }
 
+// A preview call can fail outright instead of returning a LeaveRuleOutcome -- most notably
+// LeaveService#resolveTargetEmployee's plain 403 ApiException when the acting employee is HR/CEO
+// requesting for themselves (SELF_SUBMIT_BLOCKED_ROLES). That has no `code` to look up in
+// LeaveRulePanel's RULE_META and no §5 section to link to, so it is never routed through
+// LeaveRulePanel -- doing so would render an "undefined" heading and a rules-tab link that goes
+// nowhere useful. `error.message` is already the backend's own Thai sentence (ApiExceptionHandler
+// serializes ApiException.getMessage() verbatim), so this only decides where/how to show it.
+function previewErrorMessage(error) {
+  return error?.message || 'ไม่สามารถตรวจสอบคำขอลานี้ได้ กรุณาลองใหม่อีกครั้ง';
+}
+
+function PreviewErrorNotice({ message, className }) {
+  if (!message) return null;
+  return (
+    <div className={`rounded-md border border-danger-border bg-surface p-3 ${className || ''}`}>
+      <div className="flex items-start gap-2.5">
+        <Icon name="triangleAlert" size={16} className="mt-0.5 shrink-0 text-danger" />
+        <div className="grid min-w-0 gap-1">
+          <strong className="text-sm font-bold text-danger">ไม่สามารถตรวจสอบคำขอนี้ได้</strong>
+          <p className="m-0 text-sm text-text">{message}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Step 1's type button -- a blocked type is disabled and shows the real backend verdict instead
 // of a guess; an unresolved (still-loading) type shows a skeleton rather than a false "available".
+// A type whose preview call errored outright (see PreviewErrorNotice above) stays disabled too,
+// with its own real reason -- never falls through to looking selectable just because `blocking`
+// happens to read null on an errored query.
 function TypeChoice({ type, outcomeQuery, selected, onSelect, showCondition }) {
   const loading = outcomeQuery.isPending;
   const blocking = outcomeQuery.data?.blocking ?? null;
-  const disabled = loading || Boolean(blocking);
+  const previewError = outcomeQuery.isError ? previewErrorMessage(outcomeQuery.error) : null;
+  const disabled = loading || Boolean(blocking) || Boolean(previewError);
   return (
     <div className="grid gap-2">
       <button
@@ -184,6 +214,7 @@ function TypeChoice({ type, outcomeQuery, selected, onSelect, showCondition }) {
         )}
       </button>
       {!loading && blocking ? <LeaveRulePanel outcome={blocking} tone="blocking" /> : null}
+      {!loading && previewError ? <PreviewErrorNotice message={previewError} /> : null}
     </div>
   );
 }
@@ -329,10 +360,33 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   const step2Blocking = step2Preview?.blocking ?? null;
   const step2BlockingTarget = step2Blocking ? step2FieldTarget(step2Blocking.code) : null;
   const step2Fetching = step2PreviewQuery.isFetching;
+  // Same "not every failure is a LeaveRuleOutcome" gap as step 1's TypeChoice -- see
+  // previewErrorMessage's own comment.
+  const step2Error = step2PreviewQuery.isError ? previewErrorMessage(step2PreviewQuery.error) : null;
 
   const previewCounters = step2Preview?.counters
     ?? (eligibilityByCode.get(leaveTypeCode)?.data?.counters)
     ?? null;
+
+  // --- Step 2: calendar context (holidays + resolved schedule), so "why is this N days and not
+  // the full calendar span" is answered next to the date fields instead of only showing up as a
+  // smaller totalDays number. WINDOW CHOICE: exactly the currently-selected [startDate, endDate]
+  // -- not a fixed lookahead -- because the note only needs to explain the range the employee has
+  // actually picked; a wider window would show non-working days the request never touches. Debounced
+  // same as step2Params so a date still being typed doesn't fire one request per keystroke.
+  const calendarContextParams = useMemo(() => {
+    if (!startDate || !endDate || endDate < startDate) return null;
+    return { from: startDate, to: endDate };
+  }, [startDate, endDate]);
+  const debouncedCalendarContextParams = useDebouncedValue(calendarContextParams, 400);
+  const calendarContextQuery = useQuery({
+    queryKey: queryKeys.leaveCalendarContext(
+      debouncedCalendarContextParams?.from, debouncedCalendarContextParams?.to),
+    queryFn: () => api.leave.calendarContext(debouncedCalendarContextParams).then((r) => r.calendarContext),
+    enabled: step === 2 && Boolean(debouncedCalendarContextParams),
+  });
+  const nonWorkingDates = calendarContextQuery.data?.nonWorkingDates ?? [];
+  const holidaysInRange = calendarContextQuery.data?.holidays ?? [];
 
   async function advanceFromStep2() {
     const valid = await trigger(['startDate', 'endDate', 'reason', 'startTime', 'endTime']);
@@ -377,6 +431,11 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   });
   const step3Preview = step3PreviewQuery.data ?? null;
   const step3Blocking = step3Preview?.blocking ?? null;
+  // Same "not every failure is a LeaveRuleOutcome" gap as step 1/2 -- see previewErrorMessage's
+  // own comment. This is the terminal, submit-gating checkpoint: an errored FULL preview must
+  // keep the submit button disabled exactly like a real `blocking` verdict would, not silently
+  // read as a clean pass because `step3Blocking` happens to be null on an errored query.
+  const step3Error = step3PreviewQuery.isError ? previewErrorMessage(step3PreviewQuery.error) : null;
 
   const balance = useMemo(() => {
     const type = leaveTypes.find((t) => t.code === leaveTypeCode);
@@ -389,8 +448,16 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
     if (!['application/pdf', 'image/jpeg', 'image/png'].includes(file.type)) {
       throw new Error('รองรับเฉพาะไฟล์ PDF, JPG หรือ PNG');
     }
+    // imageCompression() returns a plain Blob, not a File -- it does not carry `file.name`
+    // through, so the FormData part built from it defaults to the literal filename "blob" per the
+    // Fetch/FormData spec. Re-wrapping in a File restores the original name. PDFs skip
+    // compression entirely and never hit this path. See #498/#504 for the reference fix.
     if (!file.type.startsWith('image/')) return file;
-    return imageCompression(file, { maxSizeMB: 2, maxWidthOrHeight: 1600, useWebWorker: true });
+    return new File(
+      [await imageCompression(file, { maxSizeMB: 2, maxWidthOrHeight: 1600, useWebWorker: true })],
+      file.name,
+      { type: file.type },
+    );
   }
 
   const createMutation = useMutation({
@@ -546,6 +613,11 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                   ตรวจแบบเร็ว: ยังไม่ตรวจภาระงานของแผนก (coverageEvaluated) — จะตรวจครั้งสุดท้ายในขั้นตอน “ตรวจสอบก่อนส่ง”
                 </p>
               </div>
+              {step2Error ? (
+                <div className={formGridSpan2}>
+                  <PreviewErrorNotice message={step2Error} />
+                </div>
+              ) : null}
 
               <div className="grid grid-cols-2 gap-4 max-[720px]:grid-cols-1">
                 <FormField label="วันที่เริ่ม" htmlFor="leave-start-date" error={startDateError} required>
@@ -574,6 +646,25 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
               {step2BlockingTarget === 'dates' && step2Blocking ? (
                 <div className={formGridSpan2}>
                   <LeaveRulePanel outcome={step2Blocking} tone="blocking" />
+                </div>
+              ) : null}
+
+              {/* Calendar context (#leave-calendar-context, Phase C): why totalDays can be smaller
+                  than the calendar span -- lists which selected dates are holidays/non-working per
+                  the employee's OWN resolved schedule, not a full calendar widget. */}
+              {calendarContextParams ? (
+                <div className={formGridSpan2}>
+                  {nonWorkingDates.length > 0 ? (
+                    <p className="m-0 rounded-lg border border-warning-border bg-warning-bg-soft px-3 py-2 text-xs text-warning-dark">
+                      ช่วงที่เลือกมี {nonWorkingDates.length} วันที่ไม่นับเป็นวันทำงาน (วันหยุด/วันหยุดประจำสัปดาห์
+                      ตามตารางเวลาทำงานของคุณ): {nonWorkingDates.map((date) => formatDate(date)).join(', ')}
+                      {holidaysInRange.length > 0 ? (
+                        <> — วันหยุด: {holidaysInRange.map((h) => `${formatDate(h.holidayDate)} (${h.nameTh})`).join(', ')}</>
+                      ) : null}
+                    </p>
+                  ) : !calendarContextQuery.isFetching && calendarContextQuery.data ? (
+                    <p className="m-0 text-xs text-muted">ทุกวันในช่วงที่เลือกเป็นวันทำงานตามตารางเวลาของคุณ</p>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -715,6 +806,12 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                 </div>
               ) : null}
 
+              {step3Error ? (
+                <div role="alert">
+                  <PreviewErrorNotice message={step3Error} />
+                </div>
+              ) : null}
+
               {!step3Blocking && step3Preview ? (
                 <div className="grid gap-3 rounded-md border border-border-subtle bg-surface-subtle p-3">
                   <div className="grid grid-cols-2 gap-3 text-sm max-[720px]:grid-cols-1">
@@ -801,7 +898,7 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
               <Button type="button" variant="secondary" onClick={() => setStep(2)}>ย้อนกลับ</Button>
               <Button
                 type="submit"
-                disabled={createMutation.isPending || Boolean(step3Blocking) || step3PreviewQuery.isFetching}
+                disabled={createMutation.isPending || Boolean(step3Blocking) || Boolean(step3Error) || step3PreviewQuery.isFetching}
               >
                 <Icon name="plus" />
                 ส่งคำขอ

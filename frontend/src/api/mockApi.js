@@ -4534,6 +4534,53 @@ export const api = {
       requireSession();
       fail('ยังไม่มีการอัปโหลดเอกสารประกาศฉบับนี้ กรุณาติดต่อฝ่ายบุคคล', 404);
     },
+
+    // Leave-request composer, Phase C: mirrors LeaveController#calendarContext's SHAPE only, NOT
+    // real schedule resolution. This is a SMALL FIXED FIXTURE -- Mon-Fri/08:30-17:30, no six-day
+    // (OPS_6D) awareness, and `holidays` is always empty (same "no persisted hr.holiday store"
+    // stance as the holidays.list() stub above) -- it does NOT call TieredWorkScheduleResolver or
+    // read hr.work_schedule_assignment. `nonWorkingDates` here is plain Sat/Sun arithmetic, not
+    // LeaveDayMath's schedule/holiday-aware predicate. Do NOT read a mock-mode render of this as
+    // evidence a six-day employee or a real holiday shows up correctly -- verify against the real
+    // backend (LeaveCalendarContextIntegrationTest).
+    async calendarContext(params = {}) {
+      requireSession();
+      const { from, to } = params;
+      if (!from || !to) fail('ต้องระบุวันที่เริ่มต้นและวันที่สิ้นสุด', 400);
+      if (to < from) fail('วันที่สิ้นสุดต้องไม่มาก่อนวันที่เริ่มต้น', 400);
+      const nonWorkingDates = [];
+      const cursor = new Date(`${from}T00:00:00`);
+      const end = new Date(`${to}T00:00:00`);
+      while (cursor <= end) {
+        const day = cursor.getDay();
+        // LOCAL date components, not toISOString() (UTC) -- see bangkokTodayIso's comment above
+        // on why that conversion silently shifts a date backward for any positive UTC offset
+        // (Bangkok is UTC+7): local midnight becomes the previous UTC day, which would report the
+        // wrong non-working dates here.
+        if (day === 0 || day === 6) {
+          const y = cursor.getFullYear();
+          const m = String(cursor.getMonth() + 1).padStart(2, '0');
+          const d = String(cursor.getDate()).padStart(2, '0');
+          nonWorkingDates.push(`${y}-${m}-${d}`);
+        }
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      return delay({
+        calendarContext: {
+          from,
+          to,
+          holidays: [],
+          schedule: {
+            workStart: LEAVE_WORKDAY_START,
+            workEnd: LEAVE_WORKDAY_END,
+            graceMinutes: 5,
+            requiresCheckOut: true,
+            workdays: [1, 2, 3, 4, 5],
+          },
+          nonWorkingDates,
+        },
+      });
+    },
   },
 
   // Mirrors OvertimeController + OvertimeService (overtime/) — see
