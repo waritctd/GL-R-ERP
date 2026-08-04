@@ -20,6 +20,7 @@ import { TaxAllowanceEvidenceCount } from './TaxAllowanceEvidenceCount.jsx';
 import { TaxAllowanceForm } from './TaxAllowanceForm.jsx';
 import { buildAllowanceSubmitBody, declaredAllowanceTotal, defaultAllowanceValues } from './taxAllowanceSchema.js';
 import { taxAllowanceStatusInfo } from './taxAllowanceStatus.js';
+import { Button } from '../../components/common/Button.jsx';
 
 const REGISTER_GRID = 'grid-cols-[minmax(0,0.4fr)_minmax(0,1.4fr)_minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.7fr)] max-[1040px]:min-w-[900px] reflow-cards';
 
@@ -48,10 +49,10 @@ function ApplyDialog({ row, onClose, onConfirm, busy }) {
       onClose={busy ? undefined : onClose}
       footer={(
         <>
-          <button type="button" className="secondary-button" onClick={onClose} disabled={busy}>ยกเลิก</button>
-          <button type="button" className="primary-button" onClick={() => onConfirm(month)} disabled={busy}>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>ยกเลิก</Button>
+          <Button onClick={() => onConfirm(month)} disabled={busy}>
             {busy ? 'กำลังดำเนินการ…' : 'ยืนยัน'}
-          </button>
+          </Button>
         </>
       )}
     >
@@ -266,16 +267,15 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
       key: 'expand',
       header: '',
       render: (row) => (
-        <button
-          type="button"
-          className="icon-button"
+        <Button
+          variant="icon"
           aria-expanded={expandedEmployeeId === row.employeeId}
           title="ดูรายละเอียดค่าลดหย่อนเทียบเพดาน"
           aria-label={`ดูรายละเอียดค่าลดหย่อนของ ${row.employeeName} เทียบเพดาน`}
           onClick={() => setExpandedEmployeeId((current) => (current === row.employeeId ? null : row.employeeId))}
         >
           <Icon name={expandedEmployeeId === row.employeeId ? 'chevronUp' : 'chevronDown'} size={14} />
-        </button>
+        </Button>
       ),
     },
     {

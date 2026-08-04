@@ -16,16 +16,11 @@ import { loginAs, spaGoto } from './helpers/auth.js';
 // class names the migration exists to retire, so it failed on correct output.
 // A title is a title whichever markup produced it; that is what is checked here.
 //
-// Both mechanisms are covered on purpose, because only testing one leaves the
-// other unguarded:
-//   /ceo-settings → migrated, sized by <Panel> (Tailwind utilities)
-//   constructed   → the legacy styles.css rules, probed directly
-//
-// With TicketDetailPage ported there are NO `.panel-header` call sites left in
-// the app, so the legacy half no longer names a page at all — it builds the
-// markup it needs. Keep it only until the styles.css rules themselves are
-// deleted, then delete it with them; it is guarding rules, and rules with no
-// callers are on their way out.
+// The legacy half of this spec is GONE, on purpose. It probed the styles.css
+// `.panel-header` rules directly, and those rules were deleted once the last
+// call site was migrated — a guard for a rule that no longer exists is not a
+// guard, it is a fixture pinning dead code in place. What remains is the part
+// that still has a subject: <Panel>'s own output.
 
 async function headingMetrics(page) {
   return page.evaluate(() => {
@@ -59,47 +54,6 @@ function assertTitlesOnScale({ expected, rows }, label) {
   }
 }
 
-// The legacy half of this spec is probed against CONSTRUCTED elements, not
-// found on a page. It has now been invalidated three times by the migration it
-// is meant to outlive: it asserted on /ceo-settings, then /pricing-requests/:id,
-// then /commissions, and each was migrated in turn. What is under test is a CSS
-// RULE, and a rule does not need a page to use it in order to be measurable.
-//
-// Delete this half — and `assertLegacyRule` with it — when the last
-// `.panel-header` call site goes and the styles.css rules are removed. It
-// should not be re-pointed at anything.
-async function measureLegacyRule(page) {
-  return page.evaluate(() => {
-    const expected = getComputedStyle(document.documentElement)
-      .getPropertyValue('--text-lg').trim();
-
-    const tablePanel = document.createElement('section');
-    tablePanel.className = 'table-panel';
-    const insideHeader = document.createElement('div');
-    insideHeader.className = 'panel-header';
-    const insideHeading = document.createElement('h2');
-    insideHeading.textContent = 'x';
-    insideHeader.appendChild(insideHeading);
-    tablePanel.appendChild(insideHeader);
-
-    const loneHeader = document.createElement('div');
-    loneHeader.className = 'panel-header';
-
-    document.body.append(tablePanel, loneHeader);
-    const result = {
-      expected,
-      headingFont: getComputedStyle(insideHeading).fontSize,
-      headingMarginTop: parseFloat(getComputedStyle(insideHeading).marginTop),
-      headingMarginBottom: parseFloat(getComputedStyle(insideHeading).marginBottom),
-      marginInTablePanel: parseFloat(getComputedStyle(insideHeader).marginBottom),
-      marginStandalone: parseFloat(getComputedStyle(loneHeader).marginBottom),
-    };
-    tablePanel.remove();
-    loneHeader.remove();
-    return result;
-  });
-}
-
 test.describe('panel headers do not strand their title', () => {
   test('migrated panels (<Panel>) keep titles on the type scale', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -110,28 +64,4 @@ test.describe('panel headers do not strand their title', () => {
     assertTitlesOnScale(await headingMetrics(page), '/ceo-settings');
   });
 
-  test('the legacy styles.css rules still size and space a .panel-header', async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await loginAs(page, 'hr');
-
-    const m = await measureLegacyRule(page);
-
-    // `.panel h2, .panel-header h2` — re-scoping this back to `.panel` alone
-    // returns these headings to the 24px/0.83em UA default, which is the
-    // 101px header and the 51-59px dead band this whole spec exists for. The
-    // /ceo-settings test above cannot see it: <Panel> sets the size with a
-    // Tailwind class regardless of what styles.css says.
-    expect(m.headingFont, `legacy .panel-header h2 is ${m.headingFont}, expected ${m.expected}`)
-      .toBe(m.expected);
-    expect(m.headingMarginTop, 'legacy .panel-header h2 kept a top margin').toBe(0);
-    expect(m.headingMarginBottom, 'legacy .panel-header h2 kept a bottom margin').toBe(0);
-
-    // `.table-panel > .panel-header { margin-bottom: 0 }` — without it the
-    // header's own 16px stacks on the flush body's inset and pushes the rule
-    // away from its title.
-    expect(m.marginInTablePanel, 'table-panel header re-introduced its bottom margin').toBe(0);
-    // The control: a `.panel-header` OUTSIDE a table-panel must keep its 16px.
-    // Without this, deleting the base rule entirely would also pass.
-    expect(m.marginStandalone, 'the base .panel-header margin was lost').toBe(16);
-  });
 });

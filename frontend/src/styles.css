@@ -381,39 +381,6 @@ textarea:focus {
   font-weight: 500;
 }
 
-.primary-button,
-.secondary-button,
-.danger-button,
-.icon-button {
-  border-radius: var(--radius-md);
-  min-height: 38px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  border: 1.5px solid transparent;
-  font-weight: 700;
-}
-
-.primary-button {
-  background: var(--color-primary);
-  color: var(--color-surface);
-  padding: 0 16px;
-}
-
-.secondary-button {
-  background: var(--color-surface);
-  color: var(--color-icon-muted);
-  border-color: var(--color-border-input);
-  padding: 0 13px;
-}
-
-.danger-button {
-  background: var(--color-surface);
-  color: var(--color-danger);
-  border-color: var(--color-danger-border);
-  padding: 0 13px;
-}
 
 .breadcrumbs {
   margin-bottom: var(--space-2);
@@ -460,14 +427,6 @@ textarea:focus {
   font-weight: 600;
 }
 
-.icon-button {
-  width: 44px;
-  min-height: 44px;
-  padding: 0;
-  background: var(--color-surface);
-  color: var(--color-icon-muted);
-  border-color: var(--color-border-input);
-}
 
 .button-loading-spinner {
   position: absolute;
@@ -498,8 +457,6 @@ textarea:focus {
 }
 
 .stat-card,
-.panel,
-.table-panel,
 .profile-strip {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -571,62 +528,6 @@ textarea:focus {
   font-weight: 700;
 }
 
-.panel {
-  padding: 20px;
-}
-
-/* `.panel-header h2` is in this selector, not just `.panel h2`, and that is the
-   whole fix for the dead band under panel titles.
-
-   The reset was scoped to `.panel` only, so it never reached `.table-panel` —
-   the class every table-topped card uses. Those h2s therefore kept the UA
-   default `font-size: 1.5em` and `margin: 0.83em 0`: measured 24px text with
-   19.92px above and below, inside a 101px header, leaving 51–59px of empty
-   space between a title and the first row under it (`/ceo-settings`, all four
-   panels). Which meant a section title rendered at 16px or 24px depending only
-   on whether its card was a `.panel` or a `.table-panel` — never a decision
-   anyone made. */
-.panel h2,
-.panel-header h2 {
-  margin: 0;
-  font-size: var(--text-lg);
-}
-
-.panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  min-height: 44px;
-  margin-bottom: 16px;
-}
-
-.panel-header h2 {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-/* `.panel-header` carries no inset of its own — inside `.panel` it borrows that
-   panel's 20px padding. `.table-panel` has none (its tables are meant to run
-   edge to edge), so the same header rendered flush against the card border:
-   "คำขอราคา" measured 1px from the left edge.
-
-   16px, not the 18px `.table-head`/`.data-row` use: every panel this rule
-   actually reaches has a `p-4` body, not a table — the table-topped ones
-   (TicketDetailPage's items, CeoSettingsPage) all set their own inline
-   `padding: 14px 18px`, which still wins here. Matching the body keeps the
-   heading on the same left edge as the content under it. Horizontal only —
-   the header's own `min-height: 44px` already clears the top edge. */
-.table-panel > .panel-header {
-  padding-inline: 16px;
-  /* No `margin-bottom` here. The 16px above suits a `.panel` header, whose
-     content follows immediately inside the card's own 20px padding. A
-     `.table-panel` body brings its own inset — `p-4`, or the `padding: 14px
-     18px` the table-topped ones set inline — so the margin stacked on top of
-     it and, on the headers that also draw a `border-bottom`, pushed the rule
-     16px away from the title it belongs to. */
-  margin-bottom: 0;
-}
 
 .bar-list,
 .request-feed,
@@ -728,9 +629,6 @@ textarea:focus {
   padding-left: 40px;
 }
 
-.table-panel {
-  overflow: hidden;
-}
 
 .data-table-table {
   width: 100%;
@@ -1285,10 +1183,6 @@ textarea:focus {
   min-width: 0;
 }
 
-.payroll-table-region .table-panel {
-  max-height: min(68vh, 760px);
-  overflow: auto;
-}
 
 .payroll-table-region .data-table-table tfoot {
   position: sticky;
@@ -2365,10 +2259,6 @@ textarea.is-invalid:focus {
     flex-basis: 100%;
   }
 
-  .table-panel {
-    overflow-x: auto;
-  }
-
   /* Its 4-column `minmax(180px,1fr) minmax(200px,1fr) minmax(220px,1.2fr)
      auto` template needs ~713px minimum — wider than a 768px tablet's
      content column (704px, now that no rail eats into it) — so it still
@@ -2558,15 +2448,6 @@ textarea.is-invalid:focus {
   .breadcrumbs button {
     min-width: 0;
     overflow-wrap: anywhere;
-  }
-
-  /* These legacy classes bypass the shared Button component, so the 44px
-     mobile floor added there never reached them — including the approve
-     button on the price-approval screen. */
-  .primary-button,
-  .secondary-button,
-  .danger-button {
-    min-height: 44px;
   }
 
   /* Text controls join the same 44px floor. Two reasons, and the second is

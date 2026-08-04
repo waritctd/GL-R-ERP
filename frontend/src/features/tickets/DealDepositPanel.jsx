@@ -10,6 +10,8 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { depositPolicyLabel } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import { canCreateDepositNoticeFromQuotation } from '../pricingRequests/pricingRequestMeta.js';
+import { buttonVariants } from '../../components/common/Button.jsx';
+import { cn } from '../../utils/cn.js';
 
 const POLICY_OPTIONS = ['WAIVED', 'NOT_REQUIRED', 'CREDIT_CUSTOMER'];
 
@@ -311,7 +313,7 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
               <p className="text-xs text-text-muted">ลูกค้ายืนยันคำสั่งซื้อแล้ว — ออกใบแจ้งยอดมัดจำได้</p>
               {/* Not a <Button>: react-router's <Link> renders an <a> for
                   client-side navigation, which Button (a <button>) can't do. */}
-              <Link to={`/tickets/${ticketId}/deposit`} className="primary-button self-start">
+              <Link to={`/tickets/${ticketId}/deposit`} className={cn(buttonVariants({ variant: 'primary' }), 'self-start')}>
                 ออกใบแจ้งยอดมัดจำ
               </Link>
             </div>

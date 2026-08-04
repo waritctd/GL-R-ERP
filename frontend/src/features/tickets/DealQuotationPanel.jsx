@@ -21,6 +21,7 @@ import {
   canManageCustomerQuotation, canRecordCustomerQuotationOutcome, canViewCustomerQuotation,
   isCustomerQuotationEditable, pricingRequestRecipientLabel,
 } from '../pricingRequests/pricingRequestMeta.js';
+import { buttonVariants } from '../../components/common/Button.jsx';
 
 function generateClientRequestId() {
   return crypto.randomUUID?.()
@@ -365,7 +366,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
               {isCustomerQuotationEditable(current) && canManageCustomerQuotation(user, pr) ? (
                 // Not a <Button>: react-router's <Link> renders an <a> for
                 // client-side navigation, which Button (a <button>) can't do.
-                <Link to={`/pricing-requests/${pr.id}`} className="secondary-button">
+                <Link to={`/pricing-requests/${pr.id}`} className={buttonVariants({ variant: 'secondary' })}>
                   แก้ไขรายละเอียด/ส่วนลด →
                 </Link>
               ) : null}

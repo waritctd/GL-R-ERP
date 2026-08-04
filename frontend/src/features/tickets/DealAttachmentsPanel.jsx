@@ -12,6 +12,8 @@ import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
+import { Button, buttonVariants } from '../../components/common/Button.jsx';
+import { cn } from '../../utils/cn.js';
 
 export function DealAttachmentsPanel({
   attachments,
@@ -73,8 +75,10 @@ export function DealAttachmentsPanel({
               htmlFor. Nesting a real <button> inside that label would add a
               second interactive control competing for the same click. */}
           <span
-            className="secondary-button max-[720px]:min-h-11 max-[720px]:w-full"
-            style={{ fontSize: 12, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+            className={cn(
+              buttonVariants({ variant: 'secondary' }),
+              'gap-1 px-2.5 py-1 text-xs max-[720px]:min-h-11 max-[720px]:w-full',
+            )}
           >
             <Icon name="upload" size={13} />
             {uploadingFile ? 'กำลังอัปโหลด…' : 'แนบไฟล์ (PDF/JPG/PNG/Excel)'}
@@ -114,11 +118,20 @@ export function DealAttachmentsPanel({
                 ดูไฟล์
               </a>
               {notTerminal && (canManageDocuments || att.uploadedBy === user.id) && (
-                <button type="button" className="icon-button"
-                  style={{ color: 'var(--color-danger)', flexShrink: 0 }}
-                  onClick={() => onDeleteAttachment(att.id, att.fileName)}>
+                <Button
+                  variant="icon"
+                  className="shrink-0 text-danger"
+                  // Named from the file it deletes rather than left bare: this was
+                  // the one icon control #537 could not convert, because Button
+                  // warns without an accessible name and inventing one would have
+                  // been a guess. The handler already carries att.fileName, so the
+                  // name is derived, not invented.
+                  aria-label={`ลบไฟล์แนบ ${att.fileName}`}
+                  title={`ลบไฟล์แนบ ${att.fileName}`}
+                  onClick={() => onDeleteAttachment(att.id, att.fileName)}
+                >
                   <Icon name="close" size={13} />
-                </button>
+                </Button>
               )}
             </div>
           ))}
