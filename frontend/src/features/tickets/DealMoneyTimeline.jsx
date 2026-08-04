@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
@@ -167,9 +168,9 @@ export function DealMoneyTimeline({
   const outstanding = Number(summary.amountOutstanding ?? 0);
 
   return (
-    <section className="panel">
-      <div className="panel-header" style={{ alignItems: 'center' }}>
-        <h2>การชำระเงิน</h2>
+    <Panel
+      title="การชำระเงิน"
+      actions={(
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <StatusBadge tone={paymentStageLabel(summary.paymentStage).tone}>
             {paymentStageLabel(summary.paymentStage).label}
@@ -178,7 +179,8 @@ export function DealMoneyTimeline({
             <StatusBadge tone={overdueBadgeLabel(true).tone}>{overdueBadgeLabel(true).label}</StatusBadge>
           )}
         </div>
-      </div>
+      )}
+    >
       <div style={{ padding: '0 18px 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
         {summary.paymentStatus && !depositBypassesNotice(summary.depositPolicy) ? (
           <PaymentSubstepChips currentCode={summary.paymentStatus} />
@@ -243,6 +245,6 @@ export function DealMoneyTimeline({
           )}
         </div>
       </div>
-    </section>
+    </Panel>
   );
 }

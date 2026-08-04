@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { depositPolicyLabel } from '../../utils/format.js';
@@ -205,11 +206,7 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
   const alreadyPaid = ['DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ps);
 
   return (
-    <section className="table-panel" data-testid="deal-deposit-panel">
-      <div className="panel-header">
-        <h2>มัดจำ</h2>
-      </div>
-
+    <Panel flush title="มัดจำ" data-testid="deal-deposit-panel">
       <div className="flex flex-col gap-3 p-4">
         {/* Step 1: นโยบายมัดจำ */}
         <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
@@ -380,6 +377,6 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
           </div>
         </Modal>
       ) : null}
-    </section>
+    </Panel>
   );
 }

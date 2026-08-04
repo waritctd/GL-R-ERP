@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate } from '../../utils/format.js';
@@ -250,12 +251,7 @@ export function DealHistoryPanel({
   }
 
   return (
-    <section className="panel">
-      <div className="panel-header">
-        <h2>ประวัติดีล</h2>
-        <span className="text-2xs font-normal text-text-muted">History</span>
-      </div>
-
+    <Panel title="ประวัติดีล" actions={<span className="text-2xs font-normal text-text-muted">History</span>}>
       <div className="ticket-events">
         {rows.length === 0 && !loading ? (
           // FIX 1 (Opus review): when `canViewActivityFeed` is false,
@@ -357,6 +353,6 @@ export function DealHistoryPanel({
           </button>
         </div>
       ) : null}
-    </section>
+    </Panel>
   );
 }

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import {
@@ -71,15 +72,15 @@ export function DealTrackingPanel({
   }
 
   return (
-    <section className="panel">
-      <div className="panel-header" style={{ alignItems: 'center' }}>
-        <h2>การติดตามดีล</h2>
+    <Panel
+      title="การติดตามดีล"
+      actions={(
         <StatusBadge tone={ready ? 'success' : 'warning'}>
           <Icon name={ready ? 'check' : 'clock'} size={12} />
           {ready ? 'พร้อมเลื่อนสถานะ' : 'ยังไม่พร้อม'}
         </StatusBadge>
-      </div>
-
+      )}
+    >
       <div className="flex flex-col gap-4 px-4 py-4 sm:px-5">
         {editOpen ? (
           <div className="flex flex-col gap-3">
@@ -174,6 +175,6 @@ export function DealTrackingPanel({
           </div>
         )}
       </div>
-    </section>
+    </Panel>
   );
 }
