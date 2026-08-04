@@ -18,6 +18,7 @@ import th.co.glr.hr.commission.CommissionCalculator;
 import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.employee.EmployeeRepository;
+import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollAllowanceEstimateResult;
@@ -88,7 +89,8 @@ class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTes
             new TaxAllowanceCapCatalog(),
             mock(AuditService.class),
             mock(FileStorageService.class),
-            payrollService);
+            payrollService,
+            new NotificationRepository(jdbc));
 
         hrEmployeeId = seedEmployee("EST-HR", new BigDecimal("50000.00"), "M");
     }
