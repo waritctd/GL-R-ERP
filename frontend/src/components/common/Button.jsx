@@ -9,7 +9,20 @@ import { cn } from '../../utils/cn.js';
 // visually unchanged from before. The `text` variant (borderless inline link,
 // padding:0 per DESIGN.md) is intentionally excluded: forcing it to 44px would
 // pad prose links into ugly tap boxes that break inline text flow.
-const buttonVariants = cva(
+/**
+ * Exported because some controls that must LOOK like a button cannot BE one.
+ * A react-router `<Link>` and an `<a href>` render anchors, and `<Button>`
+ * renders a `<button>`, which has no `href` and cannot navigate. A `<label>`
+ * wrapping a hidden file input must stay a `<label>` — a `<button>` cannot
+ * open a file picker. Those call sites previously carried the legacy
+ * `.primary-button` / `.secondary-button` classes, which is the only reason
+ * those rules could not be deleted; `buttonVariants({ variant })` gives them
+ * the identical class string without pretending they are buttons.
+ *
+ * Use `<Button>` for anything that IS a button. This is the escape hatch, not
+ * an alternative.
+ */
+export const buttonVariants = cva(
   [
     'inline-flex',
     'items-center',

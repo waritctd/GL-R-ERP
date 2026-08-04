@@ -43,6 +43,8 @@ import {
   quantityTypeLabel,
 } from './pricingRequestMeta.js';
 import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
+import { buttonVariants } from '../../components/common/Button.jsx';
+import { cn } from '../../utils/cn.js';
 
 function isImport(user) {
   return user?.role === 'import';
@@ -654,7 +656,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           // Left as a <label> wrapping the hidden file input, not <Button>: a
           // <button> cannot open the native file picker the way a <label>
           // wrapping its <input type="file"> does.
-          <label className="secondary-button cursor-pointer">
+          <label className={cn(buttonVariants({ variant: 'secondary' }), 'cursor-pointer')}>
             <input type="file" className="hidden" onChange={(event) => {
               const file = event.target.files?.[0];
               if (file) uploadPricingRequestAttachment.mutate(file);
@@ -849,7 +851,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           // Left as a <label> wrapping the hidden file input, not <Button>: a
                           // <button> cannot open the native file picker the way a <label>
                           // wrapping its <input type="file"> does.
-                          <label className="secondary-button cursor-pointer">
+                          <label className={cn(buttonVariants({ variant: 'secondary' }), 'cursor-pointer')}>
                             <input type="file" className="hidden" onChange={(event) => {
                               const file = event.target.files?.[0];
                               if (file) uploadQuoteAttachment.mutate({ quote, file });

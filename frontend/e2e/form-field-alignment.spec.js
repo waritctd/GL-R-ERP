@@ -147,7 +147,7 @@ test.describe('two-column form rows stay aligned', () => {
     // the other tests never visit. `align-items: stretch` stretches a flex item
     // only when its cross-size is `auto`, so under the old `min-height: 40px`
     // these inputs were silently pulled up to the 44px height styles.css gives
-    // `.primary-button` at this width. The base rule's fixed `height` opts out
+    // the legacy button classes carried at this width. The base rule's fixed `height` opts out
     // of that stretch, so the floor has to be stated rather than inherited —
     // without it the inputs end 4px above the button and the row reads ragged.
     await page.setViewportSize({ width: 700, height: 900 });

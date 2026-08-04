@@ -11,6 +11,8 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
 import { formatMoney, formatThaiDate, quotationStatusLabel } from '../../utils/format.js';
 import { canViewCustomerQuotation } from '../pricingRequests/pricingRequestMeta.js';
+import { buttonVariants } from '../../components/common/Button.jsx';
+import { cn } from '../../utils/cn.js';
 
 /**
  * Slice D ("the เอกสาร document register"): one read-only roll-up of every document a deal can
@@ -318,7 +320,7 @@ function DocumentRow({ icon, title, meta, status, actions = [] }) {
         {actions.map((action) => (action.href ? (
           // Not a <Button>: this is a real navigation link (target="_blank" to
           // a file URL) — Button renders a <button>, which has no href.
-          <a key={action.label} href={action.href} target="_blank" rel="noreferrer" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}>
+          <a key={action.label} href={action.href} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: 'secondary' }), 'px-2.5 py-1 text-xs')}>
             {action.label}
           </a>
         ) : (
