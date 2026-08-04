@@ -92,12 +92,24 @@ Panel.Header = PanelHeader;
  * `formGridSpan2` class name, reproducing `.span-2` (span 2 / span 1 ≤720px).
  * Renders a `<div>` by default; pass `as="form"` for callers that need real
  * `<form>` semantics (e.g. a footer submit button using `form="<id>"`).
+ *
+ * `items-start` is not cosmetic. Grid's default `align-items: stretch` sized
+ * every field box to the tallest field in its row, and because a field is
+ * itself a grid of auto rows, that spare height was absorbed by the *control*
+ * — more for a field with no hint line (2 rows to share it) than for one with
+ * a hint (3 rows), so side-by-side controls ended up different heights and
+ * different vertical offsets. EmployeeFormModal's `ค่าตอบแทนกรรมการ` (no hint,
+ * 47px) beside `ภาษีหัก ณ ที่จ่าย` (hint, 36px) was the clearest case: the two
+ * differ in source only by `hint=`. Fields now sit at their natural height and
+ * a short field simply leaves whitespace below it. FormField.jsx's
+ * `content-start` fixes the same thing one level down; both are kept so a
+ * field is correct in any parent and a non-FormField child is correct here.
  */
 export function FormGrid({ as: Component = 'div', single = false, className, children, ...props }) {
   return (
     <Component
       className={cn(
-        'grid gap-[14px] max-[720px]:grid-cols-1',
+        'grid items-start gap-[14px] max-[720px]:grid-cols-1',
         single ? 'grid-cols-1' : 'grid-cols-2',
         className,
       )}
