@@ -18,17 +18,14 @@ import { loginAs, spaGoto } from './helpers/auth.js';
 //
 // Both mechanisms are covered on purpose, because only testing one leaves the
 // other unguarded:
-//   /ceo-settings  → migrated, sized by <Panel> (Tailwind utilities)
-//   /commissions   → still legacy `.panel-header` markup, sized by the
-//                    styles.css rule the remaining call sites resolve to
+//   /ceo-settings → migrated, sized by <Panel> (Tailwind utilities)
+//   constructed   → the legacy styles.css rules, probed directly
 //
-// The legacy half is deliberately temporary and has already moved once: it
-// pointed at /pricing-requests/:id until that page was migrated too. Any page
-// named here is a page someone is queued up to migrate, so expect to re-point
-// it — and when the LAST `.panel-header` call site goes (CommissionPage,
-// TicketDetailPage, DepositNoticePage, TicketDashboard are what remain), the
-// styles.css rule gets deleted and this half of the spec should be deleted
-// with it rather than re-pointed at nothing.
+// With TicketDetailPage ported there are NO `.panel-header` call sites left in
+// the app, so the legacy half no longer names a page at all — it builds the
+// markup it needs. Keep it only until the styles.css rules themselves are
+// deleted, then delete it with them; it is guarding rules, and rules with no
+// callers are on their way out.
 
 async function headingMetrics(page) {
   return page.evaluate(() => {
