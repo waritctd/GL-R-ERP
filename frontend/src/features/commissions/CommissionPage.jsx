@@ -3,14 +3,17 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import imageCompression from 'browser-image-compression';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
+import { Button } from '../../components/common/Button.jsx';
 import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { cn } from '../../utils/cn.js';
 import { commissionStatusLabel as statusInfo, dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
 import {
   invoiceCalculation,
@@ -109,7 +112,7 @@ function CommissionCalcBreakdown({ record }) {
         <div className="grid gap-1.5 rounded-md border border-border bg-surface-subtle p-3">
           <div className="flex items-center justify-between gap-3 font-bold">
             <span>จำนวนเงิน (พิมพ์เอง — ไม่ผ่านการคำนวณอัตโนมัติ)</span>
-            <code className="font-mono" style={{ color: amount < 0 ? 'var(--color-danger)' : undefined }}>
+            <code className={cn('font-mono', amount < 0 && 'text-danger')}>
               {formatMoney(amount)}
             </code>
           </div>
@@ -207,16 +210,16 @@ function CommissionCard({ record, canReview, isCeoReview, saving, expanded, onTo
         <span className="flex items-center gap-1.5">
           {manual ? <StatusBadge tone="info">Manual</StatusBadge> : null}
           <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-          <button
+          <Button
             type="button"
-            className="icon-button"
+            variant="icon"
             aria-expanded={expanded}
             title="ดูรายละเอียดการคำนวณ"
             aria-label="ดูรายละเอียดการคำนวณ"
             onClick={onToggleExpand}
           >
             <Icon name={expanded ? 'chevronUp' : 'chevronDown'} size={14} />
-          </button>
+          </Button>
         </span>
       </div>
 
@@ -226,7 +229,7 @@ function CommissionCard({ record, canReview, isCeoReview, saving, expanded, onTo
 
       {manual ? (
         <span className="flex min-w-0 flex-col gap-0.5">
-          <strong className="text-md font-extrabold text-text" style={{ color: Number(record.manualAmount || 0) < 0 ? 'var(--color-danger)' : undefined }}>
+          <strong className={cn('text-md font-extrabold text-text', Number(record.manualAmount || 0) < 0 && 'text-danger')}>
             {formatMoney(record.manualAmount)}
           </strong>
           <span className="truncate text-2xs text-text-muted">{record.manualReason}</span>
@@ -249,26 +252,26 @@ function CommissionCard({ record, canReview, isCeoReview, saving, expanded, onTo
 
       {canReview && (
         <div className="mt-1 flex gap-2">
-          <button
+          <Button
             type="button"
-            className="secondary-button min-h-11 flex-1"
-            style={{ color: 'var(--color-success)', borderColor: 'var(--color-success)' }}
+            variant="secondary"
+            className="min-h-11 flex-1 text-success border-success"
             disabled={saving}
             onClick={(event) => { event.stopPropagation(); onApprove(); }}
           >
             <Icon name="check" size={14} />
             {isCeoReview ? 'CEO อนุมัติ' : 'ผู้จัดการอนุมัติ'}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="secondary-button min-h-11 flex-1"
-            style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger)' }}
+            variant="secondary"
+            className="min-h-11 flex-1 text-danger border-danger"
             disabled={saving}
             onClick={(event) => { event.stopPropagation(); onReject(); }}
           >
             <Icon name="close" size={14} />
             ไม่อนุมัติ
-          </button>
+          </Button>
         </div>
       )}
     </>
@@ -477,16 +480,16 @@ export function CommissionPage({ user, showToast }) {
         key: 'expand',
         header: '',
         render: (record) => (
-          <button
+          <Button
             type="button"
-            className="icon-button"
+            variant="icon"
             aria-expanded={expandedId === record.id}
             title="ดูรายละเอียดการคำนวณ"
             aria-label="ดูรายละเอียดการคำนวณ"
             onClick={() => setExpandedId((current) => (current === record.id ? null : record.id))}
           >
             <Icon name={expandedId === record.id ? 'chevronUp' : 'chevronDown'} size={14} />
-          </button>
+          </Button>
         ),
       },
       {
@@ -503,13 +506,13 @@ export function CommissionPage({ user, showToast }) {
               <strong>{MANUAL_KIND_LABELS[record.kind] || record.kind}</strong>
               <StatusBadge tone="info">Manual</StatusBadge>
             </span>
-            <small style={{ color: 'var(--color-text-muted)', display: 'block' }}>{record.manualReason}</small>
+            <small className="block text-text-muted">{record.manualReason}</small>
           </span>
         ) : (
           <span>
             <strong>{record.invoiceDetails.invoiceNumber}</strong>
-            <small style={{ color: 'var(--color-text-muted)', display: 'block' }}>{kindLabel(record.kind)} · {formatThaiDate(record.invoiceDetails.invoiceDate)}</small>
-            <small style={{ color: 'var(--color-text-muted)', display: 'block' }}>ไฟล์: {record.invoiceDetails.invoiceAttachmentFileName || '-'}</small>
+            <small className="block text-text-muted">{kindLabel(record.kind)} · {formatThaiDate(record.invoiceDetails.invoiceDate)}</small>
+            <small className="block text-text-muted">ไฟล์: {record.invoiceDetails.invoiceAttachmentFileName || '-'}</small>
           </span>
         )),
       },
@@ -530,20 +533,20 @@ export function CommissionPage({ user, showToast }) {
         render: (record) => {
           if (isManualKind(record.kind)) {
             const amount = Number(record.manualAmount || 0);
-            return <code style={{ color: amount < 0 ? 'var(--color-danger)' : undefined }}>{formatMoney(amount)}</code>;
+            return <code className={amount < 0 ? 'text-danger' : undefined}>{formatMoney(amount)}</code>;
           }
           return (
             <span>
               <code>{formatMoney(record.actualReceived)}</code>
               {record.weightMultiplier > 1 && (
-                <span style={{ display: 'block', marginTop: 4 }}>
+                <span className="block mt-1">
                   <StatusBadge tone={record.weightMultiplier === 3 ? 'warning' : 'info'}>น้ำหนัก {record.weightMultiplier} เท่า</StatusBadge>
                 </span>
               )}
               {record.dealAmountMismatch && (
                 // The whole point of the Step 9 cross-check flag: surfaced right next to the
                 // amount so a reviewer sees it before approving, never buried elsewhere.
-                <span style={{ display: 'block', marginTop: 4 }}>
+                <span className="block mt-1">
                   <StatusBadge tone="warning">ยอดต่างจากยอดที่เรียกเก็บ</StatusBadge>
                 </span>
               )}
@@ -571,10 +574,10 @@ export function CommissionPage({ user, showToast }) {
           return (
             <span>
               <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-              <small style={{ color: 'var(--color-text-muted)', display: 'block', marginTop: 4 }}>
+              <small className="mt-1 block text-text-muted">
                 ผู้จัดการ: {record.managerApprovedAt ? `${record.managerApprovedByName || '-'} · ${formatThaiDate(record.managerApprovedAt)}` : '-'}
               </small>
-              <small style={{ color: 'var(--color-text-muted)', display: 'block' }}>
+              <small className="block text-text-muted">
                 CEO: {record.ceoApprovedAt ? `${record.ceoApprovedByName || '-'} · ${formatThaiDate(record.ceoApprovedAt)}` : '-'}
               </small>
             </span>
@@ -591,28 +594,28 @@ export function CommissionPage({ user, showToast }) {
       key: 'actions',
       header: '',
       render: (record) => (
-        <span style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' }}>
+        <span className="flex flex-wrap justify-end gap-1.5">
           {!isManualKind(record.kind) && (
             // Deduction editing is an invoice-input concept (grossAmount, bankFees, ...) — a
             // manual entry has no invoiceDetails at all (feat/commission-manual-adjustments), so
             // there is nothing here for beginEdit to populate.
-            <button
+            <Button
               type="button"
-              className="icon-button"
+              variant="icon"
               title="แก้ไขค่าหัก"
               aria-label="แก้ไขค่าหัก"
               onClick={(event) => { event.stopPropagation(); beginEdit(record); }}
             >
               <Icon name="pencil" size={14} />
-            </button>
+            </Button>
           )}
           {canReviewRecord(record) && (
             // Success-tinted (not just muted-gray) so approve reads as the
             // positive, serious action — matches DESIGN.md success token.
-            <button
+            <Button
               type="button"
-              className="icon-button"
-              style={{ color: 'var(--color-success)', borderColor: 'var(--color-success)' }}
+              variant="icon"
+              className="text-success border-success"
               title={canCeoReview(record) ? 'CEO อนุมัติ' : 'ผู้จัดการอนุมัติ'}
               aria-label={canCeoReview(record) ? 'CEO อนุมัติ' : 'ผู้จัดการอนุมัติ'}
               disabled={saving}
@@ -620,35 +623,35 @@ export function CommissionPage({ user, showToast }) {
               data-testid="commission-approve"
             >
               <Icon name="check" size={14} />
-            </button>
+            </Button>
           )}
           {canReviewRecord(record) && (
             // Danger stays outlined per DESIGN.md ("danger is outlined, not
             // filled") — the icon-button is already an outline shape, so this
             // just tints the outline/icon danger-red to separate it from approve.
-            <button
+            <Button
               type="button"
-              className="icon-button"
-              style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger)' }}
+              variant="icon"
+              className="text-danger border-danger"
               title={canCeoReview(record) ? 'CEO ปฏิเสธ' : 'ผู้จัดการปฏิเสธ'}
               aria-label={canCeoReview(record) ? 'CEO ปฏิเสธ' : 'ผู้จัดการปฏิเสธ'}
               disabled={saving}
               onClick={(event) => { event.stopPropagation(); reject(record.id); }}
             >
               <Icon name="close" size={14} />
-            </button>
+            </Button>
           )}
           {record.kind === 'SALE' && record.status === 'APPROVED' && (
-            <button
+            <Button
               type="button"
-              className="icon-button"
+              variant="icon"
               title="บันทึกหักคืน"
               aria-label="บันทึกหักคืน"
               disabled={saving}
               onClick={(event) => { event.stopPropagation(); clawback(record.id); }}
             >
               <Icon name="close" size={14} />
-            </button>
+            </Button>
           )}
         </span>
       ),
@@ -944,15 +947,15 @@ export function CommissionPage({ user, showToast }) {
         subtitle="Sales & Commission Management"
         actions={!canCreateFromDeal ? (
           <div className="flex flex-wrap items-center gap-3">
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700 }}>
+            <label className="inline-flex items-center gap-2 text-sm font-bold">
               รอบเดือน
-              <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} style={{ width: 150 }} />
+              <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="w-[150px]" />
             </label>
             {canCreateManual && (
-              <button type="button" className="secondary-button" onClick={() => (showManualForm ? setShowManualForm(false) : openManualForm())}>
+              <Button type="button" variant="secondary" onClick={() => (showManualForm ? setShowManualForm(false) : openManualForm())}>
                 <Icon name="plus" size={14} />
                 เพิ่มค่าคอมด้วยตนเอง
-              </button>
+              </Button>
             )}
           </div>
         ) : undefined}
@@ -1063,24 +1066,24 @@ export function CommissionPage({ user, showToast }) {
             : 'สถานะจะเปลี่ยนเป็น "รอ CEO" เพื่อรออนุมัติขั้นสุดท้าย';
           if (isManualKind(record.kind)) {
             return (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <p className="confirm-dialog-message" style={{ margin: 0 }}>
+              <div className="flex flex-col gap-2">
+                <p className="confirm-dialog-message m-0">
                   ตรวจสอบก่อนอนุมัติค่าคอมแบบ <strong>{MANUAL_KIND_LABELS[record.kind] || record.kind}</strong> ของ <strong>{record.salesRepName || record.salesRepId}</strong>
                 </p>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700, borderTop: '1px solid #e6eaf0', paddingTop: 8 }}>
+                <div className="flex justify-between text-md font-bold border-t border-border pt-2">
                   <span>จำนวนเงิน</span>
-                  <code className="font-mono" style={{ color: Number(record.manualAmount || 0) < 0 ? 'var(--color-danger)' : undefined }}>
+                  <code className={cn('font-mono', Number(record.manualAmount || 0) < 0 && 'text-danger')}>
                     {formatMoney(record.manualAmount)}
                   </code>
                 </div>
-                <p style={{ margin: 0, fontSize: 12, color: 'var(--color-text-muted)' }}>เหตุผล: {record.manualReason || '-'}</p>
-                <p style={{ margin: 0, fontSize: 12, color: 'var(--color-text-muted)' }}>{nextStep}</p>
+                <p className="m-0 text-xs text-text-muted">เหตุผล: {record.manualReason || '-'}</p>
+                <p className="m-0 text-xs text-text-muted">{nextStep}</p>
               </div>
             );
           }
           return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <p className="confirm-dialog-message" style={{ margin: 0 }}>
+            <div className="flex flex-col gap-2">
+              <p className="confirm-dialog-message m-0">
                 ตรวจสอบยอดก่อนอนุมัติใบกำกับ <strong>{record.invoiceDetails.invoiceNumber}</strong> ของ <strong>{record.salesRepName || record.salesRepId}</strong>
               </p>
               {record.dealAmountMismatch && (
@@ -1089,15 +1092,17 @@ export function CommissionPage({ user, showToast }) {
                 // the approver sees it before signing off, which is the entire point of the flag.
                 <StatusBadge tone="warning">ยอดต่างจากยอดที่เรียกเก็บ — โปรดตรวจสอบก่อนอนุมัติ</StatusBadge>
               )}
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid #e6eaf0', paddingTop: 8 }}>
-                <span style={{ color: '#475569' }}>ยอดรับจริง</span>
+              <div className="flex justify-between text-sm border-t border-border pt-2">
+                {/* #475569 has no exact --color-text-muted match (#5c6b80); --color-icon-muted is the
+                    literal token value, so it's used here to keep the rendered color identical. */}
+                <span className="text-icon-muted">ยอดรับจริง</span>
                 <code className="font-mono">{formatMoney(record.actualReceived)}</code>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700 }}>
+              <div className="flex justify-between text-md font-bold">
                 <span>ฐานค่าคอม</span>
                 <code className="font-mono">{formatMoney(record.commissionableBase)}</code>
               </div>
-              <p style={{ margin: 0, fontSize: 12, color: 'var(--color-text-muted)' }}>{nextStep}</p>
+              <p className="m-0 text-xs text-text-muted">{nextStep}</p>
             </div>
           );
         })()}
@@ -1140,11 +1145,8 @@ function AccountCreateFromDeal({
 }) {
   return (
     <>
-      <section className="panel" style={{ padding: 0 }}>
-        <div className="panel-header" style={{ padding: '14px 18px' }}>
-          <h2>บันทึกใบกำกับภาษี / สร้างคำขอค่าคอมจากดีล</h2>
-        </div>
-        <div className="grid gap-4" style={{ padding: 18 }}>
+      <Panel flush title="บันทึกใบกำกับภาษี / สร้างคำขอค่าคอมจากดีล">
+        <div className="grid gap-4 p-[18px]">
           <div className="grid gap-2">
             <label htmlFor="commission-ticket-lookup" className="text-sm font-bold">
               เลขที่ Ticket ID ของดีลที่ปิดงาน/รับเงินครบแล้ว (CLOSED_PAID)
@@ -1157,12 +1159,12 @@ function AccountCreateFromDeal({
                 value={ticketIdInput}
                 onChange={(event) => setTicketIdInput(event.target.value)}
                 placeholder="เช่น 42"
-                style={{ maxWidth: 160 }}
+                className="max-w-[160px]"
               />
-              <button type="button" className="secondary-button" disabled={ticketLookupLoading || !ticketIdInput} onClick={onLookup}>
+              <Button type="button" variant="secondary" disabled={ticketLookupLoading || !ticketIdInput} onClick={onLookup}>
                 <Icon name="search" size={14} />
                 {ticketLookupLoading ? 'กำลังโหลดข้อมูลดีล…' : 'โหลดข้อมูลดีล'}
-              </button>
+              </Button>
             </div>
             {eligibleTickets.length > 0 ? (
               <label className="grid gap-1.5 text-sm">
@@ -1247,20 +1249,17 @@ function AccountCreateFromDeal({
             </label>
 
             <div className="span-2 flex flex-wrap justify-end gap-[10px] max-[720px]:flex-col-reverse">
-              <button type="submit" className="primary-button max-[720px]:!min-h-11 max-[720px]:!w-full" disabled={saving || !loadedTicket}>
+              <Button type="submit" variant="primary" className="max-[720px]:!min-h-11 max-[720px]:!w-full" disabled={saving || !loadedTicket}>
                 <Icon name="check" size={14} />
                 บันทึกและสร้างคำขอค่าคอม
-              </button>
+              </Button>
             </div>
           </form>
         </div>
-      </section>
+      </Panel>
 
       {recentlyCreated.length > 0 ? (
-        <section className="panel">
-          <div className="panel-header">
-            <h2>บันทึกล่าสุดในเซสชันนี้</h2>
-          </div>
+        <Panel title="บันทึกล่าสุดในเซสชันนี้">
           <div className="grid gap-2">
             {recentlyCreated.map((record) => {
               const status = statusInfo(record.status);
@@ -1278,7 +1277,7 @@ function AccountCreateFromDeal({
               );
             })}
           </div>
-        </section>
+        </Panel>
       ) : null}
     </>
   );
@@ -1298,11 +1297,8 @@ function AccountCreateFromDeal({
 function ManualCommissionForm({ form, onChange, repOptions, onSubmit, onCancel, saving }) {
   const isAdjustment = form.kind === 'ADJUSTMENT';
   return (
-    <section className="panel" style={{ padding: 0 }}>
-      <div className="panel-header" style={{ padding: '14px 18px' }}>
-        <h2>เพิ่มค่าคอมด้วยตนเอง</h2>
-      </div>
-      <form className="form-grid" style={{ padding: 18 }} onSubmit={onSubmit}>
+    <Panel flush title="เพิ่มค่าคอมด้วยตนเอง">
+      <form className="form-grid p-[18px]" onSubmit={onSubmit}>
         <label>
           ประเภท *
           <select value={form.kind} onChange={(event) => onChange('kind', event.target.value)}>
@@ -1364,16 +1360,16 @@ function ManualCommissionForm({ form, onChange, repOptions, onSubmit, onCancel, 
         </label>
 
         <div className="span-2 flex flex-wrap justify-end gap-[10px] max-[720px]:flex-col-reverse">
-          <button type="button" className="secondary-button max-[720px]:!min-h-11 max-[720px]:!w-full" disabled={saving} onClick={onCancel}>
+          <Button type="button" variant="secondary" className="max-[720px]:!min-h-11 max-[720px]:!w-full" disabled={saving} onClick={onCancel}>
             ยกเลิก
-          </button>
-          <button type="submit" className="primary-button max-[720px]:!min-h-11 max-[720px]:!w-full" disabled={saving}>
+          </Button>
+          <Button type="submit" variant="primary" className="max-[720px]:!min-h-11 max-[720px]:!w-full" disabled={saving}>
             <Icon name="check" size={14} />
             บันทึกค่าคอม
-          </button>
+          </Button>
         </div>
       </form>
-    </section>
+    </Panel>
   );
 }
 
@@ -1394,10 +1390,7 @@ function ManagerReviewEditPanel({ record, draft, onChange, preview, saving, onSa
     ['overpayment', 'รับเงินเกิน'],
   ];
   return (
-    <section className="commission-row-wrap panel">
-      <div className="panel-header">
-        <h2>แก้ไขข้อมูลใบกำกับ {record.invoiceDetails.invoiceNumber}</h2>
-      </div>
+    <Panel className="commission-row-wrap" title={`แก้ไขข้อมูลใบกำกับ ${record.invoiceDetails.invoiceNumber}`}>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {fields.map(([key, label]) => (
           <label key={key} className="text-xs font-bold">
@@ -1454,10 +1447,10 @@ function ManagerReviewEditPanel({ record, draft, onChange, preview, saving, onSa
       </label>
 
       <div className="mt-3 flex gap-2">
-        <button type="button" className="primary-button" disabled={saving || !draft.reason.trim()} onClick={onSave}>บันทึก</button>
-        <button type="button" className="secondary-button" disabled={saving} onClick={onCancel}>ยกเลิก</button>
+        <Button type="button" variant="primary" disabled={saving || !draft.reason.trim()} onClick={onSave}>บันทึก</Button>
+        <Button type="button" variant="secondary" disabled={saving} onClick={onCancel}>ยกเลิก</Button>
       </div>
-    </section>
+    </Panel>
   );
 }
 
@@ -1465,13 +1458,14 @@ function ManagerReviewEditPanel({ record, draft, onChange, preview, saving, onSa
 function MonthlyTierPanel({ summary }) {
   const [open, setOpen] = useState(false);
   return (
-    <section className="panel">
-      <div className="panel-header">
-        <h2>ขั้นบันไดค่าคอมเดือนนี้ (ประมาณการ)</h2>
-        <button type="button" className="icon-button" onClick={() => setOpen((current) => !current)} aria-expanded={open} title={open ? 'ย่อ' : 'ขยาย'}>
+    <Panel
+      title="ขั้นบันไดค่าคอมเดือนนี้ (ประมาณการ)"
+      actions={(
+        <Button type="button" variant="icon" onClick={() => setOpen((current) => !current)} aria-expanded={open} title={open ? 'ย่อ' : 'ขยาย'}>
           <Icon name={open ? 'chevronUp' : 'chevronDown'} size={16} />
-        </button>
-      </div>
+        </Button>
+      )}
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span>
           <small className="block text-text-muted">ฐานค่าคอมรวมเดือนนี้ (น้ำหนักรวมแล้ว)</small>
@@ -1497,7 +1491,7 @@ function MonthlyTierPanel({ summary }) {
         // on top of the tier commission, same as CommissionService#payrollReadySummary.
         <div className="mt-2 flex items-center justify-between gap-3 text-sm">
           <span className="text-text-muted">ค่าคอมปรับปรุง/โบนัสที่อนุมัติแล้ว (นอกขั้นบันได)</span>
-          <code className="font-mono" style={{ color: summary.manualTotal < 0 ? 'var(--color-danger)' : undefined }}>
+          <code className={cn('font-mono', summary.manualTotal < 0 && 'text-danger')}>
             {formatMoney(summary.manualTotal)}
           </code>
         </div>
@@ -1533,7 +1527,7 @@ function MonthlyTierPanel({ summary }) {
           </table>
         </div>
       ) : null}
-    </section>
+    </Panel>
   );
 }
 
@@ -1553,7 +1547,7 @@ function PayrollSummary({ summary, loading }) {
           { key: 'reps', label: 'จำนวน Sales', value: summary.salesReps?.length ?? 0, helper: 'Sales reps' },
         ]}
       />
-      <section className="table-panel">
+      <Panel flush>
         <div className="commission-payroll-table table-head">
           <span>Sales Rep</span>
           <span>ฐานค่าคอม</span>
@@ -1576,7 +1570,7 @@ function PayrollSummary({ summary, loading }) {
             <code>{formatMoney(rep.commissionAmount)}</code>
           </div>
         ))}
-      </section>
+      </Panel>
     </>
   );
 }

@@ -62,13 +62,45 @@ function assertTitlesOnScale({ expected, rows }, label) {
   }
 }
 
-async function openLegacyPanelPage(page) {
-  // /commissions rather than a deal page: the Deal* panels were migrated onto
-  // <Panel> already, so ticket detail no longer renders `.panel-header` on its
-  // default tab. CommissionPage still does, at the top level.
-  await loginAs(page, 'sales');
-  await spaGoto(page, '/commissions');
-  await expect(page.locator('.panel-header h2').first()).toBeVisible();
+// The legacy half of this spec is probed against CONSTRUCTED elements, not
+// found on a page. It has now been invalidated three times by the migration it
+// is meant to outlive: it asserted on /ceo-settings, then /pricing-requests/:id,
+// then /commissions, and each was migrated in turn. What is under test is a CSS
+// RULE, and a rule does not need a page to use it in order to be measurable.
+//
+// Delete this half — and `assertLegacyRule` with it — when the last
+// `.panel-header` call site goes and the styles.css rules are removed. It
+// should not be re-pointed at anything.
+async function measureLegacyRule(page) {
+  return page.evaluate(() => {
+    const expected = getComputedStyle(document.documentElement)
+      .getPropertyValue('--text-lg').trim();
+
+    const tablePanel = document.createElement('section');
+    tablePanel.className = 'table-panel';
+    const insideHeader = document.createElement('div');
+    insideHeader.className = 'panel-header';
+    const insideHeading = document.createElement('h2');
+    insideHeading.textContent = 'x';
+    insideHeader.appendChild(insideHeading);
+    tablePanel.appendChild(insideHeader);
+
+    const loneHeader = document.createElement('div');
+    loneHeader.className = 'panel-header';
+
+    document.body.append(tablePanel, loneHeader);
+    const result = {
+      expected,
+      headingFont: getComputedStyle(insideHeading).fontSize,
+      headingMarginTop: parseFloat(getComputedStyle(insideHeading).marginTop),
+      headingMarginBottom: parseFloat(getComputedStyle(insideHeading).marginBottom),
+      marginInTablePanel: parseFloat(getComputedStyle(insideHeader).marginBottom),
+      marginStandalone: parseFloat(getComputedStyle(loneHeader).marginBottom),
+    };
+    tablePanel.remove();
+    loneHeader.remove();
+    return result;
+  });
 }
 
 test.describe('panel headers do not strand their title', () => {
@@ -81,60 +113,28 @@ test.describe('panel headers do not strand their title', () => {
     assertTitlesOnScale(await headingMetrics(page), '/ceo-settings');
   });
 
-  test('legacy .panel-header markup keeps titles on the same type scale', async ({ page }) => {
+  test('the legacy styles.css rules still size and space a .panel-header', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await openLegacyPanelPage(page);
+    await loginAs(page, 'hr');
 
-    // This is the guard on the styles.css rule itself. If `.panel h2,
-    // .panel-header h2` is ever re-scoped back to `.panel` alone, the headings
-    // here revert to the 24px UA default and this fails — which the
-    // /ceo-settings test cannot detect, because <Panel> sets the size with a
+    const m = await measureLegacyRule(page);
+
+    // `.panel h2, .panel-header h2` — re-scoping this back to `.panel` alone
+    // returns these headings to the 24px/0.83em UA default, which is the
+    // 101px header and the 51-59px dead band this whole spec exists for. The
+    // /ceo-settings test above cannot see it: <Panel> sets the size with a
     // Tailwind class regardless of what styles.css says.
-    assertTitlesOnScale(await headingMetrics(page), '/commissions');
-  });
+    expect(m.headingFont, `legacy .panel-header h2 is ${m.headingFont}, expected ${m.expected}`)
+      .toBe(m.expected);
+    expect(m.headingMarginTop, 'legacy .panel-header h2 kept a top margin').toBe(0);
+    expect(m.headingMarginBottom, 'legacy .panel-header h2 kept a bottom margin').toBe(0);
 
-  test('the .table-panel > .panel-header override still zeroes the bottom margin', async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await openLegacyPanelPage(page);
-
-    // Probed against a constructed element rather than found on the page.
-    //
-    // What is under test here is a CSS RULE, not any particular markup:
-    // `.panel-header` carries a 16px `margin-bottom` that suits a `.panel`
-    // (whose content follows inside the card's own padding), and
-    // `.table-panel > .panel-header` overrides it to 0 because a table-panel
-    // body brings its own inset — without the override the margin stacked on
-    // top of it and, on headers that also draw a `border-bottom`, pushed the
-    // rule away from the title it belongs to.
-    //
-    // Binding that to a page meant the test evaporated as pages migrated: it
-    // has already had to move once, and the pages still rendering this exact
-    // combination render it only in states the mock seed does not reach. The
-    // rule is live for every remaining call site regardless, so it is measured
-    // directly and the assertion stops depending on migration progress.
-    const margins = await page.evaluate(() => {
-      const panel = document.createElement('section');
-      panel.className = 'table-panel';
-      const header = document.createElement('div');
-      header.className = 'panel-header';
-      panel.appendChild(header);
-
-      const plain = document.createElement('div');
-      plain.className = 'panel-header';
-
-      document.body.append(panel, plain);
-      const result = {
-        inTablePanel: parseFloat(getComputedStyle(header).marginBottom),
-        standalone: parseFloat(getComputedStyle(plain).marginBottom),
-      };
-      panel.remove();
-      plain.remove();
-      return result;
-    });
-
-    expect(margins.inTablePanel, 'table-panel header re-introduced its bottom margin').toBe(0);
+    // `.table-panel > .panel-header { margin-bottom: 0 }` — without it the
+    // header's own 16px stacks on the flush body's inset and pushes the rule
+    // away from its title.
+    expect(m.marginInTablePanel, 'table-panel header re-introduced its bottom margin').toBe(0);
     // The control: a `.panel-header` OUTSIDE a table-panel must keep its 16px.
     // Without this, deleting the base rule entirely would also pass.
-    expect(margins.standalone, 'the base .panel-header margin was lost').toBe(16);
+    expect(m.marginStandalone, 'the base .panel-header margin was lost').toBe(16);
   });
 });
