@@ -201,16 +201,24 @@ describe('payroll totals-footer money cell sizing (Item 2 regression guard)', ()
 });
 
 // Item 4a regression guard (2026-07-31): --shadow-focus-ring composited to 1.18:1 on white (WCAG
-// 1.4.11/2.4.11 need >=3:1) and was declared TWICE (index.css and styles.css) -- both had to change
-// or the cascade would keep serving the old value from whichever one wins. Not reachable from jsdom
-// (no rendering engine to composite box-shadow colors against a real background), so this pins both
-// declarations down textually.
+// 1.4.11/2.4.11 need >=3:1). It used to be declared TWICE (index.css and styles.css) and both had to
+// change together or the cascade would keep serving the old value from whichever one won. The
+// styles.css retirement deleted that second declaration outright, so the guard now asserts the
+// stronger property: the good value is in index.css and styles.css declares no copy of the token at
+// all. Not reachable from jsdom (no rendering engine to composite box-shadow colors against a real
+// background), so this pins it down textually.
 describe('focus-ring contrast token (Item 4a regression guard)', () => {
-  it('uses the solid --color-indigo-ring token, not the old low-contrast rgba alpha, in BOTH index.css and styles.css', () => {
+  it('uses the solid --color-indigo-ring token, not the old low-contrast rgba alpha', () => {
     expect(indexCss).toContain('--shadow-focus-ring: 0 0 0 3px var(--color-indigo-ring);');
-    expect(stylesCss).toContain('--shadow-focus-ring: 0 0 0 3px var(--color-indigo-ring);');
     expect(indexCss).not.toContain('rgba(99, 102, 241, 0.13)');
     expect(stylesCss).not.toContain('rgba(99, 102, 241, 0.13)');
+  });
+
+  it('keeps exactly one declaration of the token, in index.css', () => {
+    // A second copy in the retiring stylesheet would sit in `@layer legacy`, which is ordered AFTER
+    // `@layer theme` -- so it, not the `@theme static` value, is what the cascade would serve. That
+    // is the exact trap the color tokens were pulled out of; do not reintroduce it here.
+    expect(stylesCss).not.toContain('--shadow-focus-ring:');
   });
 
   it('keeps --color-indigo-ring itself the known-good #2563eb (5.17:1 on white)', () => {

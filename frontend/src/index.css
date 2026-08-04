@@ -1,4 +1,12 @@
-@layer theme, legacy, utilities;
+/* `base` sits between `theme` and `legacy` so the app's reset/element defaults
+   (moved here from styles.css during its retirement — CLAUDE.md keeps base
+   reset + font setup in global CSS, and this is the global stylesheet) keep
+   losing to both the remaining `legacy` class rules and to Tailwind utilities,
+   exactly as they did when every one of them lived in the same file. This app
+   deliberately does not import `tailwindcss/preflight.css`, so the reset in
+   `@layer base` below is the only one there is — do not delete it expecting
+   Tailwind to supply one. */
+@layer theme, base, legacy, utilities;
 
 @import "tailwindcss/theme.css" layer(theme);
 @import "./styles.css" layer(legacy);
@@ -265,5 +273,168 @@
     --motion-fast: 0ms;
     --motion-standard: 0ms;
     --motion-slow: 0ms;
+  }
+}
+
+/* ============================================================
+   Base layer — reset, page/document setup, and bare-element defaults.
+
+   Moved verbatim out of styles.css as part of retiring that file. Per
+   CLAUDE.md this is the category of CSS that legitimately stays global
+   ("Tailwind imports/layers, design tokens/CSS variables, font setup, base
+   reset"), so it lands here rather than being ported to utilities — there is
+   no call site to put a reset on.
+
+   The non-color token block that used to sit alongside these rules in
+   styles.css's `:root` (--font-family, --text-*, --space-*, --radius-*,
+   --shadow-*) is GONE, not moved: it was a byte-for-byte duplicate of the
+   `@theme static` block above, and because it lived in `@layer legacy` (which
+   is ordered after `@layer theme`) it was the copy the cascade actually
+   served. Single source of truth is `@theme static` now — the same
+   consolidation the color tokens already went through, and for the same
+   reason. Values are identical, so nothing renders differently.
+   ============================================================ */
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  :root {
+    color-scheme: light;
+    font-family: var(--font-family);
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  html,
+  body,
+  #root {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background: var(--color-bg);
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  code {
+    font-family: var(--font-family-mono);
+  }
+
+  /* Load-bearing well beyond form markup: pages rely on this to stack a
+     label's own text above the control nested inside it (AttendancePage,
+     CommissionPage, FormField.jsx — see the comment there about why the
+     required marker has to be wrapped in a single element to survive it). */
+  label {
+    display: grid;
+    gap: 7px;
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+    font-weight: 700;
+  }
+
+  input,
+  select,
+  textarea {
+    width: 100%;
+    min-height: 40px;
+    /* 16px, not --text-md: anything below 16px makes iOS Safari zoom the
+       viewport on focus. */
+    font-size: 16px;
+    border: 1.5px solid var(--color-border-input);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    color: var(--color-text);
+    outline: none;
+    padding: 0 12px;
+  }
+
+  textarea {
+    padding: 10px 12px;
+    resize: vertical;
+  }
+
+  input:focus,
+  select:focus,
+  textarea:focus {
+    border-color: var(--color-primary-hover);
+    box-shadow: var(--shadow-focus-ring);
+  }
+
+  /* Zero-specificity (`:where`) focus foundation, so any component rule or
+     Tailwind utility overrides it without a specificity fight. The `:focus`
+     pair is the fallback; `@supports selector(:focus-visible)` swaps it for
+     the focus-visible-only ring in browsers that have it. */
+  :where(
+    a[href],
+    button,
+    summary,
+    [role="button"],
+    [role="link"],
+    [role="checkbox"],
+    [role="radio"],
+    [role="switch"],
+    [role="tab"],
+    [tabindex]:not([tabindex="-1"])
+  ):focus {
+    outline: 2px solid var(--color-primary-hover);
+    outline-offset: 2px;
+    box-shadow: var(--shadow-focus-ring);
+  }
+
+  @supports selector(:focus-visible) {
+    :where(
+      a[href],
+      button,
+      summary,
+      [role="button"],
+      [role="link"],
+      [role="checkbox"],
+      [role="radio"],
+      [role="switch"],
+      [role="tab"],
+      [tabindex]:not([tabindex="-1"])
+    ):focus {
+      outline: none;
+      box-shadow: none;
+    }
+
+    :where(
+      a[href],
+      button,
+      summary,
+      [role="button"],
+      [role="link"],
+      [role="checkbox"],
+      [role="radio"],
+      [role="switch"],
+      [role="tab"],
+      [tabindex]:not([tabindex="-1"])
+    ):focus-visible {
+      outline: 2px solid var(--color-primary-hover);
+      outline-offset: 2px;
+      box-shadow: var(--shadow-focus-ring);
+    }
   }
 }
