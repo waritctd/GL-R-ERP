@@ -1,5 +1,6 @@
 import { forwardRef, useImperativeHandle, useState } from 'react';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, formatThaiDate, tenderRequirementLabel } from '../../utils/format.js';
@@ -148,9 +149,10 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   }
 
   return (
-    <section className="panel" data-testid="deal-stage-panel">
-      <div className="panel-header">
-        <h2>สถานะดีล (Pipeline)</h2>
+    <Panel
+      title="สถานะดีล (Pipeline)"
+      data-testid="deal-stage-panel"
+      actions={(
         <button
           type="button"
           className="secondary-button"
@@ -159,8 +161,8 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
         >
           {showSteps ? 'ซ่อนขั้นตอนทั้งหมด' : 'ดูขั้นตอนทั้งหมด (14 ขั้น)'}
         </button>
-      </div>
-
+      )}
+    >
       <div className="flex flex-col gap-4 px-4 py-4 sm:px-5">
         <PhaseTracker salesStage={summary.salesStage} lost={lost} />
 
@@ -347,6 +349,6 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
           </label>
         </Modal>
       ) : null}
-    </section>
+    </Panel>
   );
 });

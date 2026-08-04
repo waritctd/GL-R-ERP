@@ -4,6 +4,7 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
@@ -174,23 +175,16 @@ export function DealDocumentRegister({
 
   if (!hasAnyVisibleSection) {
     return (
-      <section className="panel" data-testid="deal-document-register">
-        <div className="panel-header">
-          <h2>เอกสารของดีล</h2>
-        </div>
+      <Panel title="เอกสารของดีล" data-testid="deal-document-register">
         <div className="p-4">
           <EmptyState icon="fileText" title="ไม่มีเอกสารให้แสดงในมุมมองนี้" description="สิทธิ์การเข้าถึงของบทบาทนี้ไม่ครอบคลุมเอกสารของดีลนี้" />
         </div>
-      </section>
+      </Panel>
     );
   }
 
   return (
-    <section className="table-panel flex flex-col gap-4" data-testid="deal-document-register">
-      <div className="panel-header">
-        <h2>เอกสารของดีล</h2>
-      </div>
-
+    <Panel flush className="flex flex-col gap-4" title="เอกสารของดีล" data-testid="deal-document-register">
       {canViewQuotations ? (
         <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3" data-testid="register-quotations">
           <strong className="text-sm">ใบเสนอราคา</strong>
@@ -304,7 +298,7 @@ export function DealDocumentRegister({
           )}
         </div>
       ) : null}
-    </section>
+    </Panel>
   );
 }
 

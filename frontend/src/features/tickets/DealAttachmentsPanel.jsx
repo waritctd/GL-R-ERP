@@ -10,6 +10,7 @@
 import { api } from '../../api/index.js';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 
 export function DealAttachmentsPanel({
@@ -24,60 +25,59 @@ export function DealAttachmentsPanel({
   user,
 }) {
   return (
-    <section className="panel">
-      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2>ไฟล์แนบ (PO / ใบเซ็น)</h2>
-        {/* No แนบใบกำกับภาษี control here, deliberately (2026-07-30 owner
-            decision). The closing tax invoice is ฝ่ายบัญชี's to record, and
-            the ONLY supported path is CommissionService.createFromDeal
-            (POST /api/commissions/from-deal, CREATE_FROM_DEAL_ROLES =
-            account-only), reached from this page's own sticky CTA
-            "บันทึกใบกำกับ + ออกค่าคอม" -> /commissions?ticketId=NN
-            (accountActions.js). That one upload dual-writes the file as an
-            AttachType.INVOICE ticket attachment, so it satisfies the close
-            gate's invoiceOnFile check AND creates the deal owner's
-            commission in the same transaction.
-
-            A second invoice path here would satisfy the close gate WITHOUT
-            creating the commission — the sales rep would silently lose it.
-            That is why this is not simply re-gated to a role the backend
-            permits: the control that used to live here was gated isAccount
-            and 403'd for real, and only ever looked functional because
-            mockApi.js had no authz on attachments at all.
-
-            Issue #389 fixed the OTHER half of that gate — account can now
-            READ every deal document (it is asked to confirm money against
-            them) and hr can no longer read any — but the WRITE side was
-            left deliberately narrow for exactly the reason above:
-            TicketAccessPolicy.canManageDocuments is participant OR
-            sales_manager/ceo, never account. Pinned by
-            AttachmentTicketAccessIntegrationTest
-            .accountCannotUploadADocument_theTaxInvoiceKeepsExactlyOneEntryPoint.
-            Do not reintroduce it — the frontend regression guard is
-            TicketDetailPage.test.jsx, "offers NO ใบกำกับภาษี upload
-            control in เอกสาร". */}
-        {canUpload && (
-          <label className="cursor-pointer max-[720px]:w-full" htmlFor="ticket-attachment-file">
-            <input
-              id="ticket-attachment-file"
-              type="file"
-              // See FileUploadField: styles.css now loads into @layer legacy
-              // (before Tailwind's utilities layer), so these utilities win
-              // over the legacy global `input` rules without `!` overrides.
-              className="sr-only h-px min-h-0 w-px border-0 p-0"
-              onChange={onUploadAttachment}
-              accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
-            />
-            <span
-              className="secondary-button max-[720px]:min-h-11 max-[720px]:w-full"
-              style={{ fontSize: 12, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-            >
-              <Icon name="upload" size={13} />
-              {uploadingFile ? 'กำลังอัปโหลด…' : 'แนบไฟล์ (PDF/JPG/PNG/Excel)'}
-            </span>
-          </label>
-        )}
-      </div>
+    <Panel
+      title="ไฟล์แนบ (PO / ใบเซ็น)"
+      // No แนบใบกำกับภาษี control here, deliberately (2026-07-30 owner
+      // decision). The closing tax invoice is ฝ่ายบัญชี's to record, and
+      // the ONLY supported path is CommissionService.createFromDeal
+      // (POST /api/commissions/from-deal, CREATE_FROM_DEAL_ROLES =
+      // account-only), reached from this page's own sticky CTA
+      // "บันทึกใบกำกับ + ออกค่าคอม" -> /commissions?ticketId=NN
+      // (accountActions.js). That one upload dual-writes the file as an
+      // AttachType.INVOICE ticket attachment, so it satisfies the close
+      // gate's invoiceOnFile check AND creates the deal owner's
+      // commission in the same transaction.
+      //
+      // A second invoice path here would satisfy the close gate WITHOUT
+      // creating the commission — the sales rep would silently lose it.
+      // That is why this is not simply re-gated to a role the backend
+      // permits: the control that used to live here was gated isAccount
+      // and 403'd for real, and only ever looked functional because
+      // mockApi.js had no authz on attachments at all.
+      //
+      // Issue #389 fixed the OTHER half of that gate — account can now
+      // READ every deal document (it is asked to confirm money against
+      // them) and hr can no longer read any — but the WRITE side was
+      // left deliberately narrow for exactly the reason above:
+      // TicketAccessPolicy.canManageDocuments is participant OR
+      // sales_manager/ceo, never account. Pinned by
+      // AttachmentTicketAccessIntegrationTest
+      // .accountCannotUploadADocument_theTaxInvoiceKeepsExactlyOneEntryPoint.
+      // Do not reintroduce it — the frontend regression guard is
+      // TicketDetailPage.test.jsx, "offers NO ใบกำกับภาษี upload
+      // control in เอกสาร".
+      actions={canUpload && (
+        <label className="cursor-pointer max-[720px]:w-full" htmlFor="ticket-attachment-file">
+          <input
+            id="ticket-attachment-file"
+            type="file"
+            // See FileUploadField: styles.css now loads into @layer legacy
+            // (before Tailwind's utilities layer), so these utilities win
+            // over the legacy global `input` rules without `!` overrides.
+            className="sr-only h-px min-h-0 w-px border-0 p-0"
+            onChange={onUploadAttachment}
+            accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
+          />
+          <span
+            className="secondary-button max-[720px]:min-h-11 max-[720px]:w-full"
+            style={{ fontSize: 12, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+          >
+            <Icon name="upload" size={13} />
+            {uploadingFile ? 'กำลังอัปโหลด…' : 'แนบไฟล์ (PDF/JPG/PNG/Excel)'}
+          </span>
+        </label>
+      )}
+    >
       {attachLoading ? (
         <div
           style={{ padding: '8px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}
@@ -120,6 +120,6 @@ export function DealAttachmentsPanel({
           ))}
         </div>
       )}
-    </section>
+    </Panel>
   );
 }

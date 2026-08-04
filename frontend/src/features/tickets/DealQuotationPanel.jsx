@@ -6,6 +6,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
   formatMoney,
@@ -296,16 +297,19 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
   const status = pricingRequestStatusLabel(pr.status);
 
   return (
-    <section className="table-panel" data-testid="deal-quotation-panel">
-      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-        <h2>ราคาและใบเสนอราคา</h2>
+    <Panel flush data-testid="deal-quotation-panel">
+      {/* Explicit Panel.Header, not title/actions: this header's gap is 8px,
+          not Panel's default 14px, and title/actions has no way to pass a
+          className through to the header row it builds. */}
+      <Panel.Header bordered className="gap-2">
+        <h2 className="m-0 min-w-0 text-lg break-words">ราคาและใบเสนอราคา</h2>
         <div className="flex items-center gap-2">
           <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
           <Link to={`/pricing-requests/${pr.id}`} className="text-xs font-bold text-link">
             ดูรายละเอียดเต็ม (ราคาโรงงาน/ต้นทุน/CEO) →
           </Link>
         </div>
-      </div>
+      </Panel.Header>
 
       <div className="flex flex-col gap-3 p-4">
         <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
@@ -435,6 +439,6 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
           </div>
         ) : null}
       </div>
-    </section>
+    </Panel>
   );
 });

@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
@@ -257,11 +258,7 @@ export function DealFulfilmentPanel({
   }
 
   return (
-    <section className="table-panel" data-testid="deal-fulfilment-panel">
-      <div className="panel-header">
-        <h2>การส่งมอบ / นำเข้า</h2>
-      </div>
-
+    <Panel flush title="การส่งมอบ / นำเข้า" data-testid="deal-fulfilment-panel">
       <div className="flex flex-col gap-3 p-4">
         {/* Step 1: นำเข้าสินค้า (Import Request → รับสินค้า, or from-stock) */}
         <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
@@ -535,6 +532,6 @@ export function DealFulfilmentPanel({
           </div>
         </Modal>
       ) : null}
-    </section>
+    </Panel>
   );
 }
