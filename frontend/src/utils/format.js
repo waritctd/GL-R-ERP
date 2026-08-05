@@ -268,6 +268,18 @@ export function overtimeStatusLabel(status) {
   return map[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
+// Attendance-correction request status -> StatusBadge tone. Single CEO-only stage, same shape as
+// special-money's status set (no MANAGER_APPROVED — there is no manager stage at all here).
+export function attendanceCorrectionStatusLabel(status) {
+  const map = {
+    SUBMITTED: { label: 'รอ CEO', tone: 'warning' },
+    APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
+    REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
+    CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'neutral' },
+  };
+  return map[status] ?? { label: status || '-', tone: 'neutral' };
+}
+
 // Special-money (welfare) request status -> StatusBadge tone. Canonical source;
 // do not re-add a page-local `statusInfo`/map elsewhere.
 //
