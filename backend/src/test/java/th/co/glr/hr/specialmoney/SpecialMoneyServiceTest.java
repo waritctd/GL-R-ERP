@@ -1,6 +1,7 @@
 package th.co.glr.hr.specialmoney;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
@@ -373,6 +375,51 @@ class SpecialMoneyServiceTest {
 
         assertThat(result.status()).isEqualTo("REJECTED");
         verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_REJECTED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
+        // Notification coverage gap C, wrong-way-round: every LIVE welfare request goes SUBMITTED ->
+        // CEO directly (see the class Javadoc) -- managerApprovedBy() is null here, so nobody upstream
+        // (e.g. the 99L "manager" id the positive-case test below uses) needs telling.
+        verify(notificationService, never())
+            .notify(eq(99L), eq("SPECIAL_MONEY_REJECTED"), anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    /**
+     * Notification coverage gap C, positive case. Reachable only via a legacy row written before
+     * welfare's manager stage was removed (see the class Javadoc): {@code
+     * ceoRejectFrom(MANAGER_APPROVED, ...)} rejects it, and {@code managerApprovedBy} -- set back
+     * when that manager stage still existed -- is never cleared by a reject. {@link #dto}'s own
+     * helper ties {@code managerApprovedBy} to the CURRENT status only, so this builds the "after"
+     * row directly to reflect what a real legacy row looks like.
+     */
+    @Test
+    void ceoRejectionOfALegacyManagerApprovedRequestNotifiesTheApprovingManagerToo() {
+        SpecialMoneyRequestDto managerApproved = dto(77L, 10L, "MANAGER_APPROVED", "AID_WEDDING");
+        SpecialMoneyRequestDto rejected = rejectedWithManagerApprovedBy(77L, 10L, 99L);
+        when(repository.findById(77L)).thenReturn(Optional.of(managerApproved)).thenReturn(Optional.of(rejected));
+        when(repository.ceoReject(77L, 500L, "not justified")).thenReturn(1);
+
+        service.reject(77L, new ReviewSpecialMoneyRequest("not justified", null, null), user("ceo", 500L));
+
+        verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_REJECTED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
+        verify(notificationService).notify(eq(99L), eq("SPECIAL_MONEY_REJECTED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
+    }
+
+    /**
+     * S-6 (review, second pass): {@code notifyRejected} had no actor self-skip, mirroring the
+     * identical fix in {@code OvertimeService}. Reachable here too: {@code managerApprovedBy} on a
+     * legacy row can coincide with the CEO actor now rejecting it.
+     */
+    @Test
+    void ceoRejectionOfALegacyManagerApprovedRequestSkipsNotifyingSelfWhenActorIsTheLegacyApprovingManager() {
+        SpecialMoneyRequestDto managerApproved = dto(77L, 10L, "MANAGER_APPROVED", "AID_WEDDING");
+        SpecialMoneyRequestDto rejected = rejectedWithManagerApprovedBy(77L, 10L, 500L);
+        when(repository.findById(77L)).thenReturn(Optional.of(managerApproved)).thenReturn(Optional.of(rejected));
+        when(repository.ceoReject(77L, 500L, "not justified")).thenReturn(1);
+
+        service.reject(77L, new ReviewSpecialMoneyRequest("not justified", null, null), user("ceo", 500L));
+
+        verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_REJECTED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
+        verify(notificationService, never())
+            .notify(eq(500L), eq("SPECIAL_MONEY_REJECTED"), anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyBoolean());
     }
 
     @Test
@@ -399,10 +446,109 @@ class SpecialMoneyServiceTest {
         SpecialMoneyRequestDto cancelled = dto(77L, 10L, "CANCELLED", "AID_WEDDING");
         when(repository.findById(77L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
         when(repository.cancel(77L, 10L, null)).thenReturn(1);
+        when(repository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
 
         SpecialMoneyRequestDto result = service.cancel(77L, null, user("employee", 10L));
 
         assertThat(result.status()).isEqualTo("CANCELLED");
+        // Notification coverage gap B: the requester and the CEO(s) it was pending with -- welfare
+        // has exactly one reviewing stage (see the class Javadoc) and cancel() is reachable only from
+        // SUBMITTED, so the pending party is always the CEO.
+        verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_CANCELLED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
+        verify(notificationService).notify(eq(500L), eq("SPECIAL_MONEY_CANCELLED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
+    }
+
+    /**
+     * Unlike leave/overtime, {@code repository.cancel} always writes the actor as {@code
+     * reviewed_by_id} regardless of who cancelled (see {@code SpecialMoneyRepository#cancel}), so the
+     * self-vs-on-behalf distinction cannot be read off the "after" row the way it can for leave/
+     * overtime -- this proves the OTHER path ({@link SpecialMoneyService}'s own {@code isEmployee}
+     * check) on a fixture where the employee and the on-behalf requester are different people.
+     *
+     * <p>S2: the requester id here is {@code 10099L}, deliberately OUTSIDE Java's {@code Long} cache
+     * (-128..127) -- real employee ids in this system are 4-5 digits. The pre-existing fixture used
+     * {@code 99L}, inside the cache, which is exactly why {@code SpecialMoneyService#cancel}'s {@code
+     * existing.requestedById() == actorEmployeeId} reference-equality bug passed here despite being
+     * always-false in production; this id keeps the fixture honest about that fix.
+     */
+    @Test
+    void requesterCancellingOnBehalfOfTheEmployeeUsesOnBehalfWordingAndStillNotifiesCeo() {
+        SpecialMoneyRequestDto submitted = cancelFixtureDto(78L, 10L, 10099L, "SUBMITTED");
+        SpecialMoneyRequestDto cancelled = cancelFixtureDto(78L, 10L, 10099L, "CANCELLED");
+        when(repository.findById(78L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
+        when(repository.cancel(78L, 10099L, null)).thenReturn(1);
+        when(repository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
+
+        service.cancel(78L, null, user("employee", 10099L));
+
+        verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_CANCELLED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
+        verify(notificationService).notify(eq(500L), eq("SPECIAL_MONEY_CANCELLED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
+    }
+
+    /**
+     * BLOCKING 1: the CEO-facing message used to hardcode {@code request.employeeName()} ("Test
+     * Employee") as if the employee always did the cancelling, even on the on-behalf path where a
+     * DIFFERENT person (the requester, {@code isRequester}) is the actual actor. Captures the CEO
+     * message body and asserts it is worded from the ACTOR's own name.
+     *
+     * <p>Nit fix (review, second pass): this used to build the actor via {@code user("employee",
+     * 10099L)} and assert {@code contains("employee")} -- the literal ROLE string, not a name, which
+     * is low-signal (it would pass even if the code accidentally interpolated the actor's role
+     * instead of their name). Uses a distinctive actor name instead, matching how OT's own
+     * counterpart ({@code managerCancelOfSubmittedOvertimeWordsTheApproverMessageFromTheActingManager})
+     * asserts on {@code "Acting Manager"}.
+     */
+    @Test
+    void onBehalfCancelWordsTheCeoMessageFromTheActingRequesterNotTheEmployee() {
+        SpecialMoneyRequestDto submitted = cancelFixtureDto(79L, 10L, 10099L, "SUBMITTED");
+        SpecialMoneyRequestDto cancelled = cancelFixtureDto(79L, 10L, 10099L, "CANCELLED");
+        when(repository.findById(79L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
+        when(repository.cancel(79L, 10099L, null)).thenReturn(1);
+        when(repository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
+        UserPrincipal actingRequester = new UserPrincipal(
+            10099L, "requester@glr.co.th", "Acting Requester", "employee", 10099L, true, LocalDate.now(), false, null, false);
+
+        service.cancel(79L, null, actingRequester);
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(eq(500L), eq("SPECIAL_MONEY_CANCELLED"), anyString(), body.capture(), eq("/employee-requests"), eq(true));
+        assertThat(body.getValue()).contains("Acting Requester").doesNotContain("Test Employee");
+    }
+
+    /**
+     * BLOCKING 1 regression: the CEO cancelling is themselves one of the CEO approvers who would
+     * otherwise be notified (welfare's approver set can include the actor: e.g. the CEO filed a
+     * request on a team member's behalf and later cancels it themselves) -- must not be told about
+     * their own action.
+     */
+    @Test
+    void cancelSkipsNotifyingSelfWhenActorIsAlsoInTheCeoApproverSet() {
+        SpecialMoneyRequestDto submitted = cancelFixtureDto(80L, 10L, 500L, "SUBMITTED");
+        SpecialMoneyRequestDto cancelled = cancelFixtureDto(80L, 10L, 500L, "CANCELLED");
+        when(repository.findById(80L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
+        when(repository.cancel(80L, 500L, null)).thenReturn(1);
+        when(repository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
+
+        service.cancel(80L, null, user("ceo", 500L));
+
+        verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_CANCELLED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
+        verify(notificationService, never())
+            .notify(eq(500L), eq("SPECIAL_MONEY_CANCELLED"), anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    /**
+     * S2 (second occurrence of the same pre-existing bug, in {@link SpecialMoneyService
+     * #requireCanAttach}): the on-behalf requester (id {@code 10099L}, outside the {@code Long}
+     * cache) must be allowed to attach evidence, proving {@code requestedById().equals(...)} (not
+     * {@code ==}) is what gates this path too.
+     */
+    @Test
+    void onBehalfRequesterCanAttachEvidence() {
+        SpecialMoneyRequestDto submitted = cancelFixtureDto(81L, 10L, 10099L, "SUBMITTED");
+        when(repository.findById(81L)).thenReturn(Optional.of(submitted));
+
+        assertThatCode(() -> service.requireCanAttach(81L, user("employee", 10099L)))
+            .doesNotThrowAnyException();
     }
 
     @Test
@@ -498,6 +644,56 @@ class SpecialMoneyServiceTest {
             0,
             OffsetDateTime.parse("2026-06-14T10:00:00+07:00"),
             OffsetDateTime.parse("2026-06-14T10:00:00+07:00")
+        );
+    }
+
+    /**
+     * Like {@link #dto}, but with {@code requestedById} directly controllable -- needed to prove the
+     * self-cancel-vs-on-behalf-cancel wording. {@link #dto}'s own helper ties {@code requestedById}
+     * to {@code employeeId} always, so it cannot express "someone else filed/cancelled this on the
+     * employee's behalf".
+     */
+    private SpecialMoneyRequestDto cancelFixtureDto(long id, long employeeId, Long requestedById, String status) {
+        OffsetDateTime timestamp = OffsetDateTime.parse("2026-06-14T10:00:00+07:00");
+        return new SpecialMoneyRequestDto(
+            id, employeeId, "EMP001", "Test Employee",
+            "AID_WEDDING", LocalDate.of(2026, 7, 1), null, null,
+            BigDecimal.ONE, new BigDecimal("5000"), null,
+            "AID", 1, "Getting married", Map.of(),
+            status, null, null,
+            requestedById, "Requester", timestamp,
+            null, null, null,
+            null, null, null,
+            null, null, null, null,
+            "CANCELLED".equals(status) ? timestamp : null,
+            99L, "Test Manager",
+            1,
+            timestamp, timestamp
+        );
+    }
+
+    /**
+     * A REJECTED row with {@code managerApprovedBy} set -- the real shape a legacy MANAGER_APPROVED
+     * row has after {@code ceoRejectFrom(MANAGER_APPROVED, ...)} rejects it (that column is never
+     * cleared by a reject). {@link #dto}'s own helper cannot express this: it ties {@code
+     * managerApprovedBy} to the row's CURRENT status only.
+     */
+    private SpecialMoneyRequestDto rejectedWithManagerApprovedBy(long id, long employeeId, Long managerApprovedBy) {
+        OffsetDateTime timestamp = OffsetDateTime.parse("2026-06-14T10:00:00+07:00");
+        return new SpecialMoneyRequestDto(
+            id, employeeId, "EMP001", "Test Employee",
+            "AID_WEDDING", LocalDate.of(2026, 7, 1), null, null,
+            BigDecimal.ONE, new BigDecimal("5000"), null,
+            "AID", 1, "Getting married", Map.of(),
+            "REJECTED", null, null,
+            employeeId, "Test Employee", timestamp,
+            managerApprovedBy, managerApprovedBy == null ? null : "Test Manager", managerApprovedBy == null ? null : timestamp,
+            null, null, null,
+            500L, "Test CEO", timestamp, "not justified",
+            null,
+            99L, "Test Manager",
+            1,
+            timestamp, timestamp
         );
     }
 

@@ -5,7 +5,7 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
-import { PageStack, RowActions } from '../../components/common/Layout.jsx';
+import { PageStack, Panel, RowActions } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatShortDate, requestStatus } from '../../utils/format.js';
 
@@ -55,7 +55,7 @@ export function ProfileRequestsPage({ profileRequests, onReview, showToast }) {
     <PageStack>
       <PageHeader title="คำขอแก้ไขข้อมูล" subtitle={`${pendingCount} คำขอรอการอนุมัติ`} />
 
-      <section className="table-panel">
+      <Panel flush>
         <div className="request-table table-head">
           <span>พนักงาน</span>
           <span>ข้อมูลที่ขอแก้</span>
@@ -102,7 +102,7 @@ export function ProfileRequestsPage({ profileRequests, onReview, showToast }) {
             </div>
           );
         })}
-      </section>
+      </Panel>
 
       <ConfirmDialog
         open={confirmState?.kind === 'approve'}

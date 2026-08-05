@@ -19,6 +19,7 @@ import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -73,6 +74,7 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
             fileStorage,
             mock(AuditService.class),
             mock(NotificationService.class),
+            mock(EmployeeRepository.class),
             Clock.fixed(FIXED_NOW, BUSINESS_ZONE));
     }
 
@@ -95,9 +97,9 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
         LeaveRequestDto third = leaveService.submit(sickRequest(employeeId, "2026-07-10"), employee(employeeId));
         LeaveRequestDto fourth = leaveService.submit(sickRequest(employeeId, "2026-07-13"), employee(employeeId));
 
-        assertThat(first.status()).isEqualTo("APPROVED");
-        assertThat(second.status()).isEqualTo("APPROVED");
-        assertThat(third.status()).isEqualTo("APPROVED");
+        assertThat(first.status()).isEqualTo("SUBMITTED");
+        assertThat(second.status()).isEqualTo("SUBMITTED");
+        assertThat(third.status()).isEqualTo("SUBMITTED");
         assertThat(fourth.status()).isEqualTo("AUTO_REJECTED");
         assertThat(fourth.systemNoteCode()).isEqualTo("SICK_NO_CERT_TOLERANCE_EXHAUSTED");
         assertThat(fourth.systemNote()).isNotBlank();
@@ -118,9 +120,9 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
         LeaveRequestDto juneFirst = leaveService.submit(sickRequest(employeeId, "2026-06-22"), employee(employeeId));
         LeaveRequestDto juneSecond = leaveService.submit(sickRequest(employeeId, "2026-06-23"), employee(employeeId));
         LeaveRequestDto juneThird = leaveService.submit(sickRequest(employeeId, "2026-06-24"), employee(employeeId));
-        assertThat(juneFirst.status()).isEqualTo("APPROVED");
-        assertThat(juneSecond.status()).isEqualTo("APPROVED");
-        assertThat(juneThird.status()).isEqualTo("APPROVED");
+        assertThat(juneFirst.status()).isEqualTo("SUBMITTED");
+        assertThat(juneSecond.status()).isEqualTo("SUBMITTED");
+        assertThat(juneThird.status()).isEqualTo("SUBMITTED");
 
         // A fourth certificate-less occasion, still in June, would be rejected (same boundary as the
         // test above) -- proving June's own count is genuinely exhausted, not that this employee has
@@ -132,7 +134,7 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
         // carried the exhausted June count forward. Wed 2026-07-01 is FIXED_NOW itself, a working day,
         // SICK requires zero advance notice.
         LeaveRequestDto julyFirst = leaveService.submit(sickRequest(employeeId, "2026-07-01"), employee(employeeId));
-        assertThat(julyFirst.status()).isEqualTo("APPROVED");
+        assertThat(julyFirst.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -156,14 +158,14 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
             sickRequest(employeeId, "2026-07-02"), certificate(), employee(employeeId));
         LeaveRequestDto certifiedThird = leaveService.submit(
             sickRequest(employeeId, "2026-07-03"), certificate(), employee(employeeId));
-        assertThat(certifiedFirst.status()).isEqualTo("APPROVED");
-        assertThat(certifiedSecond.status()).isEqualTo("APPROVED");
-        assertThat(certifiedThird.status()).isEqualTo("APPROVED");
+        assertThat(certifiedFirst.status()).isEqualTo("SUBMITTED");
+        assertThat(certifiedSecond.status()).isEqualTo("SUBMITTED");
+        assertThat(certifiedThird.status()).isEqualTo("SUBMITTED");
 
         LeaveRequestDto uncertifiedFourth = leaveService.submit(
             sickRequest(employeeId, "2026-07-06"), employee(employeeId));
 
-        assertThat(uncertifiedFourth.status()).isEqualTo("APPROVED");
+        assertThat(uncertifiedFourth.status()).isEqualTo("SUBMITTED");
         assertThat(uncertifiedFourth.paidDays()).isEqualByComparingTo("1.00");
     }
 
@@ -184,7 +186,7 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
         LeaveRequestDto result = leaveService.submit(
             sickRequest(employeeId, "2026-06-29"), certificate(), employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         assertThat(result.paidDays()).isEqualByComparingTo("1.00");
         assertRealAttachmentPersisted(result.id());
     }
@@ -222,7 +224,7 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
 
         LeaveRequestDto result = leaveService.submit(sickRequest(employeeId, "2026-06-01"), employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         assertThat(result.paidDays()).isEqualByComparingTo("1.00");
     }
 
@@ -249,11 +251,17 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
         return new MockMultipartFile("attachment", "cert.pdf", "application/pdf", "cert content".getBytes());
     }
 
-    /** Stubs FileStorageService.store to return a fixed StoredFile for ANY owner id / file. */
+    /**
+     * Stubs {@code FileStorageService.storeInDatabase} to return a fixed {@code StoredContent} for
+     * ANY owner id / file -- V134 storage-durability fix: {@code LeaveService#submit} now stores
+     * leave attachments to the database, not disk, so this stubs the DB-backed method {@code
+     * submit} actually calls.
+     */
     private void stubFileStorage() {
-        when(fileStorage.store(eq("leave"), org.mockito.ArgumentMatchers.anyLong(),
+        when(fileStorage.storeInDatabase(eq("leave"), org.mockito.ArgumentMatchers.anyLong(),
             any(), eq(LEAVE_ATTACHMENT_MIME_TYPES)))
-            .thenReturn(new FileStorageService.StoredFile("cert.pdf", "/uploads/leave/x/cert.pdf", "application/pdf", 4L));
+            .thenReturn(new FileStorageService.StoredContent(
+                "cert.pdf", "leave/x/cert.pdf", "application/pdf", 4L, "cert content".getBytes()));
     }
 
     private void assertRealAttachmentPersisted(long leaveRequestId) {

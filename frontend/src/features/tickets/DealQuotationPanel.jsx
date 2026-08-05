@@ -5,7 +5,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
   formatMoney,
@@ -19,6 +21,7 @@ import {
   canManageCustomerQuotation, canRecordCustomerQuotationOutcome, canViewCustomerQuotation,
   isCustomerQuotationEditable, pricingRequestRecipientLabel,
 } from '../pricingRequests/pricingRequestMeta.js';
+import { buttonVariants } from '../../components/common/Button.jsx';
 
 function generateClientRequestId() {
   return crypto.randomUUID?.()
@@ -296,16 +299,19 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
   const status = pricingRequestStatusLabel(pr.status);
 
   return (
-    <section className="table-panel" data-testid="deal-quotation-panel">
-      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-        <h2>ราคาและใบเสนอราคา</h2>
+    <Panel flush data-testid="deal-quotation-panel">
+      {/* Explicit Panel.Header, not title/actions: this header's gap is 8px,
+          not Panel's default 14px, and title/actions has no way to pass a
+          className through to the header row it builds. */}
+      <Panel.Header bordered className="gap-2">
+        <h2 className="m-0 min-w-0 text-lg break-words">ราคาและใบเสนอราคา</h2>
         <div className="flex items-center gap-2">
           <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
           <Link to={`/pricing-requests/${pr.id}`} className="text-xs font-bold text-link">
             ดูรายละเอียดเต็ม (ราคาโรงงาน/ต้นทุน/CEO) →
           </Link>
         </div>
-      </div>
+      </Panel.Header>
 
       <div className="flex flex-col gap-3 p-4">
         <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
@@ -324,11 +330,11 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
                 หรือกดปุ่ม “ออกใบเสนอราคา” บนแถบด้านบนของหน้าเพื่อสร้างร่างและออกใบเสนอราคาในขั้นตอนเดียว
                 (ใช้ปุ่มด้านล่างนี้แทนหากต้องการแก้ไขส่วนลด/รายละเอียดก่อนออกจริง)
               </p>
-              <button type="button" className="primary-button self-start" disabled={createQuotation.isPending}
+              <Button type="button" variant="primary" className="self-start" disabled={createQuotation.isPending}
                 onClick={() => createQuotation.mutate()} data-testid="deal-quotation-create">
                 <Icon name="fileText" size={14} />
                 สร้างร่างใบเสนอราคาลูกค้า
-              </button>
+              </Button>
             </div>
           ) : (
             <p className="text-sm text-text-muted">ยังไม่มีใบเสนอราคาลูกค้าสำหรับคำขอราคานี้</p>
@@ -351,14 +357,16 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <button type="button" className="secondary-button" disabled={downloadingFormat === 'pdf'} onClick={() => handleDownload('pdf')}>
+              <Button type="button" variant="secondary" disabled={downloadingFormat === 'pdf'} onClick={() => handleDownload('pdf')}>
                 <Icon name="fileText" size={12} /> {downloadingFormat === 'pdf' ? 'กำลังดาวน์โหลด…' : 'PDF'}
-              </button>
-              <button type="button" className="secondary-button" disabled={downloadingFormat === 'xlsx'} onClick={() => handleDownload('xlsx')}>
+              </Button>
+              <Button type="button" variant="secondary" disabled={downloadingFormat === 'xlsx'} onClick={() => handleDownload('xlsx')}>
                 <Icon name="fileText" size={12} /> {downloadingFormat === 'xlsx' ? 'กำลังดาวน์โหลด…' : 'Excel'}
-              </button>
+              </Button>
               {isCustomerQuotationEditable(current) && canManageCustomerQuotation(user, pr) ? (
-                <Link to={`/pricing-requests/${pr.id}`} className="secondary-button">
+                // Not a <Button>: react-router's <Link> renders an <a> for
+                // client-side navigation, which Button (a <button>) can't do.
+                <Link to={`/pricing-requests/${pr.id}`} className={buttonVariants({ variant: 'secondary' })}>
                   แก้ไขรายละเอียด/ส่วนลด →
                 </Link>
               ) : null}
@@ -385,18 +393,18 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
                   onChange={(e) => setOutcomeNote(e.target.value)}
                 />
                 <div className="flex flex-wrap gap-2">
-                  <button type="button" className="primary-button" disabled={recordOutcome.isPending}
+                  <Button type="button" variant="primary" disabled={recordOutcome.isPending}
                     onClick={() => recordOutcome.mutate('ACCEPTED')} data-testid="deal-quotation-accept">
                     ลูกค้ายอมรับ
-                  </button>
-                  <button type="button" className="secondary-button" style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}
+                  </Button>
+                  <Button type="button" variant="secondary" style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}
                     disabled={recordOutcome.isPending} onClick={() => recordOutcome.mutate('REJECTED')} data-testid="deal-quotation-reject">
                     ลูกค้าปฏิเสธ
-                  </button>
-                  <button type="button" className="secondary-button" disabled={recordOutcome.isPending}
+                  </Button>
+                  <Button type="button" variant="secondary" disabled={recordOutcome.isPending}
                     onClick={() => recordOutcome.mutate('REVISION_REQUESTED')} data-testid="deal-quotation-revision">
                     ลูกค้าขอแก้ไข
-                  </button>
+                  </Button>
                 </div>
               </div>
             ) : null}
@@ -435,6 +443,6 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({ ticke
           </div>
         ) : null}
       </div>
-    </section>
+    </Panel>
   );
 });

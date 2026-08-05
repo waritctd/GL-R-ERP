@@ -13,4 +13,11 @@ class LogMailerTest {
         assertThatCode(() -> new LogMailer().send("someone@example.com", "subject", "body"))
             .doesNotThrowAnyException();
     }
+
+    @Test
+    void logsHtmlVariantInsteadOfSendingAndNeverThrows() {
+        assertThatCode(() -> new LogMailer()
+                .sendHtml("someone@example.com", "subject", "<p>html body</p>", "text body"))
+            .doesNotThrowAnyException();
+    }
 }

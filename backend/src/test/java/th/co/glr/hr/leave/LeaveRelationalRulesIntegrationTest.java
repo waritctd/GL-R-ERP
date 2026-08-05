@@ -22,6 +22,7 @@ import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -69,6 +70,7 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
             mock(FileStorageService.class),
             mock(AuditService.class),
             mock(NotificationService.class),
+            mock(EmployeeRepository.class),
             Clock.fixed(FIXED_NOW, BUSINESS_ZONE));
     }
 
@@ -90,7 +92,7 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(resignedResult.status()).isEqualTo("AUTO_REJECTED");
         assertThat(resignedResult.systemNoteCode()).isEqualTo("RESIGNATION_GATE");
         assertThat(resignedResult.systemNote()).isNotBlank();
-        assertThat(activeResult.status()).isEqualTo("APPROVED");
+        assertThat(activeResult.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -106,7 +108,7 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
 
         assertThat(resignedResult.status()).isEqualTo("AUTO_REJECTED");
         assertThat(resignedResult.systemNoteCode()).isEqualTo("RESIGNATION_GATE");
-        assertThat(activeResult.status()).isEqualTo("APPROVED");
+        assertThat(activeResult.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -177,7 +179,7 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
         LeaveRequestDto result = leaveService.submit(
             submitRequest(employeeId, "VACATION", "2026-07-20", "2026-07-20"), employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -221,7 +223,7 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
 
         LeaveRequestDto allowedResult = leaveService.submit(
             submitRequest(requester, "VACATION", "2026-07-20", "2026-07-20"), employee(requester));
-        assertThat(allowedResult.status()).isEqualTo("APPROVED");
+        assertThat(allowedResult.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -240,7 +242,7 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
         LeaveRequestDto result = leaveService.submit(
             submitRequest(requester, "VACATION", "2026-07-13", "2026-07-13"), employee(requester));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -256,7 +258,7 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
         LeaveRequestDto result = leaveService.submit(
             submitRequest(soleEmployee, "VACATION", "2026-07-13", "2026-07-13"), employee(soleEmployee));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -268,7 +270,7 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
         LeaveRequestDto result = leaveService.submit(
             submitRequest(employeeId, "VACATION", "2026-07-13", "2026-07-13"), employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     // --- helpers ------------------------------------------------------------

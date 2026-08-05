@@ -37,13 +37,15 @@ public class NotificationService {
     public NotificationDto notify(long employeeId, String type, String subject, String body,
                                   String link, boolean sendEmail) {
         validate(employeeId, type, subject, body);
-        long id = notifications.insert(employeeId, type.trim(), subject.trim(), body.trim(), trimmedOrNull(link));
+        String cleanLink = trimmedOrNull(link);
+        long id = notifications.insert(employeeId, type.trim(), subject.trim(), body.trim(), cleanLink);
         NotificationDto created = notifications.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Notification was not saved"));
         if (sendEmail) {
             notifications.findEmployeeEmail(employeeId)
                 .ifPresentOrElse(
-                    to -> sendEmailAfterCommit(employeeId, to, subject.trim(), body.trim()),
+                    recipient -> sendEmailAfterCommit(
+                        employeeId, recipient.email(), recipient.name(), subject.trim(), body.trim(), cleanLink),
                     () -> log.info("Notification email skipped: employee={} has no email", employeeId));
         }
         return created;
@@ -57,15 +59,16 @@ public class NotificationService {
         }
     }
 
-    private void sendEmailAfterCommit(long employeeId, String to, String subject, String body) {
+    private void sendEmailAfterCommit(long employeeId, String to, String recipientName, String subject, String body,
+                                      String link) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            emailService.send(employeeId, to, subject, body);
+            emailService.send(employeeId, to, recipientName, subject, body, link);
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                emailService.send(employeeId, to, subject, body);
+                emailService.send(employeeId, to, recipientName, subject, body, link);
             }
         });
     }

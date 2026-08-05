@@ -63,7 +63,8 @@ class LeaveCalendarContextIntegrationTest extends AbstractPostgresIntegrationTes
         HolidayRepository holidayRepository = new HolidayRepository(jdbc);
         LeaveCalendarContextService service = new LeaveCalendarContextService(leaveRepository, holidayRepository);
         controller = new LeaveController(
-            /* leaveService */ null, new SessionContext(), /* leavePolicyDocuments */ null, service);
+            /* leaveService */ null, new SessionContext(), /* leavePolicyDocuments */ null, service,
+            /* attachmentBlobs */ null);
 
         plainDepartmentId = insertDepartment("CAL-PLAIN");
     }

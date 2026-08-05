@@ -53,7 +53,8 @@ class NotificationServiceTest {
         when(notifications.insert(7L, "LEAVE_SUBMITTED", "Leave submitted",
             "Your leave request was submitted.", "/leave/1")).thenReturn(42L);
         when(notifications.findById(42L)).thenReturn(Optional.of(saved));
-        when(notifications.findEmployeeEmail(7L)).thenReturn(Optional.of("employee@glr.co.th"));
+        when(notifications.findEmployeeEmail(7L))
+            .thenReturn(Optional.of(new EmailRecipient("employee@glr.co.th", "สมชาย ใจดี")));
 
         NotificationDto result = service.notify(
             7L,
@@ -66,12 +67,21 @@ class NotificationServiceTest {
         assertThat(result).isEqualTo(saved);
         verify(notifications).insert(7L, "LEAVE_SUBMITTED", "Leave submitted",
             "Your leave request was submitted.", "/leave/1");
-        verify(mailer).send(
+        // The dead-code defect this locks in: NotificationService used to call the email service's
+        // 4-arg overload, so recipientName/link never reached the email (always the generic greeting,
+        // never a portal link) even though notify() receives both. Assert BOTH the name-driven
+        // greeting AND the link actually reach the mailer - either dropped is the regression.
+        verify(mailer).sendHtml(
             eq("employee@glr.co.th"),
             eq("[GL&R HR] Leave submitted"),
-            argThat(body -> body.contains("เรียน ท่านผู้ใช้งาน,")
-                && body.contains("Your leave request was submitted.")
-                && body.contains("ระบบบริหารงานบุคคล GL&R")));
+            argThat(html -> html.contains("เรียน คุณสมชาย ใจดี,")
+                && html.contains("Your leave request was submitted.")
+                && html.contains("https://portal.example/leave/1")
+                && html.contains("ระบบบริหารงานบุคคล GL&amp;R")),
+            argThat(text -> text.contains("เรียน คุณสมชาย ใจดี,")
+                && text.contains("Your leave request was submitted.")
+                && text.contains("https://portal.example/leave/1")
+                && text.contains("ระบบบริหารงานบุคคล GL&R")));
     }
 
     @Test
@@ -126,7 +136,7 @@ class NotificationServiceTest {
 
         @Bean
         NotificationEmailService notificationEmailService(Mailer mailer) {
-            return new NotificationEmailService(mailer, "", "", "https://portal.example");
+            return new NotificationEmailService(mailer, "", "", "https://portal.example", "https://assets.example");
         }
 
         @Bean

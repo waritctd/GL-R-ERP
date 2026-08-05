@@ -15,6 +15,7 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -55,7 +56,8 @@ class LeaveAttachmentDownloadAuthzIntegrationTest extends AbstractPostgresIntegr
             leaveAttachmentRepository,
             mock(FileStorageService.class),
             mock(AuditService.class),
-            mock(NotificationService.class));
+            mock(NotificationService.class),
+            mock(EmployeeRepository.class));
 
         long department = insertDepartment("Warehouse");
         requesterManager = insertEmployee("MGR-REQ", department, null, null, true);
@@ -97,6 +99,49 @@ class LeaveAttachmentDownloadAuthzIntegrationTest extends AbstractPostgresIntegr
             .isInstanceOf(ApiException.class)
             .extracting(e -> ((ApiException) e).getStatus())
             .isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    // --- V134 storage-durability fix: availability (410) must never leak past authz (403) --------
+    //
+    // This is the existence-leak guard the ordering in LeaveService#resolveAttachmentForDownload
+    // exists for: if availability were checked before authorization, an unauthorized caller could
+    // tell a MISSING attachment (which would 410 for someone permitted) apart from one that simply
+    // doesn't exist (404) -- without ever being allowed to know the id exists. Both cases below
+    // exercise the SAME MISSING row so the fixture cannot silently supply only the state that
+    // happens to pass.
+
+    @Test
+    void authorizedCallerAgainstAMissingAttachmentGetsGoneNotServerError() {
+        long missingAttachmentId = insertAttachmentWithState(insertLeaveRequest(requester), requester, "MISSING");
+
+        assertThatThrownBy(() -> leaveService.resolveAttachmentForDownload(missingAttachmentId, employee(requester)))
+            .isInstanceOf(ApiException.class)
+            .extracting(e -> ((ApiException) e).getStatus())
+            .isEqualTo(HttpStatus.GONE);
+    }
+
+    @Test
+    void unauthorizedCallerAgainstAMissingAttachmentStillGetsForbiddenNeverGone() {
+        long missingAttachmentId = insertAttachmentWithState(insertLeaveRequest(requester), requester, "MISSING");
+
+        // THE point of this test: an unauthorized caller must see the exact same 403 they would see
+        // against a perfectly healthy attachment -- never 410, which would only be reachable by
+        // someone authorized and would therefore leak that this id exists and is specifically MISSING.
+        assertThatThrownBy(() -> leaveService.resolveAttachmentForDownload(missingAttachmentId, employee(unrelatedEmployee)))
+            .isInstanceOf(ApiException.class)
+            .extracting(e -> ((ApiException) e).getStatus())
+            .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void authorizedCallerAgainstADatabaseBackedAttachmentSucceeds() {
+        long leaveRequestId = insertLeaveRequest(requester);
+        long databaseAttachmentId = insertAttachmentWithState(leaveRequestId, requester, "DATABASE");
+
+        LeaveAttachmentRepository.AttachmentLocation location =
+            leaveService.resolveAttachmentForDownload(databaseAttachmentId, employee(requester));
+        assertThat(location.storageState()).isEqualTo("DATABASE");
+        assertThat(location.fileName()).isEqualTo("certificate.pdf");
     }
 
     // --- regression guards: NOT the point of this class, but must not silently break -----------
@@ -164,16 +209,40 @@ class LeaveAttachmentDownloadAuthzIntegrationTest extends AbstractPostgresIntegr
             """, new MapSqlParameterSource("employeeId", employeeId), Long.class);
     }
 
+    // V134: the shared fixture attachment is DATABASE-backed (a real blob row, not a disk path
+    // pointing at a file this test never creates) -- matching what every NEW leave attachment
+    // actually looks like post-migration, and avoiding a spurious 410 from the new availability
+    // check for every regression test below that expects a plain successful download.
     private long insertAttachment(long leaveRequestId, long uploadedBy) {
-        return jdbc.queryForObject("""
+        return insertAttachmentWithState(leaveRequestId, uploadedBy, "DATABASE");
+    }
+
+    /**
+     * V134: inserts a leave attachment already in the given {@code storage_state}. For {@code
+     * DATABASE}, also inserts the matching {@code hr.file_attachment_blob} row -- a real
+     * DATABASE-state row can never exist without one, and a fixture that skipped it would prove
+     * nothing about the real write path.
+     */
+    private long insertAttachmentWithState(long leaveRequestId, long uploadedBy, String storageState) {
+        long newAttachmentId = jdbc.queryForObject("""
             INSERT INTO hr.file_attachment
-                (domain, owner_id, file_name, file_path, mime_type, file_size, uploaded_by)
-            VALUES ('leave', :ownerId, 'certificate.pdf', '/tmp/certificate.pdf', 'application/pdf', 1024, :uploadedBy)
+                (domain, owner_id, file_name, file_path, mime_type, file_size, uploaded_by, storage_state)
+            VALUES ('leave', :ownerId, 'certificate.pdf', 'leave/dummy-key.pdf', 'application/pdf', 1024,
+                    :uploadedBy, :storageState)
             RETURNING attachment_id
             """, new MapSqlParameterSource()
                 .addValue("ownerId", leaveRequestId)
-                .addValue("uploadedBy", uploadedBy),
+                .addValue("uploadedBy", uploadedBy)
+                .addValue("storageState", storageState),
             Long.class);
+        if ("DATABASE".equals(storageState)) {
+            jdbc.update("""
+                INSERT INTO hr.file_attachment_blob (attachment_id, content) VALUES (:id, :content)
+                """, new MapSqlParameterSource()
+                    .addValue("id", newAttachmentId)
+                    .addValue("content", "หลักฐานประกอบ".getBytes()));
+        }
+        return newAttachmentId;
     }
 
     private UserPrincipal employee(long employeeId) {

@@ -26,8 +26,12 @@ import {
 // Reproduces `.filter-bar` for this page's native <form onSubmit> (Enter-to-submit
 // needed); Layout.jsx's FilterBar only renders a <div> — same pattern established in
 // OvertimePage/LeavePage (docs/agent-handoffs/29_tw-convert-overtime-leave.md).
+//
+// `items-end`, not `items-center` — see MyLeaveTab.jsx's identical FILTER_BAR_CLASS
+// for the full explanation. Only reachable for HR/manager (`!isSelfView`), so it
+// never showed on the employee self-view, but it is the same defect and the same fix.
 const FILTER_BAR_CLASS =
-  'flex flex-wrap gap-[10px] items-center bg-surface border border-border rounded-md p-[14px]';
+  'flex flex-wrap gap-[10px] items-end bg-surface border border-border rounded-md p-[14px]';
 
 // Earlier than any punch the scanners have produced (the oldest on record is Nov 2020), so a
 // backfill covers everything without needing to look up where history starts. The backend walks
@@ -704,17 +708,17 @@ function MarkPresentModal({ employees, defaultDate, minDate, maxDate, submitting
       onClose={submitting ? undefined : onClose}
       footer={(
         <>
-          <button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>
+          <Button type="button" variant="secondary" onClick={onClose} disabled={submitting}>
             ยกเลิก
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="primary-button"
+            variant="primary"
             disabled={submitting}
             onClick={() => onSubmit({ date, employeeIds: [...selected], notes: notes.trim() || undefined })}
           >
             {submitting ? 'กำลังบันทึก…' : `บันทึก (${selected.size} คน)`}
-          </button>
+          </Button>
         </>
       )}
     >

@@ -79,6 +79,56 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(salesRows.get(0).title()).isEqualTo("คำขอราคาถูกรับเรื่องแล้ว");
     }
 
+    @Test
+    void findEmployeeEmailResolvesBothTheAddressAndTheThaiDisplayName() {
+        long divisionId = insertDivision("SA", "Sales2");
+        long employeeId = insertEmployeeWithNameAndEmail("EMP-400", divisionId, "สมชาย", "ใจดี",
+            "somchai@glr.co.th");
+
+        var recipient = repository.findEmployeeEmail(employeeId);
+
+        assertThat(recipient).isPresent();
+        assertThat(recipient.get().email()).isEqualTo("somchai@glr.co.th");
+        assertThat(recipient.get().name()).isEqualTo("สมชาย ใจดี");
+    }
+
+    @Test
+    void findEmployeeEmailIsEmptyWhenTheEmployeeHasAnEmptyStringEmailOnFile() {
+        long divisionId = insertDivision("SA", "Sales3");
+        long employeeId = insertEmployeeWithNameAndEmail("EMP-401", divisionId, "สมหญิง", "ดีใจ", "");
+
+        assertThat(repository.findEmployeeEmail(employeeId)).isEmpty();
+    }
+
+    // hr.employee.email is a nullable VARCHAR(255) - a real SQL NULL (as opposed to an empty
+    // string) is reachable in production and must pass through the same
+    // NULLIF(BTRIM(...), '') as the empty-string case above. Map.of() rejects null values, so this
+    // needs its own insert rather than reusing insertEmployeeWithNameAndEmail's "" coercion.
+    @Test
+    void findEmployeeEmailIsEmptyWhenTheEmployeeHasATrueSqlNullEmail() {
+        long divisionId = insertDivision("SA", "Sales4");
+        Number id = jdbc.queryForObject("""
+            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, email, division_id, is_active)
+            VALUES (:code, :firstName, :lastName, NULL, :divisionId, TRUE)
+            RETURNING employee_id
+            """, Map.of("code", "EMP-402", "firstName", "สมหญิง", "lastName", "ดีใจ",
+                "divisionId", divisionId), Number.class);
+        long employeeId = id.longValue();
+
+        assertThat(repository.findEmployeeEmail(employeeId)).isEmpty();
+    }
+
+    private long insertEmployeeWithNameAndEmail(String code, long divisionId, String firstName, String lastName,
+                                                String email) {
+        Number id = jdbc.queryForObject("""
+            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, email, division_id, is_active)
+            VALUES (:code, :firstName, :lastName, :email, :divisionId, TRUE)
+            RETURNING employee_id
+            """, Map.of("code", code, "firstName", firstName, "lastName", lastName,
+                "email", email == null ? "" : email, "divisionId", divisionId), Number.class);
+        return id.longValue();
+    }
+
     private Integer countLegacySalesNotifications() {
         return jdbc.getJdbcTemplate().queryForObject("SELECT COUNT(*) FROM sales.notification", Integer.class);
     }

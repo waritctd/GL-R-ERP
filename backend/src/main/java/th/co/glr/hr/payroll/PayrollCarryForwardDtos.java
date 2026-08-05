@@ -38,6 +38,15 @@ import java.util.List;
  * — surfaced so HR can see it, NOT auto-netted into {@code unpaidLeaveDays}, and NOT auto-resolved
  * once shown (see the V85 migration comment and {@code LeaveService#cancel} for why). HR must
  * manually factor it into the submitted {@code unpaidLeaveDays} value.
+ *
+ * <p>Leave requires approval (2026-08-05): {@code SuggestedInputsResponse#pendingSubmittedLeaveCount}
+ * is a SEPARATE, month-level (not per-employee) advisory -- the count of SUBMITTED leave requests
+ * overlapping {@code payrollMonth}, from {@code LeaveRepository#countSubmittedLeaveOverlappingMonth}.
+ * Approval is now a real payroll deadline that did not exist before: a request stuck at SUBMITTED
+ * contributes NOTHING to {@code unpaidLeaveDays} above (that overlay only reads {@code status =
+ * 'APPROVED'} rows) until a human approves it. This count exists so HR sees that gap BEFORE running
+ * payroll rather than discovering it in a payslip -- read-only, purely additive, same as every other
+ * field on this response; it never feeds {@code preview()}/{@code process()}.
  */
 public final class PayrollCarryForwardDtos {
     private PayrollCarryForwardDtos() {
@@ -84,5 +93,11 @@ public final class PayrollCarryForwardDtos {
         }
     }
 
-    public record SuggestedInputsResponse(LocalDate payrollMonth, List<SuggestedInputRow> suggestions) {}
+    public record SuggestedInputsResponse(
+        LocalDate payrollMonth,
+        List<SuggestedInputRow> suggestions,
+        // Leave requires approval (2026-08-05): count of SUBMITTED leave requests overlapping
+        // payrollMonth, across all employees -- see this class's own Javadoc paragraph above. Purely
+        // advisory; never consumed by preview()/process().
+        int pendingSubmittedLeaveCount) {}
 }

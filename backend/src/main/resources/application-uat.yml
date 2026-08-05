@@ -70,3 +70,19 @@ spring:
 app:
   mail:
     provider: ${APP_MAIL_PROVIDER:resend}
+    # Marks every UAT-sent subject so a real inbox (APP_MAIL_OVERRIDE_TO) never confuses a test email
+    # for a real one. Trailing space is deliberate - YAML-quoted so it survives (an unquoted flow
+    # scalar trims trailing whitespace), giving "[TEST] Subject" rather than "[TEST]Subject".
+    subject-prefix: "${APP_MAIL_SUBJECT_PREFIX:[TEST] }"
+    # Same UAT frontend URL NotificationEmailService already defaults to - set explicitly here so a
+    # UAT deploy doesn't rely on that Java-side default matching. Used for portal CTA links only.
+    app-base-url: ${APP_MAIL_APP_BASE_URL:https://demo-glr-git-uat-waritctds-projects.vercel.app}
+    # Deliberately a DIFFERENT host from app-base-url above: this is the emailed logo's URL only.
+    # app-base-url is a Vercel branch preview, and if Vercel Deployment Protection is ever enabled
+    # on it, Gmail's image proxy (no cookies/session, can't complete a login flow) hits an auth wall
+    # and the logo silently breaks in every email - a human clicking the CTA link doesn't have that
+    # problem because they can log in. Pointing the logo at this service's own Render origin instead
+    # sidesteps Vercel entirely; vercel.json's /api/:path* rewrite means the two origins serve the
+    # same bytes anyway, so nothing else changes. Set explicitly here for the same reason as
+    # app-base-url - don't rely on the Java-side default matching this deployment.
+    asset-base-url: ${APP_MAIL_ASSET_BASE_URL:https://gl-r-erp-uat.onrender.com}

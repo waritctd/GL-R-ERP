@@ -47,4 +47,57 @@ class FileStorageServiceTest {
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.BAD_REQUEST);
     }
+
+    // --- V134 storage-durability fix: explicit app.uploads-max-bytes cap, checked before any byte
+    // is read into memory (see FileStorageService's constructor javadoc for why this is separate
+    // from spring.servlet.multipart.max-file-size). -----------------------------------------------
+
+    @Test
+    void storeRejectsAFileOverTheConfiguredCap() {
+        FileStorageService service = new FileStorageService(uploadsDir.toString(), 4L);
+        MockMultipartFile file = new MockMultipartFile(
+            "file", "quote.pdf", "application/pdf", "this is way more than four bytes".getBytes());
+
+        assertThatThrownBy(() -> service.store("tickets", 10L, file, BUSINESS_ATTACHMENT_MIME_TYPES))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void storeAllowsAFileExactlyAtTheCap() {
+        byte[] exactlyFourBytes = "abcd".getBytes();
+        FileStorageService service = new FileStorageService(uploadsDir.toString(), exactlyFourBytes.length);
+        MockMultipartFile file = new MockMultipartFile(
+            "file", "quote.pdf", "application/pdf", exactlyFourBytes);
+
+        FileStorageService.StoredFile stored = service.store("tickets", 10L, file, BUSINESS_ATTACHMENT_MIME_TYPES);
+
+        assertThat(stored.fileSize()).isEqualTo(exactlyFourBytes.length);
+    }
+
+    @Test
+    void storeInDatabaseAlsoEnforcesTheCapAndNeverTouchesDisk() {
+        FileStorageService service = new FileStorageService(uploadsDir.toString(), 4L);
+        MockMultipartFile file = new MockMultipartFile(
+            "file", "quote.pdf", "application/pdf", "this is way more than four bytes".getBytes());
+
+        assertThatThrownBy(() -> service.storeInDatabase("leave", 10L, file, BUSINESS_ATTACHMENT_MIME_TYPES))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void storeInDatabaseReturnsContentAndABareRelativeKeyWithNoDiskWrite() {
+        FileStorageService service = new FileStorageService(uploadsDir.toString());
+        byte[] payload = "pdf-bytes".getBytes();
+        MockMultipartFile file = new MockMultipartFile("file", "quote.pdf", "application/pdf", payload);
+
+        FileStorageService.StoredContent stored = service.storeInDatabase("leave", 10L, file, BUSINESS_ATTACHMENT_MIME_TYPES);
+
+        assertThat(stored.content()).isEqualTo(payload);
+        assertThat(stored.storageKey()).startsWith("leave/10/").endsWith(".pdf");
+        assertThat(uploadsDir.resolve(stored.storageKey())).doesNotExist();
+    }
 }

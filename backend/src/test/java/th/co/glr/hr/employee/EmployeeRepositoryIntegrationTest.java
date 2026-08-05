@@ -158,6 +158,99 @@ class EmployeeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(repository.findEmployeeById(id, true).orElseThrow().withholdingTaxOverride()).isNull();
     }
 
+    /**
+     * D2 (owner ruling, notification-coverage branch): {@code findHrEmployeeIds} resolves every
+     * ACTIVE employee whose derived login role is EXACTLY {@code "hr"} per {@code
+     * DivisionAccessPolicy#roleFor} -- proven against real Postgres because it is a hand-written SQL
+     * string, exactly the shape that can pass every Mockito-level test while silently matching the
+     * wrong rows (or none) against a real schema. Wrong-way-round: an inactive HR employee and an
+     * active non-HR employee must both be excluded, not just "an HR employee is included".
+     *
+     * <p>S-3 review finding (second pass): the query used to be {@code source_code ILIKE 'HR%'},
+     * which does NOT mirror {@code roleFor} (prefix match instead of exact, and no {@code
+     * source_code IS NULL} fallback, no executive-precedence exclusion). See {@link
+     * #findHrEmployeeIdsExcludesAnHrdStyleDivisionDespiteTheSharedPrefix}, {@link
+     * #findHrEmployeeIdsIncludesANullSourceCodeHrDivisionViaTheNameFallback} and {@link
+     * #findHrEmployeeIdsExcludesAnExecutiveEvenInTheHrDivision} below for the three cases the fixed
+     * query now gets right that {@code ILIKE 'HR%'} did not.
+     */
+    @Test
+    void findHrEmployeeIdsReturnsOnlyActiveEmployeesInAnHrDivision() {
+        long activeHr = repository.create(req("บุคคล หนึ่ง", "HR", "hr1@glr.co.th", new BigDecimal("22000")));
+        long secondActiveHr = repository.create(req("บุคคล สอง", "HR", "hr2@glr.co.th", new BigDecimal("23000")));
+        long salesEmployee = repository.create(req("ขาย หนึ่ง", "SALES", "sales1@glr.co.th", new BigDecimal("21000")));
+        UpsertEmployeeRequest resignedHr = new UpsertEmployeeRequest(
+            null, null, "บุคคล ลาออก", null, null, null, null, null, null, null,
+            "hr-resigned@glr.co.th", null, "HR", "HR Division", "แผนกทดสอบ",
+            null, null, null, "RSG", new BigDecimal("22000"), BigDecimal.ZERO, null, null, null, null, null, null);
+        long inactiveHr = repository.create(resignedHr);
+
+        List<Long> hrEmployeeIds = repository.findHrEmployeeIds();
+
+        assertThat(hrEmployeeIds).contains(activeHr, secondActiveHr);
+        assertThat(hrEmployeeIds).doesNotContain(salesEmployee, inactiveHr);
+    }
+
+    /**
+     * S-3, wrong-way-round #1 (the {@code ILIKE 'HR%'} prefix bug): a division whose {@code
+     * source_code} is {@code "HRD"} satisfies the OLD {@code ILIKE 'HR%'} query, but {@code
+     * DivisionAccessPolicy#roleFor} requires an EXACT (case-insensitive) match on {@code "hr"} --
+     * {@code "hrd" != "hr"} -- so {@code roleFor} resolves such an employee to {@code "employee"},
+     * never {@code "hr"}. They must NOT be returned.
+     */
+    @Test
+    void findHrEmployeeIdsExcludesAnHrdStyleDivisionDespiteTheSharedPrefix() {
+        long hrdEmployee = repository.create(req("บุคคล เอชอาร์ดี", "HRD", "hrd1@glr.co.th", new BigDecimal("22000")));
+
+        List<Long> hrEmployeeIds = repository.findHrEmployeeIds();
+
+        assertThat(hrEmployeeIds).doesNotContain(hrdEmployee);
+    }
+
+    /**
+     * S-3, wrong-way-round #2 (the {@code source_code IS NULL} fallback): {@code
+     * hr.division.source_code} is nullable, and {@code DivisionAccessPolicy#divisionCode} falls back
+     * to the {@code name_th} prefix before the first {@code '-'} when it is null/blank -- e.g. a real
+     * observed division shaped {@code source_code = NULL, name_th = 'HR-บุคคล'} still resolves to
+     * role {@code "hr"}. The OLD {@code d.source_code ILIKE 'HR%'} query is false for every NULL row
+     * regardless of {@code name_th} and would have silently excluded them.
+     */
+    @Test
+    void findHrEmployeeIdsIncludesANullSourceCodeHrDivisionViaTheNameFallback() {
+        // Built directly (not via the req() helper, which always sets divisionId=divisionCode) so
+        // source_code stays NULL and name_th carries the "HR-" prefix DivisionAccessPolicy falls back
+        // to -- see EmployeeReferenceRepository#ensureDivision: a null sourceCode routes to
+        // findOrInsertDivisionByName, which never writes source_code at all.
+        UpsertEmployeeRequest nullSourceHr = new UpsertEmployeeRequest(
+            null, null, "บุคคล ไม่มีรหัสฝ่าย", null, null, null, null, null, null, null,
+            "hr-nullsource@glr.co.th", null, null, "HR-บุคคล", "แผนกทดสอบ",
+            null, null, null, "ACT", new BigDecimal("22000"), BigDecimal.ZERO, null, null, null, null, null, null);
+        long nullSourceHrEmployee = repository.create(nullSourceHr);
+
+        List<Long> hrEmployeeIds = repository.findHrEmployeeIds();
+
+        assertThat(hrEmployeeIds).contains(nullSourceHrEmployee);
+    }
+
+    /**
+     * S-3, executive precedence pinned: {@code DivisionAccessPolicy#roleFor} checks {@code
+     * isExecutive} (position contains "กรรมการ") BEFORE {@code "hr".equals(code)} -- an employee in
+     * the HR division whose position is "กรรมการผู้จัดการ" resolves to role {@code "ceo"}, never
+     * {@code "hr"}, and must NOT be returned here even though their division is exactly HR.
+     */
+    @Test
+    void findHrEmployeeIdsExcludesAnExecutiveEvenInTheHrDivision() {
+        UpsertEmployeeRequest executiveInHr = new UpsertEmployeeRequest(
+            null, null, "บุคคล ผู้บริหาร", null, null, null, null, null, null, null,
+            "exec-in-hr@glr.co.th", null, "HR", "HR Division", "แผนกทดสอบ",
+            "กรรมการผู้จัดการ", null, null, "ACT", new BigDecimal("22000"), BigDecimal.ZERO, null, null, null, null, null, null);
+        long executiveInHrEmployee = repository.create(executiveInHr);
+
+        List<Long> hrEmployeeIds = repository.findHrEmployeeIds();
+
+        assertThat(hrEmployeeIds).doesNotContain(executiveInHrEmployee);
+    }
+
     private UpsertEmployeeRequest req(String nameTh, String divisionCode, String email, BigDecimal salary) {
         return req(nameTh, divisionCode, email, salary, BigDecimal.ZERO);
     }

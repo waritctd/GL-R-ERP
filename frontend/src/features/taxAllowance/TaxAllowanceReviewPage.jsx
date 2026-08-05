@@ -9,7 +9,7 @@ import { DataTable } from '../../components/common/DataTable.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
-import { PageStack } from '../../components/common/Layout.jsx';
+import { FilterRow, PageStack } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -20,6 +20,7 @@ import { TaxAllowanceEvidenceCount } from './TaxAllowanceEvidenceCount.jsx';
 import { TaxAllowanceForm } from './TaxAllowanceForm.jsx';
 import { buildAllowanceSubmitBody, declaredAllowanceTotal, defaultAllowanceValues } from './taxAllowanceSchema.js';
 import { taxAllowanceStatusInfo } from './taxAllowanceStatus.js';
+import { Button } from '../../components/common/Button.jsx';
 
 const REGISTER_GRID = 'grid-cols-[minmax(0,0.4fr)_minmax(0,1.4fr)_minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.7fr)] max-[1040px]:min-w-[900px] reflow-cards';
 
@@ -48,10 +49,10 @@ function ApplyDialog({ row, onClose, onConfirm, busy }) {
       onClose={busy ? undefined : onClose}
       footer={(
         <>
-          <button type="button" className="secondary-button" onClick={onClose} disabled={busy}>ยกเลิก</button>
-          <button type="button" className="primary-button" onClick={() => onConfirm(month)} disabled={busy}>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>ยกเลิก</Button>
+          <Button onClick={() => onConfirm(month)} disabled={busy}>
             {busy ? 'กำลังดำเนินการ…' : 'ยืนยัน'}
-          </button>
+          </Button>
         </>
       )}
     >
@@ -266,16 +267,15 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
       key: 'expand',
       header: '',
       render: (row) => (
-        <button
-          type="button"
-          className="icon-button"
+        <Button
+          variant="icon"
           aria-expanded={expandedEmployeeId === row.employeeId}
           title="ดูรายละเอียดค่าลดหย่อนเทียบเพดาน"
           aria-label={`ดูรายละเอียดค่าลดหย่อนของ ${row.employeeName} เทียบเพดาน`}
           onClick={() => setExpandedEmployeeId((current) => (current === row.employeeId ? null : row.employeeId))}
         >
           <Icon name={expandedEmployeeId === row.employeeId ? 'chevronUp' : 'chevronDown'} size={14} />
-        </button>
+        </Button>
       ),
     },
     {
@@ -362,7 +362,7 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
           : 'เฉพาะแบบแจ้ง ล.ย.01 ที่ยื่นเข้ามาแล้ว — พนักงานที่ยังไม่ได้ยื่นจะไม่ปรากฏในตารางนี้'}
       />
 
-      <div className="flex flex-wrap items-center gap-3">
+      <FilterRow>
         <FormField label="ปีภาษี" htmlFor="tax-allowance-year">
           <select
             id="tax-allowance-year"
@@ -385,7 +385,7 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
             ariaLabel="กรองตามสถานะ"
           />
         </div>
-      </div>
+      </FilterRow>
 
       <DataTable
         columns={columns}
