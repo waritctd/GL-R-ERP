@@ -469,9 +469,36 @@ export function bangkokTodayIso(date = new Date()) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
-export function bangkokMonthStartIso(date = new Date()) {
+// `monthsBack` walks calendar months on the Bangkok wall-clock date, not milliseconds -- a
+// millisecond subtraction is the wrong tool for month arithmetic (months aren't a fixed length),
+// and doing it on the Intl-derived {year, month} parts (rather than a naive Date field mutation)
+// keeps this consistent with bangkokTodayIso's pattern above. `Math.floor`/modulo on a flat
+// "months since epoch" count handles the year rollover for free (e.g. Feb minus 3 months lands on
+// the previous November) without any special-casing.
+export function bangkokMonthStartIso(date = new Date(), monthsBack = 0) {
   const parts = bangkokDateParts(date);
-  return `${parts.year}-${parts.month}-01`;
+  const totalMonths = Number(parts.year) * 12 + (Number(parts.month) - 1) - monthsBack;
+  const targetYear = Math.floor(totalMonths / 12);
+  const targetMonth = (totalMonths % 12) + 1;
+  return `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`;
+}
+
+// Pure calendar-day arithmetic on a YYYY-MM-DD string. Deliberately does NOT round-trip through
+// `Date#toISOString()`: parsing "YYYY-MM-DDT00:00:00+07:00" and reading the date back off
+// `toISOString()` reads the UTC calendar day off a Bangkok-midnight instant, which is always one
+// day behind the Bangkok date that was intended (Bangkok midnight is 17:00 UTC the PREVIOUS day) --
+// that mismatch is what made the attendance date stepper net a 2-day back-step and a stuck
+// forward-step. `Date.UTC` here is used purely as neutral day-count arithmetic on the calendar
+// fields (year/month/day), never as a timezone conversion -- there is no timezone attached to a
+// bare YYYY-MM-DD, so none should be introduced by parsing it as one.
+export function addDaysIso(iso, deltaDays) {
+  const [year, month, day] = iso.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + deltaDays);
+  const y = String(date.getUTCFullYear()).padStart(4, '0');
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 // Clock time only, pinned to Bangkok. Used by the attendance day table, where the date already
