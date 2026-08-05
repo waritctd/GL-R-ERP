@@ -68,6 +68,18 @@ public class ResendMailer implements Mailer {
     }
 
     @Override
+    public void sendHtml(String to, String subject, String htmlBody, String textBody) {
+        CreateEmailOptions request = CreateEmailOptions.builder()
+            .from(fromAddress)
+            .to(to)
+            .subject(subject)
+            .html(htmlBody)
+            .text(textBody)
+            .build();
+        sendWithRetry(request, to);
+    }
+
+    @Override
     public void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes) {
         sendWithAttachments(to, subject, body, List.of(new Attachment(filename, bytes, "application/pdf")));
     }

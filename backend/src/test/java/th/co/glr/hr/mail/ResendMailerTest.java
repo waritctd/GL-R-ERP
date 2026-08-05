@@ -4,9 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.resend.core.exception.ResendException;
+import com.resend.services.emails.model.CreateEmailOptions;
 import com.resend.services.emails.model.CreateEmailResponse;
 import java.lang.reflect.Constructor;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class ResendMailerTest {
@@ -67,5 +69,39 @@ class ResendMailerTest {
             .hasMessageContaining("status=500");
 
         assertThat(calls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void sendHtmlSetsBothHtmlAndTextOnTheRequest() {
+        AtomicReference<CreateEmailOptions> captured = new AtomicReference<>();
+        ResendMailer mailer = mailerWith(options -> {
+            captured.set(options);
+            CreateEmailResponse response = new CreateEmailResponse();
+            response.setId("email-id-html");
+            return response;
+        });
+
+        mailer.sendHtml("employee@example.com", "Subject", "<p>Hello</p>", "Hello");
+
+        assertThat(captured.get().getHtml()).isEqualTo("<p>Hello</p>");
+        assertThat(captured.get().getText()).isEqualTo("Hello");
+    }
+
+    @Test
+    void sendHtmlRoutesThroughTheSameRetryPathAs429Backoff() {
+        AtomicInteger calls = new AtomicInteger(0);
+        ResendMailer mailer = mailerWith(options -> {
+            int attempt = calls.incrementAndGet();
+            if (attempt < 2) {
+                throw new ResendException(429, "rate_limit_exceeded");
+            }
+            CreateEmailResponse response = new CreateEmailResponse();
+            response.setId("email-id-retry");
+            return response;
+        });
+
+        mailer.sendHtml("employee@example.com", "Subject", "<p>Hello</p>", "Hello");
+
+        assertThat(calls.get()).isEqualTo(2);
     }
 }

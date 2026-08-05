@@ -86,6 +86,24 @@ public class SmtpMailer implements Mailer {
     }
 
     @Override
+    public void sendHtml(String to, String subject, String htmlBody, String textBody) {
+        try {
+            var message = sender.createMimeMessage();
+            // 2-arg setText(text, html) builds a proper multipart/alternative part nested inside the
+            // multipart/mixed root, so clients that reject/strip HTML fall back to textBody.
+            var helper = new MimeMessageHelper(message, true, "UTF-8");
+            helper.setFrom(fromAddress);
+            helper.setTo(to);
+            helper.setSubject(subject);
+            helper.setText(textBody, htmlBody);
+            sender.send(message);
+            log.info("HTML email sent via SMTP: from={} to={}", fromAddress, to);
+        } catch (Exception exception) {
+            throw new MailSendException("SMTP HTML send failed to " + to + ": " + exception.getMessage(), exception);
+        }
+    }
+
+    @Override
     public void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes) {
         sendWithAttachments(to, subject, body, List.of(new Attachment(filename, bytes, null)));
     }
