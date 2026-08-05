@@ -116,6 +116,30 @@ public class ManagerApproverRepository {
     }
 
     /**
+     * feat/pending-approver-info: a scalar subquery resolving the nickname-or-first-name of the
+     * SINGLE active division-manager approver for {@code employeeAlias}'s requests, or SQL NULL
+     * when there is more than one such peer -- read-only, informational ("who this is waiting on"
+     * display), never an authorization decision.
+     *
+     * <p>Built from the exact same {@link #PEER_IS_MANAGER_APPROVER} WHERE clause {@link
+     * #hasManagerApproverSql} and {@link #findManagerApproverEmployeeIds} already use, so the name
+     * this resolves can never disagree with whether a manager stage exists at all -- deliberately
+     * does NOT also repeat {@link #SELF_IS_MANAGER}: a caller must gate on {@code
+     * hasManagerApproverSql(employeeAlias)} being {@code true} before using this value (which
+     * already implies "not self is manager"), the same precondition {@link
+     * #findManagerApproverEmployeeIds} carries in its own Javadoc ("empty exactly when {@code
+     * hasManagerApprover} is false").
+     */
+    public static String managerApproverSingleNameSql(String employeeAlias) {
+        return ("(SELECT CASE WHEN COUNT(*) = 1"
+            + " THEN MIN(COALESCE(NULLIF(TRIM(peer.nickname), ''), peer.first_name_th)) END\n"
+            + "   FROM hr.employee peer\n"
+            + "   JOIN hr.position peer_pos ON peer_pos.position_id = peer.position_id\n"
+            + "  WHERE " + PEER_IS_MANAGER_APPROVER + ")")
+            .replace("{e}", employeeAlias);
+    }
+
+    /**
      * True when {@code employeeId}'s requests have a manager stage — i.e. some active ฝ่าย manager
      * could approve them.
      *

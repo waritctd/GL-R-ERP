@@ -167,6 +167,37 @@ describe('ReviewQueueTab', () => {
     await waitFor(() => expect(api.leave.cancel).toHaveBeenCalledWith(702, { reviewerNote: null }));
   });
 
+  // feat/pending-approver-info: "who this is waiting on" beside the รออนุมัติ badge.
+  it('renders the pending-approver note beside a SUBMITTED request, and omits it for an APPROVED one', async () => {
+    api.leave.list.mockResolvedValue({
+      requests: [
+        { ...submittedUnderManager, pendingApproverRole: 'manager', pendingApproverName: 'เอ็ม' },
+        { ...approvedUnderManager, pendingApproverRole: null, pendingApproverName: null },
+      ],
+    });
+    renderReviewQueueTab();
+
+    await screen.findByText('พักผ่อน');
+    expect(await screen.findByText('ผู้จัดการ (คุณเอ็ม)')).not.toBeNull();
+
+    // The APPROVED row (pendingApproverRole: null) must not render a note at all -- exactly one
+    // "ผู้จัดการ (คุณเอ็ม)" in the whole document, not one per row.
+    await screen.findByText('ไม่สบาย');
+    expect(screen.getAllByText('ผู้จัดการ (คุณเอ็ม)')).toHaveLength(1);
+  });
+
+  // Role-only fallback: the backend omits pendingApproverName when the role's candidate set is
+  // ambiguous (e.g. more than one active hr-role employee) -- the note must still show the role.
+  it('shows the role alone when the backend could not resolve a single approver name', async () => {
+    api.leave.list.mockResolvedValue({
+      requests: [{ ...submittedUnderManager, pendingApproverRole: 'hr', pendingApproverName: null }],
+    });
+    renderReviewQueueTab();
+
+    await screen.findByText('พักผ่อน');
+    expect(await screen.findByText('ฝ่ายบุคคล')).not.toBeNull();
+  });
+
   it('DEFECT (state split): zero actionable requests shows the empty StatePanel, not a spinner or blank screen', async () => {
     api.leave.list.mockResolvedValue({ requests: [submittedUnderSomeoneElse] });
     renderReviewQueueTab();

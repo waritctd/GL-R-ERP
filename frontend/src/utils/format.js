@@ -209,6 +209,30 @@ export function ticketPriorityLabel(priority) {
   return map[priority] ?? { label: priority, tone: 'neutral' };
 }
 
+// "Who this is waiting on" -- rendered BESIDE a รออนุมัติ/pending status badge (leave/overtime/
+// special-money), never baked into leaveStatusLabel/overtimeStatusLabel/specialMoneyStatusLabel
+// themselves (those stay shared, domain-status -> {label, tone} only). Consumes the backend's
+// read-only `pendingApproverRole`/`pendingApproverName` fields (LeaveRequestDto/OvertimeRequestDto/
+// SpecialMoneyRequestDto -- see PendingApproverSql on the backend). `name` reuses greetingName's
+// existing "คุณ"-prefix rule so "เอ็ม" renders "คุณเอ็ม", matching the pattern this file already
+// uses everywhere else a person's name is greeted. Returns null (render nothing) when there is no
+// role to show -- e.g. a non-pending row, where the backend never sets these fields.
+const PENDING_APPROVER_ROLE_LABELS = {
+  hr: 'ฝ่ายบุคคล',
+  manager: 'ผู้จัดการ',
+  ceo: 'CEO',
+};
+
+export function pendingApproverText(role, name) {
+  if (!role) return null;
+  const roleLabel = PENDING_APPROVER_ROLE_LABELS[role] || role.toUpperCase();
+  // No name: either the backend never resolved one (e.g. more than one active person holds a
+  // generic role -- see LeaveRepository/OvertimeRepository/SpecialMoneyRepository's
+  // resolvePendingApproverName ambiguity handling) or this role never carries one. Either way,
+  // showing the role alone is the honest fallback -- never a placeholder or a guessed name.
+  return name ? `${roleLabel} (${greetingName(name)})` : roleLabel;
+}
+
 export function requestStatus(status) {
   const map = {
     pending: { label: 'รออนุมัติ', tone: 'warning' },
