@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -50,6 +51,7 @@ class LeaveSelfCancelIntegrationTest extends AbstractPostgresIntegrationTest {
             mock(th.co.glr.hr.attachment.FileStorageService.class),
             mock(AuditService.class),
             mock(NotificationService.class),
+            mock(EmployeeRepository.class),
             Clock.fixed(java.time.Instant.parse("2026-08-01T02:00:00Z"), ZoneId.of("Asia/Bangkok")));
     }
 

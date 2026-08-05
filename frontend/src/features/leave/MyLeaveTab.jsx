@@ -229,7 +229,7 @@ function OwnRequestsSection({
       <StatePanel
         state="empty"
         title="ยังไม่มีคำขอลา"
-        description="ลาคือการหยุดงานที่ได้รับอนุมัติ กดปุ่ม “ยื่นคำขอลา” ด้านบนเพื่อเริ่ม เลือกประเภทและช่วงวันที่ ระบบจะตรวจโควตาและอนุมัติอัตโนมัติถ้าเข้าเงื่อนไข"
+        description="ลาคือการหยุดงานที่ได้รับอนุมัติ กดปุ่ม “ยื่นคำขอลา” ด้านบนเพื่อเริ่ม เลือกประเภทและช่วงวันที่ ระบบจะตรวจโควตาให้ก่อน จากนั้นส่งให้ผู้อนุมัติพิจารณา"
         // Leave HR-submit gate (2026-08-03): mirrors LeaveSurfacePage.jsx's page-header CTA --
         // hr/ceo oversee leave but do not request it for themselves (owner ruling). This is the
         // SECOND of the two "ยื่นคำขอลา" entry points on this page; hiding it here too keeps the
@@ -346,7 +346,7 @@ function PrimaryLeaveBalanceCard({ loading, balance, leaveType, isEveryday }) {
         used={used}
         cap={isEveryday ? balance.annualQuotaDays : null}
         formatValue={formatDaysNumber}
-        overMessage="ใช้วันลาเกินโควตาประจำปีแล้ว ส่วนที่เกินอาจไม่ได้รับอนุมัติอัตโนมัติ"
+        overMessage="ใช้วันลาเกินโควตาประจำปีแล้ว ส่วนที่เกินอาจถูกปฏิเสธอัตโนมัติ"
       />
       {/* Rare types (MATERNITY/MILITARY/ORDINATION): QuotaBar renders nothing above (cap=null),
           so the paid-cap headline is the meaningful figure instead. See rareBalanceSummary's

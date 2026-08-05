@@ -467,7 +467,10 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
       if (created?.status === 'AUTO_REJECTED') {
         showToast('error', created.systemNote || 'คำขอลาไม่ผ่านเงื่อนไข');
       } else {
-        showToast('success', 'ส่งคำขอลาและอนุมัติอัตโนมัติแล้ว');
+        // Leave requires approval (2026-08-05): a rule-passing request now lands SUBMITTED and
+        // waits for a human, so the old "อนุมัติอัตโนมัติแล้ว" copy was actively misleading --
+        // it told the employee their leave was granted when it is only pending.
+        showToast('success', 'ส่งคำขอลาแล้ว รอผู้อนุมัติพิจารณา');
       }
       goBackToSurface(true);
     },

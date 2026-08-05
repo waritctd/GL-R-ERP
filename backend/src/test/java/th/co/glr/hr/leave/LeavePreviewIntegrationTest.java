@@ -22,6 +22,7 @@ import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -70,6 +71,7 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
             mock(FileStorageService.class),
             mock(AuditService.class),
             mock(NotificationService.class),
+            mock(EmployeeRepository.class),
             Clock.fixed(FIXED_NOW, BUSINESS_ZONE));
     }
 
@@ -271,7 +273,10 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualTo(submitted.systemNoteCode());
         if (expectedCode == null) {
             assertThat(preview.blocking()).isNull();
-            assertThat(submitted.status()).isEqualTo("APPROVED");
+            // Leave requires approval (2026-08-05): a rule-passing submit now lands SUBMITTED, not
+            // APPROVED -- this helper's subject is preview/submit agreement on the BLOCKING code,
+            // which is unaffected by this change (see LeaveService#submit's own comment).
+            assertThat(submitted.status()).isEqualTo("SUBMITTED");
         } else {
             assertThat(previewCode).isEqualTo(expectedCode);
             assertThat(submitted.status()).isEqualTo("AUTO_REJECTED");

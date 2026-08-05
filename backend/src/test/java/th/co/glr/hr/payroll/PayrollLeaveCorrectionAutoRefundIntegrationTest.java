@@ -17,6 +17,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.leave.LeaveAttachmentRepository;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.leave.LeaveRequestDto;
@@ -64,7 +65,8 @@ class PayrollLeaveCorrectionAutoRefundIntegrationTest extends AbstractPostgresIn
             mock(LeaveAttachmentRepository.class),
             mock(FileStorageService.class),
             mock(AuditService.class),
-            mock(NotificationService.class));
+            mock(NotificationService.class),
+            mock(EmployeeRepository.class));
 
         payrollRepository = new PayrollRepository(jdbc);
         payrollService = new PayrollService(
@@ -99,6 +101,11 @@ class PayrollLeaveCorrectionAutoRefundIntegrationTest extends AbstractPostgresIn
             new SubmitLeaveRequest(employeeId, "VACATION", monday, monday.plusDays(8), "Trip"),
             employee(employeeId));
         assertThat(leave.unpaidDays()).isEqualByComparingTo("1.00");
+        // Leave requires approval (2026-08-05): this whole test's subject is the approved-leave
+        // deduct/cancel-after-close/auto-refund cycle -- #recordPayrollCorrectionIfNeeded (fired
+        // from #cancel in Step 3 below) only fires for a request that is APPROVED at cancel time,
+        // so the request must actually reach APPROVED before the cycle can proceed.
+        leaveService.approve(leave.id(), new ReviewLeaveRequest("approved"), hr());
 
         // Step 2: month M is PROCESSED for real, with HR typing in the 1 unpaid day (exactly how the
         // frontend pre-fills from suggestedInputs and submits today) -- deducts 1,000.00 pre-tax.
