@@ -7,7 +7,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
-import { FilterBar, PageStack } from '../../components/common/Layout.jsx';
+import { FilterBar, PageStack, Panel } from '../../components/common/Layout.jsx';
 import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
@@ -144,9 +144,9 @@ export function AccountFinancePage({ showToast }) {
       </FilterBar>
 
       {loading ? (
-        <section className="panel" aria-busy="true" aria-label="กำลังโหลดงานการเงิน">
+        <Panel aria-busy="true" aria-label="กำลังโหลดงานการเงิน">
           <SkeletonText lines={6} />
-        </section>
+        </Panel>
       ) : filtered.length === 0 ? (
         <EmptyState
           icon="badgeDollar"
@@ -182,7 +182,7 @@ export function AccountFinancePage({ showToast }) {
           })}
         </div>
       ) : (
-        <section className="panel !p-0 overflow-hidden">
+        <Panel flush>
           <div className="ticket-table table-head" role="row">
             <span role="columnheader">ดีล</span>
             <span role="columnheader">ขั้นตอนที่ต้องทำ</span>
@@ -211,7 +211,7 @@ export function AccountFinancePage({ showToast }) {
               </div>
             );
           })}
-        </section>
+        </Panel>
       )}
     </PageStack>
   );

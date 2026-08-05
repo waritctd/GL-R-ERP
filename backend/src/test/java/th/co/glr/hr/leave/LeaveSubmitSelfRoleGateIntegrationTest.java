@@ -17,6 +17,7 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -69,6 +70,7 @@ class LeaveSubmitSelfRoleGateIntegrationTest extends AbstractPostgresIntegration
             mock(FileStorageService.class),
             mock(AuditService.class),
             mock(NotificationService.class),
+            mock(EmployeeRepository.class),
             Clock.fixed(FIXED_NOW, BUSINESS_ZONE));
 
         hrEmployeeId = insertEmployee("GATE-HR", null, true);
@@ -102,7 +104,7 @@ class LeaveSubmitSelfRoleGateIntegrationTest extends AbstractPostgresIntegration
             submitRequest(hrManagedSubordinateId), hr(hrEmployeeId));
 
         assertThat(result.employeeId()).isEqualTo(hrManagedSubordinateId);
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -113,7 +115,7 @@ class LeaveSubmitSelfRoleGateIntegrationTest extends AbstractPostgresIntegration
             submitRequest(ceoDirectReportId), ceo(ceoEmployeeId));
 
         assertThat(result.employeeId()).isEqualTo(ceoDirectReportId);
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -122,7 +124,7 @@ class LeaveSubmitSelfRoleGateIntegrationTest extends AbstractPostgresIntegration
             submitRequest(null), employee(plainEmployeeId));
 
         assertThat(result.employeeId()).isEqualTo(plainEmployeeId);
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     // --- helpers ------------------------------------------------------------

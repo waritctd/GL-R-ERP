@@ -102,6 +102,11 @@ const baseColumns = [
     header: 'เงินเดือน',
     sortable: true,
     sortAccessor: (employee) => employee.salary,
+    // Money reads down its digits, so it anchors right — ฿9,000 and ฿156,000
+    // otherwise start at the same x and agree only on where they end, which is
+    // the one place the eye cannot compare them. DataTable applies the same
+    // class to the header, so the label tracks the column.
+    align: 'right',
     render: (employee) => <code>{formatMoney(employee.salary)}</code>,
   },
   {

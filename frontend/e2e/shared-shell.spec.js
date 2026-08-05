@@ -108,7 +108,13 @@ test.describe('Batch 2 shared shell', () => {
             .toBeGreaterThanOrEqual(0);
 
           const drawerBox = await drawer.boundingBox();
-          expect(drawerBox.x, `${role}/${viewport.label} drawer starts offscreen`).toBeGreaterThanOrEqual(0);
+          // Rounded, matching the poll above. The poll settles on
+          // `Math.round(box.x) >= 0`, so asserting the RAW float here contradicts
+          // it: the drawer arrives via a CSS transform and the compositor leaves
+          // a sub-pixel residue at rest (observed -0.00039), which satisfies the
+          // poll and then fails this line. That made the test fail at random on
+          // PRs touching nothing near the nav drawer.
+          expect(Math.round(drawerBox.x), `${role}/${viewport.label} drawer starts offscreen`).toBeGreaterThanOrEqual(0);
           expect(drawerBox.width, `${role}/${viewport.label} drawer is wider than viewport`).toBeLessThanOrEqual(viewport.width);
 
           await page.keyboard.press('Escape');

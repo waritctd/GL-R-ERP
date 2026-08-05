@@ -736,6 +736,39 @@ public class LeaveRepository {
     }
 
     /**
+     * Leave requires approval (2026-08-05): count of SUBMITTED (pending-approval) leave requests
+     * whose date range overlaps {@code [monthStart, monthStart+1month-1]} -- SAME month-overlap
+     * predicate {@link #findUnpaidLeaveDaysByEmployeeForMonth} uses ({@code start_date <=
+     * monthEndInclusive AND end_date >= monthStart}), deliberately not narrowed to
+     * unpaid-day-bearing requests only: a PAID request still stuck at SUBMITTED past the payroll
+     * cutoff is exactly as much of a "did anyone forget to approve this" signal as an unpaid one, and
+     * this is a plain visibility count, not a payroll input.
+     *
+     * <p>Read-only advisory surfaced by {@code PayrollService#suggestedInputs} (see that method's
+     * Javadoc) so HR sees, before running payroll, that some leave overlapping the month is still
+     * awaiting a human decision and therefore is NOT YET reflected in {@link
+     * #findUnpaidLeaveDaysByEmployeeForMonth}'s figures -- approval is now a real payroll deadline
+     * that did not exist before this change (a SUBMITTED request only feeds the unpaid-day deduction
+     * once it flips to APPROVED). This never feeds {@code preview()}/{@code process()}; it is purely
+     * additive, the same guarantee every other field {@code suggestedInputs} adds already carries.
+     */
+    public int countSubmittedLeaveOverlappingMonth(LocalDate monthStart) {
+        LocalDate monthEndInclusive = monthStart.plusMonths(1).minusDays(1);
+        Integer count = jdbc.queryForObject("""
+            SELECT count(*)
+              FROM hr.leave_request lr
+             WHERE lr.status = 'SUBMITTED'
+               AND lr.start_date <= :monthEndInclusive
+               AND lr.end_date >= :monthStart
+            """,
+            new MapSqlParameterSource()
+                .addValue("monthStart", monthStart)
+                .addValue("monthEndInclusive", monthEndInclusive),
+            Integer.class);
+        return count == null ? 0 : count;
+    }
+
+    /**
      * Cancel-after-close reversal (2026-07-23): of the given candidate months, which already have a
      * PROCESSED payroll_period -- i.e. which of the cancelled leave's months are "closed" and can no
      * longer simply un-happen. Called from {@code LeaveService#cancel}.

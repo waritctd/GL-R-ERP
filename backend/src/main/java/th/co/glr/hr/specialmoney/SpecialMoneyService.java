@@ -297,7 +297,7 @@ public class SpecialMoneyService {
         }
         SpecialMoneyRequestDto after = requireRequest(id);
         auditService.record(user, "CEO_REJECT_SPECIAL_MONEY_REQUEST", "special_money_request", id, existing, after);
-        notifyRejected(after);
+        notifyRejected(after, actorEmployeeId);
         return after;
     }
 
@@ -306,7 +306,13 @@ public class SpecialMoneyService {
         SpecialMoneyRequestDto existing = requireRequest(id);
         Long actorEmployeeId = requireEmployeeId(user);
         boolean isEmployee = existing.employeeId() == actorEmployeeId;
-        boolean isRequester = existing.requestedById() != null && existing.requestedById() == actorEmployeeId;
+        // S2 (pre-existing bug, not introduced by this branch): requestedById() is a boxed Long and
+        // was compared with `==`, i.e. REFERENCE equality. Real employee ids in this system are 4-5
+        // digits (10025, 142, ...), well outside Java's Long cache (-128..127), so two distinct Long
+        // instances holding the identical value never compared equal here -- isRequester was ALWAYS
+        // false in production, silently disabling the entire on-behalf-cancel path for anyone whose
+        // id fell outside the cache. Fixed to value equality via .equals().
+        boolean isRequester = existing.requestedById() != null && existing.requestedById().equals(actorEmployeeId);
         if (!isEmployee && !isRequester) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
@@ -320,7 +326,60 @@ public class SpecialMoneyService {
         }
         SpecialMoneyRequestDto after = requireRequest(id);
         auditService.record(user, "CANCEL_SPECIAL_MONEY_REQUEST", "special_money_request", id, existing, after);
+        notifyCancelled(after, isEmployee, actorEmployeeId, user.name());
         return after;
+    }
+
+    /**
+     * Notification coverage gap B: cancelling a request used to notify nobody, so a withdrawn item
+     * sat in the CEO's queue forever. {@code cancel} is reachable ONLY from {@code SUBMITTED} (see
+     * the status guard above) and welfare has exactly one reviewing stage -- the CEO (see the class
+     * Javadoc) -- so the pending party is always {@code repository.findCeoApproverEmployeeIds()},
+     * the same resolution {@link #notifySubmitted} uses; there is no manager-stage/already-decided
+     * branching to reason about here, unlike leave/overtime.
+     *
+     * <p>Unlike leave/overtime, {@code repository.cancel} always writes the actor as {@code
+     * reviewed_by_id} (never {@code null} -- see {@code SpecialMoneyRepository#cancel}), so that
+     * column cannot tell self-cancel apart from on-behalf-cancel here; {@code cancelledBySelf} (the
+     * caller's own {@code isEmployee} check) is passed through explicitly instead.
+     *
+     * <p>Review finding (BLOCKING 1): the CEO-facing message used to hardcode {@code
+     * request.employeeName()} as if the employee themselves always did the cancelling, even on the
+     * on-behalf-cancel path where a DIFFERENT person (a ฝ่าย manager who filed for their team --
+     * {@code isRequester}, see {@link #cancel}) is the one actually cancelling. Fixed by threading
+     * {@code actorEmployeeId}/{@code actorName} (the caller of {@link #cancel}) through: the message
+     * is worded from the actual actor, and the CEO loop skips {@code actorEmployeeId} -- nobody is
+     * ever notified about their own action.
+     */
+    private void notifyCancelled(
+            SpecialMoneyRequestDto request, boolean cancelledBySelf, long actorEmployeeId, String actorName) {
+        String actorLabel = actorName == null || actorName.isBlank() ? "ผู้ยื่นคำขอ" : actorName;
+        notificationService.notify(
+            request.employeeId(),
+            "SPECIAL_MONEY_CANCELLED",
+            "คำขอเงินสวัสดิการถูกยกเลิก",
+            cancelledBySelf
+                ? "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ถูกยกเลิกเรียบร้อยแล้ว"
+                // Nit fix (review, second pass): this used to omit WHO cancelled it on the employee's
+                // behalf ("...แทนคุณ" with no name), unlike the Leave/OT counterparts, which both name
+                // the actor -- now consistent with actorLabel.
+                : "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ถูกยกเลิกโดย " + actorLabel + " แทนคุณ",
+            "/employee-requests",
+            true
+        );
+        for (Long ceoEmployeeId : repository.findCeoApproverEmployeeIds()) {
+            if (ceoEmployeeId == actorEmployeeId) {
+                continue;
+            }
+            notificationService.notify(
+                ceoEmployeeId,
+                "SPECIAL_MONEY_CANCELLED",
+                "คำขอเงินสวัสดิการที่รออนุมัติถูกยกเลิก",
+                actorLabel + " ยกเลิกคำขอ " + request.requestType() + " วันที่ " + request.eventDate(),
+                "/employee-requests",
+                true
+            );
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -386,7 +445,9 @@ public class SpecialMoneyService {
         SpecialMoneyRequestDto existing = requireRequest(id);
 
         boolean isEmployee = existing.employeeId() == actorEmployeeId;
-        boolean isRequester = existing.requestedById() != null && existing.requestedById() == actorEmployeeId;
+        // S2-shaped bug, same fix as #cancel: requestedById() is a boxed Long and must be compared
+        // by value, not reference.
+        boolean isRequester = existing.requestedById() != null && existing.requestedById().equals(actorEmployeeId);
         if (!isEmployee && !isRequester) {
             throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะผู้ยื่นคำขอเท่านั้นที่แนบเอกสารได้");
         }
@@ -529,16 +590,47 @@ public class SpecialMoneyService {
         }
     }
 
-    private void notifyRejected(SpecialMoneyRequestDto request) {
-        notificationService.notify(
-            request.employeeId(),
-            "SPECIAL_MONEY_REJECTED",
-            "คำขอเงินสวัสดิการถูกปฏิเสธ",
-            "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ถูกปฏิเสธ: "
-                + (request.reviewerNote() == null ? "กรุณาติดต่อผู้จัดการหรือ HR" : request.reviewerNote()),
-            "/employee-requests",
-            true
-        );
+    /**
+     * Notification coverage gap C: a rejection used to tell only the requester. Every LIVE welfare
+     * request goes SUBMITTED -> CEO directly (see the class Javadoc), so {@code managerApprovedBy()}
+     * is null for it and there is nobody upstream to tell. It is non-null ONLY for a legacy row
+     * written before the manager stage was removed, rejected via {@code ceoRejectFrom(MANAGER_APPROVED,
+     * ...)} -- that manager approved it under the old rules and should still hear that CEO closed it
+     * as a rejection, the same counterpart-notify {@link #notifyCeoApproved} already applies to the
+     * approve path.
+     *
+     * <p><b>S-6 (review, second pass):</b> like {@code OvertimeService#notifyRejected}, this had no
+     * actor self-skip -- the one place the "nobody is notified about their own action" rule wasn't
+     * applied. Reachable for BOTH recipients: welfare allows self-submission, so a CEO who filed
+     * their own SUBMITTED request and then rejects it themselves would be told about their own
+     * rejection; and a legacy row's {@code managerApprovedBy} can coincide with the current CEO
+     * actor the same way {@code OvertimeService}'s does. {@code actorEmployeeId} is threaded through
+     * and both recipients are skipped when they are the actor.
+     */
+    private void notifyRejected(SpecialMoneyRequestDto request, long actorEmployeeId) {
+        if (request.employeeId() != actorEmployeeId) {
+            notificationService.notify(
+                request.employeeId(),
+                "SPECIAL_MONEY_REJECTED",
+                "คำขอเงินสวัสดิการถูกปฏิเสธ",
+                "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ถูกปฏิเสธ: "
+                    + (request.reviewerNote() == null ? "กรุณาติดต่อผู้จัดการหรือ HR" : request.reviewerNote()),
+                "/employee-requests",
+                true
+            );
+        }
+        if (request.managerApprovedBy() != null && request.managerApprovedBy() != actorEmployeeId) {
+            notificationService.notify(
+                request.managerApprovedBy(),
+                "SPECIAL_MONEY_REJECTED",
+                "CEO ปฏิเสธคำขอเงินสวัสดิการที่ผู้จัดการอนุมัติแล้ว",
+                request.employeeName() + " มีคำขอ " + request.requestType() + " วันที่ " + request.eventDate()
+                    + " ที่ผู้จัดการอนุมัติแล้ว แต่ถูก CEO ปฏิเสธ: "
+                    + (request.reviewerNote() == null ? "กรุณาติดต่อ HR" : request.reviewerNote()),
+                "/employee-requests",
+                true
+            );
+        }
     }
 
     // ---------------------------------------------------------------------

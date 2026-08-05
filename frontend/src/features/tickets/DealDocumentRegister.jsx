@@ -2,13 +2,17 @@ import { useMemo, useState } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
 import { formatMoney, formatThaiDate, quotationStatusLabel } from '../../utils/format.js';
 import { canViewCustomerQuotation } from '../pricingRequests/pricingRequestMeta.js';
+import { buttonVariants } from '../../components/common/Button.jsx';
+import { cn } from '../../utils/cn.js';
 
 /**
  * Slice D ("the เอกสาร document register"): one read-only roll-up of every document a deal can
@@ -174,23 +178,16 @@ export function DealDocumentRegister({
 
   if (!hasAnyVisibleSection) {
     return (
-      <section className="panel" data-testid="deal-document-register">
-        <div className="panel-header">
-          <h2>เอกสารของดีล</h2>
-        </div>
+      <Panel title="เอกสารของดีล" data-testid="deal-document-register">
         <div className="p-4">
           <EmptyState icon="fileText" title="ไม่มีเอกสารให้แสดงในมุมมองนี้" description="สิทธิ์การเข้าถึงของบทบาทนี้ไม่ครอบคลุมเอกสารของดีลนี้" />
         </div>
-      </section>
+      </Panel>
     );
   }
 
   return (
-    <section className="table-panel flex flex-col gap-4" data-testid="deal-document-register">
-      <div className="panel-header">
-        <h2>เอกสารของดีล</h2>
-      </div>
-
+    <Panel flush className="flex flex-col gap-4" title="เอกสารของดีล" data-testid="deal-document-register">
       {canViewQuotations ? (
         <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3" data-testid="register-quotations">
           <strong className="text-sm">ใบเสนอราคา</strong>
@@ -304,7 +301,7 @@ export function DealDocumentRegister({
           )}
         </div>
       ) : null}
-    </section>
+    </Panel>
   );
 }
 
@@ -321,14 +318,16 @@ function DocumentRow({ icon, title, meta, status, actions = [] }) {
       </div>
       <div className="flex shrink-0 flex-wrap gap-1.5">
         {actions.map((action) => (action.href ? (
-          <a key={action.label} href={action.href} target="_blank" rel="noreferrer" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}>
+          // Not a <Button>: this is a real navigation link (target="_blank" to
+          // a file URL) — Button renders a <button>, which has no href.
+          <a key={action.label} href={action.href} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: 'secondary' }), 'px-2.5 py-1 text-xs')}>
             {action.label}
           </a>
         ) : (
-          <button key={action.label} type="button" className="secondary-button" style={{ fontSize: 12, padding: '4px 10px' }}
+          <Button key={action.label} type="button" variant="secondary" style={{ fontSize: 12, padding: '4px 10px' }}
             disabled={action.busy} onClick={action.onClick}>
             {action.busy ? 'กำลังดาวน์โหลด…' : action.label}
-          </button>
+          </Button>
         )))}
       </div>
     </div>

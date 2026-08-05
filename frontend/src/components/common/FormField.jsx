@@ -97,7 +97,18 @@ export function FormField({ label, htmlFor, id, error, hint, required = false, c
   }));
 
   return (
-    <div className="form-field">
+    /*
+      `content-start` is what stops the control stretching. This field is
+      routinely a grid item of a two-column `FormGrid`, which stretches it to
+      the height of the tallest field in the row; with `align-content` left at
+      its default the spare height was distributed into these auto rows, so the
+      *control* grew — by a different amount depending on whether the field
+      carried a hint/error line. Two fields side by side therefore rendered at
+      different heights and different vertical offsets, which was the app-wide
+      field stagger. Packing to the start keeps the control at its natural
+      height and leaves the slack below it.
+    */
+    <div className="grid content-start gap-[7px]">
       {label ? (
         <label htmlFor={fieldId}>
           {/*

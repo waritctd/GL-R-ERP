@@ -27,6 +27,15 @@ public interface Mailer {
     void send(String to, String subject, String body);
 
     /**
+     * Sends an HTML email with a required plain-text alternative, so clients that block or strip
+     * HTML (or read via a plain-text-only reader) still render something readable. No attachment
+     * support - this is for transactional notification emails only.
+     *
+     * @throws MailSendException if the underlying transport fails.
+     */
+    void sendHtml(String to, String subject, String htmlBody, String textBody);
+
+    /**
      * Sends one attachment with a plain-text email body.
      *
      * @throws MailSendException if the underlying transport fails.

@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import { Icon } from './Icon.jsx';
 import { useDialogFocus } from '../../hooks/useDialogFocus.js';
+import { Button } from './Button.jsx';
 
 // 'lg' widens/heightens the panel via Tailwind utilities layered AFTER .modal-panel's own rules
 // (frontend/src/index.css: `@layer theme, legacy, utilities` — styles.css imports into `legacy`,
@@ -37,9 +38,9 @@ export function Modal({ title, subtitle, children, footer, onClose, testId, size
             <h2>{title}</h2>
             {subtitle ? <p>{subtitle}</p> : null}
           </div>
-          <button type="button" className="icon-button" onClick={onClose} title="ปิด" aria-label="ปิด">
+          <Button variant="icon" onClick={onClose} title="ปิด" aria-label="ปิด">
             <Icon name="close" />
-          </button>
+          </Button>
         </header>
         <div className="modal-body">{children}</div>
         {footer ? <footer className="modal-footer">{footer}</footer> : null}

@@ -3,11 +3,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Button } from '../../components/common/Button.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { depositPolicyLabel } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import { canCreateDepositNoticeFromQuotation } from '../pricingRequests/pricingRequestMeta.js';
+import { buttonVariants } from '../../components/common/Button.jsx';
+import { cn } from '../../utils/cn.js';
 
 const POLICY_OPTIONS = ['WAIVED', 'NOT_REQUIRED', 'CREDIT_CUSTOMER'];
 
@@ -205,11 +209,7 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
   const alreadyPaid = ['DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ps);
 
   return (
-    <section className="table-panel" data-testid="deal-deposit-panel">
-      <div className="panel-header">
-        <h2>มัดจำ</h2>
-      </div>
-
+    <Panel flush title="มัดจำ" data-testid="deal-deposit-panel">
       <div className="flex flex-col gap-3 p-4">
         {/* Step 1: นโยบายมัดจำ */}
         <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
@@ -225,9 +225,9 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
             <p className="text-xs text-text-muted">เหตุผล: {summary.depositPolicyReason}</p>
           ) : null}
           {canSetPolicy ? (
-            <button type="button" className="secondary-button self-start" onClick={openPolicyModal}>
+            <Button type="button" variant="secondary" className="self-start" onClick={openPolicyModal}>
               เปลี่ยนนโยบายมัดจำ…
-            </button>
+            </Button>
           ) : null}
         </div>
 
@@ -264,31 +264,31 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
                 <span>มัดจำ {Math.round(Number(doc.depositPercent ?? 0.5) * 100)}%</span>
               </div>
               <div className="flex flex-wrap gap-2">
-                <button type="button" className="secondary-button" disabled={previewMutation.isPending}
+                <Button type="button" variant="secondary" disabled={previewMutation.isPending}
                   onClick={() => previewMutation.mutate()}>
                   {previewMutation.isPending ? 'กำลังโหลดตัวอย่าง…' : 'ตัวอย่าง'}
-                </button>
+                </Button>
                 {doc.status === 'ISSUED' ? (
                   <>
-                    <button type="button" className="secondary-button" disabled={downloadingFormat === 'pdf'} onClick={() => handleDownload('pdf')}>
+                    <Button type="button" variant="secondary" disabled={downloadingFormat === 'pdf'} onClick={() => handleDownload('pdf')}>
                       {downloadingFormat === 'pdf' ? 'กำลังดาวน์โหลด…' : 'PDF'}
-                    </button>
-                    <button type="button" className="secondary-button" disabled={downloadingFormat === 'xlsx'} onClick={() => handleDownload('xlsx')}>
+                    </Button>
+                    <Button type="button" variant="secondary" disabled={downloadingFormat === 'xlsx'} onClick={() => handleDownload('xlsx')}>
                       {downloadingFormat === 'xlsx' ? 'กำลังดาวน์โหลด…' : 'Excel'}
-                    </button>
+                    </Button>
                   </>
                 ) : canManageThisNotice ? (
-                  <button type="button" className="primary-button" disabled={issueMutation.isPending}
+                  <Button type="button" variant="primary" disabled={issueMutation.isPending}
                     onClick={() => issueMutation.mutate()} data-testid="deal-deposit-issue-notice">
                     ออกเอกสาร
-                  </button>
+                  </Button>
                 ) : null}
               </div>
               {previewHtml ? (
                 <div className="flex flex-col gap-1">
                   <div className="flex items-center justify-between">
                     <span className="text-2xs font-bold text-text-muted">ตัวอย่างเอกสาร</span>
-                    <button type="button" className="icon-button" onClick={() => setPreviewHtml('')} aria-label="ปิดตัวอย่าง">×</button>
+                    <Button type="button" variant="icon" onClick={() => setPreviewHtml('')} aria-label="ปิดตัวอย่าง">×</Button>
                   </div>
                   <iframe srcDoc={previewHtml} title="Deposit notice preview"
                     className="h-64 w-full rounded border border-border-subtle" />
@@ -303,15 +303,17 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
                 <input type="number" min="0" max="1" step="0.05" className="w-24 rounded border border-border p-1 text-sm"
                   value={depositPercentInput} onChange={(e) => setDepositPercentInput(e.target.value)} />
               </label>
-              <button type="button" className="primary-button self-start" disabled={createNoticeMutation.isPending}
+              <Button type="button" variant="primary" className="self-start" disabled={createNoticeMutation.isPending}
                 onClick={() => createNoticeMutation.mutate()} data-testid="deal-deposit-create-notice">
                 สร้างใบแจ้งยอดเงินรับมัดจำ
-              </button>
+              </Button>
             </div>
           ) : legacyNoticeEligible ? (
             <div className="flex flex-col gap-2">
               <p className="text-xs text-text-muted">ลูกค้ายืนยันคำสั่งซื้อแล้ว — ออกใบแจ้งยอดมัดจำได้</p>
-              <Link to={`/tickets/${ticketId}/deposit`} className="primary-button self-start">
+              {/* Not a <Button>: react-router's <Link> renders an <a> for
+                  client-side navigation, which Button (a <button>) can't do. */}
+              <Link to={`/tickets/${ticketId}/deposit`} className={cn(buttonVariants({ variant: 'primary' }), 'self-start')}>
                 ออกใบแจ้งยอดมัดจำ
               </Link>
             </div>
@@ -338,10 +340,10 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
               ข้ามขั้นตอนนี้ — นโยบายมัดจำคือ &quot;{policyLabel.label}&quot;
             </p>
           ) : canConfirmPaid ? (
-            <button type="button" className="primary-button self-start" disabled={confirmPaidMutation.isPending}
+            <Button type="button" variant="primary" className="self-start" disabled={confirmPaidMutation.isPending}
               onClick={() => confirmPaidMutation.mutate()} data-testid="deal-deposit-confirm">
               ยืนยันรับมัดจำ
-            </button>
+            </Button>
           ) : alreadyPaid ? (
             <StatusBadge tone="success">รับมัดจำแล้ว</StatusBadge>
           ) : (
@@ -356,11 +358,11 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
           onClose={() => setPolicyOpen(false)}
           footer={(
             <>
-              <button type="button" className="secondary-button" onClick={() => setPolicyOpen(false)}>ยกเลิก</button>
-              <button type="button" className="primary-button" disabled={setPolicyMutation.isPending || !policyReason.trim()}
+              <Button type="button" variant="secondary" onClick={() => setPolicyOpen(false)}>ยกเลิก</Button>
+              <Button type="button" variant="primary" disabled={setPolicyMutation.isPending || !policyReason.trim()}
                 onClick={() => setPolicyMutation.mutate({ policy: policyValue, reason: policyReason.trim() })}>
                 บันทึก
-              </button>
+              </Button>
             </>
           )}
         >
@@ -380,6 +382,6 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
           </div>
         </Modal>
       ) : null}
-    </section>
+    </Panel>
   );
 }

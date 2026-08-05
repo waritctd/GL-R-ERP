@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import org.springframework.http.HttpStatus;
@@ -267,7 +268,7 @@ public class OvertimeService {
         }
         OvertimeRequestDto after = requireRequest(id);
         auditService.record(user, "CEO_DIRECT_REJECT_OVERTIME_REQUEST", "overtime_request", id, existing, after);
-        notifyRejected(after);
+        notifyRejected(after, actorEmployeeId);
         return after;
     }
 
@@ -284,7 +285,7 @@ public class OvertimeService {
         }
         OvertimeRequestDto after = requireRequest(id);
         auditService.record(user, "REJECT_OVERTIME_REQUEST", "overtime_request", id, existing, after);
-        notifyRejected(after);
+        notifyRejected(after, actorEmployeeId);
         return after;
     }
 
@@ -301,7 +302,7 @@ public class OvertimeService {
         }
         OvertimeRequestDto after = requireRequest(id);
         auditService.record(user, "CEO_REJECT_OVERTIME_REQUEST", "overtime_request", id, existing, after);
-        notifyRejected(after);
+        notifyRejected(after, actorEmployeeId);
         return after;
     }
 
@@ -328,9 +329,148 @@ public class OvertimeService {
         }
         OvertimeRequestDto after = requireRequest(id);
         auditService.record(user, "CANCEL_OVERTIME_REQUEST", "overtime_request", id, existing, after);
+        notifyCancelled(existing, after, actorEmployeeId, user.name());
         // Cancelling an already-APPROVED request removes minutes the day had been credited with.
         syncAttendanceDay(after);
         return after;
+    }
+
+    /**
+     * Notification coverage gap B: cancelling a request used to notify nobody, so a withdrawn item
+     * sat in a reviewer's queue forever. Notifies the requester unconditionally (worded for either
+     * cancel path -- {@code after.reviewedById()} is non-null exactly when a reviewer/manager
+     * cancelled it, the same {@code manager ? actorEmployeeId : null} shape {@link #cancel} itself
+     * just wrote), plus whoever the request was actually pending with, resolved from the SAME source
+     * {@link #notifySubmitted}/{@link #notifyManagerApproved} use for each stage -- see {@link
+     * #notifySubmitted}'s Javadoc for why this must be {@code ManagerApproverRepository}/{@code
+     * findCeoApproverEmployeeIds}, never {@code reports_to_employee_id}.
+     *
+     * <p>{@code before.status()} (the PRE-cancel status) decides which stage was pending:
+     * {@code SUBMITTED} -> the manager(s) if a manager stage exists, else the CEO(s) (mirrors {@link
+     * #notifySubmitted}'s own goesToCeo branch); {@code MANAGER_APPROVED} -> the CEO(s) only, the
+     * manager already acted. {@code APPROVED} has no PENDING stage left, but cancelling it reverses
+     * payroll-relevant state ({@link #syncAttendanceDay} strips the credited minutes back out) -- D1
+     * (owner ruling): the manager and CEO who actually approved it are told, resolved from what the
+     * row itself records approved it -- {@code managerApprovedBy} and, since S-7 below, {@code
+     * ceoApprovedBy} (the single CEO who actually approved this row), never a stage that never saw
+     * the request (a manager-less request's {@code managerApprovedBy} is always {@code null}, so
+     * that branch is simply skipped).
+     *
+     * <p><b>S-2/S-7 (review, second pass):</b> the {@code APPROVED} branch used to notify {@code
+     * before.managerApprovedBy()} and then separately loop the WHOLE CEO approver set ({@code
+     * findCeoApproverEmployeeIds()} -- every active employee in division {@code MD%}/{@code MN%}),
+     * with no de-duplication between the two. A กรรมการผู้จัดการ (position contains ผู้จัดการ,
+     * division {@code MD}) is a manager AND a member of that broadcast CEO set, so approving as the
+     * manager stage and then being looped again as "a CEO" produced two notification rows and two
+     * emails for one cancellation. S-7 replaces the broadcast with the single approving CEO, read
+     * from {@code before.ceoApprovedBy()} (populated by both {@code OvertimeRepository#ceoApprove}
+     * and {@code #ceoDirectApprove} for every row that ever reaches {@code APPROVED} -- see those
+     * methods) -- the owner's D1 ruling was "notify the approvers", i.e. the specific people who
+     * approved this row, not everyone who currently COULD. That alone removes most of the
+     * duplication (the manager and the specific approving CEO are, in the ordinary case, different
+     * people), and the {@code LinkedHashSet} below removes what is left: the rare case where the
+     * SAME employee id shows up as both {@code managerApprovedBy} and {@code ceoApprovedBy} (e.g. a
+     * division reassignment between the two approvals) is still only notified once.
+     *
+     * <p>Review finding (BLOCKING 1): every approver-facing branch below used to hardcode {@code
+     * before.employeeName()} as if the employee themselves always did the cancelling, and never
+     * excluded the actor from the notified set. Cancel is reachable by a REVIEWER too (a ฝ่าย
+     * manager, for SUBMITTED/MANAGER_APPROVED/APPROVED alike) -- and {@code
+     * findManagerApproverEmployeeIds(before.employeeId())} resolves to that SAME manager, since
+     * {@code managesEmployee}/{@code PEER_IS_MANAGER_APPROVER} key off the identical ผู้จัดการ match.
+     * A manager cancelling their own division's SUBMITTED request was therefore emailed about the
+     * cancellation they themselves had just performed, under a message that also named them as if
+     * they were the employee. Fixed by threading {@code actorEmployeeId}/{@code actorName} (the
+     * caller of {@link #cancel}) through: every message below is worded from the actual actor, and
+     * every approver loop skips {@code actorEmployeeId} -- nobody is ever notified about their own
+     * action.
+     */
+    private void notifyCancelled(
+            OvertimeRequestDto before, OvertimeRequestDto after, long actorEmployeeId, String actorName) {
+        String actorLabel = actorName == null || actorName.isBlank() ? "ผู้จัดการหรือ HR" : actorName;
+        boolean cancelledByReviewer = after.reviewedById() != null;
+        notificationService.notify(
+            after.employeeId(),
+            "OVERTIME_CANCELLED",
+            "คำขอ OT ถูกยกเลิก",
+            cancelledByReviewer
+                ? "คำขอ OT วันที่ " + after.workDate() + " ถูกยกเลิกโดย "
+                    + (after.reviewedByName() == null ? "ผู้จัดการหรือ HR" : after.reviewedByName())
+                : "คำขอ OT วันที่ " + after.workDate() + " ถูกยกเลิกเรียบร้อยแล้ว",
+            "/overtime",
+            true
+        );
+        if ("SUBMITTED".equals(before.status())) {
+            List<Long> managerApprovers =
+                managerApproverRepository.findManagerApproverEmployeeIds(before.employeeId());
+            if (managerApprovers.isEmpty()) {
+                for (Long ceoEmployeeId : overtimeRepository.findCeoApproverEmployeeIds()) {
+                    if (ceoEmployeeId == actorEmployeeId) {
+                        continue;
+                    }
+                    notificationService.notify(
+                        ceoEmployeeId,
+                        "OVERTIME_CANCELLED",
+                        "คำขอ OT ที่รอ CEO อนุมัติถูกยกเลิก",
+                        actorLabel + " ยกเลิกคำขอ OT วันที่ " + before.workDate(),
+                        "/overtime",
+                        true
+                    );
+                }
+            } else {
+                for (Long managerEmployeeId : managerApprovers) {
+                    if (managerEmployeeId == actorEmployeeId) {
+                        continue;
+                    }
+                    notificationService.notify(
+                        managerEmployeeId,
+                        "OVERTIME_CANCELLED",
+                        "คำขอ OT ที่รออนุมัติถูกยกเลิก",
+                        actorLabel + " ยกเลิกคำขอ OT วันที่ " + before.workDate(),
+                        "/overtime",
+                        true
+                    );
+                }
+            }
+        } else if ("MANAGER_APPROVED".equals(before.status())) {
+            for (Long ceoEmployeeId : overtimeRepository.findCeoApproverEmployeeIds()) {
+                if (ceoEmployeeId == actorEmployeeId) {
+                    continue;
+                }
+                notificationService.notify(
+                    ceoEmployeeId,
+                    "OVERTIME_CANCELLED",
+                    "คำขอ OT ที่รอ CEO อนุมัติถูกยกเลิก",
+                    actorLabel + " ยกเลิกคำขอ OT วันที่ " + before.workDate() + " ที่ผู้จัดการอนุมัติแล้ว",
+                    "/overtime",
+                    true
+                );
+            }
+        } else if ("APPROVED".equals(before.status())) {
+            // S-2/S-7: both possible approvers (manager, and the single CEO who actually approved
+            // this row -- see the class-level Javadoc above) collected into a LinkedHashSet so the
+            // rare case where they resolve to the SAME employee id is notified exactly once, not
+            // twice. LinkedHashSet preserves insertion order (manager first) purely for determinism;
+            // nothing downstream depends on iteration order.
+            Set<Long> approvedByRecipients = new LinkedHashSet<>();
+            if (before.managerApprovedBy() != null) {
+                approvedByRecipients.add(before.managerApprovedBy());
+            }
+            if (before.ceoApprovedBy() != null) {
+                approvedByRecipients.add(before.ceoApprovedBy());
+            }
+            approvedByRecipients.remove(actorEmployeeId);
+            for (Long recipientId : approvedByRecipients) {
+                notificationService.notify(
+                    recipientId,
+                    "OVERTIME_CANCELLED",
+                    "คำขอ OT ที่อนุมัติแล้วถูกยกเลิก",
+                    actorLabel + " ยกเลิกคำขอ OT วันที่ " + before.workDate() + " ที่อนุมัติครบถ้วนแล้ว",
+                    "/overtime",
+                    true
+                );
+            }
+        }
     }
 
     OvertimeCalculation calculate(OvertimeRequestDto request) {
@@ -617,16 +757,55 @@ public class OvertimeService {
         }
     }
 
-    private void notifyRejected(OvertimeRequestDto request) {
-        notificationService.notify(
-            request.employeeId(),
-            "OVERTIME_REJECTED",
-            "คำขอ OT ถูกปฏิเสธ",
-            "คำขอ OT วันที่ " + request.workDate() + " ถูกปฏิเสธ: "
-                + (request.reviewerNote() == null ? "กรุณาติดต่อผู้จัดการหรือ HR" : request.reviewerNote()),
-            "/overtime",
-            true
-        );
+    /**
+     * Notification coverage gap C: a rejection used to tell only the requester, leaving the manager
+     * who had already approved the request sitting on a stale mental queue entry when the CEO later
+     * closed it out.
+     *
+     * <p>{@code managerApprovedBy()} is set ONLY by {@link #managerApprove} and is never cleared by
+     * {@code reject}/{@code ceoReject} (see {@code OvertimeRepository}) -- so it reliably tells apart
+     * the three ways a request reaches REJECTED: {@link #managerReject} (the manager themselves is
+     * rejecting -- they need no notification about their own action) and {@link #ceoDirectReject}
+     * (manager-less request, no manager stage ever existed) BOTH leave it {@code null}; only {@link
+     * #ceoReject} (rejecting a MANAGER_APPROVED request) leaves it set, which is exactly the one case
+     * where a manager approved something the CEO then overturned and needs to be told.
+     *
+     * <p><b>S-6 (review, second pass):</b> this was the one branch-stated-rule ("nobody is notified
+     * about their own action") place that had no actor self-skip. Reachable: a กรรมการผู้จัดการ
+     * (division {@code MD}) has {@code manager() == true} AND role {@code ceo} -- for an
+     * MD-division non-manager's OT they can {@link #managerApprove} it and then, as CEO, {@link
+     * #ceoReject} the SAME request; {@code managerApprovedBy} then equals the rejecter, who was
+     * emailed "CEO ปฏิเสธคำขอ OT ที่ผู้จัดการอนุมัติแล้ว" about their own rejection. {@code
+     * actorEmployeeId} is threaded through the same way {@link #notifyCancelled} already does, and
+     * both possible recipients (the employee themselves, and {@code managerApprovedBy}) are skipped
+     * when they are the actor -- the employee-self case is reachable too, symmetrically: a
+     * manager-less CEO can submit their OWN OT (self-submission is allowed everywhere) and then
+     * {@link #ceoDirectReject} it.
+     */
+    private void notifyRejected(OvertimeRequestDto request, long actorEmployeeId) {
+        if (request.employeeId() != actorEmployeeId) {
+            notificationService.notify(
+                request.employeeId(),
+                "OVERTIME_REJECTED",
+                "คำขอ OT ถูกปฏิเสธ",
+                "คำขอ OT วันที่ " + request.workDate() + " ถูกปฏิเสธ: "
+                    + (request.reviewerNote() == null ? "กรุณาติดต่อผู้จัดการหรือ HR" : request.reviewerNote()),
+                "/overtime",
+                true
+            );
+        }
+        if (request.managerApprovedBy() != null && request.managerApprovedBy() != actorEmployeeId) {
+            notificationService.notify(
+                request.managerApprovedBy(),
+                "OVERTIME_REJECTED",
+                "CEO ปฏิเสธคำขอ OT ที่ผู้จัดการอนุมัติแล้ว",
+                request.employeeName() + " มีคำขอ OT วันที่ " + request.workDate()
+                    + " ที่ผู้จัดการอนุมัติแล้ว แต่ถูก CEO ปฏิเสธ: "
+                    + (request.reviewerNote() == null ? "กรุณาติดต่อ HR" : request.reviewerNote()),
+                "/overtime",
+                true
+            );
+        }
     }
 
     private Long requireEmployeeId(UserPrincipal user) {

@@ -17,6 +17,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -48,6 +49,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             mock(FileStorageService.class),
             mock(AuditService.class),
             mock(NotificationService.class),
+            mock(EmployeeRepository.class),
             Clock.fixed(FIXED_NOW, BUSINESS_ZONE));
     }
 
@@ -66,7 +68,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             submitRequest(employeeId, "MATERNITY", "2026-01-05", "2026-04-12"),
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         assertThat(result.totalDays()).isEqualByComparingTo("98.00");
         assertThat(result.paidDays()).isEqualByComparingTo("45.00");
         assertThat(result.unpaidDays()).isEqualByComparingTo("53.00");
@@ -100,9 +102,9 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             submitRequest(sickEmployeeId, "SICK", "2026-07-13", "2026-07-19"),
             employee(sickEmployeeId));
 
-        assertThat(maternityResult.status()).isEqualTo("APPROVED");
+        assertThat(maternityResult.status()).isEqualTo("SUBMITTED");
         assertThat(maternityResult.totalDays()).isEqualByComparingTo("7.00");
-        assertThat(sickResult.status()).isEqualTo("APPROVED");
+        assertThat(sickResult.status()).isEqualTo("SUBMITTED");
         assertThat(sickResult.totalDays()).isEqualByComparingTo("5.00");
         // The critical negative assertion: the two must NOT be equal on this identical date range.
         assertThat(sickResult.totalDays()).isNotEqualByComparingTo(maternityResult.totalDays());
@@ -128,7 +130,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             submitRequest(employeeId, "MATERNITY", "2026-07-13", "2026-07-17"),
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         assertThat(result.totalDays()).isEqualByComparingTo("5.00");
     }
 
@@ -158,7 +160,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             submitRequest(employeeId, "MILITARY", "2026-01-05", "2026-05-08"),
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         assertThat(result.totalDays()).isEqualByComparingTo("90.00");
         assertThat(result.paidDays()).isEqualByComparingTo("60.00");
         assertThat(result.unpaidDays()).isEqualByComparingTo("30.00");
@@ -176,7 +178,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             submitRequest(employeeId, "ORDINATION", "2026-07-13", "2026-07-24"), // 10 working days
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         assertThat(result.totalDays()).isEqualByComparingTo("10.00");
         assertThat(result.paidDays()).isEqualByComparingTo("10.00");
         assertThat(result.unpaidDays()).isEqualByComparingTo("0.00");
@@ -202,7 +204,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         LeaveRequestDto underOneYearResult = leaveService.submit(
             submitRequest(underOneYear, "VACATION", "2026-07-13", "2026-07-16"),
             employee(underOneYear));
-        assertThat(underOneYearResult.status()).isEqualTo("APPROVED");
+        assertThat(underOneYearResult.status()).isEqualTo("SUBMITTED");
         assertThat(underOneYearResult.totalDays()).isEqualByComparingTo("4.00");
         assertThat(underOneYearResult.paidDays()).isEqualByComparingTo("3.00");
         assertThat(underOneYearResult.unpaidDays()).isEqualByComparingTo("1.00");
@@ -213,7 +215,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         LeaveRequestDto overOneYearResult = leaveService.submit(
             submitRequest(overOneYear, "VACATION", "2026-07-13", "2026-07-16"),
             employee(overOneYear));
-        assertThat(overOneYearResult.status()).isEqualTo("APPROVED");
+        assertThat(overOneYearResult.status()).isEqualTo("SUBMITTED");
         assertThat(overOneYearResult.paidDays()).isEqualByComparingTo("4.00");
         assertThat(overOneYearResult.unpaidDays()).isEqualByComparingTo("0.00");
     }
@@ -228,7 +230,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             submitRequest(employeeId, "VACATION", "2026-07-13", "2026-07-14"),
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -268,7 +270,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-16"), // Mon-Thu, 4 working days
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         assertThat(result.totalDays()).isEqualByComparingTo("4.00");
         assertThat(result.paidDays()).isEqualByComparingTo("4.00");
     }
@@ -281,7 +283,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-15"), // 3 calendar days
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         assertThat(result.totalDays()).isEqualByComparingTo("3.00");
         assertThat(result.paidDays()).isEqualByComparingTo("3.00");
     }
@@ -306,7 +308,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         LeaveRequestDto allowed = leaveService.submit(
             submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-13"), // 1 working day
             employee(employeeId));
-        assertThat(allowed.status()).isEqualTo("APPROVED");
+        assertThat(allowed.status()).isEqualTo("SUBMITTED");
         assertThat(allowed.paidDays()).isEqualByComparingTo("1.00");
 
         LeaveRequestDto refused = leaveService.submit(
@@ -327,7 +329,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         LeaveRequestDto allowed = leaveService.submit(
             submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-15"), // 3 working days
             employee(employeeId));
-        assertThat(allowed.status()).isEqualTo("APPROVED");
+        assertThat(allowed.status()).isEqualTo("SUBMITTED");
         assertThat(allowed.paidDays()).isEqualByComparingTo("3.00");
 
         LeaveRequestDto refused = leaveService.submit(
@@ -358,7 +360,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         LeaveRequestDto first = leaveService.submit(
             submitRequest(employeeId, "ORDINATION", "2026-07-13", "2026-07-14"),
             employee(employeeId));
-        assertThat(first.status()).isEqualTo("APPROVED");
+        assertThat(first.status()).isEqualTo("SUBMITTED");
 
         // A second ORDINATION request, in a LATER quota year even -- once-per-employment is NOT
         // per-year -- must be refused by the Java-level check (hasOutstandingOrGrantedRequest).
@@ -380,12 +382,12 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         LeaveRequestDto forA = leaveService.submit(
             submitRequest(employeeA, "ORDINATION", "2026-07-13", "2026-07-14"),
             employee(employeeA));
-        assertThat(forA.status()).isEqualTo("APPROVED");
+        assertThat(forA.status()).isEqualTo("SUBMITTED");
 
         LeaveRequestDto forB = leaveService.submit(
             submitRequest(employeeB, "ORDINATION", "2026-07-13", "2026-07-14"),
             employee(employeeB));
-        assertThat(forB.status()).isEqualTo("APPROVED");
+        assertThat(forB.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -421,7 +423,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         LeaveRequestDto atCap = leaveService.submit(
             submitRequestWithPurpose(employeeId, "PERSONAL", "2026-07-13", "2026-07-15", "WEDDING"),
             employee(employeeId));
-        assertThat(atCap.status()).isEqualTo("APPROVED");
+        assertThat(atCap.status()).isEqualTo("SUBMITTED");
         assertThat(atCap.paidDays()).isEqualByComparingTo("3.00");
         assertThat(atCap.purposeCode()).isEqualTo("WEDDING");
 
@@ -443,7 +445,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             submitRequestWithPurpose(employeeId, "PERSONAL", "2026-07-20", "2026-07-23", "OTHER"),
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         assertThat(result.purposeCode()).isEqualTo("OTHER");
     }
 
@@ -483,7 +485,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
         for (String date : new String[] {"2026-06-01", "2026-06-08", "2026-06-15"}) {
             LeaveRequestDto result = leaveService.submit(submitRequestAsEmergency(employeeId, date), employee(employeeId));
-            assertThat(result.status()).isEqualTo("APPROVED");
+            assertThat(result.status()).isEqualTo("SUBMITTED");
             // "โดยไม่หักเงิน" ("without deduction"): a genuine emergency filing within the tolerance
             // is fully PAID, not split into an unpaid portion because it arrived late.
             assertThat(result.paidDays()).isEqualByComparingTo("1.00");
@@ -506,7 +508,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         long employeeId = insertEmployee("EMERGENCY-002", LocalDate.parse("2015-01-01"));
         for (String date : new String[] {"2026-06-01", "2026-06-08", "2026-06-15"}) {
             LeaveRequestDto result = leaveService.submit(submitRequestAsEmergency(employeeId, date), employee(employeeId));
-            assertThat(result.status()).isEqualTo("APPROVED");
+            assertThat(result.status()).isEqualTo("SUBMITTED");
         }
         // June is now fully used -- regression pin that the SAME-month 4th occasion is still refused.
         LeaveRequestDto juneFourth = leaveService.submit(
@@ -515,7 +517,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
         LeaveRequestDto mayFirst = leaveService.submit(
             submitRequestAsEmergency(employeeId, "2026-05-04"), employee(employeeId));
-        assertThat(mayFirst.status()).isEqualTo("APPROVED");
+        assertThat(mayFirst.status()).isEqualTo("SUBMITTED");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -562,7 +564,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-13"),
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -577,7 +579,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-13"),
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -651,7 +653,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             submitRequest(employeeId, "PERSONAL", "2026-07-14", "2026-07-14"),
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     // --- helpers ------------------------------------------------------------

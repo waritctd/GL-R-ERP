@@ -33,6 +33,7 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 
 class LeaveServiceTest {
@@ -45,8 +46,16 @@ class LeaveServiceTest {
     private final FileStorageService fileStorage = mock(FileStorageService.class);
     private final AuditService auditService = mock(AuditService.class);
     private final NotificationService notificationService = mock(NotificationService.class);
+    // Leave requires approval (2026-08-05), F4: kept as a field (not inlined into the constructor
+    // call, as it was before) so #notifyPendingApproval's HR-fallback branch
+    // (employeeRepository.findHrEmployeeIds()) is actually stubbable from a test -- see
+    // #submitWithNoManagerOfRecordNotifiesEveryHrEmployeeAsTheFallbackApprover below. Mockito
+    // defaults an unstubbed List-returning method to an empty list, which is exactly why that branch
+    // never executed in any pre-existing test in this class.
+    private final EmployeeRepository employeeRepository = mock(EmployeeRepository.class);
     private final LeaveService leaveService = new LeaveService(
         leaveRepository, leaveAttachments, fileStorage, auditService, notificationService,
+        employeeRepository,
         Clock.fixed(FIXED_NOW, BUSINESS_ZONE));
 
     {
@@ -62,7 +71,12 @@ class LeaveServiceTest {
     }
 
     @Test
-    void submitAutoApprovesWhenQuotaAndAdvanceNoticeAreSatisfied() {
+    void submitLandsSubmittedWhenQuotaAndAdvanceNoticeAreSatisfied() {
+        // Leave requires approval (2026-08-05, owner ruling): a rule-passing request no longer
+        // auto-approves -- it lands SUBMITTED and waits for a human (#approve/#reject). This test
+        // used to be named "...AutoApproves..." and assert status == APPROVED; renamed/updated in
+        // place rather than deleted, since it still proves the SAME thing (the rule chain passed) --
+        // only the resulting status label changed.
         SubmitLeaveRequest request = validSubmit(null);
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
@@ -70,34 +84,36 @@ class LeaveServiceTest {
             .thenReturn(new BigDecimal("1.00"));
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(55L);
         when(leaveRepository.findById(55L)).thenReturn(Optional.of(
-            requestDto(55L, 10L, "APPROVED", request.startDate(), request.endDate(), "2.00", "0.00")));
+            requestDto(55L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "2.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
         assertThat(result.id()).isEqualTo(55L);
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         ArgumentCaptor<BigDecimal> totalDays = ArgumentCaptor.forClass(BigDecimal.class);
         ArgumentCaptor<BigDecimal> paidDays = ArgumentCaptor.forClass(BigDecimal.class);
         ArgumentCaptor<BigDecimal> unpaidDays = ArgumentCaptor.forClass(BigDecimal.class);
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), totalDays.capture(), paidDays.capture(),
             unpaidDays.capture(), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(totalDays.getValue()).isEqualByComparingTo("2.00");
         // Fully within quota (1 used, 6 quota -> 5 remaining, 2 requested): entirely paid, nothing
         // unpaid, matching the pre-redesign behaviour for a request quota fully covers.
         assertThat(paidDays.getValue()).isEqualByComparingTo("2.00");
         assertThat(unpaidDays.getValue()).isEqualByComparingTo("0.00");
-        verify(notificationService).notify(eq(10L), eq("LEAVE_AUTO_APPROVED"), any(String.class), any(String.class), eq("/leave"), eq(true));
-        // uat's "professional emails across all workflows" feature emails the manager too on
-        // auto-approve (main sent this notification with sendEmail=false; uat = true).
-        verify(notificationService).notify(eq(99L), eq("LEAVE_AUTO_APPROVED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        // Leave requires approval (2026-08-05): the employee is told their request was submitted and
+        // is awaiting approval; the manager (99L, the requestDto() fixture's hardcoded manager, !=
+        // actor 10L) is told a request is pending THEIR review -- LEAVE_PENDING_APPROVAL, not
+        // LEAVE_AUTO_APPROVED (nothing auto-approves any more).
+        verify(notificationService).notify(eq(10L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(99L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), eq("/leave"), eq(true));
     }
 
     @Test
-    void submissionApprovesWithPaidUnpaidSplitWhenQuotaIsInsufficient() {
+    void submissionLandsSubmittedWithPaidUnpaidSplitWhenQuotaIsInsufficient() {
         // Leave -> payroll unpaid-day deduction (2026-07-23): the gate no longer auto-rejects purely
         // for exceeding quota -- it approves and splits paidDays/unpaidDays. Quota is 6, 5 already
         // used -> 1 remaining; this 2-day request gets 1 paid day + 1 unpaid day.
@@ -108,24 +124,24 @@ class LeaveServiceTest {
             .thenReturn(new BigDecimal("5.00"));
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(56L);
         when(leaveRepository.findById(56L)).thenReturn(Optional.of(
-            requestDto(56L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "1.00")));
+            requestDto(56L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "1.00", "1.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         ArgumentCaptor<BigDecimal> paidDays = ArgumentCaptor.forClass(BigDecimal.class);
         ArgumentCaptor<BigDecimal> unpaidDays = ArgumentCaptor.forClass(BigDecimal.class);
         ArgumentCaptor<BigDecimal> remainingAfter = ArgumentCaptor.forClass(BigDecimal.class);
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), paidDays.capture(),
             unpaidDays.capture(), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), remainingAfter.capture(), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), remainingAfter.capture(), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(paidDays.getValue()).isEqualByComparingTo("1.00");
         assertThat(unpaidDays.getValue()).isEqualByComparingTo("1.00");
         assertThat(remainingAfter.getValue()).isEqualByComparingTo("0.00");
-        verify(notificationService).notify(eq(10L), eq("LEAVE_AUTO_APPROVED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(10L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(true));
     }
 
     @Test
@@ -169,8 +185,11 @@ class LeaveServiceTest {
     @org.junit.jupiter.params.provider.ValueSource(ints = {0, 1, 2})
     void submissionAllowsCertificatelessSickLeaveForTheFirstThreeMonthlyOccasions(int occasionsAlreadyUsedThisMonth) {
         // occasionsAlreadyUsedThisMonth = 0/1/2 -> this request is the 1st/2nd/3rd occasion this
-        // month -- all three are within sickType()'s seeded tolerance of 3, so all three must be
-        // APPROVED (money-moving: today this would have been an outright AUTO_REJECTED, no pay).
+        // month -- all three are within sickType()'s seeded tolerance of 3, so all three must land
+        // SUBMITTED, not AUTO_REJECTED (money-moving: today this would have been an outright
+        // AUTO_REJECTED, no pay -- leave requires approval (2026-08-05) since then also removed the
+        // instant APPROVED this comment used to describe, but the rule-passing outcome proven here is
+        // unchanged).
         SubmitLeaveRequest request = new SubmitLeaveRequest(null, "SICK", weekdayAfterNotice(), weekdayAfterNotice(), "Fever");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("SICK")).thenReturn(Optional.of(sickType()));
@@ -181,23 +200,23 @@ class LeaveServiceTest {
             .thenReturn(occasionsAlreadyUsedThisMonth);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(58L);
         when(leaveRepository.findById(58L)).thenReturn(Optional.of(
-            requestDto(58L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "0.00")));
+            requestDto(58L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "1.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
     void submissionAllowsTheThirdCertificatelessSickOccasionButRejectsTheFourthInTheSameMonth() {
         // THE boundary, asserted from both sides on ONE fixture (same request shape, same month):
         // 2 occasions already used -> this one is the 3rd -> still within the tolerance of 3 ->
-        // APPROVED. 3 occasions already used -> this one would be the 4th -> exceeds the tolerance ->
-        // AUTO_REJECTED. If the boundary comparison used > instead of >=, this test would fail on the
-        // "3 used" side instead of passing.
+        // SUBMITTED (rule chain passed). 3 occasions already used -> this one would be the 4th ->
+        // exceeds the tolerance -> AUTO_REJECTED. If the boundary comparison used > instead of >=,
+        // this test would fail on the "3 used" side instead of passing.
         SubmitLeaveRequest request = new SubmitLeaveRequest(null, "SICK", weekdayAfterNotice(), weekdayAfterNotice(), "Fever");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("SICK")).thenReturn(Optional.of(sickType()));
@@ -210,13 +229,13 @@ class LeaveServiceTest {
             .thenReturn(2);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(58L);
         when(leaveRepository.findById(58L)).thenReturn(Optional.of(
-            requestDto(58L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "0.00")));
+            requestDto(58L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "1.00", "0.00")));
 
         LeaveRequestDto allowed = leaveService.submit(request, user("employee", 10L));
-        assertThat(allowed.status()).isEqualTo("APPROVED");
+        assertThat(allowed.status()).isEqualTo("SUBMITTED");
 
         // Side 2: 3 occasions already used this month -> the 4th -> REJECTED. Re-stub the SAME
         // repository mock, same request, only the occasion count changes.
@@ -239,9 +258,9 @@ class LeaveServiceTest {
     }
 
     @Test
-    void submissionApprovesSickLeaveWithACertificateFiledWithinTheWorkingDayWindow() {
+    void submissionLandsSubmittedForSickLeaveWithACertificateFiledWithinTheWorkingDayWindow() {
         // FIXED_NOW = Wed 2026-07-01. Start date Mon 2026-06-29: addWorkingDays(Mon, 3) = Thu
-        // 2026-07-02 -- "today" (2026-07-01) is on/before that deadline -> ON TIME -> APPROVED.
+        // 2026-07-02 -- "today" (2026-07-01) is on/before that deadline -> ON TIME -> SUBMITTED.
         LocalDate start = LocalDate.parse("2026-06-29");
         SubmitLeaveRequest request = new SubmitLeaveRequest(null, "SICK", start, start, "Fever, saw a doctor");
         MultipartFile certificate = new MockMultipartFile("attachment", "cert.pdf", "application/pdf", "cert".getBytes());
@@ -250,18 +269,22 @@ class LeaveServiceTest {
         when(leaveRepository.sumUsedDays(eq(10L), eq("SICK"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(2026),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(60L);
         when(leaveRepository.findById(60L)).thenReturn(Optional.of(
-            requestDto(60L, 10L, "APPROVED", start, start, "1.00", "0.00")));
-        when(fileStorage.store(eq("leave"), eq(60L), eq(certificate), any(Set.class)))
-            .thenReturn(new FileStorageService.StoredFile("cert.pdf", "/uploads/leave/60/x.pdf", "application/pdf", 4L));
-        when(leaveAttachments.save(eq(60L), eq("cert.pdf"), eq("/uploads/leave/60/x.pdf"), eq("application/pdf"), eq(4L), eq(10L)))
+            requestDto(60L, 10L, "SUBMITTED", start, start, "1.00", "0.00")));
+        // V134 storage-durability fix: LeaveService#submit stores attachments to the database now,
+        // via FileStorageService#storeInDatabase + LeaveAttachmentRepository#saveWithContent.
+        when(fileStorage.storeInDatabase(eq("leave"), eq(60L), eq(certificate), any(Set.class)))
+            .thenReturn(new FileStorageService.StoredContent(
+                "cert.pdf", "leave/60/x.pdf", "application/pdf", 4L, "cert".getBytes()));
+        when(leaveAttachments.saveWithContent(eq(60L), eq("cert.pdf"), eq("leave/60/x.pdf"), eq("application/pdf"),
+                eq(4L), eq(10L), any(byte[].class)))
             .thenReturn(new LeaveAttachmentDto(900L, "leave", 60L, "cert.pdf", "application/pdf", 4L, 10L, Instant.now()));
 
         LeaveRequestDto result = leaveService.submit(request, certificate, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         verify(leaveRepository).attachFile(60L, 900L);
     }
 
@@ -287,9 +310,11 @@ class LeaveServiceTest {
         // block runs after #create regardless of `status`) -- the late-filed certificate is still
         // recorded for HR to see when reviewing the rejection, it just does not buy the request
         // approval.
-        when(fileStorage.store(eq("leave"), eq(61L), eq(certificate), any(Set.class)))
-            .thenReturn(new FileStorageService.StoredFile("cert.pdf", "/uploads/leave/61/x.pdf", "application/pdf", 4L));
-        when(leaveAttachments.save(eq(61L), eq("cert.pdf"), eq("/uploads/leave/61/x.pdf"), eq("application/pdf"), eq(4L), eq(10L)))
+        when(fileStorage.storeInDatabase(eq("leave"), eq(61L), eq(certificate), any(Set.class)))
+            .thenReturn(new FileStorageService.StoredContent(
+                "cert.pdf", "leave/61/x.pdf", "application/pdf", 4L, "cert".getBytes()));
+        when(leaveAttachments.saveWithContent(eq(61L), eq("cert.pdf"), eq("leave/61/x.pdf"), eq("application/pdf"),
+                eq(4L), eq(10L), any(byte[].class)))
             .thenReturn(new LeaveAttachmentDto(901L, "leave", 61L, "cert.pdf", "application/pdf", 4L, 10L, Instant.now()));
 
         LeaveRequestDto result = leaveService.submit(request, certificate, user("employee", 10L));
@@ -305,8 +330,8 @@ class LeaveServiceTest {
     void submissionAllowsCertificatelessSickLeaveEvenWhenFiledLongAfterTheStartDate() {
         // THE combined case the task calls out explicitly: no certificate AND beyond the 3-working-
         // day window (same start date as the "filed late" test above, which is AUTO_REJECTED WITH a
-        // certificate) -- but WITHOUT a certificate and with tolerance still available, this is
-        // APPROVED. The filing-window clause governs the certificate path only; it never gates the
+        // certificate) -- but WITHOUT a certificate and with tolerance still available, this lands
+        // SUBMITTED. The filing-window clause governs the certificate path only; it never gates the
         // no-certificate tolerance path. Occasion count 0 (1st this month) proves the interaction, not
         // just "no certificate ever needs one" -- the SAME date that fails the window on the
         // certificate path passes cleanly here.
@@ -320,14 +345,14 @@ class LeaveServiceTest {
             .thenReturn(0);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(2026),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(62L);
         when(leaveRepository.findById(62L)).thenReturn(Optional.of(
-            requestDto(62L, 10L, "APPROVED", start, start, "1.00", "0.00")));
+            requestDto(62L, 10L, "SUBMITTED", start, start, "1.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -352,19 +377,19 @@ class LeaveServiceTest {
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(60L);
         when(leaveRepository.findById(60L)).thenReturn(Optional.of(
-            requestDto(60L, 10L, "APPROVED", request.startDate(), request.endDate(), "0.00", "2.00")));
+            requestDto(60L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "0.00", "2.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         ArgumentCaptor<BigDecimal> paidDays = ArgumentCaptor.forClass(BigDecimal.class);
         ArgumentCaptor<BigDecimal> unpaidDays = ArgumentCaptor.forClass(BigDecimal.class);
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), paidDays.capture(),
             unpaidDays.capture(), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(paidDays.getValue()).isEqualByComparingTo("0.00");
         assertThat(unpaidDays.getValue()).isEqualByComparingTo("2.00");
     }
@@ -395,20 +420,20 @@ class LeaveServiceTest {
             .thenReturn(new BigDecimal("6.00"));
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(61L);
         when(leaveRepository.findById(61L)).thenReturn(Optional.of(
-            requestDto(61L, 10L, "APPROVED", request.startDate(), request.endDate(), "0.00", "0.50")));
+            requestDto(61L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "0.00", "0.50")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         ArgumentCaptor<BigDecimal> totalDays = ArgumentCaptor.forClass(BigDecimal.class);
         ArgumentCaptor<BigDecimal> paidDays = ArgumentCaptor.forClass(BigDecimal.class);
         ArgumentCaptor<BigDecimal> unpaidDays = ArgumentCaptor.forClass(BigDecimal.class);
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), totalDays.capture(), paidDays.capture(),
             unpaidDays.capture(), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(totalDays.getValue()).isEqualByComparingTo("0.50");
         assertThat(paidDays.getValue()).isEqualByComparingTo("0.00");
         assertThat(unpaidDays.getValue()).isEqualByComparingTo("0.50");
@@ -532,14 +557,14 @@ class LeaveServiceTest {
         when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2027), any(Collection.class))).thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(2026),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(110L);
         when(leaveRepository.findById(110L)).thenReturn(Optional.of(
-            requestDto(110L, 10L, "APPROVED", request.startDate(), request.endDate(), "2.00", "0.00")));
+            requestDto(110L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "2.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         // Both years must have been consulted, proving the request's days were genuinely attributed
         // per year, not just against the start year the way the pre-fix single-quotaYear model did.
         verify(leaveRepository).sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class));
@@ -639,6 +664,298 @@ class LeaveServiceTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────
+    // Notification coverage gap B: cancel() must notify the requester and whoever the request was
+    // still pending with -- but NOT an already-decided request's approvers.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void selfCancelOfSubmittedRequestNotifiesEmployeeAndThePendingManager() {
+        LeaveRequestDto submitted = cancelFixtureDto(90L, "SUBMITTED", null, null, 99L);
+        LeaveRequestDto cancelled = cancelFixtureDto(90L, "CANCELLED", null, null, 99L);
+        when(leaveRepository.findById(90L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
+        when(leaveRepository.cancel(90L, null, null)).thenReturn(1);
+
+        leaveService.cancel(90L, null, user("employee", 10L));
+
+        // Self-cancel: reviewedById is null on the after-cancel row, same shape LeaveRepository#cancel
+        // itself writes for an employee cancelling their own request (reviewer ? actorId : null).
+        verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(99L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+    }
+
+    @Test
+    void reviewerCancelOfSubmittedRequestNotifiesEmployeeAndThePendingManager() {
+        LeaveRequestDto submitted = cancelFixtureDto(91L, "SUBMITTED", null, null, 99L);
+        LeaveRequestDto cancelled = cancelFixtureDto(91L, "CANCELLED", 20L, "Test HR", 99L);
+        when(leaveRepository.findById(91L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
+        when(leaveRepository.cancel(91L, 20L, null)).thenReturn(1);
+        UserPrincipal hr = user("hr", 20L);
+
+        leaveService.cancel(91L, null, hr);
+
+        verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(99L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+    }
+
+    /**
+     * S1: {@code selfCancelOfSubmittedRequestNotifiesEmployeeAndThePendingManager} (above) and
+     * {@code reviewerCancelOfSubmittedRequestNotifiesEmployeeAndThePendingManager} (above) asserted
+     * the employee-facing message with {@code any(String.class)} -- identical assertions for two
+     * cases the Javadoc on {@link #cancelFixtureDto} claims are wording-distinguished, so inverting
+     * the self-vs-reviewer ternary in {@code LeaveService#notifyCancelled} would leave both green.
+     * These two capture the actual body and assert the ACTOR-dependent content.
+     */
+    @Test
+    void selfCancelOfSubmittedRequestWordsTheEmployeeMessageAsSelfCancel() {
+        LeaveRequestDto submitted = cancelFixtureDto(96L, "SUBMITTED", null, null, 99L);
+        LeaveRequestDto cancelled = cancelFixtureDto(96L, "CANCELLED", null, null, 99L);
+        when(leaveRepository.findById(96L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
+        when(leaveRepository.cancel(96L, null, null)).thenReturn(1);
+
+        leaveService.cancel(96L, null, user("employee", 10L));
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), body.capture(), eq("/leave"), eq(true));
+        assertThat(body.getValue()).contains("ถูกยกเลิกเรียบร้อยแล้ว").doesNotContain("ถูกยกเลิกโดย");
+    }
+
+    @Test
+    void reviewerCancelOfSubmittedRequestWordsTheEmployeeMessageWithTheActingReviewersName() {
+        LeaveRequestDto submitted = cancelFixtureDto(97L, "SUBMITTED", null, null, 99L);
+        LeaveRequestDto cancelled = cancelFixtureDto(97L, "CANCELLED", 20L, "Test HR", 99L);
+        when(leaveRepository.findById(97L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
+        when(leaveRepository.cancel(97L, 20L, null)).thenReturn(1);
+        UserPrincipal hr = user("hr", 20L);
+
+        leaveService.cancel(97L, null, hr);
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), body.capture(), eq("/leave"), eq(true));
+        // user("hr", 20L)'s UserPrincipal#name() is the literal role string "hr" -- see that helper.
+        assertThat(body.getValue()).contains("ถูกยกเลิกโดย hr");
+    }
+
+    /**
+     * BLOCKING 1's Leave-side failure case: employee E's direct manager M (reachable via {@code
+     * isDirectManager}, not just HR's blanket {@code REVIEW_ALL_ROLES}) cancels E's own SUBMITTED
+     * request. {@code before.managerEmployeeId()} resolves to M -- the SAME person doing the
+     * cancelling -- so M must not be told about the cancellation M themselves just performed.
+     */
+    @Test
+    void directManagerCancelOfSubmittedRequestDoesNotNotifyThemselfAsThePendingManager() {
+        // S-1 (review, second pass): manager id raised from 99L to 10099L -- a realistic 4-5 digit
+        // id, OUTSIDE Java's Long cache (-128..127). 99L could never catch a regression from the
+        // primitive-`long` self-skip comparison back to a boxed-`Long` reference comparison: cached
+        // Longs of the same small value are always `==` equal regardless, so the assertion below
+        // would stay green either way. Proven: see the mutation-check in the PR report.
+        LeaveRequestDto submitted = cancelFixtureDto(98L, "SUBMITTED", null, null, 10099L);
+        LeaveRequestDto cancelled = cancelFixtureDto(98L, "CANCELLED", 10099L, "Test Manager", 10099L);
+        when(leaveRepository.findById(98L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
+        when(leaveRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new LeaveEmployeeAccess(10L, 10099L, true)));
+        when(leaveRepository.cancel(98L, 10099L, null)).thenReturn(1);
+        UserPrincipal directManager =
+            new UserPrincipal(10099L, "mgr2@glr.co.th", "Test Manager", "employee", 10099L, true, LocalDate.now(), false, null, false);
+
+        leaveService.cancel(98L, null, directManager);
+
+        verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService, org.mockito.Mockito.never())
+            .notify(eq(10099L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), any(String.class), org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    /**
+     * Wrong-way-round for gap B: an APPROVED request's cancellation has no PENDING reviewer left --
+     * the manager already acted (approve() notified them at the time) and must NOT hear about the
+     * cancellation as if their queue still held it. (D1 -- see the tests below -- separately notifies
+     * the ORIGINAL approver, read from {@code reviewedById}, which this fixture leaves {@code null}.)
+     */
+    @Test
+    void cancelOfApprovedRequestDoesNotNotifyTheManager() {
+        LeaveRequestDto approved = requestDto(92L, 10L, "APPROVED", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), "2.00", "0.00");
+        LeaveRequestDto cancelled = requestDto(92L, 10L, "CANCELLED", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), "2.00", "0.00");
+        when(leaveRepository.findById(92L)).thenReturn(Optional.of(approved)).thenReturn(Optional.of(cancelled));
+        when(leaveRepository.cancel(92L, 20L, null)).thenReturn(1);
+        UserPrincipal hr = user("hr", 20L);
+
+        leaveService.cancel(92L, null, hr);
+
+        verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        // The fixture's managerEmployeeId is 99L (see requestDto) -- must never be notified here.
+        verify(notificationService, org.mockito.Mockito.never())
+            .notify(eq(99L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), any(String.class), org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    /**
+     * D1 (owner ruling): cancelling an ALREADY-APPROVED leave reverses payroll-relevant state ({@link
+     * LeaveService#recordPayrollCorrectionIfNeeded} writes a correction when there are unpaid days --
+     * zero here, via {@code cancelFixtureDto}'s fixed unpaidDays, so that write path itself is not
+     * re-tested by this case) -- the person who actually approved it, read from {@code
+     * before.reviewedById()}, must be told.
+     */
+    @Test
+    void reviewerCancelOfApprovedRequestNotifiesTheOriginalApprover() {
+        LeaveRequestDto approved = cancelFixtureDto(94L, "APPROVED", 20L, "Test HR", 99L);
+        LeaveRequestDto cancelled = cancelFixtureDto(94L, "CANCELLED", 30L, "Second HR", 99L);
+        when(leaveRepository.findById(94L)).thenReturn(Optional.of(approved)).thenReturn(Optional.of(cancelled));
+        when(leaveRepository.cancel(94L, 30L, null)).thenReturn(1);
+        UserPrincipal secondHr = user("hr", 30L);
+
+        leaveService.cancel(94L, null, secondHr);
+
+        verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(20L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+    }
+
+    /**
+     * BLOCKING 1 regression for D1: the reviewer who APPROVED the request is the SAME person
+     * cancelling it -- must not be told about their own action.
+     */
+    @Test
+    void reviewerCancelOfApprovedRequestSkipsNotifyingSelfWhenActorIsTheOriginalApprover() {
+        // S-1 (review, second pass): HR actor id raised from 20L to 10020L -- same cache-blind-spot
+        // reasoning as directManagerCancelOfSubmittedRequestDoesNotNotifyThemselfAsThePendingManager
+        // above.
+        LeaveRequestDto approved = cancelFixtureDto(95L, "APPROVED", 10020L, "Test HR", 99L);
+        LeaveRequestDto cancelled = cancelFixtureDto(95L, "CANCELLED", 10020L, "Test HR", 99L);
+        when(leaveRepository.findById(95L)).thenReturn(Optional.of(approved)).thenReturn(Optional.of(cancelled));
+        when(leaveRepository.cancel(95L, 10020L, null)).thenReturn(1);
+        UserPrincipal hr = user("hr", 10020L);
+
+        leaveService.cancel(95L, null, hr);
+
+        verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService, org.mockito.Mockito.never())
+            .notify(eq(10020L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), any(String.class), org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    /** Like {@link #requestDto}, but with reviewedById/reviewedByName/managerEmployeeId controllable -- needed to prove the self-cancel-vs-reviewer-cancel wording and the pending-manager resolution in the gap B tests above. */
+    private LeaveRequestDto cancelFixtureDto(long id, String status, Long reviewedById, String reviewedByName, Long managerEmployeeId) {
+        OffsetDateTime timestamp = OffsetDateTime.parse("2026-06-14T10:00:00+07:00");
+        return new LeaveRequestDto(
+            id, 10L, "EMP001", "Test Employee",
+            "VACATION", "Vacation", "Vacation leave",
+            LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"),
+            null, null,
+            new BigDecimal("2.00"), new BigDecimal("2.00"), new BigDecimal("0.00"),
+            2026, "Family trip", null, null, status,
+            new BigDecimal("5.00"), new BigDecimal("3.00"), null,
+            10L, "Test Employee", timestamp,
+            reviewedById, reviewedByName, reviewedById == null ? null : timestamp, null,
+            "CANCELLED".equals(status) ? timestamp : null,
+            managerEmployeeId, managerEmployeeId == null ? null : "Test Manager",
+            timestamp, timestamp,
+            null, null, null, null, null,
+            null, false, null, Map.of(), false
+        );
+    }
+
+    /**
+     * Like {@link #requestDto}, but with employeeId/managerEmployeeId controllable -- needed by the
+     * two {@link #notifyPendingApproval} tests below (F4), neither of which the fixed-{@code 10L}/
+     * {@code 99L} {@link #requestDto} fixture can express (one needs {@code managerEmployeeId ==
+     * null}; the other needs {@code managerEmployeeId} to equal the ACTOR, not a fixed third party).
+     */
+    private LeaveRequestDto requestDtoWithManager(long id, long employeeId, LocalDate startDate, LocalDate endDate, Long managerEmployeeId) {
+        OffsetDateTime timestamp = OffsetDateTime.parse("2026-06-14T10:00:00+07:00");
+        return new LeaveRequestDto(
+            id, employeeId, "EMP001", "Test Employee",
+            "VACATION", "Vacation", "Vacation leave",
+            startDate, endDate, null, null,
+            new BigDecimal("2.00"), new BigDecimal("2.00"), new BigDecimal("0.00"),
+            startDate.getYear(), "Family trip", null, null, "SUBMITTED",
+            new BigDecimal("5.00"), new BigDecimal("3.00"), null,
+            employeeId, "Test Employee", timestamp,
+            null, null, null, null, null,
+            managerEmployeeId, managerEmployeeId == null ? null : "Test Manager",
+            timestamp, timestamp,
+            null, null, null, null, null,
+            null, false, null, Map.of(), false
+        );
+    }
+
+    /**
+     * F4 (Opus review): {@link #notifyPendingApproval}'s HR-fallback branch
+     * ({@code employeeRepository.findHrEmployeeIds()}, taken when {@code managerEmployeeId == null})
+     * never executed in ANY pre-existing test in this class -- {@code employeeRepository} used to be
+     * an anonymous {@code mock(EmployeeRepository.class)} inlined straight into the constructor call
+     * (not even reachable from a test to stub), and Mockito defaults an unstubbed
+     * {@code List}-returning method to an empty list regardless, so every other submit test's
+     * {@code requestDto()}/{@code requestDtoWithManager()} fixture with a non-null manager took the
+     * OTHER branch anyway.
+     *
+     * <p>Employee ids are realistic 4-5 digit values (10010L/10200L/10201L), not values inside Java's
+     * {@code Long} cache ([-128, 127]) -- see this repo's own memory note on that trap.
+     *
+     * <p>MUTATION-CHECK (verified live, not just by reasoning): temporarily blanked the body of the
+     * {@code else { approvers.addAll(employeeRepository.findHrEmployeeIds()); }} branch and re-ran
+     * this class -- exactly ONE failure, this test, on the missing 10200L
+     * {@code LEAVE_PENDING_APPROVAL} notification; all 75 other tests stayed green. Reverted to an
+     * empty diff afterward.
+     */
+    @Test
+    void submitWithNoManagerOfRecordNotifiesEveryHrEmployeeAsTheFallbackApprover() {
+        SubmitLeaveRequest request = validSubmit(10010L);
+        when(leaveRepository.employeeExists(10010L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.sumUsedDays(eq(10010L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10010L), eq(10010L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(70L);
+        when(leaveRepository.findById(70L)).thenReturn(Optional.of(
+            requestDtoWithManager(70L, 10010L, request.startDate(), request.endDate(), null)));
+        when(employeeRepository.findHrEmployeeIds()).thenReturn(List.of(10200L, 10201L));
+
+        leaveService.submit(request, user("employee", 10010L));
+
+        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(10200L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(10201L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), eq("/leave"), eq(true));
+    }
+
+    /**
+     * F4 (Opus review): {@code approvers.remove(actorEmployeeId)} (self-exclusion) was a no-op in the
+     * only pre-existing covered case ({@code requestDto()}'s fixed manager 99L never equals the
+     * fixed actor 10L in any submit test), so deleting that line left all 609 tests green. This
+     * fixture makes the actor (an HR employee filing on a subordinate's behalf, via
+     * {@code resolveTargetEmployee}) genuinely equal to the request's {@code managerEmployeeId}, so
+     * the removal actually has something to remove: the wrong-way-round assertion is that the
+     * (would-be sole) approver is NEVER notified about a request they themselves just filed.
+     *
+     * <p>MUTATION-CHECK (verified live, not just by reasoning): temporarily deleted
+     * {@code approvers.remove(actorEmployeeId);} and re-ran this class -- exactly ONE failure, this
+     * test, on a {@code NeverWantedButInvoked} for the 10099L {@code LEAVE_PENDING_APPROVAL} call;
+     * all 75 other tests stayed green. Reverted to an empty diff afterward.
+     */
+    @Test
+    void submitWhereTheActingManagerFilesForTheirOwnDirectReportDoesNotNotifyThemselfAsApprover() {
+        SubmitLeaveRequest request = validSubmit(10010L);
+        when(leaveRepository.employeeExists(10010L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.sumUsedDays(eq(10010L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10010L), eq(10099L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(71L);
+        when(leaveRepository.findById(71L)).thenReturn(Optional.of(
+            requestDtoWithManager(71L, 10010L, request.startDate(), request.endDate(), 10099L)));
+
+        // The actor is HR (10099L), NOT the employee (10010L) -- resolveTargetEmployee allows this
+        // via canReviewAll(user), and the returned dto's managerEmployeeId is deliberately the SAME
+        // 10099L, so the actor is the request's only manager-of-record.
+        leaveService.submit(request, user("hr", 10099L));
+
+        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService, org.mockito.Mockito.never())
+            .notify(eq(10099L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), any(String.class), org.mockito.ArgumentMatchers.anyBoolean());
+        // findHrEmployeeIds is the OTHER branch (no manager of record) -- must not even be consulted
+        // when a manager IS on file, even though that manager ends up excluded.
+        org.mockito.Mockito.verify(employeeRepository, org.mockito.Mockito.never()).findHrEmployeeIds();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
     // §5 leave-rules-as-data (V116) -- new per-type gates. Each gate below has a reject case AND an
     // allow case (wrong-way-round: the reject case is the one that matters). The maternity-shaped
     // paid_days_cap 98/45/53 split specifically, and the DB-level (not just Java-level)
@@ -690,14 +1007,14 @@ class LeaveServiceTest {
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(91L);
         when(leaveRepository.findById(91L)).thenReturn(Optional.of(
-            requestDto(91L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "0.00")));
+            requestDto(91L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "1.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -781,14 +1098,14 @@ class LeaveServiceTest {
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(94L);
         when(leaveRepository.findById(94L)).thenReturn(Optional.of(
-            requestDto(94L, 10L, "APPROVED", request.startDate(), request.endDate(), "3.00", "0.00")));
+            requestDto(94L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "3.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -840,14 +1157,14 @@ class LeaveServiceTest {
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(101L);
         when(leaveRepository.findById(101L)).thenReturn(Optional.of(
-            requestDto(101L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "0.00")));
+            requestDto(101L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "1.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -894,14 +1211,14 @@ class LeaveServiceTest {
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(103L);
         when(leaveRepository.findById(103L)).thenReturn(Optional.of(
-            requestDto(103L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "0.00")));
+            requestDto(103L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "1.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -919,14 +1236,14 @@ class LeaveServiceTest {
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(104L);
         when(leaveRepository.findById(104L)).thenReturn(Optional.of(
-            requestDto(104L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "0.00")));
+            requestDto(104L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "1.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -1011,14 +1328,14 @@ class LeaveServiceTest {
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(107L);
         when(leaveRepository.findById(107L)).thenReturn(Optional.of(
-            requestDto(107L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "0.00")));
+            requestDto(107L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "1.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         verify(leaveRepository, org.mockito.Mockito.never()).findProbationDays(anyLong());
     }
 
@@ -1069,14 +1386,14 @@ class LeaveServiceTest {
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(96L);
         when(leaveRepository.findById(96L)).thenReturn(Optional.of(
-            requestDto(96L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "0.00")));
+            requestDto(96L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "1.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -1097,7 +1414,7 @@ class LeaveServiceTest {
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenThrow(new org.springframework.dao.DuplicateKeyException("ux_leave_once_per_employment"));
 
         assertThatThrownBy(() -> leaveService.submit(request, user("employee", 10L)))
@@ -1125,19 +1442,19 @@ class LeaveServiceTest {
         when(leaveRepository.sumPaidDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(2026),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(97L);
         when(leaveRepository.findById(97L)).thenReturn(Optional.of(
-            requestDto(97L, 10L, "APPROVED", request.startDate(), request.endDate(), "4.00", "2.00")));
+            requestDto(97L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "4.00", "2.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         ArgumentCaptor<BigDecimal> paidDays = ArgumentCaptor.forClass(BigDecimal.class);
         ArgumentCaptor<BigDecimal> unpaidDays = ArgumentCaptor.forClass(BigDecimal.class);
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), paidDays.capture(),
             unpaidDays.capture(), eq(2026),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         // 6 working days requested, 10-day quota fully covers them -- but the 4-day paid cap bounds
         // the PAID portion to 4, leaving 2 unpaid even though quota was never exhausted.
         assertThat(paidDays.getValue()).isEqualByComparingTo("4.00");
@@ -1159,19 +1476,19 @@ class LeaveServiceTest {
         when(leaveRepository.sumPaidDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(2026),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(98L);
         when(leaveRepository.findById(98L)).thenReturn(Optional.of(
-            requestDto(98L, 10L, "APPROVED", request.startDate(), request.endDate(), "6.00", "0.00")));
+            requestDto(98L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "6.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         ArgumentCaptor<BigDecimal> paidDays = ArgumentCaptor.forClass(BigDecimal.class);
         ArgumentCaptor<BigDecimal> unpaidDays = ArgumentCaptor.forClass(BigDecimal.class);
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), paidDays.capture(),
             unpaidDays.capture(), eq(2026),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(paidDays.getValue()).isEqualByComparingTo("6.00");
         assertThat(unpaidDays.getValue()).isEqualByComparingTo("0.00");
     }
@@ -1212,7 +1529,7 @@ class LeaveServiceTest {
             eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(120L);
         when(leaveRepository.findById(120L)).thenReturn(Optional.of(
-            requestDto(120L, 10L, "APPROVED", start, end, "7.00", "0.00")));
+            requestDto(120L, 10L, "SUBMITTED", start, end, "7.00", "0.00")));
 
         leaveService.submit(maternityRequest, user("employee", 10L));
 
@@ -1262,20 +1579,20 @@ class LeaveServiceTest {
         when(leaveRepository.sumPaidDays(eq(10L), eq("MATERNITY"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(2026),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(122L);
         when(leaveRepository.findById(122L)).thenReturn(Optional.of(
-            requestDto(122L, 10L, "APPROVED", request.startDate(), request.endDate(), "45.00", "5.00")));
+            requestDto(122L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "45.00", "5.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         ArgumentCaptor<BigDecimal> totalDays = ArgumentCaptor.forClass(BigDecimal.class);
         ArgumentCaptor<BigDecimal> paidDays = ArgumentCaptor.forClass(BigDecimal.class);
         ArgumentCaptor<BigDecimal> unpaidDays = ArgumentCaptor.forClass(BigDecimal.class);
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), totalDays.capture(), paidDays.capture(),
             unpaidDays.capture(), eq(2026),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(totalDays.getValue()).isEqualByComparingTo("50.00");
         assertThat(paidDays.getValue()).isEqualByComparingTo("45.00");
         assertThat(unpaidDays.getValue()).isEqualByComparingTo("5.00");
@@ -1304,17 +1621,17 @@ class LeaveServiceTest {
             null, "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"), "Family trip");
         when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2026-01-13")));
         when(leaveRepository.create(eq(10L), eq(10L), eq(underOneYearRequest), any(BigDecimal.class), any(BigDecimal.class),
-            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
             eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(200L);
         when(leaveRepository.findById(200L)).thenReturn(Optional.of(
-            requestDto(200L, 10L, "APPROVED", underOneYearRequest.startDate(), underOneYearRequest.endDate(), "1.00", "0.00")));
+            requestDto(200L, 10L, "SUBMITTED", underOneYearRequest.startDate(), underOneYearRequest.endDate(), "1.00", "0.00")));
 
         LeaveRequestDto underOneYear = leaveService.submit(underOneYearRequest, user("employee", 10L));
-        assertThat(underOneYear.status()).isEqualTo("APPROVED");
+        assertThat(underOneYear.status()).isEqualTo("SUBMITTED");
         ArgumentCaptor<BigDecimal> underOneYearRemainingAfter = ArgumentCaptor.forClass(BigDecimal.class);
         verify(leaveRepository).create(eq(10L), eq(10L), eq(underOneYearRequest), any(BigDecimal.class), any(BigDecimal.class),
-            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class),
             underOneYearRemainingAfter.capture(), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(underOneYearRemainingAfter.getValue()).isEqualByComparingTo("2.00");
 
@@ -1325,17 +1642,17 @@ class LeaveServiceTest {
             null, "VACATION", LocalDate.parse("2026-07-20"), LocalDate.parse("2026-07-20"), "Family trip");
         when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
         when(leaveRepository.create(eq(10L), eq(10L), eq(overOneYearRequest), any(BigDecimal.class), any(BigDecimal.class),
-            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
             eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(201L);
         when(leaveRepository.findById(201L)).thenReturn(Optional.of(
-            requestDto(201L, 10L, "APPROVED", overOneYearRequest.startDate(), overOneYearRequest.endDate(), "1.00", "0.00")));
+            requestDto(201L, 10L, "SUBMITTED", overOneYearRequest.startDate(), overOneYearRequest.endDate(), "1.00", "0.00")));
 
         LeaveRequestDto overOneYear = leaveService.submit(overOneYearRequest, user("employee", 10L));
-        assertThat(overOneYear.status()).isEqualTo("APPROVED");
+        assertThat(overOneYear.status()).isEqualTo("SUBMITTED");
         ArgumentCaptor<BigDecimal> overOneYearRemainingAfter = ArgumentCaptor.forClass(BigDecimal.class);
         verify(leaveRepository).create(eq(10L), eq(10L), eq(overOneYearRequest), any(BigDecimal.class), any(BigDecimal.class),
-            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class),
             overOneYearRemainingAfter.capture(), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(overOneYearRemainingAfter.getValue()).isEqualByComparingTo("5.00");
     }
@@ -1393,17 +1710,17 @@ class LeaveServiceTest {
         SubmitLeaveRequest atCap = new SubmitLeaveRequest(
             null, "PERSONAL", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-15"), "Family matter");
         when(leaveRepository.create(eq(10L), eq(10L), eq(atCap), any(BigDecimal.class), any(BigDecimal.class),
-            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
             eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(210L);
         when(leaveRepository.findById(210L)).thenReturn(Optional.of(
-            requestDto(210L, 10L, "APPROVED", atCap.startDate(), atCap.endDate(), "3.00", "0.00")));
+            requestDto(210L, 10L, "SUBMITTED", atCap.startDate(), atCap.endDate(), "3.00", "0.00")));
 
         LeaveRequestDto atCapResult = leaveService.submit(atCap, user("employee", 10L));
-        assertThat(atCapResult.status()).isEqualTo("APPROVED");
+        assertThat(atCapResult.status()).isEqualTo("SUBMITTED");
         ArgumentCaptor<BigDecimal> paidDays = ArgumentCaptor.forClass(BigDecimal.class);
         verify(leaveRepository).create(eq(10L), eq(10L), eq(atCap), any(BigDecimal.class), paidDays.capture(),
-            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
             eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(paidDays.getValue()).isEqualByComparingTo("3.00");
 
@@ -1442,18 +1759,18 @@ class LeaveServiceTest {
         when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
         when(leaveRepository.sumPaidDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
-            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
             eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(212L);
         when(leaveRepository.findById(212L)).thenReturn(Optional.of(
-            requestDto(212L, 10L, "APPROVED", request.startDate(), request.endDate(), "4.00", "0.00")));
+            requestDto(212L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "4.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         ArgumentCaptor<BigDecimal> paidDays = ArgumentCaptor.forClass(BigDecimal.class);
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), paidDays.capture(),
-            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
             eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(paidDays.getValue()).isEqualByComparingTo("4.00");
     }
@@ -1482,19 +1799,19 @@ class LeaveServiceTest {
         when(leaveRepository.workingDayPredicate(eq(10L), eq(request.startDate()), eq(request.endDate())))
             .thenReturn(date -> date.getDayOfWeek() != java.time.DayOfWeek.SUNDAY);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
             eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(300L);
         when(leaveRepository.findById(300L)).thenReturn(Optional.of(
-            requestDto(300L, 10L, "APPROVED", request.startDate(), request.endDate(), "0.00", "6.00")));
+            requestDto(300L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "0.00", "6.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         ArgumentCaptor<BigDecimal> totalDays = ArgumentCaptor.forClass(BigDecimal.class);
         ArgumentCaptor<BigDecimal> unpaidDays = ArgumentCaptor.forClass(BigDecimal.class);
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), totalDays.capture(), eq(BigDecimal.ZERO),
-            unpaidDays.capture(), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            unpaidDays.capture(), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
             eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(totalDays.getValue()).as("Mon-Sat all count under the six-day predicate").isEqualByComparingTo("6.00");
         assertThat(unpaidDays.getValue()).isEqualByComparingTo("6.00");
@@ -1518,18 +1835,18 @@ class LeaveServiceTest {
         when(leaveRepository.workingDayPredicate(eq(10L), eq(request.startDate()), eq(request.endDate())))
             .thenReturn(date -> !date.equals(seededHoliday));
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
             eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(301L);
         when(leaveRepository.findById(301L)).thenReturn(Optional.of(
-            requestDto(301L, 10L, "APPROVED", request.startDate(), request.endDate(), "0.00", "1.00")));
+            requestDto(301L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "0.00", "1.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         ArgumentCaptor<BigDecimal> totalDays = ArgumentCaptor.forClass(BigDecimal.class);
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), totalDays.capture(), eq(BigDecimal.ZERO),
-            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
             eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(totalDays.getValue()).as("Monday counts, the holiday-stubbed Tuesday does not").isEqualByComparingTo("1.00");
     }
@@ -1557,16 +1874,16 @@ class LeaveServiceTest {
         when(leaveRepository.workingDayPredicate(eq(10L), eq(nonWorkingDate), eq(nonWorkingDate)))
             .thenReturn(alwaysNonWorking);
         when(leaveRepository.create(eq(10L), eq(10L), eq(maternitySubDay), any(BigDecimal.class), any(BigDecimal.class),
-            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
             eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(302L);
         when(leaveRepository.findById(302L)).thenReturn(Optional.of(
-            requestDto(302L, 10L, "APPROVED", nonWorkingDate, nonWorkingDate, "0.50", "0.00")));
+            requestDto(302L, 10L, "SUBMITTED", nonWorkingDate, nonWorkingDate, "0.50", "0.00")));
 
         LeaveRequestDto maternityResult = leaveService.submit(maternitySubDay, user("employee", 10L));
         assertThat(maternityResult.status())
             .as("CALENDAR_DAYS (MATERNITY) must not be rejected by the WORKING_DAYS-only gate")
-            .isEqualTo("APPROVED");
+            .isEqualTo("SUBMITTED");
 
         SubmitLeaveRequest vacationSubDay = new SubmitLeaveRequest(
             null, "VACATION", nonWorkingDate, nonWorkingDate, "Sub-day vacation",
@@ -1604,14 +1921,14 @@ class LeaveServiceTest {
             null, "PERSONAL", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-15"), "Own wedding",
             null, null, null, null, null, null, null, "WEDDING", null);
         when(leaveRepository.create(eq(10L), eq(10L), eq(atCap), any(BigDecimal.class), any(BigDecimal.class),
-            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
             eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(300L);
         when(leaveRepository.findById(300L)).thenReturn(Optional.of(
-            requestDto(300L, 10L, "APPROVED", atCap.startDate(), atCap.endDate(), "3.00", "0.00")));
+            requestDto(300L, 10L, "SUBMITTED", atCap.startDate(), atCap.endDate(), "3.00", "0.00")));
 
         LeaveRequestDto atCapResult = leaveService.submit(atCap, user("employee", 10L));
-        assertThat(atCapResult.status()).isEqualTo("APPROVED");
+        assertThat(atCapResult.status()).isEqualTo("SUBMITTED");
 
         SubmitLeaveRequest overCap = new SubmitLeaveRequest(
             null, "PERSONAL", LocalDate.parse("2026-07-20"), LocalDate.parse("2026-07-23"), "Own wedding",
@@ -1645,15 +1962,15 @@ class LeaveServiceTest {
         when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
         when(leaveRepository.sumPaidDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
-            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
             eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(302L);
         when(leaveRepository.findById(302L)).thenReturn(Optional.of(
-            requestDto(302L, 10L, "APPROVED", request.startDate(), request.endDate(), "4.00", "0.00")));
+            requestDto(302L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "4.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -1684,7 +2001,7 @@ class LeaveServiceTest {
     // ─────────────────────────────────────────────────────────────────────
 
     @Test
-    void submitApprovesEmergencyPersonalLeaveForEachOccasionUpToTheMonthlyAllowance() {
+    void submitLandsSubmittedForEmergencyPersonalLeaveForEachOccasionUpToTheMonthlyAllowance() {
         // Occasions 1, 2 and 3 this month (usedThisMonth 0, 1, 2 -- STRICTLY LESS than the 3-occasion
         // allowance) must each be approved AND recorded as an emergency filing. FIXED_NOW is Wed
         // 2026-07-01 09:00; PERSONAL's 1-day notice makes any date before 2026-07-02 late -- three
@@ -1711,15 +2028,15 @@ class LeaveServiceTest {
             when(leaveRepository.countEmergencyFilings(eq(10L), eq("PERSONAL"), eq(date), any(Collection.class)))
                 .thenReturn(occasion);
             when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
-                any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+                any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
                 eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
                 .thenReturn(id);
             when(leaveRepository.findById(id)).thenReturn(Optional.of(
-                requestDto(id, 10L, "APPROVED", date, date, "1.00", "0.00")));
+                requestDto(id, 10L, "SUBMITTED", date, date, "1.00", "0.00")));
 
             LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-            assertThat(result.status()).isEqualTo("APPROVED");
+            assertThat(result.status()).isEqualTo("SUBMITTED");
             verify(leaveRepository).markEmergencyFiling(id);
         }
     }
@@ -1868,14 +2185,14 @@ class LeaveServiceTest {
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(301L);
         when(leaveRepository.findById(301L)).thenReturn(Optional.of(
-            requestDto(301L, 10L, "APPROVED", request.startDate(), request.endDate(), "2.00", "0.00")));
+            requestDto(301L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "2.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -1950,15 +2267,15 @@ class LeaveServiceTest {
         when(leaveRepository.findActiveRequestsByType(eq(10L), eq("PERSONAL"), any(LocalDate.class), any(LocalDate.class)))
             .thenReturn(List.of(new LeaveRequestSpan(LocalDate.parse("2026-07-10"), LocalDate.parse("2026-07-10"))));
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
-            any(BigDecimal.class), eq(2026), eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
             eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(311L);
         when(leaveRepository.findById(311L)).thenReturn(Optional.of(
-            requestDto(311L, 10L, "APPROVED", request.startDate(), request.endDate(), "1.00", "0.00")));
+            requestDto(311L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "1.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -2015,14 +2332,14 @@ class LeaveServiceTest {
             // 30L has no leave at all -- still at work.
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(321L);
         when(leaveRepository.findById(321L)).thenReturn(Optional.of(
-            requestDto(321L, 10L, "APPROVED", request.startDate(), request.endDate(), "2.00", "0.00")));
+            requestDto(321L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "2.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
@@ -2043,14 +2360,14 @@ class LeaveServiceTest {
         when(leaveRepository.findActiveDepartmentColleagues(10L)).thenReturn(List.of(20L));
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(340L);
         when(leaveRepository.findById(340L)).thenReturn(Optional.of(
-            requestDto(340L, 10L, "APPROVED", request.startDate(), request.endDate(), "2.00", "0.00")));
+            requestDto(340L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "2.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         // The exemption is a size short-circuit, not a lucky coverage check -- findActiveLeaveSpans
         // (which would tell us whether 20L is on leave) must never even be consulted.
         verify(leaveRepository, org.mockito.Mockito.never())
@@ -2107,14 +2424,14 @@ class LeaveServiceTest {
         when(leaveRepository.findActiveDepartmentColleagues(10L)).thenReturn(List.of());
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.APPROVED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(322L);
         when(leaveRepository.findById(322L)).thenReturn(Optional.of(
-            requestDto(322L, 10L, "APPROVED", request.startDate(), request.endDate(), "2.00", "0.00")));
+            requestDto(322L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "2.00", "0.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         verify(leaveRepository, org.mockito.Mockito.times(1))
             .workingDayPredicate(eq(10L), eq(request.startDate()), eq(request.endDate()));
     }

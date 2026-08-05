@@ -253,9 +253,8 @@ export function ReviewQueueTab({ user, showToast }) {
           </strong>
           <span className="flex items-center gap-1.5">
             <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-            <button
-              type="button"
-              className="icon-button"
+            <Button
+              variant="icon"
               aria-expanded={expanded}
               aria-controls={expandedRowRegionId(request.id)}
               title={expanded ? 'ซ่อนรายละเอียด' : 'ดูรายละเอียด'}
@@ -263,7 +262,7 @@ export function ReviewQueueTab({ user, showToast }) {
               onClick={() => toggleExpand(request.id)}
             >
               <Icon name={expanded ? 'chevronUp' : 'chevronDown'} size={14} />
-            </button>
+            </Button>
           </span>
         </div>
         <span className="min-w-0 truncate text-xs text-text-muted">

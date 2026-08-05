@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Button } from '../../components/common/Button.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { todayIso } from './dateHelpers.js';
@@ -61,10 +62,10 @@ export function AssignmentFormModal({ schedules, busy, formError, onClose, onSub
       onClose={busy ? undefined : onClose}
       footer={(
         <>
-          <button type="button" className="secondary-button" onClick={onClose} disabled={busy}>ยกเลิก</button>
-          <button type="submit" form="assignment-form" className="primary-button" disabled={busy}>
+          <Button type="button" variant="secondary" onClick={onClose} disabled={busy}>ยกเลิก</Button>
+          <Button type="submit" form="assignment-form" variant="primary" disabled={busy}>
             {busy ? 'กำลังบันทึก...' : 'บันทึก'}
-          </button>
+          </Button>
         </>
       )}
     >

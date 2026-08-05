@@ -22,6 +22,14 @@ public class LogMailer implements Mailer {
     }
 
     @Override
+    public void sendHtml(String to, String subject, String htmlBody, String textBody) {
+        // Log the text alternative, not the HTML - readable in a log line, and it's the same content
+        // the HTML renders (just without markup).
+        log.info("[LogMailer] HTML email NOT sent (provider=log). to={} subject={} textBody={}",
+            to, subject, textBody);
+    }
+
+    @Override
     public void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes) {
         int byteCount = bytes == null ? 0 : bytes.length;
         log.info("[LogMailer] email with attachment NOT sent (provider=log). to={} subject={} filename={} bytes={}",

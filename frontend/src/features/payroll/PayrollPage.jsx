@@ -761,6 +761,12 @@ export function PayrollPage({ user, showToast }) {
   // unpaidLeaveDays field. Never re-applied to `adjustments` after the initial pre-fill in
   // applyPeriod -- HR's edits always win.
   const [suggestionsByEmployee, setSuggestionsByEmployee] = useState({});
+  // Leave requires approval (2026-08-05): month-level (not per-employee) advisory count of leave
+  // requests still SUBMITTED (not yet approved) that overlap the current payroll month -- see
+  // PayrollCarryForwardDtos#SuggestedInputsResponse's Javadoc. Fetched alongside suggestionsByEmployee
+  // (same suggestedInputs() call, same fresh-PREVIEW-only gate above), defaulting to 0 whenever that
+  // call is skipped or fails, so the warning below only ever renders on a real, non-zero count.
+  const [pendingSubmittedLeaveCount, setPendingSubmittedLeaveCount] = useState(0);
   const [payDate, setPayDate] = useState(`${thisMonth}-26`);
   const [draftDirty, setDraftDirty] = useState(false);
   const [draftSaving, setDraftSaving] = useState(false);
@@ -914,6 +920,12 @@ export function PayrollPage({ user, showToast }) {
       // see canSaveDraft's own comment for why a draft, unlike a suggestion, is NOT safe to skip
       // once a period is touched: the fields stay editable regardless of status.)
       let suggestionsByEmployee = {};
+      // Leave requires approval (2026-08-05): pendingSubmittedLeaveCount travels with the SAME
+      // suggestedInputs() response/gate/try-catch as suggestionsByEmployee -- it is just another
+      // field on that read-only advisory payload, not a separate fetch, so it shares its resilience
+      // (never blocks payroll from loading) and its fresh-PREVIEW-only scope (see the comment above
+      // this block for why a touched period skips the call entirely).
+      let pendingSubmittedLeaveCount = 0;
       if (nextPeriod?.status === 'PREVIEW' && !nextPeriod?.id) {
         try {
           // Optional chaining keeps this resilient if a caller's api.payroll mock predates this
@@ -921,8 +933,10 @@ export function PayrollPage({ user, showToast }) {
           // must never block payroll from loading.
           const suggestionResponse = await api.payroll.suggestedInputs?.({ payrollMonth: month });
           suggestionsByEmployee = indexSuggestionsByEmployee(suggestionResponse?.suggestions);
+          pendingSubmittedLeaveCount = suggestionResponse?.pendingSubmittedLeaveCount || 0;
         } catch {
           suggestionsByEmployee = {};
+          pendingSubmittedLeaveCount = 0;
         }
       }
       // Payroll input draft (2026-07-30; UNCONDITIONAL as of issue #422 A1): fetched on every
@@ -946,7 +960,7 @@ export function PayrollPage({ user, showToast }) {
         draftByEmployee = {};
         draftEtag = null;
       }
-      return { period: nextPeriod, suggestionsByEmployee, draftByEmployee, draftEtag };
+      return { period: nextPeriod, suggestionsByEmployee, pendingSubmittedLeaveCount, draftByEmployee, draftEtag };
     },
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
@@ -1025,11 +1039,13 @@ export function PayrollPage({ user, showToast }) {
     const {
       period: nextPeriod,
       suggestionsByEmployee: nextSuggestions,
+      pendingSubmittedLeaveCount: nextPendingSubmittedLeaveCount = 0,
       draftByEmployee,
       draftEtag,
       applyUatDefaults = true,
     } = payrollQuery.data;
     setSuggestionsByEmployee(nextSuggestions);
+    setPendingSubmittedLeaveCount(nextPendingSubmittedLeaveCount);
     if (draftDirtyRef.current) {
       // Optimistic concurrency (issue #422 follow-up): draftEtagRef is DELIBERATELY left alone
       // here -- see its own comment above. Adopting a fresher token while HR is mid-edit would let
@@ -1658,6 +1674,24 @@ export function PayrollPage({ user, showToast }) {
         )}
       />
 
+      {/* Leave requires approval (2026-08-05): advisory only, never a gate -- rendered before every
+          other banner on this page so HR sees it before reaching for Process. Leave that is still
+          SUBMITTED (not yet approved) does not feed findUnpaidLeaveDaysByEmployeeForMonth, so it
+          contributes NOTHING to this run's unpaid-day deduction until a human approves it -- this is
+          the one place that gap is surfaced before payroll runs, not after a payslip looks wrong. */}
+      {pendingSubmittedLeaveCount > 0 && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center gap-3 rounded-md border border-warning-border bg-warning-bg-soft px-4 py-3 text-sm font-bold text-warning"
+        >
+          <Icon name="triangleAlert" size={16} />
+          <span>
+            มีคำขอลา {pendingSubmittedLeaveCount} รายการที่ยังรอการอนุมัติในรอบเดือนนี้
+            หากไม่อนุมัติก่อนประมวลผลเงินเดือน ระบบจะยังไม่หักวันลาดังกล่าวออกจากเงินเดือนงวดนี้
+          </span>
+        </div>
+      )}
+
       {/* Optimistic concurrency (issue #422 follow-up): the persistent conflict message the plan
           requires -- unlike the header badge above (a small, easy-to-miss status word) and the
           global toast (auto-dismisses after 3.2s, see useToast.js), this banner stays on screen
@@ -1860,6 +1894,10 @@ export function PayrollPage({ user, showToast }) {
             rows={periodLines}
             getRowKey={(line) => line.employeeId}
             gridClassName="payroll-table"
+            // Restores what `.payroll-table-region .table-panel` used to do.
+            // A full payroll is 200+ rows; without the cap the table grows to
+            // the page instead of scrolling inside its own region.
+            panelClassName="max-h-[min(68vh,760px)] overflow-auto"
             pageSize={Math.max(periodLines.length, 25)}
             searchable
             searchPlaceholder="ค้นหาพนักงาน"

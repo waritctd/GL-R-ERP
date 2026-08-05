@@ -14,6 +14,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -36,6 +37,17 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * a request dated in 2025 must be submitted under a "today" that is actually still in 2025 (VACATION
  * requires 3 days' advance notice; a 2025-dated request submitted under a 2026 "today" would 400 on
  * notice, not on anything this class is testing).
+ *
+ * <p>Leave requires approval (2026-08-05): every rule-passing submission below now lands SUBMITTED,
+ * not APPROVED (see {@link LeaveService#submit}'s owner-ruling comment) -- but this class's own
+ * quota/carry-forward arithmetic (paidDays/unpaidDays split, {@link
+ * LeaveService#ensureCarryoverGrant}'s "used" figure) is computed from {@code ACTIVE_QUOTA_STATUSES}
+ * ({@code SUBMITTED} + {@code APPROVED}), not {@code APPROVED} alone, so none of it is affected: a
+ * request sitting SUBMITTED still consumes quota and still determines what carries forward, exactly
+ * as an APPROVED one always did. No test here calls {@link LeaveService#approve} -- doing so would
+ * prove nothing additional about carry-forward math (unlike the payroll-visibility seam, which IS
+ * gated on APPROVED and is covered separately by {@code LeaveUnpaidDeductionIntegrationTest} and
+ * {@code PayrollLeaveUnpaidDeductionSeamIntegrationTest}).
  */
 class LeaveVacationCarryForwardIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
@@ -52,6 +64,7 @@ class LeaveVacationCarryForwardIntegrationTest extends AbstractPostgresIntegrati
             mock(FileStorageService.class),
             mock(AuditService.class),
             mock(NotificationService.class),
+            mock(EmployeeRepository.class),
             Clock.fixed(instant, BUSINESS_ZONE));
     }
 
@@ -68,7 +81,7 @@ class LeaveVacationCarryForwardIntegrationTest extends AbstractPostgresIntegrati
         // Mon 2025-06-02 .. Thu 2025-06-05: 4 working days, all inside 2025.
         LeaveRequestDto firstYear = serviceAt("2025-05-01").submit(
             submitRequest(employeeId, "VACATION", "2025-06-02", "2025-06-05"), employee(employeeId));
-        assertThat(firstYear.status()).isEqualTo("APPROVED");
+        assertThat(firstYear.status()).isEqualTo("SUBMITTED");
         assertThat(firstYear.paidDays()).isEqualByComparingTo("4.00");
 
         // Mon 2026-07-13 .. Wed 2026-07-22: working days 13,14,15,16,17,20,21,22 = 8, all inside
@@ -76,7 +89,7 @@ class LeaveVacationCarryForwardIntegrationTest extends AbstractPostgresIntegrati
         LeaveRequestDto secondYear = serviceAt("2026-07-01").submit(
             submitRequest(employeeId, "VACATION", "2026-07-13", "2026-07-22"), employee(employeeId));
 
-        assertThat(secondYear.status()).isEqualTo("APPROVED");
+        assertThat(secondYear.status()).isEqualTo("SUBMITTED");
         assertThat(secondYear.totalDays()).isEqualByComparingTo("8.00");
         assertThat(secondYear.paidDays()).isEqualByComparingTo("8.00");
         assertThat(secondYear.unpaidDays()).isEqualByComparingTo("0.00");
@@ -157,7 +170,7 @@ class LeaveVacationCarryForwardIntegrationTest extends AbstractPostgresIntegrati
         // weekend.
         LeaveRequestDto secondYear = serviceAt("2026-07-01").submit(
             submitRequest(employeeId, "VACATION", "2026-08-03", "2026-08-10"), employee(employeeId));
-        assertThat(secondYear.status()).isEqualTo("APPROVED");
+        assertThat(secondYear.status()).isEqualTo("SUBMITTED");
         assertThat(secondYear.totalDays()).isEqualByComparingTo("6.00");
         assertThat(secondYear.paidDays()).isEqualByComparingTo("6.00");
 
@@ -182,7 +195,7 @@ class LeaveVacationCarryForwardIntegrationTest extends AbstractPostgresIntegrati
         LeaveRequestDto crossYear = serviceAt("2026-12-01").submit(
             submitRequest(employeeId, "VACATION", "2026-12-28", "2027-01-01"), employee(employeeId));
 
-        assertThat(crossYear.status()).isEqualTo("APPROVED");
+        assertThat(crossYear.status()).isEqualTo("SUBMITTED");
         assertThat(crossYear.totalDays()).isEqualByComparingTo("5.00");
         assertThat(crossYear.paidDays()).isEqualByComparingTo("5.00");
         assertThat(crossYear.unpaidDays()).isEqualByComparingTo("0.00");
@@ -208,7 +221,7 @@ class LeaveVacationCarryForwardIntegrationTest extends AbstractPostgresIntegrati
         long employeeId = insertEmployee("CF-PIN-001");
         LeaveRequestDto firstYear = serviceAt("2025-05-01").submit(
             submitRequest(employeeId, "PERSONAL", "2025-06-02", "2025-06-03"), employee(employeeId));
-        assertThat(firstYear.status()).isEqualTo("APPROVED");
+        assertThat(firstYear.status()).isEqualTo("SUBMITTED");
         assertThat(firstYear.paidDays()).isEqualByComparingTo("2.00");
 
         LeaveBalanceDto personalBalance2026 = balanceFor(serviceAt("2026-07-01"), employeeId, 2026, "PERSONAL");

@@ -140,6 +140,12 @@ public class PayrollService {
      * payroll_line still gets a row ({@link PayrollCarryForwardDtos.SuggestedInputRow#empty}). Like
      * the rest of this method, this NEVER feeds {@code preview()}/{@code process()} directly -- the
      * frontend pre-fills the unpaidLeaveDays form field from it, and HR can still override.
+     *
+     * <p>Leave requires approval (2026-08-05): also surfaces {@code pendingSubmittedLeaveCount}
+     * ({@link LeaveRepository#countSubmittedLeaveOverlappingMonth}), a month-level (not
+     * per-employee) advisory count of leave still awaiting approval for this month -- see {@link
+     * PayrollCarryForwardDtos}'s own Javadoc paragraph for why this exists. Read-only, additive, same
+     * "never feeds preview()/process()" guarantee as the rest of this method.
      */
     public PayrollCarryForwardDtos.SuggestedInputsResponse suggestedInputs(LocalDate payrollMonth, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
@@ -151,6 +157,7 @@ public class PayrollService {
 
         Map<Long, BigDecimal> unpaidLeaveDaysByEmployee = leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(month);
         Map<Long, BigDecimal> pendingCorrectionsByEmployee = leaveRepository.findPendingPayrollCorrectionsByEmployee();
+        int pendingSubmittedLeaveCount = leaveRepository.countSubmittedLeaveOverlappingMonth(month);
 
         Set<Long> employeeIds = new LinkedHashSet<>(byEmployee.keySet());
         employeeIds.addAll(unpaidLeaveDaysByEmployee.keySet());
@@ -175,7 +182,7 @@ public class PayrollService {
             })
             .toList();
 
-        return new PayrollCarryForwardDtos.SuggestedInputsResponse(month, merged);
+        return new PayrollCarryForwardDtos.SuggestedInputsResponse(month, merged, pendingSubmittedLeaveCount);
     }
 
     public PayrollPeriodDto preview(ProcessPayrollRequest request, UserPrincipal actor) {

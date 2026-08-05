@@ -21,9 +21,14 @@ public record LeaveRequestDto(
     LocalTime endTime,
     BigDecimal totalDays,
     // Leave -> payroll unpaid-day deduction (2026-07-23): totalDays split into what statutory quota
-    // covered (paidDays) vs. what went unpaid (unpaidDays); paidDays + unpaidDays == totalDays always
-    // for an APPROVED request. Both are 0 for AUTO_REJECTED/REJECTED/SUBMITTED requests, which never
-    // consumed any days. See LeaveService#submit.
+    // covered (paidDays) vs. what went unpaid (unpaidDays); paidDays + unpaidDays == totalDays for
+    // any request the rule chain did not block. Leave requires approval (2026-08-05): computed and
+    // persisted at SUBMIT time (LeaveService#computeQuotaSplit), not at approval -- #approve/#reject
+    // never touch these columns, so a SUBMITTED request already carries the real figures that will
+    // apply once a human approves it. Payroll only ever reads them once status flips to APPROVED
+    // (see LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth's WHERE clause), so a pending
+    // request contributes nothing to payroll despite these fields being non-zero. Both are 0 for
+    // AUTO_REJECTED/REJECTED requests, which never consumed any days. See LeaveService#submit.
     BigDecimal paidDays,
     BigDecimal unpaidDays,
     int quotaYear,

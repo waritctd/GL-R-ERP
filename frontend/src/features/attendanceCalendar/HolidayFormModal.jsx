@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Button } from '../../components/common/Button.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -64,10 +65,10 @@ export function HolidayFormModal({
       onClose={busy ? undefined : onClose}
       footer={(
         <>
-          <button type="button" className="secondary-button" onClick={onClose} disabled={busy}>ยกเลิก</button>
-          <button type="submit" form="holiday-form" className="primary-button" disabled={busy}>
+          <Button type="button" variant="secondary" onClick={onClose} disabled={busy}>ยกเลิก</Button>
+          <Button type="submit" form="holiday-form" variant="primary" disabled={busy}>
             {busy ? 'กำลังบันทึก...' : 'บันทึก'}
-          </button>
+          </Button>
         </>
       )}
     >
@@ -106,9 +107,9 @@ export function HolidayFormModal({
           <div className="grid gap-2 rounded-md border border-danger-border bg-surface p-3">
             <p role="alert" className="m-0 text-xs font-bold text-danger">{formError}</p>
             {onUseExisting ? (
-              <button type="button" className="secondary-button justify-self-start" onClick={onUseExisting}>
+              <Button type="button" variant="secondary" className="justify-self-start" onClick={onUseExisting}>
                 แก้ไขรายการเดิม
-              </button>
+              </Button>
             ) : null}
           </div>
         ) : null}

@@ -85,7 +85,7 @@ test.describe('HR — overtime, leave, attendance', () => {
     await expect(ceoRow.getByText('อนุมัติแล้ว')).toBeVisible();
   });
 
-  test('leave: employee submits a request and it is auto-decided', async ({ page }) => {
+  test('leave: employee submits a request and it lands awaiting approval', async ({ page }) => {
     test.setTimeout(30_000);
     await loginAs(page, 'employee');
     await spaGoto(page, '/leave');
@@ -117,12 +117,12 @@ test.describe('HR — overtime, leave, attendance', () => {
 
     await page.getByRole('button', { name: 'ส่งคำขอ' }).click();
 
-    // leave.create() resolves synchronously to APPROVED or AUTO_REJECTED —
-    // never SUBMITTED (see file header note) — so the success toast IS the
-    // approval, not just an acknowledgement. A successful submit navigates
-    // back to /leave (LeaveSurfacePage's goBackToSurface), landing on the tab
-    // it was opened from.
-    await expect(page.getByText('ส่งคำขอลาและอนุมัติอัตโนมัติแล้ว')).toBeVisible();
+    // Leave requires approval (2026-08-05): leave.create() now resolves to
+    // SUBMITTED for a rule-passing request (AUTO_REJECTED is unchanged), so the
+    // toast is an ACKNOWLEDGEMENT, not an approval — the request waits for a
+    // human. A successful submit still navigates back to /leave
+    // (LeaveSurfacePage's goBackToSurface), landing on the tab it was opened from.
+    await expect(page.getByText('ส่งคำขอลาแล้ว รอผู้อนุมัติพิจารณา')).toBeVisible();
     await expect(page).toHaveURL(/\/leave(\?|$)/);
 
     // The request list's default filter is [start of this month, today] —
@@ -133,7 +133,11 @@ test.describe('HR — overtime, leave, attendance', () => {
     await page.getByRole('button', { name: 'ค้นหา' }).click();
     const row = page.locator('.data-row', { hasText: reason });
     await expect(row).toBeVisible();
-    await expect(row.getByText('อนุมัติแล้ว')).toBeVisible();
+    // 'รออนุมัติ' is leaveStatusLabel()'s SUBMITTED label (src/utils/format.js).
+    // Asserting the label rather than the raw status is deliberate: it is what
+    // the employee actually sees, and it would have caught the stale
+    // "อนุมัติอัตโนมัติแล้ว" copy this branch had to fix.
+    await expect(row.getByText('รออนุมัติ')).toBeVisible();
   });
 
   test('attendance view renders for hr and employee without error', async ({ page }) => {
