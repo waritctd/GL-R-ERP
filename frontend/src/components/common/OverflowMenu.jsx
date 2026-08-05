@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { cn } from '../../utils/cn.js';
+import { useIsMobile } from '../../hooks/useIsMobile.js';
+import { Button } from './Button.jsx';
 import { Icon } from './Icon.jsx';
 
 /**
@@ -13,6 +16,15 @@ import { Icon } from './Icon.jsx';
  * convention as Modal.jsx, scaled down for a non-modal popover (no focus
  * trap — a menu doesn't own the whole page the way a dialog does).
  *
+ * The open panel renders via `createPortal` to `document.body`, positioned
+ * from the trigger's live `getBoundingClientRect()` instead of CSS
+ * `absolute`. A plain descendant menu got silently clipped by any ancestor
+ * with `overflow-hidden` (e.g. TicketDetailPage's rounded sticky-chrome
+ * card — a regression from PR #523 that hid every item but the first on
+ * `/tickets/:id`). Position is recomputed on open and on every scroll/
+ * resize while open, so the menu keeps tracking the trigger the way a DOM
+ * descendant would for free.
+ *
  * `items`: `{ key, label, icon?, tone?: 'default' | 'danger', onSelect,
  * disabled?, disabledReason?, testId? }[]`. Callers filter out items that
  * shouldn't appear AT ALL themselves (same responsibility split as every
@@ -25,6 +37,26 @@ import { Icon } from './Icon.jsx';
  * (not the native `disabled` attribute) is used so the item stays in the
  * roving-focus set below instead of being skipped by keyboard navigation.
  */
+// Mirrors the old absolute-positioning classes (`top-full`/`mt-1`,
+// `mobile:top-auto mobile:bottom-full mobile:mb-1`, `right-0`/`left-0`) as
+// viewport-relative fixed coordinates. `+ 4` reproduces the old `mt-1`/
+// `mb-1` (0.25rem) gap. `flipUp` is decided by the caller via `useIsMobile`
+// rather than a `matchMedia` call in here, so this stays a plain, testable
+// function of its arguments. `documentElement.client*` (not
+// `window.inner*`) because a `position: fixed` element's containing block
+// is sized excluding the scrollbar; the two only diverge when the document
+// itself scrolls, which it doesn't here (`.content-scroll` owns scrolling),
+// but the correct one costs nothing.
+function computeMenuPosition(triggerEl, { align, flipUp }) {
+  const rect = triggerEl.getBoundingClientRect();
+  const viewportWidth = document.documentElement.clientWidth;
+  const viewportHeight = document.documentElement.clientHeight;
+  return {
+    ...(flipUp ? { bottom: viewportHeight - rect.top + 4 } : { top: rect.bottom + 4 }),
+    ...(align === 'end' ? { right: viewportWidth - rect.right } : { left: rect.left }),
+  };
+}
+
 export function OverflowMenu({
   items,
   label = 'การดำเนินการเพิ่มเติม',
@@ -37,9 +69,48 @@ export function OverflowMenu({
   const [open, setOpen] = useState(false);
   const triggerRef = useRef(null);
   const menuRef = useRef(null);
+  const isMobile = useIsMobile();
 
-  useEffect(() => {
-    if (!open) return undefined;
+  // Position lives in state, computed from the trigger's live rect — not
+  // read from `triggerRef.current` during render (React refs must only be
+  // read in effects/handlers). `useLayoutEffect` (not `useEffect`) so the
+  // first paint after opening already has the right coordinates instead of
+  // flashing at (0,0) for a frame. As a portaled `position: fixed` node the
+  // menu no longer scrolls with the trigger for free the way a plain
+  // `absolute` descendant would, so this also re-measures on every scroll
+  // (capture: true catches scroll on nested containers too, e.g. a table's
+  // own overflow-x wrapper, not just window) and resize while open.
+  const [menuPosition, setMenuPosition] = useState(null);
+  const flipUp = mobilePlacement === 'up' && isMobile;
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuPosition(null);
+      return undefined;
+    }
+    function reposition() {
+      if (!triggerRef.current) return;
+      setMenuPosition(computeMenuPosition(triggerRef.current, { align, flipUp }));
+    }
+    reposition();
+    window.addEventListener('scroll', reposition, true);
+    window.addEventListener('resize', reposition);
+    return () => {
+      window.removeEventListener('scroll', reposition, true);
+      window.removeEventListener('resize', reposition);
+    };
+  }, [open, align, flipUp]);
+
+  // Gated on `menuMounted` (whether the portal has actually committed a menu
+  // node), not the raw `open` flag: `open` flips true a render before the
+  // position effect above supplies coordinates and the portal mounts, so
+  // gating on `open` here raced `menuRef.current` — it was still null when
+  // this ran, silently dropping the focus-first-item behaviour. `menuMounted`
+  // only flips once per open/close (unlike `menuPosition`, which is a new
+  // object on every scroll-driven reposition), so this doesn't re-steal
+  // focus back to the first item while the user is arrow-keying around.
+  const menuMounted = menuPosition !== null;
+  useLayoutEffect(() => {
+    if (!menuMounted) return undefined;
 
     const first = menuRef.current?.querySelector('[role="menuitem"]');
     first?.focus();
@@ -87,41 +158,64 @@ export function OverflowMenu({
       document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('mousedown', onPointerDown);
     };
-  }, [open]);
+  }, [menuMounted]);
 
   if (!items || items.length === 0) return null;
 
   return (
     <div className="relative inline-block">
-      <button
-        type="button"
-        ref={triggerRef}
-        className={cn(
-          triggerLabel
-            ? 'inline-flex min-h-[38px] items-center justify-center gap-[7px] rounded-md border-[1.5px] border-solid border-border-input bg-surface px-[13px] py-0 font-bold text-icon-muted mobile:min-h-[44px]'
-            : 'icon-button',
-          triggerClassName,
-        )}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={label}
-        title={label}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <Icon name={triggerIcon} size={18} />
-        {triggerLabel ? <span>{triggerLabel}</span> : null}
-      </button>
-      {open ? (
+      {/* Two distinct render paths, not one <Button> with a conditional
+          variant: the labeled path's classes are a hand-rolled style that
+          predates Button.jsx and isn't built from the icon-button legacy
+          class, so it's left untouched rather than guessed into a variant. */}
+      {triggerLabel ? (
+        <button
+          type="button"
+          ref={triggerRef}
+          className={cn(
+            'inline-flex min-h-[38px] items-center justify-center gap-[7px] rounded-md border-[1.5px] border-solid border-border-input bg-surface px-[13px] py-0 font-bold text-icon-muted mobile:min-h-[44px]',
+            triggerClassName,
+          )}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={label}
+          title={label}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <Icon name={triggerIcon} size={18} />
+          <span>{triggerLabel}</span>
+        </button>
+      ) : (
+        <Button
+          type="button"
+          ref={triggerRef}
+          variant="icon"
+          className={triggerClassName}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={label}
+          title={label}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <Icon name={triggerIcon} size={18} />
+        </Button>
+      )}
+      {open && menuPosition ? createPortal(
         <div
           ref={menuRef}
           role="menu"
           aria-label={label}
-          className={`absolute top-full z-20 mt-1 min-w-[12rem] rounded-lg border border-border bg-surface py-1 shadow-lg ${
-            mobilePlacement === 'up'
-              ? 'mobile:top-auto mobile:bottom-full mobile:mt-0 mobile:mb-1 mobile:max-h-[calc(100dvh-7rem)] mobile:overflow-y-auto'
-              : ''
-          } ${
-            align === 'end' ? 'right-0' : 'left-0'
+          style={{ position: 'fixed', ...menuPosition }}
+          // `max-w`: shrink-to-fit now resolves against the viewport (fixed
+          // positioning, see computeMenuPosition's doc comment) instead of
+          // the old narrow `relative inline-block` trigger wrapper, so an
+          // unlucky long label/disabledReason could otherwise balloon the
+          // panel toward full viewport width instead of wrapping the way it
+          // already did under the 12rem floor. `calc(100vw-2rem)` is the
+          // floor's own floor, so a narrow phone still gets a 1rem margin on
+          // each side rather than edge-to-edge or horizontal overflow.
+          className={`z-20 min-w-[12rem] max-w-[min(20rem,calc(100vw-2rem))] rounded-lg border border-border bg-surface py-1 shadow-lg ${
+            mobilePlacement === 'up' ? 'mobile:max-h-[calc(100dvh-7rem)] mobile:overflow-y-auto' : ''
           }`}
         >
           {items.map((item) => (
@@ -162,7 +256,8 @@ export function OverflowMenu({
               ) : null}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </div>
   );

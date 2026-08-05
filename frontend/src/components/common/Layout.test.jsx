@@ -38,7 +38,7 @@ describe('Panel', () => {
 
   it('keeps flush worklist panel titles inset from the border', () => {
     render(
-      <Panel title="สิ่งที่ต้องทำ" className="!p-0 overflow-hidden">
+      <Panel title="สิ่งที่ต้องทำ" flush>
         <p>เนื้อหา</p>
       </Panel>,
     );
@@ -46,6 +46,24 @@ describe('Panel', () => {
     const header = screen.getByRole('heading', { name: 'สิ่งที่ต้องทำ' }).closest('div');
     expect(header?.className).toContain('px-5');
     expect(header?.className).toContain('border-b');
+    // The card lends no padding in this mode, so the header must not also carry
+    // the default bottom margin — it would push the rule away from the title.
+    expect(header?.className).toContain('mb-0');
+  });
+
+  it('does not give a bordered header to a panel that merely zeroes its padding', () => {
+    // The old API inferred "flush" by regex-sniffing `p-0` out of `className`,
+    // so any caller zeroing padding for an unrelated reason silently acquired a
+    // rule under its title. `flush` is now the only way to ask for that.
+    render(
+      <Panel title="สิ่งที่ต้องทำ" className="!p-0">
+        <p>เนื้อหา</p>
+      </Panel>,
+    );
+
+    const header = screen.getByRole('heading', { name: 'สิ่งที่ต้องทำ' }).closest('div');
+    expect(header?.className).not.toContain('border-b');
+    expect(header?.className).toContain('mb-4');
   });
 
   it('merges caller className last', () => {

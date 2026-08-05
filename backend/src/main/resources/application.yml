@@ -117,6 +117,13 @@ app:
     # email. Hitting the backend origin directly avoids that; vercel.json's /api/:path* rewrite
     # means both origins serve the same bytes anyway.
     asset-base-url: ${APP_MAIL_ASSET_BASE_URL:https://gl-r-erp-uat.onrender.com}
+  # V134 storage-durability fix: explicit server-side cap enforced in FileStorageService, checked
+  # before any byte is read into memory. Deliberately separate from
+  # spring.servlet.multipart.max-file-size (${APP_MAX_FILE_SIZE:10MB} above) -- that property is
+  # env-overridable for unrelated reasons (e.g. a larger ticket attachment) and must not silently
+  # also raise how much this service is willing to pull into memory for hr.file_attachment's
+  # database-backed domains. Default matches the multipart default (10 MiB) unless overridden.
+  uploads-max-bytes: ${APP_UPLOADS_MAX_BYTES:10485760}
   bot:
     # BOT issues a separate key per API -- no fallback between them, see AppProperties.Bot's javadoc.
     holiday-api-token: ${BOT_HOLIDAY_API_TOKEN:}

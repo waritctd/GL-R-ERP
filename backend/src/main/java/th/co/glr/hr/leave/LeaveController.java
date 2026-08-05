@@ -8,11 +8,10 @@ import java.nio.file.Paths;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.Map;
-// Two resource kinds coexist here deliberately: FileSystemResource serves ATTACHMENTS, whose bytes
-// still live on disk behind hr.file_attachment.file_path, while ByteArrayResource serves the leave
-// POLICY DOCUMENT, whose bytes live in Postgres (V133). The split is not an inconsistency to tidy
-// away -- it is the attachment path that is wrong, and it is being migrated to DB-backed storage
-// separately (that filesystem is ephemeral on Render and production is going on-prem).
+// Both resource kinds now serve from Postgres: ByteArrayResource for the leave POLICY DOCUMENT
+// (V133) and, as of V134, for ATTACHMENTS too (hr.file_attachment_blob) -- FileSystemResource only
+// remains live here for pre-V134 DISK_LEGACY attachment rows whose bytes still resolve on disk. See
+// #downloadAttachment below for the storage_state branch.
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
@@ -30,6 +29,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import th.co.glr.hr.attachment.FileAttachmentBlobRepository;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -56,16 +56,19 @@ public class LeaveController {
     private final SessionContext sessions;
     private final LeavePolicyDocumentRepository leavePolicyDocuments;
     private final LeaveCalendarContextService calendarContextService;
+    private final FileAttachmentBlobRepository attachmentBlobs;
 
     public LeaveController(
             LeaveService leaveService,
             SessionContext sessions,
             LeavePolicyDocumentRepository leavePolicyDocuments,
-            LeaveCalendarContextService calendarContextService) {
+            LeaveCalendarContextService calendarContextService,
+            FileAttachmentBlobRepository attachmentBlobs) {
         this.leaveService = leaveService;
         this.sessions = sessions;
         this.leavePolicyDocuments = leavePolicyDocuments;
         this.calendarContextService = calendarContextService;
+        this.attachmentBlobs = attachmentBlobs;
     }
 
     @GetMapping
@@ -311,14 +314,27 @@ public class LeaveController {
     // SpecialMoneyController#downloadAttachment: authorize BEFORE serving, 404 (not 403) for an
     // unknown id so this cannot be used to probe which ids exist. See
     // LeaveService#resolveAttachmentForDownload for the access predicate.
+    //
+    // V134 storage-durability fix: resolveAttachmentForDownload has ALREADY confirmed the bytes are
+    // available (DATABASE, or DISK_LEGACY with a file that still resolves) before returning --
+    // throwing 410 GONE itself when they are not, strictly after its 404/403 checks (see that
+    // method's javadoc for why the ordering matters). This method only needs to pick the right
+    // byte source for the state it got back.
     @GetMapping("/attachments/{attachmentId}")
     ResponseEntity<Resource> downloadAttachment(@PathVariable long attachmentId, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         LeaveAttachmentRepository.AttachmentLocation location =
             leaveService.resolveAttachmentForDownload(attachmentId, user);
-        Resource resource = new FileSystemResource(Paths.get(location.storagePath()));
-        if (!resource.exists()) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์เอกสารนี้");
+        Resource resource;
+        if ("DATABASE".equals(location.storageState())) {
+            byte[] content = attachmentBlobs.findContent(attachmentId)
+                .orElseThrow(() -> new ApiException(HttpStatus.GONE, "ไฟล์เอกสารนี้สูญหายจากระบบจัดเก็บ กรุณาติดต่อฝ่ายบุคคล"));
+            resource = new ByteArrayResource(content);
+        } else {
+            resource = new FileSystemResource(Paths.get(location.storagePath()));
+            if (!resource.exists()) {
+                throw new ApiException(HttpStatus.GONE, "ไฟล์เอกสารนี้สูญหายจากระบบจัดเก็บ กรุณาติดต่อฝ่ายบุคคล");
+            }
         }
         MediaType mediaType = location.mimeType() == null
             ? MediaType.APPLICATION_OCTET_STREAM

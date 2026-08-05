@@ -236,7 +236,7 @@ export function ManagerOverview({ user, employee, showToast }) {
               {/* Centerpiece: ค่าคอมรออนุมัติ worklist — deep-links to
                   CommissionPage's own manager-approve flow, never duplicates
                   the approval mutation here. */}
-              <Panel title="ค่าคอมรออนุมัติ" className="!p-0 overflow-hidden">
+              <Panel title="ค่าคอมรออนุมัติ" flush>
                 {pendingCommissions.length === 0 ? (
                   <div className="flex items-center gap-3 p-5 text-text-muted">
                     <Icon name="check" size={18} />
@@ -283,7 +283,7 @@ export function ManagerOverview({ user, employee, showToast }) {
               </Panel>
 
               {/* ดีลทีมที่ต้องดูแล — stalled / overdue-follow-up open deals. */}
-              <Panel title="ดีลทีมที่ต้องดูแล" className="!p-0 overflow-hidden">
+              <Panel title="ดีลทีมที่ต้องดูแล" flush>
                 {attentionTickets.length === 0 ? (
                   <div className="flex items-center gap-3 p-5 text-text-muted">
                     <Icon name="check" size={18} />

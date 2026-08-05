@@ -30,7 +30,15 @@ import {
 // FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
 // (Enter-to-submit on the search button), so its exact utility string is reproduced
 // here rather than wrapping a <form> inside a non-form primitive.
-const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-center bg-surface border border-border rounded-md p-[14px]';
+//
+// `items-end`, not `items-center`. Every field in this row is a bare `<label>`
+// stack (label text above a control), except the trailing "ค้นหา" Button, which
+// has no label above it. Centring the row centres each LABELLED STACK, not its
+// control, so the unlabelled Button — the shortest single-height item — landed
+// visibly above the bottom edge of the date/status controls beside it (measured
+// button top=740 vs input top=751 at 1440px, an 11px stagger). Same defect class
+// as #530 (TaxAllowanceReviewPage's filter row); it just hadn't reached this file.
+const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-end bg-surface border border-border rounded-md p-[14px]';
 
 // Leave-surface IA rebuild Phase A1 (later narrowed by owner feedback, "one primary card, not
 // every quota card at once"): the everyday-vs-rare balance split. SICK/PERSONAL/VACATION are what
@@ -172,9 +180,9 @@ function OwnRequestsSection({
           </strong>
           <span className="flex items-center gap-1.5">
             <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-            <button
+            <Button
               type="button"
-              className="icon-button"
+              variant="icon"
               aria-expanded={expanded}
               aria-controls={expandedRowRegionId(request.id)}
               title={expanded ? 'ซ่อนรายละเอียด' : 'ดูรายละเอียด'}
@@ -182,7 +190,7 @@ function OwnRequestsSection({
               onClick={() => onToggleExpand(request.id)}
             >
               <Icon name={expanded ? 'chevronUp' : 'chevronDown'} size={14} />
-            </button>
+            </Button>
           </span>
         </div>
         <span className="min-w-0 truncate text-xs text-text-muted">
@@ -664,7 +672,7 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
         </div>
       </Panel>
 
-      <Panel title="คำขอลาของฉัน" className="!p-0">
+      <Panel title="คำขอลาของฉัน" flush>
         <OwnRequestsSection
           requestsQuery={requestsQuery}
           rows={requests}

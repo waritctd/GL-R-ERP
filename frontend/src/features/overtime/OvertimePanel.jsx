@@ -19,7 +19,11 @@ const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax
 // FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
 // (Enter-to-submit on the search button), so its exact utility string is reproduced
 // here rather than wrapping a <form> inside a non-form primitive.
-const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-center bg-surface border border-border rounded-md p-[14px]';
+//
+// `items-end`, not `items-center` — see MyLeaveTab.jsx's identical FILTER_BAR_CLASS
+// for the full explanation. This form is unconditional (renders for every viewer,
+// including employee self-view), so the stagger was live on the OT tab of "คำขอ".
+const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-end bg-surface border border-border rounded-md p-[14px]';
 // FormGrid (Layout.jsx) renders a <div>; the submit form needs to be a native <form>
 // for onSubmit/noValidate, so its exact (2-column) utility string is reproduced here.
 const FORM_GRID_CLASS = 'grid gap-[14px] max-[720px]:grid-cols-1 grid-cols-2';
@@ -577,7 +581,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
         </form>
       </Panel>
 
-      <section className="table-panel">
+      <Panel flush>
         <div className={`${OVERTIME_TABLE_GRID} table-head`}>
           <span>วันที่ / พนักงาน</span>
           <span>แผน OT</span>
@@ -666,7 +670,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
             </div>
           );
         })}
-      </section>
+      </Panel>
 
       <ConfirmDialog
         open={confirmState?.kind === 'approve'}

@@ -78,7 +78,7 @@ export function ProcurementFulfilmentPage({ user, showToast }) {
         subtitle="งานส่งมอบ/รับเข้าคลังของดีลที่รับผิดชอบ + ใบสั่งซื้อโรงงานทั้งหมด"
       />
 
-      <Panel title="งานรับเข้าคลัง / ส่งมอบ" className="!p-0 overflow-hidden">
+      <Panel title="งานรับเข้าคลัง / ส่งมอบ" flush>
         {ticketsQuery.isLoading ? (
           <p className="px-4 py-6 text-sm text-text-muted">กำลังโหลดงานรับเข้าคลังและส่งมอบ…</p>
         ) : fulfilmentRows.length === 0 ? (

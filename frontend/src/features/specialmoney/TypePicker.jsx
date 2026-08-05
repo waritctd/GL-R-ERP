@@ -95,11 +95,15 @@ export function TypePicker({ groups, value, onSelect, className }) {
                     value={type.requestType}
                     checked={value === type.requestType}
                     onChange={() => onSelect(type.requestType)}
-                    // Legacy `styles.css` sets a blanket `input, select, textarea { width: 100% }`
-                    // (line ~222) that a bare radio input inherits same as any other input; an
-                    // explicit small fixed size is required or the radio balloons to fill its
-                    // label's full width and pushes the Thai label text off past the container's
-                    // right edge (measured: 1040px wide inside a 1060px label at 1440 viewport).
+                    // The explicit size is no longer load-bearing, only deliberate. It used to be
+                    // the workaround for `styles.css`'s blanket `input, select, textarea
+                    // { width: 100% }`, which a bare radio inherited like any other input and which
+                    // ballooned it to fill the label (measured: 1040px wide inside a 1060px label
+                    // at 1440 viewport, pushing the Thai text off the right edge). That base rule
+                    // now excludes checkbox/radio outright and resets them, so a bare radio is
+                    // ~13px on its own. `h-4 w-4` is kept because 16px reads better beside 14px
+                    // Thai text than the 13px UA default, and `shrink-0` because a flex row full
+                    // of long Thai labels would otherwise squash it.
                     className="h-4 w-4 shrink-0"
                   />
                   {type.thaiLabel}
