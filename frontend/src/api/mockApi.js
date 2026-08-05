@@ -1582,6 +1582,11 @@ function requireTaxAllowanceAttachmentAccess(declaration, user) {
   if (!isOwner && !isHr) fail('ไม่พบไฟล์แนบนี้', 404);
 }
 
+// V135 (feat/tax-allowance-sections): mirrors TaxAllowanceDeclarationService#EVIDENCE_SECTION_KEYS,
+// which itself mirrors TAX_ALLOWANCE_GROUPS' five `key`s in
+// frontend/src/features/taxAllowance/taxAllowanceSchema.js. Kept in sync by hand in all three places.
+const TAX_ALLOWANCE_SECTION_KEYS = new Set(['family', 'insurance', 'savings', 'housing', 'donation']);
+
 function taxAllowanceCapsFor(taxYear) {
   const ssfDeductible = taxYear < 2025;
   return [
@@ -5895,11 +5900,20 @@ export const api = {
     // Evidence attachments (decision #5, 2026-08-01): file metadata + access scoping only, no tax
     // math -- genuinely fake-able. Mirrors TaxAllowanceDeclarationService#requireOwnerOrHr's rule
     // exactly: owning employee or hr, re-checked on every call, never the uploader, never ceo.
-    async uploadTaxAllowanceAttachment(declarationId, file) {
+    //
+    // sectionKey (V135, feat/tax-allowance-sections): mirrors
+    // TaxAllowanceDeclarationService#EVIDENCE_SECTION_KEYS/#normalizeSectionKey exactly -- blank/
+    // omitted normalizes to null ("general/uncategorized"), anything outside the five known keys
+    // is rejected the same way the real service rejects it (400), not silently accepted.
+    async uploadTaxAllowanceAttachment(declarationId, file, sectionKey) {
       const user = requireSession();
       const declaration = db.taxAllowanceDeclarations.find((item) => item.declarationId === Number(declarationId));
       if (!declaration) fail('ไม่พบแบบแจ้งค่าลดหย่อนนี้', 404);
       requireTaxAllowanceAttachmentAccess(declaration, user);
+      const normalizedSectionKey = sectionKey && String(sectionKey).trim() ? String(sectionKey).trim() : null;
+      if (normalizedSectionKey && !TAX_ALLOWANCE_SECTION_KEYS.has(normalizedSectionKey)) {
+        fail('sectionKey ไม่ถูกต้อง', 400);
+      }
       const attachmentId = Math.max(0, ...db.taxAllowanceAttachments.map((row) => row.attachmentId)) + 1;
       const row = {
         attachmentId,
@@ -5912,6 +5926,7 @@ export const api = {
         deletedAt: null,
         deletedBy: null,
         deleteReason: null,
+        sectionKey: normalizedSectionKey,
       };
       db.taxAllowanceAttachments.push(row);
       return delay({ attachment: row });

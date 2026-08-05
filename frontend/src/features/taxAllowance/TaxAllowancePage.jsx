@@ -8,8 +8,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { TaxAllowanceForm } from './TaxAllowanceForm.jsx';
-import { TaxAllowanceEvidencePanel } from './TaxAllowanceEvidencePanel.jsx';
-import { buildAllowanceSubmitBody, defaultAllowanceValues } from './taxAllowanceSchema.js';
+import { buildAllowanceSubmitBody, defaultAllowanceValues, UNCATEGORIZED_EVIDENCE_KEY } from './taxAllowanceSchema.js';
 import { selectCurrentDeclaration, taxAllowanceStatusInfo } from './taxAllowanceStatus.js';
 
 // Editable directly (or via "แก้ไข / ยื่นฉบับใหม่"): no declaration yet, or the current one was
@@ -33,6 +32,34 @@ export function TaxAllowancePage({ user, showToast }) {
   const [editing, setEditing] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
 
+  // Staged (not-yet-uploaded) evidence, keyed by TAX_ALLOWANCE_GROUPS' `key` -- the null key holds
+  // step-1's "general/uncategorized" bucket. See TaxAllowanceEvidencePanel's own javadoc for why
+  // this exists: while `editing` there is no declarationId a real upload could attach to yet (a
+  // brand-new declaration doesn't exist server-side until submit; a REJECTED/EXPIRED one being
+  // re-prepared has only an OLD, no-longer-current declarationId), so files picked mid-fill-in are
+  // held here and actually uploaded once submit succeeds and a real declarationId exists
+  // (see `flushStagedEvidence` below) -- this is the fix for "I couldn't attach a PDF while first
+  // filling in the form".
+  const [stagedEvidence, setStagedEvidence] = useState({});
+  const stagedEvidenceKey = (sectionKey) => sectionKey ?? UNCATEGORIZED_EVIDENCE_KEY;
+
+  function stageEvidence(sectionKey, file) {
+    const key = stagedEvidenceKey(sectionKey);
+    const tempId = `staged-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setStagedEvidence((prev) => ({
+      ...prev,
+      [key]: [...(prev[key] ?? []), { tempId, file, fileName: file.name, fileSize: file.size }],
+    }));
+  }
+
+  function unstageEvidence(sectionKey, tempId) {
+    const key = stagedEvidenceKey(sectionKey);
+    setStagedEvidence((prev) => ({
+      ...prev,
+      [key]: (prev[key] ?? []).filter((item) => item.tempId !== tempId),
+    }));
+  }
+
   const capsQuery = useQuery({
     queryKey: queryKeys.taxAllowanceCaps(taxYear),
     queryFn: () => api.payroll.getTaxAllowanceCaps(taxYear).then((response) => response.caps || []),
@@ -48,21 +75,61 @@ export function TaxAllowancePage({ user, showToast }) {
   const statusInfo = useMemo(() => taxAllowanceStatusInfo(current), [current]);
   const canStartEdit = EDITABLE_STATUS_KEYS.has(statusInfo.key) && isCurrentYear;
 
+  // Three-way evidence mode (#tax-allowance-sections) -- see TaxAllowanceEvidencePanel's own
+  // javadoc for what each does. `editing` is never true while `current.status === 'PENDING'`
+  // (PENDING is outside EDITABLE_STATUS_KEYS), so these two branches are mutually exclusive with
+  // the pre-existing `canEdit={current?.status === 'PENDING'}` behaviour this generalizes.
+  const evidenceMode = editing ? 'staging' : (current?.status === 'PENDING' ? 'direct' : 'readonly');
+
   useEffect(() => {
     setEditing(statusInfo.key === 'NONE' && isCurrentYear);
+    // A different declaration (or none) is now current -- any staged-but-unsent evidence belonged
+    // to whatever was being edited a moment ago; carrying it forward across an identity change
+    // would attach it to the wrong declaration once flushed.
+    setStagedEvidence({});
   }, [statusInfo.key, current?.declarationId, isCurrentYear]);
 
   const defaultValues = useMemo(() => defaultAllowanceValues(current), [current]);
 
   const submitMutation = useMutation({
     mutationFn: (body) => api.payroll.submitMyTaxAllowanceDeclaration(body),
-    onSuccess: () => {
+    onSuccess: async (created) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.taxAllowanceDeclarationsMe(taxYear) });
       showToast?.('success', 'ยื่นแบบแจ้งเรียบร้อย รอ HR ตรวจสอบ');
       setEditing(false);
+      await flushStagedEvidence(created.declarationId);
     },
     onError: (error) => showToast?.('error', error.message || 'ยื่นแบบแจ้งไม่สำเร็จ'),
   });
+
+  // Sends every staged file (see the `stagedEvidence` state's own comment above) against the
+  // declarationId the submit above JUST created -- the earliest point a real one exists. Runs
+  // sequentially rather than Promise.all so one failure does not abort files already in flight, and
+  // reports a single summary toast rather than one per file. The declaration itself is ALREADY
+  // submitted by the time this runs (submitMutation's onSuccess already fired) -- an attachment
+  // failure here is reported separately and never rolls back or blocks the submission.
+  async function flushStagedEvidence(declarationId) {
+    const entries = Object.entries(stagedEvidence).flatMap(([key, files]) =>
+      files.map((item) => ({ sectionKey: key === UNCATEGORIZED_EVIDENCE_KEY ? null : key, item })));
+    if (entries.length === 0) return;
+    let failureCount = 0;
+    for (const { sectionKey, item } of entries) {
+      try {
+        // Sequential by design, see the comment above -- no-await-in-loop isn't enabled in this
+        // project's ESLint config, so no disable directive is needed here.
+        await api.payroll.uploadTaxAllowanceAttachment(declarationId, item.file, sectionKey ?? undefined);
+      } catch {
+        failureCount += 1;
+      }
+    }
+    setStagedEvidence({});
+    queryClient.invalidateQueries({ queryKey: queryKeys.taxAllowanceAttachments(declarationId) });
+    if (failureCount > 0) {
+      showToast?.('error', `แนบหลักฐานไม่สำเร็จ ${failureCount} ไฟล์ — ยื่นแบบแจ้งสำเร็จแล้ว กรุณาแนบไฟล์ที่เหลือใหม่อีกครั้ง`);
+    } else {
+      showToast?.('success', 'แนบหลักฐานที่เตรียมไว้เรียบร้อย');
+    }
+  }
 
   // The endpoint has been live since issue #387 (DELETE /declarations/{id}) but nothing called it,
   // so a PENDING declaration was a dead end: read-only here, and only HR rejecting it could
@@ -165,14 +232,14 @@ export function TaxAllowancePage({ user, showToast }) {
           submitting={submitMutation.isPending}
           submitLabel={statusInfo.key === 'NONE' ? 'ยื่นแบบแจ้ง' : 'ยื่นฉบับใหม่'}
           onSubmit={handleSubmit}
+          evidenceMode={evidenceMode}
+          evidenceDeclarationId={current?.declarationId ?? null}
+          stagedEvidenceBySection={stagedEvidence}
+          onStageEvidence={stageEvidence}
+          onUnstageEvidence={unstageEvidence}
+          showToast={showToast}
         />
       </Panel>
-
-      <TaxAllowanceEvidencePanel
-        declarationId={current?.declarationId ?? null}
-        canEdit={current?.status === 'PENDING'}
-        showToast={showToast}
-      />
 
       <ConfirmDialog
         open={withdrawing}
