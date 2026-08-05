@@ -107,6 +107,16 @@ app:
     override-to: ${APP_MAIL_OVERRIDE_TO:}
     subject-prefix: ${APP_MAIL_SUBJECT_PREFIX:}
     app-base-url: ${APP_MAIL_APP_BASE_URL:https://demo-glr-git-uat-waritctds-projects.vercel.app}
+    # asset-base-url is deliberately a SEPARATE property from app-base-url: app-base-url is the
+    # Vercel frontend origin (used for portal CTA links, which must resolve to the app the user
+    # signs in to), while asset-base-url is the backend's own Render origin and is used ONLY to
+    # build the emailed logo URL. If app-base-url ever points at a Vercel branch preview with
+    # Deployment Protection enabled, an auth wall sits in front of it - harmless for a human
+    # clicking a CTA (they log in), but fatal for Gmail's image proxy, which fetches with no
+    # cookies/session and cannot complete a login flow, so the logo would silently break in every
+    # email. Hitting the backend origin directly avoids that; vercel.json's /api/:path* rewrite
+    # means both origins serve the same bytes anyway.
+    asset-base-url: ${APP_MAIL_ASSET_BASE_URL:https://gl-r-erp-uat.onrender.com}
   bot:
     # BOT issues a separate key per API -- no fallback between them, see AppProperties.Bot's javadoc.
     holiday-api-token: ${BOT_HOLIDAY_API_TOKEN:}
