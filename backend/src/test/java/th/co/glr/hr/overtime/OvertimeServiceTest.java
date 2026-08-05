@@ -390,6 +390,10 @@ class OvertimeServiceTest {
         verify(overtimeRepository).reject(77L, 99L, "no budget");
         verify(auditService).record(eq(manager), eq("REJECT_OVERTIME_REQUEST"), eq("overtime_request"), eq(77L), eq(submitted), eq(rejected));
         verify(notificationService).notify(eq(10L), eq("OVERTIME_REJECTED"), anyString(), anyString(), eq("/overtime"), eq(true));
+        // Notification coverage gap C, wrong-way-round: the manager IS the actor here and CEO never
+        // saw this request (rejected straight from SUBMITTED) -- nobody upstream needs telling.
+        verify(notificationService, never())
+            .notify(eq(99L), eq("OVERTIME_REJECTED"), anyString(), anyString(), anyString(), anyBoolean());
     }
 
     @Test
@@ -408,6 +412,55 @@ class OvertimeServiceTest {
         verify(overtimeRepository).ceoReject(77L, 500L, "not justified");
         verify(auditService).record(eq(ceo), eq("CEO_REJECT_OVERTIME_REQUEST"), eq("overtime_request"), eq(77L), eq(managerApproved), eq(rejected));
         verify(notificationService).notify(eq(10L), eq("OVERTIME_REJECTED"), anyString(), anyString(), eq("/overtime"), eq(true));
+    }
+
+    /**
+     * Notification coverage gap C, positive case. {@code requestDto()}'s own helper ties
+     * {@code managerApprovedBy} to the CURRENT status only, which would build a REJECTED row with
+     * {@code managerApprovedBy == null} regardless -- not the real shape {@code OvertimeRepository
+     * #ceoReject} produces (it never clears that column; see that method's SQL). This builds the
+     * "after" row directly to reflect what a real DB row looks like, so the positive branch of the
+     * {@code managerApprovedBy() != null} guard is actually proven, not just its (structurally
+     * identical) null branch above.
+     */
+    @Test
+    void ceoRejectionOfManagerApprovedRequestNotifiesTheApprovingManagerToo() {
+        OvertimeRequestDto managerApproved = requestDto(77L, 10L, "MANAGER_APPROVED");
+        OvertimeRequestDto rejected = rejectedWithManagerApprovedBy(77L, 10L, 99L);
+        when(overtimeRepository.findById(77L))
+            .thenReturn(Optional.of(managerApproved))
+            .thenReturn(Optional.of(rejected));
+        when(overtimeRepository.ceoReject(77L, 500L, "not justified")).thenReturn(1);
+        UserPrincipal ceo = user("ceo", 500L);
+
+        overtimeService.reject(77L, new ReviewOvertimeRequest("not justified"), ceo);
+
+        verify(notificationService).notify(eq(10L), eq("OVERTIME_REJECTED"), anyString(), anyString(), eq("/overtime"), eq(true));
+        verify(notificationService).notify(eq(99L), eq("OVERTIME_REJECTED"), anyString(), anyString(), eq("/overtime"), eq(true));
+    }
+
+    /**
+     * S-6 (review, second pass): {@code notifyRejected} had no actor self-skip. Reachable: a
+     * กรรมการผู้จัดการ (division MD) has {@code manager() == true} AND role {@code ceo} -- for an
+     * MD-division non-manager's OT they can {@code managerApprove} it and then, as CEO, {@code
+     * ceoReject} the SAME request. {@code managerApprovedBy} then equals the rejecting actor, who
+     * must not be told about their own rejection.
+     */
+    @Test
+    void ceoRejectionSkipsNotifyingSelfWhenActorIsTheApprovingManager() {
+        OvertimeRequestDto managerApproved = requestDto(77L, 10L, "MANAGER_APPROVED");
+        OvertimeRequestDto rejected = rejectedWithManagerApprovedBy(77L, 10L, 10500L);
+        when(overtimeRepository.findById(77L))
+            .thenReturn(Optional.of(managerApproved))
+            .thenReturn(Optional.of(rejected));
+        when(overtimeRepository.ceoReject(77L, 10500L, "not justified")).thenReturn(1);
+        UserPrincipal ceoWhoAlsoApproved = user("ceo", 10500L);
+
+        overtimeService.reject(77L, new ReviewOvertimeRequest("not justified"), ceoWhoAlsoApproved);
+
+        verify(notificationService).notify(eq(10L), eq("OVERTIME_REJECTED"), anyString(), anyString(), eq("/overtime"), eq(true));
+        verify(notificationService, never())
+            .notify(eq(10500L), eq("OVERTIME_REJECTED"), anyString(), anyString(), anyString(), anyBoolean());
     }
 
     @Test
@@ -492,6 +545,174 @@ class OvertimeServiceTest {
 
         assertThat(result.status()).isEqualTo("CANCELLED");
         verify(overtimeRepository).cancel(77L, null, "owner cancel");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Notification coverage gap B: cancel() must notify the requester and whoever the request was
+    // still pending with, resolved from the SAME source notifySubmitted/notifyManagerApproved use --
+    // but NOT an already-decided request's approvers.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void selfCancelOfSubmittedOvertimeWithAManagerStageNotifiesEmployeeAndManagers() {
+        OvertimeRequestDto submitted = cancelFixtureDto(90L, "SUBMITTED", null, null);
+        OvertimeRequestDto cancelled = cancelFixtureDto(90L, "CANCELLED", null, null);
+        when(overtimeRepository.findById(90L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
+        when(overtimeRepository.cancel(90L, null, "no longer needed")).thenReturn(1);
+        when(managerApproverRepository.findManagerApproverEmployeeIds(10L)).thenReturn(List.of(199L));
+
+        overtimeService.cancel(90L, new ReviewOvertimeRequest("no longer needed"), user("employee", 10L));
+
+        verify(notificationService).notify(eq(10L), eq("OVERTIME_CANCELLED"), anyString(), anyString(), eq("/overtime"), eq(true));
+        verify(notificationService).notify(eq(199L), eq("OVERTIME_CANCELLED"), anyString(), anyString(), eq("/overtime"), eq(true));
+        // S3: this status is SUBMITTED, so the CEO approver source must never be consulted -- absent
+        // this, Mockito's default empty-list stub would let a wrongful call pass silently.
+        verify(overtimeRepository, never()).findCeoApproverEmployeeIds();
+    }
+
+    @Test
+    void selfCancelOfSubmittedOvertimeWithNoManagerStageNotifiesCeo() {
+        OvertimeRequestDto submitted = cancelFixtureDto(91L, "SUBMITTED", null, null);
+        OvertimeRequestDto cancelled = cancelFixtureDto(91L, "CANCELLED", null, null);
+        when(overtimeRepository.findById(91L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
+        when(overtimeRepository.cancel(91L, null, null)).thenReturn(1);
+        when(managerApproverRepository.findManagerApproverEmployeeIds(10L)).thenReturn(List.of());
+        when(overtimeRepository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
+
+        overtimeService.cancel(91L, new ReviewOvertimeRequest(null), user("employee", 10L));
+
+        verify(notificationService).notify(eq(10L), eq("OVERTIME_CANCELLED"), anyString(), anyString(), eq("/overtime"), eq(true));
+        verify(notificationService).notify(eq(500L), eq("OVERTIME_CANCELLED"), anyString(), anyString(), eq("/overtime"), eq(true));
+    }
+
+    @Test
+    void managerCancelOfManagerApprovedOvertimeNotifiesEmployeeAndCeo() {
+        OvertimeRequestDto managerApproved = cancelFixtureDto(92L, "MANAGER_APPROVED", null, null);
+        OvertimeRequestDto cancelled = cancelFixtureDto(92L, "CANCELLED", 99L, "Test Manager");
+        when(overtimeRepository.findById(92L)).thenReturn(Optional.of(managerApproved)).thenReturn(Optional.of(cancelled));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, null, 5L, true)));
+        when(overtimeRepository.cancel(92L, 99L, null)).thenReturn(1);
+        when(overtimeRepository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
+        UserPrincipal mgr = manager(99L, 5L);
+
+        overtimeService.cancel(92L, new ReviewOvertimeRequest(null), mgr);
+
+        // Reviewer-cancel: after.reviewedById() (99L) is non-null, the same shape OvertimeRepository
+        // #cancel writes for `manager ? actorEmployeeId : null`.
+        verify(notificationService).notify(eq(10L), eq("OVERTIME_CANCELLED"), anyString(), anyString(), eq("/overtime"), eq(true));
+        verify(notificationService).notify(eq(500L), eq("OVERTIME_CANCELLED"), anyString(), anyString(), eq("/overtime"), eq(true));
+        // S3: this status is MANAGER_APPROVED, so the "pending manager" resolver must never be
+        // consulted -- absent this, Mockito's default empty-list stub would let a wrongful call pass.
+        verify(managerApproverRepository, never()).findManagerApproverEmployeeIds(anyLong());
+    }
+
+    /**
+     * BLOCKING 1's deterministic failure case: employee E's OT is SUBMITTED, and E's ผู้จัดการ M --
+     * who IS the manager {@code findManagerApproverEmployeeIds(E)} resolves to, since {@code
+     * managesEmployee}/{@code PEER_IS_MANAGER_APPROVER} key off the same ผู้จัดการ match -- cancels
+     * it. M must not be told about the cancellation M themselves just performed.
+     */
+    @Test
+    void managerCancelOfSubmittedOvertimeDoesNotNotifyThemselfAsThePendingApprover() {
+        // S-1 (review, second pass): manager id raised from 99L to 10099L -- a realistic 4-5 digit
+        // id, OUTSIDE Java's Long cache (-128..127). 99L could never catch a regression from the
+        // primitive-`long` self-skip comparison back to a boxed-`Long` reference comparison: cached
+        // Longs of the same small value are always `==` equal regardless, so the assertion below
+        // would stay green either way. Proven: see the mutation-check in the PR report.
+        OvertimeRequestDto submitted = cancelFixtureDto(95L, "SUBMITTED", null, null);
+        OvertimeRequestDto cancelled = cancelFixtureDto(95L, "CANCELLED", 10099L, "Test Manager");
+        when(overtimeRepository.findById(95L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, null, 5L, true)));
+        when(overtimeRepository.cancel(95L, 10099L, null)).thenReturn(1);
+        when(managerApproverRepository.findManagerApproverEmployeeIds(10L)).thenReturn(List.of(10099L));
+        UserPrincipal mgr = manager(10099L, 5L);
+
+        overtimeService.cancel(95L, new ReviewOvertimeRequest(null), mgr);
+
+        verify(notificationService).notify(eq(10L), eq("OVERTIME_CANCELLED"), anyString(), anyString(), eq("/overtime"), eq(true));
+        verify(notificationService, never())
+            .notify(eq(10099L), eq("OVERTIME_CANCELLED"), anyString(), anyString(), anyString(), anyBoolean());
+    }
+
+    /**
+     * S1: proves the approver-facing message is actually worded from the ACTING manager, not the
+     * employee whose request it is -- the two names differ here on purpose ("Acting Manager" vs.
+     * {@code cancelFixtureDto}'s fixed "Test Employee"), so an inverted/reverted wording branch is
+     * observable, not just "some string was passed".
+     */
+    @Test
+    void managerCancelOfSubmittedOvertimeWordsTheApproverMessageFromTheActingManager() {
+        OvertimeRequestDto submitted = cancelFixtureDto(96L, "SUBMITTED", null, null);
+        OvertimeRequestDto cancelled = cancelFixtureDto(96L, "CANCELLED", 88L, "Acting Manager");
+        when(overtimeRepository.findById(96L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, null, 5L, true)));
+        when(overtimeRepository.cancel(96L, 88L, null)).thenReturn(1);
+        when(managerApproverRepository.findManagerApproverEmployeeIds(10L)).thenReturn(List.of(199L));
+        UserPrincipal actingManager =
+            new UserPrincipal(88L, "acting@glr.co.th", "Acting Manager", "employee", 88L, true, LocalDate.now(), false, 5L, true);
+
+        overtimeService.cancel(96L, new ReviewOvertimeRequest(null), actingManager);
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(eq(199L), eq("OVERTIME_CANCELLED"), anyString(), body.capture(), eq("/overtime"), eq(true));
+        assertThat(body.getValue()).contains("Acting Manager").doesNotContain("Test Employee");
+    }
+
+    /**
+     * D1 (owner ruling): cancelling an ALREADY-APPROVED request reverses payroll-relevant state
+     * ({@link OvertimeService#syncAttendanceDay} strips the credited minutes back out) -- the manager
+     * and CEO who actually approved it must be told, resolved from the row's OWN approver columns
+     * ({@code managerApprovedBy}/the CEO approver set), never a "pending" lookup (see the
+     * wrong-way-round assertion below).
+     */
+    @Test
+    void managerCancelOfApprovedOvertimeNotifiesEmployeeApprovingManagerAndCeo() {
+        // requestDto(status="APPROVED") bakes in managerApprovedBy=99L, ceoApprovedBy=500L.
+        OvertimeRequestDto approved = requestDto(93L, 10L, "APPROVED");
+        OvertimeRequestDto cancelled = cancelFixtureDto(93L, "CANCELLED", 77L, "Second Manager");
+        when(overtimeRepository.findById(93L)).thenReturn(Optional.of(approved)).thenReturn(Optional.of(cancelled));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, null, 5L, true)));
+        when(overtimeRepository.cancel(93L, 77L, null)).thenReturn(1);
+        when(overtimeRepository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
+        UserPrincipal secondManager = manager(77L, 5L);
+
+        overtimeService.cancel(93L, new ReviewOvertimeRequest(null), secondManager);
+
+        verify(notificationService).notify(eq(10L), eq("OVERTIME_CANCELLED"), anyString(), anyString(), eq("/overtime"), eq(true));
+        verify(notificationService).notify(eq(99L), eq("OVERTIME_CANCELLED"), anyString(), anyString(), eq("/overtime"), eq(true));
+        verify(notificationService).notify(eq(500L), eq("OVERTIME_CANCELLED"), anyString(), anyString(), eq("/overtime"), eq(true));
+        // D1 must never consult the PENDING-approver resolver -- an APPROVED request has no pending
+        // stage; its approvers are read from the row itself.
+        verify(managerApproverRepository, never()).findManagerApproverEmployeeIds(anyLong());
+    }
+
+    /**
+     * BLOCKING 1 regression for D1: the manager who APPROVED the request is the SAME person
+     * cancelling it -- must not be told about their own action.
+     */
+    @Test
+    void managerCancelOfApprovedOvertimeSkipsNotifyingSelfWhenActorIsTheApprovingManager() {
+        // S-1 (review, second pass): manager id raised from 99L to 10099L -- same cache-blind-spot
+        // reasoning as managerCancelOfSubmittedOvertimeDoesNotNotifyThemselfAsThePendingApprover
+        // above. requestDto()'s own helper bakes managerApprovedBy at a fixed 99L (other tests --
+        // e.g. managerCancelOfApprovedOvertimeNotifiesEmployeeApprovingManagerAndCeo -- rely on that
+        // constant with a DIFFERENT actor, so it is not changed here); approvedFixtureDto below is a
+        // dedicated fixture so this one test alone can use a realistic, out-of-cache id.
+        OvertimeRequestDto approved = approvedFixtureDto(94L, 10L, 10099L);
+        OvertimeRequestDto cancelled = cancelFixtureDto(94L, "CANCELLED", 10099L, "Test Manager");
+        when(overtimeRepository.findById(94L)).thenReturn(Optional.of(approved)).thenReturn(Optional.of(cancelled));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, null, 5L, true)));
+        when(overtimeRepository.cancel(94L, 10099L, null)).thenReturn(1);
+        UserPrincipal sameManager = manager(10099L, 5L);
+
+        overtimeService.cancel(94L, new ReviewOvertimeRequest(null), sameManager);
+
+        verify(notificationService).notify(eq(10L), eq("OVERTIME_CANCELLED"), anyString(), anyString(), eq("/overtime"), eq(true));
+        // S-7: the CEO-facing recipient is now read from the row's own ceoApprovedBy (500L, baked
+        // into approvedFixtureDto), not a broadcast to the whole CEO approver set.
+        verify(notificationService).notify(eq(500L), eq("OVERTIME_CANCELLED"), anyString(), anyString(), eq("/overtime"), eq(true));
+        verify(notificationService, never())
+            .notify(eq(10099L), eq("OVERTIME_CANCELLED"), anyString(), anyString(), anyString(), anyBoolean());
     }
 
     @Test
@@ -598,6 +819,91 @@ class OvertimeServiceTest {
 
     private boolean isManagerApproved(String status) {
         return "MANAGER_APPROVED".equals(status) || "APPROVED".equals(status);
+    }
+
+    /**
+     * Like {@link #requestDto}, but with {@code reviewedById}/{@code reviewedByName} directly
+     * controllable -- needed to prove the self-cancel-vs-reviewer-cancel wording in the gap B cancel
+     * tests. {@code employeeId} is fixed at 10L (every cancel test above uses that id).
+     */
+    private OvertimeRequestDto cancelFixtureDto(long id, String status, Long reviewedById, String reviewedByName) {
+        OffsetDateTime timestamp = OffsetDateTime.parse("2026-06-14T10:00:00+07:00");
+        return new OvertimeRequestDto(
+            id, 10L, "EMP001", "Test Employee",
+            LocalDate.parse("2026-07-15"),
+            OffsetDateTime.parse("2026-07-15T18:00:00+07:00"),
+            OffsetDateTime.parse("2026-07-15T20:00:00+07:00"),
+            120, "WORKDAY", new BigDecimal("1.50"), "Customer shipment",
+            status,
+            null, null, 0, 0, null,
+            LocalDate.parse("2026-07-01"),
+            10L, "Test Employee", timestamp,
+            null, null, null,
+            null, null, null,
+            reviewedById, reviewedByName, reviewedById == null ? null : timestamp, null,
+            "CANCELLED".equals(status) ? timestamp : null,
+            99L, "Test Manager",
+            true,
+            timestamp, timestamp
+        );
+    }
+
+    /**
+     * An APPROVED row with {@code managerApprovedBy} directly controllable (ceoApprovedBy fixed at
+     * 500L/"Test CEO", matching {@link #requestDto}'s own APPROVED shape) -- needed so
+     * {@code managerCancelOfApprovedOvertimeSkipsNotifyingSelfWhenActorIsTheApprovingManager} can use
+     * a realistic, out-of-{@code Long}-cache manager id instead of {@link #requestDto}'s baked-in
+     * 99L (S-1, review second pass) without disturbing the other tests that rely on that constant.
+     */
+    private OvertimeRequestDto approvedFixtureDto(long id, long employeeId, Long managerApprovedBy) {
+        OffsetDateTime timestamp = OffsetDateTime.parse("2026-06-14T10:00:00+07:00");
+        return new OvertimeRequestDto(
+            id, employeeId, "EMP001", "Test Employee",
+            LocalDate.parse("2026-07-15"),
+            OffsetDateTime.parse("2026-07-15T18:00:00+07:00"),
+            OffsetDateTime.parse("2026-07-15T20:00:00+07:00"),
+            120, "WORKDAY", new BigDecimal("1.50"), "Customer shipment",
+            "APPROVED",
+            null, null, 0, 0, null,
+            LocalDate.parse("2026-07-01"),
+            employeeId, "Test Employee", timestamp,
+            managerApprovedBy, managerApprovedBy == null ? null : "Test Manager",
+            managerApprovedBy == null ? null : OffsetDateTime.parse("2026-06-14T11:00:00+07:00"),
+            500L, "Test CEO", OffsetDateTime.parse("2026-06-14T12:00:00+07:00"),
+            null, null, null, null,
+            null,
+            99L, "Test Manager",
+            true,
+            timestamp, timestamp
+        );
+    }
+
+    /**
+     * A REJECTED row with {@code managerApprovedBy} set -- the real shape {@code OvertimeRepository
+     * #ceoReject} produces for a request that WAS manager-approved before the CEO rejected it (that
+     * column is never cleared by a reject). {@link #requestDto}'s own helper cannot express this: it
+     * ties {@code managerApprovedBy} to the row's CURRENT status only.
+     */
+    private OvertimeRequestDto rejectedWithManagerApprovedBy(long id, long employeeId, Long managerApprovedBy) {
+        OffsetDateTime timestamp = OffsetDateTime.parse("2026-06-14T10:00:00+07:00");
+        return new OvertimeRequestDto(
+            id, employeeId, "EMP001", "Test Employee",
+            LocalDate.parse("2026-07-15"),
+            OffsetDateTime.parse("2026-07-15T18:00:00+07:00"),
+            OffsetDateTime.parse("2026-07-15T20:00:00+07:00"),
+            120, "WORKDAY", new BigDecimal("1.50"), "Customer shipment",
+            "REJECTED",
+            null, null, 0, 0, null,
+            LocalDate.parse("2026-07-01"),
+            employeeId, "Test Employee", timestamp,
+            managerApprovedBy, managerApprovedBy == null ? null : "Test Manager", managerApprovedBy == null ? null : timestamp,
+            null, null, null,
+            500L, "Test CEO", timestamp, "not justified",
+            null,
+            99L, "Test Manager",
+            true,
+            timestamp, timestamp
+        );
     }
 
     private UserPrincipal user(String role, Long employeeId) {
