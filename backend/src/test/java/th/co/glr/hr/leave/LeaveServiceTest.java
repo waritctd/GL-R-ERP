@@ -639,6 +639,192 @@ class LeaveServiceTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────
+    // Notification coverage gap B: cancel() must notify the requester and whoever the request was
+    // still pending with -- but NOT an already-decided request's approvers.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void selfCancelOfSubmittedRequestNotifiesEmployeeAndThePendingManager() {
+        LeaveRequestDto submitted = cancelFixtureDto(90L, "SUBMITTED", null, null, 99L);
+        LeaveRequestDto cancelled = cancelFixtureDto(90L, "CANCELLED", null, null, 99L);
+        when(leaveRepository.findById(90L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
+        when(leaveRepository.cancel(90L, null, null)).thenReturn(1);
+
+        leaveService.cancel(90L, null, user("employee", 10L));
+
+        // Self-cancel: reviewedById is null on the after-cancel row, same shape LeaveRepository#cancel
+        // itself writes for an employee cancelling their own request (reviewer ? actorId : null).
+        verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(99L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+    }
+
+    @Test
+    void reviewerCancelOfSubmittedRequestNotifiesEmployeeAndThePendingManager() {
+        LeaveRequestDto submitted = cancelFixtureDto(91L, "SUBMITTED", null, null, 99L);
+        LeaveRequestDto cancelled = cancelFixtureDto(91L, "CANCELLED", 20L, "Test HR", 99L);
+        when(leaveRepository.findById(91L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
+        when(leaveRepository.cancel(91L, 20L, null)).thenReturn(1);
+        UserPrincipal hr = user("hr", 20L);
+
+        leaveService.cancel(91L, null, hr);
+
+        verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(99L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+    }
+
+    /**
+     * S1: {@code selfCancelOfSubmittedRequestNotifiesEmployeeAndThePendingManager} (above) and
+     * {@code reviewerCancelOfSubmittedRequestNotifiesEmployeeAndThePendingManager} (above) asserted
+     * the employee-facing message with {@code any(String.class)} -- identical assertions for two
+     * cases the Javadoc on {@link #cancelFixtureDto} claims are wording-distinguished, so inverting
+     * the self-vs-reviewer ternary in {@code LeaveService#notifyCancelled} would leave both green.
+     * These two capture the actual body and assert the ACTOR-dependent content.
+     */
+    @Test
+    void selfCancelOfSubmittedRequestWordsTheEmployeeMessageAsSelfCancel() {
+        LeaveRequestDto submitted = cancelFixtureDto(96L, "SUBMITTED", null, null, 99L);
+        LeaveRequestDto cancelled = cancelFixtureDto(96L, "CANCELLED", null, null, 99L);
+        when(leaveRepository.findById(96L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
+        when(leaveRepository.cancel(96L, null, null)).thenReturn(1);
+
+        leaveService.cancel(96L, null, user("employee", 10L));
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), body.capture(), eq("/leave"), eq(true));
+        assertThat(body.getValue()).contains("ถูกยกเลิกเรียบร้อยแล้ว").doesNotContain("ถูกยกเลิกโดย");
+    }
+
+    @Test
+    void reviewerCancelOfSubmittedRequestWordsTheEmployeeMessageWithTheActingReviewersName() {
+        LeaveRequestDto submitted = cancelFixtureDto(97L, "SUBMITTED", null, null, 99L);
+        LeaveRequestDto cancelled = cancelFixtureDto(97L, "CANCELLED", 20L, "Test HR", 99L);
+        when(leaveRepository.findById(97L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
+        when(leaveRepository.cancel(97L, 20L, null)).thenReturn(1);
+        UserPrincipal hr = user("hr", 20L);
+
+        leaveService.cancel(97L, null, hr);
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), body.capture(), eq("/leave"), eq(true));
+        // user("hr", 20L)'s UserPrincipal#name() is the literal role string "hr" -- see that helper.
+        assertThat(body.getValue()).contains("ถูกยกเลิกโดย hr");
+    }
+
+    /**
+     * BLOCKING 1's Leave-side failure case: employee E's direct manager M (reachable via {@code
+     * isDirectManager}, not just HR's blanket {@code REVIEW_ALL_ROLES}) cancels E's own SUBMITTED
+     * request. {@code before.managerEmployeeId()} resolves to M -- the SAME person doing the
+     * cancelling -- so M must not be told about the cancellation M themselves just performed.
+     */
+    @Test
+    void directManagerCancelOfSubmittedRequestDoesNotNotifyThemselfAsThePendingManager() {
+        // S-1 (review, second pass): manager id raised from 99L to 10099L -- a realistic 4-5 digit
+        // id, OUTSIDE Java's Long cache (-128..127). 99L could never catch a regression from the
+        // primitive-`long` self-skip comparison back to a boxed-`Long` reference comparison: cached
+        // Longs of the same small value are always `==` equal regardless, so the assertion below
+        // would stay green either way. Proven: see the mutation-check in the PR report.
+        LeaveRequestDto submitted = cancelFixtureDto(98L, "SUBMITTED", null, null, 10099L);
+        LeaveRequestDto cancelled = cancelFixtureDto(98L, "CANCELLED", 10099L, "Test Manager", 10099L);
+        when(leaveRepository.findById(98L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
+        when(leaveRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new LeaveEmployeeAccess(10L, 10099L, true)));
+        when(leaveRepository.cancel(98L, 10099L, null)).thenReturn(1);
+        UserPrincipal directManager =
+            new UserPrincipal(10099L, "mgr2@glr.co.th", "Test Manager", "employee", 10099L, true, LocalDate.now(), false, null, false);
+
+        leaveService.cancel(98L, null, directManager);
+
+        verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService, org.mockito.Mockito.never())
+            .notify(eq(10099L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), any(String.class), org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    /**
+     * Wrong-way-round for gap B: an APPROVED request's cancellation has no PENDING reviewer left --
+     * the manager already acted (approve() notified them at the time) and must NOT hear about the
+     * cancellation as if their queue still held it. (D1 -- see the tests below -- separately notifies
+     * the ORIGINAL approver, read from {@code reviewedById}, which this fixture leaves {@code null}.)
+     */
+    @Test
+    void cancelOfApprovedRequestDoesNotNotifyTheManager() {
+        LeaveRequestDto approved = requestDto(92L, 10L, "APPROVED", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), "2.00", "0.00");
+        LeaveRequestDto cancelled = requestDto(92L, 10L, "CANCELLED", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), "2.00", "0.00");
+        when(leaveRepository.findById(92L)).thenReturn(Optional.of(approved)).thenReturn(Optional.of(cancelled));
+        when(leaveRepository.cancel(92L, 20L, null)).thenReturn(1);
+        UserPrincipal hr = user("hr", 20L);
+
+        leaveService.cancel(92L, null, hr);
+
+        verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        // The fixture's managerEmployeeId is 99L (see requestDto) -- must never be notified here.
+        verify(notificationService, org.mockito.Mockito.never())
+            .notify(eq(99L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), any(String.class), org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    /**
+     * D1 (owner ruling): cancelling an ALREADY-APPROVED leave reverses payroll-relevant state ({@link
+     * LeaveService#recordPayrollCorrectionIfNeeded} writes a correction when there are unpaid days --
+     * zero here, via {@code cancelFixtureDto}'s fixed unpaidDays, so that write path itself is not
+     * re-tested by this case) -- the person who actually approved it, read from {@code
+     * before.reviewedById()}, must be told.
+     */
+    @Test
+    void reviewerCancelOfApprovedRequestNotifiesTheOriginalApprover() {
+        LeaveRequestDto approved = cancelFixtureDto(94L, "APPROVED", 20L, "Test HR", 99L);
+        LeaveRequestDto cancelled = cancelFixtureDto(94L, "CANCELLED", 30L, "Second HR", 99L);
+        when(leaveRepository.findById(94L)).thenReturn(Optional.of(approved)).thenReturn(Optional.of(cancelled));
+        when(leaveRepository.cancel(94L, 30L, null)).thenReturn(1);
+        UserPrincipal secondHr = user("hr", 30L);
+
+        leaveService.cancel(94L, null, secondHr);
+
+        verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService).notify(eq(20L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+    }
+
+    /**
+     * BLOCKING 1 regression for D1: the reviewer who APPROVED the request is the SAME person
+     * cancelling it -- must not be told about their own action.
+     */
+    @Test
+    void reviewerCancelOfApprovedRequestSkipsNotifyingSelfWhenActorIsTheOriginalApprover() {
+        // S-1 (review, second pass): HR actor id raised from 20L to 10020L -- same cache-blind-spot
+        // reasoning as directManagerCancelOfSubmittedRequestDoesNotNotifyThemselfAsThePendingManager
+        // above.
+        LeaveRequestDto approved = cancelFixtureDto(95L, "APPROVED", 10020L, "Test HR", 99L);
+        LeaveRequestDto cancelled = cancelFixtureDto(95L, "CANCELLED", 10020L, "Test HR", 99L);
+        when(leaveRepository.findById(95L)).thenReturn(Optional.of(approved)).thenReturn(Optional.of(cancelled));
+        when(leaveRepository.cancel(95L, 10020L, null)).thenReturn(1);
+        UserPrincipal hr = user("hr", 10020L);
+
+        leaveService.cancel(95L, null, hr);
+
+        verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
+        verify(notificationService, org.mockito.Mockito.never())
+            .notify(eq(10020L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), any(String.class), org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    /** Like {@link #requestDto}, but with reviewedById/reviewedByName/managerEmployeeId controllable -- needed to prove the self-cancel-vs-reviewer-cancel wording and the pending-manager resolution in the gap B tests above. */
+    private LeaveRequestDto cancelFixtureDto(long id, String status, Long reviewedById, String reviewedByName, Long managerEmployeeId) {
+        OffsetDateTime timestamp = OffsetDateTime.parse("2026-06-14T10:00:00+07:00");
+        return new LeaveRequestDto(
+            id, 10L, "EMP001", "Test Employee",
+            "VACATION", "Vacation", "Vacation leave",
+            LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"),
+            null, null,
+            new BigDecimal("2.00"), new BigDecimal("2.00"), new BigDecimal("0.00"),
+            2026, "Family trip", null, null, status,
+            new BigDecimal("5.00"), new BigDecimal("3.00"), null,
+            10L, "Test Employee", timestamp,
+            reviewedById, reviewedByName, reviewedById == null ? null : timestamp, null,
+            "CANCELLED".equals(status) ? timestamp : null,
+            managerEmployeeId, managerEmployeeId == null ? null : "Test Manager",
+            timestamp, timestamp,
+            null, null, null, null, null,
+            null, false, null, Map.of(), false
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
     // §5 leave-rules-as-data (V116) -- new per-type gates. Each gate below has a reject case AND an
     // allow case (wrong-way-round: the reject case is the one that matters). The maternity-shaped
     // paid_days_cap 98/45/53 split specifically, and the DB-level (not just Java-level)

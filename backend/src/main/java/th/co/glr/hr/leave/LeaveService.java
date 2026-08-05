@@ -541,7 +541,83 @@ public class LeaveService {
         recordPayrollCorrectionIfNeeded(existing);
         LeaveRequestDto after = requireRequest(id);
         auditService.record(user, "CANCEL_LEAVE_REQUEST", "leave_request", id, existing, after);
+        notifyCancelled(existing, after, actorEmployeeId, user.name());
         return withCanReviewFlag(after, user);
+    }
+
+    /**
+     * Notification coverage gap B: cancelling a request used to notify nobody, so a withdrawn item
+     * sat in a reviewer's queue forever. Notifies the requester unconditionally, plus the direct
+     * manager IF the request was still pending review ({@code before.status() == SUBMITTED}) and a
+     * direct manager is on file. {@code before.status() == APPROVED} has no PENDING reviewer, but
+     * cancelling it reverses payroll-relevant state ({@link #recordPayrollCorrectionIfNeeded} writes
+     * a correction) -- D1 (owner ruling): whoever actually approved it, read from {@code
+     * before.reviewedById()} (the same column {@link #approve} itself writes the actor into -- HR or
+     * the direct manager, whichever reviewed it), is told.
+     *
+     * <p>The direct manager (and, for an APPROVED request, {@code reviewedById}) are the only
+     * pending/approving parties this can resolve to a specific employee id. Leave's OTHER possible
+     * reviewer -- HR in general, via {@code REVIEW_ALL_ROLES} -- is a role bucket, not a stored
+     * account: role is derived per-employee by {@code DivisionAccessPolicy#roleFor}. A resolver for
+     * "every employee whose derived role is hr" now exists ({@code
+     * EmployeeRepository#findHrEmployeeIds}, added alongside {@code ProfileRequestService}'s HR
+     * broadcast -- see that class), so this is no longer infeasible in principle; it is simply not
+     * used here, since every leave cancellation already has a specific person to notify (the direct
+     * manager, or -- for D1 -- the specific reviewer who approved it), and broadcasting to the whole
+     * HR division on every leave cancellation was not asked for and would be noisy for a case that
+     * already reaches the person who can act.
+     *
+     * <p>Review finding (BLOCKING 1): the approver-facing message used to hardcode {@code
+     * before.employeeName()} as if the employee themselves always did the cancelling, and never
+     * excluded the actor from the notified set -- a direct manager cancelling their own report's
+     * SUBMITTED request (reachable via {@code isDirectManager}, not just HR) was emailed about the
+     * cancellation they themselves had just performed. Fixed by threading {@code actorEmployeeId}/
+     * {@code actorName} (the caller of {@link #cancel}) through: the approver-facing message is
+     * worded from the actual actor, and the manager/reviewer notification is skipped when they ARE
+     * the actor.
+     *
+     * <p>Review finding (S5): the employee-facing wording used to key off {@code after.reviewedById()
+     * != null}, which is {@code true} whenever a reviewer-shaped actor cancelled -- including an HR
+     * employee cancelling their OWN request (reachable: {@code canReviewAll} grants any "hr"-role
+     * account blanket reviewer status, independent of whose request it is, and role is derived live
+     * from the employee's CURRENT division, so a request submitted before that employee moved into
+     * HR can still be sitting SUBMITTED afterwards). That produced "ถูกยกเลิกโดย <own name>" for a
+     * genuine self-cancel. Keyed off {@code actorEmployeeId == after.employeeId()} instead, which is
+     * exactly "did the person taking this action own the request", regardless of what role let them
+     * take it.
+     */
+    private void notifyCancelled(LeaveRequestDto before, LeaveRequestDto after, long actorEmployeeId, String actorName) {
+        String actorLabel = actorName == null || actorName.isBlank() ? "หัวหน้างานหรือ HR" : actorName;
+        boolean cancelledByReviewer = actorEmployeeId != after.employeeId();
+        String period = after.startDate() + " ถึง " + after.endDate();
+        notificationService.notify(
+            after.employeeId(),
+            "LEAVE_CANCELLED",
+            "คำขอลาถูกยกเลิก",
+            cancelledByReviewer
+                ? "คำขอลา " + after.leaveTypeNameTh() + " วันที่ " + period + " ถูกยกเลิกโดย " + actorLabel
+                : "คำขอลา " + after.leaveTypeNameTh() + " วันที่ " + period + " ถูกยกเลิกเรียบร้อยแล้ว",
+            "/leave",
+            true);
+        if ("SUBMITTED".equals(before.status())
+                && before.managerEmployeeId() != null && before.managerEmployeeId() != actorEmployeeId) {
+            notificationService.notify(
+                before.managerEmployeeId(),
+                "LEAVE_CANCELLED",
+                "คำขอลาที่รอพิจารณาถูกยกเลิก",
+                actorLabel + " ยกเลิกคำขอลา " + before.leaveTypeNameTh() + " วันที่ " + period,
+                "/leave",
+                true);
+        } else if ("APPROVED".equals(before.status())
+                && before.reviewedById() != null && before.reviewedById() != actorEmployeeId) {
+            notificationService.notify(
+                before.reviewedById(),
+                "LEAVE_CANCELLED",
+                "คำขอลาที่อนุมัติแล้วถูกยกเลิก",
+                actorLabel + " ยกเลิกคำขอลา " + before.leaveTypeNameTh() + " วันที่ " + period + " ที่อนุมัติแล้ว",
+                "/leave",
+                true);
+        }
     }
 
     /**

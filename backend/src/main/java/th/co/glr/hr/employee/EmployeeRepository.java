@@ -116,6 +116,81 @@ public class EmployeeRepository {
         }
     }
 
+    /**
+     * D2 (owner ruling): every active employee whose derived login role is EXACTLY {@code "hr"} per
+     * {@link th.co.glr.hr.auth.DivisionAccessPolicy#roleFor}.
+     *
+     * <p><b>S-3 review finding: the previous {@code d.source_code ILIKE 'HR%'} query did NOT mirror
+     * {@code roleFor} and the mismatch was latent, not theoretical.</b> {@code roleFor} is:
+     *
+     * <pre>
+     * public static String roleFor(EmployeeLoginRecord employee) {
+     *     String code = divisionCode(employee);
+     *     if ("md".equals(code) || isExecutive(employee)) {
+     *         return "ceo";
+     *     }
+     *     if ("hr".equals(code)) {
+     *         return "hr";
+     *     }
+     *     ...
+     * }
+     * private static String divisionCode(EmployeeLoginRecord employee) {
+     *     String source = firstText(employee.divisionCode(), prefix(employee.divisionName()));
+     *     return source == null ? "" : source.trim().toLowerCase(Locale.ROOT);
+     * }
+     * </pre>
+     *
+     * which the SQL below now reproduces exactly, in two respects {@code ILIKE 'HR%'} got wrong:
+     *
+     * <ol>
+     *   <li><b>Exact match, not prefix.</b> {@code roleFor} requires {@code "hr".equals(code)} --
+     *       an {@code HRD}-style {@code source_code} (Human Resources <em>Development</em>, say)
+     *       would satisfy {@code ILIKE 'HR%'} but does NOT equal {@code "hr"}, so {@code roleFor}
+     *       resolves such an employee to {@code "employee"}, never {@code "hr"}. The old query
+     *       would have wrongly notified them.</li>
+     *   <li><b>The {@code source_code IS NULL} fallback.</b> {@code hr.division.source_code} is
+     *       NULLABLE; when it is null or blank, {@code divisionCode()} falls back to the {@code
+     *       name_th} prefix before the first {@code '-'}. {@code d.source_code ILIKE 'HR%'} is
+     *       false for every NULL row regardless of {@code name_th}, so a division like {@code
+     *       name_th = 'HR-บุคคล'} with {@code source_code IS NULL} (a real, observed shape) was
+     *       silently excluded even though {@code roleFor} grants its employees the {@code "hr"}
+     *       role. The {@code CASE} below reproduces the fallback with {@code split_part(...,
+     *       '-', 1)}.</li>
+     * </ol>
+     *
+     * <p><b>Executive precedence, pinned.</b> {@code roleFor} checks {@code isExecutive} BEFORE
+     * {@code "hr".equals(code)} -- an employee whose position contains "กรรมการ" resolves to
+     * {@code "ceo"} even inside the HR division, and must therefore NOT be returned here. The
+     * {@code NOT LIKE '%กรรมการ%'} guard below (whitespace-stripped first, matching {@code
+     * DivisionAccessPolicy#contains}) reproduces that.
+     *
+     * <p>{@code 'HR'} (and the {@code name_th}-prefix {@code 'HR-...'} shape) is confirmed as this
+     * company's actual HR division coding by {@code V115__work_schedule_and_holiday_calendar.sql}'s
+     * OFFICE_5D seed -- not guessed from the "hr" role name.
+     *
+     * <p>This is a RECIPIENT-RESOLUTION query only -- it grants no access and enforces no
+     * permission. Nothing reads its result to decide who MAY do something; every employee it returns
+     * is already independently entitled (via their derived "hr" role) to see whatever this is used
+     * to notify them about. Do not repurpose this as an authorization check.
+     */
+    public List<Long> findHrEmployeeIds() {
+        return jdbc.query("""
+            SELECT e.employee_id
+              FROM hr.employee e
+              JOIN hr.division d ON d.division_id = e.division_id
+              LEFT JOIN hr.position p ON p.position_id = e.position_id
+             WHERE e.is_active = TRUE
+               AND regexp_replace(COALESCE(p.name_th, ''), '\\s+', '', 'g') NOT LIKE '%กรรมการ%'
+               AND lower(btrim(
+                     CASE
+                         WHEN d.source_code IS NOT NULL AND btrim(d.source_code) <> '' THEN d.source_code
+                         ELSE split_part(COALESCE(d.name_th, ''), '-', 1)
+                     END
+                   )) = 'hr'
+             ORDER BY e.employee_id
+            """, Map.of(), (rs, rowNum) -> rs.getLong("employee_id"));
+    }
+
     public Optional<EmployeeDto> findEmployeeSummaryById(long id) {
         try {
             EmployeeDto employee = jdbc.queryForObject(
