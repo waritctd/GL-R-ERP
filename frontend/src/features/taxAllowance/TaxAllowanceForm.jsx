@@ -105,7 +105,6 @@ export function TaxAllowanceForm({
   submitting = false,
   submitLabel = 'ยื่นแบบแจ้ง',
   onSubmit,
-  onValuesChange,
   formId = 'tax-allowance-form',
   footer,
 }) {
@@ -125,11 +124,6 @@ export function TaxAllowanceForm({
   }, [defaultValues, reset]);
 
   const watchedValues = useWatch({ control });
-
-  useEffect(() => {
-    onValuesChange?.(watchedValues);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires on every keystroke by design; onValuesChange is expected to debounce.
-  }, [JSON.stringify(watchedValues)]);
 
   const capByCategory = useMemo(() => capMapFrom(caps), [caps]);
   const groupUsage = useMemo(() => computeGroupUsage(caps, watchedValues || {}), [caps, watchedValues]);
