@@ -58,16 +58,19 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         // certificate, and LeaveService#submit's attachment path does a REAL FK-constrained UPDATE
         // (hr.leave_request.attachment_id -> hr.file_attachment.attachment_id) -- so the stubbed
         // LeaveAttachmentDto must point at a real row, not a fabricated id.
+        // V134 storage-durability fix: LeaveService#submit stores attachments to the database now,
+        // via FileStorageService#storeInDatabase + LeaveAttachmentRepository#saveWithContent.
         FileStorageService fileStorage = mock(FileStorageService.class);
-        when(fileStorage.store(anyString(), anyLong(), any(), any()))
-            .thenReturn(new FileStorageService.StoredFile("cert.pdf", "/tmp/cert.pdf", "application/pdf", 3L));
+        when(fileStorage.storeInDatabase(anyString(), anyLong(), any(), any()))
+            .thenReturn(new FileStorageService.StoredContent(
+                "cert.pdf", "leave/1/cert.pdf", "application/pdf", 3L, "cert content".getBytes()));
         long fileAttachmentId = jdbc.queryForObject("""
             INSERT INTO hr.file_attachment (domain, owner_id, file_name, file_path, mime_type, file_size)
-            VALUES ('leave', 1, 'cert.pdf', '/tmp/cert.pdf', 'application/pdf', 3)
+            VALUES ('leave', 1, 'cert.pdf', 'leave/1/cert.pdf', 'application/pdf', 3)
             RETURNING attachment_id
             """, Map.of(), Long.class);
         LeaveAttachmentRepository leaveAttachments = mock(LeaveAttachmentRepository.class);
-        when(leaveAttachments.save(anyLong(), anyString(), anyString(), anyString(), any(), anyLong()))
+        when(leaveAttachments.saveWithContent(anyLong(), anyString(), anyString(), anyString(), any(), anyLong(), any()))
             .thenReturn(new LeaveAttachmentDto(fileAttachmentId, "leave", 1L, "cert.pdf", "application/pdf", 3L, 1L, Instant.now()));
         leaveService = new LeaveService(
             leaveRepository,

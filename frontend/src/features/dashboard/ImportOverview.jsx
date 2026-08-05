@@ -258,7 +258,7 @@ export function ImportOverview({ user, employee }) {
       </Panel>
 
       <div className="grid grid-cols-2 gap-[14px] max-[720px]:grid-cols-1">
-        <Panel title="คิวของฉัน" className="!p-0 overflow-hidden">
+        <Panel title="คิวของฉัน" flush>
           <div className="flex flex-col">
             <button
               type="button"
@@ -291,7 +291,7 @@ export function ImportOverview({ user, employee }) {
           </div>
         </Panel>
 
-        <Panel title="กำลังขนส่ง" className="!p-0 overflow-hidden">
+        <Panel title="กำลังขนส่ง" flush>
           {inTransit.length === 0 ? (
             <p className="px-4 py-6 text-sm text-text-muted">ไม่มีสินค้าระหว่างขนส่งตอนนี้</p>
           ) : (

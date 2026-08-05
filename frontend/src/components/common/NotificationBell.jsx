@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Button } from './Button.jsx';
 import { Icon } from './Icon.jsx';
 
 const TYPE_ICON = {
@@ -146,10 +147,11 @@ export function NotificationBell({
 
   return (
     <div ref={ref} className="relative">
-      <button
+      <Button
         ref={triggerRef}
         type="button"
-        className="icon-button relative"
+        variant="icon"
+        className="relative"
         onClick={() => setOpen((v) => !v)}
         title="การแจ้งเตือน"
         aria-label={triggerLabel}
@@ -163,7 +165,7 @@ export function NotificationBell({
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
-      </button>
+      </Button>
 
       {open && (
         <div

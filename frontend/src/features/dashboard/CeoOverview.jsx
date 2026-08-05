@@ -353,7 +353,7 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
             />
           </StatGrid>
 
-          <Panel title="รออนุมัติจากคุณ" className="!p-0 overflow-hidden">
+          <Panel title="รออนุมัติจากคุณ" flush>
             {worklist.length === 0 ? (
               <div className="flex items-center gap-3 px-5 py-4 text-text-muted">
                 <Icon name="check" size={18} />

@@ -1894,6 +1894,10 @@ export function PayrollPage({ user, showToast }) {
             rows={periodLines}
             getRowKey={(line) => line.employeeId}
             gridClassName="payroll-table"
+            // Restores what `.payroll-table-region .table-panel` used to do.
+            // A full payroll is 200+ rows; without the cap the table grows to
+            // the page instead of scrolling inside its own region.
+            panelClassName="max-h-[min(68vh,760px)] overflow-auto"
             pageSize={Math.max(periodLines.length, 25)}
             searchable
             searchPlaceholder="ค้นหาพนักงาน"

@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import {
@@ -71,15 +73,15 @@ export function DealTrackingPanel({
   }
 
   return (
-    <section className="panel">
-      <div className="panel-header" style={{ alignItems: 'center' }}>
-        <h2>การติดตามดีล</h2>
+    <Panel
+      title="การติดตามดีล"
+      actions={(
         <StatusBadge tone={ready ? 'success' : 'warning'}>
           <Icon name={ready ? 'check' : 'clock'} size={12} />
           {ready ? 'พร้อมเลื่อนสถานะ' : 'ยังไม่พร้อม'}
         </StatusBadge>
-      </div>
-
+      )}
+    >
       <div className="flex flex-col gap-4 px-4 py-4 sm:px-5">
         {editOpen ? (
           <div className="flex flex-col gap-3">
@@ -128,12 +130,12 @@ export function DealTrackingPanel({
               </label>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <button type="button" className="primary-button" disabled={updating} onClick={submitTracking}>
+              <Button type="button" variant="primary" disabled={updating} onClick={submitTracking}>
                 บันทึก
-              </button>
-              <button type="button" className="secondary-button" disabled={updating} onClick={() => setEditOpen(false)}>
+              </Button>
+              <Button type="button" variant="secondary" disabled={updating} onClick={() => setEditOpen(false)}>
                 ยกเลิก
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
@@ -166,14 +168,14 @@ export function DealTrackingPanel({
               </div>
             </div>
             {canEdit ? (
-              <button type="button" className="secondary-button self-start" onClick={openEdit}>
+              <Button type="button" variant="secondary" className="self-start" onClick={openEdit}>
                 <Icon name="pencil" size={14} />
                 แก้ไขข้อมูลติดตาม
-              </button>
+              </Button>
             ) : null}
           </div>
         )}
       </div>
-    </section>
+    </Panel>
   );
 }

@@ -1,3 +1,4 @@
+import { Button } from '../../components/common/Button.jsx';
 import { expandedRowRegionId } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -110,9 +111,9 @@ export function buildLeaveRequestColumns({ expandedId, onToggleExpand, renderAct
         const expanded = expandedId === request.id;
         const subject = request.employeeName || request.employeeCode || request.employeeId;
         return (
-          <button
+          <Button
             type="button"
-            className="icon-button"
+            variant="icon"
             aria-expanded={expanded}
             aria-controls={expandedRowRegionId(leaveRequestRowKey(request))}
             title={expanded ? 'ซ่อนรายละเอียด' : 'ดูรายละเอียด'}
@@ -120,7 +121,7 @@ export function buildLeaveRequestColumns({ expandedId, onToggleExpand, renderAct
             onClick={() => onToggleExpand(request.id)}
           >
             <Icon name={expanded ? 'chevronUp' : 'chevronDown'} size={14} />
-          </button>
+          </Button>
         );
       },
     },
@@ -205,8 +206,20 @@ export function buildLeaveRequestColumns({ expandedId, onToggleExpand, renderAct
       },
     },
     {
+      // Right-aligned because the number of buttons varies by row: a pending
+      // request offers approve/reject/cancel, an already-decided one only
+      // cancel. Left-packed, that put the last button 88px further left on the
+      // shorter rows (measured 1292 vs 1380 on the HR review queue), so the
+      // column read as ragged rather than as a column. Anchoring on the right
+      // edge lines the trailing control up whatever the count.
+      //
+      // `align` rather than a wrapper: the cell is a block <td> holding the
+      // buttons as inline-flex siblings, so `text-align` reaches them, and
+      // DataTable applies the same class to the header — which a wrapper would
+      // not have done.
       key: 'actions',
       header: actionsHeader,
+      align: 'right',
       render: (request) => renderActions(request),
     },
   ];
