@@ -24,7 +24,7 @@ import {
 import { canSubmitOwnLeave } from './leaveSurfaceTabs.js';
 import {
   buildLeaveRequestColumns, LEAVE_REQUEST_TABLE_GRID, leaveRequestRowKey,
-  renderLeaveRequestExpanded,
+  PendingApproverNote, renderLeaveRequestExpanded,
 } from './leaveRequestTable.jsx';
 
 // FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
@@ -193,6 +193,7 @@ function OwnRequestsSection({
             </Button>
           </span>
         </div>
+        <PendingApproverNote request={request} />
         <span className="min-w-0 truncate text-xs text-text-muted">
           {request.leaveTypeNameTh || request.leaveTypeCode} · {formatDays(request.totalDays)}
         </span>
@@ -663,7 +664,10 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
                   <strong>{formatDateRange(request.startDate, request.endDate)}</strong>
                   <small>{request.employeeName || request.employeeCode} · {request.leaveTypeNameTh}</small>
                 </span>
-                <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                <span className="flex flex-col items-end gap-1">
+                  <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                  <PendingApproverNote request={request} />
+                </span>
               </div>
             );
           })}

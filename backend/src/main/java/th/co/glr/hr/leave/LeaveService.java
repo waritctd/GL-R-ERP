@@ -2032,7 +2032,8 @@ public class LeaveService {
             dto.contactHouseNo(), dto.contactSubdistrict(), dto.contactDistrict(),
             dto.contactProvince(), dto.contactPhone(), dto.purposeCode(), dto.emergencyFiling(),
             dto.systemNoteCode(), dto.systemNoteParams(),
-            canReview);
+            canReview,
+            dto.pendingApproverRole(), dto.pendingApproverName());
     }
 
     /**

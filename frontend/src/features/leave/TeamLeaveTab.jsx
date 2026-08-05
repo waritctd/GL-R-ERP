@@ -19,7 +19,7 @@ import {
 } from './leaveFormatting.js';
 import {
   buildLeaveRequestColumns, LEAVE_REQUEST_TABLE_GRID, leaveRequestRowKey,
-  renderLeaveRequestExpanded,
+  PendingApproverNote, renderLeaveRequestExpanded,
 } from './leaveRequestTable.jsx';
 
 // Bugfix (2026-08): this tab is the correctly-labelled, correctly-scoped home for what
@@ -146,6 +146,7 @@ function TeamRequestsSection({
             </Button>
           </span>
         </div>
+        <PendingApproverNote request={request} />
         <span className="min-w-0 truncate text-xs text-text-muted">
           {request.employeeName || request.employeeCode} · {request.leaveTypeNameTh || request.leaveTypeCode} · {formatDays(request.totalDays)}
         </span>
@@ -398,7 +399,10 @@ export function TeamLeaveTab({ user, showToast }) {
                   <strong>{formatDateRange(request.startDate, request.endDate)}</strong>
                   <small>{request.employeeName || request.employeeCode} · {request.leaveTypeNameTh}</small>
                 </span>
-                <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                <span className="flex flex-col items-end gap-1">
+                  <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                  <PendingApproverNote request={request} />
+                </span>
               </div>
             );
           })}

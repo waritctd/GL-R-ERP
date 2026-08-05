@@ -2814,6 +2814,93 @@ function hasManagerApproverFor(employeeId) {
     && isManagerPosition(peer));
 }
 
+// feat/pending-approver-info: mirrors PendingApproverSql on the backend -- "who this is waiting on"
+// for a SUBMITTED/MANAGER_APPROVED leave/overtime/special-money request, computed READ-ONLY
+// (never gates an approval decision here, same as the backend resolvers). Simplified but not
+// misleadingly different: the real backend derives the "ceo"/"hr" ROLE from division+position
+// (DivisionAccessPolicy.roleFor), but this mock already has each account's role stored directly on
+// db.users -- reading that field is the honest mock-mode equivalent, not a separate reimplementation
+// of the derivation itself.
+//
+// Ambiguity handling matches the backend exactly: a name is shown only when there is EXACTLY ONE
+// active account holding that role; with zero or more than one, the name is omitted (role shown
+// alone). See PendingApproverSql's Javadoc for the backend-side reasoning this mirrors.
+function activeUsersWithRole(role) {
+  return db.users.filter((candidate) => candidate.role === role && candidate.active !== false);
+}
+
+// Name preference: nickname, falling back to a first-name-shaped stand-in, mirroring the backend's
+// "nickname, else first_name_th, never blank" preference (PendingApproverSql). db.users has no
+// separate first-name field, so the user's own `name` (already a full display name, e.g. "คุณวิชัย
+// ธนาคาร") is the fallback here -- a simplification, not a shape mismatch, since it is used only
+// when nickName is missing.
+function approverDisplayName(userAccount) {
+  if (!userAccount) return null;
+  const employee = userAccount.employeeId ? findEmployee(userAccount.employeeId) : null;
+  return employee?.nickName || userAccount.name || null;
+}
+
+function singleActiveApproverName(role) {
+  const candidates = activeUsersWithRole(role);
+  return candidates.length === 1 ? approverDisplayName(candidates[0]) : null;
+}
+
+// The SAME peer set hasManagerApproverFor's own EXISTS check counts (division match + not-inactive
+// + manager position) -- kept literally identical so the two can never disagree about who the
+// division-manager candidates are.
+function divisionManagerPeers(employeeId) {
+  const employee = findEmployee(employeeId);
+  if (!employee || employee.divisionId == null) return [];
+  return db.employees.filter((peer) => peer.divisionId === employee.divisionId
+    && peer.isActive !== false
+    && isManagerPosition(peer));
+}
+
+function singleDivisionManagerName(employeeId) {
+  const peers = divisionManagerPeers(employeeId);
+  return peers.length === 1 ? (peers[0].nickName || peers[0].nameTh || null) : null;
+}
+
+// Leave: mirrors LeaveRepository#resolvePendingApproverRole/Name -- SUBMITTED only (leave has no
+// CEO stage). An active direct manager (managerIdForEmployee) if present; otherwise "hr"
+// generically.
+function pendingApproverForLeave(record, managerEmployeeId) {
+  if (record.status !== 'SUBMITTED') return { pendingApproverRole: null, pendingApproverName: null };
+  if (managerEmployeeId) {
+    const manager = findEmployee(managerEmployeeId);
+    const managerActive = manager?.active !== false;
+    if (managerActive) {
+      return { pendingApproverRole: 'manager', pendingApproverName: manager?.nickName || manager?.nameTh || null };
+    }
+  }
+  return { pendingApproverRole: 'hr', pendingApproverName: singleActiveApproverName('hr') };
+}
+
+// Overtime: mirrors OvertimeRepository#resolvePendingApproverRole/Name -- SUBMITTED with a manager
+// stage (hasManagerApproverFor) routes to "manager"; SUBMITTED with none, or MANAGER_APPROVED,
+// routes to "ceo".
+function pendingApproverForOvertime(record) {
+  if (record.status === 'SUBMITTED') {
+    return hasManagerApproverFor(record.employeeId)
+      ? { pendingApproverRole: 'manager', pendingApproverName: singleDivisionManagerName(record.employeeId) }
+      : { pendingApproverRole: 'ceo', pendingApproverName: singleActiveApproverName('ceo') };
+  }
+  if (record.status === 'MANAGER_APPROVED') {
+    return { pendingApproverRole: 'ceo', pendingApproverName: singleActiveApproverName('ceo') };
+  }
+  return { pendingApproverRole: null, pendingApproverName: null };
+}
+
+// Special money: mirrors SpecialMoneyRepository#resolvePendingApproverRole/Name -- welfare is
+// CEO-only, single-stage (SpecialMoneyService's class Javadoc), so both pending statuses resolve
+// to "ceo".
+function pendingApproverForSpecialMoney(record) {
+  if (record.status === 'SUBMITTED' || record.status === 'MANAGER_APPROVED') {
+    return { pendingApproverRole: 'ceo', pendingApproverName: singleActiveApproverName('ceo') };
+  }
+  return { pendingApproverRole: null, pendingApproverName: null };
+}
+
 function leaveTypeByCode(code) {
   const type = db.leaveTypes.find((item) => item.code === String(code || '').toUpperCase());
   if (!type) fail('ประเภทการลาไม่ถูกต้อง', 400);
@@ -2931,6 +3018,7 @@ function buildLeaveRecord(record) {
     managerName: manager?.nameTh || null,
     leaveTypeNameTh: leaveType.nameTh,
     leaveTypeNameEn: leaveType.nameEn,
+    ...pendingApproverForLeave(record, managerEmployeeId),
   };
 }
 
@@ -2987,6 +3075,7 @@ function buildOvertimeRecord(record) {
     // it. Omitting it here would leave the field undefined, which the panel reads as "has a manager
     // stage" -- the CEO would then never see the button on a manager-less request under mocks.
     hasManagerApprover: hasManagerApproverFor(record.employeeId),
+    ...pendingApproverForOvertime(record),
   };
 }
 
@@ -3062,6 +3151,7 @@ function buildSpecialMoneyRecord(record) {
     // Projected per row by SpecialMoneyRepository.baseSelect(): a reviewer sees the document trail
     // before opening the request, and the panel can warn before an approval the server will refuse.
     attachmentCount: specialMoneyAttachmentsFor(record.id).length,
+    ...pendingApproverForSpecialMoney(record),
   };
 }
 

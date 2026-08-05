@@ -497,7 +497,12 @@ class SpecialMoneyServiceTest {
             "Test Manager",
             0,
             OffsetDateTime.parse("2026-06-14T10:00:00+07:00"),
-            OffsetDateTime.parse("2026-06-14T10:00:00+07:00")
+            OffsetDateTime.parse("2026-06-14T10:00:00+07:00"),
+            // feat/pending-approver-info: computed by SpecialMoneyRepository#mapRequest (a real SQL
+            // row mapper this Mockito-level class never exercises), so no test in this class
+            // asserts on them via the helper.
+            null,
+            null
         );
     }
 
