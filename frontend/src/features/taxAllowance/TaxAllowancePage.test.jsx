@@ -20,6 +20,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         withdrawMyTaxAllowanceDeclaration: vi.fn(),
         estimateMyTaxAllowanceDeclaration: vi.fn(),
         listTaxAllowanceAttachments: vi.fn(),
+        uploadTaxAllowanceAttachment: vi.fn(),
       },
     },
   };
@@ -123,6 +124,42 @@ describe('TaxAllowancePage', () => {
 
       expect(await screen.findByText(new RegExp(`ยื่นหรือแก้ไขได้เฉพาะปีภาษี ${currentYear}`))).not.toBeNull();
       expect(screen.queryByRole('button', { name: 'แก้ไข / ยื่นฉบับใหม่' })).toBeNull();
+    });
+  });
+
+  // The user's stated complaint (#tax-allowance-sections): "I couldn't attach a PDF while first
+  // filling in the form" -- there was no declarationId yet for a brand-new declaration to attach
+  // evidence to. This proves the fix end to end: a file picked mid-fill-in shows immediately
+  // (staged, client-side) WITHOUT hitting the server, and is genuinely uploaded — tagged to the
+  // section it was picked under — only once the declaration is actually submitted and a real
+  // declarationId exists.
+  describe('attaching evidence while first filling in a NOT-YET-SUBMITTED declaration', () => {
+    it('stages a PDF picked during step 2, then uploads it against the real declarationId once submit succeeds', async () => {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [] }); // status NONE
+      api.payroll.submitMyTaxAllowanceDeclaration.mockResolvedValue({ declarationId: 77, employeeId: 9, status: 'PENDING' });
+      api.payroll.uploadTaxAllowanceAttachment.mockResolvedValue({ attachment: { attachmentId: 1 } });
+
+      renderPage();
+
+      fireEvent.click(await screen.findByText('ครอบครัว'));
+
+      const file = new File(['x'], 'cert.pdf', { type: 'application/pdf' });
+      const input = document.querySelector('input[type="file"]');
+      fireEvent.change(input, { target: { files: [file] } });
+
+      // Attached immediately, during fill-in -- no round trip needed to SEE it.
+      expect(await screen.findByText('cert.pdf')).not.toBeNull();
+      expect(screen.getByText('รอส่ง')).not.toBeNull();
+      // But genuinely not sent yet -- there is no declarationId for a brand-new declaration.
+      expect(api.payroll.uploadTaxAllowanceAttachment).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', { name: 'ยื่นแบบแจ้ง' }));
+
+      await waitFor(() => expect(api.payroll.submitMyTaxAllowanceDeclaration).toHaveBeenCalled());
+      // Flushed against the REAL declarationId the submit just returned, tagged with the section
+      // it was picked under while filling in -- proves this is not "attach after a first submit",
+      // it is the SAME pick from mid-fill-in finally reaching the server.
+      await waitFor(() => expect(api.payroll.uploadTaxAllowanceAttachment).toHaveBeenCalledWith(77, file, 'family'));
     });
   });
 });

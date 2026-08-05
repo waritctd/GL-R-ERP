@@ -510,9 +510,14 @@ export const api = {
     // csrfHeaders('POST') is applied explicitly here (unlike several older attachment call sites
     // in this file, which forget it and 403 in production) -- see the tax-allowance plan doc's PR C
     // section, "two traps that will cost a day if missed".
-    uploadTaxAllowanceAttachment: async (declarationId, file) => {
+    // sectionKey (V135, feat/tax-allowance-sections): which of TAX_ALLOWANCE_GROUPS' five keys this
+    // evidence belongs to -- optional, so callers outside the tax-allowance section flow (none
+    // today) can omit it and get the pre-existing "general/uncategorized" behaviour. Sent as a plain
+    // form field alongside `file`, not JSON -- this is a multipart request.
+    uploadTaxAllowanceAttachment: async (declarationId, file, sectionKey) => {
       const formData = new FormData();
       formData.append('file', file);
+      if (sectionKey) formData.append('sectionKey', sectionKey);
       const res = await fetch(API_ROUTES.payroll.taxAllowanceDeclarations.attachments(declarationId), {
         method: 'POST',
         credentials: 'include',
