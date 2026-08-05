@@ -74,6 +74,17 @@ export const api = {
     reject: (id, payload = {}) => apiRequest(API_ROUTES.overtime.reject(id), { method: 'POST', body: payload }),
     cancel: (id, payload = {}) => apiRequest(API_ROUTES.overtime.cancel(id), { method: 'POST', body: payload }),
   },
+  // Mirrors AttendanceCorrectionController (attendance/correction/) — an employee who missed a
+  // clock-in/clock-out scan requests the correct time; CEO-only approval, NO manager stage (see
+  // AttendanceCorrectionService class javadoc). Unlike overtime/leave there is no `employees`
+  // lookup: submit is always self-only, so there is no "file on behalf of" picker to populate.
+  attendanceCorrection: {
+    list: (params) => apiRequest(withQuery(API_ROUTES.attendanceCorrection.list, params)),
+    create: (payload) => apiRequest(API_ROUTES.attendanceCorrection.create, { method: 'POST', body: payload }),
+    approve: (id, payload = {}) => apiRequest(API_ROUTES.attendanceCorrection.approve(id), { method: 'POST', body: payload }),
+    reject: (id, payload = {}) => apiRequest(API_ROUTES.attendanceCorrection.reject(id), { method: 'POST', body: payload }),
+    cancel: (id) => apiRequest(API_ROUTES.attendanceCorrection.cancel(id), { method: 'POST' }),
+  },
   specialMoney: {
     list: (params) => apiRequest(withQuery(API_ROUTES.specialMoney.list, params)),
     employees: () => apiRequest(API_ROUTES.specialMoney.employees),

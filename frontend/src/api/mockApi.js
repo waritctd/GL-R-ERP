@@ -386,6 +386,7 @@ db.leaveTypes = db.leaveTypes || [
 // functional regression — only the earlier "all three were dead code" claim was wrong.
 db.leaveRequests = db.leaveRequests || [];
 db.overtimeRequests = db.overtimeRequests || [];
+db.attendanceCorrectionRequests = db.attendanceCorrectionRequests || [];
 db.specialMoneyRequests = db.specialMoneyRequests || [];
 // Evidence uploads live only for the life of the mock session -- there is no file store here.
 db.specialMoneyAttachments = db.specialMoneyAttachments || [];
@@ -3126,6 +3127,33 @@ function canAccessSpecialMoneyEmployee(user, employeeId) {
     || canReviewSpecialMoney(user, employeeId);
 }
 
+// Mirrors AttendanceCorrectionService: CEO-only, single stage, NO manager routing at all (unlike
+// overtime's manager -> CEO pipeline and unlike specialMoney's manager-can-file-on-behalf-but-not-
+// approve shape). Submit is always self-only -- there is no employeeId-on-behalf branch anywhere
+// in this feature, so there is nothing here for a manager (or HR) to be granted.
+function canViewAllAttendanceCorrection(user) {
+  return user.role === 'ceo';
+}
+
+function buildAttendanceCorrectionRecord(record, user) {
+  const employee = db.employees.find((item) => item.id === record.employeeId);
+  const requestedBy = record.requestedById ? db.employees.find((item) => item.id === record.requestedById) : null;
+  const reviewedBy = record.reviewedById ? db.employees.find((item) => item.id === record.reviewedById) : null;
+  return {
+    ...structuredClone(record),
+    employeeCode: employee?.code || null,
+    employeeName: employee?.nameTh || null,
+    requestedByName: requestedBy?.nameTh || null,
+    reviewedByName: reviewedBy?.nameTh || null,
+    // Mirrors AttendanceCorrectionService#withCanReviewFlag: true only for the CEO role, only
+    // while the request is still open (status must be SUBMITTED). Role-only, like requireCeo
+    // itself -- there is no self-exclusion, so a CEO reviewing their OWN correction request also
+    // gets canReview: true here (review #attendance-correction-request; matches the rest of this
+    // app's convention of role-only approval gates with no self-check).
+    canReview: Boolean(user) && canViewAllAttendanceCorrection(user) && record.status === 'SUBMITTED',
+  };
+}
+
 function specialMoneyAttachmentsFor(requestId) {
   return db.specialMoneyAttachments.filter((item) => item.specialMoneyRequestId === requestId);
 }
@@ -4875,6 +4903,132 @@ export const api = {
       request.reviewerNote = payload.reviewerNote || request.reviewerNote;
       request.updatedAt = now;
       return delay({ request: buildOvertimeRecord(request) });
+    },
+  },
+
+  // Mirrors AttendanceCorrectionController + AttendanceCorrectionService
+  // (attendance/correction/) -- an employee who missed a clock-in/clock-out scan requests the
+  // correct time; CEO approves or rejects. NO manager stage at all (simpler than overtime's
+  // manager -> CEO pipeline and simpler than specialMoney's "manager can file on behalf" shape --
+  // submit here is always self-only). Approving in the real backend also writes a
+  // hr.attendance_punch row and flips hr.attendance_daily.is_manual_override; this mock does NOT
+  // reimplement that write (there is no mock attendance_daily table to write into) -- it only
+  // flips status/reviewer fields, same as every other request-review mock in this file. Never
+  // treat a mock "approved" attendance correction as evidence the attendance-side write happened;
+  // that is backend-only and covered by AttendanceCorrectionScopeIntegrationTest.
+  attendanceCorrection: {
+    async list(params = {}) {
+      const user = requireSession();
+      let list = db.attendanceCorrectionRequests;
+      const viewAll = canViewAllAttendanceCorrection(user);
+      if (!viewAll) {
+        if (!user.employeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
+        if (params.employeeId && Number(params.employeeId) !== user.employeeId) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+        list = list.filter((item) => item.employeeId === user.employeeId);
+      } else if (params.employeeId) {
+        list = list.filter((item) => item.employeeId === Number(params.employeeId));
+      }
+      if (params.status) list = list.filter((item) => item.status === params.status);
+      const sorted = [...list].sort((a, b) => (
+        (a.workDate < b.workDate ? 1 : a.workDate > b.workDate ? -1 : 0) || (b.id - a.id)
+      ));
+      return delay({ requests: sorted.map((item) => buildAttendanceCorrectionRecord(item, user)) });
+    },
+
+    async create(payload) {
+      const user = requireSession();
+      const employeeId = user.employeeId;
+      if (!employeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
+      findEmployee(employeeId);
+      if (!payload.workDate) fail('ต้องระบุวันที่', 400);
+      if (payload.workDate > bangkokTodayIso()) fail('ไม่สามารถขอแก้ไขเวลาสำหรับวันที่ในอนาคตได้', 400);
+      const type = payload.correctionType;
+      if (!['CHECK_IN', 'CHECK_OUT', 'BOTH'].includes(type)) fail('ประเภทการแก้ไขไม่ถูกต้อง', 400);
+      const checkIn = payload.requestedCheckIn || null;
+      const checkOut = payload.requestedCheckOut || null;
+      // Mirrors chk_attendance_correction_fields_match_type (V135) + AttendanceCorrectionService
+      // #validateRequestShape -- see that method's javadoc for why this is validated ahead of a
+      // (mock-mode-nonexistent) DB constraint too, not just in the real backend.
+      if (type === 'CHECK_IN' && (!checkIn || checkOut)) fail('กรุณาระบุเวลาเข้างานที่ถูกต้อง', 400);
+      if (type === 'CHECK_OUT' && (!checkOut || checkIn)) fail('กรุณาระบุเวลาออกงานที่ถูกต้อง', 400);
+      if (type === 'BOTH' && (!checkIn || !checkOut)) fail('กรุณาระบุทั้งเวลาเข้างานและเวลาออกงาน', 400);
+      if (checkIn && checkOut && checkOut < checkIn) fail('เวลาออกงานต้องไม่อยู่ก่อนเวลาเข้างาน', 400);
+      if (!payload.reason || !payload.reason.trim()) fail('ต้องระบุเหตุผล', 400);
+      const hasOpenRequest = db.attendanceCorrectionRequests.some((item) => (
+        item.employeeId === employeeId && item.workDate === payload.workDate && item.status === 'SUBMITTED'
+      ));
+      if (hasOpenRequest) fail('มีคำขอแก้ไขเวลาสำหรับวันนี้ที่ยังไม่ได้รับการพิจารณาอยู่แล้ว', 409);
+
+      const id = Math.max(0, ...db.attendanceCorrectionRequests.map((item) => item.id)) + 1;
+      const now = new Date().toISOString();
+      const request = {
+        id,
+        employeeId,
+        workDate: payload.workDate,
+        correctionType: type,
+        requestedCheckIn: checkIn,
+        requestedCheckOut: checkOut,
+        reason: payload.reason.trim(),
+        status: 'SUBMITTED',
+        requestedById: employeeId,
+        requestedAt: now,
+        reviewedById: null,
+        reviewedAt: null,
+        reviewerNote: null,
+        cancelledAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      db.attendanceCorrectionRequests.unshift(request);
+      return delay({ request: buildAttendanceCorrectionRecord(request, user) });
+    },
+
+    async approve(id, payload = {}) {
+      const user = requireSession();
+      const request = db.attendanceCorrectionRequests.find((item) => item.id === Number(id));
+      if (!request) fail('ไม่พบคำขอแก้ไขเวลานี้', 404);
+      if (request.status !== 'SUBMITTED') fail('คำขอแก้ไขเวลานี้ได้รับการพิจารณาไปแล้ว', 409);
+      // CEO-only, no self-approval carve-out -- mirrors AttendanceCorrectionService#requireCeo
+      // exactly (a plain role check, not "unless it's your own request").
+      if (user.role !== 'ceo') fail('เฉพาะ CEO เท่านั้นที่สามารถพิจารณาคำขอแก้ไขเวลาเข้า-ออกงานได้', 403);
+      const now = new Date().toISOString();
+      request.status = 'APPROVED';
+      request.reviewedById = user.employeeId;
+      request.reviewedAt = now;
+      request.reviewerNote = payload.reviewerNote || null;
+      request.updatedAt = now;
+      return delay({ request: buildAttendanceCorrectionRecord(request, user) });
+    },
+
+    async reject(id, payload = {}) {
+      const user = requireSession();
+      const request = db.attendanceCorrectionRequests.find((item) => item.id === Number(id));
+      if (!request) fail('ไม่พบคำขอแก้ไขเวลานี้', 404);
+      if (request.status !== 'SUBMITTED') fail('คำขอแก้ไขเวลานี้ได้รับการพิจารณาไปแล้ว', 409);
+      if (user.role !== 'ceo') fail('เฉพาะ CEO เท่านั้นที่สามารถพิจารณาคำขอแก้ไขเวลาเข้า-ออกงานได้', 403);
+      const now = new Date().toISOString();
+      request.status = 'REJECTED';
+      request.reviewedById = user.employeeId;
+      request.reviewedAt = now;
+      request.reviewerNote = payload.reviewerNote || null;
+      request.updatedAt = now;
+      return delay({ request: buildAttendanceCorrectionRecord(request, user) });
+    },
+
+    // Requester-only -- unlike overtime/specialMoney there is no reviewer-side cancel (the CEO's
+    // only actions on an open request are approve/reject). Mirrors
+    // AttendanceCorrectionService#cancel.
+    async cancel(id) {
+      const user = requireSession();
+      const request = db.attendanceCorrectionRequests.find((item) => item.id === Number(id));
+      if (!request) fail('ไม่พบคำขอแก้ไขเวลานี้', 404);
+      if (request.employeeId !== user.employeeId) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (request.status !== 'SUBMITTED') fail('คำขอแก้ไขเวลานี้ไม่สามารถยกเลิกได้แล้ว', 409);
+      const now = new Date().toISOString();
+      request.status = 'CANCELLED';
+      request.cancelledAt = now;
+      request.updatedAt = now;
+      return delay({ request: buildAttendanceCorrectionRecord(request, user) });
     },
   },
 

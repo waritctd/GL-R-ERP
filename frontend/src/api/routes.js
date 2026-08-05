@@ -49,6 +49,13 @@ export const API_ROUTES = {
     reject: (id) => `/api/overtime/${id}/reject`,
     cancel: (id) => `/api/overtime/${id}/cancel`,
   },
+  attendanceCorrection: {
+    list: '/api/attendance/corrections',
+    create: '/api/attendance/corrections',
+    approve: (id) => `/api/attendance/corrections/${id}/approve`,
+    reject: (id) => `/api/attendance/corrections/${id}/reject`,
+    cancel: (id) => `/api/attendance/corrections/${id}/cancel`,
+  },
   specialMoney: {
     list: '/api/special-money',
     create: '/api/special-money',
