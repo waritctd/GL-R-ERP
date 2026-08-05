@@ -4320,8 +4320,15 @@ export const api = {
       } else if (noticeDays > 0 && payload.startDate < noticeCutoff && payload.startDate >= today) {
         systemNote = `ต้องยื่นคำขอลาล่วงหน้าอย่างน้อย ${noticeDays} วัน กรุณาติดต่อหัวหน้าหรือ HR หากเป็นเหตุเร่งด่วน`;
       }
-      const status = systemNote ? 'AUTO_REJECTED' : 'APPROVED';
-      const remainingAfter = status === 'APPROVED' ? remainingBefore - totalDays : remainingBefore;
+      // Leave requires approval (2026-08-05): mirrors LeaveService#submit -- a rule-passing request
+      // now lands SUBMITTED (awaiting #approve/#reject below), not APPROVED; auto-rejection is
+      // unchanged. paidDays/unpaidDays/remaining are still computed HERE at submit time and persist
+      // unchanged through a later #approve, exactly as the real service's computeQuotaSplit does
+      // (its `approved` flag is `outcome == null`, i.e. "did the rule chain pass", never a literal
+      // status check) -- so remainingAfter is keyed off systemNote (did any gate fire), not off the
+      // request's own status label.
+      const status = systemNote ? 'AUTO_REJECTED' : 'SUBMITTED';
+      const remainingAfter = systemNote ? remainingBefore : remainingBefore - totalDays;
       const id = Math.max(0, ...db.leaveRequests.map((item) => item.id)) + 1;
       const now = new Date().toISOString();
       // Paper-form contact-during-leave block: request value if non-blank, else the employee's

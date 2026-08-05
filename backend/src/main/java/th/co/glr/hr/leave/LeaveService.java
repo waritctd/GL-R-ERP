@@ -10,6 +10,7 @@ import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -25,6 +26,7 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.specialmoney.SpecialMoneyPolicyEvaluator;
 
@@ -107,6 +109,11 @@ public class LeaveService {
     private final FileStorageService fileStorage;
     private final AuditService auditService;
     private final NotificationService notificationService;
+    // Leave requires approval (2026-08-05): resolves the HR fallback recipient set for
+    // #notifyPendingApproval when a SUBMITTED request's employee has no manager of record --
+    // reused rather than duplicated, per this class's own EmployeeRepository#findHrEmployeeIds
+    // Javadoc pointer. No other method on this class touches it.
+    private final EmployeeRepository employeeRepository;
     private final Clock clock;
 
     // §5 leave-rules-as-data (V116): advance notice used to be a single global
@@ -120,9 +127,10 @@ public class LeaveService {
                         LeaveAttachmentRepository leaveAttachments,
                         FileStorageService fileStorage,
                         AuditService auditService,
-                        NotificationService notificationService) {
+                        NotificationService notificationService,
+                        EmployeeRepository employeeRepository) {
         this(leaveRepository, leaveAttachments, fileStorage, auditService, notificationService,
-            Clock.system(BUSINESS_ZONE));
+            employeeRepository, Clock.system(BUSINESS_ZONE));
     }
 
     LeaveService(LeaveRepository leaveRepository,
@@ -130,12 +138,14 @@ public class LeaveService {
                  FileStorageService fileStorage,
                  AuditService auditService,
                  NotificationService notificationService,
+                 EmployeeRepository employeeRepository,
                  Clock clock) {
         this.leaveRepository = leaveRepository;
         this.leaveAttachments = leaveAttachments;
         this.fileStorage = fileStorage;
         this.auditService = auditService;
         this.notificationService = notificationService;
+        this.employeeRepository = employeeRepository;
         this.clock = clock;
     }
 
@@ -243,9 +253,9 @@ public class LeaveService {
         boolean hasAttachment = attachment != null && !attachment.isEmpty();
         // Leave -> payroll unpaid-day deduction (2026-07-23); §5 leave-rules-as-data (V116) added the
         // once-per-employment/min-service/max-consecutive-days/per-type-notice gates. The gate no
-        // longer auto-rejects purely for exceeding quota. It approves and splits the requested days
-        // into paidDays (bounded by both the remaining statutory quota AND, if the type has one, the
-        // remaining paid-days-cap allowance -- see boundByPaidCap) and unpaidDays (no-work-no-pay,
+        // longer auto-rejects purely for exceeding quota. A rule-passing request splits the requested
+        // days into paidDays (bounded by both the remaining statutory quota AND, if the type has one,
+        // the remaining paid-days-cap allowance -- see boundByPaidCap) and unpaidDays (no-work-no-pay,
         // deducted downstream in payroll at base/30 per unpaid WORKING day -- see
         // PayrollCalculator#unpaidLeaveDeduction). See autoRejectNote for the full list of remaining
         // auto-reject reasons. See docs/agent-handoffs for the HR/legal sign-off caveat the
@@ -258,20 +268,33 @@ public class LeaveService {
         // Phase A0a (structured rejection outcome): `blocking` carries the machine-readable
         // LeaveRuleCode + params alongside the same Thai sentence that used to be the ONLY thing
         // #autoRejectNote returned -- systemNote/status derive from it exactly as before, since
-        // `outcome == null` (approved) and `outcome.messageTh() == null` never happens (see
+        // `outcome == null` (rule chain passed) and `outcome.messageTh() == null` never happens (see
         // LeaveRuleOutcome#of, which always renders a non-null sentence for a non-null code).
         LeaveRuleOutcome outcome = autoReject.blocking();
         String systemNote = outcome == null ? null : outcome.messageTh();
-        LeaveStatus status = systemNote == null ? LeaveStatus.APPROVED : LeaveStatus.AUTO_REJECTED;
+        // Leave requires approval (2026-08-05, owner ruling): a rule-passing request used to become
+        // APPROVED here, instantly, with no human in the loop -- SUBMITTED was unreachable from this
+        // method. It now lands SUBMITTED and waits for #approve/#reject (both already guard
+        // requireStatus(existing, SUBMITTED), and were dead code from this path until now). A
+        // rule-BREAKING request is unaffected: it still lands AUTO_REJECTED, exactly as before -- the
+        // owner ruling explicitly keeps every auto-reject gate as-is and changes only the rule-passing
+        // branch. Back-dated filing (ส่งลาย้อนหลัง) still submits fine; it simply also waits for a
+        // human to approve it, same as any other request.
+        LeaveStatus status = systemNote == null ? LeaveStatus.SUBMITTED : LeaveStatus.AUTO_REJECTED;
 
         // V118 cross-year quota fix (2026-08-02): extracted (Phase A0b) to #computeQuotaSplit -- see
-        // that method's Javadoc, which carries this comment's full original text verbatim. #preview
-        // calls the SAME method for its own totalDays/paidDays/unpaidDays/quotaYearSplits response
-        // fields, so a previewed figure and the figure #submit would actually persist can never drift
-        // apart through two separate implementations of this arithmetic.
+        // that method's Javadoc. #preview calls the same method, so a previewed figure and what
+        // #submit persists can never drift apart.
+        //
+        // Leave requires approval: `outcome == null` replaces the old `status == LeaveStatus.APPROVED`
+        // here -- an EQUIVALENT condition (status was APPROVED exactly when outcome was null), not a
+        // behaviour change, since #approve/#reject never touch the split computed here. Payroll is
+        // therefore unaffected: findUnpaidLeaveDaysByEmployeeForMonth still only reads APPROVED rows,
+        // so a SUBMITTED request's already-correct unpaid_days simply sits inert until #approve flips
+        // the status -- no recomputation, nothing to drift.
         QuotaSplitResult quotaSplit = computeQuotaSplit(
             employeeId, leaveType, request.startDate(), request.endDate(), totalDays, isWorkingDay,
-            quotaYear, status == LeaveStatus.APPROVED);
+            quotaYear, outcome == null);
         List<LeaveQuotaYearSplit> quotaYearSplits = quotaSplit.quotaYearSplits();
         BigDecimal paidDays = quotaSplit.paidDays();
         BigDecimal unpaidDays = quotaSplit.unpaidDays();
@@ -347,7 +370,7 @@ public class LeaveService {
         }
         LeaveRequestDto created = requireRequest(id);
         auditService.record(user, "SUBMIT_LEAVE_REQUEST", "leave_request", id, null, created);
-        notifyAfterSubmit(created, status);
+        notifyAfterSubmit(created, status, actorEmployeeId);
         return withCanReviewFlag(created, user);
     }
 
@@ -559,10 +582,11 @@ public class LeaveService {
      * pending/approving parties this can resolve to a specific employee id. Leave's OTHER possible
      * reviewer -- HR in general, via {@code REVIEW_ALL_ROLES} -- is a role bucket, not a stored
      * account: role is derived per-employee by {@code DivisionAccessPolicy#roleFor}. A resolver for
-     * "every employee whose derived role is hr" now exists ({@code
-     * EmployeeRepository#findHrEmployeeIds}, added alongside {@code ProfileRequestService}'s HR
-     * broadcast -- see that class), so this is no longer infeasible in principle; it is simply not
-     * used here, since every leave cancellation already has a specific person to notify (the direct
+     * "every employee whose derived role is hr" exists ({@link EmployeeRepository#findHrEmployeeIds},
+     * added alongside {@code ProfileRequestService}'s HR broadcast -- see that class; leave requires
+     * approval (2026-08-05) is now this file's OWN user of it too, as the no-manager-of-record
+     * fallback in {@link #notifyPendingApproval}), so it is not infeasible here -- it is simply not
+     * NEEDED here, since every leave cancellation already has a specific person to notify (the direct
      * manager, or -- for D1 -- the specific reviewer who approved it), and broadcasting to the whole
      * HR division on every leave cancellation was not asked for and would be noisy for a case that
      * already reaches the person who can act.
@@ -742,10 +766,16 @@ public class LeaveService {
      * consequence of that design (a boundary-straddling request can receive more total paid days than
      * a same-year one would).
      *
-     * <p>{@code approved} stands in for the caller's {@code status == LeaveStatus.APPROVED} check --
-     * an unapproved (AUTO_REJECTED) request still gets a full per-year breakdown, just with every
-     * paidDaysYear/unpaidDaysYear pinned to ZERO (nothing was actually granted) and
-     * remainingAfterYear left equal to remainingBeforeYear (nothing was consumed).
+     * <p>{@code approved} means "the rule chain did not block this request" ({@code outcome == null}
+     * in both {@link #submit} and {@link #preview} -- see #submit's own call site comment, added when
+     * leave stopped auto-approving (2026-08-05), for why this is deliberately NOT {@code status ==
+     * LeaveStatus.APPROVED}: {@link #submit} now persists a rule-passing request as SUBMITTED, not
+     * APPROVED, and #approve/#reject never recompute or touch this split -- the entitlement computed
+     * here with {@code approved = true} is the one that survives, unchanged, all the way through a
+     * later human approval. An AUTO_REJECTED request (the only case {@code approved = false} is ever
+     * passed) still gets a full per-year breakdown, just with every paidDaysYear/unpaidDaysYear pinned
+     * to ZERO (nothing was actually granted) and remainingAfterYear left equal to remainingBeforeYear
+     * (nothing was consumed).
      *
      * <p>Called from both {@link #submit} (persists the result) and {@link #preview} (a dry run --
      * see that method's Javadoc) with identical arguments for identical inputs, so a previewed figure
@@ -1795,36 +1825,25 @@ public class LeaveService {
         return new AutoRejectResult(null, false, evaluateDepartmentCoverage);
     }
 
-    private void notifyAfterSubmit(LeaveRequestDto request, LeaveStatus status) {
-        if (status == LeaveStatus.APPROVED) {
-            boolean hasUnpaidDays = request.unpaidDays() != null && request.unpaidDays().signum() > 0;
-            // review fix (V116): the unpaid portion no longer only comes from exceeding the quota --
-            // paid_days_cap (e.g. MATERNITY: 98-day quota, 45-day paid cap) can produce unpaid days on
-            // a request that never touched the quota limit at all. "เนื่องจากเกินโควตา" ("because it
-            // exceeded quota") would be a false claim in that case, so the wording no longer names a
-            // specific cause.
-            String unpaidSuffix = hasUnpaidDays
-                ? " (รวมวันลาไม่รับค่าจ้าง " + formatDays(request.unpaidDays()) + " วัน ตามเงื่อนไขของประเภทการลานี้)"
-                : "";
-            notificationService.notify(
-                request.employeeId(),
-                "LEAVE_AUTO_APPROVED",
-                "คำขอลาได้รับการอนุมัติอัตโนมัติ",
-                "คำขอลา " + request.leaveTypeNameTh() + " วันที่ " + request.startDate() + " ถึง "
-                    + request.endDate() + " ได้รับการอนุมัติแล้ว เหลือโควตา "
-                    + formatDays(request.quotaRemainingAfter()) + " วัน" + unpaidSuffix,
-                "/leave",
-                true);
-            if (request.managerEmployeeId() != null) {
-                notificationService.notify(
-                    request.managerEmployeeId(),
-                    "LEAVE_AUTO_APPROVED",
-                    "ลูกทีมมีวันลาที่อนุมัติอัตโนมัติ",
-                    request.employeeName() + " ลา " + request.leaveTypeNameTh() + " วันที่ "
-                        + request.startDate() + " ถึง " + request.endDate(),
-                    "/leave",
-                    true);
-            }
+    /**
+     * Leave requires approval (2026-08-05): {@code actorEmployeeId} (the caller of {@link #submit})
+     * threaded through so {@link #notifyPendingApproval} can exclude the actor from the approver
+     * notification -- the same "nobody is ever notified about their own action" convention {@link
+     * #notifyCancelled} already established in this file.
+     *
+     * <p>Nit fix (Opus review): this used to also branch on {@code status == LeaveStatus.APPROVED}
+     * (a LEAVE_AUTO_APPROVED path), kept around as dead code after this same 2026-08-05 change made
+     * it unreachable -- {@link #submit} now only ever passes {@link LeaveStatus#SUBMITTED} or {@link
+     * LeaveStatus#AUTO_REJECTED} (see that method's own {@code status = systemNote == null ? ...}
+     * line). Removed outright rather than kept "for the shape's own sake": {@code
+     * LEAVE_AUTO_APPROVED} has no other reader (grep the repo), and a branch no test chain can ever
+     * take is a worse trap than a two-way {@code if}/{@code else} would be a comment explaining it.
+     * If auto-approval is ever reintroduced, restore it from git history ({@code git log -p} on this
+     * file) rather than un-deleting a branch that had already drifted from #submit's actual call sites.
+     */
+    private void notifyAfterSubmit(LeaveRequestDto request, LeaveStatus status, long actorEmployeeId) {
+        if (status == LeaveStatus.SUBMITTED) {
+            notifyPendingApproval(request, actorEmployeeId);
             return;
         }
         notificationService.notify(
@@ -1834,6 +1853,77 @@ public class LeaveService {
             request.systemNote() == null ? "คำขอลาไม่ผ่านเงื่อนไข กรุณาติดต่อ HR" : request.systemNote(),
             "/leave",
             true);
+    }
+
+    /**
+     * Leave requires approval (2026-08-05): leave never had a pending-approver notification before
+     * this change, because SUBMITTED was unreachable -- this is the new case.
+     *
+     * <p>Notifies the requester unconditionally ("submitted, awaiting approval"), then the
+     * approver(s) -- resolved from {@link LeaveRequestDto#managerEmployeeId}, which is {@code
+     * reports_to_employee_id} for {@code request.employeeId()} ({@link LeaveRepository#baseSelect}'s
+     * {@code e.reports_to_employee_id} join, {@code e} being the leave-taking employee) -- the SAME
+     * {@code hr.employee.reports_to_employee_id} column {@link #isDirectManager} reads via {@link
+     * LeaveRepository#findEmployeeAccess}, just through the already-joined DTO field instead of a
+     * second lookup, exactly the pattern {@link #notifyCancelled} already uses for its own manager
+     * notification. Deliberately NOT {@code OvertimeService#notifySubmitted}'s division-ผู้จัดการ
+     * model ({@code ManagerApproverRepository}) -- leave's {@link #canReviewEmployee} is {@code
+     * canReviewAll(user)} (role) OR {@link #isDirectManager} (reports-to), a different routing
+     * decision from overtime's, so the notification must be resolved from leave's own decision
+     * source or it would tell the wrong person a request is waiting for them.
+     *
+     * <p><b>No manager of record</b> ({@code managerEmployeeId == null}): falls back to every active
+     * HR-role employee ({@link EmployeeRepository#findHrEmployeeIds}, reused rather than a new query,
+     * as instructed) -- HR can always review any employee's leave via {@link #canReviewAll}
+     * regardless of whose manager they are, so HR is the correct fallback reviewer when there is no
+     * specific manager to tell. This mirrors {@code OvertimeService#notifySubmitted}'s
+     * manager-or-broadcast-fallback SHAPE (notify the specific approver if one exists, else broadcast
+     * to the role-based fallback set) without copying its division-ผู้จัดการ resolver, per this
+     * method's own routing-source requirement above. Deliberately NOT a routine cc to HR on every
+     * submission that already has a manager -- HR is the FALLBACK reviewer (no manager on file), not
+     * a second recipient alongside an existing manager; broadcasting to the whole HR division on
+     * every ordinary leave submission that already reaches its manager was not asked for and would be
+     * noisy for a case that already reaches someone who can act.
+     *
+     * <p>{@code actorEmployeeId} (the caller of {@link #submit} -- the employee themselves, or an
+     * HR/manager filing on a subordinate's behalf via {@link #resolveTargetEmployee}) is excluded
+     * from the approver set via {@link LinkedHashSet#remove}, the same "nobody is ever notified
+     * about their own action" convention {@link #notifyCancelled} already established: a department
+     * manager filing leave for their own direct report IS that report's {@code managerEmployeeId},
+     * and would otherwise be told a request they themselves just filed is waiting for them. This can
+     * leave the approver set empty in that specific case (the filing manager is the only manager of
+     * record) -- accepted deliberately, not a gap: that manager already knows the request exists
+     * (they just created it) and can act on it without a notification telling them so. HR's
+     * broadcast-role visibility into every leave request (independent of this notification) remains
+     * the backstop if the filing manager never returns to it.
+     */
+    private void notifyPendingApproval(LeaveRequestDto request, long actorEmployeeId) {
+        notificationService.notify(
+            request.employeeId(),
+            "LEAVE_SUBMITTED",
+            "ส่งคำขอลาแล้ว",
+            "คำขอลา " + request.leaveTypeNameTh() + " วันที่ " + request.startDate() + " ถึง "
+                + request.endDate() + " ถูกส่งเรียบร้อยแล้ว รอการอนุมัติ",
+            "/leave",
+            true);
+
+        Set<Long> approvers = new LinkedHashSet<>();
+        if (request.managerEmployeeId() != null) {
+            approvers.add(request.managerEmployeeId());
+        } else {
+            approvers.addAll(employeeRepository.findHrEmployeeIds());
+        }
+        approvers.remove(actorEmployeeId);
+        for (Long approverId : approvers) {
+            notificationService.notify(
+                approverId,
+                "LEAVE_PENDING_APPROVAL",
+                "มีคำขอลารออนุมัติ",
+                request.employeeName() + " ส่งคำขอลา " + request.leaveTypeNameTh() + " วันที่ "
+                    + request.startDate() + " ถึง " + request.endDate(),
+                "/leave",
+                true);
+        }
     }
 
     /**

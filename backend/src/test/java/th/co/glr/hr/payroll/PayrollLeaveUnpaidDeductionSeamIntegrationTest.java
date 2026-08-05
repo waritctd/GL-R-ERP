@@ -18,6 +18,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.leave.LeaveAttachmentRepository;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.leave.LeaveRequestDto;
@@ -68,7 +69,8 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
             mock(LeaveAttachmentRepository.class),
             mock(FileStorageService.class),
             mock(AuditService.class),
-            mock(NotificationService.class));
+            mock(NotificationService.class),
+            mock(EmployeeRepository.class));
 
         payrollRepository = new PayrollRepository(jdbc);
         payrollService = new PayrollService(
@@ -102,6 +104,14 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
             new SubmitLeaveRequest(employeeId, "VACATION", monday, monday.plusDays(8), "Trip"),
             employee(employeeId));
         assertThat(leave.unpaidDays()).isEqualByComparingTo("1.00");
+        // Leave requires approval (2026-08-05): #submit now lands a rule-passing request at
+        // SUBMITTED, not APPROVED -- findUnpaidLeaveDaysByEmployeeForMonth (which
+        // #suggestedInputs reads) filters `WHERE status = 'APPROVED'`, so this test's subject
+        // (an approved-leave payroll deduction) requires driving the request all the way to
+        // APPROVED before it can surface. paidDays/unpaidDays were computed and persisted at
+        // submit time and are unchanged by #approve -- see LeaveService#submit's computeQuotaSplit
+        // call-site comment.
+        leaveService.approve(leave.id(), new ReviewLeaveRequest("approved"), hr());
 
         PayrollCarryForwardDtos.SuggestedInputsResponse suggestions = payrollService.suggestedInputs(month, hr());
         PayrollCarryForwardDtos.SuggestedInputRow row = suggestions.suggestions().stream()
@@ -161,6 +171,11 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
             new SubmitLeaveRequest(employeeId, "VACATION", monday, monday.plusDays(8), "Trip"),
             employee(employeeId));
         assertThat(leave.unpaidDays()).isEqualByComparingTo("1.00");
+        // Leave requires approval (2026-08-05): #recordPayrollCorrectionIfNeeded (invoked from
+        // #cancel below) only fires for a request that is APPROVED at cancel time -- this test's
+        // subject is exactly that cancel-after-close correction, so the request must actually
+        // reach APPROVED first.
+        leaveService.approve(leave.id(), new ReviewLeaveRequest("approved"), hr());
 
         insertProcessedPayrollPeriod(month);
         leaveService.cancel(leave.id(), new ReviewLeaveRequest("cancelled after close"), hr());
@@ -196,6 +211,9 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
             employee(employeeId));
         assertThat(leave.totalDays()).isEqualByComparingTo("0.50");
         assertThat(leave.unpaidDays()).isEqualByComparingTo("0.50");
+        // Leave requires approval (2026-08-05): see the whole-day case above -- payroll only sees
+        // APPROVED leave.
+        leaveService.approve(leave.id(), new ReviewLeaveRequest("approved"), hr());
 
         PayrollCarryForwardDtos.SuggestedInputsResponse suggestions = payrollService.suggestedInputs(month, hr());
         PayrollCarryForwardDtos.SuggestedInputRow row = suggestions.suggestions().stream()

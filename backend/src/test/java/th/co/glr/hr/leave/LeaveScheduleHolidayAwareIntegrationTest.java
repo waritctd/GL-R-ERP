@@ -31,6 +31,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -54,9 +55,25 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
 
     private LeaveRepository leaveRepository;
     private LeaveService leaveService;
+    // Nit fix (Opus review): hr() used to hardcode employeeId 1L, which -- since every test here
+    // calls insertEmployee(...) for the leave-taking employee(s) BEFORE ever calling hr(), and each
+    // test starts from a fresh IDENTITY sequence (see AbstractPostgresIntegrationTest) -- collided
+    // with whichever employee happened to be inserted FIRST in that test (e.g.
+    // aSixDaySaturdayCountsAsWorkingForAWarehouseEmployeeButNotForAnOfficeEmployee's own
+    // warehouseEmployee). Every approve() in this class was therefore silently "HR approves their own
+    // request", passing only because canReviewAll(user) is role-based with no self-review guard --
+    // not because the fixture proved a genuine third-party reviewer. Fixed with a dedicated reviewer
+    // row, inserted FIRST (before any test method's own insertEmployee calls), so its id can never
+    // coincide with a leave-taking employee's.
+    private long hrEmployeeId;
 
     @BeforeEach
     void wireRealCollaborators() {
+        hrEmployeeId = jdbc.queryForObject("""
+            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active, hire_date)
+            VALUES ('HR-REVIEWER', 'HR-REVIEWER', 'ทดสอบ', 30000, TRUE, DATE '2015-01-01')
+            RETURNING employee_id
+            """, Map.of(), Long.class);
         AppProperties appProperties = new AppProperties();
         WorkScheduleResolver scheduleResolver = new TieredWorkScheduleResolver(
             new WorkScheduleAssignmentRepository(jdbc, appProperties),
@@ -86,6 +103,7 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
             fileStorage,
             mock(AuditService.class),
             mock(NotificationService.class),
+            mock(EmployeeRepository.class),
             Clock.fixed(FIXED_NOW, BUSINESS_ZONE));
     }
 
@@ -114,6 +132,13 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
             .isEqualByComparingTo("5.00");
         assertThat(warehouseResult.unpaidDays()).isEqualByComparingTo("6.00");
         assertThat(officeResult.unpaidDays()).isEqualByComparingTo("5.00");
+
+        // Leave requires approval (2026-08-05): the payroll deduction query below is filtered to
+        // APPROVED requests (LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth) -- drive both
+        // requests there first so this test's actual subject (the corrected counts reaching payroll)
+        // is genuinely exercised.
+        leaveService.approve(warehouseResult.id(), new ReviewLeaveRequest("approved"), hr());
+        leaveService.approve(officeResult.id(), new ReviewLeaveRequest("approved"), hr());
 
         // The payroll deduction query must reflect the same corrected counts -- this is the query
         // that actually feeds the base/30 unpaid-day deduction (PayrollService#suggestedInputs).
@@ -166,6 +191,13 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
         assertThat(officeResult.totalDays())
             .as("same for a five-day (OFFICE_5D) schedule -- holiday beats schedule for everyone")
             .isEqualByComparingTo("1.00");
+
+        // Leave requires approval (2026-08-05): findUnpaidLeaveDaysByEmployeeForMonth is filtered
+        // to APPROVED requests -- drive all four requests (control pair included) there first.
+        leaveService.approve(warehouseControlResult.id(), new ReviewLeaveRequest("approved"), hr());
+        leaveService.approve(officeControlResult.id(), new ReviewLeaveRequest("approved"), hr());
+        leaveService.approve(warehouseResult.id(), new ReviewLeaveRequest("approved"), hr());
+        leaveService.approve(officeResult.id(), new ReviewLeaveRequest("approved"), hr());
 
         Map<Long, BigDecimal> unpaidAugust =
             leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-08-01"));
@@ -255,7 +287,7 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
         // to this branch).
         LeaveRequestDto maternityResult =
             leaveService.submit(subDayOnHolidayMaternity, certificate, employee(maternityEmployee));
-        assertThat(maternityResult.status()).isEqualTo("APPROVED");
+        assertThat(maternityResult.status()).isEqualTo("SUBMITTED");
     }
 
     // --- helpers ------------------------------------------------------------
@@ -269,6 +301,10 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
     private UserPrincipal employee(long employeeId) {
         return new UserPrincipal(employeeId, employeeId + "@glr.co.th", "Employee", "employee",
             employeeId, true, LocalDate.now(), false, null, false);
+    }
+
+    private UserPrincipal hr() {
+        return new UserPrincipal(hrEmployeeId, "hr@glr.co.th", "HR", "hr", hrEmployeeId, true, LocalDate.now(), false, null, false);
     }
 
     private long insertDepartmentOnSchedule(String code, String scheduleCode) {
