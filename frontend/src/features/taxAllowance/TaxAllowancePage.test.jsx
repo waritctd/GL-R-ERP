@@ -63,7 +63,6 @@ describe('TaxAllowancePage', () => {
     api.payroll.getTaxAllowanceCaps.mockResolvedValue({ caps: [] });
     api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [] });
     api.payroll.listTaxAllowanceAttachments.mockResolvedValue({ items: [] });
-    api.payroll.estimateMyTaxAllowanceDeclaration.mockResolvedValue({ monthlyTaxSaving: 500 });
     api.payroll.withdrawMyTaxAllowanceDeclaration.mockResolvedValue(undefined);
   });
 
@@ -124,28 +123,6 @@ describe('TaxAllowancePage', () => {
 
       expect(await screen.findByText(new RegExp(`ยื่นหรือแก้ไขได้เฉพาะปีภาษี ${currentYear}`))).not.toBeNull();
       expect(screen.queryByRole('button', { name: 'แก้ไข / ยื่นฉบับใหม่' })).toBeNull();
-    });
-  });
-
-  describe('"what this saves me" estimate', () => {
-    it('stays visible after filing, replayed from the stored declaration', async () => {
-      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [declaration()] });
-      renderPage();
-
-      // Not editing (PENDING is read-only), yet the estimate is still requested and rendered.
-      await waitFor(() => {
-        expect(api.payroll.estimateMyTaxAllowanceDeclaration).toHaveBeenCalled();
-      });
-      const body = api.payroll.estimateMyTaxAllowanceDeclaration.mock.calls[0][0];
-      expect(body.taxYear).toBe(currentYear);
-      // The estimate body never carries an employeeId — the server resolves the caller.
-      expect(body.employeeId).toBeUndefined();
-    });
-
-    it('does not call the estimate endpoint when nothing has been filed yet', async () => {
-      renderPage();
-      await screen.findByRole('heading', { name: 'แบบแจ้งรายการเพื่อการหักลดหย่อน' });
-      expect(api.payroll.estimateMyTaxAllowanceDeclaration).not.toHaveBeenCalled();
     });
   });
 });

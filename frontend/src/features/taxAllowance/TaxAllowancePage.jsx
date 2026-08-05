@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -8,12 +8,10 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { TaxAllowanceForm } from './TaxAllowanceForm.jsx';
-import { TaxAllowanceEstimateCard } from './TaxAllowanceEstimateCard.jsx';
 import { TaxAllowanceEvidencePanel } from './TaxAllowanceEvidencePanel.jsx';
 import { buildAllowanceSubmitBody, defaultAllowanceValues } from './taxAllowanceSchema.js';
 import { selectCurrentDeclaration, taxAllowanceStatusInfo } from './taxAllowanceStatus.js';
 
-const ESTIMATE_DEBOUNCE_MS = 600;
 // Editable directly (or via "แก้ไข / ยื่นฉบับใหม่"): no declaration yet, or the current one was
 // rejected/expired. PENDING and both APPROVED variants stay permanently read-only here — a direct
 // resubmission would collide with `submitMyTaxAllowanceDeclaration`'s "already pending" 409, and an
@@ -33,9 +31,7 @@ export function TaxAllowancePage({ user, showToast }) {
   );
   const isCurrentYear = taxYear === currentYear;
   const [editing, setEditing] = useState(false);
-  const [estimateState, setEstimateState] = useState({ loading: false, error: null, result: null });
   const [withdrawing, setWithdrawing] = useState(false);
-  const estimateTimer = useRef(null);
 
   const capsQuery = useQuery({
     queryKey: queryKeys.taxAllowanceCaps(taxYear),
@@ -55,27 +51,6 @@ export function TaxAllowancePage({ user, showToast }) {
   useEffect(() => {
     setEditing(statusInfo.key === 'NONE' && isCurrentYear);
   }, [statusInfo.key, current?.declarationId, isCurrentYear]);
-
-  // Read-only "what this saves me" for a declaration that has already been filed. The estimate
-  // endpoint is a pure calculation over a submit-shaped body (no employeeId — the server resolves
-  // the caller), so the stored declaration can be replayed through it. Previously the card was
-  // mounted only while `editing`, so the number that motivates the whole feature vanished the
-  // moment the employee submitted, and never came back on a later visit.
-  useEffect(() => {
-    if (editing || !current) return undefined;
-    let alive = true;
-    setEstimateState({ loading: true, error: null, result: null });
-    api.payroll
-      .estimateMyTaxAllowanceDeclaration(buildAllowanceSubmitBody(defaultAllowanceValues(current), {
-        taxYear,
-        effectiveMonth: current.effectiveMonth,
-      }))
-      .then((result) => { if (alive) setEstimateState({ loading: false, error: null, result }); })
-      .catch((error) => {
-        if (alive) setEstimateState({ loading: false, error: error.message || 'ไม่สามารถประมาณการได้ในขณะนี้', result: null });
-      });
-    return () => { alive = false; };
-  }, [editing, current, taxYear]);
 
   const defaultValues = useMemo(() => defaultAllowanceValues(current), [current]);
 
@@ -114,25 +89,6 @@ export function TaxAllowancePage({ user, showToast }) {
     const body = buildAllowanceSubmitBody(values, { taxYear, effectiveMonth: values.effectiveMonth });
     submitMutation.mutate(body);
   }
-
-  function handleValuesChange(values) {
-    if (!editing) return;
-    if (estimateTimer.current) clearTimeout(estimateTimer.current);
-    estimateTimer.current = setTimeout(async () => {
-      const body = buildAllowanceSubmitBody(values, { taxYear, effectiveMonth: values?.effectiveMonth });
-      setEstimateState((prev) => ({ ...prev, loading: true, error: null }));
-      try {
-        const result = await api.payroll.estimateMyTaxAllowanceDeclaration(body);
-        setEstimateState({ loading: false, error: null, result });
-      } catch (error) {
-        setEstimateState({ loading: false, error: error.message || 'ไม่สามารถประมาณการได้ในขณะนี้', result: null });
-      }
-    }, ESTIMATE_DEBOUNCE_MS);
-  }
-
-  useEffect(() => () => {
-    if (estimateTimer.current) clearTimeout(estimateTimer.current);
-  }, []);
 
   return (
     <PageStack>
@@ -209,13 +165,8 @@ export function TaxAllowancePage({ user, showToast }) {
           submitting={submitMutation.isPending}
           submitLabel={statusInfo.key === 'NONE' ? 'ยื่นแบบแจ้ง' : 'ยื่นฉบับใหม่'}
           onSubmit={handleSubmit}
-          onValuesChange={handleValuesChange}
         />
       </Panel>
-
-      {/* Shown whenever there is something to show — while editing (live, debounced) and after
-          filing (replayed from the stored declaration), not only during the edit. */}
-      {editing || current ? <TaxAllowanceEstimateCard {...estimateState} /> : null}
 
       <TaxAllowanceEvidencePanel
         declarationId={current?.declarationId ?? null}
