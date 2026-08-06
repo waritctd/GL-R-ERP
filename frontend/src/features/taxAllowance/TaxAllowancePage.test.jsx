@@ -120,6 +120,89 @@ describe('TaxAllowancePage', () => {
     });
   });
 
+  // Regression (fix/tax-allowance-withdraw-preserves-values): the PENDING banner promises
+  // "ยกเลิกการยื่นเพื่อแก้ไข" and the withdraw ConfirmDialog promises "กลับมาแก้ไข" -- both say the
+  // employee gets their typed-in values back after withdrawing. Before this fix, withdrawal wiped
+  // every one of the 21 fields to zero: WITHDRAWN sits in NON_CURRENT_STATUSES, so `current` became
+  // null and `defaultAllowanceValues(null)` fed the form nothing but zeros. `selectResumableDeclaration`
+  // now seeds the form from the newest WITHDRAWN row when there is no current declaration -- but must
+  // NOT make a withdrawn declaration look filed (the badge stays ยังไม่ได้ยื่น).
+  describe('withdrawal preserves values for resume (#387 regression)', () => {
+    it('pre-fills the form from the most recently withdrawn declaration when there is no current one', async () => {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({
+        items: [
+          declaration({
+            status: 'WITHDRAWN',
+            submittedAt: `${currentYear}-03-01T00:00:00.000Z`,
+            allowances: { spouseAllowance: 60000, lifeInsuranceAllowance: 25000 },
+          }),
+        ],
+      });
+      renderPage();
+
+      // Status still reads "not yet filed", exactly as before this fix -- a withdrawn declaration is
+      // not current standing, only its VALUES are offered back for editing.
+      expect(await screen.findByText('ยังไม่ได้ยื่น')).not.toBeNull();
+
+      // Hub's running total reflects the withdrawn declaration's values, not ฿0.00 -- waiting on this
+      // text is also what proves the declarations query has actually settled and fed `resumable`
+      // through to `defaultValues`, not just the synchronous first paint (which is null either way).
+      expect(await screen.findByText('฿85,000.00')).not.toBeNull();
+
+      // And the actual field value survived into the reopened section, not just the total shown on
+      // the hub -- matches the real-backend repro's own `#ta-spouseAllowance` check.
+      fireEvent.click(screen.getByRole('button', { name: /ครอบครัว/ }));
+      expect(await screen.findByLabelText('คู่สมรส (ไม่มีเงินได้)')).not.toBeNull();
+      expect(screen.getByLabelText('คู่สมรส (ไม่มีเงินได้)').value).toBe('60000');
+    });
+
+    it('does not pre-fill from a SUPERSEDED-only history -- only a WITHDRAWN row is resumable', async () => {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({
+        items: [
+          declaration({
+            status: 'SUPERSEDED',
+            submittedAt: `${currentYear}-02-01T00:00:00.000Z`,
+            allowances: { spouseAllowance: 60000 },
+          }),
+        ],
+      });
+      renderPage();
+
+      expect(await screen.findByText('ยังไม่ได้ยื่น')).not.toBeNull();
+
+      fireEvent.click(await screen.findByRole('button', { name: /ครอบครัว/ }));
+      expect(await screen.findByLabelText('คู่สมรส (ไม่มีเงินได้)')).not.toBeNull();
+      expect(screen.getByLabelText('คู่สมรส (ไม่มีเงินได้)').value).toBe('0');
+    });
+
+    it('lets a current APPROVED declaration win over an older WITHDRAWN one', async () => {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({
+        items: [
+          declaration({
+            status: 'APPROVED',
+            submittedAt: `${currentYear}-01-01T00:00:00.000Z`,
+            allowances: { spouseAllowance: 60000 },
+          }),
+          // Deliberately submitted LATER than the APPROVED row above -- proves `current` wins because
+          // it IS current, not merely because it happens to be the most recent row overall.
+          declaration({
+            declarationId: 40,
+            status: 'WITHDRAWN',
+            submittedAt: `${currentYear}-06-01T00:00:00.000Z`,
+            allowances: { spouseAllowance: 12345 },
+          }),
+        ],
+      });
+      renderPage();
+
+      await screen.findByText(/อนุมัติแล้ว/);
+
+      fireEvent.click(screen.getByRole('button', { name: /ครอบครัว/ }));
+      expect(await screen.findByLabelText('คู่สมรส (ไม่มีเงินได้)')).not.toBeNull();
+      expect(screen.getByLabelText('คู่สมรส (ไม่มีเงินได้)').value).toBe('60000');
+    });
+  });
+
   describe('tax-year history', () => {
     it('refetches when a past year is chosen', async () => {
       renderPage();
