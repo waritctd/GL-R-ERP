@@ -348,22 +348,24 @@ public class TaxAllowanceDeclarationRepository {
      */
     public TaxAllowanceAttachmentDto saveAttachmentWithContent(
         long declarationId, String fileName, String filePath, String mimeType, Long fileSize, long uploadedBy,
-        byte[] content
+        String sectionKey, byte[] content
     ) {
-        TaxAllowanceAttachmentDto saved = saveAttachment(declarationId, fileName, filePath, mimeType, fileSize, uploadedBy);
+        TaxAllowanceAttachmentDto saved =
+            saveAttachment(declarationId, fileName, filePath, mimeType, fileSize, uploadedBy, sectionKey);
         blobs.saveContent(saved.attachmentId(), content);
         return saved;
     }
 
     public TaxAllowanceAttachmentDto saveAttachment(
-        long declarationId, String fileName, String filePath, String mimeType, Long fileSize, long uploadedBy
+        long declarationId, String fileName, String filePath, String mimeType, Long fileSize, long uploadedBy,
+        String sectionKey
     ) {
         GeneratedKeyHolder key = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO hr.file_attachment
-                (domain, owner_id, file_name, file_path, mime_type, file_size, uploaded_by)
+                (domain, owner_id, file_name, file_path, mime_type, file_size, uploaded_by, section_key)
             VALUES
-                (:domain, :declarationId, :fileName, :filePath, :mimeType, :fileSize, :uploadedBy)
+                (:domain, :declarationId, :fileName, :filePath, :mimeType, :fileSize, :uploadedBy, :sectionKey)
             """,
             new MapSqlParameterSource()
                 .addValue("domain", ATTACHMENT_DOMAIN)
@@ -372,7 +374,8 @@ public class TaxAllowanceDeclarationRepository {
                 .addValue("filePath", filePath)
                 .addValue("mimeType", mimeType)
                 .addValue("fileSize", fileSize)
-                .addValue("uploadedBy", uploadedBy),
+                .addValue("uploadedBy", uploadedBy)
+                .addValue("sectionKey", sectionKey),
             key, new String[]{"attachment_id"});
         return findAttachment(key.getKey().longValue()).orElseThrow();
     }
@@ -380,7 +383,7 @@ public class TaxAllowanceDeclarationRepository {
     public Optional<TaxAllowanceAttachmentDto> findAttachment(long attachmentId) {
         List<TaxAllowanceAttachmentDto> rows = jdbc.query("""
             SELECT attachment_id, owner_id AS declaration_id, file_name, mime_type, file_size,
-                   uploaded_by, uploaded_at, deleted_at, deleted_by, delete_reason
+                   uploaded_by, uploaded_at, deleted_at, deleted_by, delete_reason, section_key
               FROM hr.file_attachment
              WHERE attachment_id = :attachmentId AND domain = :domain
             """,
@@ -393,7 +396,7 @@ public class TaxAllowanceDeclarationRepository {
     public List<TaxAllowanceAttachmentDto> findAttachments(long declarationId) {
         return jdbc.query("""
             SELECT attachment_id, owner_id AS declaration_id, file_name, mime_type, file_size,
-                   uploaded_by, uploaded_at, deleted_at, deleted_by, delete_reason
+                   uploaded_by, uploaded_at, deleted_at, deleted_by, delete_reason, section_key
               FROM hr.file_attachment
              WHERE domain = :domain AND owner_id = :declarationId
              ORDER BY uploaded_at DESC, attachment_id DESC
@@ -449,7 +452,8 @@ public class TaxAllowanceDeclarationRepository {
             rs.getObject("uploaded_at", OffsetDateTime.class),
             rs.getObject("deleted_at", OffsetDateTime.class),
             nullableLong(rs, "deleted_by"),
-            rs.getString("delete_reason"));
+            rs.getString("delete_reason"),
+            rs.getString("section_key"));
     }
 
     private BigDecimal money(BigDecimal value) {

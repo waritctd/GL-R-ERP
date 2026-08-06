@@ -13,6 +13,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
+  addDaysIso,
   attendanceFlagLabels,
   attendanceSourceLabel,
   attendanceStatusLabel,
@@ -49,15 +50,18 @@ function attendanceMode(user) {
   return 'employee';
 }
 
+// How far back the date stepper/picker may browse. Deliberately NOT full history -- backfill
+// computes all of it, but presenting years of never-before-reviewed "late" days on day one would
+// be a personnel problem rather than a feature. Product decision (2026-08): widened from
+// "this month only" to a rolling 3-month window so a Bangkok-morning check on the 1st/2nd of a
+// month can still reach last month's tail end.
+const BROWSABLE_MONTHS_BACK = 3;
+
 /**
  * The date window the page may show.
- *
- * Deliberately capped at the current month. Backfill computes all of history, but presenting years
- * of never-before-reviewed "late" days on day one would be a personnel problem rather than a
- * feature; older months are a later UI change, not a recompute.
  */
 function monthBounds() {
-  return { start: bangkokMonthStartIso(), today: bangkokTodayIso() };
+  return { start: bangkokMonthStartIso(undefined, BROWSABLE_MONTHS_BACK), today: bangkokTodayIso() };
 }
 
 export function AttendancePage({ user, showToast }) {
@@ -69,7 +73,11 @@ export function AttendancePage({ user, showToast }) {
   // always reachable in 'company' mode — the roster it needs (employeeOptions) is already loaded
   // below.
   const canMarkPresent = hasPermission(user.role, 'canMarkAttendance');
-  const { start: monthStart, today } = useMemo(() => monthBounds(), []);
+  // Deliberately not memoized: `monthBounds()` is two Intl.DateTimeFormat calls, cheap enough to
+  // recompute on every render, and memoizing it with an empty dep array froze "today" at mount --
+  // a tab left open past Bangkok midnight would keep clamping the stepper/picker to the previous
+  // day's bounds.
+  const { start: monthStart, today } = monthBounds();
 
   // Employees read their own month at a glance; everyone else answers "who is late today", so
   // they get a single day plus a stepper.
@@ -95,8 +103,13 @@ export function AttendancePage({ user, showToast }) {
   const [devices, setDevices] = useState([]);
   const [importDeviceCode, setImportDeviceCode] = useState('');
 
+  // The self-view fetch is deliberately NOT widened along with the picker's 3-month browsable
+  // window: it has no date control to reach further back with (the whole filter bar is gated on
+  // !isSelfView below), and AttendanceDailyService.MAX_RANGE_DAYS caps any query at <92 days --
+  // a 3-month-back `from` combined with a late-month `today` can exceed that and 400. Kept at the
+  // current month, matching both the copy below ("...ในเดือนนี้") and the API's hard cap.
   const range = isSelfView
-    ? { from: monthStart, to: today }
+    ? { from: bangkokMonthStartIso(), to: today }
     : { from: selectedDate, to: selectedDate };
 
   // Issue #422 B2: onto react-query so this screen participates in the shared cache (an OT
@@ -232,10 +245,12 @@ export function AttendancePage({ user, showToast }) {
   }, [expandedKey, punchesByKey, rowKey, showToast]);
 
   function stepDay(deltaDays) {
-    const next = new Date(`${selectedDate}T00:00:00+07:00`);
-    next.setDate(next.getDate() + deltaDays);
-    const iso = next.toISOString().slice(0, 10);
-    // Clamp to the current month in both directions — see monthBounds().
+    // Pure YYYY-MM-DD calendar arithmetic -- NOT `new Date(...).toISOString()`. That round trip
+    // reads the UTC calendar day off a Bangkok-midnight instant, which is always one day behind
+    // the Bangkok date intended (Bangkok midnight is 17:00 UTC the previous day), netting a 2-day
+    // back-step and a stuck forward-step. See addDaysIso's comment in utils/format.js.
+    const iso = addDaysIso(selectedDate, deltaDays);
+    // Clamp to the browsable window in both directions — see monthBounds().
     if (iso < monthStart || iso > today) return;
     setSelectedDate(iso);
   }

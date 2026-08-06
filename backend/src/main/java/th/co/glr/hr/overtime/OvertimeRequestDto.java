@@ -47,6 +47,16 @@ public record OvertimeRequestDto(
      */
     boolean hasManagerApprover,
     OffsetDateTime createdAt,
-    OffsetDateTime updatedAt
+    OffsetDateTime updatedAt,
+    // feat/pending-approver-info: "who this is waiting on" for a SUBMITTED/MANAGER_APPROVED
+    // request -- read-only, informational, NOT an authorization decision (see PendingApproverSql's
+    // Javadoc). Mirrors OvertimeService#approve's own SUBMITTED/MANAGER_APPROVED branching:
+    // "manager" when SUBMITTED and hasManagerApprover is true (division manager stage); "ceo"
+    // when SUBMITTED with no manager stage, or when MANAGER_APPROVED. Both null for any other
+    // status. pendingApproverName is null whenever the resolved role has more than one active
+    // candidate (multiple division-manager peers, or multiple active ceo-role employees) -- see
+    // OvertimeRepository#resolvePendingApprover's Javadoc.
+    String pendingApproverRole,
+    String pendingApproverName
 ) {
 }

@@ -845,7 +845,10 @@ class LeaveServiceTest {
             managerEmployeeId, managerEmployeeId == null ? null : "Test Manager",
             timestamp, timestamp,
             null, null, null, null, null,
-            null, false, null, Map.of(), false
+            null, false, null, Map.of(), false,
+            // feat/pending-approver-info: no test using this fixture asserts on these (computed by
+            // LeaveRepository#mapRequest, a real SQL row mapper this Mockito-level class never hits).
+            null, null
         );
     }
 
@@ -869,7 +872,10 @@ class LeaveServiceTest {
             managerEmployeeId, managerEmployeeId == null ? null : "Test Manager",
             timestamp, timestamp,
             null, null, null, null, null,
-            null, false, null, Map.of(), false
+            null, false, null, Map.of(), false,
+            // feat/pending-approver-info: no test using this fixture asserts on these (computed by
+            // LeaveRepository#mapRequest, a real SQL row mapper this Mockito-level class never hits).
+            null, null
         );
     }
 
@@ -2659,7 +2665,12 @@ class LeaveServiceTest {
             // Phase A0b (review-summary phase): no test in this class asserts on canReview via the
             // helper (LeaveService#withCanReviewFlag runs on the RETURNED dto, not this fixture, and
             // this class is Mockito-level, so it never exercises that code path anyway).
-            false
+            false,
+            // feat/pending-approver-info: same reasoning as canReview above -- these are computed by
+            // LeaveRepository#mapRequest (a real SQL row mapper this Mockito-level class never
+            // exercises), so no test in this class asserts on them via the helper.
+            null,
+            null
         );
     }
 

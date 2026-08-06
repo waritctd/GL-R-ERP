@@ -48,5 +48,12 @@ public record SpecialMoneyRequestDto(
      */
     int attachmentCount,
     OffsetDateTime createdAt,
-    OffsetDateTime updatedAt) {
+    OffsetDateTime updatedAt,
+    // feat/pending-approver-info: "who this is waiting on" for a SUBMITTED/MANAGER_APPROVED
+    // request -- read-only, informational, NOT an authorization decision. Welfare is CEO-only,
+    // single-stage (see SpecialMoneyService's class Javadoc): both statuses resolve to role "ceo".
+    // pendingApproverName is null when more than one active ceo-role employee exists -- see
+    // SpecialMoneyRepository#resolvePendingApprover's Javadoc.
+    String pendingApproverRole,
+    String pendingApproverName) {
 }

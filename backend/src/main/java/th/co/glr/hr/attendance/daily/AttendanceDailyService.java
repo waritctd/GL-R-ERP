@@ -125,6 +125,40 @@ public class AttendanceDailyService {
     }
 
     /**
+     * Applies an HR/CEO attendance correction (see {@code AttendanceCorrectionService#approve}) as
+     * an <strong>authoritative</strong> {@code is_manual_override = TRUE} row, after the caller has
+     * already inserted the corrected punch(es) for {@code pair}.
+     *
+     * <p>Deliberately reuses the exact same derivation this class uses everywhere else —
+     * {@link AttendanceDailyCalculator#calculate}, fed the day's punches (now including the newly
+     * inserted correction), the employee's resolved schedule, approved overtime minutes, and holiday
+     * status — so {@code total_minutes}/{@code late_minutes}/{@code early_leave_minutes} come out of
+     * the SAME §76 reporting-only computation an ordinary punch would produce, never a
+     * correction-specific reimplementation. See {@code AttendanceDailyRepository#upsertOverride}'s
+     * javadoc for why persistence (not the calculation) is what differs from {@link #recalculate}.
+     *
+     * <p>Silently no-ops (writes nothing) when the day ends up with no punches at all — cannot
+     * happen for an approved correction in practice (it always inserts at least one punch first),
+     * but keeps this method's contract identical to {@link #recalculate}'s for a day with none.
+     */
+    @Transactional
+    public void applyManualCorrection(EmployeeDay pair) {
+        List<PunchRecord> punches = repository.findPunchesFor(pair.employeeId(), pair.workDate());
+        if (punches.isEmpty()) {
+            return;
+        }
+        AttendanceDailyRecord record = calculator.calculate(
+            pair.employeeId(),
+            pair.workDate(),
+            punches,
+            scheduleFor(pair),
+            repository.findApprovedOvertimeMinutes(pair.employeeId(), pair.workDate()),
+            holidayCalendar.isHoliday(pair.workDate())
+        );
+        repository.upsertOverride(record);
+    }
+
+    /**
      * Re-derives every employee-day that has punches, over all of history.
      *
      * <p>Used by the one-shot backfill and after a badge backfill, where the newly-resolved punches

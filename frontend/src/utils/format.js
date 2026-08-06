@@ -209,6 +209,30 @@ export function ticketPriorityLabel(priority) {
   return map[priority] ?? { label: priority, tone: 'neutral' };
 }
 
+// "Who this is waiting on" -- rendered BESIDE a รออนุมัติ/pending status badge (leave/overtime/
+// special-money), never baked into leaveStatusLabel/overtimeStatusLabel/specialMoneyStatusLabel
+// themselves (those stay shared, domain-status -> {label, tone} only). Consumes the backend's
+// read-only `pendingApproverRole`/`pendingApproverName` fields (LeaveRequestDto/OvertimeRequestDto/
+// SpecialMoneyRequestDto -- see PendingApproverSql on the backend). `name` reuses greetingName's
+// existing "คุณ"-prefix rule so "เอ็ม" renders "คุณเอ็ม", matching the pattern this file already
+// uses everywhere else a person's name is greeted. Returns null (render nothing) when there is no
+// role to show -- e.g. a non-pending row, where the backend never sets these fields.
+const PENDING_APPROVER_ROLE_LABELS = {
+  hr: 'ฝ่ายบุคคล',
+  manager: 'ผู้จัดการ',
+  ceo: 'CEO',
+};
+
+export function pendingApproverText(role, name) {
+  if (!role) return null;
+  const roleLabel = PENDING_APPROVER_ROLE_LABELS[role] || role.toUpperCase();
+  // No name: either the backend never resolved one (e.g. more than one active person holds a
+  // generic role -- see LeaveRepository/OvertimeRepository/SpecialMoneyRepository's
+  // resolvePendingApproverName ambiguity handling) or this role never carries one. Either way,
+  // showing the role alone is the honest fallback -- never a placeholder or a guessed name.
+  return name ? `${roleLabel} (${greetingName(name)})` : roleLabel;
+}
+
 export function requestStatus(status) {
   const map = {
     pending: { label: 'รออนุมัติ', tone: 'warning' },
@@ -237,6 +261,18 @@ export function overtimeStatusLabel(status) {
   const map = {
     SUBMITTED: { label: 'รอผู้จัดการ', tone: 'warning' },
     MANAGER_APPROVED: { label: 'รอ CEO', tone: 'info' },
+    APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
+    REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
+    CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'neutral' },
+  };
+  return map[status] ?? { label: status || '-', tone: 'neutral' };
+}
+
+// Attendance-correction request status -> StatusBadge tone. Single CEO-only stage, same shape as
+// special-money's status set (no MANAGER_APPROVED — there is no manager stage at all here).
+export function attendanceCorrectionStatusLabel(status) {
+  const map = {
+    SUBMITTED: { label: 'รอ CEO', tone: 'warning' },
     APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
     REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
     CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'neutral' },
@@ -469,9 +505,36 @@ export function bangkokTodayIso(date = new Date()) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
-export function bangkokMonthStartIso(date = new Date()) {
+// `monthsBack` walks calendar months on the Bangkok wall-clock date, not milliseconds -- a
+// millisecond subtraction is the wrong tool for month arithmetic (months aren't a fixed length),
+// and doing it on the Intl-derived {year, month} parts (rather than a naive Date field mutation)
+// keeps this consistent with bangkokTodayIso's pattern above. `Math.floor`/modulo on a flat
+// "months since epoch" count handles the year rollover for free (e.g. Feb minus 3 months lands on
+// the previous November) without any special-casing.
+export function bangkokMonthStartIso(date = new Date(), monthsBack = 0) {
   const parts = bangkokDateParts(date);
-  return `${parts.year}-${parts.month}-01`;
+  const totalMonths = Number(parts.year) * 12 + (Number(parts.month) - 1) - monthsBack;
+  const targetYear = Math.floor(totalMonths / 12);
+  const targetMonth = (totalMonths % 12) + 1;
+  return `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`;
+}
+
+// Pure calendar-day arithmetic on a YYYY-MM-DD string. Deliberately does NOT round-trip through
+// `Date#toISOString()`: parsing "YYYY-MM-DDT00:00:00+07:00" and reading the date back off
+// `toISOString()` reads the UTC calendar day off a Bangkok-midnight instant, which is always one
+// day behind the Bangkok date that was intended (Bangkok midnight is 17:00 UTC the PREVIOUS day) --
+// that mismatch is what made the attendance date stepper net a 2-day back-step and a stuck
+// forward-step. `Date.UTC` here is used purely as neutral day-count arithmetic on the calendar
+// fields (year/month/day), never as a timezone conversion -- there is no timezone attached to a
+// bare YYYY-MM-DD, so none should be introduced by parsing it as one.
+export function addDaysIso(iso, deltaDays) {
+  const [year, month, day] = iso.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + deltaDays);
+  const y = String(date.getUTCFullYear()).padStart(4, '0');
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 // Clock time only, pinned to Bangkok. Used by the attendance day table, where the date already
