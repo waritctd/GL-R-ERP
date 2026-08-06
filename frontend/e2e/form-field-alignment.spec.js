@@ -86,6 +86,10 @@ test.describe('two-column form rows stay aligned', () => {
   test('adorned inputs keep the inset that clears their symbol', async ({ page }) => {
     await loginAs(page, 'employee');
     await spaGoto(page, '/tax-allowance');
+    // #tax-allowance-sections: the form is now a choose-a-section-then-fill flow -- no field
+    // renders until a section is picked. ครอบครัว is the group that holds the currency inputs
+    // this test cares about.
+    await page.getByRole('button', { name: /ครอบครัว/ }).click();
     await expect(page.locator('.currency-input input').first()).toBeVisible();
 
     // `.currency-input input` overrides the base control padding with a 34px
@@ -107,6 +111,9 @@ test.describe('two-column form rows stay aligned', () => {
   test('bare checkboxes are not stretched by the base control rule', async ({ page }) => {
     await loginAs(page, 'employee');
     await spaGoto(page, '/tax-allowance');
+    // #tax-allowance-sections: ta-disabilityCardHolder lives in the ครอบครัว group, which no
+    // longer renders until that section is chosen (see the previous test's comment).
+    await page.getByRole('button', { name: /ครอบครัว/ }).click();
     // Wait for the form itself, not just the route change: `spaGoto` returns
     // before the lazy route has painted, and a bare `querySelector` in that
     // window finds nothing and reports a missing checkbox rather than a

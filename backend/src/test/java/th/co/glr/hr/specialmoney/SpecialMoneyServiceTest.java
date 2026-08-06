@@ -643,7 +643,12 @@ class SpecialMoneyServiceTest {
             "Test Manager",
             0,
             OffsetDateTime.parse("2026-06-14T10:00:00+07:00"),
-            OffsetDateTime.parse("2026-06-14T10:00:00+07:00")
+            OffsetDateTime.parse("2026-06-14T10:00:00+07:00"),
+            // feat/pending-approver-info: computed by SpecialMoneyRepository#mapRequest (a real SQL
+            // row mapper this Mockito-level class never exercises), so no test in this class
+            // asserts on them via the helper.
+            null,
+            null
         );
     }
 
@@ -668,7 +673,9 @@ class SpecialMoneyServiceTest {
             "CANCELLED".equals(status) ? timestamp : null,
             99L, "Test Manager",
             1,
-            timestamp, timestamp
+            timestamp, timestamp,
+            // feat/pending-approver-info: no test using this fixture asserts on these.
+            null, null
         );
     }
 
@@ -693,7 +700,9 @@ class SpecialMoneyServiceTest {
             null,
             99L, "Test Manager",
             1,
-            timestamp, timestamp
+            timestamp, timestamp,
+            // feat/pending-approver-info: no test using this fixture asserts on these.
+            null, null
         );
     }
 

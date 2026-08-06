@@ -171,3 +171,63 @@ describe('OvertimePage form validation', () => {
     expect(api.overtime.create).not.toHaveBeenCalled();
   });
 });
+
+// feat/pending-approver-info: "who this is waiting on" beside the OT status badge.
+describe('OvertimePage pending-approver note', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.overtime.employees.mockResolvedValue({
+      employees: [{
+        employeeId: 1,
+        employeeName: 'พนักงาน ทดสอบ',
+        employeeCode: 'GLR-001',
+        self: true,
+        directReport: false,
+      }],
+    });
+  });
+
+  it('renders the note for a SUBMITTED request with a manager stage, and omits it for an APPROVED one', async () => {
+    api.overtime.list.mockResolvedValue({
+      requests: [
+        {
+          id: 801, employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001',
+          workDate: '2026-07-07', plannedStartAt: '2026-07-07T18:00:00+07:00', plannedEndAt: '2026-07-07T20:00:00+07:00',
+          plannedMinutes: 120, dayType: 'WORKDAY', reason: 'งานเร่งด่วน', status: 'SUBMITTED',
+          actualMinutes: 0, payableMinutes: 0, hasManagerApprover: true,
+          pendingApproverRole: 'manager', pendingApproverName: 'เอ็ม',
+        },
+        {
+          id: 802, employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001',
+          workDate: '2026-07-01', plannedStartAt: '2026-07-01T18:00:00+07:00', plannedEndAt: '2026-07-01T20:00:00+07:00',
+          plannedMinutes: 120, dayType: 'WORKDAY', reason: 'งานเสร็จแล้ว', status: 'APPROVED',
+          actualMinutes: 120, payableMinutes: 120, hasManagerApprover: true,
+          pendingApproverRole: null, pendingApproverName: null,
+        },
+      ],
+    });
+    renderOvertimePage();
+
+    await screen.findByText('งานเร่งด่วน');
+    expect(await screen.findByText('ผู้จัดการ (คุณเอ็ม)')).not.toBeNull();
+  });
+
+  it('shows the role alone (CEO) when the backend could not resolve a single approver name', async () => {
+    api.overtime.list.mockResolvedValue({
+      requests: [{
+        id: 803, employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001',
+        workDate: '2026-07-03', plannedStartAt: '2026-07-03T18:00:00+07:00', plannedEndAt: '2026-07-03T20:00:00+07:00',
+        plannedMinutes: 120, dayType: 'WORKDAY', reason: 'ไม่มีผู้จัดการฝ่าย', status: 'SUBMITTED',
+        actualMinutes: 0, payableMinutes: 0, hasManagerApprover: false,
+        pendingApproverRole: 'ceo', pendingApproverName: null,
+      }],
+    });
+    renderOvertimePage();
+
+    await screen.findByText('ไม่มีผู้จัดการฝ่าย');
+    // Scope to the approver note's own <small> -- bare "CEO" (no "รอ" prefix, review
+    // #pending-approver-info) could otherwise match a StatusBadge whose own label happens to be
+    // "CEO" text too, depending on status.
+    expect(await screen.findByText('CEO', { selector: 'small.text-text-muted' })).not.toBeNull();
+  });
+});

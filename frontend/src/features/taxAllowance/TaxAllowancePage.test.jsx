@@ -20,6 +20,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         withdrawMyTaxAllowanceDeclaration: vi.fn(),
         estimateMyTaxAllowanceDeclaration: vi.fn(),
         listTaxAllowanceAttachments: vi.fn(),
+        uploadTaxAllowanceAttachment: vi.fn(),
       },
     },
   };
@@ -63,7 +64,6 @@ describe('TaxAllowancePage', () => {
     api.payroll.getTaxAllowanceCaps.mockResolvedValue({ caps: [] });
     api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [] });
     api.payroll.listTaxAllowanceAttachments.mockResolvedValue({ items: [] });
-    api.payroll.estimateMyTaxAllowanceDeclaration.mockResolvedValue({ monthlyTaxSaving: 500 });
     api.payroll.withdrawMyTaxAllowanceDeclaration.mockResolvedValue(undefined);
   });
 
@@ -127,25 +127,39 @@ describe('TaxAllowancePage', () => {
     });
   });
 
-  describe('"what this saves me" estimate', () => {
-    it('stays visible after filing, replayed from the stored declaration', async () => {
-      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [declaration()] });
+  // The user's stated complaint (#tax-allowance-sections): "I couldn't attach a PDF while first
+  // filling in the form" -- there was no declarationId yet for a brand-new declaration to attach
+  // evidence to. This proves the fix end to end: a file picked mid-fill-in shows immediately
+  // (staged, client-side) WITHOUT hitting the server, and is genuinely uploaded — tagged to the
+  // section it was picked under — only once the declaration is actually submitted and a real
+  // declarationId exists.
+  describe('attaching evidence while first filling in a NOT-YET-SUBMITTED declaration', () => {
+    it('stages a PDF picked during step 2, then uploads it against the real declarationId once submit succeeds', async () => {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [] }); // status NONE
+      api.payroll.submitMyTaxAllowanceDeclaration.mockResolvedValue({ declarationId: 77, employeeId: 9, status: 'PENDING' });
+      api.payroll.uploadTaxAllowanceAttachment.mockResolvedValue({ attachment: { attachmentId: 1 } });
+
       renderPage();
 
-      // Not editing (PENDING is read-only), yet the estimate is still requested and rendered.
-      await waitFor(() => {
-        expect(api.payroll.estimateMyTaxAllowanceDeclaration).toHaveBeenCalled();
-      });
-      const body = api.payroll.estimateMyTaxAllowanceDeclaration.mock.calls[0][0];
-      expect(body.taxYear).toBe(currentYear);
-      // The estimate body never carries an employeeId — the server resolves the caller.
-      expect(body.employeeId).toBeUndefined();
-    });
+      fireEvent.click(await screen.findByText('ครอบครัว'));
 
-    it('does not call the estimate endpoint when nothing has been filed yet', async () => {
-      renderPage();
-      await screen.findByRole('heading', { name: 'แบบแจ้งรายการเพื่อการหักลดหย่อน' });
-      expect(api.payroll.estimateMyTaxAllowanceDeclaration).not.toHaveBeenCalled();
+      const file = new File(['x'], 'cert.pdf', { type: 'application/pdf' });
+      const input = document.querySelector('input[type="file"]');
+      fireEvent.change(input, { target: { files: [file] } });
+
+      // Attached immediately, during fill-in -- no round trip needed to SEE it.
+      expect(await screen.findByText('cert.pdf')).not.toBeNull();
+      expect(screen.getByText('รอส่ง')).not.toBeNull();
+      // But genuinely not sent yet -- there is no declarationId for a brand-new declaration.
+      expect(api.payroll.uploadTaxAllowanceAttachment).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', { name: 'ยื่นแบบแจ้ง' }));
+
+      await waitFor(() => expect(api.payroll.submitMyTaxAllowanceDeclaration).toHaveBeenCalled());
+      // Flushed against the REAL declarationId the submit just returned, tagged with the section
+      // it was picked under while filling in -- proves this is not "attach after a first submit",
+      // it is the SAME pick from mid-fill-in finally reaching the server.
+      await waitFor(() => expect(api.payroll.uploadTaxAllowanceAttachment).toHaveBeenCalledWith(77, file, 'family'));
     });
   });
 });

@@ -13,7 +13,9 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { formGridSpan2, FormGrid, Panel, RowActions } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { specialMoneyStatusLabel as statusInfo, SPECIAL_MONEY_STATUSES } from '../../utils/format.js';
+import {
+  pendingApproverText, specialMoneyStatusLabel as statusInfo, SPECIAL_MONEY_STATUSES,
+} from '../../utils/format.js';
 import { AttachmentList } from './AttachmentList.jsx';
 import { EntitlementPanel } from './EntitlementPanel.jsx';
 import { RuleCard } from './RuleCard.jsx';
@@ -1034,6 +1036,10 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
           const attachable = canAttach(request);
           const isRejected = request.status === 'REJECTED';
           const showAttachments = !isRejected && (attachable || Number(request.attachmentCount || 0) > 0);
+          const isPending = request.status === 'SUBMITTED' || request.status === 'MANAGER_APPROVED';
+          const pendingApproverNote = isPending
+            ? pendingApproverText(request.pendingApproverRole, request.pendingApproverName)
+            : null;
           return (
             <div className={`${TABLE_GRID} data-row`} key={request.id}>
               <span data-label="ประเภท / รายละเอียด" className="max-[720px]:order-1">
@@ -1045,6 +1051,9 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
               </span>
               <span data-label="สถานะ" className="max-[720px]:order-2">
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                {/* No "รอ" prefix -- the StatusBadge above already says that; repeating it made
+                    this note a superset of the badge's own text (review #pending-approver-info). */}
+                {pendingApproverNote ? <small className="text-text-muted">{pendingApproverNote}</small> : null}
                 {typeMeta?.evidenceRequired && request.status === 'SUBMITTED' && !request.attachmentCount ? (
                   <small className="text-warning">ยังไม่ได้แนบเอกสาร — อนุมัติไม่ได้</small>
                 ) : null}

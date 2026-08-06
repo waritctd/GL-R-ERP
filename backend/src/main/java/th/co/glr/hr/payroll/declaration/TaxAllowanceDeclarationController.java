@@ -107,10 +107,11 @@ public class TaxAllowanceDeclarationController {
     @PostMapping("/declarations/{id}/attachments")
     @PreAuthorize("isAuthenticated()")
     public Map<String, TaxAllowanceAttachmentDto> uploadAttachment(
-        @PathVariable long id, @RequestParam("file") MultipartFile file, HttpSession session
+        @PathVariable long id, @RequestParam("file") MultipartFile file,
+        @RequestParam(required = false) String sectionKey, HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        return Map.of("attachment", service.uploadAttachment(id, file, user));
+        return Map.of("attachment", service.uploadAttachment(id, file, sectionKey, user));
     }
 
     @GetMapping("/declarations/{id}/attachments")

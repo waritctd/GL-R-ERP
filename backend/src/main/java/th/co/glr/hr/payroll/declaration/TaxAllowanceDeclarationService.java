@@ -58,6 +58,15 @@ public class TaxAllowanceDeclarationService {
     private static final Set<String> EVIDENCE_MIME_TYPES =
         Set.of("application/pdf", "image/jpeg", "image/png");
 
+    // V135 (feat/tax-allowance-sections): mirrors TAX_ALLOWANCE_GROUPS' five `key`s in
+    // frontend/src/features/taxAllowance/taxAllowanceSchema.js. No shared enum exists between the
+    // frontend and backend for this grouping -- unlike TaxAllowanceCapEntry's `category` strings,
+    // which TaxAllowanceCapCatalog owns authoritatively, the five-section grouping is a UI
+    // information-architecture concept with no backend equivalent to reuse. Keep both lists in sync
+    // by hand if a section is ever added, renamed, or removed.
+    private static final Set<String> EVIDENCE_SECTION_KEYS =
+        Set.of("family", "insurance", "savings", "housing", "donation");
+
     private final TaxAllowanceDeclarationRepository repository;
     private final PayrollRepository payrollRepository;
     private final EmployeeRepository employeeRepository;
@@ -452,8 +461,11 @@ public class TaxAllowanceDeclarationService {
     // whether an attachment id exists to a caller with no business seeing it).
 
     @Transactional
-    public TaxAllowanceAttachmentDto uploadAttachment(long declarationId, MultipartFile file, UserPrincipal actor) {
+    public TaxAllowanceAttachmentDto uploadAttachment(
+        long declarationId, MultipartFile file, String sectionKey, UserPrincipal actor
+    ) {
         requireOwnerOrHr(declarationId, actor);
+        String normalizedSectionKey = normalizeSectionKey(sectionKey);
         // V134 storage-durability fix: this evidence file goes straight to the database now -- see
         // FileStorageService#storeInDatabase's javadoc.
         FileStorageService.StoredContent stored =
@@ -462,10 +474,29 @@ public class TaxAllowanceDeclarationService {
         // an HR-on-behalf upload actor.employeeId() is HR's own employee row, correctly distinct
         // from the declaration's beneficiary employee_id.
         TaxAllowanceAttachmentDto attachment = repository.saveAttachmentWithContent(declarationId, stored.fileName(),
-            stored.storageKey(), stored.mimeType(), stored.fileSize(), actor.employeeId(), stored.content());
+            stored.storageKey(), stored.mimeType(), stored.fileSize(), actor.employeeId(), normalizedSectionKey,
+            stored.content());
         auditService.record(actor, "UPLOAD_TAX_ALLOWANCE_ATTACHMENT", "tax_allowance_declaration",
             declarationId, null, attachment);
         return attachment;
+    }
+
+    /**
+     * Blank/whitespace-only ({@code @RequestParam(required = false)} on the controller means an
+     * omitted form field arrives as {@code null}, but an EMPTY one arrives as {@code ""}) normalizes
+     * to {@code null} ("general/uncategorized", V135's own nullable-by-design choice — see that
+     * migration's header). Anything else must be one of {@link #EVIDENCE_SECTION_KEYS} or the
+     * upload is rejected outright, rather than silently storing an unrecognised tag the frontend's
+     * per-section filter would never match.
+     */
+    private String normalizeSectionKey(String sectionKey) {
+        if (sectionKey == null || sectionKey.isBlank()) {
+            return null;
+        }
+        if (!EVIDENCE_SECTION_KEYS.contains(sectionKey)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "sectionKey ไม่ถูกต้อง");
+        }
+        return sectionKey;
     }
 
     public List<TaxAllowanceAttachmentDto> listAttachments(long declarationId, UserPrincipal actor) {
