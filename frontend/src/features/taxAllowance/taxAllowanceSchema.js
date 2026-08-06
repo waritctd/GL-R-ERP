@@ -41,6 +41,11 @@ export const ALLOWANCE_CHECKBOX_KEYS = ['disabilityCardHolder'];
 
 export const ALL_ALLOWANCE_KEYS = [...ALLOWANCE_MONEY_KEYS, ...ALLOWANCE_COUNT_KEYS, ...ALLOWANCE_CHECKBOX_KEYS];
 
+// Shared between TaxAllowancePage.jsx (staged-evidence bucket key) and TaxAllowanceForm.jsx
+// (reading that bucket for step 1's general/uncategorized evidence list) -- one definition so the
+// two can't silently drift apart (review #tax-allowance-sections).
+export const UNCATEGORIZED_EVIDENCE_KEY = '__uncategorized';
+
 // Field order/grouping mirrors the issue's screen 1 layout exactly: ครอบครัว → ประกัน →
 // การออมและการลงทุน → ที่อยู่อาศัย → เงินบริจาค.
 export const TAX_ALLOWANCE_GROUPS = [
@@ -125,6 +130,27 @@ export const AUTO_GRANTED_ROWS = [
   { key: 'personal', label: 'ส่วนตัว', capCategory: 'personal' },
   { key: 'sso', label: 'ประกันสังคม (SSO)', capCategory: null, note: 'หักตามฐานเงินเดือนและอัตราที่กฎหมายกำหนดโดยอัตโนมัติ' },
 ];
+
+/**
+ * Whether the employee has entered anything for this GROUP's own fields yet — feeds the "กรอกแล้ว"
+ * indicator on TaxAllowanceForm's step-1 section picker (progressive disclosure, #tax-allowance-
+ * sections), so a returning user can see at a glance which of the five sections they have already
+ * started.
+ *
+ * Deliberately its own helper, not a reuse of `computeGroupUsage` (taxAllowanceCaps.js):
+ * `computeGroupUsage` answers "how much of a SHARED CEILING has been consumed" and only has an
+ * opinion on the two groups that share one (life_health/retirement -- `groupCapId` on `insurance`/
+ * `savings` below); it says nothing about `family`, `housing`, or `donation`, and is keyed by a
+ * different id namespace (`groupId`, not `TAX_ALLOWANCE_GROUPS[].key`). This only asks "is any
+ * field in this group non-default", for all five groups uniformly.
+ */
+export function groupHasValue(group, values) {
+  if (!values) return false;
+  return group.fields.some((field) => {
+    const value = values[field.key];
+    return field.kind === 'checkbox' ? Boolean(value) : Number(value || 0) > 0;
+  });
+}
 
 export function defaultAllowanceValues(declaration) {
   const source = declaration?.allowances || {};

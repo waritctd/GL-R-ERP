@@ -202,7 +202,10 @@ public final class TaxAllowanceDeclarationDtos {
         OffsetDateTime uploadedAt,
         OffsetDateTime deletedAt,
         Long deletedBy,
-        String deleteReason
+        String deleteReason,
+        // V135: which of TAX_ALLOWANCE_GROUPS' five section keys this evidence belongs to. Null for
+        // every pre-V135 row -- the frontend shows those as "general/uncategorized", never drops them.
+        String sectionKey
     ) {}
 
     /**

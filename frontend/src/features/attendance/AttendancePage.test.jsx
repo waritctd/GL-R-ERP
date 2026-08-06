@@ -25,6 +25,9 @@ vi.mock('../../api/index.js', () => ({
 }));
 
 const hrUser = { role: 'hr', employeeId: 1 };
+// Not HR/CEO (no canViewAllAttendance) and not a manager -- attendanceMode() falls through to
+// 'employee', i.e. isSelfView.
+const selfViewUser = { role: 'employee', employeeId: 2, manager: false };
 
 function renderWithClient(ui) {
   const queryClient = new QueryClient({
@@ -184,5 +187,80 @@ describe('AttendancePage rendering (issue #422 B2)', () => {
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('เครือข่ายขัดข้อง');
     expect(showToastCalls).toHaveLength(1);
+  });
+});
+
+// Regression coverage for the date stepper bug: `stepDay` used to round-trip through
+// `new Date(...).toISOString()`, which reads the UTC calendar day off a Bangkok-midnight instant
+// -- always one day behind the Bangkok date intended, netting a 2-day back-step and a stuck
+// forward-step. System time is pinned mid-month (not near either window edge) so neither button
+// is disabled by the min/max clamp, isolating the stepping arithmetic itself.
+describe('AttendancePage date stepper', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.attendance.daily.mockResolvedValue({ days: [] });
+    api.attendance.employees.mockResolvedValue({ employees: [] });
+    api.attendance.devices.mockResolvedValue({ devices: [] });
+    api.attendance.unmapped.mockResolvedValue({ badges: [] });
+  });
+
+  it('previous then next round-trips to the original date, one calendar day at a time', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-08-15T05:00:00Z')); // 2026-08-15 12:00 Bangkok
+      renderWithClient(<AttendancePage user={hrUser} showToast={vi.fn()} />);
+
+      const dateInput = await screen.findByLabelText('วันที่');
+      await waitFor(() => expect(dateInput.value).toBe('2026-08-15'));
+
+      const prevButton = screen.getByRole('button', { name: 'วันก่อนหน้า' });
+      const nextButton = screen.getByRole('button', { name: 'วันถัดไป' });
+      // Both buttons are disabled while the scoped daily-attendance query for the CURRENT
+      // selectedDate is loading (issue #422 P2) -- wait for that to clear before every click, or
+      // a click on a still-disabled button is a silent no-op that this test would misread as the
+      // stepper doing nothing.
+      await waitFor(() => expect(prevButton.disabled).toBe(false));
+
+      fireEvent.click(prevButton);
+      await waitFor(() => expect(dateInput.value).toBe('2026-08-14'));
+      await waitFor(() => expect(nextButton.disabled).toBe(false));
+
+      fireEvent.click(nextButton);
+      await waitFor(() => expect(dateInput.value).toBe('2026-08-15'));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// Regression coverage: monthBounds() widened the picker's browsable window to 3 months back
+// (BROWSABLE_MONTHS_BACK), but the self-view fetch range must NOT widen along with it -- it has
+// no date control to reach further back with (the whole filter bar is `!isSelfView`-gated), and
+// AttendanceDailyService.MAX_RANGE_DAYS caps any query at <92 days. A 3-month-back `from` combined
+// with a late-month `today` (e.g. Aug 30 -> 122-day span) would exceed that and 400. This pins the
+// self-view range to the CURRENT month regardless of BROWSABLE_MONTHS_BACK, decoupled from the
+// picker's own min bound.
+describe('AttendancePage self-view fetch range', () => {
+  it("does not widen the self-view's own attendance query past the current month", async () => {
+    vi.clearAllMocks();
+    api.attendance.daily.mockResolvedValue({ days: [] });
+    api.attendance.employees.mockResolvedValue({ employees: [] });
+    api.attendance.devices.mockResolvedValue({ devices: [] });
+    api.attendance.unmapped.mockResolvedValue({ badges: [] });
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // Late in the month -- if the self-view range had inherited the 3-month-back picker window,
+      // `from` would be 2026-05-01 and the span would be 96 days, over the backend's 92-day cap.
+      vi.setSystemTime(new Date('2026-08-30T05:00:00Z')); // 2026-08-30 12:00 Bangkok
+      renderWithClient(<AttendancePage user={selfViewUser} showToast={vi.fn()} />);
+
+      await waitFor(() => expect(api.attendance.daily).toHaveBeenCalledTimes(1));
+      expect(api.attendance.daily).toHaveBeenCalledWith(
+        expect.objectContaining({ from: '2026-08-01', to: '2026-08-30' }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -13,7 +13,8 @@ import { downloadBlob } from '../../utils/download.js';
 import { leaveStatusLabel as statusInfo } from '../../utils/format.js';
 import { formatDateRange, formatDays } from './leaveFormatting.js';
 import {
-  buildLeaveRequestColumns, LEAVE_REQUEST_TABLE_GRID, leaveRequestRowKey, renderLeaveRequestExpanded,
+  buildLeaveRequestColumns, LEAVE_REQUEST_TABLE_GRID, leaveRequestRowKey,
+  PendingApproverNote, renderLeaveRequestExpanded,
 } from './leaveRequestTable.jsx';
 import { canManagerCancelRequest, canReviewRequest } from './leaveSurfaceTabs.js';
 
@@ -265,6 +266,7 @@ export function ReviewQueueTab({ user, showToast }) {
             </Button>
           </span>
         </div>
+        <PendingApproverNote request={request} />
         <span className="min-w-0 truncate text-xs text-text-muted">
           {request.employeeName || request.employeeCode} · {request.leaveTypeNameTh || request.leaveTypeCode} · {formatDays(request.totalDays)}
         </span>

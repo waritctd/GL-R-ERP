@@ -7,6 +7,8 @@ import {
   defaultLeaveSurfaceTabId,
   LEAVE_SURFACE_TABS,
   resolveLeaveSurfaceTab,
+  resolveTabHelper,
+  resolveTabLabel,
   visibleLeaveSurfaceTabIds,
 } from './leaveSurfaceTabs.js';
 
@@ -22,12 +24,30 @@ const submittedRequestUnderSomeoneElse = {
   id: 502, status: 'SUBMITTED', managerEmployeeId: 999,
 };
 
+// api.leave.employees() shape -- self + direct reports (or, for hr/ceo, every active
+// employee). Only `.length` matters to hasTeamMembers, but full-shaped fixtures keep this
+// file honest about what the real response looks like.
+const selfOnlyEmployeeOptions = [
+  {
+    employeeId: 5, employeeName: 'หัวหน้างาน', self: true, directReport: false,
+  },
+];
+const selfPlusReportEmployeeOptions = [
+  {
+    employeeId: 5, employeeName: 'หัวหน้างาน', self: true, directReport: false,
+  },
+  {
+    employeeId: 6, employeeName: 'ลูกทีม', self: false, directReport: true,
+  },
+];
+
 describe('LEAVE_SURFACE_TABS', () => {
-  it('declares the three ids, in order, with the expected Thai copy', () => {
-    expect(LEAVE_SURFACE_TABS.map(({ id }) => id)).toEqual(['me', 'review', 'rules']);
-    expect(LEAVE_SURFACE_TABS.map(({ label }) => label)).toEqual(['ของฉัน', 'รอพิจารณา', 'กฎการลา']);
+  it('declares the four ids, in order, with the expected Thai copy', () => {
+    expect(LEAVE_SURFACE_TABS.map(({ id }) => id)).toEqual(['me', 'team', 'review', 'rules']);
+    expect(LEAVE_SURFACE_TABS.map(({ label }) => label)).toEqual(['ของฉัน', 'ลูกทีม', 'รอพิจารณา', 'กฎการลา']);
     expect(LEAVE_SURFACE_TABS.map(({ helper }) => helper)).toEqual([
       'โควตาและคำขอลาของคุณ',
+      'การลาของทีมคุณ',
       'คำขอลาที่รอคุณพิจารณา',
       'เงื่อนไขการลาแต่ละประเภท',
     ]);
@@ -35,11 +55,14 @@ describe('LEAVE_SURFACE_TABS', () => {
 });
 
 describe('visibleLeaveSurfaceTabIds', () => {
-  it('a plain employee with no reports does not see "review"', () => {
+  it('a plain employee with no reports does not see "review" or "team"', () => {
     expect(visibleLeaveSurfaceTabIds(employee, [])).toEqual(['me', 'rules']);
     // Still hidden even with OTHER people's requests loaded -- none of them are this
     // user's own reports.
     expect(visibleLeaveSurfaceTabIds(employee, [submittedRequestUnderSomeoneElse])).toEqual(['me', 'rules']);
+    // ...and even with employeeOptions unset (the default -- a caller that never wired the
+    // signal through at all).
+    expect(visibleLeaveSurfaceTabIds(employee, [], selfOnlyEmployeeOptions)).toEqual(['me', 'rules']);
   });
 
   it('a non-HR manager (not in ROLE_PERMISSIONS.canReviewLeave) DOES see "review" once a report\'s request loads', () => {
@@ -66,6 +89,31 @@ describe('visibleLeaveSurfaceTabIds', () => {
   it('Phase A0: a server-supplied canReview=true row makes "review" visible even without a manager FK match', () => {
     const serverAuthoritative = { id: 504, status: 'SUBMITTED', managerEmployeeId: null, canReview: true };
     expect(visibleLeaveSurfaceTabIds(employee, [serverAuthoritative])).toEqual(['me', 'review', 'rules']);
+  });
+
+  describe('"team" (2026-08 bugfix -- the correctly-scoped, correctly-labelled home for what used to leak into "me")', () => {
+    it('is hidden when the actor\'s api.leave.employees() list is just themselves', () => {
+      expect(visibleLeaveSurfaceTabIds(nonHrManager, [], selfOnlyEmployeeOptions)).toEqual(['me', 'rules']);
+    });
+
+    it('is visible as soon as the actor has at least one other person (a direct report) in that list', () => {
+      expect(visibleLeaveSurfaceTabIds(nonHrManager, [], selfPlusReportEmployeeOptions))
+        .toEqual(['me', 'team', 'rules']);
+    });
+
+    it('sits between "me" and "review" when both are visible', () => {
+      expect(visibleLeaveSurfaceTabIds(nonHrManager, [submittedRequestUnderNonHrManager], selfPlusReportEmployeeOptions))
+        .toEqual(['me', 'team', 'review', 'rules']);
+    });
+
+    it('does NOT key off isDivisionManager-style user.manager -- a plain employee with reports in their employees() list still sees it', () => {
+      // Deliberately no `manager: true` on this fixture -- hasTeamMembers reads
+      // employeeOptions, never user.manager/role (aside from hr/ceo's own includeAll widening
+      // inside api.leave.employees() itself, which is opaque to this function).
+      const plainEmployeeWithReports = { role: 'employee', employeeId: 42 };
+      expect(visibleLeaveSurfaceTabIds(plainEmployeeWithReports, [], selfPlusReportEmployeeOptions))
+        .toEqual(['me', 'team', 'rules']);
+    });
   });
 });
 
@@ -132,6 +180,33 @@ describe('defaultLeaveSurfaceTabId', () => {
   it('is DEFAULT_LEAVE_SURFACE_TAB_ID ("me") for every other role', () => {
     expect(defaultLeaveSurfaceTabId(employee)).toBe(DEFAULT_LEAVE_SURFACE_TAB_ID);
     expect(defaultLeaveSurfaceTabId(nonHrManager)).toBe(DEFAULT_LEAVE_SURFACE_TAB_ID);
+  });
+});
+
+// Review fix (2026-08): api.leave.employees() returns the whole company for hr/ceo
+// (VIEW_ALL_ROLES server-side), so they legitimately see the "team" tab too -- but "ลูกทีม"
+// ("my team") is factually wrong when the viewer is looking at the entire company. These
+// assertions are keyed off the `team` tab entry directly (not a rendered page) so they stay
+// pure/fast, same convention as the LEAVE_SURFACE_TABS/isVisible tests above.
+describe('resolveTabLabel / resolveTabHelper (team tab role-aware copy)', () => {
+  const teamTab = LEAVE_SURFACE_TABS.find((tab) => tab.id === 'team');
+
+  it('an hr or ceo user sees "พนักงานทั้งหมด" copy, not "ลูกทีม"', () => {
+    expect(resolveTabLabel(teamTab, hr)).toBe('พนักงานทั้งหมด');
+    expect(resolveTabLabel(teamTab, ceo)).toBe('พนักงานทั้งหมด');
+    expect(resolveTabHelper(teamTab, hr)).toBe('การลาของพนักงานทั้งหมด');
+    expect(resolveTabHelper(teamTab, ceo)).toBe('การลาของพนักงานทั้งหมด');
+  });
+
+  it('a real division manager (non-hr/ceo, has direct reports) still sees "ลูกทีม" copy unchanged', () => {
+    expect(resolveTabLabel(teamTab, nonHrManager)).toBe('ลูกทีม');
+    expect(resolveTabHelper(teamTab, nonHrManager)).toBe('การลาของทีมคุณ');
+  });
+
+  it('a tab with no labelFor/helperFor override (e.g. "me") always returns the static copy', () => {
+    const meTab = LEAVE_SURFACE_TABS.find((tab) => tab.id === 'me');
+    expect(resolveTabLabel(meTab, hr)).toBe('ของฉัน');
+    expect(resolveTabHelper(meTab, hr)).toBe('โควตาและคำขอลาของคุณ');
   });
 });
 

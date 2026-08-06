@@ -33,6 +33,15 @@ const STATUS_FILTER_OPTIONS = [
 
 const DEFAULT_SORT = 'name.asc';
 
+// HR-visible missing-nickname flag: read-only visibility only -- never auto-populates or invents a
+// nickname for anyone. `nickName` is blank for a genuinely un-set value (see
+// `EmployeeFormModal.jsx`'s `nickName: z.string()`, which allows an empty string), so "missing" is
+// simply "falsy after trim", the same emptiness check `formatAddress`/other display helpers in
+// `utils/format.js` already use elsewhere in this codebase.
+function hasNoNickname(employee) {
+  return !String(employee?.nickName || '').trim();
+}
+
 const SORT_OPTIONS = [
   { value: 'name.asc', label: 'ชื่อ ก-ฮ' },
   { value: 'name.desc', label: 'ชื่อ ฮ-ก' },
@@ -70,7 +79,12 @@ const baseColumns = [
         <Avatar employee={employee} size="sm" />
         <span>
           <strong>{employee.nameTh}</strong>
-          <small>{employee.nickName} · {employee.divisionTh}</small>
+          <small>
+            {hasNoNickname(employee) ? (
+              <span className="text-warning">ไม่มีชื่อเล่น</span>
+            ) : employee.nickName}
+            {' · '}{employee.divisionTh}
+          </small>
         </span>
       </span>
     ),
@@ -143,7 +157,14 @@ function EmployeeCard({ employee, onOpen }) {
       </div>
 
       <span className="min-w-0 truncate text-xs text-text-muted">
-        {[employee.nickName, employee.positionTh, employee.departmentTh].filter(Boolean).join(' · ')}
+        {hasNoNickname(employee) ? (
+          <span className="text-warning">ไม่มีชื่อเล่น</span>
+        ) : employee.nickName}
+        {/* Separator only when there's a position/department to join to it -- unconditional here
+            regressed to a trailing " · " for anyone missing both (review #pending-approver-info). */}
+        {employee.positionTh || employee.departmentTh
+          ? <>{' · '}{[employee.positionTh, employee.departmentTh].filter(Boolean).join(' · ')}</>
+          : null}
       </span>
 
       <span className="flex min-w-0 items-baseline justify-between gap-3">
@@ -189,6 +210,9 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
   const sortParam = searchParams.get('sort') ?? DEFAULT_SORT;
   const sortValue = isKnown(SORT_OPTIONS, sortParam) ? sortParam : DEFAULT_SORT;
   const [sortKey, sortDir] = sortValue.split('.');
+  // HR-visible missing-nickname flag: read-only filter, off by default -- an untouched page shows
+  // everyone, same "default = untouched URL" convention every other filter on this page follows.
+  const nicknameFilter = searchParams.get('nickname') === 'missing';
 
   function updateParams(changes) {
     setSearchParams((previous) => {
@@ -229,9 +253,10 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
         || (status === DEFAULT_STATUS
           ? CURRENT_STATUS_IDS.includes(employee.statusId)
           : employee.statusId === status);
-      return matchQuery && matchDivision && matchDepartment && matchStatus;
+      const matchNickname = !nicknameFilter || hasNoNickname(employee);
+      return matchQuery && matchDivision && matchDepartment && matchStatus && matchNickname;
     });
-  }, [employees, search, divisionId, departmentTh, status]);
+  }, [employees, search, divisionId, departmentTh, status, nicknameFilter]);
 
   // Chips stand in for the panel while it is closed, so a filtered list never
   // looks like an unfiltered one. The status chip shows for every value except
@@ -252,6 +277,11 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
       key: 'dept',
       label: departmentTh,
       onRemove: () => updateParams({ dept: '' }),
+    },
+    nicknameFilter && {
+      key: 'nickname',
+      label: 'ไม่มีชื่อเล่น',
+      onRemove: () => updateParams({ nickname: '' }),
     },
     sortValue !== DEFAULT_SORT && {
       key: 'sort',
@@ -400,6 +430,21 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
                   <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
               </select>
+            </label>
+            {/* HR-visible missing-nickname flag: read-only visibility only -- see hasNoNickname's
+                comment. Not a data-quality fix; just lets HR find who to ask. */}
+            <label htmlFor="employee-filter-missing-nickname" className="grid gap-1 text-sm font-bold text-text-secondary">
+              ชื่อเล่น
+              <span className="flex min-h-9 items-center gap-2 font-normal text-text">
+                <input
+                  id="employee-filter-missing-nickname"
+                  type="checkbox"
+                  className="h-4 w-4 shrink-0"
+                  checked={nicknameFilter}
+                  onChange={(event) => updateParams({ nickname: event.target.checked ? 'missing' : '' })}
+                />
+                แสดงเฉพาะที่ไม่มีชื่อเล่น
+              </span>
             </label>
           </div>
         ) : null}

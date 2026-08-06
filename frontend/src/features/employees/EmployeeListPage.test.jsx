@@ -78,10 +78,10 @@ function LocationProbe() {
   );
 }
 
-function renderPage(initialEntry = '/employees') {
+function renderPage(initialEntry = '/employees', employeesOverride = employees) {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
-      <EmployeeListPage user={user} employees={employees} onCreateEmployee={() => {}} />
+      <EmployeeListPage user={user} employees={employeesOverride} onCreateEmployee={() => {}} />
       <LocationProbe />
     </MemoryRouter>,
   );
@@ -284,5 +284,50 @@ describe('EmployeeListPage mobile cards', () => {
 
     expect(screen.getByRole('button', { name: /^ตัวกรอง/ }).getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByLabelText('สถานะ')).toBeNull();
+  });
+});
+
+// HR-visible missing-nickname flag: read-only visibility only -- never auto-populates or invents a
+// nickname. A separate, LOCAL fixture (not the shared module-level `employees`) so the row-count
+// assertions in the describe blocks above stay unaffected by adding a missing-nickname row.
+const employeesWithMissingNickname = [
+  employees[0],
+  { ...employees[1], nickName: '' },
+  employees[2],
+];
+
+describe('EmployeeListPage missing-nickname flag', () => {
+  it('flags an employee with a blank nickname in the row, and leaves a normal one alone', () => {
+    const { container } = renderPage('/employees', employeesWithMissingNickname);
+
+    expect(screen.getByText('ไม่มีชื่อเล่น')).toBeTruthy();
+    // สมชาย's row (a normal nickname) never shows the missing-nickname flag text.
+    const somchaiRow = [...container.querySelectorAll('.data-row')].find((row) => row.textContent.includes('สมชาย'));
+    expect(somchaiRow.textContent).not.toContain('ไม่มีชื่อเล่น');
+  });
+
+  it('does not invent or auto-populate a nickname -- the row just shows the flag, never a fabricated value', () => {
+    renderPage('/employees', employeesWithMissingNickname);
+
+    // นภาพร's nickname was blanked in the fixture ('แนน' would have shown otherwise, per the
+    // search-normalisation describe block above using the same name for the real nickname).
+    expect(screen.queryByText('แนน')).toBeNull();
+  });
+
+  it('filters to only missing-nickname rows when the checkbox is toggled, and writes/clears the URL param', () => {
+    renderPage('/employees', employeesWithMissingNickname);
+
+    expect(screen.getByText('สมชาย ใจดี')).toBeTruthy();
+    expect(screen.getByText('นภาพร สุขสวัสดิ์')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /แสดงเฉพาะที่ไม่มีชื่อเล่น/ }));
+
+    expect(params()).toContain('nickname=missing');
+    expect(screen.queryByText('สมชาย ใจดี')).toBeNull();
+    expect(screen.getByText('นภาพร สุขสวัสดิ์')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /แสดงเฉพาะที่ไม่มีชื่อเล่น/ }));
+    expect(params()).not.toContain('nickname=missing');
+    expect(screen.getByText('สมชาย ใจดี')).toBeTruthy();
   });
 });

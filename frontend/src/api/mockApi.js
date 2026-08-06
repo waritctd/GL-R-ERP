@@ -386,6 +386,7 @@ db.leaveTypes = db.leaveTypes || [
 // functional regression — only the earlier "all three were dead code" claim was wrong.
 db.leaveRequests = db.leaveRequests || [];
 db.overtimeRequests = db.overtimeRequests || [];
+db.attendanceCorrectionRequests = db.attendanceCorrectionRequests || [];
 db.specialMoneyRequests = db.specialMoneyRequests || [];
 // Evidence uploads live only for the life of the mock session -- there is no file store here.
 db.specialMoneyAttachments = db.specialMoneyAttachments || [];
@@ -1581,6 +1582,11 @@ function requireTaxAllowanceAttachmentAccess(declaration, user) {
   const isHr = user.role === 'hr';
   if (!isOwner && !isHr) fail('ไม่พบไฟล์แนบนี้', 404);
 }
+
+// V135 (feat/tax-allowance-sections): mirrors TaxAllowanceDeclarationService#EVIDENCE_SECTION_KEYS,
+// which itself mirrors TAX_ALLOWANCE_GROUPS' five `key`s in
+// frontend/src/features/taxAllowance/taxAllowanceSchema.js. Kept in sync by hand in all three places.
+const TAX_ALLOWANCE_SECTION_KEYS = new Set(['family', 'insurance', 'savings', 'housing', 'donation']);
 
 function taxAllowanceCapsFor(taxYear) {
   const ssfDeductible = taxYear < 2025;
@@ -2809,6 +2815,93 @@ function hasManagerApproverFor(employeeId) {
     && isManagerPosition(peer));
 }
 
+// feat/pending-approver-info: mirrors PendingApproverSql on the backend -- "who this is waiting on"
+// for a SUBMITTED/MANAGER_APPROVED leave/overtime/special-money request, computed READ-ONLY
+// (never gates an approval decision here, same as the backend resolvers). Simplified but not
+// misleadingly different: the real backend derives the "ceo"/"hr" ROLE from division+position
+// (DivisionAccessPolicy.roleFor), but this mock already has each account's role stored directly on
+// db.users -- reading that field is the honest mock-mode equivalent, not a separate reimplementation
+// of the derivation itself.
+//
+// Ambiguity handling matches the backend exactly: a name is shown only when there is EXACTLY ONE
+// active account holding that role; with zero or more than one, the name is omitted (role shown
+// alone). See PendingApproverSql's Javadoc for the backend-side reasoning this mirrors.
+function activeUsersWithRole(role) {
+  return db.users.filter((candidate) => candidate.role === role && candidate.active !== false);
+}
+
+// Name preference: nickname, falling back to a first-name-shaped stand-in, mirroring the backend's
+// "nickname, else first_name_th, never blank" preference (PendingApproverSql). db.users has no
+// separate first-name field, so the user's own `name` (already a full display name, e.g. "คุณวิชัย
+// ธนาคาร") is the fallback here -- a simplification, not a shape mismatch, since it is used only
+// when nickName is missing.
+function approverDisplayName(userAccount) {
+  if (!userAccount) return null;
+  const employee = userAccount.employeeId ? findEmployee(userAccount.employeeId) : null;
+  return employee?.nickName || userAccount.name || null;
+}
+
+function singleActiveApproverName(role) {
+  const candidates = activeUsersWithRole(role);
+  return candidates.length === 1 ? approverDisplayName(candidates[0]) : null;
+}
+
+// The SAME peer set hasManagerApproverFor's own EXISTS check counts (division match + not-inactive
+// + manager position) -- kept literally identical so the two can never disagree about who the
+// division-manager candidates are.
+function divisionManagerPeers(employeeId) {
+  const employee = findEmployee(employeeId);
+  if (!employee || employee.divisionId == null) return [];
+  return db.employees.filter((peer) => peer.divisionId === employee.divisionId
+    && peer.isActive !== false
+    && isManagerPosition(peer));
+}
+
+function singleDivisionManagerName(employeeId) {
+  const peers = divisionManagerPeers(employeeId);
+  return peers.length === 1 ? (peers[0].nickName || peers[0].nameTh || null) : null;
+}
+
+// Leave: mirrors LeaveRepository#resolvePendingApproverRole/Name -- SUBMITTED only (leave has no
+// CEO stage). An active direct manager (managerIdForEmployee) if present; otherwise "hr"
+// generically.
+function pendingApproverForLeave(record, managerEmployeeId) {
+  if (record.status !== 'SUBMITTED') return { pendingApproverRole: null, pendingApproverName: null };
+  if (managerEmployeeId) {
+    const manager = findEmployee(managerEmployeeId);
+    const managerActive = manager?.active !== false;
+    if (managerActive) {
+      return { pendingApproverRole: 'manager', pendingApproverName: manager?.nickName || manager?.nameTh || null };
+    }
+  }
+  return { pendingApproverRole: 'hr', pendingApproverName: singleActiveApproverName('hr') };
+}
+
+// Overtime: mirrors OvertimeRepository#resolvePendingApproverRole/Name -- SUBMITTED with a manager
+// stage (hasManagerApproverFor) routes to "manager"; SUBMITTED with none, or MANAGER_APPROVED,
+// routes to "ceo".
+function pendingApproverForOvertime(record) {
+  if (record.status === 'SUBMITTED') {
+    return hasManagerApproverFor(record.employeeId)
+      ? { pendingApproverRole: 'manager', pendingApproverName: singleDivisionManagerName(record.employeeId) }
+      : { pendingApproverRole: 'ceo', pendingApproverName: singleActiveApproverName('ceo') };
+  }
+  if (record.status === 'MANAGER_APPROVED') {
+    return { pendingApproverRole: 'ceo', pendingApproverName: singleActiveApproverName('ceo') };
+  }
+  return { pendingApproverRole: null, pendingApproverName: null };
+}
+
+// Special money: mirrors SpecialMoneyRepository#resolvePendingApproverRole/Name -- welfare is
+// CEO-only, single-stage (SpecialMoneyService's class Javadoc), so both pending statuses resolve
+// to "ceo".
+function pendingApproverForSpecialMoney(record) {
+  if (record.status === 'SUBMITTED' || record.status === 'MANAGER_APPROVED') {
+    return { pendingApproverRole: 'ceo', pendingApproverName: singleActiveApproverName('ceo') };
+  }
+  return { pendingApproverRole: null, pendingApproverName: null };
+}
+
 function leaveTypeByCode(code) {
   const type = db.leaveTypes.find((item) => item.code === String(code || '').toUpperCase());
   if (!type) fail('ประเภทการลาไม่ถูกต้อง', 400);
@@ -2926,6 +3019,7 @@ function buildLeaveRecord(record) {
     managerName: manager?.nameTh || null,
     leaveTypeNameTh: leaveType.nameTh,
     leaveTypeNameEn: leaveType.nameEn,
+    ...pendingApproverForLeave(record, managerEmployeeId),
   };
 }
 
@@ -2982,6 +3076,7 @@ function buildOvertimeRecord(record) {
     // it. Omitting it here would leave the field undefined, which the panel reads as "has a manager
     // stage" -- the CEO would then never see the button on a manager-less request under mocks.
     hasManagerApprover: hasManagerApproverFor(record.employeeId),
+    ...pendingApproverForOvertime(record),
   };
 }
 
@@ -3032,6 +3127,33 @@ function canAccessSpecialMoneyEmployee(user, employeeId) {
     || canReviewSpecialMoney(user, employeeId);
 }
 
+// Mirrors AttendanceCorrectionService: CEO-only, single stage, NO manager routing at all (unlike
+// overtime's manager -> CEO pipeline and unlike specialMoney's manager-can-file-on-behalf-but-not-
+// approve shape). Submit is always self-only -- there is no employeeId-on-behalf branch anywhere
+// in this feature, so there is nothing here for a manager (or HR) to be granted.
+function canViewAllAttendanceCorrection(user) {
+  return user.role === 'ceo';
+}
+
+function buildAttendanceCorrectionRecord(record, user) {
+  const employee = db.employees.find((item) => item.id === record.employeeId);
+  const requestedBy = record.requestedById ? db.employees.find((item) => item.id === record.requestedById) : null;
+  const reviewedBy = record.reviewedById ? db.employees.find((item) => item.id === record.reviewedById) : null;
+  return {
+    ...structuredClone(record),
+    employeeCode: employee?.code || null,
+    employeeName: employee?.nameTh || null,
+    requestedByName: requestedBy?.nameTh || null,
+    reviewedByName: reviewedBy?.nameTh || null,
+    // Mirrors AttendanceCorrectionService#withCanReviewFlag: true only for the CEO role, only
+    // while the request is still open (status must be SUBMITTED). Role-only, like requireCeo
+    // itself -- there is no self-exclusion, so a CEO reviewing their OWN correction request also
+    // gets canReview: true here (review #attendance-correction-request; matches the rest of this
+    // app's convention of role-only approval gates with no self-check).
+    canReview: Boolean(user) && canViewAllAttendanceCorrection(user) && record.status === 'SUBMITTED',
+  };
+}
+
 function specialMoneyAttachmentsFor(requestId) {
   return db.specialMoneyAttachments.filter((item) => item.specialMoneyRequestId === requestId);
 }
@@ -3057,6 +3179,7 @@ function buildSpecialMoneyRecord(record) {
     // Projected per row by SpecialMoneyRepository.baseSelect(): a reviewer sees the document trail
     // before opening the request, and the panel can warn before an approval the server will refuse.
     attachmentCount: specialMoneyAttachmentsFor(record.id).length,
+    ...pendingApproverForSpecialMoney(record),
   };
 }
 
@@ -4790,6 +4913,132 @@ export const api = {
     },
   },
 
+  // Mirrors AttendanceCorrectionController + AttendanceCorrectionService
+  // (attendance/correction/) -- an employee who missed a clock-in/clock-out scan requests the
+  // correct time; CEO approves or rejects. NO manager stage at all (simpler than overtime's
+  // manager -> CEO pipeline and simpler than specialMoney's "manager can file on behalf" shape --
+  // submit here is always self-only). Approving in the real backend also writes a
+  // hr.attendance_punch row and flips hr.attendance_daily.is_manual_override; this mock does NOT
+  // reimplement that write (there is no mock attendance_daily table to write into) -- it only
+  // flips status/reviewer fields, same as every other request-review mock in this file. Never
+  // treat a mock "approved" attendance correction as evidence the attendance-side write happened;
+  // that is backend-only and covered by AttendanceCorrectionScopeIntegrationTest.
+  attendanceCorrection: {
+    async list(params = {}) {
+      const user = requireSession();
+      let list = db.attendanceCorrectionRequests;
+      const viewAll = canViewAllAttendanceCorrection(user);
+      if (!viewAll) {
+        if (!user.employeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
+        if (params.employeeId && Number(params.employeeId) !== user.employeeId) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+        list = list.filter((item) => item.employeeId === user.employeeId);
+      } else if (params.employeeId) {
+        list = list.filter((item) => item.employeeId === Number(params.employeeId));
+      }
+      if (params.status) list = list.filter((item) => item.status === params.status);
+      const sorted = [...list].sort((a, b) => (
+        (a.workDate < b.workDate ? 1 : a.workDate > b.workDate ? -1 : 0) || (b.id - a.id)
+      ));
+      return delay({ requests: sorted.map((item) => buildAttendanceCorrectionRecord(item, user)) });
+    },
+
+    async create(payload) {
+      const user = requireSession();
+      const employeeId = user.employeeId;
+      if (!employeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
+      findEmployee(employeeId);
+      if (!payload.workDate) fail('ต้องระบุวันที่', 400);
+      if (payload.workDate > bangkokTodayIso()) fail('ไม่สามารถขอแก้ไขเวลาสำหรับวันที่ในอนาคตได้', 400);
+      const type = payload.correctionType;
+      if (!['CHECK_IN', 'CHECK_OUT', 'BOTH'].includes(type)) fail('ประเภทการแก้ไขไม่ถูกต้อง', 400);
+      const checkIn = payload.requestedCheckIn || null;
+      const checkOut = payload.requestedCheckOut || null;
+      // Mirrors chk_attendance_correction_fields_match_type (V135) + AttendanceCorrectionService
+      // #validateRequestShape -- see that method's javadoc for why this is validated ahead of a
+      // (mock-mode-nonexistent) DB constraint too, not just in the real backend.
+      if (type === 'CHECK_IN' && (!checkIn || checkOut)) fail('กรุณาระบุเวลาเข้างานที่ถูกต้อง', 400);
+      if (type === 'CHECK_OUT' && (!checkOut || checkIn)) fail('กรุณาระบุเวลาออกงานที่ถูกต้อง', 400);
+      if (type === 'BOTH' && (!checkIn || !checkOut)) fail('กรุณาระบุทั้งเวลาเข้างานและเวลาออกงาน', 400);
+      if (checkIn && checkOut && checkOut < checkIn) fail('เวลาออกงานต้องไม่อยู่ก่อนเวลาเข้างาน', 400);
+      if (!payload.reason || !payload.reason.trim()) fail('ต้องระบุเหตุผล', 400);
+      const hasOpenRequest = db.attendanceCorrectionRequests.some((item) => (
+        item.employeeId === employeeId && item.workDate === payload.workDate && item.status === 'SUBMITTED'
+      ));
+      if (hasOpenRequest) fail('มีคำขอแก้ไขเวลาสำหรับวันนี้ที่ยังไม่ได้รับการพิจารณาอยู่แล้ว', 409);
+
+      const id = Math.max(0, ...db.attendanceCorrectionRequests.map((item) => item.id)) + 1;
+      const now = new Date().toISOString();
+      const request = {
+        id,
+        employeeId,
+        workDate: payload.workDate,
+        correctionType: type,
+        requestedCheckIn: checkIn,
+        requestedCheckOut: checkOut,
+        reason: payload.reason.trim(),
+        status: 'SUBMITTED',
+        requestedById: employeeId,
+        requestedAt: now,
+        reviewedById: null,
+        reviewedAt: null,
+        reviewerNote: null,
+        cancelledAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      db.attendanceCorrectionRequests.unshift(request);
+      return delay({ request: buildAttendanceCorrectionRecord(request, user) });
+    },
+
+    async approve(id, payload = {}) {
+      const user = requireSession();
+      const request = db.attendanceCorrectionRequests.find((item) => item.id === Number(id));
+      if (!request) fail('ไม่พบคำขอแก้ไขเวลานี้', 404);
+      if (request.status !== 'SUBMITTED') fail('คำขอแก้ไขเวลานี้ได้รับการพิจารณาไปแล้ว', 409);
+      // CEO-only, no self-approval carve-out -- mirrors AttendanceCorrectionService#requireCeo
+      // exactly (a plain role check, not "unless it's your own request").
+      if (user.role !== 'ceo') fail('เฉพาะ CEO เท่านั้นที่สามารถพิจารณาคำขอแก้ไขเวลาเข้า-ออกงานได้', 403);
+      const now = new Date().toISOString();
+      request.status = 'APPROVED';
+      request.reviewedById = user.employeeId;
+      request.reviewedAt = now;
+      request.reviewerNote = payload.reviewerNote || null;
+      request.updatedAt = now;
+      return delay({ request: buildAttendanceCorrectionRecord(request, user) });
+    },
+
+    async reject(id, payload = {}) {
+      const user = requireSession();
+      const request = db.attendanceCorrectionRequests.find((item) => item.id === Number(id));
+      if (!request) fail('ไม่พบคำขอแก้ไขเวลานี้', 404);
+      if (request.status !== 'SUBMITTED') fail('คำขอแก้ไขเวลานี้ได้รับการพิจารณาไปแล้ว', 409);
+      if (user.role !== 'ceo') fail('เฉพาะ CEO เท่านั้นที่สามารถพิจารณาคำขอแก้ไขเวลาเข้า-ออกงานได้', 403);
+      const now = new Date().toISOString();
+      request.status = 'REJECTED';
+      request.reviewedById = user.employeeId;
+      request.reviewedAt = now;
+      request.reviewerNote = payload.reviewerNote || null;
+      request.updatedAt = now;
+      return delay({ request: buildAttendanceCorrectionRecord(request, user) });
+    },
+
+    // Requester-only -- unlike overtime/specialMoney there is no reviewer-side cancel (the CEO's
+    // only actions on an open request are approve/reject). Mirrors
+    // AttendanceCorrectionService#cancel.
+    async cancel(id) {
+      const user = requireSession();
+      const request = db.attendanceCorrectionRequests.find((item) => item.id === Number(id));
+      if (!request) fail('ไม่พบคำขอแก้ไขเวลานี้', 404);
+      if (request.employeeId !== user.employeeId) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (request.status !== 'SUBMITTED') fail('คำขอแก้ไขเวลานี้ไม่สามารถยกเลิกได้แล้ว', 409);
+      const now = new Date().toISOString();
+      request.status = 'CANCELLED';
+      request.cancelledAt = now;
+      request.updatedAt = now;
+      return delay({ request: buildAttendanceCorrectionRecord(request, user) });
+    },
+  },
+
   // Mirrors SpecialMoneyController + SpecialMoneyService (specialmoney/). Approval is CEO-only in
   // a SINGLE stage for every employee -- unlike overtime, which keeps a manager -> CEO pipeline
   // wherever the employee's ฝ่าย has a ผู้จัดการ. canReviewSpecialMoney therefore gates only
@@ -5902,11 +6151,20 @@ export const api = {
     // Evidence attachments (decision #5, 2026-08-01): file metadata + access scoping only, no tax
     // math -- genuinely fake-able. Mirrors TaxAllowanceDeclarationService#requireOwnerOrHr's rule
     // exactly: owning employee or hr, re-checked on every call, never the uploader, never ceo.
-    async uploadTaxAllowanceAttachment(declarationId, file) {
+    //
+    // sectionKey (V135, feat/tax-allowance-sections): mirrors
+    // TaxAllowanceDeclarationService#EVIDENCE_SECTION_KEYS/#normalizeSectionKey exactly -- blank/
+    // omitted normalizes to null ("general/uncategorized"), anything outside the five known keys
+    // is rejected the same way the real service rejects it (400), not silently accepted.
+    async uploadTaxAllowanceAttachment(declarationId, file, sectionKey) {
       const user = requireSession();
       const declaration = db.taxAllowanceDeclarations.find((item) => item.declarationId === Number(declarationId));
       if (!declaration) fail('ไม่พบแบบแจ้งค่าลดหย่อนนี้', 404);
       requireTaxAllowanceAttachmentAccess(declaration, user);
+      const normalizedSectionKey = sectionKey && String(sectionKey).trim() ? String(sectionKey).trim() : null;
+      if (normalizedSectionKey && !TAX_ALLOWANCE_SECTION_KEYS.has(normalizedSectionKey)) {
+        fail('sectionKey ไม่ถูกต้อง', 400);
+      }
       const attachmentId = Math.max(0, ...db.taxAllowanceAttachments.map((row) => row.attachmentId)) + 1;
       const row = {
         attachmentId,
@@ -5919,6 +6177,7 @@ export const api = {
         deletedAt: null,
         deletedBy: null,
         deleteReason: null,
+        sectionKey: normalizedSectionKey,
       };
       db.taxAllowanceAttachments.push(row);
       return delay({ attachment: row });

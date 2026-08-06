@@ -81,11 +81,6 @@ function renderMyLeaveTab(renderUser = user) {
 describe('MyLeaveTab balances: one primary card + a single disclosure (owner feedback, 2026-08)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.leave.employees.mockResolvedValue({
-      employees: [{
-        employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001', self: true, directReport: false,
-      }],
-    });
     // The balance-preview select (Phase A2: decoupled from the removed submission form) seeds
     // its default from THIS list, not from the balances fixture -- every test below needs at
     // least VACATION here so that seeding effect has something to default to.
@@ -232,11 +227,6 @@ describe('MyLeaveTab own-request table: the three state-defect fixes (Phase A1)'
 
   beforeEach(() => {
     vi.clearAllMocks();
-    api.leave.employees.mockResolvedValue({
-      employees: [{
-        employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001', self: true, directReport: false,
-      }],
-    });
     api.leave.types.mockResolvedValue({ leaveTypes: [] });
     api.leave.balances.mockResolvedValue({ balances: [] });
     api.leave.contactDefaults.mockResolvedValue(emptyContactDefaults);
@@ -365,11 +355,6 @@ describe('MyLeaveTab Phase A4: self-cancel confirmation + certificate download',
 
   beforeEach(() => {
     vi.clearAllMocks();
-    api.leave.employees.mockResolvedValue({
-      employees: [{
-        employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001', self: true, directReport: false,
-      }],
-    });
     api.leave.types.mockResolvedValue({ leaveTypes: [] });
     api.leave.balances.mockResolvedValue({ balances: [] });
     api.leave.contactDefaults.mockResolvedValue(emptyContactDefaults);
@@ -433,5 +418,146 @@ describe('MyLeaveTab Phase A4: self-cancel confirmation + certificate download',
 
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ไม่มีสิทธิ์เข้าถึงรายการนี้'));
     expect(downloadBlob).not.toHaveBeenCalled();
+  });
+});
+
+describe('MyLeaveTab bugfix (2026-08): "ของฉัน" always scopes to the actor\'s own employeeId', () => {
+  // THE regression test for the bug this branch fixes. LeaveService#list -- for any actor
+  // outside VIEW_ALL_ROLES (hr/ceo) -- treats an omitted `employeeId` as "self OR
+  // reports_to_employee_id = actor" (LeaveRepository#findRequests), so a manager's own
+  // "ของฉัน" tab used to genuinely receive their direct reports' rows too. This fixture is
+  // the first one in this file where `manager` actually has a direct report with a request
+  // of their own -- every fixture above uses `manager: false` and a single-employee actor,
+  // so none of them could have caught this.
+  const managerUser = {
+    employeeId: 5, name: 'หัวหน้างาน', role: 'employee', manager: true,
+  };
+  const managerCurrentEmployee = { id: 5, nameTh: 'หัวหน้างาน' };
+
+  const ownRequest = {
+    id: 4001,
+    employeeId: 5,
+    employeeName: 'หัวหน้างาน',
+    employeeCode: 'GLR-005',
+    leaveTypeCode: 'VACATION',
+    leaveTypeNameTh: 'ลาพักร้อน',
+    startDate: '2026-08-01',
+    endDate: '2026-08-01',
+    totalDays: 1,
+    quotaRemainingAfter: 5,
+    status: 'APPROVED',
+    reason: 'ลาของหัวหน้างานเอง',
+  };
+
+  const directReportRequest = {
+    id: 4002,
+    employeeId: 6,
+    employeeName: 'ลูกทีม ทดสอบ',
+    employeeCode: 'GLR-006',
+    managerEmployeeId: 5,
+    leaveTypeCode: 'SICK',
+    leaveTypeNameTh: 'ลาป่วย',
+    startDate: '2026-08-02',
+    endDate: '2026-08-02',
+    totalDays: 1,
+    quotaRemainingAfter: 29,
+    status: 'SUBMITTED',
+    reason: 'ลาป่วยของลูกทีม',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.leave.types.mockResolvedValue({ leaveTypes: [] });
+    api.leave.balances.mockResolvedValue({ balances: [] });
+    api.leave.contactDefaults.mockResolvedValue(emptyContactDefaults);
+    // Mirrors the real backend contract (LeaveService#list / LeaveRepository#findRequests):
+    // an explicit `employeeId` narrows strictly to that one employee's own rows. Before the
+    // fix, MyLeaveTab's requestsQuery omitted `employeeId` whenever no filter value was
+    // applied, so this mock would have received `{}` and (per its own self-OR-report
+    // semantics below) handed back BOTH rows.
+    api.leave.list.mockImplementation((params) => Promise.resolve({
+      requests: [ownRequest, directReportRequest].filter((request) => (
+        params?.employeeId
+          ? Number(request.employeeId) === Number(params.employeeId)
+          : Number(request.employeeId) === 5 || request.managerEmployeeId === 5
+      )),
+    }));
+  });
+
+  it('REGRESSION: a manager with a direct report sees only their OWN request in "ของฉัน", never the report\'s', async () => {
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <MyLeaveTab user={managerUser} currentEmployee={managerCurrentEmployee} showToast={vi.fn()} />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('ลาของหัวหน้างานเอง')).not.toBeNull();
+    expect(screen.queryByText('ลาป่วยของลูกทีม')).toBeNull();
+    expect(screen.queryByText('ลูกทีม ทดสอบ')).toBeNull();
+
+    // The plumbing assertion: requestsQuery must always pass the actor's own employeeId,
+    // never omit it.
+    await waitFor(() => expect(api.leave.list).toHaveBeenCalledWith(expect.objectContaining({ employeeId: 5 })));
+  });
+
+  // Review fix (2026-08): restores "ปฏิทินวันลา", which this branch's original cut had moved
+  // into TeamLeaveTab.jsx (gated on hasTeamMembers) -- leaving every employee with no direct
+  // reports (the majority of the workforce) with no leave calendar anywhere on the page.
+  describe('review fix: "ปฏิทินวันลา" is restored here, self-scoped', () => {
+    it('renders for a plain employee with no direct reports, showing their own leave days', async () => {
+      const plainEmployee = { employeeId: 1, name: 'พนักงาน ทดสอบ', role: 'employee', manager: false };
+      const plainEmployeeCurrent = { id: 1, nameTh: 'พนักงาน ทดสอบ' };
+      const ownDay = {
+        id: 5001,
+        employeeId: 1,
+        employeeName: 'พนักงาน ทดสอบ',
+        employeeCode: 'GLR-001',
+        leaveTypeCode: 'VACATION',
+        leaveTypeNameTh: 'ลาพักร้อน',
+        startDate: '2026-08-04',
+        endDate: '2026-08-04',
+        totalDays: 1,
+        quotaRemainingAfter: 5,
+        status: 'APPROVED',
+        reason: 'พักผ่อนของตัวเอง',
+      };
+      api.leave.list.mockResolvedValue({ requests: [ownDay] });
+
+      render(
+        <MemoryRouter>
+          <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+            <MyLeaveTab user={plainEmployee} currentEmployee={plainEmployeeCurrent} showToast={vi.fn()} />
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+
+      const calendarHeading = await screen.findByRole('heading', { name: 'ปฏิทินวันลา' });
+      // Same closest('section') pattern TeamLeaveTab.test.jsx's own calendar test uses -- the
+      // heading's immediate ancestor is only PanelHeader's wrapper `<div>`, so the calendar-list
+      // content (a sibling of that div) requires walking up to the Panel's `<section>`.
+      const calendarPanel = calendarHeading.closest('section');
+      await waitFor(() => expect(calendarPanel.textContent).toMatch(/ลาพักร้อน/));
+      expect(calendarPanel.textContent).toMatch(/พนักงาน ทดสอบ/);
+    });
+
+    it("REGRESSION: a manager's own calendar does NOT include a direct report's day", async () => {
+      render(
+        <MemoryRouter>
+          <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+            <MyLeaveTab user={managerUser} currentEmployee={managerCurrentEmployee} showToast={vi.fn()} />
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+
+      const calendarHeading = await screen.findByRole('heading', { name: 'ปฏิทินวันลา' });
+      const calendarPanel = calendarHeading.closest('section');
+      await waitFor(() => expect(calendarPanel.textContent).toMatch(/หัวหน้างาน/));
+      // The direct report's name/status never appears in the actor's OWN calendar -- the
+      // beforeEach's api.leave.list mock (self-OR-report semantics) would have returned both
+      // rows here before this branch's own employeeId-scoping fix.
+      expect(calendarPanel.textContent).not.toMatch(/ลูกทีม ทดสอบ/);
+    });
   });
 });

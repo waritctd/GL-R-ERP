@@ -42,6 +42,8 @@ export const queryKeys = {
   leaveCalendarContext: (from, to) => ['leave', 'calendarContext', from ?? '', to ?? ''],
   overtimeRequests: (filters = {}) => ['overtime', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   overtimeEmployees: () => ['overtime', 'employees'],
+  attendanceCorrectionRequests: (filters = {}) =>
+    ['attendanceCorrection', 'list', filters.status ?? '', filters.employeeId ?? ''],
   // CommissionController#list only ever takes payrollMonth (no status param —
   // see CommissionPage.jsx's imperative load()); kept here so CeoOverview's
   // unfiltered fetch shares one cache entry with anything else that reads
