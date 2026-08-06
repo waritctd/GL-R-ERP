@@ -19,7 +19,7 @@ import { TaxAllowanceBreakdown } from './TaxAllowanceBreakdown.jsx';
 import { TaxAllowanceEvidenceCount } from './TaxAllowanceEvidenceCount.jsx';
 import { TaxAllowanceForm } from './TaxAllowanceForm.jsx';
 import { buildAllowanceSubmitBody, declaredAllowanceTotal, defaultAllowanceValues } from './taxAllowanceSchema.js';
-import { taxAllowanceStatusInfo } from './taxAllowanceStatus.js';
+import { taxAllowanceStatusInfo, taxAllowanceStatusShortLabel } from './taxAllowanceStatus.js';
 import { Button } from '../../components/common/Button.jsx';
 
 const REGISTER_GRID = 'grid-cols-[minmax(0,0.4fr)_minmax(0,1.4fr)_minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.7fr)] max-[1040px]:min-w-[900px] reflow-cards';
@@ -28,14 +28,20 @@ const REGISTER_GRID = 'grid-cols-[minmax(0,0.4fr)_minmax(0,1.4fr)_minmax(0,1.3fr
 // no declaration" row, which only exists when the employee list can be enumerated. It is filtered
 // out for a viewer without that access (see `visibleStatusChips` below), because for them it can
 // only ever match zero rows.
+//
+// Labels come from `taxAllowanceStatusShortLabel` (taxAllowanceStatus.js) — the canonical map —
+// rather than a literal here: this array used to carry its own copy of each label and it had
+// already drifted from that map (APPROVED_UNAPPLIED and EXPIRED both read differently here than on
+// the StatusBadge). `''` (ทั้งหมด) isn't a status at all, so it keeps its own literal, and
+// `requiresEmployeeList` is a register-only display concern, not status vocabulary — both stay here.
 const STATUS_CHIPS = [
   { key: '', label: 'ทั้งหมด' },
-  { key: 'NONE', label: 'ยังไม่ได้ยื่น', requiresEmployeeList: true },
-  { key: 'PENDING', label: 'รอ HR ตรวจสอบ' },
-  { key: 'APPROVED_UNAPPLIED', label: 'ยังไม่ใช้กับเงินเดือน' },
-  { key: 'APPLIED', label: 'ใช้กับเงินเดือนแล้ว' },
-  { key: 'EXPIRED', label: 'หมดอายุ' },
-  { key: 'REJECTED', label: 'ปฏิเสธ' },
+  { key: 'NONE', label: taxAllowanceStatusShortLabel('NONE'), requiresEmployeeList: true },
+  { key: 'PENDING', label: taxAllowanceStatusShortLabel('PENDING') },
+  { key: 'APPROVED_UNAPPLIED', label: taxAllowanceStatusShortLabel('APPROVED_UNAPPLIED') },
+  { key: 'APPLIED', label: taxAllowanceStatusShortLabel('APPLIED') },
+  { key: 'EXPIRED', label: taxAllowanceStatusShortLabel('EXPIRED') },
+  { key: 'REJECTED', label: taxAllowanceStatusShortLabel('REJECTED') },
 ];
 
 const MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => index + 1);
@@ -349,7 +355,29 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
         if (status === 'EXPIRED') {
           items.push({ key: 'reverify', label: 'ยืนยันใหม่', icon: 'refresh', onSelect: () => setReverifyTarget(row) });
         }
-        items.push({ key: 'onBehalf', label: 'ยื่นแทนพนักงาน', icon: 'userPlus', onSelect: () => setOnBehalfTarget(row) });
+        // "ยื่นแทนพนักงาน" is a CREATE verb (a new, HR-authored, auto-approved declaration), not a
+        // review verb — offering it unconditionally used to sit it in the same list as อนุมัติ/
+        // ปฏิเสธ/ใช้กับเงินเดือน/ยืนยันใหม่ regardless of whether creating a fresh one made any
+        // sense for the row's current state. OverflowMenu (components/common/OverflowMenu.jsx) has
+        // no separator/group concept to render it as visually distinct, so the fix here is which
+        // statuses offer it at all:
+        //  - NONE: the only path in for staff who never log in (decision #9) — always offered.
+        //  - REJECTED / EXPIRED: that submission is already settled (a final HR decision) or lapsed
+        //    (inert) — refiling starts fresh, it does not discard anything live. Always offered.
+        //  - APPROVED_UNAPPLIED: HR's own prior approval, not an unreviewed employee claim, and the
+        //    only way to correct it before it reaches payroll (there is no "unapprove"). The modal
+        //    pre-fills the existing values, so nothing is silently blind-overwritten. Kept.
+        //  - PENDING: dropped. The backend (TaxAllowanceDeclarationService#createOnBehalf) clears
+        //    the way by unconditionally WITHDRAWING any pending row first — so next to อนุมัติ/
+        //    ปฏิเสธ, the two actions that actually decide THIS submission, "ยื่นแทนพนักงาน" would
+        //    silently discard an employee's own live, awaiting-review submission with no recorded
+        //    reason. HR wanting to override a pending submission should reject it (which requires a
+        //    reason) and refile from REJECTED, not skip past review.
+        //  - APPLIED: dropped — the declaration is already in effect, so filing a new one is not a
+        //    next step at all (the clear case: this status now shows no menu, nothing to do here).
+        if (status !== 'PENDING' && status !== 'APPLIED') {
+          items.push({ key: 'onBehalf', label: 'ยื่นแทนพนักงาน', icon: 'userPlus', onSelect: () => setOnBehalfTarget(row) });
+        }
         return <OverflowMenu items={items} label={`การดำเนินการสำหรับ ${row.employeeName}`} />;
       },
     },
@@ -358,7 +386,10 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
   return (
     <PageStack>
       <PageHeader
-        title="ตรวจสอบแบบแจ้ง ล.ย.01 (ค่าลดหย่อนภาษี)"
+        // Matches the sidebar's own pattern (AppShell.jsx: ค่าลดหย่อนภาษี / ตรวจสอบค่าลดหย่อนภาษี)
+        // and the employee page's noun order (TaxAllowancePage.jsx: "ค่าลดหย่อนภาษี (แบบ ล.ย.01)")
+        // instead of inverting it — both pages are titles for the same object, ล.ย.01.
+        title="ตรวจสอบค่าลดหย่อนภาษี (แบบ ล.ย.01)"
         // The two audiences are looking at genuinely different tables, so they are told so. HR
         // sees one row per active employee (non-filers included, synthesized below); a viewer
         // without employee-list access sees only declarations that exist. Same honesty the
@@ -407,10 +438,30 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
         loading={declarationsQuery.isLoading || (canListEmployees && employeesQuery.isLoading)}
         error={declarationsQuery.error}
         onRetry={() => declarationsQuery.refetch()}
-        emptyState={{
-          icon: 'clipboard',
-          title: canListEmployees ? 'ไม่มีข้อมูลพนักงานในปีนี้' : 'ยังไม่มีแบบแจ้ง ล.ย.01 ในปีนี้',
-        }}
+        // `rows` (pre-status-filter) vs `filteredRows` (post-filter, what DataTable actually got)
+        // restores DataTable's own "(กรองจาก N)" screen-reader clause (DataTable.jsx: FIX G/F7) for
+        // the zero-row case, same as TicketListPage's `unfilteredTotal={allDeals.length}`. It does
+        // NOT by itself change the visible empty-state text below — DataTable's EmptyState `title`
+        // never reads `unfilteredTotal` (confirmed by reading DataTable.jsx/EmptyState.jsx directly:
+        // the visible `<strong>` always renders `emptyState.title` verbatim, aria-hidden so it isn't
+        // announced a second time; only the separate sr-only live region gets the "(กรองจาก N)"
+        // clause). The conditional title/description below is the part that fixes what a SIGHTED
+        // viewer sees, same split TicketListPage.jsx already uses (`activeFilterCount > 0 ? ... :
+        // ...` alongside its own `unfilteredTotal`) — the two props are a pair, not alternatives.
+        unfilteredTotal={rows.length}
+        emptyState={statusFilter && rows.length > 0
+          ? {
+            // Reachable from any chip whose bucket is empty for this tax year (e.g. REJECTED with
+            // no rejections) — distinct from "no employee data at all", which used to render here
+            // and claim exactly that even though `rows` (every other status) was non-empty.
+            icon: 'clipboard',
+            title: 'ไม่พบพนักงานที่ตรงกับตัวกรองนี้',
+            description: `ลองเลือก "ทั้งหมด" เพื่อดูพนักงานทั้งหมด ${rows.length} คน`,
+          }
+          : {
+            icon: 'clipboard',
+            title: canListEmployees ? 'ไม่มีข้อมูลพนักงานในปีนี้' : 'ยังไม่มีแบบแจ้ง ล.ย.01 ในปีนี้',
+          }}
         renderExpanded={(row) => (row.employeeId === expandedEmployeeId
           ? <TaxAllowanceBreakdown declaration={row.declaration} caps={caps} />
           : null)}

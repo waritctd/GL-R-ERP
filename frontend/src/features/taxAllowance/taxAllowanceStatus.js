@@ -28,6 +28,39 @@ export function selectCurrentDeclaration(items = []) {
   return [...candidates].sort((a, b) => String(b.submittedAt || '').localeCompare(String(a.submittedAt || '')))[0];
 }
 
+// Compact "chip" copy per derived status KEY — not the raw backend `status` column (there is no
+// backend status called APPROVED_UNAPPLIED or APPLIED; those two are this module's own split of
+// APPROVED by `appliedAt`, see taxAllowanceStatusInfo below). A filter chip stands for a whole
+// bucket of declarations, not one row in hand, so it cannot reuse the long-form `label` below where
+// that form is per-declaration text (APPLIED's `label` interpolates one specific effective month;
+// a chip has no single month to show). This is the one place the short copy lives — callers that
+// need a label for a status KEY with no declaration in hand (TaxAllowanceReviewPage's STATUS_CHIPS)
+// read it via `taxAllowanceStatusShortLabel` instead of keeping their own literals, which is how
+// APPROVED_UNAPPLIED and EXPIRED ended up reading differently on the register than on the badge.
+const STATUS_SHORT_LABELS = {
+  NONE: 'ยังไม่ได้ยื่น',
+  PENDING: 'รอ HR ตรวจสอบ',
+  REJECTED: 'ปฏิเสธ',
+  EXPIRED: 'หมดอายุ',
+  APPROVED_UNAPPLIED: 'ยังไม่ใช้กับเงินเดือน',
+  APPLIED: 'ใช้กับเงินเดือนแล้ว',
+};
+
+/**
+ * Short chip label for a status KEY, e.g. `taxAllowanceStatusShortLabel('EXPIRED')` — the one
+ * place this short copy lives. A chip needs a label for every status a filter row can show BEFORE
+ * any one declaration is in view — most obviously NONE, which `taxAllowanceStatusInfo` can only
+ * ever produce by being handed `null`, not a key — so this stays a separate, declaration-free
+ * lookup rather than a field tacked onto that function's return value (review-remediation: a
+ * `.shortLabel` field lived there briefly and had zero callers — `taxAllowanceStatusInfo` is keyed
+ * off a full declaration, which every chip-building caller lacks by construction, so nothing could
+ * ever have read it). An unrecognised key falls back to itself so a status this map hasn't been
+ * taught about yet renders as its own name instead of blank.
+ */
+export function taxAllowanceStatusShortLabel(key) {
+  return STATUS_SHORT_LABELS[key] ?? key;
+}
+
 /** Six distinct states per issue #387 screen 1, each with its own Thai copy and StatusBadge tone. */
 export function taxAllowanceStatusInfo(declaration) {
   if (!declaration) {
