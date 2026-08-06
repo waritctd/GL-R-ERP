@@ -87,6 +87,16 @@ public record LeaveRequestDto(
     // request actionable right now" -- callers should still check status == SUBMITTED themselves.
     // LeaveRepository#mapRequest always writes false here (it has no actor to check against);
     // LeaveService overwrites it for every DTO it returns -- see #withCanReviewFlag.
-    boolean canReview
+    boolean canReview,
+    // feat/pending-approver-info: "who this is waiting on" for a SUBMITTED request -- read-only,
+    // informational, NOT an authorization decision (see PendingApproverSql's Javadoc). "manager"
+    // when the requester has an active direct manager (reports_to_employee_id resolves to an
+    // active employee -- the same person managerEmployeeId/managerName above already describe);
+    // otherwise "hr" (leave has no CEO stage -- REVIEW_ALL_ROLES is {hr} only). Both null for any
+    // non-SUBMITTED status. pendingApproverName is null when the role is "hr" and more than one
+    // active hr-role employee exists -- see LeaveRepository#resolvePendingApprover's Javadoc for
+    // why a single name cannot be picked in that case.
+    String pendingApproverRole,
+    String pendingApproverName
 ) {
 }

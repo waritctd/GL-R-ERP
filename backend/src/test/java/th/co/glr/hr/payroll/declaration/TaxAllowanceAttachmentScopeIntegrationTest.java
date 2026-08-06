@@ -157,6 +157,46 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
         assertThat(stillThere.fileName()).isEqualTo(uploaded.fileName());
     }
 
+    // --- sectionKey (V135, feat/tax-allowance-sections) -------------------------------------------
+    // Not an authorization change -- the owner/HR access check above is untouched; these four cases
+    // cover the new data field's own validation only (CLAUDE.md's scope note on this task).
+
+    @Test
+    void aValidSectionKeyIsAcceptedAndReturned() {
+        long declarationId = submit(employeeA);
+        TaxAllowanceAttachmentDto uploaded = uploadPdf(declarationId, "insurance", employeeActor(employeeA));
+
+        assertThat(uploaded.sectionKey()).isEqualTo("insurance");
+        // Persisted, not just echoed back -- re-fetching through a fresh query proves the column
+        // round-trips through hr.file_attachment, not just through the in-memory DTO this call returned.
+        assertThat(repository.findAttachment(uploaded.attachmentId()).orElseThrow().sectionKey())
+            .isEqualTo("insurance");
+    }
+
+    @Test
+    void anInvalidSectionKeyIsRejected() {
+        long declarationId = submit(employeeA);
+
+        assertThatThrownBy(() -> uploadPdf(declarationId, "not-a-real-section", employeeActor(employeeA)))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void anOmittedSectionKeyStaysNullRatherThanFailing() {
+        long declarationId = submit(employeeA);
+        TaxAllowanceAttachmentDto uploaded = uploadPdf(declarationId, employeeActor(employeeA));
+
+        assertThat(uploaded.sectionKey()).isNull();
+    }
+
+    @Test
+    void aBlankSectionKeyNormalizesToNullRatherThanBeingRejected() {
+        long declarationId = submit(employeeA);
+        TaxAllowanceAttachmentDto uploaded = uploadPdf(declarationId, "   ", employeeActor(employeeA));
+
+        assertThat(uploaded.sectionKey()).isNull();
+    }
+
     // --- helpers ---------------------------------------------------------------------------------
 
     private long submit(long employeeId) {
@@ -176,9 +216,13 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
     }
 
     private TaxAllowanceAttachmentDto uploadPdf(long declarationId, UserPrincipal actor) {
+        return uploadPdf(declarationId, null, actor);
+    }
+
+    private TaxAllowanceAttachmentDto uploadPdf(long declarationId, String sectionKey, UserPrincipal actor) {
         MockMultipartFile file = new MockMultipartFile(
             "file", "evidence.pdf", "application/pdf", "หลักฐานประกอบการยื่นแบบ".getBytes());
-        return service.uploadAttachment(declarationId, file, actor);
+        return service.uploadAttachment(declarationId, file, sectionKey, actor);
     }
 
     private long seedEmployee(String code) {

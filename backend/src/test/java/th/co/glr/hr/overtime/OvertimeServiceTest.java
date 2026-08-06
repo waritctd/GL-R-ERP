@@ -813,7 +813,12 @@ class OvertimeServiceTest {
             "Test Manager",
             true,
             OffsetDateTime.parse("2026-06-14T10:00:00+07:00"),
-            OffsetDateTime.parse("2026-06-14T10:00:00+07:00")
+            OffsetDateTime.parse("2026-06-14T10:00:00+07:00"),
+            // feat/pending-approver-info: computed by OvertimeRepository#mapRequest (a real SQL row
+            // mapper this Mockito-level class never exercises), so no test in this class asserts on
+            // them via the helper.
+            null,
+            null
         );
     }
 
@@ -844,7 +849,9 @@ class OvertimeServiceTest {
             "CANCELLED".equals(status) ? timestamp : null,
             99L, "Test Manager",
             true,
-            timestamp, timestamp
+            timestamp, timestamp,
+            // feat/pending-approver-info: no test using this fixture asserts on these.
+            null, null
         );
     }
 
@@ -874,7 +881,9 @@ class OvertimeServiceTest {
             null,
             99L, "Test Manager",
             true,
-            timestamp, timestamp
+            timestamp, timestamp,
+            // feat/pending-approver-info: no test using this fixture asserts on these.
+            null, null
         );
     }
 
@@ -902,7 +911,9 @@ class OvertimeServiceTest {
             null,
             99L, "Test Manager",
             true,
-            timestamp, timestamp
+            timestamp, timestamp,
+            // feat/pending-approver-info: no test using this fixture asserts on these.
+            null, null
         );
     }
 

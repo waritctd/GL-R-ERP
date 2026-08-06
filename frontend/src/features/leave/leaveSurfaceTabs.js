@@ -54,12 +54,57 @@ function userMayActOnAnyRequest(requests, user, canReviewAll) {
     || canManagerCancelRequest(request, user, canReviewAll));
 }
 
+// Bugfix (2026-08): the "ของฉัน" tab's own requestsQuery used to omit `employeeId` by
+// default, and LeaveService#list -- for any actor outside VIEW_ALL_ROLES (hr/ceo) --
+// treats an omitted employeeId as "self OR reports_to_employee_id = actor"
+// (LeaveRepository#findRequests' `filter.managerEmployeeId()` branch). So a manager's
+// direct reports' leave requests were genuinely served into a panel titled "MY leave
+// requests". MyLeaveTab.jsx now always scopes to the actor's own employeeId; this
+// `team` tab is the correctly-labelled, correctly-scoped home for the team-wide view
+// that used to leak into `me`.
+//
+// `employeeOptions` is exactly api.leave.employees()'s response -- the SAME "self +
+// direct reports" (or, for hr/ceo, every active employee) list TeamLeaveTab.jsx's own
+// "ทุกคน" filter select gates on via `employeeOptions.length > 1`. Deliberately reused
+// verbatim rather than a second computation, so the tab and its filter never disagree
+// about whether this actor "has a team": if you can't see your team in one you
+// shouldn't see it in the other.
+//
+// Deliberately NOT isDivisionManager(user) (app/permissions.js) -- that flag is
+// `user.role === 'employee' && !!user.manager`, a position-based signal that is a
+// DIFFERENT set of people than the reports_to_employee_id org-chart relationship this
+// tab (and LeaveService#list itself) actually scope on. A sales_manager, or anyone else
+// with direct reports who isn't formally a "division manager" by title, must still see
+// this tab.
+function hasTeamMembers(employeeOptions) {
+  return employeeOptions.length > 1;
+}
+
 export const LEAVE_SURFACE_TABS = [
   {
     id: 'me',
     label: 'ของฉัน',
     helper: 'โควตาและคำขอลาของคุณ',
     isVisible: () => true,
+  },
+  {
+    id: 'team',
+    label: 'ลูกทีม',
+    helper: 'การลาของทีมคุณ',
+    // Review fix (2026-08): api.leave.employees() returns literally every active employee
+    // for hr/ceo (VIEW_ALL_ROLES server-side, mirrored here by ROLE_PERMISSIONS.canViewAllLeave
+    // -- routes.js), so hasTeamMembers is always true for them and this tab is correctly kept
+    // visible (it's now the only date/status/employee-filtered browse-all surface hr/ceo have).
+    // But "ลูกทีม"/"การลาของทีมคุณ" is factually wrong when the viewer is looking at the whole
+    // company, not a set of direct reports -- labelFor/helperFor below swap in company-wide
+    // copy for exactly that case, via resolveTabLabel/resolveTabHelper. A real division
+    // manager (not hr/ceo) keeps the original label/helper above unchanged.
+    labelFor: (user) => (hasPermission(user?.role, 'canViewAllLeave') ? 'พนักงานทั้งหมด' : 'ลูกทีม'),
+    helperFor: (user) => (hasPermission(user?.role, 'canViewAllLeave') ? 'การลาของพนักงานทั้งหมด' : 'การลาของทีมคุณ'),
+    // See hasTeamMembers' own comment above for the full reasoning. Visible only to an
+    // actor who currently has at least one other person (a direct report, or -- for
+    // hr/ceo -- any active employee) in their api.leave.employees() list.
+    isVisible: (user, requests, canReviewAll, employeeOptions) => hasTeamMembers(employeeOptions),
   },
   {
     id: 'review',
@@ -94,6 +139,21 @@ export const LEAVE_SURFACE_TABS = [
   },
 ];
 
+/**
+ * `tab.label`/`tab.helper` unless the tab declares a role-aware override
+ * (`labelFor`/`helperFor` -- currently only `team`, see its own comment above), in which case
+ * that override wins. Centralised here so every renderer of LEAVE_SURFACE_TABS copy (currently
+ * LeaveSurfacePage.jsx's `<Tabs>` items) resolves the same way instead of reading `tab.label`
+ * directly and missing the hr/ceo override.
+ */
+export function resolveTabLabel(tab, user) {
+  return tab.labelFor ? tab.labelFor(user) : tab.label;
+}
+
+export function resolveTabHelper(tab, user) {
+  return tab.helperFor ? tab.helperFor(user) : tab.helper;
+}
+
 export const DEFAULT_LEAVE_SURFACE_TAB_ID = 'me';
 
 // Leave HR-submit gate (2026-08-03), owner ruling: "HR and บริหาร oversee leave but do not
@@ -127,15 +187,16 @@ export function defaultLeaveSurfaceTabId(user) {
 
 /**
  * The ordered list of tab ids `user` may see right now, given the currently-loaded
- * `requests` (used only by `review`'s isVisible -- see its own comment above).
- * `requests` defaults to `[]` so a caller mid-first-load (no data yet) never throws;
- * the `review` tab simply stays hidden until either the role permission is known or a
- * loaded row proves it should show.
+ * `requests` (used only by `review`'s isVisible -- see its own comment above) and
+ * `employeeOptions` (used only by `team`'s isVisible -- see hasTeamMembers' own comment
+ * above). Both default to `[]` so a caller mid-first-load (no data yet) never throws;
+ * `review`/`team` simply stay hidden until either the role permission is known or the
+ * relevant data proves the tab should show.
  */
-export function visibleLeaveSurfaceTabIds(user, requests = []) {
+export function visibleLeaveSurfaceTabIds(user, requests = [], employeeOptions = []) {
   const canReviewAll = hasPermission(user?.role, 'canReviewLeave');
   return LEAVE_SURFACE_TABS
-    .filter((tab) => tab.isVisible(user, requests, canReviewAll))
+    .filter((tab) => tab.isVisible(user, requests, canReviewAll, employeeOptions))
     .map((tab) => tab.id);
 }
 

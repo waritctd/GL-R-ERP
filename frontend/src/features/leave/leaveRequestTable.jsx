@@ -2,7 +2,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { expandedRowRegionId } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { leaveStatusLabel as statusInfo } from '../../utils/format.js';
+import { leaveStatusLabel as statusInfo, pendingApproverText } from '../../utils/format.js';
 import {
   formatDateRange, formatDateTime, formatDays, formatDaysOrDash,
 } from './leaveFormatting.js';
@@ -39,6 +39,25 @@ export const LEAVE_REQUEST_TABLE_GRID = 'grid-cols-[minmax(0,2.25rem)_minmax(0,1
 
 export function leaveRequestRowKey(request) {
   return request.id;
+}
+
+/**
+ * "Who this is waiting on" -- rendered beside a SUBMITTED status badge, in the shared table column
+ * below and in each tab's own mobileCard/calendar-list render (MyLeaveTab.jsx, TeamLeaveTab.jsx,
+ * ReviewQueueTab.jsx -- none of those funnel their StatusBadge through this module, so they each
+ * render this component directly). Renders nothing for any other status, or when the backend could
+ * not resolve a pendingApproverRole for the row.
+ *
+ * No "รอ" ("waiting for") prefix here -- the adjacent status badge already says that (รออนุมัติ);
+ * repeating it made this note's text a superset of the badge's own, which broke e2e locators that
+ * matched on the badge's exact label (review #pending-approver-info). Bare "CEO (คุณราม)" reads
+ * fine right next to a "รออนุมัติ" badge, and matches the format requested.
+ */
+export function PendingApproverNote({ request }) {
+  if (request.status !== 'SUBMITTED') return null;
+  const text = pendingApproverText(request.pendingApproverRole, request.pendingApproverName);
+  if (!text) return null;
+  return <small className="text-text-muted">{text}</small>;
 }
 
 function DetailField({ label, value }) {
@@ -172,6 +191,7 @@ export function buildLeaveRequestColumns({ expandedId, onToggleExpand, renderAct
         return (
           <span className="flex flex-col items-start gap-1">
             <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+            <PendingApproverNote request={request} />
             {hasUnpaidDays ? (
               <StatusBadge tone="warning">ไม่รับค่าจ้าง {formatDays(request.unpaidDays)}</StatusBadge>
             ) : null}

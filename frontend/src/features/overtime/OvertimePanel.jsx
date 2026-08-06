@@ -13,7 +13,7 @@ import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { formGridSpan2, Panel, PageStack, RowActions } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { overtimeStatusLabel as statusInfo } from '../../utils/format.js';
+import { overtimeStatusLabel as statusInfo, pendingApproverText } from '../../utils/format.js';
 
 const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,0.75fr)] max-[1040px]:min-w-[940px] reflow-cards';
 // FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
@@ -596,6 +596,10 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           <EmptyState icon="clock" title="ยังไม่มีคำขอ OT" description="ลองเปลี่ยนช่วงวันที่หรือยื่นคำขอใหม่" />
         ) : requests.map((request) => {
           const status = statusInfo(request.status);
+          const isPending = request.status === 'SUBMITTED' || request.status === 'MANAGER_APPROVED';
+          const pendingApproverNote = isPending
+            ? pendingApproverText(request.pendingApproverRole, request.pendingApproverName)
+            : null;
           const reviewable = canReviewRequest(request);
           const approveTitle = canCeoApprove(request) ? 'CEO อนุมัติ' : 'ผู้จัดการอนุมัติ';
           const canCancel = request.status === 'SUBMITTED' && Number(request.employeeId) === Number(user.employeeId);
@@ -627,6 +631,10 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               </span>
               <span data-label="ขั้นอนุมัติ" className="max-[720px]:order-2">
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                {/* No "รอ" prefix -- the StatusBadge above already says that (รอผู้จัดการ/รอ CEO);
+                    repeating it made this note a superset of the badge's own text, which broke an
+                    e2e locator matching the badge's exact label (review #pending-approver-info). */}
+                {pendingApproverNote ? <small className="text-text-muted">{pendingApproverNote}</small> : null}
                 <small>ผู้จัดการ: {request.managerApprovedAt ? `${request.managerApprovedByName || '-'} · ${formatDateTime(request.managerApprovedAt)}` : '-'}</small>
                 <small>CEO: {request.ceoApprovedAt ? `${request.ceoApprovedByName || '-'} · ${formatDateTime(request.ceoApprovedAt)}` : '-'}</small>
               </span>

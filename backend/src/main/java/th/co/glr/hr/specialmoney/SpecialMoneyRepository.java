@@ -19,6 +19,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.approval.PendingApproverSql;
 import th.co.glr.hr.common.ApiException;
 
 /**
@@ -566,7 +567,14 @@ public class SpecialMoneyRepository {
                    (SELECT COUNT(*) FROM hr.special_money_request_attachment a
                      WHERE a.special_money_request_id = s.special_money_request_id) AS attachment_count,
                    s.created_at,
-                   s.updated_at
+                   s.updated_at,
+                   """
+            // feat/pending-approver-info: read-only "who this is waiting on" -- welfare is
+            // CEO-only, single-stage (see SpecialMoneyService's class Javadoc), so the single
+            // generic lookup below is the only candidate this domain ever needs.
+            + PendingApproverSql.SINGLE_ACTIVE_CEO_NAME_SQL + " AS ceo_single_name"
+            + """
+
               FROM hr.special_money_request s
               JOIN hr.employee e ON e.employee_id = s.employee_id
               LEFT JOIN hr.employee requested_by ON requested_by.employee_id = s.requested_by_id
@@ -615,8 +623,30 @@ public class SpecialMoneyRepository {
             blankToNull(rs.getString("manager_name")),
             rs.getInt("attachment_count"),
             rs.getObject("created_at", OffsetDateTime.class),
-            rs.getObject("updated_at", OffsetDateTime.class)
+            rs.getObject("updated_at", OffsetDateTime.class),
+            resolvePendingApproverRole(rs),
+            resolvePendingApproverName(rs)
         );
+    }
+
+    /**
+     * feat/pending-approver-info: welfare is CEO-only, single-stage (see {@code
+     * SpecialMoneyService}'s class Javadoc -- {@code MANAGER_APPROVED} survives only for legacy
+     * rows and {@code ceoApproveFrom} handles both the same way), so both pending statuses resolve
+     * to "ceo". Any other status (APPROVED/REJECTED/CANCELLED) has nobody left to wait on.
+     */
+    String resolvePendingApproverRole(ResultSet rs) throws SQLException {
+        String status = rs.getString("status");
+        return "SUBMITTED".equals(status) || "MANAGER_APPROVED".equals(status) ? "ceo" : null;
+    }
+
+    /**
+     * feat/pending-approver-info: {@code null} whenever more than one active ceo-role employee
+     * exists -- see {@link PendingApproverSql#SINGLE_ACTIVE_CEO_NAME_SQL}'s Javadoc. Deliberate
+     * ambiguity handling, not a bug -- see this feature's PR body.
+     */
+    String resolvePendingApproverName(ResultSet rs) throws SQLException {
+        return "ceo".equals(resolvePendingApproverRole(rs)) ? blankToNull(rs.getString("ceo_single_name")) : null;
     }
 
     private SpecialMoneyType parseType(String value) {

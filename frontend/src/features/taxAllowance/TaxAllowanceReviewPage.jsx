@@ -73,6 +73,11 @@ function OnBehalfModal({ row, caps, onClose, onSubmit, submitting }) {
   const defaultValues = defaultAllowanceValues(row.declaration);
   return (
     <Modal title={`ยื่นแทนพนักงาน — ${row.employeeName}`} subtitle="HR เป็นผู้ยื่นแทน" onClose={onClose}>
+      {/* sectioned=false: keeps this modal's ORIGINAL "every group expanded" layout. It is a
+          one-off compact entry for staff who never log in (decision #9) -- no evidence attachment
+          exists on the on-behalf endpoint, and there is no returning-user "which section did I
+          already start" need for a single-sitting form, so the #tax-allowance-sections step flow
+          (TaxAllowancePage's own self-service screen) is deliberately not turned on here. */}
       <TaxAllowanceForm
         caps={caps}
         defaultValues={defaultValues}
@@ -80,6 +85,7 @@ function OnBehalfModal({ row, caps, onClose, onSubmit, submitting }) {
         submitLabel="บันทึกและอนุมัติ"
         formId="tax-allowance-on-behalf-form"
         onSubmit={(values) => onSubmit(row.employeeId, values)}
+        sectioned={false}
       />
     </Modal>
   );
