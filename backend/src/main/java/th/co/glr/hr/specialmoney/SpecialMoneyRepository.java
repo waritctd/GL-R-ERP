@@ -92,6 +92,36 @@ public class SpecialMoneyRepository {
             .findFirst();
     }
 
+    /**
+     * {@code year} is deliberately never {@code event_date}'s year -- see {@code
+     * SpecialMoneyService#usageYear}'s Javadoc for why that field cannot key an annual cap (it is
+     * employee-supplied and unbounded: {@link SubmitSpecialMoneyHttpRequest} marks it {@code
+     * @NotNull} only, V66 has no future-date check, and {@code evaluateMedical} does not even read
+     * it). The two queries below key on two DIFFERENT columns instead, because they run over
+     * different status sets and only one of those columns is populated for both:
+     *
+     * <ul>
+     *   <li><b>{@code approvedAmountThisYear}</b> -- {@code status = 'APPROVED'} only, so {@code
+     *       payroll_month} is always non-null ({@code chk_smr_approved_complete}) and is the exact
+     *       column that decides which calendar year's payroll actually pays this row -- V128's
+     *       {@code welfare_pay} is summed the same way. It is assigned by the server at approval
+     *       time ({@code SpecialMoneyService#ceoApproveFrom}) from {@code LocalDate.now(...)}, never
+     *       from client input.
+     *   <li><b>{@code activeCountThisYear}</b> -- also spans {@code SUBMITTED} /
+     *       {@code MANAGER_APPROVED}, which have no {@code payroll_month} yet (NULL until
+     *       approval), so it keys on {@code requested_at} instead: a server-stamped timestamp
+     *       ({@code DEFAULT now()}; {@link #create} never writes it explicitly and no method in
+     *       this class ever updates it afterwards) present on every row from the moment it is
+     *       created. Bangkok-zoned to match {@code SpecialMoneyService.BUSINESS_ZONE} -- this
+     *       connection has no session-level timezone configured, so a bare {@code EXTRACT(YEAR FROM
+     *       requested_at)} would extract whatever the server/session default (commonly UTC) says,
+     *       which can disagree with Bangkok's calendar date by up to 7 hours a day.
+     * </ul>
+     *
+     * <p>Both replacements are deliberately columns the employee never supplies on the request
+     * body, so neither can be walked back to "employee picks the year" the way {@code event_date}
+     * could.
+     */
     public UsageSnapshot findUsage(long employeeId, int year) {
         Map<SpecialMoneyType, BigDecimal> approvedAmountThisYear = new EnumMap<>(SpecialMoneyType.class);
         jdbc.query("""
@@ -99,7 +129,7 @@ public class SpecialMoneyRepository {
               FROM hr.special_money_request
              WHERE employee_id = :employeeId
                AND status = 'APPROVED'
-               AND EXTRACT(YEAR FROM event_date) = :year
+               AND EXTRACT(YEAR FROM payroll_month) = :year
              GROUP BY request_type
             """, new MapSqlParameterSource()
             .addValue("employeeId", employeeId)
@@ -137,7 +167,7 @@ public class SpecialMoneyRepository {
               FROM hr.special_money_request
              WHERE employee_id = :employeeId
                AND status IN ('SUBMITTED', 'MANAGER_APPROVED', 'APPROVED')
-               AND EXTRACT(YEAR FROM event_date) = :year
+               AND EXTRACT(YEAR FROM (requested_at AT TIME ZONE 'Asia/Bangkok')) = :year
              GROUP BY request_type
             """, new MapSqlParameterSource()
             .addValue("employeeId", employeeId)

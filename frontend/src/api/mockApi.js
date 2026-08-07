@@ -5119,6 +5119,15 @@ export const api = {
       // direction: it under-reports usage, so mock-mode UI says "you may still claim" on a type the
       // real backend refuses. `approvedCountLifetimeByType` is a misnomer on the DTO too -- it has
       // always carried the in-flight-inclusive count. Do not "fix" it to match its name.
+      //
+      // P0 fix (fix/welfare-cap-year-bypass): findUsage's two year-scoped maps ALSO no longer key
+      // on eventDate -- an employee-supplied, unbounded field that let the annual cap be defeated by
+      // filing against a year nothing had been approved against yet. They key on the same two
+      // server-stamped columns the real findUsage now does (see that method's Javadoc): payrollMonth
+      // for the APPROVED amount sum (assigned by approve(), never by the client), and requestedAt
+      // for the in-flight-inclusive count (stamped at create(), never by the client). Both already
+      // exist on every mock row -- this mirrors which column the real query reads, not the cap
+      // ENFORCEMENT itself: create() below still accepts any requestedAmount uncapped, unchanged.
       const ACTIVE_STATUSES = ['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED'];
       const approvedAmountThisYearByType = {};
       const approvedCountLifetimeByType = {};
@@ -5127,12 +5136,12 @@ export const api = {
         .filter((item) => item.employeeId === employeeId && ACTIVE_STATUSES.includes(item.status))
         .forEach((item) => {
           approvedCountLifetimeByType[item.requestType] = (approvedCountLifetimeByType[item.requestType] || 0) + 1;
-          if (new Date(item.eventDate).getFullYear() === year) {
+          if (new Date(item.requestedAt).getFullYear() === year) {
             activeCountThisYearByType[item.requestType] = (activeCountThisYearByType[item.requestType] || 0) + 1;
-            if (item.status === 'APPROVED') {
-              approvedAmountThisYearByType[item.requestType] =
-                (approvedAmountThisYearByType[item.requestType] || 0) + Number(item.approvedAmount || 0);
-            }
+          }
+          if (item.status === 'APPROVED' && item.payrollMonth && new Date(item.payrollMonth).getFullYear() === year) {
+            approvedAmountThisYearByType[item.requestType] =
+              (approvedAmountThisYearByType[item.requestType] || 0) + Number(item.approvedAmount || 0);
           }
         });
       return delay({
