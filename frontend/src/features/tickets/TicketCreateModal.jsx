@@ -390,9 +390,10 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   // Both fetches degrade silently: if EITHER fails, `estimateReady` below stays false and every
   // ราคาตั้ง display site is skipped entirely, leaving the existing catalog reference price as the
   // only price shown (a deal must stay creatable with zero prices — V50). Never surfaced via
-  // showToast from an effect — this repo's useToast has an unstable identity that turns a toast in
-  // a useEffect dep array into an infinite render loop (see CLAUDE.md); these are silent, no-toast
-  // failures on purpose. `retry: false` keeps a genuinely-down endpoint from stalling the modal.
+  // showToast from an effect — this is optional estimate enrichment, not critical modal data, so
+  // these are silent, no-toast failures on purpose (independent of useToast's own identity, which
+  // useToast.js now keeps stable via useCallback([])). `retry: false` keeps a genuinely-down
+  // endpoint from stalling the modal.
   const fxRatesQuery = useQuery({
     queryKey: queryKeys.fxRates(),
     queryFn: () => api.fxRates.list().then((res) => res.fxRates ?? []),
