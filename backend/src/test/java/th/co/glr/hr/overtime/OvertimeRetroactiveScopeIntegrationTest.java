@@ -142,7 +142,7 @@ class OvertimeRetroactiveScopeIntegrationTest extends AbstractPostgresIntegratio
     private SubmitOvertimeRequest backdated(Long employeeId, int daysAgo, String reason) {
         LocalDate workDate = bangkokToday().minusDays(daysAgo);
         OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(ZoneOffset.ofHours(7));
-        return new SubmitOvertimeRequest(employeeId, workDate, startAt, startAt.plusHours(2), "WORKDAY", reason);
+        return new SubmitOvertimeRequest(employeeId, workDate, startAt, startAt.plusHours(2), reason);
     }
 
     /** Match OvertimeService.BUSINESS_ZONE; the JVM default zone flakes in UTC CI (see the unit test). */

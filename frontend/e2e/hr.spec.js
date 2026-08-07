@@ -49,7 +49,9 @@ test.describe('HR — overtime, leave, attendance', () => {
 
     const workDate = nextWeekdayAtLeast(0);
     await page.locator('#ot-work-date').fill(workDate);
-    await page.locator('#ot-day-type').selectOption('WORKDAY');
+    // P0 fix: #ot-day-type no longer exists. The OT rate is derived server-side from the holiday
+    // calendar (never a caller's declaration) and shown read-only at #ot-day-type-preview instead
+    // of a <select> -- nothing for this test to choose, so nothing to drive here.
     await page.locator('#ot-planned-start').fill(`${workDate}T19:00`);
     await page.locator('#ot-planned-end').fill(`${workDate}T21:00`);
     await page.locator('#ot-reason').fill(reason);

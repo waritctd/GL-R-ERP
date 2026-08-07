@@ -158,15 +158,14 @@ class OvertimeServiceTest {
     void divisionManagersCanSubmitOvertimeForTheirTeam() {
         LocalDate workDate = LocalDate.now().plusDays(4);
         OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
-        // The request DECLARES "HOLIDAY", but that is not what makes create() see HOLIDAY below --
-        // the calendar stub is. See divisionManagerSubmissionIgnoresADeclaredDayTypeTheCalendarDisagreesWith
-        // for the case that proves the declaration alone is not enough.
+        // No dayType on the request at all -- what makes create() see HOLIDAY below is the
+        // calendar stub. See divisionManagerSubmissionResolvesWorkdayWhenTheCalendarHasNoEntry
+        // for the complementary case.
         SubmitOvertimeRequest request = new SubmitOvertimeRequest(
             10L,
             workDate,
             startAt,
             startAt.plusHours(2),
-            "HOLIDAY",
             "Urgent delivery"
         );
         when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
@@ -184,16 +183,18 @@ class OvertimeServiceTest {
 
     /**
      * THE regression test for this defect at the unit level (the real-DB proof lives in
-     * OvertimeDayTypeDerivedFromCalendarIntegrationTest): a client-declared "HOLIDAY" the calendar
-     * does not corroborate must store WORKDAY/1.50x, not the declared value. Same fixture as
-     * divisionManagersCanSubmitOvertimeForTheirTeam above, MINUS the calendar stub.
+     * OvertimeDayTypeDerivedFromCalendarIntegrationTest). {@code SubmitOvertimeRequest} has no
+     * {@code dayType} field at all -- there is no channel by which a caller can supply one -- so
+     * this asserts the complementary case to divisionManagersCanSubmitOvertimeForTheirTeam above:
+     * same submission, but the calendar does NOT corroborate a holiday, and the stored/paid result
+     * must be WORKDAY/1.50x, never HOLIDAY/3.00x by default or by accident.
      */
     @Test
-    void divisionManagerSubmissionIgnoresADeclaredDayTypeTheCalendarDisagreesWith() {
+    void divisionManagerSubmissionResolvesWorkdayWhenTheCalendarHasNoEntry() {
         LocalDate workDate = LocalDate.now().plusDays(4);
         OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
         SubmitOvertimeRequest request = new SubmitOvertimeRequest(
-            10L, workDate, startAt, startAt.plusHours(2), "HOLIDAY", "Urgent delivery");
+            10L, workDate, startAt, startAt.plusHours(2), "Urgent delivery");
         when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
         when(overtimeRepository.employeeExists(10L)).thenReturn(true);
         // No holidayCalendar stub: Mockito's boolean default (false) means "not a holiday".
@@ -567,7 +568,6 @@ class OvertimeServiceTest {
             workDate,
             startAt,
             startAt.plusHours(2),
-            "WORKDAY",
             "Customer shipment"
         );
     }
@@ -583,7 +583,7 @@ class OvertimeServiceTest {
     private SubmitOvertimeRequest backdatedSubmit(int daysAgo, String reason) {
         LocalDate workDate = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).minusDays(daysAgo);
         OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
-        return new SubmitOvertimeRequest(null, workDate, startAt, startAt.plusHours(2), "WORKDAY", reason);
+        return new SubmitOvertimeRequest(null, workDate, startAt, startAt.plusHours(2), reason);
     }
 
     private OvertimeRequestDto requestDto(long id, long employeeId, String status) {

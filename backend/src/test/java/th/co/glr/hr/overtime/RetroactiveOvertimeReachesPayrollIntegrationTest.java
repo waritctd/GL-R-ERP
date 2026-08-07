@@ -335,7 +335,7 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
     private SubmitOvertimeRequest backdated(LocalDate workDate) {
         OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(ZoneOffset.ofHours(7));
         return new SubmitOvertimeRequest(
-            null, workDate, startAt, startAt.plusHours(2), "WORKDAY",
+            null, workDate, startAt, startAt.plusHours(2),
             "Urgent customer escalation, filed after the shift ended");
     }
 

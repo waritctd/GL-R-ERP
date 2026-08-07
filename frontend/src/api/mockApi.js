@@ -4795,7 +4795,16 @@ export const api = {
         plannedStartAt: payload.plannedStartAt,
         plannedEndAt: payload.plannedEndAt,
         plannedMinutes,
-        dayType: payload.dayType || 'WORKDAY',
+        // P0 fix: never read payload.dayType -- OvertimeService no longer accepts one at all
+        // (SubmitOvertimeRequest has no dayType field; the real backend derives it exclusively
+        // from hr.holiday via HolidayCalendar#isHoliday). The honest mirror in mock mode is
+        // WORKDAY, always: there is no persisted hr.holiday store here (same stance as
+        // holidays.list() and leave.calendarContext() above -- both return an empty calendar),
+        // and "no calendar entry" is real HolidayCalendar#isHoliday's OWN meaning for "not a
+        // holiday", not a mock-specific shortcut. This keeps the mock at least as strict as
+        // production even though it is less rich: it can never demonstrate a real holiday
+        // resolving to 3x, but it must never let a caller manufacture one either.
+        dayType: 'WORKDAY',
         reason: payload.reason,
         status: 'SUBMITTED',
         actualMinutes: null,

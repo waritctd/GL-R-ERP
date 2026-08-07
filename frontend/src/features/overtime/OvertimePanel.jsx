@@ -64,7 +64,6 @@ function defaultForm(employeeId = '') {
     workDate: date,
     plannedStartAt: `${date}T18:00`,
     plannedEndAt: `${date}T20:00`,
-    dayType: 'WORKDAY',
     reason: '',
   };
 }
@@ -88,7 +87,6 @@ export function createOvertimeFormSchema({
     workDate: z.string().min(1, 'กรุณาเลือกวันที่ทำ OT'),
     plannedStartAt: z.string().min(1, 'กรุณาเลือกเวลาเริ่ม'),
     plannedEndAt: z.string().min(1, 'กรุณาเลือกเวลาสิ้นสุด'),
-    dayType: z.enum(['WORKDAY', 'HOLIDAY']),
     reason: z.string().min(1, 'กรุณาระบุเหตุผลความจำเป็น'),
   }).superRefine((data, context) => {
     if (requireEmployeeId && !data.employeeId) {
@@ -157,6 +155,15 @@ function formatMinutes(value) {
   if (hours <= 0) return `${rest} นาที`;
   if (rest === 0) return `${hours} ชม.`;
   return `${hours} ชม. ${rest} นาที`;
+}
+
+// Server-derived rate label, shared by every place a submitted request's day type is displayed
+// (the list row, the approval confirm dialog). "วันหยุดตามปฏิทินบริษัท" over a bare "วันหยุด" is
+// deliberate: it names WHERE the classification came from, the same provenance the submit-form
+// preview below shows before a request even exists, so a wrong calendar entry reads as wrong
+// wherever it shows up, not just as an unexplained number.
+function dayTypeLabel(dayType) {
+  return dayType === 'HOLIDAY' ? 'วันหยุดตามปฏิทินบริษัท · 3x' : 'วันทำงานปกติ · 1.5x';
 }
 
 export function OvertimePanel({ user, currentEmployee, showToast }) {
@@ -229,11 +236,37 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
     mode: 'onChange',
     reValidateMode: 'onChange',
   });
-  const [plannedStartAt, plannedEndAt, selectedEmployeeId, selectedDayType, selectedWorkDate] = useWatch({
+  const [plannedStartAt, plannedEndAt, selectedEmployeeId, selectedWorkDate] = useWatch({
     control,
-    name: ['plannedStartAt', 'plannedEndAt', 'employeeId', 'dayType', 'workDate'],
+    name: ['plannedStartAt', 'plannedEndAt', 'employeeId', 'workDate'],
   });
   const isBackdated = Boolean(selectedWorkDate) && selectedWorkDate < todayIso();
+  // The OT rate is derived server-side from hr.holiday, never chosen by the caller (P0 fix — a
+  // client-declared rate used to be trusted straight into pay_rate_multiplier). This reads the
+  // SAME calendar data through the existing employee-self-scoped endpoint the Leave composer
+  // already uses (GET /api/leave/calendar-context, sessions.requireUser-gated, always the
+  // caller's own data) rather than adding a second accessor for the same hr.holiday rows — see
+  // OvertimeService#deriveDayType's Javadoc for the backend half of this reuse.
+  const dayTypeContextQuery = useQuery({
+    queryKey: queryKeys.leaveCalendarContext(selectedWorkDate, selectedWorkDate),
+    queryFn: () => api.leave.calendarContext({ from: selectedWorkDate, to: selectedWorkDate })
+      .then((response) => response.calendarContext),
+    enabled: Boolean(selectedWorkDate),
+  });
+  const matchedHoliday = dayTypeContextQuery.data?.holidays?.find(
+    (holiday) => holiday.holidayDate === selectedWorkDate,
+  ) ?? null;
+  // Provenance, not just the number: naming the SPECIFIC holiday (when there is one) is what
+  // makes a wrong calendar entry visible instead of invisible — an employee or approver who sees
+  // "วันหยุดตามปฏิทินบริษัท: [wrong holiday name]" has something concrete to query HR about; "3x"
+  // alone gives them nothing to question.
+  const dayTypePreview = !selectedWorkDate
+    ? '-'
+    : dayTypeContextQuery.isFetching && !dayTypeContextQuery.data
+      ? 'กำลังตรวจสอบวันหยุด...'
+      : matchedHoliday
+        ? `วันหยุดตามปฏิทินบริษัท: ${matchedHoliday.nameTh} · 3x`
+        : 'วันทำงานปกติ · 1.5x';
   const hasTimeRangeError = Boolean(
     plannedStartAt && plannedEndAt && plannedEndAt <= plannedStartAt,
   );
@@ -344,7 +377,6 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
       workDate: values.workDate,
       plannedStartAt: apiDateTime(values.plannedStartAt),
       plannedEndAt: apiDateTime(values.plannedEndAt),
-      dayType: values.dayType,
       reason: values.reason.trim(),
     });
   }
@@ -520,18 +552,25 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               required
             />
           </FormField>
-          <FormField label="ประเภท OT" htmlFor="ot-day-type" error={errors.dayType?.message} required>
-            <select
-              id="ot-day-type"
-              {...register('dayType')}
-              value={selectedDayType ?? ''}
-              onChange={(event) => setValue('dayType', event.target.value, { shouldDirty: true, shouldValidate: true })}
-              aria-invalid={Boolean(errors.dayType)}
-              aria-describedby={errors.dayType ? fieldErrorId('ot-day-type') : undefined}
-            >
-              <option value="WORKDAY">วันทำงานปกติ · 1.5x</option>
-              <option value="HOLIDAY">วันหยุด/วันหยุดนักขัตฤกษ์ · 3x</option>
-            </select>
+          {/*
+            P0 fix: the rate is derived server-side from the company holiday calendar; a caller's
+            declaration was never honored -- this used to be an editable <select> that claimed a
+            choice the employee did not actually have. Read-only-with-provenance (not a dropped
+            field) so the employee and approver both see WHY it resolved that way before the
+            request even exists, matching the same hr.holiday lookup the server itself uses
+            (see backend OvertimeService#deriveDayType).
+          */}
+          <FormField
+            label="ประเภท OT"
+            htmlFor="ot-day-type-preview"
+            hint="ระบบคำนวณจากปฏิทินวันหยุดของบริษัทโดยอัตโนมัติ ไม่สามารถเลือกเองได้"
+          >
+            <input
+              id="ot-day-type-preview"
+              value={dayTypePreview}
+              disabled
+              aria-live="polite"
+            />
           </FormField>
           <FormField label="เริ่ม" htmlFor="ot-planned-start" error={errors.plannedStartAt?.message} required>
             <input
@@ -615,8 +654,12 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               </span>
               <span data-label="แผน OT" className="max-[720px]:order-4">
                 <strong>{formatDateTime(request.plannedStartAt)}</strong>
+                {/* Asymmetric verbosity, same rule the Leave calendar-context note already uses:
+                    stay terse for the common WORKDAY case, spell out the provenance for the
+                    exceptional HOLIDAY one, where a wrong calendar entry is worth catching. */}
                 <small>
-                  {formatDateTime(request.plannedEndAt)} · {formatMinutes(request.plannedMinutes)} · {request.dayType === 'HOLIDAY' ? '3x' : '1.5x'}
+                  {formatDateTime(request.plannedEndAt)} · {formatMinutes(request.plannedMinutes)} ·{' '}
+                  {request.dayType === 'HOLIDAY' ? dayTypeLabel(request.dayType) : '1.5x'}
                 </small>
               </span>
               <span data-label="เหตุผล" className="max-[720px]:order-5">
@@ -695,15 +738,18 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           // manager step already computed. The manager-less route does BOTH at once, so its copy
           // has to promise the calculation as well as the final status -- telling a CEO their
           // one click "only flips the status" would be wrong on the one route that pays out.
-          const rateLabel = request.dayType === 'HOLIDAY' ? '3x (วันหยุด)' : '1.5x (วันทำงานปกติ)';
+          // dayTypeLabel() leads with the TYPE ("วันหยุดตามปฏิทินบริษัท · 3x"), not a bare rate, so
+          // it reads better parenthesised after "อัตรา" than substituted straight in as if it were
+          // just "3x" -- the provenance is the point of showing it here at all.
+          const rateLabel = dayTypeLabel(request.dayType);
           const isDirectCeoStep = isCeoStep && request.status === 'SUBMITTED';
           let nextStep;
           if (isDirectCeoStep) {
-            nextStep = `คำขอนี้ไม่มีขั้นอนุมัติของหัวหน้างาน สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว" และคำนวณชั่วโมงจ่ายได้ตามอัตรา ${rateLabel}`;
+            nextStep = `คำขอนี้ไม่มีขั้นอนุมัติของหัวหน้างาน สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว" และคำนวณชั่วโมงจ่ายได้ตามอัตรา (${rateLabel})`;
           } else if (isCeoStep) {
             nextStep = 'สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว" พร้อมชั่วโมงจ่ายได้ที่คำนวณไว้';
           } else {
-            nextStep = `สถานะจะเปลี่ยนเป็น "รอ CEO" และคำนวณชั่วโมงจ่ายได้ตามอัตรา ${rateLabel}`;
+            nextStep = `สถานะจะเปลี่ยนเป็น "รอ CEO" และคำนวณชั่วโมงจ่ายได้ตามอัตรา (${rateLabel})`;
           }
           return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -716,7 +762,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700 }}>
                 <span>เวลาที่วางแผน</span>
-                <span className="font-mono">{formatMinutes(request.plannedMinutes)} · {request.dayType === 'HOLIDAY' ? '3x' : '1.5x'}</span>
+                <span className="font-mono">{formatMinutes(request.plannedMinutes)} · {rateLabel}</span>
               </div>
               <p style={{ margin: 0, fontSize: 12, color: 'var(--color-icon-muted)' }}>{nextStep}</p>
             </div>

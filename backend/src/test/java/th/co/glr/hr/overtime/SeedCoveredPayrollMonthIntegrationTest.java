@@ -207,7 +207,7 @@ class SeedCoveredPayrollMonthIntegrationTest extends AbstractPostgresIntegration
     private SubmitOvertimeRequest backdated(LocalDate workDate) {
         OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(ZoneOffset.ofHours(7));
         return new SubmitOvertimeRequest(
-            null, workDate, startAt, startAt.plusHours(2), "WORKDAY",
+            null, workDate, startAt, startAt.plusHours(2),
             "Filed late after the shift ended, customer escalation kept everyone past close");
     }
 

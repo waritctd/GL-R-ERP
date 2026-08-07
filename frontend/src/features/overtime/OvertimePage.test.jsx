@@ -17,6 +17,12 @@ vi.mock('../../api/index.js', () => ({
       reject: vi.fn(),
       cancel: vi.fn(),
     },
+    // P0 fix: the submit form's day-type field is now a read-only preview of
+    // hr.holiday, reusing the SAME employee-self-scoped endpoint the Leave composer already
+    // calls (GET /api/leave/calendar-context) -- see OvertimePanel.jsx's dayTypeContextQuery.
+    leave: {
+      calendarContext: vi.fn(),
+    },
   },
 }));
 
@@ -79,6 +85,8 @@ describe('OvertimePage form validation', () => {
     });
     api.overtime.list.mockResolvedValue({ requests: [] });
     api.overtime.create.mockResolvedValue({ request: { id: 1001 } });
+    // No holidays in range by default -- the read-only preview resolves to "วันทำงานปกติ".
+    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
   });
 
   it('blocks submit when planned end is not after planned start', async () => {
@@ -108,14 +116,53 @@ describe('OvertimePage form validation', () => {
     fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
 
     await waitFor(() => expect(api.overtime.create).toHaveBeenCalledTimes(1));
+    // No dayType: the field was removed from the submit payload entirely (P0 fix) -- the server
+    // derives it from hr.holiday and never reads a caller-declared value. See
+    // OvertimeDayTypeDerivedFromCalendarIntegrationTest.java on the backend for the real-DB proof.
     expect(api.overtime.create).toHaveBeenCalledWith({
       employeeId: 1,
       workDate,
       plannedStartAt: `${workDate}T18:00:00+07:00`,
       plannedEndAt: `${workDate}T20:00:00+07:00`,
-      dayType: 'WORKDAY',
       reason: 'ทดสอบระบบ',
     });
+  });
+
+  // P0 fix, UI half: the day-type field must read as system-determined information the employee
+  // cannot set, not a form control that happens to be pre-filled.
+  it('renders the day-type field as a disabled, read-only preview -- not a selectable control', async () => {
+    renderOvertimePage();
+
+    const dayTypeField = await screen.findByLabelText(/ประเภท OT/);
+    expect(dayTypeField.tagName).toBe('INPUT');
+    expect(dayTypeField.disabled).toBe(true);
+    // No HOLIDAY option anywhere on the page for the employee to pick -- the whole point is that
+    // there is no longer a channel to declare one.
+    expect(screen.queryByRole('option', { name: /วันหยุด/ })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: /ประเภท OT/ })).toBeNull();
+  });
+
+  it('previews "วันทำงานปกติ" when the holiday calendar has no entry for the selected date', async () => {
+    renderOvertimePage();
+
+    const dayTypeField = await screen.findByLabelText(/ประเภท OT/);
+    await waitFor(() => expect(dayTypeField.value).toBe('วันทำงานปกติ · 1.5x'));
+  });
+
+  it('previews the specific holiday name (provenance) when the calendar has an entry for the selected date', async () => {
+    const workDate = isoDaysFromToday(5);
+    api.leave.calendarContext.mockResolvedValue({
+      calendarContext: {
+        holidays: [{ holidayDate: workDate, nameTh: 'วันแม่แห่งชาติ' }],
+        nonWorkingDates: [workDate],
+      },
+    });
+    renderOvertimePage();
+
+    fireEvent.change(await screen.findByLabelText(/วันที่ทำ OT/), { target: { value: workDate } });
+
+    const dayTypeField = await screen.findByLabelText(/ประเภท OT/);
+    await waitFor(() => expect(dayTypeField.value).toBe('วันหยุดตามปฏิทินบริษัท: วันแม่แห่งชาติ · 3x'));
   });
 
   // Advance notice was removed on CEO instruction. Same-day is now the default the form opens on.
@@ -176,6 +223,9 @@ describe('OvertimePage form validation', () => {
 describe('OvertimePage pending-approver note', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The submit form (with its read-only day-type preview) renders alongside the list
+    // unconditionally, so every test here needs this mocked too, not just the submit-focused ones.
+    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
     api.overtime.employees.mockResolvedValue({
       employees: [{
         employeeId: 1,

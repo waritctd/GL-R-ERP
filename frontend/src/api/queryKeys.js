@@ -44,6 +44,10 @@ export const queryKeys = {
   leavePolicyDocumentAvailable: () => ['leave', 'policyDocumentAvailable'],
   // Leave-request composer, Phase C (#leave-calendar-context): keyed on the exact { from, to }
   // window fetched -- see LeaveRequestPage.jsx's own comment on the lookahead-window choice.
+  // Also used by OvertimePanel.jsx's read-only day-type preview (P0 fix) -- the endpoint is
+  // employee-self-scoped calendar data, not leave-specific, so reusing this key is intentional:
+  // it lets the same date range hit cache across both features instead of adding a second key
+  // (and a second query) for identical data.
   leaveCalendarContext: (from, to) => ['leave', 'calendarContext', from ?? '', to ?? ''],
   overtimeRequests: (filters = {}) => ['overtime', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   overtimeEmployees: () => ['overtime', 'employees'],
