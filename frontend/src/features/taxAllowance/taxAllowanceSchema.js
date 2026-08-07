@@ -152,6 +152,22 @@ export function groupHasValue(group, values) {
   });
 }
 
+/**
+ * Sum of just this GROUP's `kind: 'money'` fields, read from live `values` — the hub row and
+ * review-recap subtotal for one section (#tax-allowance-ia-hub-review). Sibling of `groupHasValue`
+ * above, not a replacement for it: `groupHasValue` also counts a nonzero COUNT field or a checked
+ * checkbox as "something is here" (used to decide whether to show a subtotal at all, vs the
+ * `ไม่ได้ประกาศ` fallback), while this only totals money — a group whose only entry is e.g.
+ * `childCount` with no corresponding `childAllowance` yet would have `groupHasValue` true and this
+ * return 0, which is the honest answer to "how many baht has this group declared so far", not a bug.
+ */
+export function groupDeclaredTotal(group, values) {
+  if (!values) return 0;
+  return group.fields
+    .filter((field) => field.kind === 'money')
+    .reduce((sum, field) => sum + Number(values[field.key] || 0), 0);
+}
+
 export function defaultAllowanceValues(declaration) {
   const source = declaration?.allowances || {};
   const values = {};
@@ -176,6 +192,22 @@ export function declaredAllowanceTotal(declaration) {
   const source = declaration?.allowances;
   if (!source) return 0;
   return ALLOWANCE_MONEY_KEYS.reduce((sum, key) => sum + Number(source[key] || 0), 0);
+}
+
+/**
+ * Same "sum of every declared baht amount" figure as `declaredAllowanceTotal` above, but reads a
+ * live react-hook-form `values` object instead of a submitted `declaration` — the hub and review
+ * views (#tax-allowance-ia-hub-review) need this total WHILE the employee is still filling the form
+ * in, before there is any `declaration.allowances` to sum. Deliberately not a call to
+ * `declaredAllowanceTotal({ allowances: values })`: that would happen to work today because the two
+ * key sets line up, but it would keep silently working if they ever drifted apart instead of failing
+ * loudly, and it reads backwards at the call site (building a fake declaration just to satisfy a
+ * shape). Two helpers, two sources (`declaration` vs live `values`) — same reasoning as
+ * `groupHasValue`/`groupDeclaredTotal` above for why neither is a call-through to the other.
+ */
+export function declaredAllowanceTotalFromValues(values) {
+  if (!values) return 0;
+  return ALLOWANCE_MONEY_KEYS.reduce((sum, key) => sum + Number(values[key] || 0), 0);
 }
 
 export function buildAllowanceSubmitBody(values, { taxYear, effectiveMonth, documentReference }) {

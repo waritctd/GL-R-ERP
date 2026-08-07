@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
@@ -15,6 +15,8 @@ import {
   ALLOWANCE_MONEY_KEYS,
   AUTO_GRANTED_ROWS,
   TAX_ALLOWANCE_GROUPS,
+  declaredAllowanceTotalFromValues,
+  groupDeclaredTotal,
   groupHasValue,
   UNCATEGORIZED_EVIDENCE_KEY,
 } from './taxAllowanceSchema.js';
@@ -92,39 +94,95 @@ function GroupUsageBar({ group }) {
   );
 }
 
-function StepHeading({ innerRef, step, total, title }) {
+// Every view (HUB/SECTION/REVIEW) renders exactly one of these as its own top heading. `tabIndex={-1}`
+// plus the `useEffect` below that focuses it on every `view` change is the accessibility carry-over
+// from the old 2-step wizard's `StepHeading` -- a screen-reader user needs an explicit "you have
+// landed on a new screen" cue here, because this whole form never unmounts/remounts between views
+// (see the component's own javadoc on why the single `useForm` instance must survive navigation), so
+// there is no natural DOM-mount event for assistive tech to announce on its own. The
+// `ขั้นตอนที่ n/total` counter this replaces is gone along with the linear "step" framing it implied
+// -- HUB/SECTION/REVIEW is a hub-and-spoke, not a wizard (#tax-allowance-ia-hub-review) -- but the
+// focus behaviour itself is unrelated to that framing and stays exactly as it was.
+//
+// `<h2>`, not `<h3>`: this was an h3 back when it sat directly under the caller's own `<Panel
+// title="...">`, which rendered an `<h2>` (Layout.jsx's `Panel`). Removing that title (the same
+// #tax-allowance-ia-hub-review pass, on TaxAllowancePage) took the page's only h2 with it, which
+// would otherwise leave the heading tree skipping straight from the PageHeader's `<h1>` to this one.
+function ViewHeading({ innerRef, title }) {
   return (
-    <h3 ref={innerRef} tabIndex={-1} className="m-0 text-base font-bold text-text focus-visible:outline-none">
-      <span className="mr-2 text-text-muted">ขั้นตอนที่ {step}/{total}</span>
+    <h2 ref={innerRef} tabIndex={-1} className="m-0 text-base font-bold text-text focus-visible:outline-none">
       {title}
-    </h3>
+    </h2>
   );
 }
 
-// Step 1's section-choice button. Shows the real "has anything been typed in yet" verdict
-// (`groupHasValue`) rather than a guess, so a returning user can see which sections they already
-// started without opening each one.
-function GroupChoice({ group, filled, selected, onSelect }) {
+// `groupHasValue` counts a nonzero COUNT field or a ticked checkbox as "something is here" even
+// when `groupDeclaredTotal`'s money-only sum is 0 -- e.g. "จำนวนบุตร" filled in with the "บุตร" baht
+// amount still at 0. Showing that state as a bare `฿0.00` next to a checkmark reads as "zero baht
+// declared", a more misleading lie than the `ยังไม่ได้กรอก` this whole row replaced (review fix,
+// #tax-allowance-ia-hub-review): a genuine ฿0 subtotal and "nothing entered yet" would render
+// identically. Money still wins once there is any, since a real subtotal is the more useful number.
+function groupSecondaryLabel(hasValue, subtotal, fileCount) {
+  if (!hasValue) return 'ไม่ได้ประกาศ';
+  const fileSuffix = fileCount > 0 ? ` · ${fileCount} ไฟล์` : '';
+  if (subtotal > 0) return `${formatMoney(subtotal)}${fileSuffix}`;
+  return `มีข้อมูล — ยังไม่ระบุยอดเงิน${fileSuffix}`;
+}
+
+// HUB's section-choice row. Secondary line is `groupSecondaryLabel` above: the group's own declared
+// subtotal (money fields only -- `groupDeclaredTotal`) plus how many files are staged for it, or
+// `ไม่ได้ประกาศ` when `groupHasValue` says nothing in the group -- money, count, or checkbox -- has
+// been touched yet. This replaces the old binary `กรอกแล้ว`/`ยังไม่ได้กรอก` readout
+// (#tax-allowance-ia-hub-review, defect #3): a legitimately-empty section (no spouse, no children)
+// used to read "ยังไม่ได้กรอก" forever, indistinguishable from a section the employee simply hadn't
+// gotten to yet. A real number (or its explicit absence) tells the truth either way.
+//
+// No `selected`/`aria-current` any more: the old version highlighted whichever group had last been
+// opened, using a state (`activeGroupKey`) that survived going back to step 1 on purpose. HUB and
+// SECTION are now mutually exclusive views of a single `view` prop with no such "last opened"
+// memory of its own -- reintroducing it would mean adding state beyond the one URL param this whole
+// redesign is built around (#tax-allowance-ia-hub-review's "driven by ONE URL param `?view=`"), for
+// a highlight ring that was never asked for here.
+function GroupChoice({ group, hasValue, subtotal, fileCount, onSelect }) {
   return (
     <button
       type="button"
-      onClick={() => onSelect(group.key)}
-      aria-current={selected ? 'true' : undefined}
-      className={`flex w-full items-center justify-between gap-3 rounded-md border-[1.5px] px-4 py-3 text-left transition-colors ${
-        selected ? 'border-primary bg-info-bg-alt' : 'border-border-input bg-surface hover:border-primary-hover'
-      }`}
+      onClick={() => onSelect?.(group.key)}
+      className="flex w-full items-center justify-between gap-3 rounded-md border-[1.5px] border-border-input bg-surface px-4 py-3 text-left transition-colors hover:border-primary-hover"
     >
       <span className="grid gap-0.5">
         <span className="text-sm font-bold text-text">{group.title}</span>
-        <span className="text-xs text-text-muted">{filled ? 'กรอกแล้ว' : 'ยังไม่ได้กรอก'}</span>
+        <span className="text-xs text-text-muted">{groupSecondaryLabel(hasValue, subtotal, fileCount)}</span>
       </span>
-      {filled ? (
+      {hasValue ? (
         <Icon name="check" size={16} className="shrink-0 text-primary" />
       ) : (
         <Icon name="chevronRight" size={16} className="shrink-0 text-text-muted" />
       )}
     </button>
   );
+}
+
+// REVIEW's per-group recap line list -- every field with something declared (the same per-field
+// truthiness `groupHasValue` uses: a checkbox counts as declared when checked, a money/count field
+// when its value is a positive number), formatted for read-only display. A field with nothing
+// declared is left out entirely; the caller renders the `ไม่ได้ประกาศ` fallback for a group whose
+// list comes back empty, rather than this returning a placeholder row per untouched field.
+function declaredFieldLines(group, values) {
+  if (!values) return [];
+  const lines = [];
+  for (const field of group.fields) {
+    const value = values[field.key];
+    if (field.kind === 'checkbox') {
+      if (value) lines.push({ key: field.key, label: field.label, value: 'มี' });
+      continue;
+    }
+    const amount = Number(value || 0);
+    if (amount <= 0) continue;
+    const formatted = field.kind === 'money' ? formatMoney(amount) : `${amount}${field.unit ? ` ${field.unit}` : ''}`;
+    lines.push({ key: field.key, label: field.label, value: formatted });
+  }
+  return lines;
 }
 
 /**
@@ -137,19 +195,32 @@ function GroupChoice({ group, filled, selected, onSelect }) {
  * submitted body carries whatever was declared verbatim — decision #1's "do not pre-clamp the
  * submitted value, the backend clamps".
  *
- * Progressive disclosure (#tax-allowance-sections): `sectioned` (default true) renders a 2-step
- * "choose a section, then fill only that section" flow modelled on LeaveRequestPage.jsx's step
- * wizard — step 1 lists the five TAX_ALLOWANCE_GROUPS as choices, step 2 shows only the chosen
- * group's fields plus its evidence panel. The single `react-hook-form` instance below is never
- * remounted or reset between steps, so values already typed into another section survive switching
- * away and back — see `TaxAllowanceForm.test.jsx`'s "values survive step navigation" case for the
- * explicit A→B→back-to-A proof.
+ * Hub-and-spoke navigation (#tax-allowance-ia-hub-review), replacing the earlier 2-step wizard
+ * (#tax-allowance-sections) it grew out of: `sectioned` (default true) renders three views — HUB
+ * (declaration-level fields, the auto-granted info, all five TAX_ALLOWANCE_GROUPS as rows showing
+ * what has been declared so far, and a running total), SECTION (one group's own fields plus its
+ * evidence panel), and REVIEW (every group's declared lines, the total again, an evidence manifest,
+ * and the ONLY submit button in the entire flow) — selected by the controlled `view` prop (`'hub'` |
+ * a TAX_ALLOWANCE_GROUPS key | `'review'`) rather than internal state; the PAGE owns `?view=` in the
+ * URL and passes it straight through via `view`/`onViewChange`. This replaces the old linear
+ * `ขั้นตอนที่ 1/2`/`2/2` framing, which mislabelled what was always a hub-and-spoke (five
+ * independent, individually-optional sections, not a sequence) and put the SAME submit control on
+ * both steps — on step 2 it sat beside `ย้อนกลับ` and read as "save this section and continue" but
+ * actually submitted the whole declaration, so an employee who filled in one section and pressed the
+ * obvious button had filed an incomplete ล.ย.01 with no way back short of discovering
+ * `ยกเลิกการยื่น`. SECTION now has no submit control at all — only REVIEW does.
+ *
+ * The single `react-hook-form` instance below is never remounted or reset between views, so values
+ * already typed into another section survive navigating away and back — see
+ * `TaxAllowanceForm.test.jsx`'s "values survive navigating between views" case for the explicit
+ * A→B→back-to-A proof, and its "SECTION view has no submit control" case for the defect this whole
+ * change exists to fix.
  *
  * `sectioned={false}` keeps the ORIGINAL "every group expanded via CollapsibleSection" layout,
  * unchanged — TaxAllowanceReviewPage's `OnBehalfModal` opts into this: it is a small modal for a
  * one-off HR-on-behalf entry (no evidence, no returning-user "which section did I start" need), and
- * turning it into a step wizard too would be an unrequested UX change to a flow this task was never
- * asked to touch.
+ * turning it into a hub-and-spoke too would be an unrequested UX change to a flow this task was
+ * never asked to touch.
  */
 export function TaxAllowanceForm({
   caps = [],
@@ -161,6 +232,15 @@ export function TaxAllowanceForm({
   formId = 'tax-allowance-form',
   footer,
   sectioned = true,
+  // Controlled view state (#tax-allowance-ia-hub-review): the PAGE owns `?view=` in the URL and
+  // passes it straight through -- this component holds no navigation state of its own beyond the
+  // single `useForm` instance below. `'hub'` | one of TAX_ALLOWANCE_GROUPS' keys | `'review'`.
+  // Only consulted when `sectioned` is true; the `sectioned={false}` branch below never reads it.
+  view = 'hub',
+  onViewChange,
+  // Fires with `formState.isDirty` on every change so the PAGE can guard a destructive action (a
+  // year switch) that would otherwise silently discard unsaved edits underneath this form.
+  onDirtyChange,
   // Evidence panel (only rendered when sectioned && evidenceMode is provided — TaxAllowanceReviewPage's
   // OnBehalfModal passes none of these, so it never renders one; see the component javadoc above).
   evidenceMode, // 'direct' | 'staging' | 'readonly' | undefined
@@ -175,24 +255,30 @@ export function TaxAllowanceForm({
     handleSubmit,
     reset,
     control,
-    formState: { errors },
+    formState: { errors, isDirty },
   } = useForm({
     resolver: zodResolver(SCHEMA),
     defaultValues,
   });
 
-  const [step, setStep] = useState(1);
-  const [activeGroupKey, setActiveGroupKey] = useState(null);
-  const step1HeadingRef = useRef(null);
-  const step2HeadingRef = useRef(null);
+  // Only one heading is ever mounted at a time -- HUB/SECTION/REVIEW render mutually exclusively
+  // below -- so all three `ViewHeading`s below safely share this single ref instead of needing one
+  // each. React attaches the new view's heading node to it in the same commit that detaches the old
+  // one, which happens before this passive effect runs, so `.current` is always the CURRENT view's
+  // heading by the time it fires.
+  const headingRef = useRef(null);
 
   useEffect(() => {
+    // A new declaration/year loaded underneath this form -- reset to its values. Which VIEW the
+    // employee lands on for that new declaration is the PAGE's call now (it owns `?view=` and
+    // resets it alongside the year on every switch -- see TaxAllowancePage's `requestYearChange`),
+    // not this component's -- there is no local step/view state left here to reset.
     reset(defaultValues);
-    // A new declaration/year loaded underneath this form -- return to the section picker rather
-    // than silently staying on whatever group happened to be open for the PREVIOUS declaration.
-    setStep(1);
-    setActiveGroupKey(null);
   }, [defaultValues, reset]);
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
 
   const watchedValues = useWatch({ control });
 
@@ -201,23 +287,13 @@ export function TaxAllowanceForm({
   const groupUsageById = useMemo(() => new Map(groupUsage.map((group) => [group.groupId, group])), [groupUsage]);
 
   useEffect(() => {
-    const ref = step === 1 ? step1HeadingRef : step2HeadingRef;
-    ref.current?.focus();
-  }, [step]);
+    headingRef.current?.focus();
+  }, [view]);
 
   const activeGroup = useMemo(
-    () => TAX_ALLOWANCE_GROUPS.find((group) => group.key === activeGroupKey) ?? null,
-    [activeGroupKey],
+    () => TAX_ALLOWANCE_GROUPS.find((group) => group.key === view) ?? null,
+    [view],
   );
-
-  function openGroup(key) {
-    setActiveGroupKey(key);
-    setStep(2);
-  }
-
-  function backToSections() {
-    setStep(1);
-  }
 
   function submit(values) {
     onSubmit?.(values);
@@ -335,23 +411,67 @@ export function TaxAllowanceForm({
     );
   }
 
+  const isReview = view === 'review';
+  const isSection = !isReview && !!activeGroup;
+  // Also the safety net for an unrecognised `view`: TaxAllowancePage validates `?view=` against the
+  // five group keys plus `'review'` before it ever reaches this prop, so this branch should never
+  // actually catch a garbage value in production -- but a component with an external prop contract
+  // should not blank-render or throw if a future caller passes one anyway.
+  const isHub = !isReview && !isSection;
+
+  const declaredTotal = formatMoney(declaredAllowanceTotalFromValues(watchedValues));
+
+  // CRITICAL (review fix, #tax-allowance-ia-hub-review): one <form> wraps all three views below, and
+  // HTML's implicit-submission rule fires a real 'submit' event on Enter in a text field whenever the
+  // form has no visible submit button but has exactly ONE field that counts toward that rule -- true
+  // for HUB (only `#ta-document-reference` is a bare text input; the month <select> and file inputs
+  // don't count) and true for the `housing` SECTION (its one and only field). The other four sections
+  // are safe only by ACCIDENT, because they happen to carry more than one such field -- not something
+  // to rely on. Before this gate, Enter in either of those two fields filed the ENTIRE declaration
+  // with no button ever pressed, silently, in a real browser (confirmed in Chromium and WebKit; jsdom
+  // does not implement implicit submission, which is why the suite was green with the bug live --
+  // see `TaxAllowanceForm.test.jsx`'s `fireEvent.submit(form)` cases, which exercise the same
+  // 'submit' event a real Enter-key trigger produces without depending on jsdom modelling the
+  // browser's implicit-submission heuristics). `handleSubmit(submit)` -- react-hook-form's real
+  // validate-then-call wiring -- now only ever attaches on REVIEW; every other view's handler just
+  // swallows the event. The `sectioned={false}` branch above is untouched and keeps submitting
+  // normally -- it has no views/URL, so this gate does not apply to it at all.
+  function handleFormSubmit(event) {
+    if (!isReview) {
+      event.preventDefault();
+      return;
+    }
+    handleSubmit(submit)(event);
+  }
+
   return (
-    <form id={formId} noValidate onSubmit={handleSubmit(submit)} className="grid gap-4">
-      {step === 1 ? (
+    <form id={formId} noValidate onSubmit={handleFormSubmit} className="grid gap-4">
+      {isHub ? (
         <div className="grid gap-4">
-          <StepHeading innerRef={step1HeadingRef} step={1} total={2} title="เลือกหมวดที่ต้องการกรอก" />
-          {autoGrantedInfo}
-          {declarationFields}
+          <ViewHeading innerRef={headingRef} title="ภาพรวมการยื่นแบบแจ้ง" />
           <div className="grid gap-2">
-            {TAX_ALLOWANCE_GROUPS.map((group) => (
-              <GroupChoice
-                key={group.key}
-                group={group}
-                filled={groupHasValue(group, watchedValues)}
-                selected={group.key === activeGroupKey}
-                onSelect={openGroup}
-              />
-            ))}
+            <p className="m-0 text-xs font-extrabold uppercase tracking-wide text-text-muted">ข้อมูลแบบแจ้ง</p>
+            {declarationFields}
+          </div>
+          {autoGrantedInfo}
+          <div className="grid gap-2">
+            {TAX_ALLOWANCE_GROUPS.map((group) => {
+              const hasValue = groupHasValue(group, watchedValues);
+              return (
+                <GroupChoice
+                  key={group.key}
+                  group={group}
+                  hasValue={hasValue}
+                  subtotal={groupDeclaredTotal(group, watchedValues)}
+                  fileCount={(stagedEvidenceBySection?.[group.key] ?? []).length}
+                  onSelect={onViewChange}
+                />
+              );
+            })}
+          </div>
+          <div className="flex items-center justify-between gap-3 rounded-md border border-border-subtle bg-surface-subtle p-3">
+            <span className="text-sm font-bold text-text">รวมค่าลดหย่อนที่ประกาศ</span>
+            <strong className="font-mono text-base text-text">{declaredTotal}</strong>
           </div>
           {evidenceMode ? (
             <TaxAllowanceEvidencePanel
@@ -367,19 +487,25 @@ export function TaxAllowanceForm({
               emptyLabel="ยังไม่มีไฟล์แนบทั่วไป — แนบไฟล์เฉพาะหมวดได้หลังเลือกหมวดด้านบน"
             />
           ) : null}
-          {submitFooter}
+          {/* Hidden read-only, same as the OLD submitFooter's `readOnly ? null : …` rule -- this
+              button's only job is to lead toward the submit path, and REVIEW's own submit control
+              already disappears under `readOnly` (via `submitFooter` below), so leaving this visible
+              would open a door to a screen with nothing behind it. Deep-linking straight to
+              `?view=review` still works read-only (for browsing a decided declaration's recap) --
+              this only removes the HUB-initiated entry point. */}
+          {!readOnly ? (
+            <div className="flex justify-end">
+              <Button type="button" variant="primary" onClick={() => onViewChange?.('review')}>
+                ตรวจทานและยื่น
+              </Button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
-      {step === 2 && activeGroup ? (
+      {isSection ? (
         <div className="grid gap-4">
-          <div className="flex items-center justify-between gap-3">
-            <StepHeading innerRef={step2HeadingRef} step={2} total={2} title={activeGroup.title} />
-            <Button type="button" variant="secondary" size="sm" onClick={backToSections}>
-              <Icon name="chevronLeft" size={14} />
-              กลับไปเลือกหมวด
-            </Button>
-          </div>
+          <ViewHeading innerRef={headingRef} title={activeGroup.title} />
           {renderGroupFields(activeGroup)}
           {evidenceMode ? (
             <TaxAllowanceEvidencePanel
@@ -394,8 +520,116 @@ export function TaxAllowanceForm({
               title={`หลักฐานแสดงสิทธิ — ${activeGroup.title}`}
             />
           ) : null}
+          {/* No submit control here, ever -- this is #tax-allowance-ia-hub-review's whole point.
+              The OLD step 2 put the real submit button right beside `ย้อนกลับ`, where it read as
+              "save this section and continue" but actually submitted the ENTIRE declaration -- see
+              the component javadoc above. `type="button"`, never `type="submit"`, so a click can
+              never fire the form's onSubmit -- and the form-level `onSubmit` gate below additionally
+              refuses to submit from this view at all, so even Enter-key implicit submission is inert
+              here (review fix: it was NOT inert before, see that gate's own comment).
+              `secondary`, not `primary`: this button's whole job is to look like plain navigation,
+              not a completion action -- the one and only primary "commit" affordance in this entire
+              flow lives on REVIEW's submit button below.
+              Labelled "กลับไปหน้ารวม" ("back to the overview"), not "บันทึก..." ("save..."): nothing
+              is actually saved anywhere by pressing this -- there is no draft endpoint, values live
+              only in this component's in-memory form state and are gone on reload. "บันทึกและกลับ"
+              promised persistence this button cannot deliver, which is the exact category of false
+              promise the rest of this redesign exists to remove (review fix). REVIEW's own back
+              button uses the equally honest "ย้อนกลับ", for the same reason. */}
+          <div className="flex justify-end">
+            <Button type="button" variant="secondary" onClick={() => onViewChange?.('hub')}>
+              <Icon name="chevronLeft" size={14} />
+              กลับไปหน้ารวม
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {isReview ? (
+        <div className="grid gap-4">
+          <ViewHeading innerRef={headingRef} title="ตรวจทานก่อนยื่น" />
+          {/* Declaration-level fields (มีผลตั้งแต่งวดเดือน / เลขที่เอกสารอ้างอิง) are part of the
+              submitted body (`buildAllowanceSubmitBody`) exactly like every group's own fields, but
+              live only on HUB -- without this block REVIEW recapped everything EXCEPT two of the
+              values it is about to file (review fix). Same "ข้อมูลแบบแจ้ง" label HUB uses above its
+              own copy of these two fields, for one consistent name across both views. */}
+          <div className="rounded-md border border-border-subtle bg-surface-subtle p-3">
+            <p className="m-0 mb-2 text-sm font-bold text-text">ข้อมูลแบบแจ้ง</p>
+            <div className="grid gap-1">
+              <div className="flex items-baseline justify-between gap-3 text-sm">
+                <span className="text-text-muted">มีผลตั้งแต่งวดเดือน</span>
+                <span className="font-mono font-bold text-text">
+                  {watchedValues?.effectiveMonth ? `เดือน ${watchedValues.effectiveMonth}` : 'มกราคม (ค่าเริ่มต้น)'}
+                </span>
+              </div>
+              <div className="flex items-baseline justify-between gap-3 text-sm">
+                <span className="text-text-muted">เลขที่เอกสารอ้างอิง</span>
+                <span className="font-mono font-bold text-text">{watchedValues?.documentReference?.trim() || '-'}</span>
+              </div>
+            </div>
+          </div>
+          <div className="grid gap-3">
+            {TAX_ALLOWANCE_GROUPS.map((group) => {
+              const lines = declaredFieldLines(group, watchedValues);
+              return (
+                <div key={group.key} className="rounded-md border border-border-subtle bg-surface-subtle p-3">
+                  <p className="m-0 mb-2 text-sm font-bold text-text">{group.title}</p>
+                  {lines.length > 0 ? (
+                    <div className="grid gap-1">
+                      {lines.map((line) => (
+                        <div key={line.key} className="flex items-baseline justify-between gap-3 text-sm">
+                          <span className="text-text-muted">{line.label}</span>
+                          <span className="font-mono font-bold text-text">{line.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    // Explicitly listed, not omitted -- a group with nothing in it is real
+                    // information for a reviewer about to submit, not noise to hide (defect #2/#3).
+                    <p className="m-0 text-xs text-text-muted">ไม่ได้ประกาศ</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-surface-subtle p-3">
+            <span className="text-sm font-bold text-text">รวมค่าลดหย่อนที่ประกาศ</span>
+            <strong className="font-mono text-base text-text">{declaredTotal}</strong>
+          </div>
+          {/* Evidence manifest -- STAGED (not-yet-uploaded) file counts, per section plus the hub's
+              own general/uncategorized bucket (`UNCATEGORIZED_EVIDENCE_KEY` -- easy to miss, it is
+              not one of TAX_ALLOWANCE_GROUPS' keys; omitting it used to silently read `0 ไฟล์` for
+              anything staged through the hub's own panel, review fix). Rendered ONLY in `'staging'`
+              mode -- this is deliberately not the already-stored attachment count each per-section
+              `TaxAllowanceEvidencePanel` holds behind its own query (HUB/REVIEW never mount one of
+              those per group, only SECTION does, so a stored count is not something "the form
+              already has access to" without a new fetch this task is not reaching for), and outside
+              `'staging'` -- `'direct'`/`'readonly'`, e.g. a PENDING or already-decided declaration
+              reached by deep-linking straight to `?view=review` -- `staged` is empty while real,
+              stored attachments may well exist, so showing it would read `0 ไฟล์` next to a section
+              that genuinely has evidence: false on a URL this redesign now advertises as shareable
+              (review fix). Hiding the manifest entirely there is the honest choice; a false zero is
+              worse than no number. The heading says "เตรียมไว้" (prepared), never "ทั้งหมด" (total),
+              for the same reason -- this is what is staged and about to be sent, not a final count. */}
+          {evidenceMode === 'staging' ? (
+            <div className="rounded-md border border-border-subtle bg-surface-subtle p-3">
+              <p className="m-0 mb-2 text-xs font-extrabold uppercase tracking-wide text-text-muted">ไฟล์ที่เตรียมไว้ — ยังไม่ได้ส่ง</p>
+              <div className="grid gap-1">
+                {TAX_ALLOWANCE_GROUPS.map((group) => (
+                  <div key={group.key} className="flex items-center justify-between gap-3 text-sm">
+                    <span className="text-text-muted">{group.title}</span>
+                    <span className="text-text">{(stagedEvidenceBySection?.[group.key] ?? []).length} ไฟล์</span>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span className="text-text-muted">ทั่วไป (ไม่ได้ระบุหมวด)</span>
+                  <span className="text-text">{(stagedEvidenceBySection?.[UNCATEGORIZED_EVIDENCE_KEY] ?? []).length} ไฟล์</span>
+                </div>
+              </div>
+            </div>
+          ) : null}
           <div className="flex justify-between gap-[10px]">
-            <Button type="button" variant="secondary" onClick={backToSections}>ย้อนกลับ</Button>
+            <Button type="button" variant="secondary" onClick={() => onViewChange?.('hub')}>ย้อนกลับ</Button>
             {submitFooter}
           </div>
         </div>
