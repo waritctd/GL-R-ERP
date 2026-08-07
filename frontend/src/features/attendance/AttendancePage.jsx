@@ -144,12 +144,23 @@ export function AttendancePage({ user, showToast }) {
   // this one. Worth doing if this page ever talks to a slow/rate-limited backend.
   const loading = daysQuery.isLoading;
 
-  // Adversarial-review fix (P0): same infinite-loop hazard as PayrollPage's identical effect --
-  // `showToast` (useToast()/App.jsx) is a plain, re-created-per-render function; with it in this
-  // effect's deps, calling it re-renders App, which hands a new `showToast` identity back down,
-  // which re-fires this effect for as long as `daysQuery.error` stays non-null. A ref holds the
-  // latest callback without being a dependency, and the effect keys on the error's MESSAGE (a
-  // primitive) instead of the Error object or the callback.
+  // PR #426 (P0, adversarial review) introduced this showToastRef indirection because `showToast`
+  // (useToast()/App.jsx) used to be a plain, re-created-per-render function: with it in this
+  // effect's deps, calling it re-rendered App, which handed back a new `showToast` identity, which
+  // re-fired this effect for as long as `daysQuery.error` stayed non-null.
+  //
+  // The root cause is now fixed at the source -- useToast.js wraps showToast in useCallback([]),
+  // so it has a stable identity everywhere in production, and this ref is no longer load-bearing
+  // there. Kept anyway, deliberately, rather than deleted: this file's own regression test
+  // (AttendancePage.test.jsx, "does not call showToast more than once ... driven by an App-shaped
+  // (unstable) showToast") renders through a harness whose counting wrapper AROUND showToast is
+  // itself a fresh closure every render of that harness, independent of useToast.js's fix --
+  // removing this ref would put that still-locally-unstable wrapper directly in this effect's
+  // deps and fail that test, for a reason that has nothing to do with the bug this ref was
+  // written to fix. Still keyed on the error's MESSAGE (a primitive), not the Error object:
+  // `daysQuery` polls every 60s (refetchInterval above), and a repeated failure hands back a new
+  // Error instance each attempt even when the text is identical, which would otherwise re-toast
+  // the same message every poll.
   const showToastRef = useRef(showToast);
   useEffect(() => {
     showToastRef.current = showToast;
