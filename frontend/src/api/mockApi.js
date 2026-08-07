@@ -749,6 +749,12 @@ let mockFactoryPurchaseOrderItemSeq = 1;
   delete db.salesSeed;
 }
 
+// Mirrors CustomerService.VIEWER_ROLES, which itself aliases TicketAccessPolicy.VIEWER_ROLES
+// rather than hand-copying it (issue #389 records a real divergence bug from hand-copying this
+// exact set). Named here for the same reason: three customer reads share it, and an inline copy
+// per call site is how the Java side drifted before. `requireTicketViewer` below wraps the same
+// list but cannot be reused -- it takes a ticket id and applies a sales-ownership check.
+const CUSTOMER_VIEWER_ROLES = ['sales', 'import', 'ceo', 'account', 'sales_manager'];
 const PRICING_REQUEST_VIEWER_ROLES = ['sales', 'import', 'ceo', 'sales_manager'];
 const PRICING_REQUEST_RECIPIENT_VALUES = PRICING_REQUEST_RECIPIENT_OPTIONS.map((o) => o.code);
 const PRICING_REQUEST_QUANTITY_TYPE_VALUES = PRICING_REQUEST_QUANTITY_TYPE_OPTIONS.map((o) => o.code);
@@ -6946,7 +6952,7 @@ export const api = {
     // match in insertion order — unbounded and unsorted — so a caller counting results, or
     // reading "the first customer", saw something production would never return (issue #434).
     async search(q) {
-      hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
+      hasRole(...CUSTOMER_VIEWER_ROLES);
       const lower = (q ?? '').toLowerCase();
       const results = lower
         ? mockCustomers.filter((c) => c.name.toLowerCase().includes(lower) || (c.taxId ?? '').includes(lower))
@@ -6955,7 +6961,7 @@ export const api = {
       return delay({ customers: ordered.slice(0, CUSTOMER_SEARCH_LIMIT) });
     },
     async contacts(customerId) {
-      hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
+      hasRole(...CUSTOMER_VIEWER_ROLES);
       return delay({ contacts: mockContacts.filter((c) => c.customerId === Number(customerId)) });
     },
     async createContact(customerId, payload) {
@@ -6965,7 +6971,7 @@ export const api = {
       return delay({ contact });
     },
     async projects(customerId) {
-      hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
+      hasRole(...CUSTOMER_VIEWER_ROLES);
       return delay({ projects: mockProjects.filter((p) => p.customerId === Number(customerId)) });
     },
     async createProject(customerId, payload) {
