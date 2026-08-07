@@ -12,6 +12,7 @@ import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { commissionStatusLabel as statusInfo, dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
@@ -1195,7 +1196,32 @@ function AccountCreateFromDeal({
             ) : null}
           </div>
 
-          <form className="form-grid" onSubmit={onSubmit}>
+          {/* allowSubmitterlessSubmit, with a written reason (#safe-form-primitive): this form's
+              own file input carries a native `required`, and jsdom does not run real constraint
+              validation on it after a synthetic `fireEvent.change` -- CommissionPage.test.jsx's
+              two file-rewrap regression tests (`re-wraps the compressed invoice image...`, `does
+              not touch PDFs...`) both dispatch a submitter-less `fireEvent.submit(form)` directly
+              to route around that jsdom-only false negative, exactly as their own comment
+              explains (verified still current: switching either to `fireEvent.click(button)` or
+              to `form.requestSubmit(button)` -- which DOES carry a real submitter -- reproduces
+              the same false negative and times out waiting for `createFromDeal`).
+              The escape hatch itself is INERT in a real browser, not merely unneeded: the
+              `<Button type="submit">` below is unconditionally RENDERED -- only its `disabled`
+              attribute varies with `saving || !loadedTicket` -- and a real browser's default-
+              button resolution does not fall back to a submitter-less implicit submission when
+              that one submit button happens to be disabled; Enter simply does nothing at all in
+              that state (verified empirically -- see SafeForm.jsx's header comment). So `submitter`
+              can never actually be null here for a genuine keypress, with any number of fields;
+              the escape hatch exists purely to satisfy the two jsdom-only tests above, not because
+              production needs it. (An earlier version of this comment said the operative reason
+              was "ten Enter-blocking fields" -- true as a fact, but not what actually protects
+              this form; a future edit that trimmed the field count to one would still be safe for
+              the reason given here, and would NOT reopen anything.) Closing the jsdom gap for real
+              needs either `noValidate` here plus app-side required-field validation (a real
+              behaviour change, out of scope for this migration) or a jsdom/test-only fix upstream;
+              flagged as a followup rather than silently either weakening this gate everywhere or
+              leaving two tests red. */}
+          <SafeForm className="form-grid" onSubmit={onSubmit} allowSubmitterlessSubmit>
             <label>
               Invoice Number *
               <input value={createForm.invoiceNumber} onChange={(event) => updateCreateForm('invoiceNumber', event.target.value)} required />
@@ -1254,7 +1280,7 @@ function AccountCreateFromDeal({
                 บันทึกและสร้างคำขอค่าคอม
               </Button>
             </div>
-          </form>
+          </SafeForm>
         </div>
       </Panel>
 
@@ -1298,7 +1324,7 @@ function ManualCommissionForm({ form, onChange, repOptions, onSubmit, onCancel, 
   const isAdjustment = form.kind === 'ADJUSTMENT';
   return (
     <Panel flush title="เพิ่มค่าคอมด้วยตนเอง">
-      <form className="form-grid p-[18px]" onSubmit={onSubmit}>
+      <SafeForm className="form-grid p-[18px]" onSubmit={onSubmit}>
         <label>
           ประเภท *
           <select value={form.kind} onChange={(event) => onChange('kind', event.target.value)}>
@@ -1368,7 +1394,7 @@ function ManualCommissionForm({ form, onChange, repOptions, onSubmit, onCancel, 
             บันทึกค่าคอม
           </Button>
         </div>
-      </form>
+      </SafeForm>
     </Panel>
   );
 }

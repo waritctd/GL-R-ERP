@@ -404,17 +404,30 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
 // HTML implicit submission (fix/form-enter-submits-real-records): a <form> with no submit button
 // but exactly ONE field that blocks implicit submission fires a real 'submit' event on Enter, no
 // button ever pressed. jsdom does not implement that algorithm at all (pressing "Enter" via
-// fireEvent does nothing special), but dispatching 'submit' directly at the <form> below produces
-// the exact same native event a real Enter-key trigger would, which is what the <form>'s
-// `onSubmit` prop actually listens for — a faithful, environment-agnostic test of
-// `handleFormSubmit`'s gate itself, independent of how many blocking fields a step actually has
-// mounted right now. Mirrors TaxAllowanceForm.test.jsx's "form-level submit gate blocks Enter-key
-// implicit submission" describe block. See `handleFormSubmit`'s own comment in
-// LeaveRequestPage.jsx for why this is hardening, not a fix for a currently-reachable bug.
+// fireEvent does nothing special) -- e2e/implicit-submission.spec.js is the layer that reproduces
+// the real thing. See `canSubmit`'s own comment in LeaveRequestPage.jsx for why this describe
+// block is hardening, not a fix for a currently-reachable bug.
+//
+// `submitWithSubmitter` below, not `fireEvent.submit(form)`: this form is now `<SafeForm
+// canSubmit={step === 3} ...>` (#safe-form-primitive), and `canSubmit` is a RESTRICTION layered on
+// top of SafeForm's own submitter guard, not a replacement for it -- both checks always apply.
+// `fireEvent.submit(form)` dispatches a plain synthetic Event with no `.submitter` property at all
+// under jsdom, so it would be blocked by the submitter guard on EVERY step including step 3, which
+// would make "does NOT call create()" pass for the wrong reason on steps 1/2 (no submitter present
+// at all, not because `canSubmit` rejected it -- this repo's own documented vacuous-test shape)
+// and make "calls create()" on step 3 fail outright. A manually constructed `SubmitEvent` with an
+// explicit `submitter` is picked up by React's onSubmit exactly like a real click (verified), so
+// every case below now exercises `canSubmit` specifically. Mirrors
+// TaxAllowanceForm.test.jsx's "form-level submit gate blocks Enter-key implicit submission" and
+// TicketCreateModal.test.jsx's `submitForm()`.
+function submitWithSubmitter(form) {
+  form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: document.createElement('button') }));
+}
+
 describe('LeaveRequestPage implicit submission (Enter-key) hardening', () => {
   // The gate's blocking branch (`event.preventDefault(); return;`) is synchronous, so a correctly
   // gated step 1/2 never even calls `handleSubmit`, let alone awaits anything — but an assertion
-  // that only checks SYNCHRONOUSLY, right after `fireEvent.submit`, proves nothing about whether
+  // that only checks SYNCHRONOUSLY, right after the submit dispatch, proves nothing about whether
   // the gate is doing that work: `handleSubmit(onSubmit)` is asynchronous (`onSubmit` itself is
   // `async`), so if the gate were ever removed, `api.leave.create` would still not have been
   // called yet at that exact synchronous instant either -- the assertion would keep passing for
@@ -430,7 +443,7 @@ describe('LeaveRequestPage implicit submission (Enter-key) hardening', () => {
     const { container } = renderComposer();
     await screen.findByRole('button', { name: /ลาพักร้อน/ });
 
-    fireEvent.submit(container.querySelector('form'));
+    submitWithSubmitter(container.querySelector('form'));
     await flushAsyncSubmitChain();
 
     expect(api.leave.create).not.toHaveBeenCalled();
@@ -441,7 +454,7 @@ describe('LeaveRequestPage implicit submission (Enter-key) hardening', () => {
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2099-12-31' } });
     fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
 
-    fireEvent.submit(container.querySelector('form'));
+    submitWithSubmitter(container.querySelector('form'));
     await flushAsyncSubmitChain();
 
     expect(api.leave.create).not.toHaveBeenCalled();
@@ -456,7 +469,7 @@ describe('LeaveRequestPage implicit submission (Enter-key) hardening', () => {
     await screen.findByText(/ขั้นตอนที่ 3\/3/);
     await waitFor(() => expect(screen.getByRole('button', { name: /ส่งคำขอ/ }).disabled).toBe(false));
 
-    fireEvent.submit(container.querySelector('form'));
+    submitWithSubmitter(container.querySelector('form'));
 
     await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
   });

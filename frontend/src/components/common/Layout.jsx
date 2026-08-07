@@ -113,8 +113,19 @@ Panel.Header = PanelHeader;
  *   ≤720px: grid-template-columns: 1fr (both variants)
  * `span-2` children should pass `className="span-2-item"` via the exported
  * `formGridSpan2` class name, reproducing `.span-2` (span 2 / span 1 ≤720px).
- * Renders a `<div>` by default; pass `as="form"` for callers that need real
- * `<form>` semantics (e.g. a footer submit button using `form="<id>"`).
+ * Always renders a `<div>` — deliberately NOT polymorphic any more
+ * (#safe-form-primitive). It used to accept `as="form"` for callers that
+ * wanted real `<form>` semantics (a footer submit button using `form="<id>"`)
+ * on the same element as the grid, but that was a second, unguarded way to
+ * put a `<form>` on the page that the ban on raw `<form>` JSX
+ * (eslint.config.js) could never see, because `<FormGrid as="form">` isn't a
+ * `<form>` JSX element — it's a call to this function that happens to choose
+ * one at runtime. A caller that needs both the grid layout and real form
+ * semantics now wraps `<SafeForm>` around `<FormGrid>` instead of collapsing
+ * them into one element; see EmployeeFormModal.jsx for the shape. Two
+ * elements instead of one costs nothing visually — `<form>` has no default
+ * display of its own that the grid depended on — and it means every `<form>`
+ * in this codebase is reachable by one lint rule instead of two.
  *
  * `items-start` is not cosmetic. Grid's default `align-items: stretch` sized
  * every field box to the tallest field in its row, and because a field is
@@ -128,9 +139,9 @@ Panel.Header = PanelHeader;
  * `content-start` fixes the same thing one level down; both are kept so a
  * field is correct in any parent and a non-FormField child is correct here.
  */
-export function FormGrid({ as: Component = 'div', single = false, className, children, ...props }) {
+export function FormGrid({ single = false, className, children, ...props }) {
   return (
-    <Component
+    <div
       className={cn(
         'grid items-start gap-[14px] max-[720px]:grid-cols-1',
         single ? 'grid-cols-1' : 'grid-cols-2',
@@ -139,7 +150,7 @@ export function FormGrid({ as: Component = 'div', single = false, className, chi
       {...props}
     >
       {children}
-    </Component>
+    </div>
   );
 }
 

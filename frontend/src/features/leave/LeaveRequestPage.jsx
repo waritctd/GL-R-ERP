@@ -16,6 +16,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { formGridSpan2, Panel, PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { QuotaBar } from '../../components/common/QuotaBar.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { EVERYDAY_LEAVE_TYPE_CODES } from './MyLeaveTab.jsx';
 import { LeaveRulePanel } from './LeaveRulePanel.jsx';
@@ -520,27 +521,28 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   const formSubDay = subDay;
 
   // HARDENING, not a fix for a live bug (HTML implicit submission, fix/form-enter-submits-real-
-  // records): this <form> wraps all 3 steps and is not otherwise gated by `step`, so it is safe
-  // today only because three facts happen to stack up, none of them load-bearing by design. Step
-  // 1's choices are all `<button type="button">` (zero fields that block implicit submission).
-  // Step 2 always renders at least two blocking fields (startDate + endDate, or four once sub-day
-  // adds startTime/endTime) — notably `endDate` stays MOUNTED (merely `disabled`) rather than
-  // removed from the DOM when sub-day is checked, which is what keeps that count at 2 instead of
-  // dropping to 1. Step 3 always renders the one real `<Button type="submit">` in this form.
-  // Change any one of those three — e.g. unmounting `endDate` instead of disabling it — and Enter
-  // in whatever single text field remained would silently file a real leave request, the same as
-  // the tax-allowance bug this gate shape is copied from (TaxAllowanceForm.jsx's
-  // `handleFormSubmit`, #tax-allowance-ia-hub-review), and jsdom would not catch it — it does not
-  // implement implicit submission at all (see LeaveRequestPage.test.jsx's `fireEvent.submit(form)`
-  // cases, which exercise the same 'submit' event a real Enter keypress produces). Gating
-  // explicitly here removes the dependency on those three accidents continuing to hold.
-  function handleFormSubmit(event) {
-    if (step !== 3) {
-      event.preventDefault();
-      return;
-    }
-    handleSubmit(onSubmit)(event);
-  }
+  // records; migrated to SafeForm's `canSubmit` under #safe-form-primitive): this <form> wraps all
+  // 3 steps and was, before this gate, safe today only because three facts happened to stack up,
+  // none of them load-bearing by design. Step 1's choices are all `<button type="button">` (zero
+  // fields that block implicit submission). Step 2 always renders at least two blocking fields
+  // (startDate + endDate, or four once sub-day adds startTime/endTime) — notably `endDate` stays
+  // MOUNTED (merely `disabled`) rather than removed from the DOM when sub-day is checked, which is
+  // what keeps that count at 2 instead of dropping to 1. Step 3 always renders the one real
+  // `<Button type="submit">` in this form. Change any one of those three — e.g. unmounting
+  // `endDate` instead of disabling it — and Enter in whatever single text field remained would
+  // silently file a real leave request, the same as the tax-allowance bug this gate shape was
+  // copied from (TaxAllowanceForm.jsx, #tax-allowance-ia-hub-review), and jsdom would not catch it
+  // — it does not implement implicit submission at all (see LeaveRequestPage.test.jsx's
+  // `fireEvent.submit(form)` cases, which exercise the same 'submit' event a real Enter keypress
+  // produces). `canSubmit={step === 3}` removes the dependency on those three accidents continuing
+  // to hold, exactly like the old bespoke `handleFormSubmit` did — and additionally, every OTHER
+  // step now also gets SafeForm's own submitter guard for free should this ever stop being a
+  // `canSubmit`-gated form. `canSubmit` is a RESTRICTION and never a permission (see SafeForm.jsx's
+  // header): it narrows submission to step 3, and SafeForm's submitter guard still applies on top,
+  // so BOTH must pass. Step 3's real submit button is always rendered — only ever `disabled` — so
+  // that AND costs this form nothing in production. It does mean a test proving step 3 submits has
+  // to carry a real submitter rather than dispatching a bare `fireEvent.submit(form)`; see
+  // `submitWithSubmitter` in LeaveRequestPage.test.jsx.
 
   return (
     <PageStack className="relative">
@@ -550,7 +552,7 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
         breadcrumbs={[{ label: 'การลา', onClick: () => goBackToSurface(false) }, { label: 'ยื่นคำขอลา' }]}
       />
 
-      <form onSubmit={handleFormSubmit} noValidate className="grid gap-[18px]">
+      <SafeForm onSubmit={handleSubmit(onSubmit)} canSubmit={step === 3} noValidate className="grid gap-[18px]">
         {/* ── Step 1: เลือกประเภท ───────────────────────────────────────────── */}
         {step === 1 ? (
           <Panel>
@@ -929,7 +931,7 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
             </div>
           </Panel>
         ) : null}
-      </form>
+      </SafeForm>
     </PageStack>
   );
 }
