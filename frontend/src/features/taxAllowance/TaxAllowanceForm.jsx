@@ -15,6 +15,7 @@ import {
   ALLOWANCE_COUNT_KEYS,
   ALLOWANCE_MONEY_KEYS,
   AUTO_GRANTED_ROWS,
+  LAW_SOURCES,
   TAX_ALLOWANCE_GROUPS,
   declaredAllowanceTotalFromValues,
   groupDeclaredTotal,
@@ -75,6 +76,47 @@ function CountField({ id, label, unit, hint, error, disabled, register }) {
     <FormField label={unit ? `${label} (${unit})` : label} htmlFor={id} hint={hint} error={error}>
       <input id={id} type="number" inputMode="numeric" min="0" step="1" placeholder="0" disabled={disabled} {...register} />
     </FormField>
+  );
+}
+
+// Compact, REAL link to a field's underlying legal source (taxAllowanceSchema.js's `LAW_SOURCES`,
+// via each field's `lawRef`). Deliberately NOT rendered through InfoTip: `.info-tip-bubble` is
+// `pointer-events: none` by design (styles.css's own comment on it) -- a hover/focus tooltip meant
+// for inert text, never something a mouse can reach inside. A clickable law citation living in there
+// would be a link nobody could actually click, which is exactly the "label asserts something the
+// code doesn't do" defect class this feature exists to avoid, just aimed at a link instead of a
+// number. External, so it opens in a new tab and says so both visibly (the icon) and to assistive
+// tech (the sr-only suffix) -- CLAUDE.md's "visible indication they leave the app".
+function LawRefLink({ lawRef }) {
+  if (!lawRef) return null;
+  return (
+    <a
+      href={lawRef.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-0.5 font-bold text-primary hover:underline"
+    >
+      {lawRef.label}
+      <Icon name="externalLink" size={11} />
+      <span className="sr-only"> (เปิดในแท็บใหม่)</span>
+    </a>
+  );
+}
+
+// Folds a field's own plain-text hint (cap caption, usage note) and its `lawRef` link into the one
+// node FormField's `hint` slot expects, so a field that already carries a cap caption does not grow
+// an extra row just for the citation -- it rides the existing hint line instead. `field.hint`/the
+// cap caption stay plain strings (unchanged); only the composition with a lawRef present becomes a
+// node. Mirrors `hint || undefined` (not `null`) when there is no lawRef, so FormField's own
+// `Boolean(hint)` gate behaves exactly as it did before this feature existed.
+function hintWithLawRef(textHint, lawRef) {
+  if (!lawRef) return textHint || undefined;
+  return (
+    <>
+      {textHint || null}
+      {textHint ? ' ' : null}
+      <LawRefLink lawRef={lawRef} />
+    </>
   );
 }
 
@@ -309,15 +351,15 @@ export function TaxAllowanceForm({
           const unavailable = isCapUnavailableThisYear(cap);
           const fieldError = errors[field.key]?.message;
           if (field.kind === 'money') {
-            const hint = unavailable
+            const textHint = unavailable
               ? 'ไม่สามารถหักลดหย่อนได้ตั้งแต่ปีภาษีนี้เป็นต้นไปตามกฎหมาย'
-              : [fieldCapCaption(cap), field.hint].filter(Boolean).join(' · ') || undefined;
+              : [fieldCapCaption(cap), field.hint].filter(Boolean).join(' · ') || null;
             return (
               <MoneyField
                 key={field.key}
                 id={`ta-${field.key}`}
                 label={field.label}
-                hint={hint}
+                hint={hintWithLawRef(textHint, field.lawRef)}
                 error={fieldError}
                 disabled={readOnly || unavailable}
                 register={register(field.key)}
@@ -331,7 +373,7 @@ export function TaxAllowanceForm({
                 id={`ta-${field.key}`}
                 label={field.label}
                 unit={field.unit}
-                hint={field.hint}
+                hint={hintWithLawRef(field.hint, field.lawRef)}
                 error={fieldError}
                 disabled={readOnly}
                 register={register(field.key)}
@@ -339,10 +381,20 @@ export function TaxAllowanceForm({
             );
           }
           return (
-            <label key={field.key} htmlFor={`ta-${field.key}`} className={`${formGridSpan2} inline-flex items-center gap-2`}>
+            // `flex flex-wrap`, not `inline-flex` (review fix, feat/tax-allowance-law-references):
+            // with a single non-wrapping row, a long label (this field's is 35 characters) left no
+            // room for the InfoTip + law-ref link, which then squeezed into a narrow wrapped column
+            // of their own -- "ประมวลรัษฎากร" itself splitting across lines at 360px. Wrapping lets
+            // the {InfoTip, link} pair drop to their own line under the label instead, same
+            // information, no squeeze. They stay grouped in their own inline-flex span so the two
+            // wrap together as one unit rather than independently.
+            <label key={field.key} htmlFor={`ta-${field.key}`} className={`${formGridSpan2} flex flex-wrap items-center gap-x-2 gap-y-1`}>
               <input id={`ta-${field.key}`} type="checkbox" disabled={readOnly} {...register(field.key)} />
-              <span>{field.label}</span>
-              {field.hint ? <InfoTip label={field.label} text={field.hint} /> : null}
+              <span className="min-w-0">{field.label}</span>
+              <span className="inline-flex items-center gap-1.5">
+                {field.hint ? <InfoTip label={field.label} text={field.hint} /> : null}
+                <LawRefLink lawRef={field.lawRef} />
+              </span>
             </label>
           );
         })}
@@ -359,11 +411,55 @@ export function TaxAllowanceForm({
           const cap = row.capCategory ? capByCategory.get(row.capCategory) : null;
           return (
             <div key={row.key} className="flex items-center justify-between gap-3 text-sm">
-              <span className="text-text-muted">{row.label}</span>
-              <strong className="text-text">{cap ? formatMoney(cap.ownCap) : (row.note ?? '-')}</strong>
+              <span className="inline-flex flex-wrap items-center gap-1.5 text-text-muted">
+                {row.label}
+                <LawRefLink lawRef={row.lawRef} />
+              </span>
+              <strong className="shrink-0 text-text">{cap ? formatMoney(cap.ownCap) : (row.note ?? '-')}</strong>
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+
+  // Reference material for the whole ล.ย.01 flow -- the verified rd.go.th sources `lawRef` above
+  // points at, listed ONCE each (`Object.values(LAW_SOURCES)` -- a plain object is de-duplicated by
+  // construction, so this can never repeat a source the way iterating every field's own `lawRef`
+  // would) regardless of how many fields cite the same one, plus the two sources
+  // (`yearSummary`/`formPdf`) that are not any single field's citation but are still worth a reader
+  // having on hand. HUB only, not SECTION/REVIEW -- this is background material, not something to
+  // repeat on every screen. Deliberately quiet (muted colors, small type, last thing on the view,
+  // after the primary "ตรวจทานและยื่น" action below): a reader who wants it can find it, but it never
+  // competes with the actual task of filling in the form. `caveat` is folded into the same muted
+  // description line as `what` (not a separate loud callout) -- honesty here means the reader can
+  // see the limitation, not that it needs to shout; the full reasoning for each caveat lives in
+  // taxAllowanceSchema.js's own comments for whoever next edits a label.
+  const lawReferences = (
+    <div className="grid gap-2.5 rounded-md border border-border-subtle bg-surface-subtle p-3">
+      <p className="m-0 text-2xs font-extrabold uppercase tracking-wide text-text-muted">แหล่งอ้างอิงทางกฎหมาย</p>
+      <div className="grid gap-3">
+        {Object.values(LAW_SOURCES).map((source) => (
+          <div key={source.url} className="grid gap-0.5">
+            <a
+              href={source.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex w-fit items-center gap-1 text-xs font-bold text-primary hover:underline"
+            >
+              {source.label} — กรมสรรพากร
+              <Icon name="externalLink" size={11} />
+              <span className="sr-only"> (เปิดในแท็บใหม่)</span>
+            </a>
+            {source.vintage ? (
+              <p className="m-0 text-2xs font-bold text-text-muted">{source.vintage}</p>
+            ) : null}
+            <p className="m-0 text-2xs text-text-muted">
+              {source.what}
+              {source.caveat ? ` — ${source.caveat}` : ''}
+            </p>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -509,6 +605,7 @@ export function TaxAllowanceForm({
               </Button>
             </div>
           ) : null}
+          {lawReferences}
         </div>
       ) : null}
 

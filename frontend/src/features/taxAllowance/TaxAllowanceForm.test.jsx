@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { TaxAllowanceForm } from './TaxAllowanceForm.jsx';
-import { defaultAllowanceValues, TAX_ALLOWANCE_GROUPS } from './taxAllowanceSchema.js';
+import { defaultAllowanceValues, LAW_SOURCES, TAX_ALLOWANCE_GROUPS } from './taxAllowanceSchema.js';
 
 globalThis.React = React;
 
@@ -286,5 +286,90 @@ describe('TaxAllowanceForm — sectioned=false (TaxAllowanceReviewPage\'s on-beh
     expect(screen.getByLabelText('ประกันชีวิต')).not.toBeNull();
     // No step/view chrome of any kind.
     expect(screen.queryByText(/ขั้นตอนที่/)).toBeNull();
+  });
+
+  it('never renders the references section — a small one-off on-behalf entry, not the hub (unrequested UX change otherwise)', () => {
+    renderForm({ sectioned: false });
+    expect(screen.queryByText('แหล่งอ้างอิงทางกฎหมาย')).toBeNull();
+  });
+});
+
+// feat/tax-allowance-law-references: each field/row that carries a `lawRef` (taxAllowanceSchema.js)
+// renders it as a REAL, externally-opening link, and the hub carries one references section listing
+// every distinct LAW_SOURCES entry exactly once. See taxAllowanceSchema.test.js for the data-layer
+// guarantee ("every field has a lawRef pointing at a verified URL") this only exercises the render
+// side of.
+describe('TaxAllowanceForm — law references (feat/tax-allowance-law-references)', () => {
+  it('a field with a lawRef renders it as a real link, not text trapped inside the inert InfoTip bubble', () => {
+    renderForm();
+    fireEvent.click(screen.getByText('ครอบครัว'));
+
+    // Several ครอบครัว fields legitimately share มาตรา 47 (task spec) -- assert on all of them, not
+    // just the first, and that every one is a genuine, independently clickable anchor.
+    const links = screen.getAllByRole('link', { name: /ประมวลรัษฎากร มาตรา 47/ });
+    expect(links.length).toBeGreaterThan(1);
+    for (const link of links) {
+      expect(link.getAttribute('href')).toBe('https://www.rd.go.th/5937.html');
+      expect(link.getAttribute('target')).toBe('_blank');
+      expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+      // `.info-tip-bubble` is `pointer-events: none` by design (styles.css) -- a link nested inside
+      // one could never actually be clicked by a mouse. This is the regression the component's own
+      // comment (TaxAllowanceForm.jsx's `LawRefLink`) explains; assert it stays true.
+      expect(link.closest('.info-tip-bubble')).toBeNull();
+    }
+  });
+
+  it('the checkbox field (disabilityCardHolder) renders its own law reference link alongside its InfoTip', () => {
+    renderForm();
+    fireEvent.click(screen.getByText('ครอบครัว'));
+
+    const checkboxLabel = screen.getByText('ผู้พิการที่อุปการะมีบัตรประจำตัวคนพิการ').closest('label');
+    expect(checkboxLabel).not.toBeNull();
+    const link = within(checkboxLabel).getByRole('link', { name: /ประมวลรัษฎากร มาตรา 47/ });
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(link.getAttribute('target')).toBe('_blank');
+  });
+
+  it('the auto-granted rows (ส่วนตัว, ประกันสังคม) on the hub carry their own law reference link', () => {
+    renderForm();
+    const links = screen.getAllByRole('link', { name: /ประมวลรัษฎากร มาตรา 47/ });
+    expect(links.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('the hub renders one references section listing every distinct LAW_SOURCES entry exactly once, each opening externally', () => {
+    renderForm();
+    expect(screen.getByText('แหล่งอ้างอิงทางกฎหมาย')).not.toBeNull();
+
+    const allLinks = screen.getAllByRole('link');
+    for (const source of Object.values(LAW_SOURCES)) {
+      // Only the references-section occurrence carries the "— กรมสรรพากร" attribution suffix in its
+      // visible text; bare inline per-field occurrences (e.g. section47, cited by several fields)
+      // render the label alone, so filtering on the suffix isolates the references-section entry
+      // specifically even for a source also cited elsewhere on the same page.
+      const inReferences = allLinks.filter(
+        (link) => link.textContent.includes(source.label) && link.textContent.includes('กรมสรรพากร'),
+      );
+      expect(inReferences, `"${source.label}" should appear exactly once in the references section`).toHaveLength(1);
+      const [link] = inReferences;
+      expect(link.getAttribute('href')).toBe(source.url);
+      expect(link.getAttribute('target')).toBe('_blank');
+      expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+    }
+  });
+
+  it('a source with a vintage (year/version) shows it as visible text, not only inside the link', () => {
+    renderForm();
+    // "A reader must be able to see a source is year-stamped without clicking it" (task spec) --
+    // both must be visible as plain text, not just carried in the href or an aria-label.
+    expect(screen.getByText(LAW_SOURCES.yearSummary.vintage)).not.toBeNull();
+    expect(screen.getByText(LAW_SOURCES.formPdf.vintage)).not.toBeNull();
+  });
+
+  it('the references section is not shown on a SECTION or REVIEW view — hub-only, background material', () => {
+    renderForm({ initialView: 'housing' });
+    expect(screen.queryByText('แหล่งอ้างอิงทางกฎหมาย')).toBeNull();
+
+    renderForm({ initialView: 'review' });
+    expect(screen.queryByText('แหล่งอ้างอิงทางกฎหมาย')).toBeNull();
   });
 });
