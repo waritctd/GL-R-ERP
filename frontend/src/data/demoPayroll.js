@@ -175,6 +175,16 @@ export function buildDemoCommissions() {
 // ── Tax allowance declarations (db.taxAllowanceDeclarations / db.taxAllowanceAttachments) —
 // mirrors the DECLARATION workflow only (submit/withdraw/approve/reject/on-behalf never run
 // real tax math). status: PENDING / APPROVED / REJECTED / SUPERSEDED / WITHDRAWN.
+//
+// `effectiveMonth`/`appliedEffectiveMonth` are plain 1-12 month NUMBERS, never a 'YYYY-MM' string —
+// TaxAllowanceDeclarationDto declares them `int` / `Integer` (backend/.../declaration/
+// TaxAllowanceDeclarationDtos.java), and `taxYear` alongside already carries the year. These were
+// seeded as strings until 2026-08; contract.test.js compares the method surface and arity only,
+// never field value types, so nothing caught it. Three UI sites read the month raw and all three
+// were wrong under VITE_USE_MOCKS=true: TaxAllowanceReviewPage's applied column and
+// taxAllowanceStatus.js's APPLIED badge both rendered "ตั้งแต่เดือน 2026-07", and ApplyDialog seeds
+// its <select> from `declaration.effectiveMonth` against options 1-12, which a string matches none
+// of. Keep these integers — see buildDemoEmployeeTaxAllowances below, which seeds the same field.
 function blankAllowances(overrides = {}) {
   return {
     spouseAllowance: 0, childAllowance: 0, parentCareAllowance: 0, disabledCareAllowance: 0,
@@ -193,7 +203,7 @@ export function buildDemoTaxAllowanceDeclarations(employees) {
   return [
     {
       declarationId: 1, employeeId: employees[8].id, employeeCode: employees[8].code, employeeName: employees[8].nameTh,
-      taxYear: 2026, effectiveMonth: '2026-08',
+      taxYear: 2026, effectiveMonth: 8,
       allowances: blankAllowances({ spouseAllowance: 60000, lifeInsuranceAllowance: 30000 }),
       documentReference: 'ล.ย.01-2026-0009', status: 'PENDING',
       submittedById: employees[8].id, submittedAt: now, onBehalf: false,
@@ -204,18 +214,18 @@ export function buildDemoTaxAllowanceDeclarations(employees) {
     },
     {
       declarationId: 2, employeeId: employees[12].id, employeeCode: employees[12].code, employeeName: employees[12].nameTh,
-      taxYear: 2026, effectiveMonth: '2026-07',
+      taxYear: 2026, effectiveMonth: 7,
       allowances: blankAllowances({ childAllowance: 30000, childCount: 1, rmfAllowance: 50000 }),
       documentReference: 'ล.ย.01-2026-0010', status: 'APPROVED',
       submittedById: employees[12].id, submittedAt: now, onBehalf: false,
       reviewedById: employees[20].id, reviewedAt: now, reviewerNote: null,
-      appliedAt: now, appliedById: employees[20].id, appliedEffectiveMonth: '2026-07',
+      appliedAt: now, appliedById: employees[20].id, appliedEffectiveMonth: 7,
       expiresOn: '2026-12-31', expiredAt: null, reverifiedAt: null, reverifiedById: null,
       supersededById: null,
     },
     {
       declarationId: 3, employeeId: employees[2].id, employeeCode: employees[2].code, employeeName: employees[2].nameTh,
-      taxYear: 2026, effectiveMonth: '2026-07',
+      taxYear: 2026, effectiveMonth: 7,
       allowances: blankAllowances({ homeLoanInterestAllowance: 40000 }),
       documentReference: 'ล.ย.01-2026-0011', status: 'REJECTED',
       submittedById: employees[2].id, submittedAt: now, onBehalf: false,
@@ -227,29 +237,29 @@ export function buildDemoTaxAllowanceDeclarations(employees) {
     },
     {
       declarationId: 4, employeeId: employees[19].id, employeeCode: employees[19].code, employeeName: employees[19].nameTh,
-      taxYear: 2026, effectiveMonth: '2026-01',
+      taxYear: 2026, effectiveMonth: 1,
       allowances: blankAllowances({ spouseAllowance: 60000, parentCareAllowance: 30000, parentCareCount: 1 }),
       documentReference: 'ล.ย.01-2026-0002', status: 'SUPERSEDED',
       submittedById: employees[19].id, submittedAt: now, onBehalf: false,
       reviewedById: employees[20].id, reviewedAt: now, reviewerNote: null,
-      appliedAt: now, appliedById: employees[20].id, appliedEffectiveMonth: '2026-01',
+      appliedAt: now, appliedById: employees[20].id, appliedEffectiveMonth: 1,
       expiresOn: null, expiredAt: null, reverifiedAt: null, reverifiedById: null,
       supersededById: 5,
     },
     {
       declarationId: 5, employeeId: employees[19].id, employeeCode: employees[19].code, employeeName: employees[19].nameTh,
-      taxYear: 2026, effectiveMonth: '2026-08',
+      taxYear: 2026, effectiveMonth: 8,
       allowances: blankAllowances({ spouseAllowance: 60000, parentCareAllowance: 60000, parentCareCount: 2 }),
       documentReference: 'ล.ย.01-2026-0012', status: 'APPROVED',
       submittedById: employees[19].id, submittedAt: now, onBehalf: false,
       reviewedById: employees[20].id, reviewedAt: now, reviewerNote: null,
-      appliedAt: now, appliedById: employees[20].id, appliedEffectiveMonth: '2026-08',
+      appliedAt: now, appliedById: employees[20].id, appliedEffectiveMonth: 8,
       expiresOn: '2026-12-31', expiredAt: null, reverifiedAt: null, reverifiedById: null,
       supersededById: null,
     },
     {
       declarationId: 6, employeeId: employees[15].id, employeeCode: employees[15].code, employeeName: employees[15].nameTh,
-      taxYear: 2026, effectiveMonth: '2026-06',
+      taxYear: 2026, effectiveMonth: 6,
       allowances: blankAllowances({ ssfAllowance: 20000 }),
       documentReference: 'ล.ย.01-2026-0007', status: 'WITHDRAWN',
       submittedById: employees[15].id, submittedAt: now, onBehalf: false,
