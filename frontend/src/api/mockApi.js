@@ -69,7 +69,7 @@ import {
 // fake-able stores only (see demoPayroll.js's own header for what's deliberately excluded).
 import {
   buildDemoCommissions, buildDemoTaxAllowanceDeclarations, buildDemoTaxAllowanceAttachments,
-  buildDemoDeductionObligations, buildDemoPayrollInputDrafts,
+  buildDemoEmployeeTaxAllowances, buildDemoDeductionObligations, buildDemoPayrollInputDrafts,
 } from '../data/demoPayroll.js';
 
 const db = createDemoDatabase();
@@ -241,6 +241,12 @@ db.taxAllowanceDeclarations = db.taxAllowanceDeclarations?.length
 // which are NOT.
 db.taxAllowanceAttachments = db.taxAllowanceAttachments?.length
   ? db.taxAllowanceAttachments : buildDemoTaxAllowanceAttachments();
+// hr.employee_tax_allowance (C1 stored allowance -- "register shows what payroll actually uses",
+// 2026-08): a SEPARATE store from taxAllowanceDeclarations above -- see buildDemoEmployeeTaxAllowances'
+// own header comment in demoPayroll.js for why this is genuinely fake-able and what the four seeded
+// rows cover.
+db.employeeTaxAllowances = db.employeeTaxAllowances?.length
+  ? db.employeeTaxAllowances : buildDemoEmployeeTaxAllowances(db.employees);
 // Deduction obligation tracking (issue #373): the record + status transitions themselves perform
 // no payroll/tax calculation -- they only track an instruction and its lifecycle -- so, like
 // taxAllowanceDeclarations above, this CAN be faked genuinely here. The remittance ledger is the
@@ -6000,13 +6006,27 @@ export const api = {
       throw new Error('ส่งอีเมลสลิปเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
     // C1/C2 reconciliation additions (2026-07-21): same "view broader than edit" split as the rest
-    // of this namespace (GET is hr/ceo, PUT is hr-only). Like preview/process above, these carry
-    // real payroll numbers (tax allowances, YTD income), so mock mode surfaces a clear
-    // "not supported" error on writes rather than fabricating figures; GET returns an empty list so
-    // the UI's empty state renders correctly.
-    async getTaxAllowances() {
+    // of this namespace (GET is hr/ceo, PUT is hr-only). Like preview/process above, PUT carries
+    // real payroll numbers (tax allowances), so mock mode surfaces a clear "not supported" error on
+    // that write rather than fabricating figures.
+    //
+    // GET used to return an empty list unconditionally, regardless of `year` -- documented as a
+    // deliberate gap in contract.test.js's ARITY_EXEMPTIONS. "Register shows what payroll actually
+    // uses" (2026-08) gave this endpoint its first UI caller (TaxAllowanceReviewPage.jsx), so an
+    // empty fixture is no longer an honest stand-in -- it would be exactly CLAUDE.md's "mock omits a
+    // field the feature keys on" shape, where the register's join against this endpoint would never
+    // see a row under VITE_USE_MOCKS=true. Now genuinely reads db.employeeTaxAllowances (seeded by
+    // buildDemoEmployeeTaxAllowances, demoPayroll.js) filtered by `year`, same shape
+    // getTaxAllowanceDeclarations below already uses. Mirrors PayrollRepository#findTaxAllowanceRows'
+    // `ORDER BY e.employee_code, eta.effective_month` (one row per effective_month, not one per
+    // employee -- see that repository method's own doc comment).
+    async getTaxAllowances(year) {
       hasRole('hr', 'ceo');
-      return delay({ taxYear: new Date().getFullYear(), items: [] });
+      const taxYear = year ? Number(year) : new Date().getFullYear();
+      const items = db.employeeTaxAllowances
+        .filter((row) => row.taxYear === taxYear)
+        .sort((a, b) => (a.employeeCode || '').localeCompare(b.employeeCode || '') || a.effectiveMonth - b.effectiveMonth);
+      return delay({ taxYear, items });
     },
     async saveTaxAllowances() {
       hasRole('hr');
