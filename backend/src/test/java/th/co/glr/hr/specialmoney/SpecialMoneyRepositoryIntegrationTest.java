@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -51,26 +52,43 @@ class SpecialMoneyRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(amounts.version()).isEqualTo(2);
     }
 
+    /**
+     * P0 fix (fix/welfare-cap-year-bypass): {@code findUsage}'s year filter used to be {@code
+     * EXTRACT(YEAR FROM event_date)} for both the amount and the count query -- {@code event_date}
+     * is employee-supplied and {@code SubmitSpecialMoneyHttpRequest} places no bound on it, so an
+     * annual cap keyed on it could always be defeated by filing against a year nothing had been
+     * approved against yet. This fixture is deliberately adversarial about it: every row's {@code
+     * event_date} is set to a year that would give the OPPOSITE answer under the old
+     * event_date-keyed query, so a regression back to keying on event_date fails this test instead
+     * of passing it by coincidence.
+     */
     @Test
-    void findUsageSumsOnlyApprovedRowsWithinTheRequestedCalendarYear() {
+    void findUsageKeysTheAmountSumOnPayrollMonthAndTheCountOnRequestedAt() {
         long employeeId = insertEmployee("SMR-USG");
-        // APPROVED, event in 2026 -> counted
-        insertRequest(employeeId, "MEDICAL", LocalDate.of(2026, 3, 1), "1500", "APPROVED", "1500", LocalDate.of(2026, 4, 1));
-        // APPROVED, event in 2025 -> excluded (wrong year)
-        insertRequest(employeeId, "MEDICAL", LocalDate.of(2025, 12, 1), "800", "APPROVED", "800", LocalDate.of(2026, 1, 1));
-        // SUBMITTED (not approved), event in 2026 -> excluded from the amount sum, but counted lifetime
-        insertRequest(employeeId, "MEDICAL", LocalDate.of(2026, 6, 1), "500", "SUBMITTED", null, null);
+        // APPROVED, payroll_month in 2026 (so it belongs to 2026's cap under the fix) but
+        // event_date claims 2099 -- must still be COUNTED for year 2026.
+        insertRequest(employeeId, "MEDICAL", LocalDate.of(2099, 1, 1), "1500", "APPROVED", "1500",
+            LocalDate.of(2026, 4, 1), OffsetDateTime.parse("2026-03-15T10:00:00+07:00"));
+        // APPROVED, payroll_month in 2025 (belongs to 2025's cap) but event_date claims 2026 -- must
+        // be EXCLUDED from 2026, even though the old, buggy query would have included it.
+        insertRequest(employeeId, "MEDICAL", LocalDate.of(2026, 12, 1), "800", "APPROVED", "800",
+            LocalDate.of(2025, 12, 1), OffsetDateTime.parse("2025-12-20T10:00:00+07:00"));
+        // SUBMITTED (no payroll_month yet), requested_at in 2026, event_date claims 2099 -- must be
+        // excluded from the APPROVED amount sum (not yet approved) but counted in the in-flight
+        // per-year count for 2026, keyed on requested_at.
+        insertRequest(employeeId, "MEDICAL", LocalDate.of(2099, 6, 1), "500", "SUBMITTED", null, null,
+            OffsetDateTime.parse("2026-06-01T09:00:00+07:00"));
 
         UsageSnapshot usage = repository.findUsage(employeeId, 2026);
 
+        // Only the first row: payroll_month 2026, regardless of its 2099 event_date.
         assertThat(usage.approvedAmountThisYear(SpecialMoneyType.MEDICAL)).isEqualByComparingTo("1500");
         // Lifetime count is NOT year-scoped by design (it backs the once-per-lifetime AID gate,
         // which must see every prior claim regardless of year): all 3 rows count.
         assertThat(usage.activeCountLifetime(SpecialMoneyType.MEDICAL)).isEqualTo(3);
-        // The per-year count backs the once-per-year uniform gate, so it is year-scoped like the
-        // amount but in-flight-inclusive like the lifetime count. This fixture separates all three:
-        // 2 (2026 approved + 2026 submitted) is neither the lifetime 3 nor the approved-only 1, so
-        // an implementation that copied either of the other two maps fails here.
+        // requested_at in 2026: rows 1 and 3 (row 2's requested_at is 2025). Deliberately different
+        // from both the lifetime count (3) and the approved-only amount-bearing count (1), so an
+        // implementation that keys this off the wrong column/map fails here rather than by luck.
         assertThat(usage.activeCountThisYear(SpecialMoneyType.MEDICAL)).isEqualTo(2);
     }
 
@@ -108,14 +126,33 @@ class SpecialMoneyRepositoryIntegrationTest extends AbstractPostgresIntegrationT
             String status,
             String approvedAmount,
             LocalDate payrollMonth) {
+        insertRequest(employeeId, requestType, eventDate, requestedAmount, status, approvedAmount, payrollMonth, null);
+    }
+
+    /**
+     * {@code requestedAt} lets a test pin the one column {@code findUsage}'s in-flight count now
+     * keys on ({@code EXTRACT(YEAR FROM requested_at AT TIME ZONE 'Asia/Bangkok')}) to a
+     * deterministic value instead of whatever {@code DEFAULT now()} produces at test-run time --
+     * required to exercise year boundaries on demand. {@code null} keeps the column's own default.
+     */
+    private void insertRequest(
+            long employeeId,
+            String requestType,
+            LocalDate eventDate,
+            String requestedAmount,
+            String status,
+            String approvedAmount,
+            LocalDate payrollMonth,
+            OffsetDateTime requestedAt) {
         jdbc.update("""
             INSERT INTO hr.special_money_request (
                 employee_id, request_type, event_date, quantity, requested_amount, approved_amount,
-                payroll_bucket, policy_version, reason, status, payroll_month
+                payroll_bucket, policy_version, reason, status, payroll_month, requested_at
             )
             VALUES (
                 :employeeId, :requestType, :eventDate, 1, :requestedAmount, CAST(:approvedAmount AS numeric),
-                'AID', 1, 'Integration test row', :status, :payrollMonth
+                'AID', 1, 'Integration test row', :status, :payrollMonth,
+                COALESCE(CAST(:requestedAt AS timestamptz), now())
             )
             """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
             .addValue("employeeId", employeeId)
@@ -124,6 +161,7 @@ class SpecialMoneyRepositoryIntegrationTest extends AbstractPostgresIntegrationT
             .addValue("requestedAmount", new BigDecimal(requestedAmount))
             .addValue("approvedAmount", approvedAmount)
             .addValue("status", status)
+            .addValue("requestedAt", requestedAt)
             .addValue("payrollMonth", payrollMonth));
     }
 }
