@@ -5,6 +5,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TaxAllowanceReviewPage } from './TaxAllowanceReviewPage.jsx';
 import { api } from '../../api/index.js';
+import { taxAllowanceStatusShortLabel } from './taxAllowanceStatus.js';
 
 globalThis.React = React;
 
@@ -154,6 +155,153 @@ describe('TaxAllowanceReviewPage', () => {
         // The regression this guards: the old handler replaced the whole query string.
         expect(location).toContain('year=2024');
       });
+    });
+  });
+
+  describe('status chip labels (canonical map)', () => {
+    it('sources every status chip label from taxAllowanceStatusShortLabel, not a page-local literal', async () => {
+      renderPage({ user: hrUser, entry: '/tax-allowance-review?status=' });
+      await screen.findByText('สมชาย ใจดี');
+      // Read from the same function TaxAllowanceReviewPage's STATUS_CHIPS calls to build its
+      // labels. If STATUS_CHIPS ever grows its own hardcoded literal again — the exact drift this
+      // PR fixes, where APPROVED_UNAPPLIED and EXPIRED read differently here than on the badge —
+      // a divergence makes this fail instead of passing on a lucky coincidence of matching text.
+      for (const key of ['NONE', 'PENDING', 'APPROVED_UNAPPLIED', 'APPLIED', 'EXPIRED', 'REJECTED']) {
+        expect(screen.getByRole('button', { name: taxAllowanceStatusShortLabel(key) })).not.toBeNull();
+      }
+    });
+
+    it('keeps the chip SHORT label distinct from the badge LONG label where the two differ', async () => {
+      const expiredDeclaration = {
+        declarationId: 77,
+        employeeId: 9,
+        employeeCode: 'EMP009',
+        employeeName: 'สมชาย ใจดี',
+        status: 'EXPIRED',
+        submittedAt: '2025-01-01T00:00:00.000Z',
+        appliedAt: null,
+        appliedEffectiveMonth: null,
+        expiresOn: '2026-01-01',
+        reviewerNote: null,
+      };
+      api.payroll.getTaxAllowanceDeclarations.mockResolvedValue({ items: [expiredDeclaration] });
+      renderPage({ user: hrUser, entry: '/tax-allowance-review?status=' });
+
+      // Long form (StatusBadge, on the row itself) keeps the full sentence.
+      expect(await screen.findByText('หมดอายุ — ต้องยืนยันใหม่')).not.toBeNull();
+      // Short form (the filter chip) is the compact noun alone — a distinct DOM node, not a
+      // truncated rendering of the same text.
+      const chip = screen.getByRole('button', { name: 'หมดอายุ' });
+      expect(chip.textContent).not.toContain('ต้องยืนยันใหม่');
+    });
+  });
+
+  describe('empty state honesty', () => {
+    it('does not claim "no data" when a status filter matches zero rows out of a non-empty table', async () => {
+      // Reachable today from any chip whose bucket happens to be empty for the year — the fixture
+      // has one PENDING and one NONE (no-declaration) employee, and zero REJECTED ones.
+      renderPage({ user: hrUser, entry: '/tax-allowance-review?status=REJECTED' });
+      // The honest, filter-aware message appears...
+      expect(await screen.findByText('ไม่พบพนักงานที่ตรงกับตัวกรองนี้')).not.toBeNull();
+      // ...naming the real (pre-filter) headcount, not the zero the filter produced.
+      expect(screen.getByText('ลองเลือก "ทั้งหมด" เพื่อดูพนักงานทั้งหมด 2 คน')).not.toBeNull();
+      // ...and the old "there is no data at all" claim — false here, ~207 real employees exist in
+      // production — does not appear anywhere (not even doubled into the sr-only live region).
+      expect(screen.queryByText('ไม่มีข้อมูลพนักงานในปีนี้')).toBeNull();
+    });
+
+    it('keeps the original "no data at all" message when the table is genuinely empty (no filter active)', async () => {
+      api.payroll.getTaxAllowanceDeclarations.mockResolvedValue({ items: [] });
+      api.employees.list.mockResolvedValue({ employees: [] });
+      renderPage({ user: hrUser }); // ทั้งหมด (no status filter) — this is not a filtered-empty case
+      // The text is duplicated into DataTable's `aria-live` sr-only region alongside the visible
+      // `<strong>` title (DataTable.jsx), so this asserts on the count rather than a single node.
+      await waitFor(() => {
+        expect(screen.getAllByText('ไม่มีข้อมูลพนักงานในปีนี้').length).toBeGreaterThan(0);
+      });
+      expect(screen.queryByText('ไม่พบพนักงานที่ตรงกับตัวกรองนี้')).toBeNull();
+    });
+  });
+
+  describe('row menu — ยื่นแทนพนักงาน placement', () => {
+    const soloEmployee = [{ id: 20, code: 'EMP020', nameTh: 'มานะ ตั้งใจ', active: true }];
+
+    function declarationFor(status, extra = {}) {
+      return {
+        declarationId: 100,
+        employeeId: 20,
+        employeeCode: 'EMP020',
+        employeeName: 'มานะ ตั้งใจ',
+        status,
+        submittedAt: '2026-01-01T00:00:00.000Z',
+        appliedAt: null,
+        appliedEffectiveMonth: null,
+        expiresOn: null,
+        reviewerNote: null,
+        ...extra,
+      };
+    }
+
+    // `?status=` (ทั้งหมด) throughout: these tests are about menu CONTENT for a given row status,
+    // not which chip is selected — pinning ALL keeps the fixture's one row visible regardless of
+    // which status `declarationFor` below is given.
+    async function openRowMenu() {
+      renderPage({ entry: '/tax-allowance-review?status=' });
+      fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการสำหรับ มานะ ตั้งใจ' }));
+      return screen.getAllByRole('menuitem');
+    }
+
+    it('drops ยื่นแทนพนักงาน from a PENDING row, but keeps อนุมัติ/ปฏิเสธ', async () => {
+      api.payroll.getTaxAllowanceDeclarations.mockResolvedValue({ items: [declarationFor('PENDING')] });
+      api.employees.list.mockResolvedValue({ employees: soloEmployee });
+      const labels = (await openRowMenu()).map((item) => item.textContent);
+      expect(labels.some((text) => text.includes('ยื่นแทนพนักงาน'))).toBe(false);
+      expect(labels.some((text) => text.includes('อนุมัติ'))).toBe(true);
+      expect(labels.some((text) => text.includes('ปฏิเสธ'))).toBe(true);
+    });
+
+    it('drops ยื่นแทนพนักงาน from an APPLIED row entirely — nothing is left to do', async () => {
+      api.payroll.getTaxAllowanceDeclarations.mockResolvedValue({
+        items: [declarationFor('APPROVED', { appliedAt: '2026-04-01T00:00:00.000Z', appliedEffectiveMonth: 4 })],
+      });
+      api.employees.list.mockResolvedValue({ employees: soloEmployee });
+      renderPage({ entry: '/tax-allowance-review?status=' });
+      await screen.findByText('มานะ ตั้งใจ');
+      // No actions at all remain for an applied declaration — the overflow trigger itself does not
+      // render (OverflowMenu returns null on an empty items array), not just a missing menu item.
+      expect(screen.queryByRole('button', { name: 'การดำเนินการสำหรับ มานะ ตั้งใจ' })).toBeNull();
+    });
+
+    it('keeps ยื่นแทนพนักงาน as the only action on NONE — the only path in for staff who never log in', async () => {
+      api.payroll.getTaxAllowanceDeclarations.mockResolvedValue({ items: [] });
+      api.employees.list.mockResolvedValue({ employees: soloEmployee });
+      const items = await openRowMenu();
+      expect(items).toHaveLength(1);
+      expect(items[0].textContent).toContain('ยื่นแทนพนักงาน');
+    });
+
+    it('keeps ยื่นแทนพนักงาน alongside ใช้กับเงินเดือน on APPROVED_UNAPPLIED', async () => {
+      api.payroll.getTaxAllowanceDeclarations.mockResolvedValue({ items: [declarationFor('APPROVED')] });
+      api.employees.list.mockResolvedValue({ employees: soloEmployee });
+      const labels = (await openRowMenu()).map((item) => item.textContent);
+      expect(labels.some((text) => text.includes('ยื่นแทนพนักงาน'))).toBe(true);
+      expect(labels.some((text) => text.includes('ใช้กับเงินเดือน'))).toBe(true);
+    });
+
+    it('keeps ยื่นแทนพนักงาน alongside ยืนยันใหม่ on EXPIRED', async () => {
+      api.payroll.getTaxAllowanceDeclarations.mockResolvedValue({ items: [declarationFor('EXPIRED')] });
+      api.employees.list.mockResolvedValue({ employees: soloEmployee });
+      const labels = (await openRowMenu()).map((item) => item.textContent);
+      expect(labels.some((text) => text.includes('ยื่นแทนพนักงาน'))).toBe(true);
+      expect(labels.some((text) => text.includes('ยืนยันใหม่'))).toBe(true);
+    });
+
+    it('keeps ยื่นแทนพนักงาน as the only action on REJECTED', async () => {
+      api.payroll.getTaxAllowanceDeclarations.mockResolvedValue({ items: [declarationFor('REJECTED')] });
+      api.employees.list.mockResolvedValue({ employees: soloEmployee });
+      const items = await openRowMenu();
+      expect(items).toHaveLength(1);
+      expect(items[0].textContent).toContain('ยื่นแทนพนักงาน');
     });
   });
 });
