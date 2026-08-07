@@ -5571,6 +5571,33 @@ export const api = {
       if (['VOID', 'REJECTED'].includes(record.status)) {
         fail('ไม่สามารถแก้ไขรายการค่าคอมมิชชั่นที่ถูกยกเลิกแล้วได้', 409);
       }
+      if (isManualCommissionKind(record.kind)) {
+        fail('รายการค่าคอมมิชชั่นแบบกรอกเองไม่มีรายการหักจากใบกำกับภาษีให้แก้ไข', 409);
+      }
+      // P0 fix (fix/commission-approved-record-immutable): mirrors CommissionService
+      // #updateDeductions's two new guards exactly (same order, same Thai text) -- a CLAWBACK
+      // shares invoice_id with the original sale it reverses (createClawback below), so editing
+      // one through its own id would silently rewrite the ORIGINAL's invoiceDetails/amounts too;
+      // an APPROVED record already fed payrollReadySummary and has no route back to
+      // SUBMITTED/MANAGER_APPROVED for re-review -- createClawback is the only sanctioned
+      // correction. Checked before the APPROVED check for the same reason as the backend: a
+      // clawback is always created APPROVED, so the status check alone would also catch it, but
+      // would name the wrong reason.
+      if (record.kind === 'CLAWBACK') {
+        fail('รายการเรียกคืนค่าคอมมิชชั่นคำนวณจากรายการต้นทางโดยอัตโนมัติ ไม่สามารถแก้ไขได้โดยตรง', 409);
+      }
+      if (record.status === 'APPROVED') {
+        fail('รายการค่าคอมมิชชั่นที่อนุมัติแล้วไม่สามารถแก้ไขได้ กรุณาใช้การเรียกคืนค่าคอมมิชชั่นแทน', 409);
+      }
+      // KNOWN GAP (same shape as the OvertimeService one near OT_RETROACTIVE_WINDOW_DAYS above):
+      // the Java service also refuses this write once the record's payroll month is already
+      // PROCESSED or seed-covered (CommissionService#requireCommissionPayrollMonthOpen). There is
+      // no payroll_period collection in this mock, and none of the other six commission call
+      // sites that guard is called from (createManualCommission/submit/createFromDeal/
+      // createClawback/managerApprove/ceoApprove, all below) mirror it here either -- this is not
+      // a new gap, just the existing one restated for a seventh site. The mock is therefore more
+      // permissive than prod on a record whose month has already closed -- do not read a
+      // successful mock edit as proof the backend would accept it.
       const valueOrExisting = (value, existing) => (value === null || value === undefined || value === '' ? existing : Number(value));
       Object.assign(record.invoiceDetails, {
         grossAmount: valueOrExisting(payload.grossAmount, record.invoiceDetails.grossAmount),
