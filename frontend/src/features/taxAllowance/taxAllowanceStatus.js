@@ -116,14 +116,22 @@ export function resolvePayrollAllowance(items = [], employeeId, taxYear, today =
   const latestOf = (list) => list.reduce((a, b) => (Number(b.effectiveMonth) > Number(a.effectiveMonth) ? b : a));
   // A single employee/year CAN carry more than one dated row (V93 effective dating), so this always
   // resolves "the latest QUALIFYING row" rather than assuming the single latest row's status speaks
-  // for the whole year. In today's production data, though, a MIXED state -- one dated row
-  // EXPIRED_UNVERIFIED while another, differently-dated row for the same employee/year is not -- is
-  // not actually reachable: the only two mutators that ever change verification_status,
-  // PayrollRepository#markTaxAllowanceVerified and #expireTaxAllowanceVerification, both run `WHERE
-  // employee_id = :employeeId AND tax_year = :taxYear` with NO `effective_month` filter, so each one
-  // flips EVERY dated row for that employee/year in a single statement, never just one. The
-  // qualifying/expired split below stays regardless, because this mirrors what the SQL WOULD do if
-  // that ever changed -- not because this exact fallback is currently load-bearing in prod.
+  // for the whole year. A MIXED state -- one dated row EXPIRED_UNVERIFIED while another,
+  // differently-dated row for the same employee/year is not -- IS reachable, and this fallback is
+  // load-bearing for it, not a defensive no-op.
+  //
+  // (2026-08-08 correction, Opus review F4: this comment previously claimed the mix was NOT
+  // reachable, reasoning that "the only two mutators that ever change verification_status,
+  // PayrollRepository#markTaxAllowanceVerified and #expireTaxAllowanceVerification, both run WHERE
+  // employee_id AND tax_year with no effective_month filter" and so always flip every dated row
+  // together. That enumeration is now wrong on its own terms: PayrollRepository#upsertTaxAllowances'
+  // ON CONFLICT DO UPDATE is a THIRD mutator of verification_status, and it operates PER ROW -- it
+  // can reset one dated row from VERIFIED back to GRANDFATHERED_UNVERIFIED while a sibling row for a
+  // different effective_month, untouched by that call, keeps whatever status it already had (see
+  // that method's own doc comment). A brand-new dated row inserted for a month that never existed
+  // before ALSO starts at GRANDFATHERED_UNVERIFIED (the column default) regardless of any sibling
+  // row's status, including an already-EXPIRED_UNVERIFIED one. Do not delete this fallback as dead
+  // code -- it is reachable today.)
   const qualifying = candidates.filter((item) => item.verificationStatus !== 'EXPIRED_UNVERIFIED');
   if (qualifying.length > 0) return { applying: latestOf(qualifying) };
   return { expired: latestOf(candidates) };
