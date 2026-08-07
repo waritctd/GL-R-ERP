@@ -357,11 +357,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   // ── Slice F: ราคาตั้ง on the deal's item rows — same FX/markup wiring as
   // TicketCreateModal.jsx's own estimate inputs (see that file's comment for the full
-  // rationale). Both fetches degrade silently — retry: false, no showToast from an effect (this
-  // repo's useToast has an unstable identity, see CLAUDE.md) — and estimateReady requires BOTH to
-  // have actually succeeded with a usable multiplier. Never default markupMultiplier to 1: an
-  // un-marked-up supplier cost displayed as ราคาตั้ง is exactly the number
-  // dealEstimatePricing.js's header comment says must never appear on screen.
+  // rationale). Both fetches degrade silently by design — retry: false, no error toast — because
+  // this is optional pricing-estimate enrichment, not critical page data (same non-critical
+  // pattern as attachmentsQuery below, which also stays silent on failure); estimateReady requires
+  // BOTH to have actually succeeded with a usable multiplier. This is unrelated to useToast's
+  // (now-fixed, see useToast.js) identity: the ticketQuery effect a little further down this same
+  // file does call showToast from an effect, deliberately -- that failure IS critical page data.
+  // Never default markupMultiplier to 1: an un-marked-up supplier cost displayed as ราคาตั้ง is
+  // exactly the number dealEstimatePricing.js's header comment says must never appear on screen.
   const fxRatesQuery = useQuery({
     queryKey: queryKeys.fxRates(),
     queryFn: () => api.fxRates.list().then((res) => res.fxRates ?? []),

@@ -596,10 +596,22 @@ export function CommissionPage({ user, showToast }) {
       header: '',
       render: (record) => (
         <span className="flex flex-wrap justify-end gap-1.5">
-          {!isManualKind(record.kind) && (
+          {!isManualKind(record.kind) && canReviewRecord(record) && (
             // Deduction editing is an invoice-input concept (grossAmount, bankFees, ...) — a
             // manual entry has no invoiceDetails at all (feat/commission-manual-adjustments), so
             // there is nothing here for beginEdit to populate.
+            //
+            // P0 fix (fix/commission-approved-record-immutable): reuse the SAME gate the approve
+            // button below uses, not just !isManualKind. CommissionService#updateDeductions now
+            // refuses an APPROVED record outright (and a CLAWBACK's own id, which is always
+            // created APPROVED and so is already excluded by this same status check) — as of
+            // V102's census every one of prod's 1,132 commission records is APPROVED, so an
+            // unguarded pencil would 409 on 100% of them. canReviewRecord(record) is narrower than
+            // the backend actually allows (it also requires the viewing actor's role to match the
+            // record's specific stage — sales_manager only at SUBMITTED, ceo only at
+            // MANAGER_APPROVED — where the backend's requireManagerOrCeo would accept either role
+            // at either stage); that's intentional here, matching the approve/reject buttons
+            // exactly rather than exposing a wider edit affordance those two don't also expose.
             <Button
               type="button"
               variant="icon"

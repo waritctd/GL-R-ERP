@@ -749,6 +749,12 @@ let mockFactoryPurchaseOrderItemSeq = 1;
   delete db.salesSeed;
 }
 
+// Mirrors CustomerService.VIEWER_ROLES, which itself aliases TicketAccessPolicy.VIEWER_ROLES
+// rather than hand-copying it (issue #389 records a real divergence bug from hand-copying this
+// exact set). Named here for the same reason: three customer reads share it, and an inline copy
+// per call site is how the Java side drifted before. `requireTicketViewer` below wraps the same
+// list but cannot be reused -- it takes a ticket id and applies a sales-ownership check.
+const CUSTOMER_VIEWER_ROLES = ['sales', 'import', 'ceo', 'account', 'sales_manager'];
 const PRICING_REQUEST_VIEWER_ROLES = ['sales', 'import', 'ceo', 'sales_manager'];
 const PRICING_REQUEST_RECIPIENT_VALUES = PRICING_REQUEST_RECIPIENT_OPTIONS.map((o) => o.code);
 const PRICING_REQUEST_QUANTITY_TYPE_VALUES = PRICING_REQUEST_QUANTITY_TYPE_OPTIONS.map((o) => o.code);
@@ -5113,6 +5119,15 @@ export const api = {
       // direction: it under-reports usage, so mock-mode UI says "you may still claim" on a type the
       // real backend refuses. `approvedCountLifetimeByType` is a misnomer on the DTO too -- it has
       // always carried the in-flight-inclusive count. Do not "fix" it to match its name.
+      //
+      // P0 fix (fix/welfare-cap-year-bypass): findUsage's two year-scoped maps ALSO no longer key
+      // on eventDate -- an employee-supplied, unbounded field that let the annual cap be defeated by
+      // filing against a year nothing had been approved against yet. They key on the same two
+      // server-stamped columns the real findUsage now does (see that method's Javadoc): payrollMonth
+      // for the APPROVED amount sum (assigned by approve(), never by the client), and requestedAt
+      // for the in-flight-inclusive count (stamped at create(), never by the client). Both already
+      // exist on every mock row -- this mirrors which column the real query reads, not the cap
+      // ENFORCEMENT itself: create() below still accepts any requestedAmount uncapped, unchanged.
       const ACTIVE_STATUSES = ['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED'];
       const approvedAmountThisYearByType = {};
       const approvedCountLifetimeByType = {};
@@ -5121,12 +5136,12 @@ export const api = {
         .filter((item) => item.employeeId === employeeId && ACTIVE_STATUSES.includes(item.status))
         .forEach((item) => {
           approvedCountLifetimeByType[item.requestType] = (approvedCountLifetimeByType[item.requestType] || 0) + 1;
-          if (new Date(item.eventDate).getFullYear() === year) {
+          if (new Date(item.requestedAt).getFullYear() === year) {
             activeCountThisYearByType[item.requestType] = (activeCountThisYearByType[item.requestType] || 0) + 1;
-            if (item.status === 'APPROVED') {
-              approvedAmountThisYearByType[item.requestType] =
-                (approvedAmountThisYearByType[item.requestType] || 0) + Number(item.approvedAmount || 0);
-            }
+          }
+          if (item.status === 'APPROVED' && item.payrollMonth && new Date(item.payrollMonth).getFullYear() === year) {
+            approvedAmountThisYearByType[item.requestType] =
+              (approvedAmountThisYearByType[item.requestType] || 0) + Number(item.approvedAmount || 0);
           }
         });
       return delay({
@@ -5565,6 +5580,33 @@ export const api = {
       if (['VOID', 'REJECTED'].includes(record.status)) {
         fail('ไม่สามารถแก้ไขรายการค่าคอมมิชชั่นที่ถูกยกเลิกแล้วได้', 409);
       }
+      if (isManualCommissionKind(record.kind)) {
+        fail('รายการค่าคอมมิชชั่นแบบกรอกเองไม่มีรายการหักจากใบกำกับภาษีให้แก้ไข', 409);
+      }
+      // P0 fix (fix/commission-approved-record-immutable): mirrors CommissionService
+      // #updateDeductions's two new guards exactly (same order, same Thai text) -- a CLAWBACK
+      // shares invoice_id with the original sale it reverses (createClawback below), so editing
+      // one through its own id would silently rewrite the ORIGINAL's invoiceDetails/amounts too;
+      // an APPROVED record already fed payrollReadySummary and has no route back to
+      // SUBMITTED/MANAGER_APPROVED for re-review -- createClawback is the only sanctioned
+      // correction. Checked before the APPROVED check for the same reason as the backend: a
+      // clawback is always created APPROVED, so the status check alone would also catch it, but
+      // would name the wrong reason.
+      if (record.kind === 'CLAWBACK') {
+        fail('รายการเรียกคืนค่าคอมมิชชั่นคำนวณจากรายการต้นทางโดยอัตโนมัติ ไม่สามารถแก้ไขได้โดยตรง', 409);
+      }
+      if (record.status === 'APPROVED') {
+        fail('รายการค่าคอมมิชชั่นที่อนุมัติแล้วไม่สามารถแก้ไขได้ กรุณาใช้การเรียกคืนค่าคอมมิชชั่นแทน', 409);
+      }
+      // KNOWN GAP (same shape as the OvertimeService one near OT_RETROACTIVE_WINDOW_DAYS above):
+      // the Java service also refuses this write once the record's payroll month is already
+      // PROCESSED or seed-covered (CommissionService#requireCommissionPayrollMonthOpen). There is
+      // no payroll_period collection in this mock, and none of the other six commission call
+      // sites that guard is called from (createManualCommission/submit/createFromDeal/
+      // createClawback/managerApprove/ceoApprove, all below) mirror it here either -- this is not
+      // a new gap, just the existing one restated for a seventh site. The mock is therefore more
+      // permissive than prod on a record whose month has already closed -- do not read a
+      // successful mock edit as proof the backend would accept it.
       const valueOrExisting = (value, existing) => (value === null || value === undefined || value === '' ? existing : Number(value));
       Object.assign(record.invoiceDetails, {
         grossAmount: valueOrExisting(payload.grossAmount, record.invoiceDetails.grossAmount),
@@ -6925,6 +6967,15 @@ export const api = {
   },
 
   // Mirrors CustomerController (customer/).
+  //
+  // P0 fix (customer master read gate): the three reads below used to be requireSession() only
+  // — authenticated, not authorized, same bug the real CustomerController had. Now gated to
+  // CustomerService.VIEWER_ROLES (an alias of TicketAccessPolicy.VIEWER_ROLES — the same set
+  // requireTicketViewer above uses), derived from the two real callers: TicketCreateModal's
+  // picker (sales only ever reaches it — canCreateTickets) and DepositNoticePage's customer
+  // search (the full canViewTickets audience). Leaving this open while the real backend now
+  // 403s employee/warehouse/qc/hr would make VITE_USE_MOCKS=true lie about the permission —
+  // exactly the "mock more permissive than production" direction CLAUDE.md warns about.
   customers: {
     async create(payload) {
       hasRole('sales'); // deal-entry flow; mirrors CustomerController's requireAnyRole('sales')
@@ -6937,7 +6988,7 @@ export const api = {
     // match in insertion order — unbounded and unsorted — so a caller counting results, or
     // reading "the first customer", saw something production would never return (issue #434).
     async search(q) {
-      requireSession();
+      hasRole(...CUSTOMER_VIEWER_ROLES);
       const lower = (q ?? '').toLowerCase();
       const results = lower
         ? mockCustomers.filter((c) => c.name.toLowerCase().includes(lower) || (c.taxId ?? '').includes(lower))
@@ -6946,7 +6997,7 @@ export const api = {
       return delay({ customers: ordered.slice(0, CUSTOMER_SEARCH_LIMIT) });
     },
     async contacts(customerId) {
-      requireSession();
+      hasRole(...CUSTOMER_VIEWER_ROLES);
       return delay({ contacts: mockContacts.filter((c) => c.customerId === Number(customerId)) });
     },
     async createContact(customerId, payload) {
@@ -6956,7 +7007,7 @@ export const api = {
       return delay({ contact });
     },
     async projects(customerId) {
-      requireSession();
+      hasRole(...CUSTOMER_VIEWER_ROLES);
       return delay({ projects: mockProjects.filter((p) => p.customerId === Number(customerId)) });
     },
     async createProject(customerId, payload) {
