@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
+import th.co.glr.hr.attendance.schedule.DbHolidayCalendar;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -62,7 +63,8 @@ class SeedCoveredPayrollMonthIntegrationTest extends AbstractPostgresIntegration
             mock(AuditService.class),
             mock(NotificationService.class),
             appProperties,
-            mock(AttendanceDailyService.class));
+            mock(AttendanceDailyService.class),
+            new DbHolidayCalendar(jdbc));
 
         division = insertDivision("SLS", "ฝ่ายขาย");
         manager = insertEmployee("M001", null, "ผู้จัดการฝ่ายขาย");

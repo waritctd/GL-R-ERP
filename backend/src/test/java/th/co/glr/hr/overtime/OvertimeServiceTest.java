@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
+import th.co.glr.hr.attendance.schedule.HolidayCalendar;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.employee.ManagerApproverRepository;
 import th.co.glr.hr.auth.UserPrincipal;
@@ -39,13 +40,17 @@ class OvertimeServiceTest {
     // stay about the overtime rules. The real sync is covered by the integration tests.
     private final AttendanceDailyService attendanceDailyService = mock(AttendanceDailyService.class);
     private final ManagerApproverRepository managerApproverRepository = mock(ManagerApproverRepository.class);
+    // Defaults every date to "not a holiday" (Mockito's boolean default is false) unless a test
+    // stubs a specific date -- i.e. every case in this class gets WORKDAY/1.50x unless it opts in.
+    private final HolidayCalendar holidayCalendar = mock(HolidayCalendar.class);
     private final OvertimeService overtimeService = new OvertimeService(
         overtimeRepository,
         managerApproverRepository,
         auditService,
         notificationService,
         appProperties,
-        attendanceDailyService
+        attendanceDailyService,
+        holidayCalendar
     );
 
     /**
@@ -153,6 +158,9 @@ class OvertimeServiceTest {
     void divisionManagersCanSubmitOvertimeForTheirTeam() {
         LocalDate workDate = LocalDate.now().plusDays(4);
         OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
+        // The request DECLARES "HOLIDAY", but that is not what makes create() see HOLIDAY below --
+        // the calendar stub is. See divisionManagerSubmissionIgnoresADeclaredDayTypeTheCalendarDisagreesWith
+        // for the case that proves the declaration alone is not enough.
         SubmitOvertimeRequest request = new SubmitOvertimeRequest(
             10L,
             workDate,
@@ -163,6 +171,7 @@ class OvertimeServiceTest {
         );
         when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
         when(overtimeRepository.employeeExists(10L)).thenReturn(true);
+        when(holidayCalendar.isHoliday(workDate)).thenReturn(true);
         when(overtimeRepository.create(eq(10L), eq(99L), eq(request), eq(120), eq(OvertimeDayType.HOLIDAY), eq(workDate.withDayOfMonth(1))))
             .thenReturn(56L);
         when(overtimeRepository.findById(56L)).thenReturn(Optional.of(requestDto(56L, 10L, "SUBMITTED")));
@@ -171,6 +180,31 @@ class OvertimeServiceTest {
 
         assertThat(result.id()).isEqualTo(56L);
         verify(overtimeRepository).create(eq(10L), eq(99L), eq(request), eq(120), eq(OvertimeDayType.HOLIDAY), eq(workDate.withDayOfMonth(1)));
+    }
+
+    /**
+     * THE regression test for this defect at the unit level (the real-DB proof lives in
+     * OvertimeDayTypeDerivedFromCalendarIntegrationTest): a client-declared "HOLIDAY" the calendar
+     * does not corroborate must store WORKDAY/1.50x, not the declared value. Same fixture as
+     * divisionManagersCanSubmitOvertimeForTheirTeam above, MINUS the calendar stub.
+     */
+    @Test
+    void divisionManagerSubmissionIgnoresADeclaredDayTypeTheCalendarDisagreesWith() {
+        LocalDate workDate = LocalDate.now().plusDays(4);
+        OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
+        SubmitOvertimeRequest request = new SubmitOvertimeRequest(
+            10L, workDate, startAt, startAt.plusHours(2), "HOLIDAY", "Urgent delivery");
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
+        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
+        // No holidayCalendar stub: Mockito's boolean default (false) means "not a holiday".
+        when(overtimeRepository.create(eq(10L), eq(99L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY), eq(workDate.withDayOfMonth(1))))
+            .thenReturn(57L);
+        when(overtimeRepository.findById(57L)).thenReturn(Optional.of(requestDto(57L, 10L, "SUBMITTED")));
+
+        overtimeService.submit(request, manager(99L, 5L));
+
+        verify(overtimeRepository).create(eq(10L), eq(99L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY), eq(workDate.withDayOfMonth(1)));
+        verify(overtimeRepository, never()).create(anyLong(), anyLong(), any(), anyInt(), eq(OvertimeDayType.HOLIDAY), any());
     }
 
     @Test

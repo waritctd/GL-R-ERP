@@ -295,6 +295,8 @@ public class OvertimeRepository {
         return jdbc.update("""
             UPDATE hr.overtime_request
                SET status = 'MANAGER_APPROVED',
+                   day_type = :dayType,
+                   pay_rate_multiplier = :payRateMultiplier,
                    actual_start_at = :actualStartAt,
                    actual_end_at = :actualEndAt,
                    actual_minutes = :actualMinutes,
@@ -312,6 +314,11 @@ public class OvertimeRepository {
             """, new MapSqlParameterSource()
             .addValue("id", id)
             .addValue("reviewedById", reviewedById)
+            // Re-derived and frozen here, not carried over from whatever submit() stored -- see
+            // OvertimeService#calculate's Javadoc. Same source of truth (OvertimeDayType), never
+            // caller input.
+            .addValue("dayType", calculation.dayType().name())
+            .addValue("payRateMultiplier", calculation.dayType().multiplier())
             .addValue("actualStartAt", calculation.actualStartAt())
             .addValue("actualEndAt", calculation.actualEndAt())
             .addValue("actualMinutes", calculation.actualMinutes())
@@ -336,6 +343,8 @@ public class OvertimeRepository {
         return jdbc.update("""
             UPDATE hr.overtime_request
                SET status = 'APPROVED',
+                   day_type = :dayType,
+                   pay_rate_multiplier = :payRateMultiplier,
                    actual_start_at = :actualStartAt,
                    actual_end_at = :actualEndAt,
                    actual_minutes = :actualMinutes,
@@ -353,6 +362,10 @@ public class OvertimeRepository {
             """, new MapSqlParameterSource()
             .addValue("id", id)
             .addValue("reviewedById", reviewedById)
+            // See managerApprove's comment -- same re-derive-and-freeze treatment for the
+            // manager-less route, which is this class's one-step equivalent of that same stage.
+            .addValue("dayType", calculation.dayType().name())
+            .addValue("payRateMultiplier", calculation.dayType().multiplier())
             .addValue("actualStartAt", calculation.actualStartAt())
             .addValue("actualEndAt", calculation.actualEndAt())
             .addValue("actualMinutes", calculation.actualMinutes())
