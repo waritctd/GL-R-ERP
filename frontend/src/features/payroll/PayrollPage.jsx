@@ -2309,8 +2309,25 @@ export function PayrollPage({ user, showToast }) {
               {/* ล.ย.01 tax-allowance drill-down (issue #387 screen 3) — surgical addition below
                   the existing ค่าลดหย่อนรวม line above. Composes the year's declaration register
                   client-side (no employeeId filter exists on GET /declarations) — see
-                  TaxAllowanceDrilldown.jsx. */}
-              <CollapsibleSection title="รายละเอียดค่าลดหย่อน (ล.ย.01)" defaultOpen={false}>
+                  TaxAllowanceDrilldown.jsx.
+
+                  Title/subtitle (2026-08, "register shows what payroll actually uses"): this used
+                  to be titled "รายละเอียดค่าลดหย่อน" directly under ค่าลดหย่อนรวม, reading as if it
+                  broke that number down. It does not — ค่าลดหย่อนรวม above is computed from
+                  hr.employee_tax_allowance (what PayrollCalculator actually applied this run);
+                  TaxAllowanceDrilldown below reads ONLY hr.tax_allowance_declaration, a separate
+                  table the two can legitimately disagree with (most visibly for a grandfathered
+                  employee, where this section reads "no declaration" under a non-zero total above).
+                  Retitled to name what it actually is, with the relationship stated explicitly
+                  rather than implied by adjacency. Full reconciliation detail (what payroll is
+                  applying vs. what was declared, and whether they agree) lives on the HR register
+                  TaxAllowanceDrilldown already links out to below ("ดูในหน้าตรวจสอบของ HR") — not
+                  duplicated here, per "minimal diff, do not restructure this panel". */}
+              <CollapsibleSection
+                title="ประวัติการยื่นแบบ ล.ย.01"
+                subtitle="อาจไม่ตรงกับค่าลดหย่อนรวมด้านบน ซึ่งคำนวณจากข้อมูลที่ใช้จริงในระบบเงินเดือน"
+                defaultOpen={false}
+              >
                 <TaxAllowanceDrilldown
                   employeeId={selectedLine.employeeId}
                   employeeCode={selectedLine.employeeCode}
