@@ -519,6 +519,29 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
 
   const formSubDay = subDay;
 
+  // HARDENING, not a fix for a live bug (HTML implicit submission, fix/form-enter-submits-real-
+  // records): this <form> wraps all 3 steps and is not otherwise gated by `step`, so it is safe
+  // today only because three facts happen to stack up, none of them load-bearing by design. Step
+  // 1's choices are all `<button type="button">` (zero fields that block implicit submission).
+  // Step 2 always renders at least two blocking fields (startDate + endDate, or four once sub-day
+  // adds startTime/endTime) — notably `endDate` stays MOUNTED (merely `disabled`) rather than
+  // removed from the DOM when sub-day is checked, which is what keeps that count at 2 instead of
+  // dropping to 1. Step 3 always renders the one real `<Button type="submit">` in this form.
+  // Change any one of those three — e.g. unmounting `endDate` instead of disabling it — and Enter
+  // in whatever single text field remained would silently file a real leave request, the same as
+  // the tax-allowance bug this gate shape is copied from (TaxAllowanceForm.jsx's
+  // `handleFormSubmit`, #tax-allowance-ia-hub-review), and jsdom would not catch it — it does not
+  // implement implicit submission at all (see LeaveRequestPage.test.jsx's `fireEvent.submit(form)`
+  // cases, which exercise the same 'submit' event a real Enter keypress produces). Gating
+  // explicitly here removes the dependency on those three accidents continuing to hold.
+  function handleFormSubmit(event) {
+    if (step !== 3) {
+      event.preventDefault();
+      return;
+    }
+    handleSubmit(onSubmit)(event);
+  }
+
   return (
     <PageStack className="relative">
       <PageHeader
@@ -527,7 +550,7 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
         breadcrumbs={[{ label: 'การลา', onClick: () => goBackToSurface(false) }, { label: 'ยื่นคำขอลา' }]}
       />
 
-      <form onSubmit={handleSubmit(onSubmit)} noValidate className="grid gap-[18px]">
+      <form onSubmit={handleFormSubmit} noValidate className="grid gap-[18px]">
         {/* ── Step 1: เลือกประเภท ───────────────────────────────────────────── */}
         {step === 1 ? (
           <Panel>

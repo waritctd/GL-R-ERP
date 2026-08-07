@@ -88,11 +88,16 @@ function renderComposer(initialEntries = ['/leave/new']) {
 }
 
 async function goToStep2ForVacation() {
-  renderComposer();
+  // Returns the render utils (container, etc.) so callers that need to reach past the rendered
+  // output -- e.g. dispatching a raw DOM event straight at the <form> -- can do so without
+  // re-implementing this same setup. Existing callers that only awaited this for its side effects
+  // are unaffected; an ignored return value changes nothing for them.
+  const utils = renderComposer();
   const vacationButton = await screen.findByRole('button', { name: /ลาพักร้อน/ });
   fireEvent.click(vacationButton);
   fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
   await screen.findByText(/ขั้นตอนที่ 2\/3/);
+  return utils;
 }
 
 describe('LeaveRequestPage (Phase A2, #485)', () => {
@@ -393,5 +398,66 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     renderComposer(['/leave/new?returnTab=review']);
     fireEvent.click(await screen.findByRole('button', { name: 'ยกเลิก' }));
     await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/leave?tab=review'));
+  });
+});
+
+// HTML implicit submission (fix/form-enter-submits-real-records): a <form> with no submit button
+// but exactly ONE field that blocks implicit submission fires a real 'submit' event on Enter, no
+// button ever pressed. jsdom does not implement that algorithm at all (pressing "Enter" via
+// fireEvent does nothing special), but dispatching 'submit' directly at the <form> below produces
+// the exact same native event a real Enter-key trigger would, which is what the <form>'s
+// `onSubmit` prop actually listens for — a faithful, environment-agnostic test of
+// `handleFormSubmit`'s gate itself, independent of how many blocking fields a step actually has
+// mounted right now. Mirrors TaxAllowanceForm.test.jsx's "form-level submit gate blocks Enter-key
+// implicit submission" describe block. See `handleFormSubmit`'s own comment in
+// LeaveRequestPage.jsx for why this is hardening, not a fix for a currently-reachable bug.
+describe('LeaveRequestPage implicit submission (Enter-key) hardening', () => {
+  // The gate's blocking branch (`event.preventDefault(); return;`) is synchronous, so a correctly
+  // gated step 1/2 never even calls `handleSubmit`, let alone awaits anything — but an assertion
+  // that only checks SYNCHRONOUSLY, right after `fireEvent.submit`, proves nothing about whether
+  // the gate is doing that work: `handleSubmit(onSubmit)` is asynchronous (`onSubmit` itself is
+  // `async`), so if the gate were ever removed, `api.leave.create` would still not have been
+  // called yet at that exact synchronous instant either -- the assertion would keep passing for
+  // the wrong reason. Found via this file's own mutation-check (temporarily making
+  // `handleFormSubmit` call `handleSubmit(onSubmit)` unconditionally): a bare synchronous
+  // `expect(...).not.toHaveBeenCalled()` here stayed green regardless. Waiting a beat first means
+  // "not called" is checked once an unguarded submit would already have gotten there.
+  async function flushAsyncSubmitChain() {
+    await new Promise((resolve) => { setTimeout(resolve, 50); });
+  }
+
+  it('a real submit event on step 1 does not call create()', async () => {
+    const { container } = renderComposer();
+    await screen.findByRole('button', { name: /ลาพักร้อน/ });
+
+    fireEvent.submit(container.querySelector('form'));
+    await flushAsyncSubmitChain();
+
+    expect(api.leave.create).not.toHaveBeenCalled();
+  });
+
+  it('a real submit event on step 2 does not call create()', async () => {
+    const { container } = await goToStep2ForVacation();
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2099-12-31' } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
+
+    fireEvent.submit(container.querySelector('form'));
+    await flushAsyncSubmitChain();
+
+    expect(api.leave.create).not.toHaveBeenCalled();
+  });
+
+  it('a real submit event on step 3 calls create()', async () => {
+    const { container } = await goToStep2ForVacation();
+    const futureDate = '2099-12-31';
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
+    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
+    await screen.findByText(/ขั้นตอนที่ 3\/3/);
+    await waitFor(() => expect(screen.getByRole('button', { name: /ส่งคำขอ/ }).disabled).toBe(false));
+
+    fireEvent.submit(container.querySelector('form'));
+
+    await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
   });
 });
