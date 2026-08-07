@@ -1588,8 +1588,22 @@ function requireTaxAllowanceAttachmentAccess(declaration, user) {
 // frontend/src/features/taxAllowance/taxAllowanceSchema.js. Kept in sync by hand in all three places.
 const TAX_ALLOWANCE_SECTION_KEYS = new Set(['family', 'insurance', 'savings', 'housing', 'donation']);
 
+// Mirrors TaxAllowanceCapCatalog#capsFor exactly -- a lookup TABLE, not a computation, so this is a
+// faithful stand-in rather than the "mock reimplements the algorithm" trap CLAUDE.md warns about.
+// Both year conditions below have a named counterpart in the Java catalogue AND in PayrollCalculator;
+// all three are kept in sync by hand, and TaxAllowanceCapCatalogTest drives the real calculator so
+// the two Java copies cannot drift silently. This third copy has no such guard -- when a cap changes,
+// change it here too or mock-mode UI quietly shows a different number than production.
 function taxAllowanceCapsFor(taxYear) {
   const ssfDeductible = taxYear < 2025;
+  // Thai ESG's enhanced ฿300,000 ceiling covers units bought 1 Jan 2024 - 31 Dec 2026 (ปีภาษี
+  // 2567-2569); ฿100,000 outside that window on EITHER side. Unlike SSF this is not a sunset to
+  // zero -- the deduction continues, only the ceiling steps down, and the 30% income rate is
+  // unchanged either way. Mirrors THAI_ESG_ENHANCED_CAP_FIRST_TAX_YEAR / _LAST_TAX_YEAR.
+  // The closed range is deliberate: SSF's cutoff is a one-way sunset so one comparison suffices,
+  // but this enhancement is temporary at both ends -- don't "simplify" it to a single inequality.
+  const thaiEsgEnhanced = taxYear >= 2024 && taxYear <= 2026;
+  const thaiEsgCeiling = thaiEsgEnhanced ? 300000 : 100000;
   return [
     { category: 'personal', kind: 'FLAT', groupId: null, ownCap: 60000, groupCap: null, maxTotal: null, incomeRate: null, multiplier: null, declarable: false },
     { category: 'spouse', kind: 'FLAT', groupId: null, ownCap: 60000, groupCap: null, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
@@ -1604,7 +1618,7 @@ function taxAllowanceCapsFor(taxYear) {
     { category: 'rmf', kind: 'PERCENT_OF_INCOME', groupId: 'retirement', ownCap: 500000, groupCap: 500000, maxTotal: null, incomeRate: 0.30, multiplier: null, declarable: true },
     { category: 'ssf', kind: 'PERCENT_OF_INCOME', groupId: 'retirement', ownCap: ssfDeductible ? 200000 : 0, groupCap: 500000, maxTotal: null, incomeRate: ssfDeductible ? 0.30 : 0, multiplier: null, declarable: true },
     { category: 'pension', kind: 'PERCENT_OF_INCOME', groupId: 'retirement', ownCap: 200000, groupCap: 500000, maxTotal: null, incomeRate: 0.15, multiplier: null, declarable: true },
-    { category: 'thai_esg', kind: 'PERCENT_OF_INCOME', groupId: null, ownCap: 300000, groupCap: null, maxTotal: null, incomeRate: 0.30, multiplier: null, declarable: true },
+    { category: 'thai_esg', kind: 'PERCENT_OF_INCOME', groupId: null, ownCap: thaiEsgCeiling, groupCap: null, maxTotal: null, incomeRate: 0.30, multiplier: null, declarable: true },
     { category: 'home_loan_interest', kind: 'FLAT', groupId: null, ownCap: 100000, groupCap: null, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
     { category: 'education_donation', kind: 'PERCENT_OF_INCOME', groupId: 'donation', ownCap: null, groupCap: null, maxTotal: null, incomeRate: 0.10, multiplier: 2, declarable: true },
     { category: 'general_donation', kind: 'PERCENT_OF_INCOME', groupId: 'donation', ownCap: null, groupCap: null, maxTotal: null, incomeRate: 0.10, multiplier: null, declarable: true },

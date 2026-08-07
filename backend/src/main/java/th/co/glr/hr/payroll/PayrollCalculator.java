@@ -33,6 +33,28 @@ public class PayrollCalculator {
     private static final int ELDERLY_EXEMPTION_AGE = 65;
     // SSF purchases were deductible for ปีภาษี 2563-2567 only; ปีภาษี 2568 = Gregorian 2025.
     private static final int SSF_FIRST_NON_DEDUCTIBLE_TAX_YEAR = 2025;
+    // Thai ESG (กองทุนรวมไทยเพื่อความยั่งยืน): the enhanced ฿300,000 ceiling applies ONLY to units
+    // purchased 1 Jan 2024 - 31 Dec 2026 (ปีภาษี 2567-2569) -- bounded on BOTH sides, unlike SSF's
+    // one-way sunset above. Before 2024 and from ปีภาษี 2570 (Gregorian 2027) onward, the ceiling
+    // is its original ฿100,000. This is NOT a sunset to zero -- the deduction continues
+    // indefinitely outside the window, only the absolute ceiling steps down, and the 30% of
+    // assessable income rate is unchanged in every regime. If a later Royal Decree extends the
+    // enhanced window, this is a one-constant edit (also update TaxAllowanceCapCatalog's and
+    // mockApi.js's mirrors of these same two constants).
+    //
+    // Deliberately NOT modelled as ฿0 before the fund's actual ~21 Nov 2023 launch: that would
+    // require tracking each unit's purchase date, which this schema does not do (one declared
+    // figure per tax year, not per purchase), and no employee_tax_allowance row this old exists to
+    // need it. ฿100,000 below the window is the law's OWN pre-enhancement figure, so it is the
+    // correct answer for every year this system can actually be asked about -- not a guess standing
+    // in for a rule this schema cannot express.
+    //
+    // Mixed comparison direction from SSF above is deliberate, not a typo: SSF's cutoff is a
+    // one-way sunset (>=, "this year and every year after"), so one comparison suffices. Thai ESG's
+    // enhancement is temporary at BOTH ends, so it needs a closed range (>= first year AND <= last
+    // year) -- do not "simplify" this to a single inequality when copying the pattern elsewhere.
+    private static final int THAI_ESG_ENHANCED_CAP_FIRST_TAX_YEAR = 2024;
+    private static final int THAI_ESG_ENHANCED_CAP_LAST_TAX_YEAR = 2026;
     private static final BigDecimal MIN_NET_AFTER_LEGAL_EXECUTION = new BigDecimal("20000.00");
     // 2026-07-29 (V95): a ninth พิเศษ slot added (ค่าเช่าบ้าน). F7 correction (Opus review,
     // 2026-07-30): this comment previously said "พิเศษ 9 -- ค่าเช่าบ้าน", which was V95's ORIGINAL
@@ -965,9 +987,21 @@ public class PayrollCalculator {
         BigDecimal parentHealth = min(money(input.parentHealthInsuranceAllowance()), new BigDecimal("15000.00"));
 
         BigDecimal retirement = retirementAllowance(input, projectedAnnualIncome, taxYear);
+        // Thai ESG has its own ceiling, separate from the 500,000 retirement cluster above (groupId
+        // stays null in the catalogue mirror). ฿300,000 for units purchased 1 Jan 2024 - 31 Dec 2026;
+        // ฿100,000 outside that window on EITHER side -- see THAI_ESG_ENHANCED_CAP_FIRST_TAX_YEAR /
+        // _LAST_TAX_YEAR above. taxYear == 0 means "not supplied" (a legacy TEST call site --
+        // PayrollCalculator#calculate has zero production callers; PayrollService always resolves a
+        // real taxYear) and falls outside the window like any other unenhanced year, but this is
+        // unobservable in practice: every such call site declares a zero Thai ESG allowance, and
+        // min(0, anyCeiling) is 0 regardless of which ceiling applies.
+        BigDecimal thaiEsgCeiling = taxYear >= THAI_ESG_ENHANCED_CAP_FIRST_TAX_YEAR
+                && taxYear <= THAI_ESG_ENHANCED_CAP_LAST_TAX_YEAR
+            ? new BigDecimal("300000.00")
+            : new BigDecimal("100000.00");
         BigDecimal thaiEsg = min(
             money(input.thaiEsgAllowance()),
-            min(percentOf(projectedAnnualIncome, "0.30"), new BigDecimal("300000.00"))
+            min(percentOf(projectedAnnualIncome, "0.30"), thaiEsgCeiling)
         );
         BigDecimal homeLoan = min(money(input.homeLoanInterestAllowance()), new BigDecimal("100000.00"));
         BigDecimal politicalDonation = min(money(input.politicalDonation()), new BigDecimal("10000.00"));
