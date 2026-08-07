@@ -36,10 +36,15 @@ import th.co.glr.hr.ticket.TicketRepository;
  * meant a CLAWBACK's own id could rewrite the ORIGINAL sale's shared invoice row too.
  *
  * <p>Concrete failure this closes: an APPROVED sale with {@code actual_received} = 1,070,000.00,
- * {@code weight_multiplier} = 1 (tier base 1,000,000.00, tier commission 6,250.00) could have its
+ * {@code weight_multiplier} = 1 (tier base 1,000,000.00, tier commission 6,250.00, no INCENTIVE --
+ * far below every threshold in {@code sales.commission_incentive_tier}) could have its
  * weight_multiplier PATCHed to 3 by a sales_manager alone (3 passes {@code @Min(1) @Max(3)}),
- * reweighting to 3,210,000.00 -&gt; base 3,000,000.00 -&gt; tier commission 48,750.00, a 42,500.00
- * jump with zero re-approval, on a row the CEO already signed off.
+ * reweighting to 3,210,000.00 -&gt; base 3,000,000.00 -&gt; tier commission 48,750.00, PLUS crossing
+ * V108's first INCENTIVE threshold (base &ge; 3,000,000.00) for another +15,000.00 -- {@link
+ * CommissionService#payrollCommissionTotalsByEmployee} would then pay 63,750.00, a 57,500.00 jump
+ * with zero re-approval, on a row the CEO already signed off. V108's ladder is a real migration
+ * (not test-only fixture data), so both legs are live for any payroll month from 2026-08-01
+ * onward -- including {@link #OPEN_MONTH} below -- with no extra seeding required.
  *
  * <p>Every guard case here is written wrong-way-round: the write must be REFUSED and the STORED
  * amounts/derived payroll total must be unchanged in real Postgres, not merely a 4xx status code --
@@ -113,11 +118,14 @@ class CommissionApprovedRecordImmutableIntegrationTest extends AbstractPostgresI
 
     /**
      * The exact defect scenario: 1,070,000.00 actual_received / 1x weight -&gt; base 1,000,000.00
-     * -&gt; tier commission 6,250.00 (tiers 1-4 exactly filled, tier 5's lower bound not crossed --
-     * see {@link TierConfig#defaults()}). A sales_manager ALONE PATCHes weightMultiplier to 3
-     * (passes {@code @Min(1) @Max(3)}); unguarded, this reweights to 3,210,000.00 -&gt; base
-     * 3,000,000.00 -&gt; tier commission 48,750.00 -- a 42,500.00 jump with zero re-approval, on a
-     * row the CEO already signed off. Asserts the number {@link
+     * -&gt; tier commission 6,250.00, zero INCENTIVE (tiers 1-4 exactly filled, tier 5's lower bound
+     * not crossed -- see {@link TierConfig#defaults()}; base is far under V108's lowest 3,000,000.00
+     * INCENTIVE threshold). A sales_manager ALONE PATCHes weightMultiplier to 3 (passes {@code
+     * @Min(1) @Max(3)}); unguarded, this reweights to 3,210,000.00 -&gt; base 3,000,000.00 -&gt;
+     * tier commission 48,750.00 AND lands exactly on V108's first INCENTIVE threshold for another
+     * +15,000.00 -- 63,750.00 total, a 57,500.00 jump with zero re-approval, on a row the CEO
+     * already signed off. Both legs are real, migration-seeded config (not test-only fixture data),
+     * live for {@link #OPEN_MONTH} with no extra setup. Asserts the number {@link
      * CommissionService#payrollCommissionTotalsByEmployee} would hand to payroll, not a proxy for
      * it -- this IS the figure {@code PayrollService} reads for {@code PayrollComponent.COMMISSION_PAY}.
      */
@@ -138,8 +146,10 @@ class CommissionApprovedRecordImmutableIntegrationTest extends AbstractPostgresI
 
         assertThat(commissions.findById(commissionId).orElseThrow().weightMultiplier()).isEqualTo(1);
         BigDecimal totalAfter = commissionService.payrollCommissionTotalsByEmployee(OPEN_MONTH).get(salesRepId);
-        // The bug: this would be 48750.00 (or 63750.00 once the incentive ladder is configured)
-        // instead of unchanged 6250.00 -- a 57,500.00-class overpayment that already cleared review.
+        // The bug: this would be 63750.00 (48750.00 tier + 15000.00 INCENTIVE, both legs already
+        // live for OPEN_MONTH via V108's real migration-seeded ladder -- not "once configured")
+        // instead of unchanged 6250.00. This single assertion therefore already pins the full
+        // 57,500.00 delta the defect describes, not just the tier-only leg of it.
         assertThat(totalAfter).isEqualByComparingTo(new BigDecimal("6250.00"));
         assertThat(totalAfter).isEqualByComparingTo(totalBefore);
     }

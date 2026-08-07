@@ -382,16 +382,19 @@ public class CommissionService {
         }
         // P0 fix (fix/commission-approved-record-immutable): a CLAWBACK record shares its
         // invoice_id with the ORIGINAL sale it reverses (CommissionRepository#createClawback
-        // inserts the clawback row with invoice_id = original.invoiceDetails().id()). Without this
-        // check, PATCHing a clawback's own id would edit that shared invoice_details row, and
-        // updateCommissionAmountsForInvoice's `WHERE invoice_id = :invoiceId` would then rewrite the
-        // ORIGINAL sale's actual_received/commissionable_base too -- an approved SALE record
-        // mutated through a completely different id. A clawback's amount is always derived
-        // (negated) from the original at creation time and is never directly editable. Checked
-        // BEFORE the APPROVED check below (a clawback is always created APPROVED and has no path
-        // back to SUBMITTED/MANAGER_APPROVED, so that check alone would also catch it) so the
-        // refusal names the real, permanent reason -- "this id is a clawback" -- rather than a
-        // status coincidence a reader could mistake for "edit it again once it's un-approved".
+        // inserts the clawback row with invoice_id = original.invoiceDetails().id()) -- editing one
+        // through its own id rewrites that shared invoice_details row, and
+        // updateCommissionAmountsForInvoice's `WHERE invoice_id = :invoiceId` then rewrites the
+        // ORIGINAL sale's actual_received/commissionable_base too, through a completely different
+        // id. That mechanism is why a clawback's amount must never be hand-edited: it is always
+        // derived (negated) from the original at creation time -- a KIND invariant, true regardless
+        // of status. This check is redundant with the APPROVED check below today (a clawback is
+        // always created APPROVED and has no path back to SUBMITTED/MANAGER_APPROVED, so that check
+        // alone already stops the write) -- it is checked FIRST not because it is the only thing
+        // preventing the corruption above, but so the refusal names the real, permanent reason
+        // ("this id is a clawback") instead of a status coincidence a future reader could mistake
+        // for "editable again once un-approved", and so the guard survives unchanged if anyone ever
+        // adds a review stage before a clawback is finalized.
         if (CommissionKind.CLAWBACK.equals(existing.kind())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "รายการเรียกคืนค่าคอมมิชชั่นคำนวณจากรายการต้นทางโดยอัตโนมัติ ไม่สามารถแก้ไขได้โดยตรง");
