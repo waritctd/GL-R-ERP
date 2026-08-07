@@ -11,7 +11,7 @@ import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { TaxAllowanceForm } from './TaxAllowanceForm.jsx';
 import { buildAllowanceSubmitBody, defaultAllowanceValues, TAX_ALLOWANCE_GROUPS, UNCATEGORIZED_EVIDENCE_KEY } from './taxAllowanceSchema.js';
-import { selectCurrentDeclaration, taxAllowanceStatusInfo } from './taxAllowanceStatus.js';
+import { selectCurrentDeclaration, selectResumableDeclaration, taxAllowanceStatusInfo } from './taxAllowanceStatus.js';
 
 // Editable directly (or via "แก้ไข / ยื่นฉบับใหม่"): no declaration yet, or the current one was
 // rejected/expired. PENDING and both APPROVED variants stay permanently read-only here — a direct
@@ -173,6 +173,11 @@ export function TaxAllowancePage({ user, showToast }) {
     enabled: !!user?.employeeId,
   });
   const current = useMemo(() => selectCurrentDeclaration(declarationsQuery.data ?? []), [declarationsQuery.data]);
+  // Feeds ONLY the form's prefill (`defaultValues` below) when there is no current declaration for
+  // this tax year -- see selectResumableDeclaration's own doc comment for why WITHDRAWN specifically
+  // and why this must never feed statusInfo/canStartEdit/evidenceMode, all of which stay keyed on
+  // `current` alone below.
+  const resumable = useMemo(() => selectResumableDeclaration(declarationsQuery.data ?? []), [declarationsQuery.data]);
   const statusInfo = useMemo(() => taxAllowanceStatusInfo(current), [current]);
   const canStartEdit = EDITABLE_STATUS_KEYS.has(statusInfo.key) && isCurrentYear;
 
@@ -210,11 +215,19 @@ export function TaxAllowancePage({ user, showToast }) {
   // read-only from `searchParams` each render (see above) and nothing downstream of this memo ever
   // calls `setSearchParams`, so there is no cycle back into this dependency.
   //
+  // `resumable` (the newest WITHDRAWN declaration for this year, see selectResumableDeclaration) is
+  // a genuine input the memo body reads via `current ?? resumable` -- the fix for the defect where
+  // withdrawing a PENDING declaration wiped every value the employee had typed, contradicting the
+  // PENDING banner's own "ยกเลิกการยื่นเพื่อแก้ไข" and the withdraw dialog's "กลับมาแก้ไข" promises.
+  // This is PREFILL ONLY: `current` itself is untouched, so `statusInfo`/`canStartEdit`/`evidenceMode`
+  // below -- all keyed on `current` alone -- keep reporting ยังไม่ได้ยื่น and treating the year as
+  // unfiled exactly as before; only what the form is seeded with changes.
+  //
   // The disable is load-bearing, not noise-suppression: exhaustive-deps calls `taxYear` "unnecessary"
   // because the memo body never reads it, which is exactly the point -- it is a cache-busting key, not
   // an input. Taking the rule's advice and deleting it silently restores the bug described above.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const defaultValues = useMemo(() => defaultAllowanceValues(current), [current, taxYear]);
+  const defaultValues = useMemo(() => defaultAllowanceValues(current ?? resumable), [current, resumable, taxYear]);
 
   const submitMutation = useMutation({
     mutationFn: (body) => api.payroll.submitMyTaxAllowanceDeclaration(body),

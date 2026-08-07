@@ -28,6 +28,32 @@ export function selectCurrentDeclaration(items = []) {
   return [...candidates].sort((a, b) => String(b.submittedAt || '').localeCompare(String(a.submittedAt || '')))[0];
 }
 
+/**
+ * Picks the declaration a "resume" flow should pre-fill a form from when there is no CURRENT
+ * declaration (`selectCurrentDeclaration` returned null) -- specifically, the most recently
+ * submitted WITHDRAWN row for this tax year, if one exists. Same defensive newest-first re-sort on
+ * `submittedAt` as `selectCurrentDeclaration` above, for the same reason (trust the shape, not the
+ * ordering).
+ *
+ * This is PREFILL ONLY and changes nothing about "current standing": `NON_CURRENT_STATUSES` and
+ * `selectCurrentDeclaration` are untouched by this function, so `selectCurrentDeclaration` keeps
+ * returning null after a withdrawal and `taxAllowanceStatusInfo(null)` keeps reporting the honest
+ * `ยังไม่ได้ยื่น` badge -- a withdrawn declaration genuinely is not the employee's current standing.
+ * The only caller that should ever read this is TaxAllowancePage's `defaultValues` memo (fixing the
+ * defect where withdrawing a PENDING declaration wiped every value the employee had typed, directly
+ * contradicting the PENDING banner's "ยกเลิกการยื่นเพื่อแก้ไข" and the withdraw dialog's "กลับมาแก้ไข"
+ * promises) -- never `statusInfo`/`canStartEdit`/`evidenceMode`, which must keep reading `current`.
+ *
+ * Deliberately excludes SUPERSEDED: a superseded row was replaced by a newer APPROVED declaration,
+ * so resuming from it would resurrect stale figures the employee no longer stands behind. Only
+ * WITHDRAWN is a user-initiated "I want this back".
+ */
+export function selectResumableDeclaration(items = []) {
+  const withdrawn = items.filter((item) => item.status === 'WITHDRAWN');
+  if (withdrawn.length === 0) return null;
+  return [...withdrawn].sort((a, b) => String(b.submittedAt || '').localeCompare(String(a.submittedAt || '')))[0];
+}
+
 // Compact "chip" copy per derived status KEY — not the raw backend `status` column (there is no
 // backend status called APPROVED_UNAPPLIED or APPLIED; those two are this module's own split of
 // APPROVED by `appliedAt`, see taxAllowanceStatusInfo below). A filter chip stands for a whole
