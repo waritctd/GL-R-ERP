@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -163,6 +164,207 @@ class PayrollRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         List<th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceDto> rows = repository.findTaxAllowanceRows(2026);
         assertThat(rows).hasSize(1);
         assertThat(rows.get(0).employeeCode()).isEqualTo("EMP-001");
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // verification_status reset on overwrite (2026-08-08 fix). PUT /api/payroll/tax-allowances
+    // (PayrollController, HR-only) reaches upsertTaxAllowances directly with no verification step of
+    // its own, unlike TaxAllowanceDeclarationService#apply, which always re-verifies in the same
+    // transaction right after (see TaxAllowanceApplySeamIntegrationTest for that regression guard).
+    // Before the fix, overwriting a VERIFIED row's amounts through this bare upsert silently left
+    // verification_status = 'VERIFIED' on brand-new, never-reviewed figures -- and
+    // findTaxAllowancesByEmployee applies VERIFIED rows to withholding same as GRANDFATHERED_UNVERIFIED.
+    // Every assertion here is written wrong-way-round: it asserts the bad outcome CANNOT happen.
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void overwritingAVerifiedRowsAmountsThroughTheLegacyPathDoesNotLeaveItVerified() {
+        long alice = seedEmployee("EMP-301", "อลิสา", "reset1");
+        long hr = seedEmployee("EMP-302", "เอชอาร์", "reset1");
+        repository.upsertTaxAllowances(2026,
+            List.of(taxAllowanceUpsert(alice, new BigDecimal("60000.00"), 1, "doc-v1")), hr);
+
+        // HR verifies against supporting documents -- a real reviewer/timestamp/deadline attached,
+        // exactly how a genuine apply()/reverify() leaves the row.
+        repository.markTaxAllowanceVerified(alice, 2026, hr);
+        repository.setTaxAllowanceVerificationDeadline(alice, 2026, LocalDate.of(2026, 12, 31));
+        assertThat(verificationStatusOf(alice, 1)).isEqualTo("VERIFIED");
+
+        // A later, unrelated overwrite through the SAME legacy path changes the declared amount --
+        // nobody has reviewed this new figure.
+        repository.upsertTaxAllowances(2026,
+            List.of(taxAllowanceUpsert(alice, new BigDecimal("90000.00"), 1, "doc-v1")), hr);
+
+        assertThat(verificationStatusOf(alice, 1))
+            .as("a VERIFIED row whose amounts changed under it must NOT still read VERIFIED")
+            .isEqualTo("GRANDFATHERED_UNVERIFIED");
+        assertThat(verifiedByIdOf(alice, 1)).as("no stale reviewer left on an unreviewed figure").isNull();
+        assertThat(verifiedAtOf(alice, 1)).as("no stale review timestamp left on an unreviewed figure").isNull();
+        assertThat(verificationDeadlineOf(alice, 1)).as("no stale deadline borrowed from the old review").isNull();
+        // Sanity: the overwrite really did take effect -- this is not a no-op being misread as a reset.
+        Map<Long, PayrollTaxAllowanceInput> resolved = repository.findTaxAllowancesByEmployee(LocalDate.of(2026, 6, 1));
+        assertThat(resolved.get(alice).spouseAllowance()).isEqualByComparingTo("90000.00");
+    }
+
+    @Test
+    void reUpsertingByteIdenticalFiguresDoesNotDowngradeAnAlreadyVerifiedRow() {
+        long alice = seedEmployee("EMP-303", "อลิสา", "reset2");
+        long hr = seedEmployee("EMP-304", "เอชอาร์", "reset2");
+        repository.upsertTaxAllowances(2026,
+            List.of(taxAllowanceUpsert(alice, new BigDecimal("60000.00"), 1, "doc-v1")), hr);
+        repository.markTaxAllowanceVerified(alice, 2026, hr);
+        repository.setTaxAllowanceVerificationDeadline(alice, 2026, LocalDate.of(2026, 12, 31));
+        OffsetDateTime verifiedAtBefore = verifiedAtOf(alice, 1);
+        assertThat(verifiedAtBefore).isNotNull();
+
+        // Same employee, same year/month, IDENTICAL figures -- a genuine no-op re-save (e.g. a
+        // retried request), not a real edit.
+        repository.upsertTaxAllowances(2026,
+            List.of(taxAllowanceUpsert(alice, new BigDecimal("60000.00"), 1, "doc-v1")), hr);
+
+        assertThat(verificationStatusOf(alice, 1))
+            .as("a no-op re-save of identical figures must not downgrade a legitimately verified row")
+            .isEqualTo("VERIFIED");
+        assertThat(verifiedByIdOf(alice, 1)).isEqualTo(hr);
+        assertThat(verifiedAtOf(alice, 1)).isEqualTo(verifiedAtBefore);
+        assertThat(verificationDeadlineOf(alice, 1)).isEqualTo(LocalDate.of(2026, 12, 31));
+    }
+
+    @Test
+    void overwritingOneDatedRowDoesNotDowngradeASiblingDatedRowInTheSameYear() {
+        long alice = seedEmployee("EMP-305", "อลิสา", "reset3");
+        long hr = seedEmployee("EMP-306", "เอชอาร์", "reset3");
+        // Two dated rows for the same employee/year (V93 effective dating): January and June.
+        repository.upsertTaxAllowances(2026, List.of(
+            taxAllowanceUpsert(alice, new BigDecimal("60000.00"), 1, "doc-jan"),
+            taxAllowanceUpsert(alice, new BigDecimal("60000.00"), 6, "doc-jun")), hr);
+        // markTaxAllowanceVerified has NO effective_month -- it verifies the WHOLE year's lineage at
+        // once, exactly as the real declaration workflow's apply()/reverify() do.
+        repository.markTaxAllowanceVerified(alice, 2026, hr);
+        repository.setTaxAllowanceVerificationDeadline(alice, 2026, LocalDate.of(2026, 12, 31));
+        assertThat(verificationStatusOf(alice, 1)).isEqualTo("VERIFIED");
+        assertThat(verificationStatusOf(alice, 6)).isEqualTo("VERIFIED");
+
+        // Only June's amount is corrected through the legacy path. January is never part of this call.
+        repository.upsertTaxAllowances(2026,
+            List.of(taxAllowanceUpsert(alice, new BigDecimal("90000.00"), 6, "doc-jun")), hr);
+
+        assertThat(verificationStatusOf(alice, 6))
+            .as("the row that actually changed must lose its verification")
+            .isEqualTo("GRANDFATHERED_UNVERIFIED");
+        assertThat(verificationStatusOf(alice, 1))
+            .as("a sibling dated row this call never touched must NOT be downgraded too -- reset is per-row, not per-year")
+            .isEqualTo("VERIFIED");
+        assertThat(verifiedByIdOf(alice, 1)).as("January's own review is untouched").isEqualTo(hr);
+        assertThat(verificationDeadlineOf(alice, 1)).isEqualTo(LocalDate.of(2026, 12, 31));
+    }
+
+    @Test
+    void changingOnlyTheDocumentReferenceAlsoResetsVerification() {
+        long alice = seedEmployee("EMP-307", "อลิสา", "reset4");
+        long hr = seedEmployee("EMP-308", "เอชอาร์", "reset4");
+        repository.upsertTaxAllowances(2026,
+            List.of(taxAllowanceUpsert(alice, new BigDecimal("60000.00"), 1, "receipt-A.pdf")), hr);
+        repository.markTaxAllowanceVerified(alice, 2026, hr);
+        assertThat(verificationStatusOf(alice, 1)).isEqualTo("VERIFIED");
+
+        // Same declared amount, but a DIFFERENT document was supplied -- VERIFIED meant HR confirmed
+        // receipt-A.pdf specifically, not whatever this new reference points to.
+        repository.upsertTaxAllowances(2026,
+            List.of(taxAllowanceUpsert(alice, new BigDecimal("60000.00"), 1, "receipt-B.pdf")), hr);
+
+        assertThat(verificationStatusOf(alice, 1))
+            .as("a changed document_reference must also invalidate the prior verification")
+            .isEqualTo("GRANDFATHERED_UNVERIFIED");
+    }
+
+    /**
+     * Opus review finding F1 (2026-08-08, blocking, fixed before merge): an earlier version of this
+     * fix reset ANY content change to GRANDFATHERED_UNVERIFIED regardless of the row's PRIOR status.
+     * From EXPIRED_UNVERIFIED that was a silent PROMOTION -- GRANDFATHERED_UNVERIFIED IS applied to
+     * payroll (findTaxAllowancesByEmployee excludes only EXPIRED_UNVERIFIED), so a lapsed,
+     * no-longer-reviewed declaration would have re-entered withholding on nothing more than a bare
+     * amount edit through the legacy PUT, with no reviewer, no deadline, and no automated way back
+     * out (the sweep only re-examines declarations still APPROVED in hr.tax_allowance_declaration).
+     * Wrong-way-round: asserts the promotion CANNOT happen, and separately that the row's PRE-EXPIRY
+     * verifier/timestamp survive as genuine history rather than being laundered away.
+     */
+    @Test
+    void overwritingAnExpiredRowsAmountsDoesNotPromoteItBackIntoPayroll() {
+        long alice = seedEmployee("EMP-309", "อลิสา", "reset5");
+        long hr = seedEmployee("EMP-310", "เอชอาร์", "reset5");
+        repository.upsertTaxAllowances(2026,
+            List.of(taxAllowanceUpsert(alice, new BigDecimal("60000.00"), 1, "doc-v1")), hr);
+        repository.markTaxAllowanceVerified(alice, 2026, hr);
+        OffsetDateTime verifiedAtBeforeExpiry = verifiedAtOf(alice, 1);
+        assertThat(verifiedAtBeforeExpiry).isNotNull();
+
+        // The verification lapsed -- the sweep's real effect (expireTaxAllowanceVerification), not a
+        // hand-set status. The row is now excluded from payroll.
+        repository.expireTaxAllowanceVerification(alice, 2026);
+        assertThat(verificationStatusOf(alice, 1)).isEqualTo("EXPIRED_UNVERIFIED");
+        assertThat(repository.findTaxAllowancesByEmployee(LocalDate.of(2026, 6, 1)))
+            .as("EXPIRED_UNVERIFIED must be excluded from payroll before the overwrite (sanity)")
+            .doesNotContainKey(alice);
+
+        // A later, unrelated amount edit through the legacy path -- nobody reviewed this new figure,
+        // and nobody re-verified the lapsed declaration either.
+        repository.upsertTaxAllowances(2026,
+            List.of(taxAllowanceUpsert(alice, new BigDecimal("90000.00"), 1, "doc-v1")), hr);
+
+        assertThat(verificationStatusOf(alice, 1))
+            .as("an EXPIRED_UNVERIFIED row whose amounts changed must NOT be promoted to GRANDFATHERED_UNVERIFIED")
+            .isEqualTo("EXPIRED_UNVERIFIED");
+        assertThat(repository.findTaxAllowancesByEmployee(LocalDate.of(2026, 6, 1)))
+            .as("must still NOT apply to payroll -- this is the whole point of F1")
+            .doesNotContainKey(alice);
+        assertThat(verifiedByIdOf(alice, 1)).as("pre-expiry reviewer is preserved, not cleared").isEqualTo(hr);
+        assertThat(verifiedAtOf(alice, 1))
+            .as("pre-expiry timestamp is preserved, not cleared")
+            .isEqualTo(verifiedAtBeforeExpiry);
+        // Sanity: the overwrite really did take effect on the stored row -- a direct SQL read, since
+        // findTaxAllowancesByEmployee deliberately excludes this row and can't be used to check it.
+        BigDecimal storedAmount = jdbc.queryForObject(
+            "SELECT spouse_allowance FROM hr.employee_tax_allowance WHERE employee_id = :id AND effective_month = 1",
+            Map.of("id", alice), BigDecimal.class);
+        assertThat(storedAmount).isEqualByComparingTo("90000.00");
+    }
+
+    /** Full-arity upsert request with everything but spouseAllowance/effectiveMonth/documentReference zeroed. */
+    private th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest taxAllowanceUpsert(
+        long employeeId, BigDecimal spouseAllowance, Integer effectiveMonth, String documentReference
+    ) {
+        return new th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest(
+            employeeId,
+            spouseAllowance, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            0, 0, 0, false, 0,
+            effectiveMonth, documentReference);
+    }
+
+    private String verificationStatusOf(long employeeId, int effectiveMonth) {
+        return jdbc.queryForObject(
+            "SELECT verification_status FROM hr.employee_tax_allowance WHERE employee_id = :id AND effective_month = :month",
+            Map.of("id", employeeId, "month", effectiveMonth), String.class);
+    }
+
+    private Long verifiedByIdOf(long employeeId, int effectiveMonth) {
+        return jdbc.queryForObject(
+            "SELECT verified_by_id FROM hr.employee_tax_allowance WHERE employee_id = :id AND effective_month = :month",
+            Map.of("id", employeeId, "month", effectiveMonth), Long.class);
+    }
+
+    private OffsetDateTime verifiedAtOf(long employeeId, int effectiveMonth) {
+        return jdbc.queryForObject(
+            "SELECT verified_at FROM hr.employee_tax_allowance WHERE employee_id = :id AND effective_month = :month",
+            Map.of("id", employeeId, "month", effectiveMonth), OffsetDateTime.class);
+    }
+
+    private LocalDate verificationDeadlineOf(long employeeId, int effectiveMonth) {
+        return jdbc.queryForObject(
+            "SELECT verification_deadline FROM hr.employee_tax_allowance WHERE employee_id = :id AND effective_month = :month",
+            Map.of("id", employeeId, "month", effectiveMonth), LocalDate.class);
     }
 
     @Test
