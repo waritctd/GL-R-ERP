@@ -13,6 +13,7 @@ import { FieldList } from '../../components/common/FieldList.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { QuotaBar } from '../../components/common/QuotaBar.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -620,7 +621,7 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
         </p>
       </Panel>
 
-      <form className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
+      <SafeForm className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
         <label>
           จากวันที่
           <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
@@ -650,7 +651,7 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
             กำลังอัปเดต…
           </span>
         ) : null}
-      </form>
+      </SafeForm>
 
       <Panel title="ปฏิทินวันลา">
         <div className="leave-calendar-list">

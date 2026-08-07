@@ -12,6 +12,7 @@ import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { formGridSpan2, Panel, PageStack, RowActions } from '../../components/common/Layout.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { overtimeStatusLabel as statusInfo, pendingApproverText } from '../../utils/format.js';
 
@@ -440,7 +441,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
         ]}
       />
 
-      <form className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
+      <SafeForm className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
         <label>
           จากวันที่
           <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
@@ -475,10 +476,10 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           <Icon name="search" />
           ค้นหา
         </Button>
-      </form>
+      </SafeForm>
 
       <Panel title="ยื่นคำขอ OT">
-        <form className={FORM_GRID_CLASS} onSubmit={handleSubmit(submitOvertime)} noValidate>
+        <SafeForm className={FORM_GRID_CLASS} onSubmit={handleSubmit(submitOvertime)} noValidate>
           {hasMultipleSubmitOptions ? (
             <FormField label="พนักงาน" htmlFor="ot-employee" error={errors.employeeId?.message}>
               <select
@@ -578,7 +579,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               ส่งคำขอ
             </Button>
           </RowActions>
-        </form>
+        </SafeForm>
       </Panel>
 
       <Panel flush>

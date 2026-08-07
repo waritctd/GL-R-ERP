@@ -72,8 +72,19 @@ function catalogItem(overrides = {}) {
   });
 }
 
+// Deliberately NOT fireEvent.submit(form): that dispatches a plain synthetic Event with no
+// `.submitter` property at all under jsdom, and SafeForm's canSubmit gate is a RESTRICTION on
+// top of its submitter guard, not a replacement for it (#safe-form-primitive review round) -- a
+// submitterless dispatch is blocked on EVERY view regardless of canSubmit, which would make every
+// "does NOT submit" test below pass for the wrong reason (no submitter in the DOM at all, not
+// because the view gate rejected it -- this repo's own documented vacuous-test shape) and every
+// "submits" test fail outright. A manually constructed SubmitEvent with an explicit `submitter`
+// is picked up by React's onSubmit exactly like a real click (verified), so every call site below
+// now exercises `canSubmit` specifically: HUB/REVIEW let it through, every other view still
+// blocks it even though a submitter is present.
 function submitForm() {
-  fireEvent.submit(document.getElementById('ticket-create-form'));
+  const form = document.getElementById('ticket-create-form');
+  form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: document.createElement('button') }));
 }
 
 // Anchored to the start of the accessible name: a hub row's name is its
@@ -296,10 +307,15 @@ describe('TicketCreateModal validation', () => {
 // HTML implicit submission (fix/form-enter-submits-real-records): a <form> with no submit button
 // but exactly ONE field that blocks implicit submission fires a real 'submit' event on Enter, no
 // button ever pressed. jsdom does not implement that algorithm at all (pressing "Enter" via
-// fireEvent does nothing special), but `submitForm()` above dispatches the exact same native
-// 'submit' event a real Enter-key trigger produces, which is what the <form>'s `onSubmit` prop
-// actually listens for — a faithful, environment-agnostic test of `handleFormSubmit`'s gate itself.
-// Mirrors TaxAllowanceForm.test.jsx's "form-level submit gate blocks Enter-key implicit submission"
+// fireEvent does nothing special) -- e2e/implicit-submission.spec.js is the layer that reproduces
+// the real thing. What `submitForm()` proves here is narrower and complementary: given a genuine
+// 'submit' event WITH a submitter attached (deliberately, not the submitter-less dispatch a real
+// Enter-on-a-buttonless-view would actually produce -- see the helper's own comment), does
+// SafeForm's `canSubmit` gate on `<TicketCreateModal>`'s form still reject it on every view except
+// HUB/REVIEW? A submitter-less dispatch would pass every "does NOT submit" case below for free
+// (SafeForm's separate submitter guard would block it regardless of canSubmit), which would prove
+// nothing about `canSubmit` specifically -- this repo's own documented vacuous-test shape. Mirrors
+// TaxAllowanceForm.test.jsx's "form-level submit gate blocks Enter-key implicit submission"
 // describe block. HUB's own positive case (a real submit event with view==='hub') is already
 // exercised by every test above that calls `selectCustomerAndProject()` then `submitForm()`
 // directly — see `handleFormSubmit`'s own comment in TicketCreateModal.jsx for why HUB, unlike the

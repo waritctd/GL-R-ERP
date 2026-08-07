@@ -9,6 +9,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { InfoTip } from '../../components/common/InfoTip.jsx';
 import { FormGrid, formGridSpan2 } from '../../components/common/Layout.jsx';
 import { QuotaBar } from '../../components/common/QuotaBar.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { formatMoney } from '../../utils/format.js';
 import {
   ALLOWANCE_COUNT_KEYS,
@@ -398,7 +399,7 @@ export function TaxAllowanceForm({
 
   if (!sectioned) {
     return (
-      <form id={formId} noValidate onSubmit={handleSubmit(submit)} className="grid gap-4">
+      <SafeForm id={formId} noValidate onSubmit={handleSubmit(submit)} className="grid gap-4">
         {autoGrantedInfo}
         {declarationFields}
         {TAX_ALLOWANCE_GROUPS.map((group) => (
@@ -407,7 +408,7 @@ export function TaxAllowanceForm({
           </CollapsibleSection>
         ))}
         {submitFooter}
-      </form>
+      </SafeForm>
     );
   }
 
@@ -421,31 +422,39 @@ export function TaxAllowanceForm({
 
   const declaredTotal = formatMoney(declaredAllowanceTotalFromValues(watchedValues));
 
-  // CRITICAL (review fix, #tax-allowance-ia-hub-review): one <form> wraps all three views below, and
-  // HTML's implicit-submission rule fires a real 'submit' event on Enter in a text field whenever the
-  // form has no visible submit button but has exactly ONE field that counts toward that rule -- true
-  // for HUB (only `#ta-document-reference` is a bare text input; the month <select> and file inputs
-  // don't count) and true for the `housing` SECTION (its one and only field). The other four sections
-  // are safe only by ACCIDENT, because they happen to carry more than one such field -- not something
-  // to rely on. Before this gate, Enter in either of those two fields filed the ENTIRE declaration
-  // with no button ever pressed, silently, in a real browser (confirmed in Chromium and WebKit; jsdom
-  // does not implement implicit submission, which is why the suite was green with the bug live --
-  // see `TaxAllowanceForm.test.jsx`'s `fireEvent.submit(form)` cases, which exercise the same
-  // 'submit' event a real Enter-key trigger produces without depending on jsdom modelling the
-  // browser's implicit-submission heuristics). `handleSubmit(submit)` -- react-hook-form's real
-  // validate-then-call wiring -- now only ever attaches on REVIEW; every other view's handler just
-  // swallows the event. The `sectioned={false}` branch above is untouched and keeps submitting
-  // normally -- it has no views/URL, so this gate does not apply to it at all.
-  function handleFormSubmit(event) {
-    if (!isReview) {
-      event.preventDefault();
-      return;
-    }
-    handleSubmit(submit)(event);
-  }
-
+  // CRITICAL (review fix, #tax-allowance-ia-hub-review; migrated to SafeForm's `canSubmit` under
+  // #safe-form-primitive): one <form> wraps all three views below, and HTML's implicit-submission
+  // rule fires a real 'submit' event on Enter in a text field whenever the form has no visible
+  // submit button but has exactly ONE field that counts toward that rule -- true for HUB (only
+  // `#ta-document-reference` is a bare text input; the month <select> and file inputs don't count)
+  // and true for the `housing` SECTION (its one and only field). The other four sections were safe
+  // only by ACCIDENT, because they happened to carry more than one such field -- not something to
+  // rely on, which is the whole reason this gate is now `canSubmit` on the shared primitive instead
+  // of a bespoke handler here. `canSubmit={isReview}` narrows submission to REVIEW; SafeForm's own
+  // submitter guard then applies ON TOP of it, because `canSubmit` is a RESTRICTION and never a
+  // permission (see SafeForm.jsx's header). Both must pass.
+  //
+  // That AND matters specifically here, and this form is why the primitive works that way. An
+  // earlier version let `canSubmit === true` bypass the submitter check, justified as "REVIEW
+  // always has a real submit button whenever `!readOnly`". Read `submitFooter` below: it is
+  // `readOnly ? null : <Button type="submit">`, and `?view=review` is an advertised shareable deep
+  // link that works read-only (`readOnly={!editing}` on TaxAllowancePage). So `canSubmit === true`
+  // with NO submit button in the DOM is reachable today. It does not fire only because REVIEW
+  // renders no input at all -- i.e. the form was safe by a DIFFERENT accident than the one the
+  // justification named, which is the precise failure mode this whole primitive exists to delete.
+  // Add one field to REVIEW and, under the old bypass, Enter would have filed the declaration.
+  //
+  // Before either gate existed, Enter in HUB or `housing` filed the ENTIRE
+  // declaration with no button ever pressed, silently, in a real browser (confirmed in Chromium;
+  // jsdom does not implement implicit submission at all, which is why the suite was green with the
+  // bug live -- see `TaxAllowanceForm.test.jsx`'s `fireEvent.submit(form)` cases, which exercise the
+  // same 'submit' event a real Enter-key trigger produces without depending on jsdom modelling the
+  // browser's implicit-submission heuristics). The `sectioned={false}` branch above is untouched
+  // apart from the same SafeForm swap -- it has no views/URL, so no `canSubmit` is passed there and
+  // SafeForm's default submitter guard applies on its own (new protection, not a relocated one: that
+  // branch never had an explicit gate of its own before).
   return (
-    <form id={formId} noValidate onSubmit={handleFormSubmit} className="grid gap-4">
+    <SafeForm id={formId} noValidate onSubmit={handleSubmit(submit)} canSubmit={isReview} className="grid gap-4">
       {isHub ? (
         <div className="grid gap-4">
           <ViewHeading innerRef={headingRef} title="ภาพรวมการยื่นแบบแจ้ง" />
@@ -634,6 +643,6 @@ export function TaxAllowanceForm({
           </div>
         </div>
       ) : null}
-    </form>
+    </SafeForm>
   );
 }

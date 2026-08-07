@@ -11,6 +11,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
   addDaysIso,
@@ -484,7 +485,7 @@ export function AttendancePage({ user, showToast }) {
             </span>
           </button>
           {importOpen ? (
-            <form className="attendance-import-panel border-t border-border" onSubmit={importFile}>
+            <SafeForm className="attendance-import-panel border-t border-border" onSubmit={importFile}>
               <label className="attendance-import-device">
                 เครื่องสแกน / สถานที่
                 <select
@@ -523,7 +524,7 @@ export function AttendancePage({ user, showToast }) {
                   {lastImport.skipped_punch_count} · ผิดพลาด {lastImport.error_count}
                 </span>
               ) : null}
-            </form>
+            </SafeForm>
           ) : null}
           {importOpen ? (
             <div className="flex flex-wrap items-center gap-3 border-t border-border p-[14px]">

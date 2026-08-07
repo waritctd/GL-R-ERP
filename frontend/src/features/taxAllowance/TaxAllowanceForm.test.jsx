@@ -161,13 +161,27 @@ describe('TaxAllowanceForm — hub-and-spoke navigation (sectioned, default)', (
   // text input) and of the `housing` SECTION (its one and only field) -- Enter in either filed the
   // ENTIRE declaration with no button ever pressed, in a real browser, before the form-level
   // `onSubmit` gate this section tests. jsdom does not implement implicit submission (pressing "Enter"
-  // via fireEvent does nothing special here), but `fireEvent.submit(form)` dispatches the exact same
-  // native 'submit' event a real Enter-key trigger produces, which is what React's `onSubmit` prop
-  // actually listens for -- so this is a faithful, environment-agnostic test of the gate itself.
+  // via fireEvent does nothing special here) -- e2e/implicit-submission.spec.js is the layer that
+  // reproduces the real thing.
+  //
+  // `submitWithSubmitter` below, not `fireEvent.submit(form)`: this form is now `<SafeForm
+  // canSubmit={isReview} ...>` (#safe-form-primitive), and `canSubmit` is a RESTRICTION layered on
+  // top of SafeForm's own submitter guard, not a replacement for it -- both checks always apply.
+  // `fireEvent.submit(form)` dispatches a plain synthetic Event with no `.submitter` property at
+  // all under jsdom, so it would be blocked by the submitter guard on EVERY view including REVIEW,
+  // which would make "does NOT call onSubmit" pass for the wrong reason on HUB/housing (no
+  // submitter present at all, not because `canSubmit` rejected it -- this repo's own documented
+  // vacuous-test shape) and make "calls onSubmit" on REVIEW fail outright. A manually constructed
+  // `SubmitEvent` with an explicit `submitter` is picked up by React's onSubmit exactly like a real
+  // click (verified), so every case below now exercises `canSubmit` specifically.
+  function submitWithSubmitter(form) {
+    form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: document.createElement('button') }));
+  }
+
   describe('form-level submit gate blocks Enter-key implicit submission outside REVIEW', () => {
     it('a real submit event on HUB does not call onSubmit', () => {
       const { onSubmit, container } = renderForm();
-      fireEvent.submit(container.querySelector('form'));
+      submitWithSubmitter(container.querySelector('form'));
       expect(onSubmit).not.toHaveBeenCalled();
     });
 
@@ -175,13 +189,13 @@ describe('TaxAllowanceForm — hub-and-spoke navigation (sectioned, default)', (
       // housing is the specific group the review flagged: it holds exactly one field
       // (homeLoanInterestAllowance), so it satisfies HTML's implicit-submission rule same as HUB does.
       const { onSubmit, container } = renderForm({ initialView: 'housing' });
-      fireEvent.submit(container.querySelector('form'));
+      submitWithSubmitter(container.querySelector('form'));
       expect(onSubmit).not.toHaveBeenCalled();
     });
 
     it('a real submit event on REVIEW calls onSubmit', async () => {
       const { onSubmit, container } = renderForm({ initialView: 'review' });
-      fireEvent.submit(container.querySelector('form'));
+      submitWithSubmitter(container.querySelector('form'));
       await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     });
   });
@@ -240,6 +254,24 @@ describe('TaxAllowanceForm — hub-and-spoke navigation (sectioned, default)', (
       expect(screen.queryByRole('button', { name: 'ยื่นแบบแจ้ง' })).toBeNull();
       // ย้อนกลับ still works read-only -- it is pure navigation, not a mutation.
       expect(screen.getByRole('button', { name: 'ย้อนกลับ' })).not.toBeNull();
+    });
+
+    // Review-round regression (#safe-form-primitive, F1): `canSubmit={isReview}` is true here --
+    // `readOnly` does not affect `isReview` at all -- yet the test just above proves there is no
+    // submit button anywhere in this exact state. An earlier version of SafeForm let `canSubmit`
+    // BYPASS its submitter guard, so a submitterless submit event reaching this state (impossible
+    // today only because REVIEW currently renders zero input fields while readOnly -- not because
+    // anything actually stops the event) would have gone straight through to `onSubmit`. This is
+    // the scenario, made concrete: REVIEW reached read-only via `?view=review` (a URL
+    // TaxAllowancePage advertises as shareable), the way it would look the moment REVIEW gains any
+    // input field in read-only mode (an acknowledgement note is the obvious next ask). It must
+    // still be blocked.
+    it('still blocks a submitterless submit on REVIEW even though canSubmit is true here (readOnly)', () => {
+      const { onSubmit, container } = renderForm({ readOnly: true, initialView: 'review' });
+
+      fireEvent.submit(container.querySelector('form'));
+
+      expect(onSubmit).not.toHaveBeenCalled();
     });
   });
 });
