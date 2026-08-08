@@ -5,9 +5,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 import java.math.BigDecimal;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,6 +22,7 @@ import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
 import th.co.glr.hr.attendance.schedule.DbHolidayCalendar;
+import th.co.glr.hr.attendance.schedule.WorkSchedule;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.commission.CommissionAttachmentRepository;
@@ -56,6 +61,20 @@ import th.co.glr.hr.ticket.TicketRepository;
 class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final BigDecimal SALARY = new BigDecimal("30000.00");
+    /**
+     * feat/ot-nonworkday-rate-suggestion: this class's fixed pay figures (375.00, 750.00) assume
+     * every fixture date resolves to WORKDAY/1.50x. {@link #backdatedWorkDateInCurrentMonth}
+     * derives its date from "today", which carries no guarantee of landing on a weekday -- a real
+     * Mon-Fri resolver would make this class's money assertions depend on which day of the week the
+     * suite happens to run on (confirmed: it fails outright when run on a Saturday/Sunday). This
+     * class is about the retroactive-window/payroll-integration seam, not the schedule-derived
+     * suggestion, so a fake that keeps every day a workday is the correct scope, not a shortcut --
+     * see {@code OvertimeDayTypeDerivedFromCalendarIntegrationTest} for the real schedule-aware
+     * coverage.
+     */
+    private static final WorkSchedule ALWAYS_WORKDAY_SCHEDULE = new WorkSchedule(
+        ZoneId.of("Asia/Bangkok"), LocalTime.of(8, 30), LocalTime.of(17, 30), 15,
+        EnumSet.allOf(DayOfWeek.class));
 
     private OvertimeService overtimeService;
     private PayrollService payrollService;
@@ -73,7 +92,8 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             mock(NotificationService.class),
             new AppProperties(),
             mock(AttendanceDailyService.class),
-            new DbHolidayCalendar(jdbc));
+            new DbHolidayCalendar(jdbc),
+            (employeeId, divisionId, departmentId, workDate) -> ALWAYS_WORKDAY_SCHEDULE);
         CommissionService commissionService = new CommissionService(
             new CommissionRepository(jdbc),
             mock(CommissionAttachmentRepository.class),
@@ -137,7 +157,7 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
         LocalDate workDate = backdatedWorkDateInCurrentMonth();
         insertPunchesCovering(workDate);
         long id = overtimeService.submit(backdated(workDate), employee(staff)).id();
-        overtimeService.approve(id, new ReviewOvertimeRequest("ok"), directManager());
+        overtimeService.approve(id, new ApproveOvertimeRequest("ok", null), directManager());
 
         assertThat(statusOf(id)).isEqualTo("MANAGER_APPROVED");
         assertThat(payableMinutesOf(id)).isEqualTo(120);
@@ -205,12 +225,12 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
         LocalDate workDate = backdatedWorkDateInCurrentMonth();
         insertPunchesCovering(workDate);
         long id = overtimeService.submit(backdated(workDate), employee(staff)).id();
-        overtimeService.approve(id, new ReviewOvertimeRequest("ok"), directManager());
+        overtimeService.approve(id, new ApproveOvertimeRequest("ok", null), directManager());
 
         // Payroll runs for the month while the request waits on the CEO.
         insertProcessedPeriod(workDate.withDayOfMonth(1));
 
-        assertThatThrownBy(() -> overtimeService.approve(id, new ReviewOvertimeRequest("ok"), ceo()))
+        assertThatThrownBy(() -> overtimeService.approve(id, new ApproveOvertimeRequest("ok", null), ceo()))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.CONFLICT);
@@ -295,8 +315,8 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
     private long fileAndFullyApprove(LocalDate workDate) {
         insertPunchesCovering(workDate);
         long id = overtimeService.submit(backdated(workDate), employee(staff)).id();
-        overtimeService.approve(id, new ReviewOvertimeRequest("ok"), directManager());
-        overtimeService.approve(id, new ReviewOvertimeRequest("ok"), ceo());
+        overtimeService.approve(id, new ApproveOvertimeRequest("ok", null), directManager());
+        overtimeService.approve(id, new ApproveOvertimeRequest("ok", null), ceo());
         assertThat(statusOf(id)).isEqualTo("APPROVED");
         return id;
     }
