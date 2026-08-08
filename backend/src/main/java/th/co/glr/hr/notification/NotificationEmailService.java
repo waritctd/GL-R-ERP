@@ -1,46 +1,61 @@
 package th.co.glr.hr.notification;
 
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import th.co.glr.hr.brand.BrandAssets;
 import th.co.glr.hr.mail.Mailer;
 
 @Service
 public class NotificationEmailService {
     private static final Logger log = LoggerFactory.getLogger(NotificationEmailService.class);
 
-    /** Backend-served asset (see th.co.glr.hr.brand.BrandController) - built off asset-base-url (the
-     * backend's own Render origin), deliberately NOT app-base-url (the Vercel frontend origin) as it
-     * once was: if the frontend deployment is a Vercel branch preview with Deployment Protection
-     * enabled, an auth wall sits in front of it and Gmail's image proxy - which fetches with no
-     * cookies/session and cannot complete a login flow - gets blocked, so the logo silently breaks in
-     * every email while portal links (built off app-base-url) still work fine. Hitting the backend
-     * origin directly sidesteps that: it isn't behind Vercel's protection and vercel.json's
-     * {@code /api/:path*} rewrite means the two origins serve the same bytes anyway. An absolute
-     * HTTPS URL is required here regardless: email clients cannot resolve a relative path against
-     * "the app". */
-    private static final String LOGO_PATH = "/api/public/brand/logo.png";
+    /** Content-ID the logo is embedded under and referenced from the HTML via {@code cid:glr-logo}
+     * (see {@link #htmlBody}). Previously this was a remote {@code <img src>} built from a separate
+     * {@code asset-base-url} host (the backend's own Render origin) specifically to dodge a Vercel
+     * Deployment-Protection auth wall that could block Gmail's image-fetching proxy. That whole
+     * class of problem - any mail client refusing to FETCH a URL, whether from an auth wall or (the
+     * defect that actually reached UAT) Gmail blocking remote images for mail it files as Spam or
+     * from a sender it does not yet trust - is moot once the image travels INSIDE the message:
+     * there is no URL, so there is nothing to block. {@code asset-base-url} /
+     * {@code app.mail.asset-base-url} are retired along with it. {@code app-base-url} remains,
+     * unrelated, for the portal CTA link below. */
+    private static final String LOGO_CONTENT_ID = "glr-logo";
     private static final String BRAND_COLOR = "#4f46e5";
     private static final String FONT_STACK = "'Sarabun',-apple-system,'Segoe UI',Tahoma,sans-serif";
 
     private final Mailer mailer;
     private final String overrideTo;
-    private final String subjectPrefix;
+    private final String subjectSuffix;
     private final String appBaseUrl;
-    private final String assetBaseUrl;
+    /** The logo, pre-wrapped as the single-element list {@link Mailer#sendHtml} expects - computed
+     * once at construction (this service is a singleton bean), not per email. Loaded via
+     * {@link BrandAssets#logoBytes()} - a small standalone component in the {@code brand} package,
+     * not a method on {@code BrandController} (a {@code @RestController}, i.e. a web adapter):
+     * this service depending on that would invert the normal dependency direction. Both this
+     * service and {@code BrandController} depend on {@code BrandAssets} instead, so there is
+     * exactly one place that knows where the asset lives on disk. Empty when the resource is
+     * absent, in which case the email sends with no inline image and the {@code <img>} falls back
+     * to its alt text - the same degrade-gracefully behavior a 404'd remote fetch would have had
+     * before this change. */
+    private final List<Mailer.InlineImage> logoInlineImages;
 
     public NotificationEmailService(Mailer mailer,
+                                    BrandAssets brandAssets,
                                     @Value("${app.mail.override-to:}") String overrideTo,
-                                    @Value("${app.mail.subject-prefix:}") String subjectPrefix,
-                                    @Value("${app.mail.app-base-url:https://demo-glr-git-uat-waritctds-projects.vercel.app}") String appBaseUrl,
-                                    @Value("${app.mail.asset-base-url:https://gl-r-erp-uat.onrender.com}") String assetBaseUrl) {
+                                    @Value("${app.mail.subject-suffix:}") String subjectSuffix,
+                                    @Value("${app.mail.app-base-url:https://demo-glr-git-uat-waritctds-projects.vercel.app}") String appBaseUrl) {
         this.mailer = mailer;
         this.overrideTo = clean(overrideTo);
-        this.subjectPrefix = subjectPrefix == null ? "" : subjectPrefix;
+        this.subjectSuffix = subjectSuffix == null ? "" : subjectSuffix;
         this.appBaseUrl = stripTrailingSlash(clean(appBaseUrl));
-        this.assetBaseUrl = stripTrailingSlash(clean(assetBaseUrl));
+        byte[] logoBytes = brandAssets.logoBytes();
+        this.logoInlineImages = logoBytes.length == 0
+            ? List.of()
+            : List.of(new Mailer.InlineImage(LOGO_CONTENT_ID, "glr-logo.png", logoBytes, "image/png"));
     }
 
     @Async
@@ -55,15 +70,15 @@ public class NotificationEmailService {
                 employeeId);
             return;
         }
-        String finalSubject = subjectPrefix + "[GL&R HR] " + subject;
+        String finalSubject = "[GL&R HR] " + subject + subjectSuffix;
         String redirectNote = overrideTo.isBlank()
             ? null
-            : "[Redirected for testing - originally addressed to employee #" + employeeId
-                + (to == null || to.isBlank() ? ", no email on file]" : ", " + to + "]");
+            : "Redirected for testing — originally addressed to employee #" + employeeId
+                + (to == null || to.isBlank() ? " (no email on file)." : " (" + to + ").");
         String htmlBody = htmlBody(recipientName, body, link, redirectNote);
         String textBody = textBody(recipientName, body, link, redirectNote);
         try {
-            mailer.sendHtml(recipient, finalSubject, htmlBody, textBody);
+            mailer.sendHtml(recipient, finalSubject, htmlBody, textBody, logoInlineImages);
             log.info("Notification email sent: employee={} to={}", employeeId, recipient);
         } catch (Exception exception) {
             log.error("Failed to send notification email: employee={} to={} error={}",
@@ -79,11 +94,11 @@ public class NotificationEmailService {
         if (bytes == null || bytes.length == 0) {
             throw new IllegalArgumentException("Attachment is required");
         }
-        String finalSubject = subjectPrefix + subject;
+        String finalSubject = subject + subjectSuffix;
         String finalBody = overrideTo.isBlank()
             ? clean(body)
-            : clean(body) + "\n\n[Redirected for testing - originally addressed to "
-                + (to == null || to.isBlank() ? "no email on file]" : to + "]");
+            : clean(body) + "\n\nRedirected for testing — originally addressed to "
+                + (to == null || to.isBlank() ? "no email on file." : to + ".");
         try {
             mailer.sendWithAttachment(recipient, finalSubject, finalBody, filename, bytes);
             log.info("Notification email with attachment sent: to={} filename={}", recipient, filename);
@@ -140,7 +155,7 @@ public class NotificationEmailService {
               </td>
             </tr>
             """.formatted(FONT_STACK, escapeHtml(redirectNote));
-        String logoUrl = assetBaseUrl + LOGO_PATH;
+        String logoSrc = "cid:" + LOGO_CONTENT_ID;
 
         // The GL&R artwork is black-on-white with NO alpha channel, so the header band stays white
         // and the brand colour appears as the rule beneath it (and on the CTA) instead. Painting the
@@ -148,8 +163,9 @@ public class NotificationEmailService {
         // are pinned to the source's true 360x195 (1.85:1) ratio, halved for retina - an
         // aspect-ratio guess here letterboxes the wordmark in every client that honours the
         // attributes. The font/color styles apply to the ALT TEXT when the image is blocked (Outlook
-        // always, Gmail for unknown senders), so a blocked image still reads as a deliberate wordmark
-        // rather than a broken box - which is why no duplicate text wordmark sits beside it.
+        // always, or any client that disables inline images entirely), so a blocked image still
+        // reads as a deliberate wordmark rather than a broken box - which is why no duplicate text
+        // wordmark sits beside it.
         //
         // NOTE: this reasoning stays a Java comment, not an HTML one - an HTML comment here would
         // ship inside every recipient's email and be readable via "show original".
@@ -191,7 +207,7 @@ public class NotificationEmailService {
                 </table>
               </body>
             </html>
-            """.formatted(BRAND_COLOR, logoUrl, FONT_STACK, FONT_STACK, greeting, messageHtml, cta, FONT_STACK,
+            """.formatted(BRAND_COLOR, logoSrc, FONT_STACK, FONT_STACK, greeting, messageHtml, cta, FONT_STACK,
                 FONT_STACK, redirectHtml);
     }
 

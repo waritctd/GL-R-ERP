@@ -105,18 +105,18 @@ app:
     # only on a test/UAT deployment to redirect every notification email to one inbox (regardless of
     # the employee's actual/fake seeded address) so the pipeline can be verified without real mailboxes.
     override-to: ${APP_MAIL_OVERRIDE_TO:}
-    subject-prefix: ${APP_MAIL_SUBJECT_PREFIX:}
+    # Appended (not prepended) to the subject so a test/UAT deployment never lets a real inbox
+    # mistake test mail for real, without putting a bracketed keyword at the FRONT of the subject -
+    # a leading "[TEST]"-shaped token is a classic spam-filter trigger. Blank by default so every
+    # other deployment sends the subject unchanged.
+    subject-suffix: ${APP_MAIL_SUBJECT_SUFFIX:}
     app-base-url: ${APP_MAIL_APP_BASE_URL:https://demo-glr-git-uat-waritctds-projects.vercel.app}
-    # asset-base-url is deliberately a SEPARATE property from app-base-url: app-base-url is the
-    # Vercel frontend origin (used for portal CTA links, which must resolve to the app the user
-    # signs in to), while asset-base-url is the backend's own Render origin and is used ONLY to
-    # build the emailed logo URL. If app-base-url ever points at a Vercel branch preview with
-    # Deployment Protection enabled, an auth wall sits in front of it - harmless for a human
-    # clicking a CTA (they log in), but fatal for Gmail's image proxy, which fetches with no
-    # cookies/session and cannot complete a login flow, so the logo would silently break in every
-    # email. Hitting the backend origin directly avoids that; vercel.json's /api/:path* rewrite
-    # means both origins serve the same bytes anyway.
-    asset-base-url: ${APP_MAIL_ASSET_BASE_URL:https://gl-r-erp-uat.onrender.com}
+    # Optional. Blank by default = no Reply-To header at all (RFC 5322 clients then reply to
+    # app.mail.from, which is fine). Set APP_MAIL_REPLY_TO to a real, monitored mailbox to improve
+    # deliverability - a Reply-To that resolves to a real inbox is a positive signal to mail
+    # providers, and gives a recipient somewhere to go if they have a question. Never invented here:
+    # an unmonitored or made-up address would be worse than omitting the header.
+    reply-to: ${APP_MAIL_REPLY_TO:}
   # V134 storage-durability fix: explicit server-side cap enforced in FileStorageService, checked
   # before any byte is read into memory. Deliberately separate from
   # spring.servlet.multipart.max-file-size (${APP_MAX_FILE_SIZE:10MB} above) -- that property is

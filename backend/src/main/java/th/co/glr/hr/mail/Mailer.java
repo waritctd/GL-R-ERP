@@ -31,9 +31,28 @@ public interface Mailer {
      * HTML (or read via a plain-text-only reader) still render something readable. No attachment
      * support - this is for transactional notification emails only.
      *
+     * <p>Equivalent to {@link #sendHtml(String, String, String, String, List)} with no inline
+     * images. Kept as a separate default method (rather than requiring every caller to pass
+     * {@code List.of()}) so every existing call site compiles unchanged.
+     *
      * @throws MailSendException if the underlying transport fails.
      */
-    void sendHtml(String to, String subject, String htmlBody, String textBody);
+    default void sendHtml(String to, String subject, String htmlBody, String textBody) {
+        sendHtml(to, subject, htmlBody, textBody, List.of());
+    }
+
+    /**
+     * Sends an HTML email with a required plain-text alternative and zero or more images embedded
+     * IN the message, referenced from the HTML via {@code cid:<contentId>} (e.g. a logo). This is
+     * what lets a client that blocks or delays remote image fetches - Gmail does this for mail
+     * filed as Spam, and for senders/domains it does not yet trust - still render the image: the
+     * bytes travel with the message instead of being fetched afterward from a URL that may never be
+     * requested. An empty list behaves exactly like
+     * {@link #sendHtml(String, String, String, String)}.
+     *
+     * @throws MailSendException if the underlying transport fails.
+     */
+    void sendHtml(String to, String subject, String htmlBody, String textBody, List<InlineImage> inlineImages);
 
     /**
      * Sends one attachment with a plain-text email body.
@@ -52,4 +71,9 @@ public interface Mailer {
 
     /** One file attached to an outbound email, already resolved to bytes. */
     record Attachment(String filename, byte[] bytes, String mimeType) {}
+
+    /** One image embedded in an HTML email and referenced from the HTML via {@code cid:<contentId>}
+     * (no leading {@code cid:} in {@code contentId} itself - that prefix is an HTML/CSS URL-scheme
+     * concern, not part of the identifier), already resolved to bytes. */
+    record InlineImage(String contentId, String filename, byte[] bytes, String mimeType) {}
 }
