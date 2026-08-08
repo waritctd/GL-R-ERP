@@ -119,13 +119,21 @@ Reference implementation:
 aspect **unverified**. Never let "I clicked through it as HR" stand in for an authz claim.
 
 **Clicking through a browser CAN be authz evidence — but only against the real stack.** The
-real-backend e2e suite (`cd frontend && npm run test:e2e:real`, see `frontend/e2e-real/README.md`)
+real-backend e2e suite (`cd frontend && npm run test:e2e`, see `frontend/e2e-real/README.md`)
 drives a real browser against real Spring services and a real Postgres, with no mock in the path.
 `e2e-real/api-authz.spec.js` is where a role gate's *observed* behaviour is pinned. It does not
 replace requirement 2 above — a real-DB integration test through the Java service is still what
-proves a scope filter reaches the `WHERE` clause — but a green run there is real evidence, whereas
-a green `npm run test:e2e` (mock) run is not. Three roles have no seeded persona (`account`,
-`warehouse`, `qc`), so that suite says nothing about them; the README lists the gaps.
+proves a scope filter reaches the `WHERE` clause — but a green run there is real evidence. Three
+roles have no seeded persona (`account`, `warehouse`, `qc`), so that suite says nothing about them;
+the README lists the gaps.
+
+**There is only one e2e suite now.** The mock-frontend suite (`frontend/e2e/`, its own
+`playwright.config.js`, and `e2e-ci.yml`) was removed on 2026-08-08 — owner ruling, one e2e job per
+PR instead of two. Only 8 of its 73 tests were duplicated by `e2e-real/`; the other 65 were mostly
+**visual / layout / form-behaviour** coverage that nothing currently replaces, plus the sales and HR
+journey specs. `frontend/e2e-real/README.md` lists exactly what went, and
+`git show e08a5d03^:frontend/e2e/<file>` recovers any of it. Do not read a green
+`npm run test:e2e` as covering layout or a UI journey — it covers neither.
 
 ## Styling direction — Tailwind-first
 The frontend is migrating from the single global `frontend/src/styles.css` to a **Tailwind-first** system. Tailwind 4 is already wired up via `@tailwindcss/vite`, with design tokens in `frontend/src/index.css` (`@theme static`).

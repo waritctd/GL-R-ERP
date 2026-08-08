@@ -118,7 +118,7 @@ jobs:
 
       - name: Run real-backend e2e
         working-directory: frontend
-        run: npm run test:e2e:real
+        run: npm run test:e2e
 
       - name: Backend log (on failure)
         if: failure()
