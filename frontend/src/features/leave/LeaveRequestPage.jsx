@@ -18,6 +18,8 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { QuotaBar } from '../../components/common/QuotaBar.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
+import { UpcomingHolidays } from '../../components/common/UpcomingHolidays.jsx';
+import { addDaysIso } from '../../utils/format.js';
 import { EVERYDAY_LEAVE_TYPE_CODES } from './MyLeaveTab.jsx';
 import { LeaveRulePanel } from './LeaveRulePanel.jsx';
 import { LEAVE_PURPOSE_OPTIONS } from './leaveRequestTable.jsx';
@@ -520,6 +522,15 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
 
   const formSubDay = subDay;
 
+  // Upcoming-holidays panel (composer follow-up to #ot-holiday-visibility, PR 2): a fixed ~90-day
+  // forward window from today, independent of whatever startDate/endDate is (or is not yet)
+  // chosen -- same window OvertimePanel.jsx's own UpcomingHolidays call uses, so "what's coming
+  // up" reads identically everywhere it appears. NOT the same thing as `calendarContextParams`
+  // below, which is scoped to the employee's own SELECTED range and answers "what did I just
+  // pick", not "what's ahead" -- see that block's own comment.
+  const holidayWindowFrom = todayIso();
+  const holidayWindowTo = addDaysIso(holidayWindowFrom, 90);
+
   // HARDENING, not a fix for a live bug (HTML implicit submission, fix/form-enter-submits-real-
   // records; migrated to SafeForm's `canSubmit` under #safe-form-primitive): this <form> wraps all
   // 3 steps and was, before this gate, safe today only because three facts happened to stack up,
@@ -551,6 +562,18 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
         subtitle="ระบบตรวจเงื่อนไขทั้งหมดให้ก่อนคุณกดส่ง จะได้ไม่ต้องแก้แล้วแก้อีก"
         breadcrumbs={[{ label: 'การลา', onClick: () => goBackToSurface(false) }, { label: 'ยื่นคำขอลา' }]}
       />
+
+      {/* Holiday answer arrives BEFORE the date is picked, not just after (the gap this PR
+          closes): sits above the whole step-2 panel rather than nested inside it -- same
+          "no nested cards" shape OvertimePanel.jsx's own placement uses (a Panel is a bordered
+          card; UpcomingHolidays renders its own, so nesting it inside step 2's Panel would be a
+          card-in-a-card). Gated on step === 2 only: step 1 has no type chosen yet for this to be
+          useful context for, and step 3 already has its own answer to "which of MY selected dates
+          are holidays" via the reactive note further down -- this panel's job is only the
+          "before you've even opened the date field" moment step 2 owns. */}
+      {step === 2 ? (
+        <UpcomingHolidays from={holidayWindowFrom} to={holidayWindowTo} />
+      ) : null}
 
       <SafeForm onSubmit={handleSubmit(onSubmit)} canSubmit={step === 3} noValidate className="grid gap-[18px]">
         {/* ── Step 1: เลือกประเภท ───────────────────────────────────────────── */}
@@ -676,17 +699,42 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
 
               {/* Calendar context (#leave-calendar-context, Phase C): why totalDays can be smaller
                   than the calendar span -- lists which selected dates are holidays/non-working per
-                  the employee's OWN resolved schedule, not a full calendar widget. */}
+                  the employee's OWN resolved schedule, not a full calendar widget. Answers "what
+                  did I just select" -- a different question from the วันหยุดที่จะถึง panel above
+                  ("what's coming up", visible before any date is picked) -- so this stays,
+                  restyled to sit under it rather than replaced by it. */}
               {calendarContextParams ? (
-                <div className={formGridSpan2}>
+                <div className={formGridSpan2} data-testid="calendar-context-note">
                   {nonWorkingDates.length > 0 ? (
-                    <p className="m-0 rounded-lg border border-warning-border bg-warning-bg-soft px-3 py-2 text-xs text-warning-dark">
-                      ช่วงที่เลือกมี {nonWorkingDates.length} วันที่ไม่นับเป็นวันทำงาน (วันหยุด/วันหยุดประจำสัปดาห์
-                      ตามตารางเวลาทำงานของคุณ): {nonWorkingDates.map((date) => formatDate(date)).join(', ')}
+                    <div className="rounded-lg border border-warning-border bg-warning-bg-soft px-3 py-2 text-xs text-warning-dark">
+                      <p className="m-0">
+                        ช่วงที่เลือกมี {nonWorkingDates.length} วันที่ไม่นับเป็นวันทำงาน (วันหยุดบริษัท/วันหยุดประจำสัปดาห์
+                        ตามตารางเวลาทำงานของคุณ): {nonWorkingDates.map((date) => formatDate(date)).join(', ')}
+                      </p>
+                      {/* Real วันหยุดบริษัท names run up to 149 chars (MOCK_HOLIDAY_DATES in
+                          mockApi.js is now a verbatim copy of production's hr.holiday, V129's own
+                          reason for widening name_th from VARCHAR(120) to TEXT). This used to
+                          interpolate `${formatDate(...)} (${nameTh})` straight into the sentence
+                          above, comma-joined with every other holiday in range -- fine at the old
+                          fixture's 9-17 chars, an unreadable wall of text at production length with
+                          two or three holidays in one selected range. Same fix shape as the OT
+                          verdict pill (#ot-holiday-visibility): each holiday gets its OWN line
+                          below instead of being crammed inline, so a 149-char name only ever
+                          affects the one row it belongs to. */}
                       {holidaysInRange.length > 0 ? (
-                        <> — วันหยุด: {holidaysInRange.map((h) => `${formatDate(h.holidayDate)} (${h.nameTh})`).join(', ')}</>
+                        <div className="mt-2 border-t border-warning-border pt-2">
+                          <p className="m-0 font-semibold">วันหยุดบริษัทในช่วงนี้</p>
+                          <ul className="m-0 mt-1 grid list-none gap-1 p-0">
+                            {holidaysInRange.map((holiday) => (
+                              <li key={holiday.holidayDate} className="flex flex-wrap items-baseline gap-x-1.5">
+                                <strong className="shrink-0">{formatDate(holiday.holidayDate)}</strong>
+                                <span className="min-w-0">{holiday.nameTh}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
                       ) : null}
-                    </p>
+                    </div>
                   ) : !calendarContextQuery.isFetching && calendarContextQuery.data ? (
                     <p className="m-0 text-xs text-muted">ทุกวันในช่วงที่เลือกเป็นวันทำงานตามตารางเวลาของคุณ</p>
                   ) : null}
