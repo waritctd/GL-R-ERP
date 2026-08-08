@@ -173,16 +173,32 @@ export const LOR_YOR_01_DETAIL_KEYS = [
   'providentFundAllowance', 'rmfSellerName', 'otherDonationNote',
 ];
 
+/**
+ * The eight ข้อ 4 / ข้อ 6 ticks. Split out because they must default to `false`, not `''` — they are
+ * checkbox inputs validated as booleans, and seeding them with the empty string every other detail
+ * key uses makes the whole form fail validation silently: `handleSubmit` simply never fires, with
+ * no error rendered anywhere near the ข้อ the employee was filling in.
+ */
+export const LOR_YOR_01_TICK_KEYS = [
+  'ownFatherSupported', 'ownMotherSupported', 'spouseFatherSupported', 'spouseMotherSupported',
+  'ownFatherHealthInsured', 'ownMotherHealthInsured',
+  'spouseFatherHealthInsured', 'spouseMotherHealthInsured',
+];
+
 export const LOR_YOR_01_ADDRESS_KEYS = [
   'building', 'roomNo', 'floor', 'village', 'houseNo', 'moo', 'soi', 'junction', 'road',
   'subDistrict', 'district', 'province', 'postalCode',
 ];
 
-/** Attachment bucket for the signed, scanned form — required before submit (owner decision #3). */
-export const SIGNED_FORM_EVIDENCE_KEY = 'signed_form';
-
-/** The hub's general/uncategorised evidence bucket. */
+/** The general/uncategorised evidence bucket, kept for evidence that belongs to no single ข้อ. */
 export const UNCATEGORIZED_EVIDENCE_KEY = '__uncategorized';
+
+/**
+ * Attachment bucket for the signed, scanned form. Its own key rather than a file in the general
+ * bucket (owner decision #3) so that "has the employee signed this?" is answerable without opening
+ * files — the page gates submit on it and the backend refuses to approve without it.
+ */
+export const SIGNED_FORM_EVIDENCE_KEY = 'signed_form';
 
 export const MARITAL_STATE_OPTIONS = [
   { value: 'SINGLE', label: 'โสด' },
@@ -412,7 +428,11 @@ export function defaultAllowanceValues(declaration) {
   // a re-prepared declaration to January while restoring documentReference right beside it.
   values.effectiveMonth = declaration?.effectiveMonth ?? '';
   values.lorYor01 = {};
-  for (const key of LOR_YOR_01_DETAIL_KEYS) values.lorYor01[key] = detail[key] ?? '';
+  for (const key of LOR_YOR_01_DETAIL_KEYS) {
+    values.lorYor01[key] = LOR_YOR_01_TICK_KEYS.includes(key)
+      ? Boolean(detail[key])
+      : detail[key] ?? '';
+  }
   values.lorYor01.address = {};
   for (const key of LOR_YOR_01_ADDRESS_KEYS) {
     values.lorYor01.address[key] = detail.address?.[key] ?? '';

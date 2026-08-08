@@ -1595,10 +1595,18 @@ function requireTaxAllowanceAttachmentAccess(declaration, user) {
   if (!isOwner && !isHr) fail('ไม่พบไฟล์แนบนี้', 404);
 }
 
-// V135 (feat/tax-allowance-sections): mirrors TaxAllowanceDeclarationService#EVIDENCE_SECTION_KEYS,
-// which itself mirrors TAX_ALLOWANCE_GROUPS' five `key`s in
-// frontend/src/features/taxAllowance/taxAllowanceSchema.js. Kept in sync by hand in all three places.
-const TAX_ALLOWANCE_SECTION_KEYS = new Set(['family', 'insurance', 'savings', 'housing', 'donation']);
+// Mirrors TaxAllowanceDeclarationService#EVIDENCE_SECTION_KEYS, which itself mirrors
+// LOR_YOR_01_SECTIONS' keys in frontend/src/features/taxAllowance/taxAllowanceSchema.js. Kept in
+// sync BY HAND in all three places — nothing enforces it, so a key added to the form and not here
+// uploads fine in mock mode and 400s against the real service.
+//
+// The five invented category keys (family/insurance/savings/housing/donation) were replaced by one
+// key per ข้อ when the page was restructured to follow the government form, plus `signed_form` for
+// the signed scan the employee returns.
+const TAX_ALLOWANCE_SECTION_KEYS = new Set([
+  'item3', 'item4', 'item5', 'item6', 'item7', 'item8', 'item9', 'item10',
+  'item12', 'item14', 'item15', 'signed_form',
+]);
 
 // Mirrors TaxAllowanceCapCatalog#capsFor exactly -- a lookup TABLE, not a computation, so this is a
 // faithful stand-in rather than the "mock reimplements the algorithm" trap CLAUDE.md warns about.
@@ -6303,6 +6311,21 @@ export const api = {
     async estimateMyTaxAllowanceDeclaration() {
       requireSession();
       throw new Error('การประมาณการผลของค่าลดหย่อนต่อภาษีไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    // Both ล.ย.01 PDF endpoints are honest stubs rather than a fake Blob.
+    //
+    // The real ones fill the Revenue Department's own AcroForm with an embedded Thai font in
+    // PDFBox — there is no faithful browser-side stand-in, and returning a placeholder PDF would
+    // make mock-mode click-through look like evidence that the generated form is correct. It is
+    // exactly the "mock mirrors a backend computation" trap CLAUDE.md documents: verify the output
+    // against the real Java service, never against this file.
+    async renderMyTaxAllowanceForm(declaration) {  // eslint-disable-line no-unused-vars
+      requireSession();
+      throw new Error('การสร้างไฟล์ PDF แบบ ล.ย.01 ไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async downloadTaxAllowanceForm(declarationId) {  // eslint-disable-line no-unused-vars
+      requireSession();
+      throw new Error('การดาวน์โหลดแบบ ล.ย.01 ไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
     async getTaxAllowanceDeclarations(params = {}) {
       hasRole('hr', 'ceo');

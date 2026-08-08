@@ -144,16 +144,19 @@ describe('TaxAllowancePage', () => {
       // not current standing, only its VALUES are offered back for editing.
       expect(await screen.findByText('ยังไม่ได้ยื่น')).not.toBeNull();
 
-      // Hub's running total reflects the withdrawn declaration's values, not ฿0.00 -- waiting on this
-      // text is also what proves the declarations query has actually settled and fed `resumable`
-      // through to `defaultValues`, not just the synchronous first paint (which is null either way).
-      expect(await screen.findByText('฿85,000.00')).not.toBeNull();
+      // ข้อ 7's own collapsed row shows the withdrawn declaration's figure, not ฿0.00. Waiting on
+      // this is also what proves the declarations query has actually settled and fed `resumable`
+      // through to `defaultValues`, rather than the synchronous first paint (null either way).
+      //
+      // ฿25,000 not ฿85,000: the withdrawn row's spouseAllowance is deliberately NOT shown, because
+      // ล.ย.01 has no spouse amount box — HR sets that figure at review.
+      expect(await screen.findByText('฿25,000.00')).not.toBeNull();
 
       // And the actual field value survived into the reopened section, not just the total shown on
       // the hub -- matches the real-backend repro's own `#ta-spouseAllowance` check.
-      fireEvent.click(screen.getByRole('button', { name: /ครอบครัว/ }));
-      expect(await screen.findByLabelText('คู่สมรส (ไม่มีเงินได้)')).not.toBeNull();
-      expect(screen.getByLabelText('คู่สมรส (ไม่มีเงินได้)').value).toBe('60000');
+      fireEvent.click(screen.getByRole('button', { name: /ข้อ 7/ }));
+      expect(await screen.findByLabelText('จำนวนเงิน')).not.toBeNull();
+      expect(screen.getByLabelText('จำนวนเงิน').value).toBe('25000');
     });
 
     it('does not pre-fill from a SUPERSEDED-only history -- only a WITHDRAWN row is resumable', async () => {
@@ -170,9 +173,9 @@ describe('TaxAllowancePage', () => {
 
       expect(await screen.findByText('ยังไม่ได้ยื่น')).not.toBeNull();
 
-      fireEvent.click(await screen.findByRole('button', { name: /ครอบครัว/ }));
-      expect(await screen.findByLabelText('คู่สมรส (ไม่มีเงินได้)')).not.toBeNull();
-      expect(screen.getByLabelText('คู่สมรส (ไม่มีเงินได้)').value).toBe('0');
+      fireEvent.click(await screen.findByRole('button', { name: /ข้อ 7/ }));
+      expect(await screen.findByLabelText('จำนวนเงิน')).not.toBeNull();
+      expect(screen.getByLabelText('จำนวนเงิน').value).toBe('0');
     });
 
     it('lets a current APPROVED declaration win over an older WITHDRAWN one', async () => {
@@ -197,9 +200,9 @@ describe('TaxAllowancePage', () => {
 
       await screen.findByText(/อนุมัติแล้ว/);
 
-      fireEvent.click(screen.getByRole('button', { name: /ครอบครัว/ }));
-      expect(await screen.findByLabelText('คู่สมรส (ไม่มีเงินได้)')).not.toBeNull();
-      expect(screen.getByLabelText('คู่สมรส (ไม่มีเงินได้)').value).toBe('60000');
+      fireEvent.click(screen.getByRole('button', { name: /ข้อ 7/ }));
+      expect(await screen.findByLabelText('จำนวนเงิน')).not.toBeNull();
+      expect(screen.getByLabelText('จำนวนเงิน').value).toBe('25000');
     });
   });
 
@@ -241,7 +244,7 @@ describe('TaxAllowancePage', () => {
 
       renderPage();
 
-      fireEvent.click(await screen.findByText('ครอบครัว'));
+      fireEvent.click(await screen.findByRole('button', { name: /ข้อ 7/ }));
 
       const file = new File(['x'], 'cert.pdf', { type: 'application/pdf' });
       const input = document.querySelector('input[type="file"]');
@@ -255,8 +258,6 @@ describe('TaxAllowancePage', () => {
 
       // Back to the hub, into review, then the ONE real submit control in the whole flow --
       // SECTION itself never carries one (#tax-allowance-ia-hub-review).
-      fireEvent.click(screen.getByRole('button', { name: /กลับไปหน้ารวม/ }));
-      fireEvent.click(screen.getByRole('button', { name: 'ตรวจทานและยื่น' }));
       fireEvent.click(screen.getByRole('button', { name: 'ยื่นแบบแจ้ง' }));
 
       await waitFor(() => expect(api.payroll.submitMyTaxAllowanceDeclaration).toHaveBeenCalled());
@@ -267,29 +268,9 @@ describe('TaxAllowancePage', () => {
     });
   });
 
-  describe('?year=/?view= navigation via the URL (#tax-allowance-ia-hub-review)', () => {
-    it('reads a valid ?view= from the URL straight into the matching section', async () => {
-      renderPage({ entry: '/tax-allowance?view=insurance' });
-      expect(await screen.findByLabelText('ประกันชีวิต')).not.toBeNull();
-    });
-
-    it('falls back to the hub for a garbage ?view=', async () => {
-      renderPage({ entry: '/tax-allowance?view=not-a-real-section' });
-      // Only the hub renders the declaration-level fields directly, with nothing else selected.
-      expect(await screen.findByLabelText('มีผลตั้งแต่งวดเดือน')).not.toBeNull();
-    });
-
-    it('writes ?view= into the URL when a hub row is opened, and clears it again on the way back', async () => {
-      renderPage();
-      await screen.findByLabelText('มีผลตั้งแต่งวดเดือน');
-
-      fireEvent.click(screen.getByRole('button', { name: /ครอบครัว/ }));
-      await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('view=family'));
-
-      fireEvent.click(screen.getByRole('button', { name: 'กลับไปหน้ารวม' }));
-      await waitFor(() => expect(screen.getByTestId('location').textContent).not.toContain('view='));
-    });
-
+  // `?view=` is gone with the wizard — the page is one screen of collapsibles now, so only the
+  // year is still URL-addressable.
+  describe('?year= navigation via the URL', () => {
     it('reads a valid ?year= from the URL and refetches for it', async () => {
       renderPage({ entry: `/tax-allowance?year=${currentYear - 1}` });
       await waitFor(() => {
@@ -310,52 +291,6 @@ describe('TaxAllowancePage', () => {
     // all, so Back should step between them like any other page navigation -- not leave
     // `/tax-allowance` entirely and drop everything typed. A year switch is a filter on the same
     // screen, not a screen of its own, so it keeps the OLD `replace: true` behaviour instead.
-    it('view changes push a new history entry; year changes replace instead', async () => {
-      renderPage();
-      await screen.findByLabelText('มีผลตั้งแต่งวดเดือน');
-
-      fireEvent.click(screen.getByRole('button', { name: /ครอบครัว/ }));
-      await waitFor(() => expect(screen.getByTestId('location').dataset.navType).toBe('PUSH'));
-
-      fireEvent.change(screen.getByLabelText('ปีภาษี'), { target: { value: String(currentYear - 1) } });
-      await waitFor(() => expect(screen.getByTestId('location').dataset.navType).toBe('REPLACE'));
-    });
-  });
-
-  describe('REVIEW\'s staged-evidence manifest (review fix)', () => {
-    it('includes the general/uncategorized bucket staged through the hub, not just the five sections', async () => {
-      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [] }); // status NONE -> editing, mode 'staging'
-      renderPage();
-
-      // The picker only mounts once the declarations query has SETTLED and the page has concluded
-      // this year is unfiled -- `editing` is deliberately not decided while the query is in flight
-      // (see TaxAllowancePage's own comment on that effect), so querying for it synchronously
-      // after render finds nothing.
-      const picker = await waitFor(() => {
-        const input = document.querySelector('input[type="file"]');
-        expect(input).not.toBeNull();
-        return input;
-      });
-
-      // Staged through the HUB's own general panel -- no section chosen, so this lands in the
-      // UNCATEGORIZED_EVIDENCE_KEY bucket, which is not one of TAX_ALLOWANCE_GROUPS' own keys.
-      const file = new File(['x'], 'general.pdf', { type: 'application/pdf' });
-      fireEvent.change(picker, { target: { files: [file] } });
-      await screen.findByText('general.pdf');
-
-      fireEvent.click(screen.getByRole('button', { name: 'ตรวจทานและยื่น' }));
-
-      const generalRow = screen.getByText('ทั่วไป (ไม่ได้ระบุหมวด)').closest('div');
-      expect(within(generalRow).getByText('1 ไฟล์')).not.toBeNull();
-    });
-
-    it('does not render outside staging mode, where the staged-only count would misreport real stored attachments as zero', async () => {
-      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [declaration()] }); // PENDING -> mode 'direct'
-      renderPage({ entry: '/tax-allowance?view=review' });
-
-      await screen.findByRole('heading', { name: 'ตรวจทานก่อนยื่น' });
-      expect(screen.queryByText('ไฟล์ที่เตรียมไว้ — ยังไม่ได้ส่ง')).toBeNull();
-    });
   });
 
   describe('year-switch confirmation guards unsaved work', () => {
@@ -386,7 +321,7 @@ describe('TaxAllowancePage', () => {
       api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [] });
       renderPage();
 
-      fireEvent.click(await screen.findByRole('button', { name: /ครอบครัว/ }));
+      fireEvent.click(await screen.findByRole('button', { name: /ข้อ 7/ }));
       const file = new File(['x'], 'cert.pdf', { type: 'application/pdf' });
       fireEvent.change(document.querySelector('input[type="file"]'), { target: { files: [file] } });
       await screen.findByText('cert.pdf');
@@ -396,21 +331,20 @@ describe('TaxAllowancePage', () => {
       expect(await screen.findByRole('heading', { name: 'เปลี่ยนปีภาษี' })).not.toBeNull();
     });
 
-    it('proceeds with the year switch once confirmed, and resets ?view= back to the hub', async () => {
+    it('proceeds with the year switch once confirmed', async () => {
       api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [] });
       // Starts on the family SECTION (not the hub) so this also proves the reset-to-hub half of the
       // claim -- "เลขที่เอกสารอ้างอิง" (used by the other dirty-form test above) lives on the hub only,
       // so dirtying via this section's own field is what's available here.
-      renderPage({ entry: '/tax-allowance?view=family' });
+      renderPage();
 
-      fireEvent.change(await screen.findByLabelText('คู่สมรส (ไม่มีเงินได้)'), { target: { value: '1000' } });
+      fireEvent.change(await screen.findByLabelText('จำนวนเงิน'), { target: { value: '1000' } });
       fireEvent.change(screen.getByLabelText('ปีภาษี'), { target: { value: String(currentYear - 1) } });
       fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันเปลี่ยนปีภาษี' }));
 
       await waitFor(() => {
         expect(api.payroll.getMyTaxAllowanceDeclarations).toHaveBeenCalledWith(currentYear - 1);
       });
-      expect(screen.getByTestId('location').textContent).not.toContain('view=');
     });
   });
 });

@@ -74,8 +74,20 @@ public class TaxAllowanceDeclarationService {
     // which TaxAllowanceCapCatalog owns authoritatively, the five-section grouping is a UI
     // information-architecture concept with no backend equivalent to reuse. Keep both lists in sync
     // by hand if a section is ever added, renamed, or removed.
+    /**
+     * One key per ข้อ of แบบ ล.ย.01, plus {@code signed_form} for the signed scan the employee
+     * returns before HR will accept the filing.
+     *
+     * <p>Replaces the five invented category keys (family/insurance/savings/housing/donation) that
+     * predate the form restructure. Mirrored BY HAND in {@code mockApi.js}'s
+     * {@code TAX_ALLOWANCE_SECTION_KEYS} and in {@code LOR_YOR_01_SECTIONS} — nothing enforces the
+     * three stay in step, so a key added to the form and not here uploads cleanly under mocks and
+     * 400s against this service. ข้อ 11 and ข้อ 13 are absent deliberately: neither is fillable, so
+     * neither can carry evidence.
+     */
     private static final Set<String> EVIDENCE_SECTION_KEYS =
-        Set.of("family", "insurance", "savings", "housing", "donation");
+        Set.of("item3", "item4", "item5", "item6", "item7", "item8", "item9", "item10",
+            "item12", "item14", "item15", "signed_form");
 
     private final TaxAllowanceDeclarationRepository repository;
     private final PayrollRepository payrollRepository;
