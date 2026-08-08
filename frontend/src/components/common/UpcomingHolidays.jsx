@@ -3,7 +3,6 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { EmptyState } from './EmptyState.jsx';
 import { Panel } from './Layout.jsx';
-import { StatusBadge } from './StatusBadge.jsx';
 
 function formatHolidayDate(value) {
   if (!value) return '-';
@@ -61,17 +60,31 @@ export function UpcomingHolidays({ from, to, title = 'วันหยุดท�
       ) : holidays.length === 0 ? (
         <EmptyState icon="calendar" title="ยังไม่มีข้อมูลวันหยุด" description="ไม่มีวันหยุดบริษัทในช่วงที่แสดงนี้" />
       ) : (
-        <ul className="m-0 grid list-none gap-2 p-0">
+        // A two-column GRID, not a flex row, and each name clamped to one line. Both are about the
+        // same fact: `hr.holiday.name_th` carries the OFFICIAL Bank of Thailand record, not a label.
+        // Production names average 35 characters and reach 149 -- e.g. 12 Aug is
+        // "วันเฉลิมพระชนมพรรษาสมเด็จพระนางเจ้าสิริกิติ์ พระบรมราชินีนาถ พระบรมราชชนนีพันปีหลวง และวันแม่แห่งชาติ".
+        //
+        // Under the previous `flex flex-wrap`, measured at 360px: a 101-char name wrapped onto its
+        // own line starting at x=50 while short names stayed inline at x=132, and row heights ran
+        // 44px / 71px / 127px. The column read as ragged and the panel dwarfed the form it was
+        // meant to support. A fixed date column plus `truncate` makes every row exactly one line
+        // and every name start at the same x, whatever the calendar happens to contain.
+        //
+        // The full record is one hover away via `title` and is never lost -- and HR keeps the
+        // unabridged value in the admin surface (`attendanceCalendar/HolidaysTab.jsx`), which is
+        // the role that actually needs it. An employee picking an OT date needs to know THAT the
+        // day is a holiday, not to read a royal title.
+        <ul className="m-0 grid list-none gap-1.5 p-0">
           {holidays.map((holiday) => (
             <li
               key={holiday.holidayDate}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface px-3 py-2"
+              className="grid grid-cols-[7.5rem_1fr] items-baseline gap-x-3 rounded-md border border-border bg-surface px-3 py-2"
             >
-              <span className="flex flex-wrap items-baseline gap-2">
-                <strong className="text-sm text-text">{formatHolidayDate(holiday.holidayDate)}</strong>
-                <span className="text-xs text-text-muted">{holiday.nameTh}</span>
+              <strong className="text-sm tabular-nums text-text">{formatHolidayDate(holiday.holidayDate)}</strong>
+              <span className="truncate text-xs text-text-muted" title={holiday.nameTh}>
+                {holiday.nameTh}
               </span>
-              <StatusBadge tone="warning">วันหยุดบริษัท</StatusBadge>
             </li>
           ))}
         </ul>
