@@ -5,7 +5,11 @@ This repository is a GL&R **HR + Sales/CRM portal** growing into an ERP platform
 ## Start every session by reading context
 1. **Read this file and `AGENTS.md` before starting.** They hold the product identity, the current priorities, and the non-negotiable rules. There is no longer a separate handoff corpus to read — it was retired in 2026-07 (see "Where the old docs went" below).
 2. **Always run `git status` before making any changes** and confirm which branch you are on.
-3. **Check you are not on a stale base.** With several worktrees in play, `git fetch` then `git rev-list --left-right --count HEAD...origin/main` before you build anything substantial — this repo has had a full feature built on a base that `main` had already moved past.
+3. **Keep local `main` identical to `origin/main` — always.** `main` is never a place to hold work, so it should only ever fast-forward. Sync it at session start, after every merge, and before cutting any branch:
+   ```
+   git fetch origin main && git merge --ff-only origin/main
+   ```
+   `--ff-only` is the point: it refuses to create a merge commit on `main`, so a failure means something was committed locally that should not have been — investigate rather than force it. Verify with `git rev-list --left-right --count HEAD...origin/main`, which must read `0  0`. **Branch from `origin/main`, not from a stale local `main`**: with several worktrees in play this repo has had a full feature built on a base `main` had already moved past, and a branch cut from a stale base is the thing that turns into repeated mid-flight syncs later.
 4. **Check for concurrent activity before starting substantial work.** `git branch -a` / `git log --all --oneline -10` to see what other worktrees or agents have pushed recently, and list open PRs to see if another session is already on the same files or surface. Two agents silently touching the same area is how conflicting changes and repeated merge-fixups happen — see the branch-lifetime note below.
 
 ## Scope rules — non-negotiable
@@ -118,6 +122,23 @@ Reference implementation:
 **Reporting:** if verification ran only under `VITE_USE_MOCKS=true`, say so and call the permission
 aspect **unverified**. Never let "I clicked through it as HR" stand in for an authz claim.
 
+**Clicking through a browser CAN be authz evidence — but only against the real stack.** The
+real-backend e2e suite (`cd frontend && npm run test:e2e`, see `frontend/e2e-real/README.md`)
+drives a real browser against real Spring services and a real Postgres, with no mock in the path.
+`e2e-real/api-authz.spec.js` is where a role gate's *observed* behaviour is pinned. It does not
+replace requirement 2 above — a real-DB integration test through the Java service is still what
+proves a scope filter reaches the `WHERE` clause — but a green run there is real evidence. Three
+roles have no seeded persona (`account`, `warehouse`, `qc`), so that suite says nothing about them;
+the README lists the gaps.
+
+**There is only one e2e suite now.** The mock-frontend suite (`frontend/e2e/`, its own
+`playwright.config.js`, and `e2e-ci.yml`) was removed on 2026-08-08 — owner ruling, one e2e job per
+PR instead of two. Only 8 of its 73 tests were duplicated by `e2e-real/`; the other 65 were mostly
+**visual / layout / form-behaviour** coverage that nothing currently replaces, plus the sales and HR
+journey specs. `frontend/e2e-real/README.md` lists exactly what went, and
+`git show e08a5d03^:frontend/e2e/<file>` recovers any of it. Do not read a green
+`npm run test:e2e` as covering layout or a UI journey — it covers neither.
+
 ## Styling direction — Tailwind-first
 The frontend is migrating from the single global `frontend/src/styles.css` to a **Tailwind-first** system. Tailwind 4 is already wired up via `@tailwindcss/vite`, with design tokens in `frontend/src/index.css` (`@theme static`).
 
@@ -131,7 +152,17 @@ The frontend is migrating from the single global `frontend/src/styles.css` to a 
 ## Frontend design skills — use before/during UI work
 - **Use the `information-architecture` skill** whenever frontend work involves navigation, page/content structure, URL patterns, or user flows — plan the structural layer before touching visual design. This applies to new pages/sections and to any restructuring of existing ones, not just net-new features.
 - **Use the `frontend-design` skill/plugin** when implementing the actual UI. Hold implementation to an impeccable bar: no generic/placeholder-looking output, consistent with the Tailwind-first direction above and the existing design tokens in `frontend/src/index.css`.
-- Both are installed locally (`.agents/skills/information-architecture`, `.agents/skills/frontend-design`, and the `frontend-design@claude-plugins-official` Claude Code plugin) — invoke them rather than freehanding IA or visual design decisions.
+- Both live in `.agents/skills/` (committed). Claude Code loads skills from `.claude/skills/`, which is gitignored, so each machine needs symlinks into `.agents/skills/` — `.claude/hooks/session-start.sh` creates them, **but only when `CLAUDE_CODE_REMOTE=true`**. On a local checkout you must create them yourself, or these skills silently will not exist:
+  ```
+  mkdir -p .claude/skills && for d in .agents/skills/*/; do ln -sfn "../../$d" ".claude/skills/$(basename "$d")"; done
+  ```
+  **Re-run that loop in two situations, not one.** It links only what exists *at the moment it runs*, and it is not idempotent against a changing `.agents/skills/`:
+  1. **Every new worktree** — the symlinks are gitignored, so a fresh `git worktree add` starts with none.
+  2. **After any merge that adds a skill** — an already-linked worktree that pulls in a new one gets the committed directory with no symlink.
+
+  Both failures are **silent**: nothing errors, the skill is simply absent from the listing and the session freehands instead. Confirmed twice on 2026-08-08 — a new worktree started bare, and an already-linked worktree merged `main`, gained `retired-docs`, and did not load it. **`ls .claude/skills` and compare against `ls .agents/skills` before relying on any of them**; the counts must match. Invoke these skills rather than freehanding IA or visual design decisions.
+
+  Note `.agents/skills/` is no longer only design skills — it also carries `retired-docs` and `playwright-best-practices`. The loop covers all of them; this section just happens to be where it is documented.
 
 ## Branch & agent discipline
 - **One branch per task.** `main` must stay deployable; branch off `main`, open a PR, merge only after review.
@@ -147,14 +178,17 @@ The frontend is migrating from the single global `frontend/src/styles.css` to a 
   a second or third `git fetch origin main && git merge/rebase` mid-flight has grown too large or sat
   open too long; both cost real agent time re-reading diffs and re-resolving conflicts. `feat/leave-rules-tab`
   synced `main` four times before merging — that pattern is the thing to avoid, not repeat.
-- **Use a PR stack instead of one long branch when a task naturally has sequential parts** (e.g. "add
-  the composer" → "wire it to the API" → "add the calendar admin UI"). Branch each step off the
-  previous step's branch (`git checkout -b feat/x-step2 feat/x-step1`) and open each as its own PR
-  targeting the previous branch, so each is small, reviewable, and only ever merges forward — never
-  re-synced against a moving `main` mid-task. If a stacking CLI (Graphite `gt`, `git-spice`) is
-  installed and configured for this repo, use it instead of hand-rolled stacked branches; check for
-  it (`which gt`, `which git-spice` / `gs`) before assuming plain git is the only option. Land and
-  merge the bottom of the stack first — don't let the whole stack sit unmerged waiting on the top PR.
+- **Stacked PRs run on Git Town — read [`STACKED-PRS.md`](STACKED-PRS.md) before creating any branch.**
+  It has the mechanics (depth cap, recorded parents, the required PR **Stack** block, resync and
+  recovery); config is checked in at [`git-town.toml`](git-town.toml). Three things belong here
+  because getting them wrong is expensive and you will not have read that file yet:
+  - **Default to `git town hack` off `main`. Stack only for a genuine dependency** — the work cannot
+    compile, pass tests, or be reviewed without another branch's unmerged commits. "Related" and
+    "would conflict later" are **not** dependencies, and a needless stack is pure cost.
+  - ⚠️ **`git town sync` pushes** — branches *and* tags — and stashes your working tree. It is not a
+    read-only catch-up, so never run it when a push has not been asked for. `--dry-run` first.
+  - ⚠️ **Merge bottom-up with a merge commit. Squashing a PR that has children orphans every branch
+    above it.**
 - **Rework costs a full second pass — verify before handing off, not after review flags it.** Commits
   like `review fixes for V116` (a second pass on quota bookkeeping and probation resolution after
   review) are exactly the pattern to prevent: for business-logic-sensitive surfaces (leave/payroll
@@ -185,22 +219,19 @@ The frontend is migrating from the single global `frontend/src/styles.css` to a 
   5. **Known risks**
 
 ## Where the old docs went
-`docs/agent-handoffs/`, `docs/ui-repair/` and `docs/ux-ui-audit/` were retired in 2026-07. The
-per-branch handoff corpus had grown to ~260 files that no one read end-to-end, and a stale copy
-is worse than none — an agent following a superseded plan is the failure mode this repo actually
-hit. **The PR body is now the handoff**, and the code's own comments carry the reasoning.
+`docs/agent-handoffs/`, `docs/ui-repair/` and `docs/ux-ui-audit/` were retired in 2026-07 — **the
+PR body is now the handoff**, and the code's own comments carry the reasoning. Source comments
+still cite those paths; treat such a pointer as a history reference, not a live file. Nothing is
+lost — use the `retired-docs` skill to read any of them back out of git history.
 
-Nothing is lost: the files are in git history. `git log --diff-filter=D --oneline -- docs/ui-repair`
-finds the removal commit, and `git show <sha>^:docs/ui-repair/<path>` reads any of them. Source
-comments still cite those paths; treat such a pointer as a history reference, not a live file.
-
-## Repo quick facts (frontend verified 2026-07-16)
-- **Frontend:** React 18 + Vite 8. Routing is `react-router-dom` 7 (`frontend/src/App.jsx`); server state via `@tanstack/react-query` 5; tables via `@tanstack/react-table` 8; forms via `react-hook-form` + `zod`. Styling is mid-migration: Tailwind 4 (`@tailwindcss/vite`) with tokens in `src/index.css`, alongside a legacy global `src/styles.css` (~2k lines) being progressively retired. Tests: Vitest. Lint: ESLint + jsx-a11y.
+## Repo quick facts
+- **Frontend styling is mid-migration:** Tailwind 4 (`@tailwindcss/vite`) with tokens in `src/index.css`, alongside a legacy global `src/styles.css` being progressively retired. `styles.css` is imported as `@import "./styles.css" layer(legacy)` — so a Tailwind utility **always** beats a `styles.css` rule regardless of selector specificity. Measure computed styles before assuming a legacy rule still applies.
 - **There is no `typecheck` script** — this is a plain JS project with no TypeScript. Validation is `npm run lint && npm test && npm run build`. Do not claim a typecheck ran.
 - **npm scripts live in `frontend/`**, not the repo root (there is no root `package.json`).
-- **Backend:** Spring Boot 4.1 / Java 21. Session auth. `SecurityConfig` is currently `permitAll` with manual per-endpoint checks. Flyway migrations run to `V58` (plus a `db/migration-demo` seed). No Actuator/OpenAPI yet. Integration tests resolve Postgres via `TEST_DB_URL` **or** Testcontainers when Docker is available (`support/PostgresTestSupport#isAvailable`), and skip only when neither exists — so they usually *do* run on a local `mvnw verify`.
-- **CI:** `.github/workflows/` — `backend-ci.yml`, `frontend-ci.yml`, `dependency-review.yml`.
-- **Deploy:** `render.yaml` (backend), `vercel.json` (frontend), `docker-compose*.yml` (local). The Render demo is a showcase, not real production.
+- **Backend:** session auth via `SessionSecurityFilter`. `SecurityConfig` is **default-deny** — `anyRequest().authenticated()`, with only four anonymous exceptions (OPTIONS preflight, `POST /api/auth/login`, `POST /api/attendance/punch`, `GET /actuator/health`). Read the file (39 lines) rather than assuming — this bullet claimed `permitAll` and "no Actuator/OpenAPI" until 2026-08-08, and both were wrong. **Role checks live in the controllers, not the filter chain**, so "authenticated" is the only guarantee `SecurityConfig` gives you.
+- **CSRF is enforced, but not by Spring Security.** `SecurityConfig` calls `.csrf(disable)` because the app rolls its own: `CsrfCookieFilter` (`@Order(0)`) issues a non-HttpOnly `XSRF-TOKEN` cookie and rejects unsafe `/api/` methods with 403 unless `X-XSRF-TOKEN` matches it. Do **not** "fix" the disabled Spring CSRF — you would double up on an already-working guard.
+- Integration tests resolve Postgres via `TEST_DB_URL` **or** Testcontainers when Docker is available (`support/PostgresTestSupport#isAvailable`), and skip only when neither exists — so they usually *do* run on a local `mvnw verify`.
+- **The Render demo is a showcase, not real production.**
 
 ## Commit / PR conventions
 - Conventional-commit style prefixes (`feat:`, `fix:`, `chore:`, `refactor:`, `security:`, `docs:`, `test:`).

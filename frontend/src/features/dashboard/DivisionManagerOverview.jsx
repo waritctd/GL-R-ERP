@@ -18,7 +18,7 @@ import { cn } from '../../utils/cn.js';
  * primitive for this exact ratio yet — see that file's own copy of this
  * constant for the reasoning).
  */
-const DASHBOARD_GRID = 'grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] max-[1040px]:grid-cols-2 max-[720px]:grid-cols-1';
+const DASHBOARD_GRID = 'grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] nav-drawer:grid-cols-2 mobile:grid-cols-1';
 
 function bangkokDateParts(date = new Date()) {
   return Object.fromEntries(new Intl.DateTimeFormat('en-US', {
@@ -268,7 +268,7 @@ export function DivisionManagerOverview({ user, employee, dashboardSummary, show
               {worklist.map((item) => (
                 <div
                   key={item.key}
-                  className="flex items-center justify-between gap-3 py-3 border-b border-surface-subtle last:border-b-0 max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-2.5"
+                  className="flex items-center justify-between gap-3 py-3 border-b border-surface-subtle last:border-b-0 mobile:flex-col mobile:items-start mobile:gap-2.5"
                 >
                   <div className="min-w-0">
                     <p className="m-0 text-sm font-bold text-text truncate">{item.employeeName}</p>
@@ -280,7 +280,7 @@ export function DivisionManagerOverview({ user, employee, dashboardSummary, show
                     variant="success"
                     size="sm"
                     onClick={item.onApprove}
-                    className="shrink-0 max-[720px]:w-full"
+                    className="shrink-0 mobile:w-full"
                   >
                     <Icon name="check" size={14} />
                     อนุมัติ

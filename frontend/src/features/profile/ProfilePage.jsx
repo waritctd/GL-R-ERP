@@ -12,7 +12,7 @@ import { formatAddress, formatShortDate, requestStatus } from '../../utils/forma
 import { TaxAllowanceSummaryPanel } from '../taxAllowance/TaxAllowanceSummaryPanel.jsx';
 import { ChangeRequestModal } from './ChangeRequestModal.jsx';
 
-const MY_REQUESTS_TABLE_GRID = 'grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)_minmax(0,2fr)_minmax(0,0.9fr)_minmax(0,1fr)] max-[1040px]:min-w-[900px] reflow-cards';
+const MY_REQUESTS_TABLE_GRID = 'grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)_minmax(0,2fr)_minmax(0,0.9fr)_minmax(0,1fr)] nav-drawer:min-w-[900px] reflow-cards';
 
 export function ProfilePage({ user, employee, profileRequests, onCreateRequest, taxAllowanceSummary }) {
   const [requestField, setRequestField] = useState(null);

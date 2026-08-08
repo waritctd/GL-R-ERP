@@ -96,8 +96,8 @@ describe('AppShell navigation (drawer content, no persistent tablet rail)', () =
   // jsdom never evaluates media queries, so nothing else in this suite can
   // catch the hamburger's responsive gate reverting to the old ≤720px-only
   // boundary — this pins the className directly (same technique as
-  // Layout.test.jsx's StatGrid 'max-[1040px]:grid-cols-2' assertion).
-  // Mutation-checked: reverting the className to `max-[720px]:` (undoing the
+  // Layout.test.jsx's StatGrid 'nav-drawer:grid-cols-2' assertion).
+  // Mutation-checked: reverting the className to `mobile:` (undoing the
   // whole point of this branch) turns this test red and nothing else in the
   // suite.
   it('gates the mobile nav trigger on the nav-drawer (≤1040px) breakpoint, not ≤720px', async () => {
@@ -163,9 +163,9 @@ describe('AppShell navigation (drawer content, no persistent tablet rail)', () =
     fireEvent.click(await screen.findByRole('button', { name: 'เมนูผู้ใช้' }));
     const menu = await screen.findByRole('menu', { name: 'เมนูผู้ใช้' });
 
-    expect(menu.className).toContain('max-[720px]:fixed');
-    expect(menu.className).toContain('max-[720px]:left-4');
-    expect(menu.className).toContain('max-[720px]:right-4');
+    expect(menu.className).toContain('mobile:fixed');
+    expect(menu.className).toContain('mobile:left-4');
+    expect(menu.className).toContain('mobile:right-4');
   });
 
 });

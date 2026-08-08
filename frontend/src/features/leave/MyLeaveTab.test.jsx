@@ -20,6 +20,10 @@ vi.mock('../../api/index.js', () => ({
       create: vi.fn(),
       cancel: vi.fn(),
       downloadAttachment: vi.fn(),
+      // #leave-holiday-visibility: MyLeaveTab now renders UpcomingHolidays unconditionally
+      // (alongside "ปฏิทินวันลา"), so every describe block below that renders MyLeaveTab needs
+      // its own default resolved value, or the panel's query errors out under every test.
+      calendarContext: vi.fn(),
     },
   },
 }));
@@ -87,6 +91,9 @@ describe('MyLeaveTab balances: one primary card + a single disclosure (owner fee
     api.leave.types.mockResolvedValue({ leaveTypes: [{ code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation' }] });
     api.leave.list.mockResolvedValue({ requests: [] });
     api.leave.contactDefaults.mockResolvedValue(emptyContactDefaults);
+    // #leave-holiday-visibility: UpcomingHolidays renders unconditionally alongside "ปฏิทินวันลา"
+    // -- default to no holidays so this describe block's own assertions stay uninvolved with it.
+    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
   });
 
   it('DEFECT: the "โควตาคงเหลือ" stat sums ONLY the everyday three, never the rare types', async () => {
@@ -230,6 +237,9 @@ describe('MyLeaveTab own-request table: the three state-defect fixes (Phase A1)'
     api.leave.types.mockResolvedValue({ leaveTypes: [] });
     api.leave.balances.mockResolvedValue({ balances: [] });
     api.leave.contactDefaults.mockResolvedValue(emptyContactDefaults);
+    // #leave-holiday-visibility: UpcomingHolidays renders unconditionally alongside "ปฏิทินวันลา"
+    // -- default to no holidays so this describe block's own assertions stay uninvolved with it.
+    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
   });
 
   it('DEFECT 1: a background refetch (isFetching, not isPending) never blanks already-loaded rows into an empty state', async () => {
@@ -358,6 +368,9 @@ describe('MyLeaveTab Phase A4: self-cancel confirmation + certificate download',
     api.leave.types.mockResolvedValue({ leaveTypes: [] });
     api.leave.balances.mockResolvedValue({ balances: [] });
     api.leave.contactDefaults.mockResolvedValue(emptyContactDefaults);
+    // #leave-holiday-visibility: UpcomingHolidays renders unconditionally alongside "ปฏิทินวันลา"
+    // -- default to no holidays so this describe block's own assertions stay uninvolved with it.
+    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
   });
 
   it('clicking ยกเลิก on a SUBMITTED own request opens a ConfirmDialog and does NOT cancel until confirmed', async () => {
@@ -470,6 +483,9 @@ describe('MyLeaveTab bugfix (2026-08): "ของฉัน" always scopes to the
     api.leave.types.mockResolvedValue({ leaveTypes: [] });
     api.leave.balances.mockResolvedValue({ balances: [] });
     api.leave.contactDefaults.mockResolvedValue(emptyContactDefaults);
+    // #leave-holiday-visibility: UpcomingHolidays renders unconditionally alongside "ปฏิทินวันลา"
+    // -- default to no holidays so this describe block's own assertions stay uninvolved with it.
+    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
     // Mirrors the real backend contract (LeaveService#list / LeaveRepository#findRequests):
     // an explicit `employeeId` narrows strictly to that one employee's own rows. Before the
     // fix, MyLeaveTab's requestsQuery omitted `employeeId` whenever no filter value was
@@ -559,5 +575,59 @@ describe('MyLeaveTab bugfix (2026-08): "ของฉัน" always scopes to the
       // rows here before this branch's own employeeId-scoping fix.
       expect(calendarPanel.textContent).not.toMatch(/ลูกทีม ทดสอบ/);
     });
+  });
+});
+
+// #leave-holiday-visibility (PR 3): holidays visible up front on this tab, alongside "ปฏิทินวันลา"
+// (the actor's own leave days) rather than replacing or disturbing it -- see MyLeaveTab.jsx's own
+// comment on why the two panels sit next to each other.
+describe('MyLeaveTab holiday visibility (#leave-holiday-visibility, PR 3)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.leave.types.mockResolvedValue({ leaveTypes: [] });
+    api.leave.balances.mockResolvedValue({ balances: [] });
+    api.leave.contactDefaults.mockResolvedValue(emptyContactDefaults);
+    api.leave.list.mockResolvedValue({ requests: [] });
+  });
+
+  it('shows the วันหยุดที่จะถึง panel alongside "ปฏิทินวันลา", without disturbing it', async () => {
+    api.leave.calendarContext.mockResolvedValue({
+      calendarContext: {
+        holidays: [{ holidayDate: '2026-08-15', nameTh: 'วันหยุดทดสอบ' }],
+        nonWorkingDates: [],
+      },
+    });
+
+    renderMyLeaveTab();
+
+    const holidayHeading = await screen.findByRole('heading', { name: 'วันหยุดที่จะถึง' });
+    const holidayPanel = holidayHeading.closest('section');
+    // The heading itself is present from first render (Panel's title is static); the query
+    // result it depends on is not -- waitFor lets the loading EmptyState resolve before asserting.
+    await waitFor(() => expect(holidayPanel.textContent).toMatch(/วันหยุดทดสอบ/));
+
+    // "ปฏิทินวันลา" still renders too -- the new panel sits ALONGSIDE it, never in place of it.
+    const calendarHeading = await screen.findByRole('heading', { name: 'ปฏิทินวันลา' });
+    expect(calendarHeading.closest('section')).not.toBeNull();
+  });
+
+  // Real วันหยุดบริษัท names run up to 149 chars (MOCK_HOLIDAY_DATES in mockApi.js is a verbatim
+  // copy of production's hr.holiday, the reason V129 widened name_th from VARCHAR(120) to TEXT).
+  // UpcomingHolidays.jsx already renders one holiday per list row rather than a comma-joined
+  // sentence -- this pins that the composition holds through THIS caller too, not only in
+  // isolation or only in the leave composer (LeaveRequestPage.test.jsx's own long-name coverage).
+  it('renders a 149-char real production holiday name intact, not truncated or broken', async () => {
+    const LONGEST_REAL_HOLIDAY_NAME =
+      'ชดเชยวันคล้ายวันพระบรมราชสมภพ พระบาทสมเด็จพระบรมชนกาธิเบศร มหาภูมิพลอดุลยเดชมหาราช บรมนาถบพิตร วันชาติ และวันพ่อแห่งชาติ (วันเสาร์ที่ 5 ธันวาคม 2569)';
+    api.leave.calendarContext.mockResolvedValue({
+      calendarContext: {
+        holidays: [{ holidayDate: '2026-12-07', nameTh: LONGEST_REAL_HOLIDAY_NAME }],
+        nonWorkingDates: [],
+      },
+    });
+
+    renderMyLeaveTab();
+
+    expect(await screen.findByText(LONGEST_REAL_HOLIDAY_NAME)).not.toBeNull();
   });
 });

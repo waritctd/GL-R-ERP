@@ -17,6 +17,7 @@ import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
+import th.co.glr.hr.attendance.schedule.DbHolidayCalendar;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.commission.CommissionAttachmentRepository;
@@ -71,7 +72,8 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             mock(AuditService.class),
             mock(NotificationService.class),
             new AppProperties(),
-            mock(AttendanceDailyService.class));
+            mock(AttendanceDailyService.class),
+            new DbHolidayCalendar(jdbc));
         CommissionService commissionService = new CommissionService(
             new CommissionRepository(jdbc),
             mock(CommissionAttachmentRepository.class),
