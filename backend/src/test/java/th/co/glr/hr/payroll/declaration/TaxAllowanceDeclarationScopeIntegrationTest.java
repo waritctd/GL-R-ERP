@@ -92,6 +92,38 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
      * employee's 13-digit tax ID, home address and every declared amount on one page. Wrong-way-round
      * per CLAUDE.md: assert the caller who should NOT reach it gets nothing.
      */
+    /**
+     * The signed ล.ย.01 is a real precondition, not just a UI courtesy (owner decision #3).
+     *
+     * <p>Wrong-way-round per CLAUDE.md: every other fixture in this package now attaches the form
+     * via {@code approveSigned}, so without THIS test the guard could be deleted and the whole suite
+     * would still pass. The declaration must also survive as PENDING — a refused approval that
+     * quietly advanced the status would be worse than no guard at all.
+     */
+    @Test
+    void hrCannotApproveADeclarationWithNoSignedFormAttached() {
+        TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026, new BigDecimal("60000"));
+
+        assertThatThrownBy(() -> service.approve(declaration.declarationId(), null, hrActor()))
+            .as("approving an unsigned ล.ย.01 records HR as accepting a filing nobody attested to")
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(repository.findById(declaration.declarationId()).orElseThrow().status())
+            .isEqualTo(TaxAllowanceDeclarationStatus.PENDING);
+    }
+
+    /** …and it goes through the moment the signed scan is there. */
+    @Test
+    void theSameDeclarationApprovesOnceTheSignedFormIsAttached() {
+        TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026, new BigDecimal("60000"));
+
+        approveSigned(declaration.declarationId());
+
+        assertThat(repository.findById(declaration.declarationId()).orElseThrow().status())
+            .isEqualTo(TaxAllowanceDeclarationStatus.APPROVED);
+    }
+
     @Test
     void employeeCannotRenderAnotherEmployeesLorYor01Form() {
         TaxAllowanceDeclarationDto victimDeclaration = submit(employeeB, 2026, new BigDecimal("60000"));
@@ -165,7 +197,7 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
     @Test
     void employeeCannotApplyAndTheAllowanceTableStaysEmpty() {
         TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026, new BigDecimal("60000"));
-        service.approve(declaration.declarationId(), null, hrActor());
+        approveSigned(declaration.declarationId());
 
         assertThatThrownBy(() -> service.apply(declaration.declarationId(), null, employeeActor(employeeA)))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
@@ -186,7 +218,7 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
         assertThat(repository.findById(declaration.declarationId()).orElseThrow().status())
             .isEqualTo(TaxAllowanceDeclarationStatus.PENDING);
 
-        service.approve(declaration.declarationId(), null, hrActor()); // HR approves for real, so apply has something to reach
+        approveSigned(declaration.declarationId()); // HR approves for real, so apply has something to reach
         assertThatThrownBy(() -> service.apply(declaration.declarationId(), null, ceoActor()))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         assertThat(countEmployeeTaxAllowanceRows(employeeA)).isZero();
@@ -196,7 +228,7 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
     void approvingAnAlreadyApprovedDeclarationIsConflictViaTheRowcountCheck() {
         TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026, new BigDecimal("60000"));
 
-        service.approve(declaration.declarationId(), null, hrActor());
+        approveSigned(declaration.declarationId());
         assertThatThrownBy(() -> service.approve(declaration.declarationId(), null, hrActor()))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
@@ -251,5 +283,15 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
 
     private UserPrincipal ceoActor() {
         return new UserPrincipal(ceoEmployeeId, "ceo@glr.co.th", "CEO", "ceo", ceoEmployeeId, true, LocalDate.now(), false, null, false);
+    }
+
+    /**
+     * Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3).
+     * The failure cases below deliberately do NOT use this — they assert on the role and status
+     * checks, which both run before the signed-form check and so are unaffected by it.
+     */
+    private void approveSigned(long declarationId) {
+        TaxAllowanceTestSupport.attachSignedForm(jdbc, declarationId);
+        service.approve(declarationId, null, hrActor());
     }
 }

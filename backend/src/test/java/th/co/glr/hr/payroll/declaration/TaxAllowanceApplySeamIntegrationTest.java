@@ -129,7 +129,7 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
     @Test
     void anApprovedButUnappliedDeclarationStillDoesNotAppear() {
         TaxAllowanceDeclarationDto declaration = submit(new BigDecimal("60000"), 1);
-        service.approve(declaration.declarationId(), null, hrActor());
+        approveSigned(declaration.declarationId());
 
         TaxAllowanceDeclarationDto approved = declarationRepository.findById(declaration.declarationId()).orElseThrow();
         assertThat(approved.status()).isEqualTo(TaxAllowanceDeclarationStatus.APPROVED);
@@ -143,7 +143,7 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
     @Test
     void onlyApplyPutsItInTheParentTableAsVerified() {
         TaxAllowanceDeclarationDto declaration = submit(new BigDecimal("60000"), 1);
-        service.approve(declaration.declarationId(), null, hrActor());
+        approveSigned(declaration.declarationId());
 
         service.apply(declaration.declarationId(), null, hrActor());
 
@@ -171,7 +171,7 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
     @Test
     void applyingASecondDeclarationOverAnAlreadyVerifiedRowStillEndsVerified() {
         TaxAllowanceDeclarationDto first = submit(new BigDecimal("60000"), 1);
-        service.approve(first.declarationId(), null, hrActor());
+        approveSigned(first.declarationId());
         service.apply(first.declarationId(), null, hrActor());
         assertThat(verificationStatusOf(employeeId)).isEqualTo("VERIFIED");
 
@@ -179,7 +179,7 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
         // its apply() drives upsertTaxAllowances down the ON CONFLICT DO UPDATE branch over a row
         // that is currently VERIFIED, the exact interaction the reset-on-overwrite fix touches.
         TaxAllowanceDeclarationDto second = submit(new BigDecimal("90000"), 1);
-        service.approve(second.declarationId(), null, hrActor());
+        approveSigned(second.declarationId());
         service.apply(second.declarationId(), null, hrActor());
 
         assertThat(countEmployeeTaxAllowanceRows(employeeId))
@@ -208,7 +208,7 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
     void applyIsRefusedForAnAlreadyProcessedMonthAndWritesNoRow() {
         seedProcessedPeriod(LocalDate.of(2026, 3, 1));
         TaxAllowanceDeclarationDto declaration = submit(new BigDecimal("60000"), 3);
-        service.approve(declaration.declarationId(), null, hrActor());
+        approveSigned(declaration.declarationId());
 
         assertThatThrownBy(() -> service.apply(declaration.declarationId(), null, hrActor()))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
@@ -259,12 +259,12 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
     @Test
     void approvingANewerDeclarationSupersedesThePreviousAndHistorySurvives() {
         TaxAllowanceDeclarationDto first = submit(new BigDecimal("60000"), 1);
-        service.approve(first.declarationId(), null, hrActor());
+        approveSigned(first.declarationId());
 
         // A second declaration for the same employee/year — allowed once the first is no longer
         // PENDING (uq_tad_one_pending_per_employee_year only blocks a SECOND concurrent PENDING).
         TaxAllowanceDeclarationDto second = submit(new BigDecimal("90000"), 1);
-        service.approve(second.declarationId(), null, hrActor());
+        approveSigned(second.declarationId());
 
         TaxAllowanceDeclarationDto firstAfter = declarationRepository.findById(first.declarationId()).orElseThrow();
         assertThat(firstAfter.status()).isEqualTo(TaxAllowanceDeclarationStatus.SUPERSEDED);
@@ -292,7 +292,7 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             .isEqualByComparingTo(before.taxAllowanceTotal());
         assertThat(afterSubmit.withholdingTax()).isEqualByComparingTo(before.withholdingTax());
 
-        service.approve(declaration.declarationId(), null, hrActor());
+        approveSigned(declaration.declarationId());
         PayrollLineDto afterApprove = lineFor(payrollService.preview(
             new ProcessPayrollRequest(LocalDate.of(2026, 6, 1), List.of()), hrPrincipal()));
         assertThat(afterApprove.taxAllowanceTotal())
@@ -367,5 +367,15 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
 
     private UserPrincipal hrPrincipal() {
         return hrActor();
+    }
+
+    /**
+     * Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3).
+     * The failure cases below deliberately do NOT use this — they assert on the role and status
+     * checks, which both run before the signed-form check and so are unaffected by it.
+     */
+    private void approveSigned(long declarationId) {
+        TaxAllowanceTestSupport.attachSignedForm(jdbc, declarationId);
+        service.approve(declarationId, null, hrActor());
     }
 }

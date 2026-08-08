@@ -72,7 +72,7 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
     void approvalNotifiesTheOwnerAndNobodyElse() {
         TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026);
 
-        service.approve(declaration.declarationId(), null, hrActor());
+        approveSigned(declaration.declarationId());
 
         assertThat(notificationTypesFor(employeeA)).containsExactly("TAX_ALLOWANCE_APPROVED");
         // The reviewing HR user must not be notified about someone else's tax affairs.
@@ -108,7 +108,7 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
         TaxAllowanceDeclarationDto declarationA = submit(employeeA, 2026);
         TaxAllowanceDeclarationDto declarationB = submit(employeeB, 2026);
 
-        service.approve(declarationA.declarationId(), null, hrActor());
+        approveSigned(declarationA.declarationId());
         service.reject(declarationB.declarationId(), new TaxAllowanceReviewRequest("ไม่ผ่าน"), hrActor());
 
         // Each employee sees exactly their own outcome — never the other's.
@@ -119,7 +119,7 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
     @Test
     void theExpirySweepNotifiesEachOwnerExactlyOnce() {
         TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026);
-        service.approve(declaration.declarationId(), null, hrActor());
+        approveSigned(declaration.declarationId());
         service.apply(declaration.declarationId(), new TaxAllowanceApplyRequest(1), hrActor());
         // Backdate the deadline so the sweep considers this row overdue.
         jdbc.update("UPDATE hr.tax_allowance_declaration SET expires_on = :past WHERE declaration_id = :id",
@@ -185,5 +185,15 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
     private UserPrincipal hrActor() {
         return new UserPrincipal(hrEmployeeId, "hr@glr.co.th", "HR", "hr", hrEmployeeId, true,
             LocalDate.now(), false, null, false);
+    }
+
+    /**
+     * Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3).
+     * The failure cases below deliberately do NOT use this — they assert on the role and status
+     * checks, which both run before the signed-form check and so are unaffected by it.
+     */
+    private void approveSigned(long declarationId) {
+        TaxAllowanceTestSupport.attachSignedForm(jdbc, declarationId);
+        service.approve(declarationId, null, hrActor());
     }
 }

@@ -85,6 +85,9 @@ public class TaxAllowanceDeclarationService {
      * 400s against this service. ข้อ 11 and ข้อ 13 are absent deliberately: neither is fillable, so
      * neither can carry evidence.
      */
+    /** The bucket holding the signed, scanned form — the one attachment approval depends on. */
+    static final String SIGNED_FORM_SECTION_KEY = "signed_form";
+
     private static final Set<String> EVIDENCE_SECTION_KEYS =
         Set.of("item3", "item4", "item5", "item6", "item7", "item8", "item9", "item10",
             "item12", "item14", "item15", "signed_form");
@@ -257,6 +260,7 @@ public class TaxAllowanceDeclarationService {
         if (existing.status() != TaxAllowanceDeclarationStatus.PENDING) {
             throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ได้รับการพิจารณาไปแล้ว");
         }
+        requireSignedForm(declarationId);
         repository.supersedeApproved(existing.employeeId(), existing.taxYear(), declarationId);
         String reviewerNote = request == null ? null : blankToNull(request.reviewerNote());
         int rows = repository.approve(declarationId, actor.employeeId(), reviewerNote);
@@ -631,6 +635,37 @@ public class TaxAllowanceDeclarationService {
     private void requireEmployeeActor(UserPrincipal actor) {
         if (actor == null || actor.employeeId() == null) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+    }
+
+    /**
+     * แบบ ล.ย.01 must be signed before HR can approve it (owner decision #3, 2026-08-08).
+     *
+     * <p>The printed form ends in "ลงชื่อ...ผู้มีเงินได้", and that signature is what makes the
+     * declaration a statement the employee is accountable for. Approving an unsigned one records HR
+     * as having accepted a filing nobody attested to.
+     *
+     * <p>The employee-facing page already refuses to submit without the scan, but that is a
+     * courtesy and not a control: the submit endpoint takes JSON and cannot see whether a file
+     * exists, and a caller bypassing the UI is not hypothetical. This is where it holds.
+     *
+     * <p><b>Checked at APPROVE, not at submit — and it has to be.</b> The attachment is uploaded
+     * against a declarationId, which does not exist until the submit has already succeeded, so a
+     * submit-time gate would be unsatisfiable by construction.
+     *
+     * <p>Ordered AFTER the role and status checks so those keep their existing failure modes: a
+     * non-HR caller still gets 403 and an already-decided declaration still gets its own conflict,
+     * rather than either being masked by a complaint about a missing file.
+     *
+     * <p>Deleted attachments do not count — {@code findAttachments} excludes tombstoned rows — so
+     * withdrawing the signed scan withdraws the basis for approving.
+     */
+    private void requireSignedForm(long declarationId) {
+        boolean signed = repository.findAttachments(declarationId).stream()
+            .anyMatch(attachment -> SIGNED_FORM_SECTION_KEY.equals(attachment.sectionKey()));
+        if (!signed) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ยังอนุมัติไม่ได้ — ต้องมีแบบ ล.ย.01 ที่ผู้มีเงินได้ลงนามแล้วแนบไว้ก่อน");
         }
     }
 

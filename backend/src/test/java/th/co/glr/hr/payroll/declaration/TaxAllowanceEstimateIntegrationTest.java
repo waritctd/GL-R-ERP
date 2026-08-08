@@ -160,7 +160,7 @@ class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTes
 
         TaxAllowanceDeclarationDto declaration =
             service.submitOwn(submitRequest(spouseAllowance), employeeActor(employeeId));
-        service.approve(declaration.declarationId(), null, hrActor());
+        approveSigned(declaration.declarationId());
         service.apply(declaration.declarationId(), null, hrActor());
 
         PayrollPeriodDto realPeriod = payrollService.preview(
@@ -218,5 +218,15 @@ class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTes
 
     private UserPrincipal hrActor() {
         return new UserPrincipal(hrEmployeeId, "hr@glr.co.th", "HR", "hr", hrEmployeeId, true, LocalDate.now(), false, null, false);
+    }
+
+    /**
+     * Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3).
+     * The failure cases below deliberately do NOT use this — they assert on the role and status
+     * checks, which both run before the signed-form check and so are unaffected by it.
+     */
+    private void approveSigned(long declarationId) {
+        TaxAllowanceTestSupport.attachSignedForm(jdbc, declarationId);
+        service.approve(declarationId, null, hrActor());
     }
 }
