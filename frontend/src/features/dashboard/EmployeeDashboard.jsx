@@ -374,7 +374,7 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
         >
           <div className="request-feed">
             {profileRequests.length === 0 ? (
-              <div className="empty-state">ยังไม่มีคำขอล่าสุด</div>
+              <div className="grid min-h-[220px] place-items-center content-center gap-2 text-center text-text-muted">ยังไม่มีคำขอล่าสุด</div>
             ) : profileRequests.slice(0, 5).map((request) => {
               const status = requestStatus(request.status);
               return (

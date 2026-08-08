@@ -255,13 +255,20 @@ describe('payroll detail panel close button touch target (Item 4b regression gua
 // would be visual noise), so the touch-target fix has to grow the CLICKABLE area via an invisible
 // hit-slop rather than the visible badge itself.
 describe('InfoTip trigger hit-slop (Item 4c regression guard)', () => {
-  it('keeps the visible badge small (16x16) and anchors an invisible hit-slop to it', () => {
-    expect(stylesCss).toMatch(/\.info-tip-trigger\s*{[^}]*position:\s*relative;[^}]*width:\s*16px;[^}]*height:\s*16px;/);
+  // Group B primitives port: `.info-tip-trigger`/`.info-tip-trigger::before` were retired from
+  // styles.css in favor of Tailwind utilities on InfoTip.jsx itself, so the regression guard now
+  // pins the same intent (16x16 visible badge, 44x44 invisible hit-slop) against the component
+  // source instead of the retired stylesheet text.
+  const infoTipJsx = fs.readFileSync(path.resolve(__dirname, '../../components/common/InfoTip.jsx'), 'utf8');
+
+  it('keeps the visible badge small (16x16 = w-4 h-4)', () => {
+    expect(infoTipJsx).toMatch(/className="[^"]*\bw-4\b[^"]*\bh-4\b[^"]*"/);
   });
 
   it('grows the clickable area to >=44x44 via an invisible ::before, not a bigger visible circle', () => {
     // 16px visible + 14px inset on each side = 44px hit area.
-    expect(stylesCss).toMatch(/\.info-tip-trigger::before\s*{[^}]*content:\s*'';[^}]*position:\s*absolute;[^}]*inset:\s*-14px;/);
+    expect(infoTipJsx).toContain("before:content-['']");
+    expect(infoTipJsx).toContain('before:inset-[-14px]');
   });
 });
 

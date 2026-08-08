@@ -11,8 +11,8 @@ import { Icon } from './Icon.jsx';
 // caller (there is no live region wrapping most of them) is unaffected.
 export function EmptyState({ icon = 'search', title, description, titleAnnouncedElsewhere = false }) {
   return (
-    <div className="empty-state">
-      <Icon name={icon} size={34} />
+    <div className="empty-state grid min-h-[220px] place-items-center content-center gap-2 text-center text-text-muted">
+      <Icon name={icon} size={34} className="text-text-faint" />
       <strong aria-hidden={titleAnnouncedElsewhere ? 'true' : undefined}>{title}</strong>
       {description ? <span>{description}</span> : null}
     </div>

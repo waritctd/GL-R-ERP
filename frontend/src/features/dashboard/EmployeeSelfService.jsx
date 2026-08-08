@@ -306,7 +306,7 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], dash
       >
         <div className="request-feed">
           {myRequests.length === 0 ? (
-            <div className="empty-state">ยังไม่มีคำขอล่าสุด</div>
+            <div className="grid min-h-[220px] place-items-center content-center gap-2 text-center text-text-muted">ยังไม่มีคำขอล่าสุด</div>
           ) : myRequests.map((row) => <MyRequestRow key={row.id} row={row} />)}
         </div>
       </Panel>
