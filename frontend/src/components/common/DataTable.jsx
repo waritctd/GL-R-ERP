@@ -513,9 +513,12 @@ export function DataTable({
   function renderErrorRegion() {
     if (!hasError) return null;
     return (
-      <div className="data-table-error" role="alert">
-        <span className="data-table-error-copy">
-          <Icon name="triangleAlert" size={16} />
+      <div
+        className="data-table-error flex items-center justify-between gap-3 py-3 px-3.5 border border-warning-border rounded-md bg-warning-bg text-text"
+        role="alert"
+      >
+        <span className="data-table-error-copy inline-flex min-w-0 items-center gap-2 text-[length:var(--text-sm)] font-bold">
+          <Icon name="triangleAlert" size={16} className="flex-none text-warning" />
           <span>{errorMessage}</span>
         </span>
         {typeof onRetry === 'function' ? (
@@ -635,9 +638,13 @@ export function DataTable({
     return (
       <Panel flush className={panelClassName} aria-busy={loading ? 'true' : undefined}>
         {(loading || sortedRows.length > 0) ? (
-          <table className="data-table-table">
+          <table className="data-table-table w-full border-separate border-spacing-0">
             {caption ? <caption className="sr-only">{caption}</caption> : null}
-            <thead>
+            {/* `display: block` on thead/tbody/tfoot opts them out of the native table
+                layout algorithm so `.table-head`/`.data-row` (styles.css) can opt back in
+                with `display: grid` and drive column widths from each page's own
+                grid-template-columns. */}
+            <thead className="block">
               <tr className={`${gridClassName} table-head${stickyHeader ? ' is-sticky' : ''}`}>
                 {columns.map((column) => (
                   <th
@@ -662,7 +669,7 @@ export function DataTable({
                 ))}
               </tr>
             </thead>
-            <tbody>
+            <tbody className="block">
               {loading ? (
                 Array.from({ length: skeletonRowCount }, (_, index) => (
                   <tr className={`${gridClassName} data-row`} aria-hidden="true" key={index}>
@@ -737,8 +744,16 @@ export function DataTable({
                         ))}
                       </tr>
                       {expanded ? (
-                        <tr className="data-table-expanded-row">
-                          <td colSpan={columns.length}>
+                        // thead/tbody above are `block` (see comment near <thead>), and
+                        // `.table-head`/`.data-row` opt back into `display: grid`. This
+                        // expansion row carries neither class, so leaving it at its default
+                        // `display: table-row` inside a block parent would make the browser
+                        // generate an anonymous shrink-to-fit table around it (width: auto)
+                        // instead of spanning the row (visible on AttendancePage/CommissionPage
+                        // above 720px). Block-level both the row and its cell so the panel
+                        // fills the width.
+                        <tr className="data-table-expanded-row block">
+                          <td colSpan={columns.length} className="block w-full p-0 border-0">
                             <div id={expandedRowRegionId(key)} className="border-b border-border bg-surface-subtle px-4 py-3">
                               {expanded}
                             </div>
@@ -751,7 +766,7 @@ export function DataTable({
               )}
             </tbody>
             {!loading && sortedRows.length > 0 && footerRow ? (
-              <tfoot>
+              <tfoot className="block">
                 {footerRow({ columns, rows: sortedRows, pageRows })}
               </tfoot>
             ) : null}
@@ -772,14 +787,14 @@ export function DataTable({
   }
 
   return (
-    <div className="data-table">
+    <div className="data-table flex flex-col gap-3">
       {/* FIX F1: exactly one always-mounted live region for the whole table
           — see `liveRegionText` above for why it must never conditionally
           mount/unmount, and why the visible footer span is `aria-hidden`
           instead of carrying its own `aria-live`. */}
       <div aria-live="polite" className="sr-only">{liveRegionText}</div>
       {(searchable || toolbarExtra || canExport) ? (
-        <div className="data-table-toolbar">
+        <div className="data-table-toolbar flex flex-wrap gap-2.5 items-center">
           {searchable ? (
             <label className="data-table-search search-field">
               <Icon name="search" />
