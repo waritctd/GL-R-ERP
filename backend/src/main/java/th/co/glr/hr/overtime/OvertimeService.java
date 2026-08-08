@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
 import th.co.glr.hr.attendance.daily.EmployeeDay;
+import th.co.glr.hr.attendance.schedule.HolidayCalendar;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -26,6 +27,20 @@ public class OvertimeService {
     private static final int ATTENDANCE_LOOKAROUND_HOURS = 16;
     /** A backdated request has to say why it is backdated, not just "OT". */
     private static final int BACKDATED_REASON_MIN_LENGTH = 20;
+    /**
+     * Prefix marking a {@code calculation_note} as the day-type-claim flag {@link
+     * #validateDayTypeClaim} wrote at submit time, rather than an ordinary approval-time
+     * calculation note. Used by {@link #preserveDayTypeClaimFlag} to decide whether an
+     * approval-time note must be appended to, rather than allowed to overwrite, whatever is
+     * already stored.
+     *
+     * <p>Kept short deliberately: {@code calculation_note} renders untruncated in a narrow
+     * {@code <small>} table cell ({@code OvertimePanel.jsx}'s "เหตุผล" column), so the full note
+     * (this prefix plus {@link #validateDayTypeClaim}'s message) targets roughly 80 characters
+     * total rather than reproducing the work date, which the same table row already shows in its
+     * own column.
+     */
+    private static final String DAY_TYPE_CLAIM_UNVERIFIED_NOTE_PREFIX = "[รอตรวจสอบ] ";
 
     private final OvertimeRepository overtimeRepository;
     private final ManagerApproverRepository managerApproverRepository;
@@ -33,6 +48,7 @@ public class OvertimeService {
     private final NotificationService notificationService;
     private final AppProperties appProperties;
     private final AttendanceDailyService attendanceDailyService;
+    private final HolidayCalendar holidayCalendar;
 
     public OvertimeService(
             OvertimeRepository overtimeRepository,
@@ -40,13 +56,15 @@ public class OvertimeService {
             AuditService auditService,
             NotificationService notificationService,
             AppProperties appProperties,
-            AttendanceDailyService attendanceDailyService) {
+            AttendanceDailyService attendanceDailyService,
+            HolidayCalendar holidayCalendar) {
         this.overtimeRepository = overtimeRepository;
         this.managerApproverRepository = managerApproverRepository;
         this.auditService = auditService;
         this.notificationService = notificationService;
         this.appProperties = appProperties;
         this.attendanceDailyService = attendanceDailyService;
+        this.holidayCalendar = holidayCalendar;
     }
 
     public List<OvertimeRequestDto> list(
@@ -108,8 +126,18 @@ public class OvertimeService {
 
         int plannedMinutes = minutesBetween(request.plannedStartAt(), request.plannedEndAt());
         LocalDate payrollMonth = request.workDate().withDayOfMonth(1);
-        OvertimeDayType dayType = parseDayType(request.dayType());
-        long id = overtimeRepository.create(employeeId, actorEmployeeId, request, plannedMinutes, dayType, payrollMonth);
+        // SECURITY: request.dayType() is unauthenticated client input and is deliberately never
+        // used to set pay -- it used to be (see git history / the P0 this fixed), which let a
+        // caller self-declare HOLIDAY (3.00x) on an ordinary Tuesday and get paid double what the
+        // work was worth, with nothing in the approval UI to contradict the lie. day_type/
+        // pay_rate_multiplier must always be DERIVED from hr.holiday (V115) via deriveDayType,
+        // never DECLARED by the caller. The claim is still validated -- see validateDayTypeClaim --
+        // but only to refuse an actively-disprovable claim or flag an unverifiable one; either way
+        // it never feeds dayType.
+        String submitTimeNote = validateDayTypeClaim(request.dayType(), request.workDate());
+        OvertimeDayType dayType = deriveDayType(request.workDate());
+        long id = overtimeRepository.create(
+            employeeId, actorEmployeeId, request, plannedMinutes, dayType, payrollMonth, submitTimeNote);
         OvertimeRequestDto created = requireRequest(id);
         auditService.record(user, "SUBMIT_OVERTIME_REQUEST", "overtime_request", id, null, created);
         notifySubmitted(created);
@@ -333,21 +361,36 @@ public class OvertimeService {
         return after;
     }
 
+    /**
+     * The money calculation, computed once at whichever approval stage first leaves {@code
+     * SUBMITTED} ({@link #managerApprove} / {@link #ceoDirectApprove}) and frozen from there —
+     * {@link #ceoApprove} never calls this again, matching how {@code salary_basis} is resolved
+     * once and not re-priced later (see {@code OvertimeRepository#findSalaryBasisAsOf}'s Javadoc
+     * and {@code PayrollRepository#findApprovedOvertimePayByEmployee}'s comment on the same rule).
+     *
+     * <p>{@code dayType} is re-derived from the calendar here, at approval time, rather than
+     * trusted from whatever was stored at submit — the calendar can be corrected by HR between
+     * submission and approval (see {@link #deriveDayType}), and this is the point money is
+     * finalized, so it must reflect the calendar's current state, not a possibly-stale one from
+     * days or weeks earlier.
+     */
     OvertimeCalculation calculate(OvertimeRequestDto request) {
+        OvertimeDayType dayType = deriveDayType(request.workDate());
         OffsetDateTime windowStart = request.plannedStartAt().minusHours(ATTENDANCE_LOOKAROUND_HOURS);
         OffsetDateTime windowEnd = request.plannedEndAt().plusHours(ATTENDANCE_LOOKAROUND_HOURS);
         return overtimeRepository.findAttendanceBounds(request.employeeId(), windowStart, windowEnd)
-            .map(bounds -> calculate(request, bounds))
+            .map(bounds -> calculate(request, bounds, dayType))
             .orElseGet(() -> new OvertimeCalculation(
                 null,
                 null,
                 0,
                 0,
-                "No attendance punches were found around the approved overtime window."
+                preserveDayTypeClaimFlag(request, "No attendance punches were found around the approved overtime window."),
+                dayType
             ));
     }
 
-    private OvertimeCalculation calculate(OvertimeRequestDto request, OvertimeAttendanceBounds bounds) {
+    private OvertimeCalculation calculate(OvertimeRequestDto request, OvertimeAttendanceBounds bounds, OvertimeDayType dayType) {
         OffsetDateTime actualStart = laterOf(request.plannedStartAt(), bounds.firstPunchAt());
         OffsetDateTime actualEnd = earlierOf(request.plannedEndAt(), bounds.lastPunchAt());
         int actualMinutes = actualEnd.toInstant().isAfter(actualStart.toInstant())
@@ -359,7 +402,8 @@ public class OvertimeService {
                 null,
                 0,
                 0,
-                "Attendance punches were found, but they do not overlap the approved overtime window."
+                preserveDayTypeClaimFlag(request, "Attendance punches were found, but they do not overlap the approved overtime window."),
+                dayType
             );
         }
         return new OvertimeCalculation(
@@ -367,8 +411,102 @@ public class OvertimeService {
             actualEnd,
             actualMinutes,
             actualMinutes,
-            "Calculated from the overlap between approved overtime time and first/last attendance punch. No rounding applied."
+            preserveDayTypeClaimFlag(request, "Calculated from the overlap between approved overtime time and first/last attendance punch. No rounding applied."),
+            dayType
         );
+    }
+
+    /**
+     * The ONLY source of truth for WORKDAY vs HOLIDAY overtime — never {@code
+     * SubmitOvertimeRequest.dayType}, which is client-supplied and unauthenticated (see {@link
+     * #validateDayTypeClaim} for how that field IS used: as a claim to validate, not a pay input).
+     * Reuses {@link HolidayCalendar}, the same accessor {@code AttendanceDailyService} and {@code
+     * LeaveRepository} already read {@code hr.holiday} (V115) through.
+     *
+     * <p>A work date with no {@code hr.holiday} row resolves to WORKDAY (1.50x), not HOLIDAY
+     * (3.00x). This is not a special case invented for overtime: it is the existing meaning of
+     * {@link HolidayCalendar#isHoliday} everywhere else it is used (attendance, leave) — an
+     * ordinary working day simply has no calendar row, so absence is the overwhelmingly common,
+     * correct case, not a data gap to fail loudly over. It also happens to be the conservative
+     * direction: an under-populated calendar under-pays overtime rather than over-pays it.
+     *
+     * <p>Deliberately scoped to {@code hr.holiday} (public/company holidays) only — it does NOT
+     * also treat an employee's ordinary weekly non-workday (from their {@code WorkSchedule}) as
+     * HOLIDAY. {@link HolidayCalendar}'s own Javadoc draws this line: a work-schedule day off is a
+     * distinct concept the holiday calendar is not meant to answer. Folding it in would be a policy
+     * change (see the PR body for why that is out of scope here), not this defect's fix.
+     */
+    private OvertimeDayType deriveDayType(LocalDate workDate) {
+        return holidayCalendar.isHoliday(workDate) ? OvertimeDayType.HOLIDAY : OvertimeDayType.WORKDAY;
+    }
+
+    /**
+     * Validates {@code SubmitOvertimeRequest.dayType} as a CLAIM only — it must never become a pay
+     * input; {@link #deriveDayType} alone decides money. Returns a non-null {@code
+     * calculation_note} flag when the claim cannot yet be corroborated (holiday calendar has zero
+     * rows for the work date's year at all — distinct from "loaded, and this date isn't in it", see
+     * {@link HolidayCalendar#hasHolidaysForYear}'s Javadoc), or {@code null} when nothing needs
+     * recording. Throws 400 outright for a claim the calendar can actively disprove.
+     *
+     * <pre>
+     * calendar has ≥1 row for the year? | claim   | date IS a holiday? | outcome
+     * yes                                | HOLIDAY | yes                 | accept, no note
+     * yes                                | HOLIDAY | no                  | 400 -- claim contradicted
+     * yes                                | WORKDAY | yes                 | accept, no note (deriveDayType corrects upward)
+     * yes                                | WORKDAY | no                  | accept, no note
+     * no (zero rows for the year)        | HOLIDAY | n/a                 | accept + flag (unverifiable)
+     * no                                 | WORKDAY | n/a                 | accept, no note
+     * blank/null claim                   | --      | --                  | accept, no note (today's behaviour: no claim made)
+     * </pre>
+     *
+     * <p>A WORKDAY claim is never validated against the calendar, in either branch: it can only ever
+     * be corrected UPWARD by {@link #deriveDayType} (an under-claim on a genuine holiday still pays
+     * the holiday rate), never used to suppress real holiday pay, so there is nothing a WORKDAY claim
+     * could get away with and nothing worth flagging.
+     */
+    private String validateDayTypeClaim(String claim, LocalDate workDate) {
+        if (claim == null || claim.isBlank()) {
+            return null;
+        }
+        OvertimeDayType claimedDayType;
+        try {
+            claimedDayType = OvertimeDayType.valueOf(claim.trim().toUpperCase());
+        } catch (IllegalArgumentException exception) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ประเภทวันทำงานล่วงเวลาไม่ถูกต้อง");
+        }
+        if (claimedDayType != OvertimeDayType.HOLIDAY) {
+            return null;
+        }
+        if (!holidayCalendar.hasHolidaysForYear(workDate.getYear())) {
+            // Short and scannable on purpose -- see DAY_TYPE_CLAIM_UNVERIFIED_NOTE_PREFIX's
+            // Javadoc. The work date itself is deliberately omitted: the same table row already
+            // shows it in a separate column, so repeating it here would just spend budget the
+            // <small> cell doesn't have.
+            return DAY_TYPE_CLAIM_UNVERIFIED_NOTE_PREFIX
+                + "แจ้ง HOLIDAY แต่ปี " + workDate.getYear() + " ไม่มีปฏิทิน บันทึกเป็น WORKDAY โปรดตรวจสอบ";
+        }
+        if (!holidayCalendar.isHoliday(workDate)) {
+            throw new ApiException(
+                HttpStatus.BAD_REQUEST,
+                "วันที่ " + workDate + " ไม่ใช่วันหยุดตามปฏิทินบริษัท จึงไม่สามารถแจ้งว่าเป็นวันหยุด (HOLIDAY) ได้");
+        }
+        return null;
+    }
+
+    /**
+     * Appends -- never replaces -- a day-type-claim flag {@link #validateDayTypeClaim} wrote into
+     * {@code calculation_note} at submit time. {@link OvertimeRepository#managerApprove}/{@link
+     * OvertimeRepository#ceoDirectApprove} overwrite {@code calculation_note} wholesale with
+     * whatever this method's caller ({@link #calculate}) returns, so if a flag is present in {@code
+     * request.calculationNote()} it must be folded into the new approval-time text here, or
+     * approval silently erases the flag HR was supposed to review.
+     */
+    private String preserveDayTypeClaimFlag(OvertimeRequestDto request, String approvalCalculationNote) {
+        String submitTimeNote = request.calculationNote();
+        if (submitTimeNote != null && submitTimeNote.startsWith(DAY_TYPE_CLAIM_UNVERIFIED_NOTE_PREFIX)) {
+            return submitTimeNote + " " + approvalCalculationNote;
+        }
+        return approvalCalculationNote;
     }
 
     private long resolveTargetEmployee(Long requestedEmployeeId, UserPrincipal user) {
@@ -644,17 +782,6 @@ public class OvertimeService {
             return OvertimeStatus.valueOf(value.trim().toUpperCase());
         } catch (IllegalArgumentException exception) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "สถานะคำขอทำงานล่วงเวลาไม่ถูกต้อง");
-        }
-    }
-
-    private OvertimeDayType parseDayType(String value) {
-        if (value == null || value.isBlank()) {
-            return OvertimeDayType.WORKDAY;
-        }
-        try {
-            return OvertimeDayType.valueOf(value.trim().toUpperCase());
-        } catch (IllegalArgumentException exception) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "ประเภทวันทำงานล่วงเวลาไม่ถูกต้อง");
         }
     }
 

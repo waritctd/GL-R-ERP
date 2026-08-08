@@ -132,21 +132,31 @@ public class OvertimeRepository {
         });
     }
 
+    /**
+     * @param submitTimeCalculationNote nullable. Written straight into {@code calculation_note} at
+     *     INSERT time -- normally {@code null} (nothing to say yet; a real calculation note is only
+     *     produced at approval, see {@link #managerApprove}/{@link #ceoDirectApprove}). Non-null
+     *     exactly when {@code OvertimeService#validateDayTypeClaim} flagged an unverifiable HOLIDAY
+     *     claim (calendar has zero rows for the work date's year, so the claim can be neither
+     *     confirmed nor refused). Approval must APPEND to this, never overwrite it wholesale -- see
+     *     {@code OvertimeService#preserveDayTypeClaimFlag}.
+     */
     public long create(
             long employeeId,
             Long requestedById,
             SubmitOvertimeRequest request,
             int plannedMinutes,
             OvertimeDayType dayType,
-            LocalDate payrollMonth) {
+            LocalDate payrollMonth,
+            String submitTimeCalculationNote) {
         Long id = jdbc.queryForObject("""
             INSERT INTO hr.overtime_request (
                 employee_id, work_date, planned_start_at, planned_end_at, planned_minutes,
-                day_type, pay_rate_multiplier, reason, payroll_month, requested_by_id
+                day_type, pay_rate_multiplier, calculation_note, reason, payroll_month, requested_by_id
             )
             VALUES (
                 :employeeId, :workDate, :plannedStartAt, :plannedEndAt, :plannedMinutes,
-                :dayType, :payRateMultiplier, :reason, :payrollMonth, :requestedById
+                :dayType, :payRateMultiplier, :calculationNote, :reason, :payrollMonth, :requestedById
             )
             RETURNING overtime_request_id
             """, new MapSqlParameterSource()
@@ -157,6 +167,7 @@ public class OvertimeRepository {
             .addValue("plannedMinutes", plannedMinutes)
             .addValue("dayType", dayType.name())
             .addValue("payRateMultiplier", dayType.multiplier())
+            .addValue("calculationNote", submitTimeCalculationNote)
             .addValue("reason", request.reason().trim())
             .addValue("payrollMonth", payrollMonth)
             .addValue("requestedById", requestedById), Long.class);
@@ -295,6 +306,8 @@ public class OvertimeRepository {
         return jdbc.update("""
             UPDATE hr.overtime_request
                SET status = 'MANAGER_APPROVED',
+                   day_type = :dayType,
+                   pay_rate_multiplier = :payRateMultiplier,
                    actual_start_at = :actualStartAt,
                    actual_end_at = :actualEndAt,
                    actual_minutes = :actualMinutes,
@@ -312,6 +325,11 @@ public class OvertimeRepository {
             """, new MapSqlParameterSource()
             .addValue("id", id)
             .addValue("reviewedById", reviewedById)
+            // Re-derived and frozen here, not carried over from whatever submit() stored -- see
+            // OvertimeService#calculate's Javadoc. Same source of truth (OvertimeDayType), never
+            // caller input.
+            .addValue("dayType", calculation.dayType().name())
+            .addValue("payRateMultiplier", calculation.dayType().multiplier())
             .addValue("actualStartAt", calculation.actualStartAt())
             .addValue("actualEndAt", calculation.actualEndAt())
             .addValue("actualMinutes", calculation.actualMinutes())
@@ -336,6 +354,8 @@ public class OvertimeRepository {
         return jdbc.update("""
             UPDATE hr.overtime_request
                SET status = 'APPROVED',
+                   day_type = :dayType,
+                   pay_rate_multiplier = :payRateMultiplier,
                    actual_start_at = :actualStartAt,
                    actual_end_at = :actualEndAt,
                    actual_minutes = :actualMinutes,
@@ -353,6 +373,10 @@ public class OvertimeRepository {
             """, new MapSqlParameterSource()
             .addValue("id", id)
             .addValue("reviewedById", reviewedById)
+            // See managerApprove's comment -- same re-derive-and-freeze treatment for the
+            // manager-less route, which is this class's one-step equivalent of that same stage.
+            .addValue("dayType", calculation.dayType().name())
+            .addValue("payRateMultiplier", calculation.dayType().multiplier())
             .addValue("actualStartAt", calculation.actualStartAt())
             .addValue("actualEndAt", calculation.actualEndAt())
             .addValue("actualMinutes", calculation.actualMinutes())

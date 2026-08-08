@@ -3090,6 +3090,61 @@ function validateOvertimeRetroactiveWindow(payload) {
   }
 }
 
+// Mirrors DbHolidayCalendar / hr.holiday (V115) -- deliberately NOT the same store as the
+// `holidays` mock namespace below (HolidayController's admin CRUD), which stays an honest
+// "nothing persisted" stub per its own comment (list() always returns [], every write throws).
+// This is a separate, fixed, read-only set: the mock-appropriate equivalent of "HR has already
+// loaded the calendar for these years". Letting overtime's day-type derivation depend on the
+// admin-CRUD store would make it impossible to ever populate from the mock UI at all, since that
+// store's create/update/remove all reject. Extend the date list if a demo/test needs another
+// corroborated holiday.
+const MOCK_HOLIDAY_DATES = new Set([
+  '2026-01-01', '2026-04-13', '2026-04-14', '2026-04-15', '2026-05-01', '2026-12-05', '2026-12-31',
+]);
+// Years the mock calendar is considered "loaded" for -- distinct from a date simply being absent
+// from the set above, same distinction HolidayCalendar#hasHolidaysForYear's Javadoc draws in the
+// real service (an empty-for-this-date calendar vs. a calendar nobody has loaded yet).
+const MOCK_HOLIDAY_LOADED_YEARS = new Set([2026]);
+
+// Mirrors OvertimeService#deriveDayType -- the ONLY source of truth for day_type /
+// pay_rate_multiplier, at both create() and approve() below. NEVER read a caller-supplied
+// dayType for pay; see validateOvertimeDayTypeClaim for how that field is used instead (a claim
+// to validate, never a pay input).
+//
+// P0 THIS CLOSES IN MOCK MODE TOO (issue #199's "mock more permissive than production" shape --
+// see CLAUDE.md "Mock API contract"): this file used to do `dayType: payload.dayType || 'WORKDAY'`
+// at create() and `request.dayType === 'HOLIDAY' ? 3 : 1.5` at approve(), so under
+// VITE_USE_MOCKS=true a caller could self-declare HOLIDAY (3.00x) on an ordinary day and be paid
+// double, with no way to reproduce the real service's 400. This mock is NOT authoritative --
+// verify day-type behaviour against OvertimeService, never this file (CLAUDE.md) -- but it must
+// not be MORE permissive than the service it stands in for, either.
+function deriveOvertimeDayType(workDate) {
+  return MOCK_HOLIDAY_DATES.has(workDate) ? 'HOLIDAY' : 'WORKDAY';
+}
+
+// Mirrors OvertimeService#validateDayTypeClaim's decision table exactly: a HOLIDAY claim the mock
+// calendar can actively disprove (year "loaded", date not in the set) is refused outright (400,
+// naming the date). A claim it cannot yet corroborate (year not in MOCK_HOLIDAY_LOADED_YEARS) is
+// accepted but flagged for HR, matching OvertimeService's DAY_TYPE_CLAIM_UNVERIFIED_NOTE_PREFIX
+// note. Either way the claim never reaches dayType/multiplier -- deriveOvertimeDayType alone
+// decides those.
+function validateOvertimeDayTypeClaim(claim, workDate) {
+  if (!claim) return null;
+  const normalized = String(claim).trim().toUpperCase();
+  if (!['WORKDAY', 'HOLIDAY'].includes(normalized)) {
+    fail('ประเภทวันทำงานล่วงเวลาไม่ถูกต้อง', 400);
+  }
+  if (normalized !== 'HOLIDAY') return null;
+  const year = Number(workDate.slice(0, 4));
+  if (!MOCK_HOLIDAY_LOADED_YEARS.has(year)) {
+    return `[รอตรวจสอบ] แจ้ง HOLIDAY แต่ปี ${year} ไม่มีปฏิทิน บันทึกเป็น WORKDAY โปรดตรวจสอบ`;
+  }
+  if (!MOCK_HOLIDAY_DATES.has(workDate)) {
+    fail(`วันที่ ${workDate} ไม่ใช่วันหยุดตามปฏิทินบริษัท จึงไม่สามารถแจ้งว่าเป็นวันหยุด (HOLIDAY) ได้`, 400);
+  }
+  return null;
+}
+
 function buildOvertimeRecord(record) {
   const employee = db.employees.find((item) => item.id === record.employeeId);
   const managerEmployeeId = managerIdForEmployee(employee);
@@ -4798,6 +4853,13 @@ export const api = {
       findEmployee(employeeId);
       validateOvertimeRetroactiveWindow(payload);
       const plannedMinutes = overtimeMinutesBetween(payload.plannedStartAt, payload.plannedEndAt);
+      // SECURITY: payload.dayType is unauthenticated client input and is deliberately never used
+      // to set pay -- mirrors OvertimeService#submit's identical comment. day_type/multiplier must
+      // always be DERIVED from the calendar (deriveOvertimeDayType), never DECLARED by the caller.
+      // The claim is still validated (validateOvertimeDayTypeClaim), only to refuse an
+      // actively-disprovable claim or flag an unverifiable one -- either way it never feeds dayType.
+      const submitTimeNote = validateOvertimeDayTypeClaim(payload.dayType, payload.workDate);
+      const dayType = deriveOvertimeDayType(payload.workDate);
       const id = Math.max(0, ...db.overtimeRequests.map((item) => item.id)) + 1;
       const now = new Date().toISOString();
       const request = {
@@ -4807,12 +4869,12 @@ export const api = {
         plannedStartAt: payload.plannedStartAt,
         plannedEndAt: payload.plannedEndAt,
         plannedMinutes,
-        dayType: payload.dayType || 'WORKDAY',
+        dayType,
         reason: payload.reason,
         status: 'SUBMITTED',
         actualMinutes: null,
         payableMinutes: null,
-        calculationNote: null,
+        calculationNote: submitTimeNote,
         requestedById: user.employeeId,
         requestedByName: user.name,
         requestedAt: now,
@@ -4838,13 +4900,19 @@ export const api = {
       if (!request) fail('ไม่พบคำขอทำงานล่วงเวลานี้', 404);
       const now = new Date().toISOString();
       if (request.status === 'SUBMITTED') {
-        const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
         // Manager-less route: SUBMITTED straight to APPROVED, doing the manager step's minute
         // calculation as well as the CEO's status flip. Mirrors OvertimeService.ceoDirectApprove.
         if (!hasManagerApproverFor(request.employeeId)) {
           if (user.role !== 'ceo') {
             fail('คำขอนี้ไม่มีขั้นอนุมัติของหัวหน้างาน (ฝ่ายนี้ไม่มีผู้จัดการ หรือผู้ยื่นเป็นผู้จัดการเอง) จึงต้องให้ CEO พิจารณาเท่านั้น', 403);
           }
+          // Re-derived and FROZEN here, from the calendar, not carried over from whatever create()
+          // stored -- mirrors OvertimeService#calculate, invoked by the real
+          // ceoDirectApprove AFTER its own authorization check (requireCeoForManagerlessRequest),
+          // same ordering kept here so a REJECTED approve attempt never mutates dayType as a
+          // side effect. See deriveOvertimeDayType's comment for why this is the only source.
+          request.dayType = deriveOvertimeDayType(request.workDate);
+          const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
           request.status = 'APPROVED';
           request.actualMinutes = request.actualMinutes ?? request.plannedMinutes;
           request.payableMinutes = Math.round(request.actualMinutes * multiplier);
@@ -4859,6 +4927,10 @@ export const api = {
           return delay({ request: buildOvertimeRecord(request) });
         }
         if (!canReviewOvertime(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+        // Same re-derive-after-authz ordering as the manager-less branch above, matching
+        // OvertimeService.managerApprove calling calculate() after requireManager().
+        request.dayType = deriveOvertimeDayType(request.workDate);
+        const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
         request.status = 'MANAGER_APPROVED';
         request.actualMinutes = request.actualMinutes ?? request.plannedMinutes;
         request.payableMinutes = Math.round(request.actualMinutes * multiplier);
