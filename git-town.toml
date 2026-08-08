@@ -1,0 +1,37 @@
+# Git Town configuration for GL-R-ERP — checked in so every parallel session and
+# worktree gets identical stacked-PR behaviour. See STACKED-PRS.md for the rules.
+#
+# Committed config beats per-machine `git config git-town.*`, which is exactly the
+# point: this repo runs many concurrent agent sessions and they must all sync,
+# push and ship the same way.
+
+[branches]
+# `main` is the only long-lived branch. Everything else is a feature branch that
+# is expected to be shipped and deleted.
+main = "main"
+perennials = []
+
+[create]
+# Never auto-push or auto-propose a new branch. Repo rule: do not commit, push or
+# open a PR unless the user asked for it.
+share-new-branches = "no"
+new-branch-type = "feature"
+
+[hosting]
+forge-type = "github"
+
+[ship]
+# `git town ship` is NOT part of this repo's workflow — PRs are merged on GitHub
+# after review, with the merge-commit button. This value only exists so that a
+# stray `ship` can never squash a branch that has children stacked on it:
+# squashing rewrites the parent's SHAs and orphans every child below it.
+strategy = "always-merge"
+delete-tracking-branch = true
+
+[sync]
+# merge, not rebase: syncing a stack must not rewrite history that another
+# session may already have based work on, and must not require a force-push.
+# The child's PR diff against its parent stays exactly the child's own changes.
+feature-strategy = "merge"
+perennial-strategy = "rebase"
+push-branches = true
