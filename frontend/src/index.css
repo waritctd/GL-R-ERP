@@ -3,7 +3,7 @@
    `base` sits between `theme` and `legacy` deliberately. The reset and
    bare-element defaults in `@layer base` below used to live in styles.css,
    co-located with the class-level rules that override them (`.currency-input
-   input`, `.status-tab`, and the like) -- and lost to them there purely on
+   input`, `.input-with-icon input`, and the like) -- and lost to them there purely on
    selector specificity, both rules in the same cascade layer. Splitting them
    into their own layer, positioned BEFORE `legacy`, reproduces that same
    losing relationship deliberately: a `@layer` always loses to a layer
@@ -63,9 +63,10 @@
 }
 /* ≤900px — AttendancePage's non-self-view day grid needs a min-width floor below
    this point so its seven columns scroll instead of crushing the status column
-   off-screen (see AttendancePage.jsx's gridClassName). Unrelated to styles.css's
-   own `@media (max-width: 900px)` `.ticket-detail-grid` rule, which shares only
-   the number. */
+   off-screen (see AttendancePage.jsx's gridClassName). This is now the app's only
+   900px boundary: styles.css used to carry an unrelated `@media (max-width: 900px)`
+   block for `.ticket-detail-grid` that shared nothing but the number, and it was
+   deleted with that rule as dead code. Do not reintroduce a second one. */
 @custom-variant attendance-scroll {
   @media (max-width: 900px) {
     @slot;

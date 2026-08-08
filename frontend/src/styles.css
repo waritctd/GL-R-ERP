@@ -1246,32 +1246,6 @@
   border-bottom: 0;
 }
 
-.status-tabs {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-  padding: 4px 0;
-}
-
-.status-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: 1px solid var(--color-border-subtle);
-  background: var(--color-surface);
-  border-radius: var(--radius-lg);
-  padding: 5px 14px;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: filter 0.1s;
-}
-
-.status-tab:hover:not(.active) { background: var(--color-surface-subtle); }
-.status-tab.active { filter: brightness(0.96); }
-
 .ticket-events {
   display: flex;
   flex-direction: column;
@@ -1302,25 +1276,6 @@
 .event-dot.comment    { background: var(--color-text-muted); }
 .event-dot.created    { background: var(--color-success-soft); }
 .event-dot.success    { background: var(--color-success); }
-
-.ticket-detail-grid {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: 16px;
-  align-items: start;
-  min-width: 0;
-}
-
-.ticket-detail-grid > * {
-  min-width: 0;
-  overflow: hidden;
-}
-
-@media (max-width: 900px) {
-  .ticket-detail-grid {
-    grid-template-columns: 1fr;
-  }
-}
 
 .employee-cell {
   display: flex;
@@ -1495,32 +1450,6 @@ a.status-badge {
   padding: 8px 14px;
 }
 
-.tabs {
-  display: flex;
-  gap: 2px;
-  border-bottom: 1px solid var(--color-border-input);
-  overflow-x: auto;
-}
-
-.tabs button {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 44px;
-  padding: 0 14px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--color-text-muted);
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.tabs button.active {
-  color: var(--color-primary);
-  border-bottom-color: var(--color-primary);
-}
-
 .timeline-list > div {
   border-left: 3px solid var(--color-border-subtle);
   padding: 0 0 18px 15px;
@@ -1616,42 +1545,6 @@ a.status-badge {
 
 .span-2 {
   grid-column: span 2;
-}
-
-.toast {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  z-index: 80;
-  min-height: 48px;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  border: 0;
-  border-radius: var(--radius-md);
-  padding: 12px 16px;
-  background: var(--color-text);
-  color: var(--color-surface);
-  box-shadow: var(--shadow-md);
-}
-
-.toast-success svg {
-  color: var(--color-teal-focus);
-}
-
-.toast-error svg {
-  color: var(--color-danger-soft);
-}
-
-.loading-veil {
-  position: fixed;
-  inset: 0;
-  z-index: 90;
-  display: grid;
-  place-items: center;
-  background: rgba(255, 255, 255, 0.55);
-  color: var(--color-text);
-  font-weight: 800;
 }
 
 /* ConfirmDialog */
@@ -2200,14 +2093,6 @@ textarea.is-invalid:focus {
   .breadcrumbs button {
     min-width: 0;
     overflow-wrap: anywhere;
-  }
-
-  /* Status filter chips are a primary mobile interaction (they filter the
-     work queue), but padding alone leaves them 28px tall — well under the
-     touch floor. Desktop keeps its denser 28px chip. */
-  .status-tab {
-    min-height: 44px;
-    padding: 5px 16px;
   }
 
   .ticket-list-page {
