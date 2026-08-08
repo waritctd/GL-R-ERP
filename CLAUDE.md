@@ -118,6 +118,15 @@ Reference implementation:
 **Reporting:** if verification ran only under `VITE_USE_MOCKS=true`, say so and call the permission
 aspect **unverified**. Never let "I clicked through it as HR" stand in for an authz claim.
 
+**Clicking through a browser CAN be authz evidence — but only against the real stack.** The
+real-backend e2e suite (`cd frontend && npm run test:e2e:real`, see `frontend/e2e-real/README.md`)
+drives a real browser against real Spring services and a real Postgres, with no mock in the path.
+`e2e-real/api-authz.spec.js` is where a role gate's *observed* behaviour is pinned. It does not
+replace requirement 2 above — a real-DB integration test through the Java service is still what
+proves a scope filter reaches the `WHERE` clause — but a green run there is real evidence, whereas
+a green `npm run test:e2e` (mock) run is not. Three roles have no seeded persona (`account`,
+`warehouse`, `qc`), so that suite says nothing about them; the README lists the gaps.
+
 ## Styling direction — Tailwind-first
 The frontend is migrating from the single global `frontend/src/styles.css` to a **Tailwind-first** system. Tailwind 4 is already wired up via `@tailwindcss/vite`, with design tokens in `frontend/src/index.css` (`@theme static`).
 
