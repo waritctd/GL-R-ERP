@@ -33,6 +33,12 @@ docker-compose.override.yml
 # the source of truth, and the UI links to it so an employee can read the rule the
 # system enforced. Without this negation `git add` drops them silently.
 !frontend/public/policy/*.pdf
+# ...and except official government form templates the backend fills at runtime. Same inverse
+# case again: forms/loryor01_290362.pdf IS the ล.ย.01 document, downloaded verbatim from
+# rd.go.th, and LorYor01Renderer loads it off the classpath. Without this negation it stays a
+# local-only file, every test passes on the machine that downloaded it, and the deployed app
+# throws FileNotFoundException the first time an employee asks for their form.
+!backend/src/main/resources/forms/*.pdf
 
 # UAT/SIT operational deliverables — kept out of git (store externally)
 ERP Documentation/SIT Deliverables/

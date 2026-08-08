@@ -51,6 +51,10 @@ import th.co.glr.hr.ticket.TicketRepository;
  * expireTaxAllowanceVerification(employeeId, taxYear)} takes no {@code effective_month} — it expires
  * every dated row for the year at once.
  */
+import th.co.glr.hr.config.AppProperties;
+
+import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
+
 class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTest {
     private TaxAllowanceDeclarationRepository declarationRepository;
     private TaxAllowanceDeclarationService service;
@@ -103,7 +107,8 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             // The REAL PayrollService, wired above — this class's byte-for-byte pinning test needs
             // estimateAllowanceEffect to run the SAME calculator instance #preview does.
             payrollService,
-            new NotificationRepository(jdbc));
+            new NotificationRepository(jdbc),
+            new AppProperties(), new LorYor01Renderer());
 
         employeeId = seedEmployee("SEAM-EMP", new BigDecimal("50000.00"));
         hrEmployeeId = seedEmployee("SEAM-HR", new BigDecimal("50000.00"));
@@ -310,7 +315,8 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             null, null, null,         // childCount, childCountDouble, disabledCareCount
             null,                     // disabilityCardHolder
             null,                     // parentCareCount
-            null);                    // documentReference
+            null,                    // documentReference
+            null);                   // lorYor01 — no ล.ย.01 form detail in this fixture
         return service.submitOwn(request, employeeActor());
     }
 
