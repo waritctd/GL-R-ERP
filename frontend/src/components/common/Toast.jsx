@@ -13,7 +13,7 @@ export function Toast({ toast, onDismiss }) {
   const isError = toast.kind === 'error';
   return (
     <div
-      className="pointer-events-none fixed right-6 bottom-[max(24px,calc(env(safe-area-inset-bottom)+16px))] z-[80] w-[min(420px,calc(100vw-32px))] max-[720px]:right-4 max-[720px]:bottom-[max(72px,calc(env(safe-area-inset-bottom)+16px))]"
+      className="pointer-events-none fixed right-6 bottom-[max(24px,calc(env(safe-area-inset-bottom)+16px))] z-[80] w-[min(420px,calc(100vw-32px))] mobile:right-4 mobile:bottom-[max(72px,calc(env(safe-area-inset-bottom)+16px))]"
       role={isError ? 'alert' : 'status'}
       aria-live={isError ? 'assertive' : 'polite'}
       aria-atomic="true"

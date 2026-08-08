@@ -231,7 +231,7 @@ export function ManagerOverview({ user, employee, showToast }) {
             />
           </StatGrid>
 
-          <div className="grid gap-[18px] items-start grid-cols-[1.6fr_1fr] max-[1040px]:grid-cols-1">
+          <div className="grid gap-[18px] items-start grid-cols-[1.6fr_1fr] nav-drawer:grid-cols-1">
             <div className="grid gap-[18px]">
               {/* Centerpiece: ค่าคอมรออนุมัติ worklist — deep-links to
                   CommissionPage's own manager-approve flow, never duplicates
@@ -250,7 +250,7 @@ export function ManagerOverview({ user, employee, showToast }) {
                       return (
                         <div
                           key={record.id}
-                          className="flex items-center justify-between gap-3 border-t border-border px-5 py-3 first:border-t-0 max-[720px]:flex-col max-[720px]:items-stretch max-[720px]:gap-2.5 max-[720px]:p-4"
+                          className="flex items-center justify-between gap-3 border-t border-border px-5 py-3 first:border-t-0 mobile:flex-col mobile:items-stretch mobile:gap-2.5 mobile:p-4"
                         >
                           <div className="flex min-w-0 flex-1 items-center gap-3">
                             <Avatar name={record.salesRepName} size="sm" />
@@ -261,7 +261,7 @@ export function ManagerOverview({ user, employee, showToast }) {
                               <code className="block truncate text-2xs text-text-muted">{ref || '-'}</code>
                             </div>
                           </div>
-                          <div className="flex shrink-0 items-center gap-3 max-[720px]:w-full max-[720px]:justify-between">
+                          <div className="flex shrink-0 items-center gap-3 mobile:w-full mobile:justify-between">
                             <span className="text-right">
                               <strong className="block tabular-nums text-sm text-text">{formatMoney(record.commissionableBase)}</strong>
                               <span className="block text-2xs text-text-muted">ฐานค่าคอม</span>
@@ -269,7 +269,7 @@ export function ManagerOverview({ user, employee, showToast }) {
                             <Button
                               type="button"
                               variant="success"
-                              className="max-[720px]:flex-1 max-[720px]:min-h-11"
+                              className="mobile:flex-1 mobile:min-h-11"
                               onClick={() => navigate('/commissions')}
                             >
                               ตรวจ · อนุมัติ
@@ -302,7 +302,7 @@ export function ManagerOverview({ user, employee, showToast }) {
                           type="button"
                           key={ticket.id}
                           onClick={() => navigate(`/tickets/${ticket.id}`)}
-                          className="flex cursor-pointer items-center justify-between gap-3 border-t border-border px-5 py-3 text-left first:border-t-0 hover:bg-surface-hover max-[720px]:flex-col max-[720px]:items-stretch max-[720px]:gap-2 max-[720px]:p-4"
+                          className="flex cursor-pointer items-center justify-between gap-3 border-t border-border px-5 py-3 text-left first:border-t-0 hover:bg-surface-hover mobile:flex-col mobile:items-stretch mobile:gap-2 mobile:p-4"
                         >
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-2">

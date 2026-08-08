@@ -71,6 +71,13 @@ frontend/test-results/
 frontend/blob-report/
 frontend/playwright/.cache/
 
+# Real-backend e2e run artifacts (playwright.real.config.js keeps its own report/output dirs
+# so a mock run and a real run never overwrite each other's results).
+frontend/playwright-report-real/
+frontend/test-results-real/
+# Uploads the e2e backend writes when APP_UPLOADS_DIR is left at its default.
+backend/target/e2e-uploads/
+
 # Untracked design-review tooling output (impeccable skill) — not source
 .impeccable/
 

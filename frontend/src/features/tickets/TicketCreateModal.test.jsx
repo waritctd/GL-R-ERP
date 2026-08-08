@@ -72,8 +72,19 @@ function catalogItem(overrides = {}) {
   });
 }
 
+// Deliberately NOT fireEvent.submit(form): that dispatches a plain synthetic Event with no
+// `.submitter` property at all under jsdom, and SafeForm's canSubmit gate is a RESTRICTION on
+// top of its submitter guard, not a replacement for it (#safe-form-primitive review round) -- a
+// submitterless dispatch is blocked on EVERY view regardless of canSubmit, which would make every
+// "does NOT submit" test below pass for the wrong reason (no submitter in the DOM at all, not
+// because the view gate rejected it -- this repo's own documented vacuous-test shape) and every
+// "submits" test fail outright. A manually constructed SubmitEvent with an explicit `submitter`
+// is picked up by React's onSubmit exactly like a real click (verified), so every call site below
+// now exercises `canSubmit` specifically: HUB/REVIEW let it through, every other view still
+// blocks it even though a submitter is present.
 function submitForm() {
-  fireEvent.submit(document.getElementById('ticket-create-form'));
+  const form = document.getElementById('ticket-create-form');
+  form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: document.createElement('button') }));
 }
 
 // Anchored to the start of the accessible name: a hub row's name is its
@@ -293,6 +304,86 @@ describe('TicketCreateModal validation', () => {
   });
 });
 
+// HTML implicit submission (fix/form-enter-submits-real-records): a <form> with no submit button
+// but exactly ONE field that blocks implicit submission fires a real 'submit' event on Enter, no
+// button ever pressed. jsdom does not implement that algorithm at all (pressing "Enter" via
+// fireEvent does nothing special) -- e2e/implicit-submission.spec.js is the layer that reproduces
+// the real thing. What `submitForm()` proves here is narrower and complementary: given a genuine
+// 'submit' event WITH a submitter attached (deliberately, not the submitter-less dispatch a real
+// Enter-on-a-buttonless-view would actually produce -- see the helper's own comment), does
+// SafeForm's `canSubmit` gate on `<TicketCreateModal>`'s form still reject it on every view except
+// HUB/REVIEW? A submitter-less dispatch would pass every "does NOT submit" case below for free
+// (SafeForm's separate submitter guard would block it regardless of canSubmit), which would prove
+// nothing about `canSubmit` specifically -- this repo's own documented vacuous-test shape. Mirrors
+// TaxAllowanceForm.test.jsx's "form-level submit gate blocks Enter-key implicit submission"
+// describe block. HUB's own positive case (a real submit event with view==='hub') is already
+// exercised by every test above that calls `selectCustomerAndProject()` then `submitForm()`
+// directly — see `handleFormSubmit`'s own comment in TicketCreateModal.jsx for why HUB, unlike the
+// three views below, is deliberately left able to submit.
+describe('TicketCreateModal implicit submission (Enter-key) safety', () => {
+  it('does not submit a real submit event from the DETAILS view, even with a valid customer+project', async () => {
+    const onSubmit = vi.fn();
+    renderModal({ onSubmit, initialItems: [validItem()] });
+
+    await selectCustomerAndProject();
+    goToSection('รายละเอียดดีล');
+    // ชื่อดีล is DETAILS' only Enter-blocking field (renderDetailsView) — the textarea and
+    // role="radio" priority chips don't count toward HTML's implicit-submission rule.
+    fireEvent.change(screen.getByPlaceholderText(mockCustomer.name), { target: { value: 'ดีลทดสอบ Enter' } });
+
+    submitForm();
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('does not submit a real submit event from the CUSTOMER view before a customer is chosen', async () => {
+    const onSubmit = vi.fn();
+    renderModal({ onSubmit });
+
+    goToSection('ลูกค้า');
+    // SearchSelect's own search input is the CUSTOMER view's only field while nothing is selected.
+    fireEvent.change(screen.getByPlaceholderText('พิมพ์ค้นหาชื่อบริษัท…'), { target: { value: 'บริษัท' } });
+
+    submitForm();
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('does not submit a real submit event from the PROJECT view while creating a new project', async () => {
+    const onSubmit = vi.fn();
+    renderModal({ onSubmit });
+
+    goToSection('ลูกค้า');
+    fireEvent.change(screen.getByPlaceholderText('พิมพ์ค้นหาชื่อบริษัท…'), { target: { value: 'บริษัท' } });
+    fireEvent.mouseDown(await screen.findByText(mockCustomer.name));
+    goToSection('กลับ');
+
+    goToSection('โครงการ');
+    await screen.findByRole('button', { name: mockProject.name });
+    // Once "สร้างโครงการใหม่" is open, ชื่อโครงการ is the PROJECT view's only field —
+    // `selectedProject` is still null, so validateTicketForm() would fail regardless, but the
+    // implicit-submission gate must refuse to even try before that check ever runs.
+    fireEvent.click(screen.getByRole('button', { name: /สร้างโครงการใหม่/ }));
+    fireEvent.change(screen.getByPlaceholderText('ชื่อโครงการ'), { target: { value: 'โครงการทดสอบ' } });
+
+    submitForm();
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('submits a real submit event dispatched from the REVIEW view', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderModal({ onSubmit, initialItems: [validItem()] });
+
+    await selectCustomerAndProject();
+    goToSection('ตรวจสอบ & บันทึก');
+
+    submitForm();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+  });
+});
+
 // V110 fix: the catalog product picked here used to be discarded entirely (ticket_item had no
 // column for it), forcing PricingRequestCreateModal to re-search the same product. It is now
 // persisted as catalogPriceId/catalogProductCode. Picking a catalog product also used to write
@@ -345,6 +436,12 @@ describe('TicketCreateModal catalog picker (V110 catalog link + brand mapping fi
     // The bug this fixes: brand must NOT become the factory name.
     expect(brandInput.value).not.toBe('Cotto Factory');
     expect(screen.getByPlaceholderText('เช่น SCG Ceramics').value).toBe('Cotto Factory');
+
+    // Close the item editor back to the hub before submitting — the item editor itself never
+    // renders a submit control (fix/form-enter-submits-real-records's `handleFormSubmit` gate), so
+    // submitting from inside it is not a real, reachable path in a browser.
+    fireEvent.click(screen.getByRole('button', { name: /บันทึกรายการ/ }));
+    goToSection('กลับ');
 
     submitForm();
 
@@ -417,6 +514,12 @@ describe('TicketCreateModal catalog picker (V110 catalog link + brand mapping fi
 
     // Hand-edit color after the pick — the link no longer reliably describes this row.
     fireEvent.change(screen.getByPlaceholderText('เช่น ขาว, เทา, ครีม'), { target: { value: 'เทาเข้ม' } });
+
+    // Close the item editor back to the hub before submitting — the item editor itself never
+    // renders a submit control (fix/form-enter-submits-real-records's `handleFormSubmit` gate), so
+    // submitting from inside it is not a real, reachable path in a browser.
+    fireEvent.click(screen.getByRole('button', { name: /บันทึกรายการ/ }));
+    goToSection('กลับ');
 
     submitForm();
 

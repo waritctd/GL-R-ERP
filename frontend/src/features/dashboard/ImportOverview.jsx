@@ -103,7 +103,7 @@ function PulseTile({ label, count, tone, active, onClick }) {
 
 function WorklistRow({ ticket, action, navigate }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle px-4 py-3 first:border-t-0 max-[720px]:flex-col max-[720px]:items-stretch">
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle px-4 py-3 first:border-t-0 mobile:flex-col mobile:items-stretch">
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <strong className="min-w-0 truncate text-sm font-extrabold text-text">
@@ -212,7 +212,7 @@ export function ImportOverview({ user, employee }) {
       <PageHeader title={greeting} subtitle="ภาพรวมงานนำเข้า — จัดซื้อ ขนส่ง และส่งมอบ" />
 
       <Panel title="สถานะงานทั้งหมด" className="!p-4">
-        <div className="flex flex-wrap gap-2 max-[520px]:flex-nowrap max-[520px]:overflow-x-auto max-[520px]:pb-1">
+        <div className="flex flex-wrap gap-2 mobile-xs:flex-nowrap mobile-xs:overflow-x-auto mobile-xs:pb-1">
           <PulseTile
             label="เกินกำหนด"
             count={bucketCounts.overdue}
@@ -257,7 +257,7 @@ export function ImportOverview({ user, employee }) {
         )}
       </Panel>
 
-      <div className="grid grid-cols-2 gap-[14px] max-[720px]:grid-cols-1">
+      <div className="grid grid-cols-2 gap-[14px] mobile:grid-cols-1">
         <Panel title="คิวของฉัน" flush>
           <div className="flex flex-col">
             <button

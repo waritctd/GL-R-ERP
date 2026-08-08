@@ -5,6 +5,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { ProductFormModal } from './ProductFormModal.jsx';
 
@@ -134,7 +135,7 @@ export function CatalogSearchPage({ user, showToast }) {
       {/* Search bar — search is the primary interaction on this page, so it
           leads with a full-width icon field; factory narrows the same query. */}
       <Panel>
-        <form onSubmit={handleSearch} className="flex flex-wrap gap-2.5 items-end">
+        <SafeForm onSubmit={handleSearch} className="flex flex-wrap gap-2.5 items-end">
           <div className="flex-1 min-w-[220px]">
             <label className="block text-xs font-bold text-text-muted mb-1" htmlFor="catalog-q">
               ค้นหา (แบรนด์ / รุ่น / สี / รหัส)
@@ -176,7 +177,7 @@ export function CatalogSearchPage({ user, showToast }) {
             <Icon name="search" size={14} />
             {loading ? 'กำลังค้นหา…' : 'ค้นหา'}
           </Button>
-        </form>
+        </SafeForm>
       </Panel>
 
       {/* Results */}

@@ -380,6 +380,47 @@ public class CommissionService {
             // (create a fresh entry, or use the clawback-style correction pattern, if it was wrong).
             throw new ApiException(HttpStatus.CONFLICT, "รายการค่าคอมมิชชั่นแบบกรอกเองไม่มีรายการหักจากใบกำกับภาษีให้แก้ไข");
         }
+        // P0 fix (fix/commission-approved-record-immutable): a CLAWBACK record shares its
+        // invoice_id with the ORIGINAL sale it reverses (CommissionRepository#createClawback
+        // inserts the clawback row with invoice_id = original.invoiceDetails().id()) -- editing one
+        // through its own id rewrites that shared invoice_details row, and
+        // updateCommissionAmountsForInvoice's `WHERE invoice_id = :invoiceId` then rewrites the
+        // ORIGINAL sale's actual_received/commissionable_base too, through a completely different
+        // id. That mechanism is why a clawback's amount must never be hand-edited: it is always
+        // derived (negated) from the original at creation time -- a KIND invariant, true regardless
+        // of status. This check is redundant with the APPROVED check below today (a clawback is
+        // always created APPROVED and has no path back to SUBMITTED/MANAGER_APPROVED, so that check
+        // alone already stops the write) -- it is checked FIRST not because it is the only thing
+        // preventing the corruption above, but so the refusal names the real, permanent reason
+        // ("this id is a clawback") instead of a status coincidence a future reader could mistake
+        // for "editable again once un-approved", and so the guard survives unchanged if anyone ever
+        // adds a review stage before a clawback is finalized.
+        if (CommissionKind.CLAWBACK.equals(existing.kind())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "รายการเรียกคืนค่าคอมมิชชั่นคำนวณจากรายการต้นทางโดยอัตโนมัติ ไม่สามารถแก้ไขได้โดยตรง");
+        }
+        // P0 fix: a fully APPROVED record has already been signed off by the CEO and is in range
+        // for payroll (CommissionRepository#findApprovedRecordsByMonth filters status = 'APPROVED'
+        // only, feeding #payrollCommissionTotalsByEmployee) -- it may already be reflected in a
+        // filed payroll run. There is no route back to SUBMITTED/MANAGER_APPROVED for re-review, so
+        // an unguarded edit here would recompute the tier commission from new numbers with no
+        // re-approval by anyone, including the CEO who approved the original figure. The sanctioned
+        // way to correct an approved record is createClawback, which books a new, separately-
+        // audited, separately payroll-month-guarded record instead of mutating one that already
+        // cleared review.
+        if (CommissionStatus.APPROVED.equals(existing.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "รายการค่าคอมมิชชั่นที่อนุมัติแล้วไม่สามารถแก้ไขได้ กรุณาใช้การเรียกคืนค่าคอมมิชชั่นแทน");
+        }
+        // Commission-closed-month guard: matches every other write against sales.commission_record
+        // (see requireCommissionPayrollMonthOpen's Javadoc -- this is the seventh call site, an
+        // omission the guard's own Javadoc used to undercount as "six"). Guards the record's own
+        // payrollMonth, the same value managerApprove/ceoApprove guard, even though only APPROVED
+        // (already refused above) is counted toward payroll: a SUBMITTED/MANAGER_APPROVED record
+        // whose month has since closed can never be approved either (both approval-stage guards
+        // would refuse that transition), so silently letting its numbers be edited is dead work at
+        // best and a confusing, unaudited-looking edit to a closed month's data at worst.
+        requireCommissionPayrollMonthOpen(existing.payrollMonth());
         BigDecimal grossAmount = valueOrExisting(request.grossAmount(), existing.invoiceDetails().grossAmount());
         BigDecimal bankFees = valueOrExisting(request.bankFees(), existing.invoiceDetails().bankFees());
         BigDecimal suspenseVat = valueOrExisting(request.suspenseVat(), existing.invoiceDetails().suspenseVat());
@@ -1028,19 +1069,22 @@ public class CommissionService {
      *
      * <p>Call this on the already-normalized, first-of-month value that will actually be
      * written/read -- never on a raw caller-supplied date. Guarding the raw input would let a
-     * mid-month date slip past a first-of-month comparison. Six call sites, all of which write or
+     * mid-month date slip past a first-of-month comparison. Seven call sites, all of which write or
      * advance {@code sales.commission_record}: the four creation paths -- {@link
      * #createManualCommission} (on the resolved {@code month}), {@link #submit}/{@link
      * #createFromDeal} (on {@link #saleCommissionPayrollMonth(LocalDate)}'s M+1-derived result --
      * use the {@link #requireCommissionPayrollMonthOpen(LocalDate, LocalDate)} overload there so
      * the refusal names the invoice date too), and {@link #createClawback} (on {@code
      * currentPayrollMonth()} -- a clawback filed after the current month is marked PROCESSED
-     * mid-month, as happened on prod 23 Jul 2026, must not silently land in it) -- plus the two
+     * mid-month, as happened on prod 23 Jul 2026, must not silently land in it) -- the two
      * approval stages, {@link #managerApprove(long, UserPrincipal, CommissionRecord)} and {@link
      * #ceoApprove(long, UserPrincipal, CommissionRecord)} (on the existing record's {@code
      * payrollMonth()}): a commission created while its month was open can still be approved after
      * the month closes underneath it, exactly the seam {@code OvertimeService} already guards at
-     * both its manager- and CEO-approval stages.
+     * both its manager- and CEO-approval stages -- and {@link #updateDeductions} (on the existing
+     * record's {@code payrollMonth()}, added by fix/commission-approved-record-immutable: originally
+     * missing here entirely, which is how a manager could edit a SUBMITTED/MANAGER_APPROVED
+     * record's numbers for a month that could then never be approved into payroll anyway).
      */
     private void requireCommissionPayrollMonthOpen(LocalDate payrollMonth) {
         if (commissions.payrollMonthProcessed(payrollMonth)) {

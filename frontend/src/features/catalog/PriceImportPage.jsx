@@ -7,6 +7,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { ProductFormModal } from './ProductFormModal.jsx';
@@ -98,7 +99,7 @@ function AddFactoryModal({ onClose, onCreated }) {
         </>
       }
     >
-      <form id="add-factory-form" onSubmit={handleSubmit} className="space-y-4">
+      <SafeForm id="add-factory-form" onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label htmlFor="af-name" className="block text-sm font-medium mb-1">ชื่อโรงงาน *</label>
           <input
@@ -143,7 +144,7 @@ function AddFactoryModal({ onClose, onCreated }) {
           </div>
         </div>
         {error && <p className="text-sm text-red-600">{error}</p>}
-      </form>
+      </SafeForm>
     </Modal>
   );
 }
@@ -488,7 +489,7 @@ export function PriceImportPage({ showToast }) {
             variant="primary"
             onClick={() => setConfirmUpload(true)}
             disabled={!file || uploading}
-            className="max-[720px]:min-h-11 max-[720px]:w-full"
+            className="mobile:min-h-11 mobile:w-full"
           >
             <Icon name="upload" />
             {uploading ? 'กำลังอัปโหลด…' : 'อัปโหลดและบันทึกราคาใช้งาน'}
