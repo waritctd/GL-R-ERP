@@ -54,7 +54,7 @@ export function CompactStatRow({
 }) {
   const gridClassName = cn(
     'm-0 grid grid-cols-4 gap-x-6 gap-y-4 rounded-md border border-border bg-surface px-5 py-4',
-    'max-[1040px]:grid-cols-2 max-[720px]:grid-cols-2 max-[720px]:gap-x-4 max-[720px]:gap-y-3 max-[720px]:px-4 max-[720px]:py-3.5',
+    'nav-drawer:grid-cols-2 mobile:grid-cols-2 mobile:gap-x-4 mobile:gap-y-3 mobile:px-4 mobile:py-3.5',
     className,
   );
 

@@ -12,10 +12,12 @@ import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { formGridSpan2, Panel, PageStack, RowActions } from '../../components/common/Layout.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { UpcomingHolidays } from '../../components/common/UpcomingHolidays.jsx';
 import { overtimeStatusLabel as statusInfo, pendingApproverText } from '../../utils/format.js';
 
-const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,0.75fr)] max-[1040px]:min-w-[940px] reflow-cards';
+const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,0.75fr)] nav-drawer:min-w-[940px] reflow-cards';
 // FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
 // (Enter-to-submit on the search button), so its exact utility string is reproduced
 // here rather than wrapping a <form> inside a non-form primitive.
@@ -26,7 +28,7 @@ const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax
 const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-end bg-surface border border-border rounded-md p-[14px]';
 // FormGrid (Layout.jsx) renders a <div>; the submit form needs to be a native <form>
 // for onSubmit/noValidate, so its exact (2-column) utility string is reproduced here.
-const FORM_GRID_CLASS = 'grid gap-[14px] max-[720px]:grid-cols-1 grid-cols-2';
+const FORM_GRID_CLASS = 'grid gap-[14px] mobile:grid-cols-1 grid-cols-2';
 
 function bangkokDateParts(date = new Date()) {
   return Object.fromEntries(new Intl.DateTimeFormat('en-US', {
@@ -158,6 +160,33 @@ function formatMinutes(value) {
   return `${hours} ชม. ${rest} นาที`;
 }
 
+// Matches OvertimeService#validateDayTypeClaim's ONE actively-disprovable-claim message (and its
+// mock mirror, byte-for-byte the same string) -- see that method's decision table. A malformed
+// dayType value ("ประเภทวันทำงานล่วงเวลาไม่ถูกต้อง") can't reach here: the <select> below only ever
+// submits WORKDAY or HOLIDAY. Every OTHER create() 400 (planned-window order, backdated-window/
+// reason-length) is already blocked client-side by createOvertimeFormSchema's own zod checks, so
+// a 400 that reaches this far and carries this exact substring is the day-type claim, not a
+// coincidence.
+function isDayTypeClaimError(error) {
+  return Boolean(error)
+    && error.status === 400
+    && typeof error.message === 'string'
+    && error.message.includes('ไม่สามารถแจ้งว่าเป็นวันหยุด');
+}
+
+// Debounces `value` by `delayMs` -- mirrors LeaveRequestPage's identically-named private helper
+// (same calendar-context endpoint, same reason: don't fire one request per keystroke). Kept as
+// its own small local copy rather than a new shared hook module for a four-line function two
+// call sites use.
+function useDebouncedValue(value, delayMs) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return debounced;
+}
+
 export function OvertimePanel({ user, currentEmployee, showToast }) {
   const queryClient = useQueryClient();
   const initialFilters = {
@@ -238,6 +267,35 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
   );
   const plannedEndError = hasTimeRangeError ? OT_TIME_RANGE_MESSAGE : errors.plannedEndAt?.message;
 
+  // Holiday-verdict lookup for the currently selected วันที่ทำ OT (#ot-holiday-visibility, PR 2).
+  // Debounced like LeaveRequestPage's own calendar-context read (same endpoint) so typing into
+  // the date field doesn't fire one request per keystroke. Scoped to the single selected date,
+  // NOT the ~90-day-forward window UpcomingHolidays shows above -- a backdated work date (up to
+  // OT_RETROACTIVE_WINDOW_DAYS in the past) falls outside that window, and this must still answer
+  // correctly for it.
+  const debouncedVerdictWorkDate = useDebouncedValue(selectedWorkDate, 400);
+  const dayTypeVerdictQuery = useQuery({
+    queryKey: queryKeys.leaveCalendarContext(debouncedVerdictWorkDate, debouncedVerdictWorkDate),
+    queryFn: () => api.leave.calendarContext({ from: debouncedVerdictWorkDate, to: debouncedVerdictWorkDate })
+      .then((response) => response.calendarContext),
+    enabled: Boolean(debouncedVerdictWorkDate),
+  });
+  const verdictHoliday = dayTypeVerdictQuery.data?.holidays?.[0] ?? null;
+  const verdictResolved = Boolean(debouncedVerdictWorkDate) && dayTypeVerdictQuery.isSuccess;
+  const verdictIsHoliday = verdictResolved && Boolean(verdictHoliday);
+
+  // Pre-flight ONLY -- a prediction of OvertimeService#validateDayTypeClaim's decision table
+  // (backend) and its mock mirror, never a substitute for it; the real gate still runs at submit.
+  // A WORKDAY claim on a genuine holiday is never refused server-side (deriveDayType corrects it
+  // upward silently), so 'under-claim' is informational, not a warning that submit will fail --
+  // 'over-claim' is the one that WILL 400 (see the pre-flight note's own copy below).
+  const dayTypeMismatch = !verdictResolved ? null
+    : verdictIsHoliday && selectedDayType === 'WORKDAY'
+      ? { kind: 'under-claim', nameTh: verdictHoliday.nameTh }
+      : !verdictIsHoliday && selectedDayType === 'HOLIDAY'
+        ? { kind: 'over-claim' }
+        : null;
+
   const totals = useMemo(() => {
     const submitted = requests.filter((request) => request.status === 'SUBMITTED').length;
     const managerApproved = requests.filter((request) => request.status === 'MANAGER_APPROVED').length;
@@ -293,6 +351,19 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
     },
     onError: (error) => showToast('error', error.message || 'ส่งคำขอ OT ไม่สำเร็จ'),
   });
+  // Inline surfacing alongside the toast above (#ot-holiday-visibility) -- a contradicted HOLIDAY
+  // claim (OvertimeService#validateDayTypeClaim's 400) is a FIELD-shaped error, not just a
+  // transient one a toast alone adequately explains; the "ประเภท OT" FormField below reads this.
+  const dayTypeSubmitError = isDayTypeClaimError(createMutation.error) ? createMutation.error.message : null;
+  // Live-verified rough edge: without this, a FAILED contradicted-claim submit left its 400
+  // (naming the OLD workDate) showing after the employee fixed the mismatch by changing either
+  // field -- a stale rejection about a request they no longer intend to send. Clears the instant
+  // either contributing field changes, not on every render (mutate() itself already clears it
+  // the moment a NEW submit starts, same as any TanStack Query mutation).
+  useEffect(() => {
+    createMutation.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedWorkDate, selectedDayType]);
 
   const approveMutation = useMutation({
     mutationFn: (id) => api.overtime.approve(id, {}).then((response) => response.request),
@@ -401,18 +472,23 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
     return ['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED'].includes(request.status) && managesRequest(request);
   }
 
+  // Always confirm before cancelling -- matches the self-cancel pattern in
+  // MyLeaveTab.requestCancel and SpecialMoneyPanel.cancel. The row action is
+  // already gated by (canCancel || managerCancellable), so eligibility is
+  // decided at render time; this function no longer needs to re-check it.
   function cancel(id) {
-    const request = requests.find((item) => item.id === id);
-    if (request && canManagerCancel(request)) {
-      setConfirmState({ kind: 'cancel', id });
-      return;
-    }
-    doCancel(id, '');
+    setConfirmState({ kind: 'cancel', id });
   }
 
   function doCancel(id, reviewerNote) {
     cancelMutation.mutate({ id, reviewerNote });
   }
+
+  // UpcomingHolidays' own window: "next ~90 days" per the design brief -- independent of the
+  // requests-list filter range above (appliedFilters), which exists for a different purpose
+  // (browsing past/pending OT requests, not "what's coming up").
+  const holidayWindowFrom = todayIso();
+  const holidayWindowTo = addDaysIso(90);
 
   return (
     <PageStack>
@@ -440,7 +516,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
         ]}
       />
 
-      <form className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
+      <SafeForm className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
         <label>
           จากวันที่
           <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
@@ -475,10 +551,15 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           <Icon name="search" />
           ค้นหา
         </Button>
-      </form>
+      </SafeForm>
+
+      {/* Holiday answer arrives BEFORE the claim is made (#ot-holiday-visibility): this panel sits
+          above the whole submit form, not just above the day-type select, so an employee can see
+          which upcoming days are company holidays before they even open the date field below. */}
+      <UpcomingHolidays from={holidayWindowFrom} to={holidayWindowTo} />
 
       <Panel title="ยื่นคำขอ OT">
-        <form className={FORM_GRID_CLASS} onSubmit={handleSubmit(submitOvertime)} noValidate>
+        <SafeForm className={FORM_GRID_CLASS} onSubmit={handleSubmit(submitOvertime)} noValidate>
           {hasMultipleSubmitOptions ? (
             <FormField label="พนักงาน" htmlFor="ot-employee" error={errors.employeeId?.message}>
               <select
@@ -519,7 +600,44 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               required
             />
           </FormField>
-          <FormField label="ประเภท OT" htmlFor="ot-day-type" error={errors.dayType?.message} required>
+
+          {/* Verdict badge (#ot-holiday-visibility): resolves the SAME holiday calendar
+              OvertimeService#validateDayTypeClaim checks server-side, for the currently selected
+              วันที่ทำ OT above -- so the answer is in front of the employee BEFORE they touch
+              ประเภท OT below, not only after a 400 tells them they guessed wrong. aria-live
+              announces it updating as the date field changes, matching LeaveRequestPage's
+              identical convention for its own dynamic calendar-context note. */}
+          <div className={formGridSpan2} aria-live="polite" aria-busy={dayTypeVerdictQuery.isFetching}>
+            {verdictIsHoliday ? (
+              // The name is deliberately OUTSIDE the pill. `hr.holiday.name_th` is not a short
+              // label: production's 19 BANK rows average 35 chars and reach **149**
+              // ("ชดเชยวันคล้ายวันพระบรมราชสมภพ ... (วันเสาร์ที่ 5 ธันวาคม 2569)"), which is why V129
+              // had to widen the column from VARCHAR(120) to TEXT. Interpolated into the pill it
+              // either stretched it off-grid or wrapped inside a `rounded-full`, which reads as
+              // broken -- a pill shape asserts "one short line" and a 149-char label breaks that
+              // promise. Pill keeps the fixed verdict + rate; the variable-length name sits beside
+              // it as ordinary text that is allowed to wrap.
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="inline-flex w-fit shrink-0 items-center gap-1.5 rounded-full border border-warning-border bg-warning-bg-soft px-3 py-1.5 text-xs font-bold text-warning-dark">
+                  <Icon name="triangleAlert" size={13} />
+                  วันหยุดบริษัท · 3x
+                </span>
+                <span className="min-w-0 text-xs text-text-muted">{verdictHoliday.nameTh}</span>
+              </span>
+            ) : verdictResolved ? (
+              <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-border bg-surface-subtle px-3 py-1.5 text-xs font-bold text-text-muted">
+                <Icon name="check" size={13} />
+                วันทำงานปกติ · 1.5x
+              </span>
+            ) : (
+              <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-dashed border-border-muted bg-surface px-3 py-1.5 text-xs font-medium text-text-muted">
+                <Icon name="clock" size={13} />
+                ปฏิทินยังไม่ได้โหลด
+              </span>
+            )}
+          </div>
+
+          <FormField label="ประเภท OT" htmlFor="ot-day-type" error={errors.dayType?.message || dayTypeSubmitError} required>
             <select
               id="ot-day-type"
               {...register('dayType')}
@@ -532,6 +650,20 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               <option value="HOLIDAY">วันหยุด/วันหยุดนักขัตฤกษ์ · 3x</option>
             </select>
           </FormField>
+
+          {/* Pre-flight ONLY -- see dayTypeMismatch's own comment above. 'over-claim' predicts the
+              exact 400 OvertimeService#validateDayTypeClaim throws on submit; 'under-claim' is
+              informational (deriveDayType pays 3x regardless of what stays selected here). */}
+          {dayTypeMismatch ? (
+            <div className={formGridSpan2}>
+              <p className="m-0 rounded-lg border border-warning-border bg-warning-bg-soft px-3 py-2 text-xs text-warning-dark">
+                {dayTypeMismatch.kind === 'over-claim'
+                  ? 'วันที่เลือกไม่ใช่วันหยุดตามปฏิทินบริษัท — หากส่งคำขอโดยระบุ "วันหยุด/วันหยุดนักขัตฤกษ์" ระบบจะปฏิเสธคำขอนี้ กรุณาเลือก "วันทำงานปกติ"'
+                  : `วันที่เลือกเป็นวันหยุดบริษัท (${dayTypeMismatch.nameTh}) ระบบจะคำนวณอัตรา 3x ให้โดยอัตโนมัติ แม้เลือก "วันทำงานปกติ" ไว้`}
+              </p>
+            </div>
+          ) : null}
+
           <FormField label="เริ่ม" htmlFor="ot-planned-start" error={errors.plannedStartAt?.message} required>
             <input
               id="ot-planned-start"
@@ -573,12 +705,12 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
             </FormField>
           </div>
           <RowActions className={formGridSpan2}>
-            <Button type="submit" disabled={saving || hasTimeRangeError} className="max-[720px]:min-h-11 max-[720px]:w-full">
+            <Button type="submit" disabled={saving || hasTimeRangeError} className="mobile:min-h-11 mobile:w-full">
               <Icon name="plus" />
               ส่งคำขอ
             </Button>
           </RowActions>
-        </form>
+        </SafeForm>
       </Panel>
 
       <Panel flush>
@@ -608,28 +740,28 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
             <div className={`${OVERTIME_TABLE_GRID} data-row`} key={request.id}>
               {/* Mobile order (step 8 rule 7 — summary -> actions -> details): this
                   span is the summary (who/when) and stays first on every viewport. */}
-              <span data-label="วันที่ / พนักงาน" className="max-[720px]:order-1">
+              <span data-label="วันที่ / พนักงาน" className="mobile:order-1">
                 <strong>{formatWorkDate(request.workDate)}</strong>
                 <small>{request.employeeName || request.employeeCode || request.employeeId}</small>
               </span>
-              <span data-label="แผน OT" className="max-[720px]:order-4">
+              <span data-label="แผน OT" className="mobile:order-4">
                 <strong>{formatDateTime(request.plannedStartAt)}</strong>
                 <small>
                   {formatDateTime(request.plannedEndAt)} · {formatMinutes(request.plannedMinutes)} · {request.dayType === 'HOLIDAY' ? '3x' : '1.5x'}
                 </small>
               </span>
-              <span data-label="เหตุผล" className="max-[720px]:order-5">
+              <span data-label="เหตุผล" className="mobile:order-5">
                 <strong>{request.reason}</strong>
                 <small>{request.reviewerNote || request.calculationNote || '-'}</small>
               </span>
               {/* Pure-numeric column: right-aligned + mono on desktop so the figures
                   line up for scanning (DESIGN.md mono is for "figures needing
                   alignment"). Left on mobile, where it reads as a stacked card. */}
-              <span data-label="เวลาจริง / จ่ายได้" className="max-[720px]:order-6 min-[721px]:text-right">
+              <span data-label="เวลาจริง / จ่ายได้" className="mobile:order-6 min-[721px]:text-right">
                 <strong className="font-mono">{formatMinutes(request.actualMinutes)}</strong>
                 <small className="font-mono">จ่ายได้ {formatMinutes(request.payableMinutes)}</small>
               </span>
-              <span data-label="ขั้นอนุมัติ" className="max-[720px]:order-2">
+              <span data-label="ขั้นอนุมัติ" className="mobile:order-2">
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
                 {/* No "รอ" prefix -- the StatusBadge above already says that (รอผู้จัดการ/รอ CEO);
                     repeating it made this note a superset of the badge's own text, which broke an
@@ -642,7 +774,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
                   outlined, not filled) and step 9 rule 2 — mirrors the exact
                   success/danger icon-button tinting CommissionPage uses for the
                   same manager/CEO review pattern. */}
-              <span className="row-actions max-[720px]:order-3">
+              <span className="row-actions mobile:order-3">
                 {reviewable ? (
                   <>
                     <Button

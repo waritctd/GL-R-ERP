@@ -24,9 +24,12 @@ npm run build
 npm run test:e2e
 ```
 
-Playwright starts the mock Vite app through `frontend/playwright.config.js`.
+`test:e2e` is the real-backend suite (`frontend/playwright.real.config.js`, driving
+`frontend/e2e-real/`); it needs Postgres and a running backend — see
+`frontend/e2e-real/README.md`. The mock-frontend suite it used to run was removed on 2026-08-08.
 Rendered browser evidence is required for UI repair work, including the affected
-roles and viewport sizes named by the phase plan.
+roles and viewport sizes named by the phase plan — note that the removal took the viewport/layout
+specs with it, so that evidence is now manual until they are ported.
 
 ## UI Repair Boundaries
 

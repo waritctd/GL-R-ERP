@@ -96,10 +96,10 @@ describe('StatGrid', () => {
     expect(screen.getByText('การ์ด 1')).toBeTruthy();
     expect(screen.getByText('การ์ด 2')).toBeTruthy();
     expect(grid.className).toContain('grid-cols-4');
-    expect(grid.className).toContain('max-[1040px]:grid-cols-2');
+    expect(grid.className).toContain('nav-drawer:grid-cols-2');
     // ≤720px stays 2-up (not a single stacked column) — a single column was
     // forcing users to scroll past several screens of stat tiles before
     // reaching real content.
-    expect(grid.className).toContain('max-[720px]:grid-cols-2');
+    expect(grid.className).toContain('mobile:grid-cols-2');
   });
 });

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Button } from '../../components/common/Button.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 
 /**
@@ -72,7 +73,7 @@ export function HolidayFormModal({
         </>
       )}
     >
-      <form id="holiday-form" onSubmit={handleSubmit} className="grid gap-3.5">
+      <SafeForm id="holiday-form" onSubmit={handleSubmit} className="grid gap-3.5">
         {isEdit ? (
           <div>
             <span className="mb-1 block text-xs font-bold text-text-muted">แหล่งที่มาปัจจุบัน</span>
@@ -113,7 +114,7 @@ export function HolidayFormModal({
             ) : null}
           </div>
         ) : null}
-      </form>
+      </SafeForm>
     </Modal>
   );
 }

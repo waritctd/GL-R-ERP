@@ -21,7 +21,7 @@ import { Panel } from '../../components/common/Layout.jsx';
  * (requires action), so an item with no `to` AND no other affordance must never reach here.
  * `to` omitted still means "actionable elsewhere" for `notifications`, never "unreachable".
  *
- * Desktop/tablet only (`max-[720px]:hidden`): ui-responsive-repair-plan.md Step 7's
+ * Desktop/tablet only (`mobile:hidden`): ui-responsive-repair-plan.md Step 7's
  * item 10 ("mobile dashboard must not become too tall") is explicit, and Step 4
  * already fought hard to cut the mobile stat block from 1541px to 661px — this
  * panel measured +130-200px depending on how many items are active, which would
@@ -34,7 +34,7 @@ export function ActionQueue({ items }) {
 
   if (active.length === 0) {
     return (
-      <Panel className="max-[720px]:hidden">
+      <Panel className="mobile:hidden">
         <div className="flex items-center gap-3 text-text-muted">
           <Icon name="check" size={18} />
           <span className="text-sm font-bold">ไม่มีรายการที่ต้องดำเนินการตอนนี้</span>
@@ -44,7 +44,7 @@ export function ActionQueue({ items }) {
   }
 
   return (
-    <Panel flush title="ต้องดำเนินการ" className="max-[720px]:hidden">
+    <Panel flush title="ต้องดำเนินการ" className="mobile:hidden">
       <div className="flex flex-col">
         {active.map((item) => {
           const Tag = item.to ? 'button' : 'div';

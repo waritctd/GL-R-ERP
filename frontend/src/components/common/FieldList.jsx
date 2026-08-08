@@ -13,7 +13,7 @@ export function FieldList({ columns = 2, className, children, ...props }) {
   return (
     <dl
       className={cn(
-        'grid gap-x-[18px] gap-y-[15px] mt-4 max-[720px]:grid-cols-1',
+        'grid gap-x-[18px] gap-y-[15px] mt-4 mobile:grid-cols-1',
         // dt: field labels are real data captions the user reads, not icons/
         // placeholders, so per DESIGN.md's Muted Floor Rule they sit at Ink
         // Muted (not Ink Faint, which is ~2.6:1 on white).
@@ -40,7 +40,7 @@ export function InfoGrid({ two = false, className, children, ...props }) {
     <div
       className={cn(
         'grid gap-4',
-        two ? 'grid-cols-2 max-[720px]:grid-cols-1' : '',
+        two ? 'grid-cols-2 mobile:grid-cols-1' : '',
         className,
       )}
       {...props}
@@ -74,9 +74,9 @@ export function DetailHero({ compact = false, className, children, ...props }) {
       className={cn(
         'bg-surface border border-border rounded-md',
         'flex items-center gap-[18px] p-5',
-        'max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-2.5 max-[720px]:p-3.5',
-        'max-[720px]:[&_h1]:m-0 max-[720px]:[&_h1]:text-lg max-[720px]:[&_h1]:leading-snug',
-        'max-[720px]:[&_p]:mt-0.5 max-[720px]:[&_p]:text-sm max-[720px]:[&_p]:text-text-muted',
+        'mobile:flex-col mobile:items-start mobile:gap-2.5 mobile:p-3.5',
+        'mobile:[&_h1]:m-0 mobile:[&_h1]:text-lg mobile:[&_h1]:leading-snug',
+        'mobile:[&_p]:mt-0.5 mobile:[&_p]:text-sm mobile:[&_p]:text-text-muted',
         compact ? 'max-w-[980px]' : '',
         className,
       )}

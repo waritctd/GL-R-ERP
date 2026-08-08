@@ -188,10 +188,12 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   // did before (the old onChange handler had its own `.catch(() => {})`).
   const loadError = depositNoticesQuery.error || noteTemplatesQuery.error;
 
+  // showToast (useToast.js) is now a stable useCallback([]) identity, so it belongs directly in
+  // this effect's deps -- the eslint-disable this line used to carry (to route around showToast's
+  // then-unstable identity retriggering the effect) is no longer needed.
   useEffect(() => {
     if (loadError) showToast('error', loadError.message || 'โหลดไม่สำเร็จ');
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once per new error identity, not on every showToast identity change
-  }, [loadError]);
+  }, [loadError, showToast]);
 
   function retryLoad() {
     depositNoticesQuery.refetch();

@@ -158,7 +158,7 @@ export function AccountOverview({ user, employee, showToast }) {
 
       {loading ? (
         <div aria-busy="true" aria-label="กำลังโหลดข้อมูลการเงิน">
-          <div className="grid grid-cols-5 gap-3 max-[1040px]:grid-cols-3 max-[720px]:grid-cols-2">
+          <div className="grid grid-cols-5 gap-3 nav-drawer:grid-cols-3 mobile:grid-cols-2">
             {MONEY_BUCKETS.map((b) => <SkeletonCard key={b.key} lines={1} />)}
           </div>
           <Panel className="mt-[14px]">
@@ -191,7 +191,7 @@ export function AccountOverview({ user, employee, showToast }) {
               })}
             </div>
           ) : (
-            <div className="grid grid-cols-5 gap-3 max-[1040px]:grid-cols-3">
+            <div className="grid grid-cols-5 gap-3 nav-drawer:grid-cols-3">
               {MONEY_BUCKETS.map((b) => {
                 const bucket = buckets[b.key];
                 return (
@@ -213,7 +213,7 @@ export function AccountOverview({ user, employee, showToast }) {
             </div>
           )}
 
-          <div className="grid gap-[18px] items-start grid-cols-[1.6fr_1fr] max-[1040px]:grid-cols-1">
+          <div className="grid gap-[18px] items-start grid-cols-[1.6fr_1fr] nav-drawer:grid-cols-1">
             {/* "สิ่งที่ต้องทำ" money worklist — overdue-first. */}
             <Panel title="สิ่งที่ต้องทำ" flush>
               {worklist.length === 0 ? (
@@ -228,9 +228,9 @@ export function AccountOverview({ user, employee, showToast }) {
                     return (
                       <div
                         key={ticket.id}
-                        className="flex items-center justify-between gap-3 border-t border-border px-5 py-3 first:border-t-0 max-[720px]:flex-col max-[720px]:items-stretch max-[720px]:gap-2.5 max-[720px]:p-4"
+                        className="flex items-center justify-between gap-3 border-t border-border px-5 py-3 first:border-t-0 mobile:flex-col mobile:items-stretch mobile:gap-2.5 mobile:p-4"
                       >
-                        <div className="flex min-w-0 flex-1 items-center gap-3 max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-1.5">
+                        <div className="flex min-w-0 flex-1 items-center gap-3 mobile:flex-col mobile:items-start mobile:gap-1.5">
                           <span className={`h-2 w-2 shrink-0 rounded-full ${action.urgent ? 'bg-danger' : 'bg-info'}`} aria-hidden="true" />
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-2">
@@ -242,12 +242,12 @@ export function AccountOverview({ user, employee, showToast }) {
                             <code className="block text-2xs text-text-muted">{ticket.code}</code>
                           </div>
                         </div>
-                        <div className="flex shrink-0 items-center gap-3 max-[720px]:w-full max-[720px]:justify-between">
+                        <div className="flex shrink-0 items-center gap-3 mobile:w-full mobile:justify-between">
                           <strong className="tabular-nums text-sm text-text">{formatMoney(rowAmount(ticket))}</strong>
                           <Button
                             type="button"
                             variant={CTA_VARIANT[action.key] ?? 'secondary'}
-                            className="max-[720px]:flex-1 max-[720px]:min-h-11"
+                            className="mobile:flex-1 mobile:min-h-11"
                             onClick={() => navigate(action.to)}
                           >
                             {action.label}

@@ -16,7 +16,7 @@ import { ActionQueue } from './ActionQueue.jsx';
  * No shared primitive yet for this exact column ratio, so it's kept local
  * (matches the breakpoints of `.stat-grid`/`.dashboard-grid` in styles.css).
  */
-const DASHBOARD_GRID = 'grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] max-[1040px]:grid-cols-2 max-[720px]:grid-cols-1';
+const DASHBOARD_GRID = 'grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] nav-drawer:grid-cols-2 mobile:grid-cols-1';
 
 export function HrDashboard({ employee, employees, profileRequests, dashboardSummary }) {
   const navigate = useNavigate();

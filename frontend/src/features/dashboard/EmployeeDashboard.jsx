@@ -20,7 +20,7 @@ import { ActionQueue } from './ActionQueue.jsx';
  * No shared primitive yet for this exact column ratio, so it's kept local
  * (matches the breakpoints of `.stat-grid`/`.dashboard-grid` in styles.css).
  */
-const DASHBOARD_GRID = 'grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] max-[1040px]:grid-cols-2 max-[720px]:grid-cols-1';
+const DASHBOARD_GRID = 'grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] nav-drawer:grid-cols-2 mobile:grid-cols-1';
 
 const COMPANY_ROLES = ['hr', 'ceo'];
 
@@ -268,7 +268,7 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
           card, never a nested card (DESIGN.md). */}
       {employee && mode === 'employee' ? (
         <section className="profile-strip !flex-col !items-stretch !gap-0">
-          <div className="flex items-center gap-[18px] max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-2.5">
+          <div className="flex items-center gap-[18px] mobile:flex-col mobile:items-start mobile:gap-2.5">
             <Avatar employee={employee} size="lg" />
             <div className="min-w-0 flex-1">
               <h2>{employee?.nameTh}</h2>
@@ -297,7 +297,7 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
         <button
           type="button"
           onClick={() => navigate('/attendance')}
-          className="bg-surface border border-border rounded-md p-5 w-full text-left cursor-pointer flex items-center justify-between gap-4 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-2"
+          className="bg-surface border border-border rounded-md p-5 w-full text-left cursor-pointer flex items-center justify-between gap-4 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover mobile:flex-col mobile:items-start mobile:gap-2"
         >
           <span className="flex items-center gap-3 min-w-0">
             <span className={`stat-icon !mb-0 stat-${dashboardSummary?.attendance?.todayStatus === 'PRESENT' ? 'teal' : 'amber'}`}>

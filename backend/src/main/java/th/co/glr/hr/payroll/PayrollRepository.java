@@ -514,11 +514,118 @@ public class PayrollRepository {
             ));
     }
 
-    /** C1: bulk upsert of the standing tax-allowance declaration. */
+    /**
+     * Columns whose change invalidates a prior HR verification -- used by {@link
+     * #upsertTaxAllowances} to decide whether an overwrite must reset {@code verification_status}.
+     * Deliberately the full set of DECLARED content: amounts, the per-head counts, the disability
+     * flag, and {@code document_reference} (VERIFIED means HR confirmed THESE documents -- a new
+     * reference means different documents were supplied, so the old confirmation no longer applies).
+     * Deliberately NOT {@code updated_by_id}/{@code updated_at}: those change on every call
+     * regardless of content, and would make even a byte-identical re-save look "changed".
+     */
+    private static final String TAX_ALLOWANCE_CONTENT_CHANGED = """
+        (eta.spouse_allowance IS DISTINCT FROM EXCLUDED.spouse_allowance
+         OR eta.child_allowance IS DISTINCT FROM EXCLUDED.child_allowance
+         OR eta.parent_care_allowance IS DISTINCT FROM EXCLUDED.parent_care_allowance
+         OR eta.disabled_care_allowance IS DISTINCT FROM EXCLUDED.disabled_care_allowance
+         OR eta.maternity_allowance IS DISTINCT FROM EXCLUDED.maternity_allowance
+         OR eta.life_insurance_allowance IS DISTINCT FROM EXCLUDED.life_insurance_allowance
+         OR eta.health_insurance_allowance IS DISTINCT FROM EXCLUDED.health_insurance_allowance
+         OR eta.parent_health_insurance_allowance IS DISTINCT FROM EXCLUDED.parent_health_insurance_allowance
+         OR eta.rmf_allowance IS DISTINCT FROM EXCLUDED.rmf_allowance
+         OR eta.ssf_allowance IS DISTINCT FROM EXCLUDED.ssf_allowance
+         OR eta.pension_insurance_allowance IS DISTINCT FROM EXCLUDED.pension_insurance_allowance
+         OR eta.thai_esg_allowance IS DISTINCT FROM EXCLUDED.thai_esg_allowance
+         OR eta.home_loan_interest_allowance IS DISTINCT FROM EXCLUDED.home_loan_interest_allowance
+         OR eta.education_donation IS DISTINCT FROM EXCLUDED.education_donation
+         OR eta.general_donation IS DISTINCT FROM EXCLUDED.general_donation
+         OR eta.political_donation IS DISTINCT FROM EXCLUDED.political_donation
+         OR eta.child_count IS DISTINCT FROM EXCLUDED.child_count
+         OR eta.child_count_double IS DISTINCT FROM EXCLUDED.child_count_double
+         OR eta.disabled_care_count IS DISTINCT FROM EXCLUDED.disabled_care_count
+         OR eta.disability_card_holder IS DISTINCT FROM EXCLUDED.disability_card_holder
+         OR eta.parent_care_count IS DISTINCT FROM EXCLUDED.parent_care_count
+         OR eta.document_reference IS DISTINCT FROM EXCLUDED.document_reference)
+        """;
+
+    /**
+     * Gate for {@link #upsertTaxAllowances}'s verification reset: content changed AND the row is
+     * CURRENTLY {@code VERIFIED}. Deliberately gated on the row's PRIOR status, not just "content
+     * changed" -- Opus review finding F1 (2026-08-08, caught pre-merge): an earlier version of this
+     * fix reset to {@code GRANDFATHERED_UNVERIFIED} on any content change regardless of prior
+     * status. From VERIFIED that is the intended downgrade; from {@code EXPIRED_UNVERIFIED} it is a
+     * silent PROMOTION -- {@link #findTaxAllowancesByEmployee} excludes only {@code
+     * EXPIRED_UNVERIFIED}, so a lapsed, no-longer-applied declaration would have re-entered the
+     * withholding base on nothing more than a bare amount edit through the legacy PUT, with no
+     * reviewer and no deadline, and no automated way back out (the expiry sweep only re-examines
+     * declarations still {@code APPROVED} in {@code hr.tax_allowance_declaration}, and an expired
+     * one no longer is).
+     *
+     * <p>Consequence of the VERIFIED-only gate: a {@code GRANDFATHERED_UNVERIFIED} row that is
+     * re-edited stays {@code GRANDFATHERED_UNVERIFIED} (already the "unreviewed but still applied"
+     * state -- nothing to invalidate). An {@code EXPIRED_UNVERIFIED} row that is re-edited stays
+     * {@code EXPIRED_UNVERIFIED} and KEEPS whatever verified_by_id/verified_at it carried from
+     * before it expired -- {@link #expireTaxAllowanceVerification} only ever flips the status, never
+     * clears those, so they are genuine history ("this was reviewed once, by whom, before it
+     * lapsed"), not staleness this method should launder away. The only route back from {@code
+     * EXPIRED_UNVERIFIED} is the real declaration workflow's own {@code
+     * TaxAllowanceDeclarationService#reverify}.
+     */
+    private static final String TAX_ALLOWANCE_VERIFICATION_INVALIDATED =
+        "(" + TAX_ALLOWANCE_CONTENT_CHANGED + " AND eta.verification_status = 'VERIFIED')";
+
+    /**
+     * C1: bulk upsert of the standing tax-allowance declaration.
+     *
+     * <p><b>verification_status reset on overwrite (2026-08-08 fix).</b> {@code PUT
+     * /api/payroll/tax-allowances} ({@code PayrollController}, HR-only) reaches this method
+     * directly and has no verification step of its own -- unlike {@code
+     * TaxAllowanceDeclarationService#apply}, the only other caller, which always calls {@link
+     * #markTaxAllowanceVerified} in the very same transaction right after this method returns (see
+     * the block comment above that method). Before this fix the {@code ON CONFLICT DO UPDATE} below
+     * left {@code verification_status} untouched, so overwriting a VERIFIED row's amounts through
+     * the bare PUT silently kept it VERIFIED: brand-new, never-reviewed figures inheriting someone
+     * else's review, and {@link #findTaxAllowancesByEmployee} applies VERIFIED rows to withholding
+     * exactly like GRANDFATHERED_UNVERIFIED ones (it excludes only EXPIRED_UNVERIFIED).
+     *
+     * <p>Fix: when {@link #TAX_ALLOWANCE_VERIFICATION_INVALIDATED} for the row being upserted --
+     * content changed AND the row was VERIFIED, see that constant's own doc for why the gate is on
+     * prior status, not just content -- the update resets verification_status to
+     * GRANDFATHERED_UNVERIFIED and clears verified_by_id/verified_at/verification_deadline together:
+     * the row becomes indistinguishable from a brand-new row (exactly this column set's own defaults
+     * on a fresh INSERT), never a half reset that keeps a stale reviewer or deadline pinned to a
+     * status that now says "not yet reviewed". A true no-op re-save (identical figures, e.g. a
+     * retry) leaves an existing VERIFIED row alone, and a GRANDFATHERED_UNVERIFIED or
+     * EXPIRED_UNVERIFIED row is never touched by this reset regardless of content, whatever it was.
+     *
+     * <p><b>Scope is per-row, not per-year.</b> This is deliberately narrower than {@link
+     * #markTaxAllowanceVerified}/{@link #setTaxAllowanceVerificationDeadline}/{@link
+     * #expireTaxAllowanceVerification} below, which all key on {@code (employee_id, tax_year)} with
+     * no {@code effective_month} and flip EVERY dated row for the year at once (V93: an employee can
+     * carry several dated rows per year) -- those three persist ONE holistic yearly review decision
+     * the service layer already made. This reset is the opposite: an unreviewed overwrite of ONE
+     * dated row's content, so only that row's own verification is invalidated. A sibling row for a
+     * different effective_month that this call never touched had its own supporting documents
+     * confirmed independently, and keeps whatever verification it already earned. This also matches
+     * what a single row's {@code ON CONFLICT (employee_id, tax_year, effective_month) DO UPDATE} can
+     * even reach: one conflict target, one row, never a sibling.
+     *
+     * <p><b>Known limitation (F3, not fixed here -- document, don't fix):</b> {@link
+     * #markTaxAllowanceVerified} has no {@code effective_month} filter by design (it persists ONE
+     * holistic yearly review decision, see above), so a later, entirely legitimate {@code
+     * TaxAllowanceDeclarationService#apply} of ANY new declaration for this employee/tax-year
+     * re-VERIFIES every dated row for that year at once -- including a row THIS reset had correctly
+     * downgraded for unrelated reasons. That restores the original defect's end state (a row applying
+     * to payroll under a VERIFIED label nobody re-reviewed) through a legitimate action, not a bug in
+     * this method. The per-row write scope here is right and unavoidable -- a single {@code ON
+     * CONFLICT} can only ever reach the one row it targets -- the gap is that the REPAIR back to
+     * VERIFIED is only possible year-wide. Not addressed in this change; flagged for whoever next
+     * touches the verification state machine.
+     */
     public void upsertTaxAllowances(int taxYear, List<EmployeeTaxAllowanceUpsertRequest> items, Long updatedById) {
         for (EmployeeTaxAllowanceUpsertRequest item : items) {
             jdbc.update("""
-                INSERT INTO hr.employee_tax_allowance (
+                INSERT INTO hr.employee_tax_allowance AS eta (
                     employee_id, tax_year, spouse_allowance, child_allowance, parent_care_allowance,
                     disabled_care_allowance, maternity_allowance, life_insurance_allowance,
                     health_insurance_allowance, parent_health_insurance_allowance, rmf_allowance,
@@ -561,8 +668,18 @@ public class PayrollRepository {
                     parent_care_count = EXCLUDED.parent_care_count,
                     document_reference = EXCLUDED.document_reference,
                     updated_by_id = EXCLUDED.updated_by_id,
-                    updated_at = now()
-                """,
+                    updated_at = now(),
+                    verification_status = CASE WHEN %1$s
+                        THEN 'GRANDFATHERED_UNVERIFIED' ELSE eta.verification_status END,
+                    verified_by_id = CASE WHEN %1$s THEN NULL ELSE eta.verified_by_id END,
+                    verified_at = CASE WHEN %1$s THEN NULL ELSE eta.verified_at END,
+                    verification_deadline = CASE WHEN %1$s THEN NULL ELSE eta.verification_deadline END
+                """
+                // F6: .formatted() only substitutes %1$s -- fine today since neither this statement
+                // nor TAX_ALLOWANCE_VERIFICATION_INVALIDATED contains a literal '%'. If either ever
+                // grows one (a LIKE pattern, a to_char format), it must be escaped as '%%' or this
+                // throws a runtime UnknownFormatConversionException, not a compile error.
+                .formatted(TAX_ALLOWANCE_VERIFICATION_INVALIDATED),
                 new MapSqlParameterSource()
                     .addValue("employeeId", item.employeeId())
                     .addValue("taxYear", taxYear)
@@ -848,10 +965,31 @@ public class PayrollRepository {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Declaration verification + grandfathering (V95, 2026-07-29). Deliberately separate from
-    // upsertTaxAllowances above: re-typing declared amounts does not, by itself, change
-    // verification state -- that state machine's transition rules are the next task's service-
-    // layer work. These three methods only persist a transition already decided by the caller.
+    // Declaration verification + grandfathering (V95, 2026-07-29). These three methods only persist
+    // a transition already DECIDED by the caller -- they never inspect stored content themselves.
+    //
+    // upsertTaxAllowances above is the one exception to "separate from verification state", and
+    // deliberately so (2026-08-08 fix, see its own doc comment): it is the only one of the four
+    // writers on this table that can silently overwrite a verified row's substance with no
+    // verification decision behind it at all, so it now downgrades VERIFIED back to
+    // GRANDFATHERED_UNVERIFIED itself -- but ONLY when the row's own declared content actually
+    // changes AND the row is currently VERIFIED (TAX_ALLOWANCE_VERIFICATION_INVALIDATED -- gated on
+    // prior status too, not just content, since a bare content-changed gate would silently PROMOTE
+    // an EXPIRED_UNVERIFIED row back into applying to payroll; see that constant's own doc), and only
+    // for the one row it touched.
+    //
+    // TaxAllowanceDeclarationService#apply is the ONLY caller that routes through this method AND
+    // then re-verifies: apply() calls upsertTaxAllowances, then markTaxAllowanceVerified, then
+    // setTaxAllowanceVerificationDeadline, all in the SAME transaction, so its own row always ends
+    // VERIFIED regardless of the reset (see TaxAllowanceApplySeamIntegrationTest). #reverify is
+    // DIFFERENT: it never calls upsertTaxAllowances at all (it only promotes an already-stored row
+    // straight from EXPIRED via markTaxAllowanceVerified + setTaxAllowanceVerificationDeadline), so
+    // this reset cannot fire in that path and there is nothing here for reverify() to race with.
+    //
+    // Known gap (F3, not fixed here): markTaxAllowanceVerified has no effective_month filter, so
+    // apply()-ing ANY new declaration for this employee/tax-year re-VERIFIES every dated row for the
+    // year at once, including one this reset had correctly downgraded for unrelated reasons -- see
+    // upsertTaxAllowances' own doc comment for the full reasoning.
     // ------------------------------------------------------------------------------------------
 
     /**

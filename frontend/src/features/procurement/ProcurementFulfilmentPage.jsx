@@ -19,7 +19,7 @@ const STAGE_ORDER = ['issueImportRequest', 'markIrSent', 'markShipping', 'markGo
 function FulfilmentRow({ ticket, actionCode, navigate }) {
   const status = ticket.fulfillmentStatus ? fulfilmentStatusLabel(ticket.fulfillmentStatus) : null;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle px-4 py-3 first:border-t-0 max-[720px]:flex-col max-[720px]:items-stretch">
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle px-4 py-3 first:border-t-0 mobile:flex-col mobile:items-stretch">
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <strong className="min-w-0 truncate text-sm font-extrabold text-text">

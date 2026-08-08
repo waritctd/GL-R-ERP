@@ -47,6 +47,9 @@ import th.co.glr.hr.ticket.TicketRepository;
 class TaxAllowanceCapCatalogTest extends AbstractPostgresIntegrationTest {
     private static final BigDecimal ABSURD = new BigDecimal("9999999.00");
     private static final LocalDate MONTH = LocalDate.of(2026, 1, 1);
+    // Thai ESG enhanced-cap sunset (2026 -> 2027): PayrollService#preview derives taxYear from
+    // payrollMonth.getYear(), so exercising tax year 2027 means previewing a 2027 month.
+    private static final LocalDate MONTH_2027 = LocalDate.of(2027, 1, 1);
     private static final BigDecimal PERSONAL_PLUS_SSO = new BigDecimal("70500.00"); // 60,000 + SSO year cap 10,500
 
     private final TaxAllowanceCapCatalog catalog = new TaxAllowanceCapCatalog();
@@ -193,11 +196,107 @@ class TaxAllowanceCapCatalogTest extends AbstractPostgresIntegrationTest {
             .isEqualByComparingTo(BigDecimal.ZERO);
     }
 
+    /**
+     * Thai ESG enhanced ceiling (หนังสือกรมสรรพากร / Royal Decree extending the higher cap to
+     * units purchased 1 Jan 2024 - 31 Dec 2026): tax year 2026 still falls inside that window, so
+     * the ceiling is the full ฿300,000 at 30% of assessable income.
+     */
     @Test
-    void thaiEsgCapMatchesTheCatalogue() {
-        long employeeId = seedEmployee("CAP-ESG");
+    void thaiEsgCapMatchesTheCatalogueForTaxYear2026() {
+        TaxAllowanceCapEntry thaiEsg = entry("thai_esg", 2026);
+        assertThat(thaiEsg.ownCap())
+            .as("2026 purchases still fall inside the enhanced 1 Jan 2024 - 31 Dec 2026 window")
+            .isEqualByComparingTo(new BigDecimal("300000.00"));
+        assertThat(thaiEsg.incomeRate())
+            .as("30% of assessable income rate is unchanged across both regimes")
+            .isEqualByComparingTo(new BigDecimal("0.30"));
+
+        long employeeId = seedEmployee("CAP-ESG-2026");
         seed(employeeId, "thai_esg_allowance", ABSURD, Map.of());
-        assertThat(deltaOverFloor(employeeId)).isEqualByComparingTo(entry("thai_esg").ownCap());
+        assertThat(deltaOverFloor(employeeId))
+            .as("catalogue ownCap must match what the real calculator actually grants")
+            .isEqualByComparingTo(thaiEsg.ownCap());
+    }
+
+    /**
+     * From tax year 2027 the enhanced window (1 Jan 2024 - 31 Dec 2026) has closed and the ceiling
+     * REVERTS to its original ฿100,000 -- this is NOT a sunset to zero like SSF's; the 30% of
+     * assessable income rate is unchanged, only the absolute ceiling steps down. See
+     * {@code PayrollCalculator#THAI_ESG_ENHANCED_CAP_LAST_TAX_YEAR} and
+     * {@code TaxAllowanceCapCatalog#THAI_ESG_ENHANCED_CAP_LAST_TAX_YEAR}.
+     */
+    @Test
+    void thaiEsgCapRevertsToOneHundredThousandFromTaxYear2027() {
+        TaxAllowanceCapEntry thaiEsg = entry("thai_esg", 2027);
+        assertThat(thaiEsg.ownCap())
+            .as("the enhanced 300,000 window closed after 31 Dec 2026 -- reverts to 100,000, not zero")
+            .isEqualByComparingTo(new BigDecimal("100000.00"));
+        assertThat(thaiEsg.incomeRate())
+            .as("30% of assessable income rate is unchanged across both regimes")
+            .isEqualByComparingTo(new BigDecimal("0.30"));
+
+        long employeeId = seedEmployee("CAP-ESG-2027", 2027);
+        seed(employeeId, 2027, "thai_esg_allowance", ABSURD, Map.of());
+        assertThat(deltaOverFloor(employeeId, MONTH_2027))
+            .as("catalogue ownCap must match what the real calculator actually grants for 2027")
+            .isEqualByComparingTo(thaiEsg.ownCap());
+    }
+
+    /**
+     * Tax year 2023 is BEFORE the enhanced window opened (1 Jan 2024), so the ceiling is the law's
+     * own pre-enhancement ฿100,000 — the same figure as after the window closes. Pins the LOWER
+     * bound: without {@code THAI_ESG_ENHANCED_CAP_FIRST_TAX_YEAR} the condition would be a bare
+     * {@code taxYear <= 2026} and every pre-2024 year would wrongly get the enhanced ฿300,000.
+     */
+    @Test
+    void thaiEsgCapIsThePreEnhancementCeilingBeforeTheWindowOpened() {
+        assertThat(entry("thai_esg", 2023).ownCap())
+            .as("2023 predates the 1 Jan 2024 enhancement — ฿100,000, not the enhanced ฿300,000")
+            .isEqualByComparingTo(new BigDecimal("100000.00"));
+    }
+
+    /**
+     * The rate, not the ceiling, under test. Every other scenario in this class runs a ฿300,000/month
+     * employee precisely so no %-of-income cap binds — which makes {@code ownCap} observable and
+     * leaves {@code incomeRate} completely unguarded: an Opus review proved the calculator's
+     * {@code percentOf(..., "0.30")} could be changed to {@code "0.50"} with all 440 payroll tests
+     * still green. A low salary inverts the binding constraint, so this test fails on exactly that
+     * mutation.
+     *
+     * <p>Asserts the RELATIONSHIP (granted == 30% of the projected annual income the line itself
+     * reports) rather than a hardcoded baht figure, so it stays honest if income projection changes
+     * for unrelated reasons — and asserts the ceiling is genuinely NOT the binding constraint, so it
+     * can never silently degrade back into another ownCap test.
+     */
+    @Test
+    void thaiEsgIsRateBoundNotCeilingBoundOnALowSalaryForTaxYear2026() {
+        assertThaiEsgIsRateBound(2026, MONTH);
+    }
+
+    /** Same property in the post-2026 regime — the ceiling steps down but the 30% rate must not. */
+    @Test
+    void thaiEsgIsRateBoundNotCeilingBoundOnALowSalaryForTaxYear2027() {
+        assertThaiEsgIsRateBound(2027, MONTH_2027);
+    }
+
+    private void assertThaiEsgIsRateBound(int taxYear, LocalDate month) {
+        // ฿25,000/month => ~฿300,000 projected annually => 30% is ~฿90,000, comfortably under BOTH
+        // the enhanced ฿300,000 and the reverted ฿100,000 ceilings, so the percentage binds first.
+        long employeeId = seedEmployee("CAP-ESG-RATE-" + taxYear, taxYear, new BigDecimal("25000.00"));
+        seed(employeeId, taxYear, "thai_esg_allowance", ABSURD, Map.of());
+
+        PayrollLineDto line = lineFor(employeeId, month);
+        BigDecimal granted = line.taxAllowanceTotal().subtract(PERSONAL_PLUS_SSO);
+        BigDecimal expected = line.projectedAnnualIncome()
+            .multiply(new BigDecimal("0.30"))
+            .setScale(2, java.math.RoundingMode.HALF_UP);
+
+        assertThat(granted)
+            .as("the 30%% rate — not the ceiling — must decide the grant on a low salary (taxYear=%d)", taxYear)
+            .isEqualByComparingTo(expected);
+        assertThat(granted)
+            .as("guard: if this ever reaches the ceiling the test has silently become an ownCap test")
+            .isLessThan(entry("thai_esg", taxYear).ownCap());
     }
 
     // --- helpers ---------------------------------------------------------------------------------
@@ -215,7 +314,16 @@ class TaxAllowanceCapCatalogTest extends AbstractPostgresIntegrationTest {
     }
 
     private TaxAllowanceCapEntry entry(String category) {
-        return catalog.capsFor(2026).stream()
+        return entry(category, 2026);
+    }
+
+    /**
+     * Same as the 1-arg overload, but against a specific {@code taxYear} -- needed because Thai ESG
+     * is the only category in this catalogue whose ownCap actually varies by year (the enhanced-cap
+     * sunset from tax year 2027; see {@code thaiEsgCapRevertsToOneHundredThousandFromTaxYear2027}).
+     */
+    private TaxAllowanceCapEntry entry(String category, int taxYear) {
+        return catalog.capsFor(taxYear).stream()
             .filter(e -> e.category().equals(category))
             .findFirst()
             .orElseThrow(() -> new AssertionError("no cap entry for " + category));
@@ -223,27 +331,56 @@ class TaxAllowanceCapCatalogTest extends AbstractPostgresIntegrationTest {
 
     /** taxAllowanceTotal minus the personal+SSO floor, for an employee whose declaration is under test. */
     private BigDecimal deltaOverFloor(long employeeId) {
-        PayrollLineDto line = lineFor(employeeId);
+        return deltaOverFloor(employeeId, MONTH);
+    }
+
+    /**
+     * Same as the 1-arg overload, but previewing a specific payroll {@code month} -- needed for the
+     * tax year 2027 Thai ESG case, since {@code PayrollService#preview} derives its taxYear from
+     * {@code month.getYear()} (there is no separate taxYear parameter to pass).
+     */
+    private BigDecimal deltaOverFloor(long employeeId, LocalDate month) {
+        PayrollLineDto line = lineFor(employeeId, month);
         return line.taxAllowanceTotal().subtract(PERSONAL_PLUS_SSO);
     }
 
     private PayrollLineDto lineFor(long employeeId) {
-        return payrollService.preview(new ProcessPayrollRequest(MONTH, List.of()), hr()).lines().stream()
+        return lineFor(employeeId, MONTH);
+    }
+
+    private PayrollLineDto lineFor(long employeeId, LocalDate month) {
+        return payrollService.preview(new ProcessPayrollRequest(month, List.of()), hr()).lines().stream()
             .filter(line -> line.employeeId() == employeeId)
             .findFirst()
             .orElseThrow(() -> new AssertionError("no payroll line for employee " + employeeId));
     }
 
     private void seed(long employeeId, String column, BigDecimal amount, Map<String, String> counts) {
-        seed(employeeId, column, amount, counts, null, null);
+        seed(employeeId, 2026, column, amount, counts, null, null);
     }
 
     private void seed(long employeeId, String column, BigDecimal amount, Map<String, String> counts,
                        String secondColumn, BigDecimal secondAmount) {
+        seed(employeeId, 2026, column, amount, counts, secondColumn, secondAmount);
+    }
+
+    /** Same as the 4-arg overload, but for a declaration filed under a specific {@code taxYear}. */
+    private void seed(long employeeId, int taxYear, String column, BigDecimal amount, Map<String, String> counts) {
+        seed(employeeId, taxYear, column, amount, counts, null, null);
+    }
+
+    /**
+     * Same as the other overloads, but for a declaration filed under a specific {@code taxYear} --
+     * needed for the Thai ESG enhanced-cap sunset test (tax year 2027), which every other cap test
+     * doesn't need since no other category's cap varies by year.
+     */
+    private void seed(long employeeId, int taxYear, String column, BigDecimal amount, Map<String, String> counts,
+                       String secondColumn, BigDecimal secondAmount) {
         StringBuilder columns = new StringBuilder("employee_id, tax_year, effective_month, " + column);
-        StringBuilder values = new StringBuilder(":employeeId, 2026, 1, :amount");
+        StringBuilder values = new StringBuilder(":employeeId, :taxYear, 1, :amount");
         Map<String, Object> params = new java.util.HashMap<>();
         params.put("employeeId", employeeId);
+        params.put("taxYear", taxYear);
         params.put("amount", amount);
         for (Map.Entry<String, String> count : counts.entrySet()) {
             columns.append(", ").append(count.getKey());
@@ -268,14 +405,35 @@ class TaxAllowanceCapCatalogTest extends AbstractPostgresIntegrationTest {
      * (home_loan_interest, parent_health_insurance, ...) do not fit with any descriptive prefix.
      */
     private long seedEmployee(String label) {
+        return seedEmployee(label, 2026);
+    }
+
+    /**
+     * Same as the 1-arg overload, but for an employee whose tax treatment / SSO inclusion is filed
+     * under a specific {@code taxYear} -- needed for the Thai ESG enhanced-cap sunset test (tax
+     * year 2027).
+     */
+    private long seedEmployee(String label, int taxYear) {
+        return seedEmployee(label, taxYear, new BigDecimal("300000.00"));
+    }
+
+    /**
+     * Same as the 2-arg overload, but on a specific monthly {@code salary}. Every other test in this
+     * class deliberately uses a salary high enough that NO %-of-income cap binds, which is what makes
+     * {@code ownCap} the observable quantity — but it also makes {@code incomeRate} completely
+     * invisible to them. A low salary inverts that: the percentage binds first and the ceiling never
+     * does, so the RATE becomes the thing under test. See
+     * {@code thaiEsgIsRateBoundNotCeilingBoundOnALowSalary...} for why that gap needed closing.
+     */
+    private long seedEmployee(String label, int taxYear, BigDecimal monthlySalary) {
         String code = "CAPT" + (employeeCodeCounter += 1);
         long employeeId = jdbc.queryForObject("""
-            INSERT INTO hr.employee (employee_code, current_salary, is_active) VALUES (:code, 300000.00, TRUE)
+            INSERT INTO hr.employee (employee_code, current_salary, is_active) VALUES (:code, :salary, TRUE)
             RETURNING employee_id
             """,
-            Map.of("code", code), Long.class);
-        seedRegularTaxTreatment(employeeId, 2026, PayrollComponent.SPECIAL_PAY_1);
-        seedSsoIncluded(employeeId, 2026, PayrollComponent.SALARY);
+            Map.of("code", code, "salary", monthlySalary), Long.class);
+        seedRegularTaxTreatment(employeeId, taxYear, PayrollComponent.SPECIAL_PAY_1);
+        seedSsoIncluded(employeeId, taxYear, PayrollComponent.SALARY);
         return employeeId;
     }
 

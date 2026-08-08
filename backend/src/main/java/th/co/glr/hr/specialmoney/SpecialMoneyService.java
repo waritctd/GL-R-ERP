@@ -125,7 +125,7 @@ public class SpecialMoneyService {
         LocalDate today = LocalDate.now(BUSINESS_ZONE);
         EmployeeEligibilitySnapshot eligibility = repository.findEligibility(employeeId, today)
             .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบข้อมูลพนักงาน"));
-        UsageSnapshot usage = repository.findUsage(employeeId, usageYear(request, today));
+        UsageSnapshot usage = repository.findUsage(employeeId, usageYear(today));
         PolicyAmounts amounts = repository.findPolicyAmounts(type.name(), today);
         Set<String> excludedProvinces = repository.findExcludedProvinces();
 
@@ -185,9 +185,30 @@ public class SpecialMoneyService {
 
         SpecialMoneyType type = parseType(existing.requestType());
         LocalDate today = LocalDate.now(BUSINESS_ZONE);
+
+        // The 25th-of-month payroll cutoff. Rolling forward past an already-PROCESSED month is
+        // deliberate: payroll writes a processed period once, so a request landing in a closed month
+        // would be approved and then never paid.
+        //
+        // Computed HERE, before the usage/cap recheck below, so the recheck can key the annual-cap
+        // lookup on THIS row's own payrollMonth (see usageYear's Javadoc) rather than on
+        // existing.eventDate()'s year, which the employee supplied and does not bound. approvedOn
+        // used to be a second, separate `LocalDate.now(BUSINESS_ZONE)` call made later in this
+        // method; folded into `today` since both name the same instant and a request evaluated
+        // across a real midnight boundary should not see two different "todays".
+        int cutoffDay = appProperties.getSpecialMoney().getPayrollCutoffDay();
+        LocalDate payrollMonth = today.getDayOfMonth() <= cutoffDay
+            ? today.withDayOfMonth(1)
+            : today.plusMonths(1).withDayOfMonth(1);
+        while (repository.payrollMonthProcessed(payrollMonth)) {
+            payrollMonth = payrollMonth.plusMonths(1);
+        }
+
         EmployeeEligibilitySnapshot eligibility = repository.findEligibility(existing.employeeId(), today)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบข้อมูลพนักงาน"));
-        UsageSnapshot usage = repository.findUsage(existing.employeeId(), existing.eventDate().getYear());
+        // The AUTHORITATIVE cap-year check (see usageYear's Javadoc): the year this approval's own
+        // payrollMonth falls in, never existing.eventDate()'s year.
+        UsageSnapshot usage = repository.findUsage(existing.employeeId(), usageYear(payrollMonth));
         PolicyAmounts amounts = repository.findPolicyAmounts(type.name(), today);
         Set<String> excludedProvinces = repository.findExcludedProvinces();
 
@@ -223,18 +244,6 @@ public class SpecialMoneyService {
             throw new ApiException(
                 HttpStatus.BAD_REQUEST,
                 "ต้องระบุเหตุผลเมื่อจำนวนเงินที่อนุมัติเกินเพดานตามนโยบายหรือเกินจำนวนที่พนักงานขอเบิก");
-        }
-
-        // The 25th-of-month payroll cutoff. Rolling forward past an already-PROCESSED month is
-        // deliberate: payroll writes a processed period once, so a request landing in a closed month
-        // would be approved and then never paid.
-        int cutoffDay = appProperties.getSpecialMoney().getPayrollCutoffDay();
-        LocalDate approvedOn = LocalDate.now(BUSINESS_ZONE);
-        LocalDate payrollMonth = approvedOn.getDayOfMonth() <= cutoffDay
-            ? approvedOn.withDayOfMonth(1)
-            : approvedOn.plusMonths(1).withDayOfMonth(1);
-        while (repository.payrollMonthProcessed(payrollMonth)) {
-            payrollMonth = payrollMonth.plusMonths(1);
         }
 
         int updated = direct
@@ -637,8 +646,41 @@ public class SpecialMoneyService {
     // Small helpers
     // ---------------------------------------------------------------------
 
-    private int usageYear(SubmitSpecialMoneyRequest request, LocalDate today) {
-        return request.eventDate() != null ? request.eventDate().getYear() : today.getYear();
+    /**
+     * The calendar year an annual welfare cap (MEDICAL's ฿ balance, UNIFORM_ANNUAL's once-a-year
+     * count) is evaluated against.
+     *
+     * <p><b>Deliberately never {@code request.eventDate()}'s year.</b> {@code event_date} is
+     * employee-supplied and unbounded -- {@link SubmitSpecialMoneyHttpRequest} marks it {@code
+     * @NotNull} only, {@code V66} has no future-date constraint, and {@code evaluateMedical} does
+     * not read it at all -- so a cap keyed on it can always be defeated by picking a date in a year
+     * nothing has been approved against yet (e.g. filing today against next year's date, where the
+     * "used so far" query always comes back ฿0). This was exploitable: see the fix commit for the
+     * concrete ฿6,000-against-a-฿3,000-cap repro.
+     *
+     * <p>The money itself lands in payroll via {@code payrollMonth} (computed in {@link
+     * #ceoApproveFrom}; V128's {@code welfare_pay} is summed by that same column), so that -- or,
+     * before it exists, the best available estimate of it -- is what the cap has to track instead:
+     *
+     * <ul>
+     *   <li>at <b>submit</b> time there is no {@code payrollMonth} yet (assigned only on approval),
+     *       so the caller passes {@code today}: the year a reasonably prompt approval would almost
+     *       always land in, and the only year-shaped value available this early. This is a
+     *       fast-fail estimate, not the authoritative check -- see the next point.
+     *   <li>at <b>approval</b> time ({@link #ceoApproveFrom}) the caller passes the {@code
+     *       payrollMonth} just computed for THIS row -- the authoritative answer, because it is the
+     *       exact year {@link SpecialMoneyRepository#findUsage}'s own money query files THIS
+     *       approval's amount under once it is written.
+     * </ul>
+     *
+     * <p>Backdating (a receipt from last month, filed today) is unaffected on purpose: this method
+     * never looks at how far in the past the request's own dates are, only at when the cap check
+     * itself is running. A genuinely backdated claim draws down the budget for the year it is
+     * actually decided in -- the same year its money is actually paid -- which is correct, not a
+     * side effect to route around.
+     */
+    private int usageYear(LocalDate reference) {
+        return reference.getYear();
     }
 
     private SpecialMoneyRequestDto requireRequest(long id) {

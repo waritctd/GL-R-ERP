@@ -49,7 +49,7 @@ export function TaxAllowanceSummaryPanel({ summary }) {
         </p>
       ) : null}
 
-      <div className="grid grid-cols-3 gap-3 max-[720px]:grid-cols-1">
+      <div className="grid grid-cols-3 gap-3 mobile:grid-cols-1">
         <div>
           <small className="block text-text-muted">ค่าลดหย่อนที่ประกาศ</small>
           <strong className="text-lg">{summary?.declaredTotal ? formatMoney(summary.declaredTotal) : '-'}</strong>
@@ -67,11 +67,11 @@ export function TaxAllowanceSummaryPanel({ summary }) {
       </div>
       {/* Full-width CTA below 720px: a right-aligned secondary button is a small target on a
           phone, and this is the panel's only action. */}
-      <div className="mt-4 flex justify-end max-[720px]:block">
+      <div className="mt-4 flex justify-end mobile:block">
         <Button
           type="button"
           variant="secondary"
-          className="max-[720px]:w-full"
+          className="mobile:w-full"
           onClick={() => navigate('/tax-allowance')}
         >
           {ctaLabel(statusKey)}

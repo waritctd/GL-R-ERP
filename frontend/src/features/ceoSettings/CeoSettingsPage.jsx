@@ -9,6 +9,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Panel, PageStack } from '../../components/common/Layout.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 
 function pctDisplay(val) {
   return val != null ? `${(Number(val) * 100).toFixed(2)}%` : '-';
@@ -130,7 +131,7 @@ function ConfigEditModal({ config, saving, onClose, onSubmit }) {
         </>
       }
     >
-      <form id="config-edit-form" onSubmit={handleSubmit(submit)} noValidate>
+      <SafeForm id="config-edit-form" onSubmit={handleSubmit(submit)} noValidate>
         <div className="grid gap-3">
           {CONFIG_FIELDS.map(({ key, label, suffix }) => (
             <FormField key={key} label={label} htmlFor={`cfg-${key}`} error={errors[key]?.message}>
@@ -155,7 +156,7 @@ function ConfigEditModal({ config, saving, onClose, onSubmit }) {
             </FormField>
           ))}
         </div>
-      </form>
+      </SafeForm>
     </Modal>
   );
 }
@@ -304,7 +305,7 @@ function FormulaConfigEditModal({ config, saving, onClose, onSubmit }) {
         </>
       }
     >
-      <form id="formula-config-edit-form" onSubmit={handleSubmit(submit)} noValidate>
+      <SafeForm id="formula-config-edit-form" onSubmit={handleSubmit(submit)} noValidate>
         <div className="grid gap-5">
           <section>
             <h3 className="m-0 mb-2 text-sm font-bold">ค่าคงที่ในสูตร</h3>
@@ -439,7 +440,7 @@ function FormulaConfigEditModal({ config, saving, onClose, onSubmit }) {
             </div>
           </section>
         </div>
-      </form>
+      </SafeForm>
     </Modal>
   );
 }
