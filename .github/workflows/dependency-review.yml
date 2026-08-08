@@ -2,8 +2,19 @@ name: Dependency Review
 
 # Fails a PR that introduces a dependency with a known high+ severity vulnerability
 # (software composition analysis gate, issue #21).
+#
+# Also runs on push to main. Branch protection requires this check for pull_request merges, but
+# an admin/owner can push to main directly (enforce_admins is off), which bypasses pull_request
+# entirely -- confirmed live via `gh api repos/.../branches/main/protection`, not assumed. A direct
+# push (this repo's git-town sync pattern lands exactly this way) previously got zero dependency
+# scanning. The push job diffs github.event.before -> github.event.after explicitly, since the
+# action only auto-resolves base/head for pull_request(_target) -- see action.yml's base-ref/
+# head-ref inputs, "must be provided otherwise". Kept as a separate `if:`-gated step (not a
+# fall-through default) so the proven pull_request path is untouched.
 on:
   pull_request:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -13,7 +24,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Dependency Review
+        with:
+          # push's before/after SHAs must be reachable locally for the diff -- the default
+          # shallow checkout (depth 1) would not have `before` available.
+          fetch-depth: 0
+      - name: Dependency Review (pull request)
+        if: github.event_name == 'pull_request'
         uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
+      - name: Dependency Review (push to main)
+        if: github.event_name == 'push'
+        uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: high
+          base-ref: ${{ github.event.before }}
+          head-ref: ${{ github.event.after }}
