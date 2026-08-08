@@ -3093,13 +3093,37 @@ function validateOvertimeRetroactiveWindow(payload) {
 // Mirrors DbHolidayCalendar / hr.holiday (V115) -- deliberately NOT the same store as the
 // `holidays` mock namespace below (HolidayController's admin CRUD), which stays an honest
 // "nothing persisted" stub per its own comment (list() always returns [], every write throws).
-// This is a separate, fixed, read-only set: the mock-appropriate equivalent of "HR has already
-// loaded the calendar for these years". Letting overtime's day-type derivation depend on the
-// admin-CRUD store would make it impossible to ever populate from the mock UI at all, since that
-// store's create/update/remove all reject. Extend the date list if a demo/test needs another
-// corroborated holiday.
-const MOCK_HOLIDAY_DATES = new Set([
-  '2026-01-01', '2026-04-13', '2026-04-14', '2026-04-15', '2026-05-01', '2026-12-05', '2026-12-31',
+// This is a separate, fixed, read-only calendar: the mock-appropriate equivalent of "HR has
+// already loaded the calendar for these years". Letting overtime's day-type derivation depend on
+// the admin-CRUD store would make it impossible to ever populate from the mock UI at all, since
+// that store's create/update/remove all reject. Extend the entries below if a demo/test needs
+// another corroborated holiday.
+//
+// A Map (date -> nameTh), not a bare Set: `leave.calendarContext` below
+// (#ot-holiday-visibility, PR 2) needs the same NAME `LeaveCalendarHolidayDto` carries, and a
+// second, separate name lookup risked drifting out of sync with this one (a date added here
+// without a matching name there). `.has()` -- all `deriveOvertimeDayType`/
+// `validateOvertimeDayTypeClaim` below have ever needed -- means exactly the same thing on a Map
+// as it did on the Set it replaces, so neither of those changes at all.
+// NOTE ON COVERAGE, not just correctness: these must be spread across the whole year, not just
+// clustered in Q1/Q4. `UpcomingHolidays` (PR 2) shows a rolling ~90-day forward window, so a
+// fixture whose entries all sit in Jan-May and December renders that panel EMPTY for most of the
+// year -- which is exactly what happened before 08-12/10-13/10-23 were added: the feature's
+// headline surface showed its empty state under `VITE_USE_MOCKS=true`, the default verification
+// surface, and read as "working" because the empty state is itself a legitimate render.
+// A fixture that never constructs the interesting state is the same class of lie as a mock that
+// is more permissive than production. If you add a date, keep the year's gaps in mind.
+const MOCK_HOLIDAY_DATES = new Map([
+  ['2026-01-01', 'วันขึ้นปีใหม่'],
+  ['2026-04-13', 'วันสงกรานต์'],
+  ['2026-04-14', 'วันสงกรานต์'],
+  ['2026-04-15', 'วันสงกรานต์'],
+  ['2026-05-01', 'วันแรงงานแห่งชาติ'],
+  ['2026-08-12', 'วันแม่แห่งชาติ'],
+  ['2026-10-13', 'วันนวมินทรมหาราช'],
+  ['2026-10-23', 'วันปิยมหาราช'],
+  ['2026-12-05', 'วันพ่อแห่งชาติ'],
+  ['2026-12-31', 'วันสิ้นปี'],
 ]);
 // Years the mock calendar is considered "loaded" for -- distinct from a date simply being absent
 // from the set above, same distinction HolidayCalendar#hasHolidaysForYear's Javadoc draws in the
@@ -4747,17 +4771,29 @@ export const api = {
 
     // Leave-request composer, Phase C: mirrors LeaveController#calendarContext's SHAPE only, NOT
     // real schedule resolution. This is a SMALL FIXED FIXTURE -- Mon-Fri/08:30-17:30, no six-day
-    // (OPS_6D) awareness, and `holidays` is always empty (same "no persisted hr.holiday store"
-    // stance as the holidays.list() stub above) -- it does NOT call TieredWorkScheduleResolver or
-    // read hr.work_schedule_assignment. `nonWorkingDates` here is plain Sat/Sun arithmetic, not
-    // LeaveDayMath's schedule/holiday-aware predicate. Do NOT read a mock-mode render of this as
-    // evidence a six-day employee or a real holiday shows up correctly -- verify against the real
-    // backend (LeaveCalendarContextIntegrationTest).
+    // (OPS_6D) awareness -- it does NOT call TieredWorkScheduleResolver or read
+    // hr.work_schedule_assignment. `nonWorkingDates` here is plain Sat/Sun arithmetic, not
+    // LeaveDayMath's schedule/holiday-aware predicate (it does NOT fold `holidays` in, unlike the
+    // real LeaveCalendarContextService#get -> LeaveRepository#workingDayPredicate).
+    //
+    // #ot-holiday-visibility (PR 2): `holidays` USED TO be unconditionally `[]` -- that made the
+    // OT verdict badge, UpcomingHolidays, and the leave composer's own holiday note all
+    // unverifiable under VITE_USE_MOCKS=true, since every one of them reads this field. Now
+    // sourced from MOCK_HOLIDAY_DATES (the same fixed calendar deriveOvertimeDayType/
+    // validateOvertimeDayTypeClaim already read), filtered to [from, to] -- still NOT the real
+    // persisted hr.holiday store (that honesty belongs to the holidays.list() admin-CRUD stub
+    // below, which stays an empty stub on purpose; see its own comment).
+    // Do NOT read a mock-mode render of this as evidence a six-day employee or a real holiday
+    // shows up correctly -- verify against the real backend (LeaveCalendarContextIntegrationTest).
     async calendarContext(params = {}) {
       requireSession();
       const { from, to } = params;
       if (!from || !to) fail('ต้องระบุวันที่เริ่มต้นและวันที่สิ้นสุด', 400);
       if (to < from) fail('วันที่สิ้นสุดต้องไม่มาก่อนวันที่เริ่มต้น', 400);
+      const holidays = [...MOCK_HOLIDAY_DATES.entries()]
+        .filter(([date]) => date >= from && date <= to)
+        .map(([holidayDate, nameTh]) => ({ holidayDate, nameTh }))
+        .sort((a, b) => (a.holidayDate < b.holidayDate ? -1 : a.holidayDate > b.holidayDate ? 1 : 0));
       const nonWorkingDates = [];
       const cursor = new Date(`${from}T00:00:00`);
       const end = new Date(`${to}T00:00:00`);
@@ -4779,7 +4815,7 @@ export const api = {
         calendarContext: {
           from,
           to,
-          holidays: [],
+          holidays,
           schedule: {
             workStart: LEAVE_WORKDAY_START,
             workEnd: LEAVE_WORKDAY_END,
