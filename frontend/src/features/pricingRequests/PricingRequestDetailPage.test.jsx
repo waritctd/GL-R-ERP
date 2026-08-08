@@ -509,7 +509,10 @@ describe('PricingRequestDetailPage role-scoped raw quote/costing visibility (UI-
     await waitForLoaded();
 
     // Raw data IS visible to CEO.
-    expect(await screen.findByText('ราคาโรงงาน')).not.toBeNull();
+    // By role, not text: "ราคาโรงงาน" now also names a column in the
+    // response-entry grid, so a bare text query can match more than one node.
+    // The assertion here is that the SECTION is present.
+    expect(await screen.findByRole('heading', { name: 'ราคาโรงงาน' })).not.toBeNull();
     expect(screen.getByText('ต้นทุนนำเข้า')).not.toBeNull();
     expect(screen.getByText('SCG Ceramics')).not.toBeNull();
     expect(screen.getByText('COST-2026-0001')).not.toBeNull();
@@ -523,9 +526,12 @@ describe('PricingRequestDetailPage role-scoped raw quote/costing visibility (UI-
     expect(screen.queryByRole('button', { name: 'เจรจา' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'คำนวณใหม่' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'ส่งให้ CEO ตรวจ' })).toBeNull();
-    // No editable email-draft or response-entry form fields either.
-    expect(screen.queryByPlaceholderText('อีเมลโรงงาน')).toBeNull();
-    expect(screen.queryByPlaceholderText('ราคาโรงงาน')).toBeNull();
+    // No editable email-draft or response-entry form fields either. Queried by
+    // accessible name, not placeholder: these fields carry real labels now, so
+    // a placeholder query would report "absent" for a field that is present and
+    // simply has no placeholder — an assertion that passes for the wrong reason.
+    expect(screen.queryByLabelText('อีเมลโรงงาน')).toBeNull();
+    expect(screen.queryByLabelText(/^ราคาโรงงาน/)).toBeNull();
   });
 });
 
@@ -536,9 +542,9 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    const toInput = screen.getByPlaceholderText('อีเมลโรงงาน');
-    const subjectInput = screen.getByPlaceholderText('หัวข้ออีเมล');
-    const bodyInput = screen.getByPlaceholderText('เนื้อหาอีเมล');
+    const toInput = screen.getByLabelText('อีเมลโรงงาน');
+    const subjectInput = screen.getByLabelText('หัวข้ออีเมล');
+    const bodyInput = screen.getByLabelText('เนื้อหาอีเมล');
 
     fireEvent.change(toInput, { target: { value: 'purchasing@scg-factory.example' } });
     fireEvent.change(subjectInput, { target: { value: 'ขอราคาใหม่ SCG A1' } });
@@ -597,9 +603,9 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    const priceInput = screen.getByPlaceholderText('ราคาโรงงาน');
+    const priceInput = screen.getByLabelText(/^ราคาโรงงาน/);
     fireEvent.change(priceInput, { target: { value: '55.5' } });
-    const refInput = screen.getByPlaceholderText('เลขอ้างอิงใบเสนอราคา');
+    const refInput = screen.getByLabelText('เลขอ้างอิงใบเสนอราคา');
     fireEvent.change(refInput, { target: { value: 'QT-9001' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกคำตอบ/รอบแก้ไข' }));
@@ -921,7 +927,10 @@ describe('PricingRequestDetailPage mobile layout', () => {
     // Item identity renders brand+model ("SCG A1") ahead of productDescription per the
     // component's own fallback chain (catalogBrand/brand + catalogModel/model first).
     expect(screen.getByText('SCG A1')).not.toBeNull();
-    expect(await screen.findByText('ราคาโรงงาน')).not.toBeNull();
+    // By role, not text: "ราคาโรงงาน" now also names a column in the
+    // response-entry grid, so a bare text query can match more than one node.
+    // The assertion here is that the SECTION is present.
+    expect(await screen.findByRole('heading', { name: 'ราคาโรงงาน' })).not.toBeNull();
     expect(screen.getByText('ต้นทุนนำเข้า')).not.toBeNull();
   });
 });

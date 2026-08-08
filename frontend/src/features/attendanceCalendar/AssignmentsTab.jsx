@@ -178,9 +178,9 @@ export function AssignmentsTab({ showToast }) {
           title={`ปิดการมอบหมายเดิม ${lastAutoClosed.count} รายการโดยอัตโนมัติ`}
           description={`รหัสรายการที่ถูกปิด: ${lastAutoClosed.ids.join(', ')} — ระบบปิดรายการเดิมที่ยังมีผลอยู่สำหรับขอบเขตเดียวกัน (สิ้นสุดวันก่อนวันเริ่มมีผลของรายการใหม่) เพื่อไม่ให้ซ้อนทับกัน`}
           action={(
-            <button type="button" className="secondary-button" onClick={() => setLastAutoClosed(null)}>
+            <Button variant="secondary" onClick={() => setLastAutoClosed(null)}>
               รับทราบ
-            </button>
+            </Button>
           )}
         />
       ) : null}

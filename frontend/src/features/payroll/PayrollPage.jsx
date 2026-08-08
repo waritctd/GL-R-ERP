@@ -956,16 +956,26 @@ export function PayrollPage({ user, showToast }) {
   // 60s poll/focus refetch, so a background refresh never flashes the table/stat strip.
   const loading = payrollQuery.isLoading;
 
-  // Adversarial-review fix (P0): `showToast` comes from useToast() (App.jsx) and is a PLAIN
-  // function re-created on every App render -- calling it does setToast(...), which re-renders
-  // App, which hands this component a new `showToast` identity, which (if `showToast` sat in this
-  // effect's deps, as it used to) re-fires the effect for as long as `payrollQuery.error` stays
-  // non-null: an infinite `Maximum update depth exceeded` loop that every test here missed only
-  // because every test passes a stable `vi.fn()` instead of an App-shaped one. Fixed two ways at
-  // once: a ref holds the LATEST showToast without being a dependency (mutated in its own
-  // no-deps effect, not during render -- see canSaveDraftRef's identical pattern above), and the
-  // effect keys on the error's MESSAGE (a primitive), not the Error object or the callback, so it
-  // only re-fires when the failure actually changes.
+  // PR #426 (P0, adversarial review) introduced this showToastRef indirection because `showToast`
+  // (useToast(), App.jsx) used to be a PLAIN function re-created on every App render -- calling it
+  // did setToast(...), which re-rendered App, which handed this component a new `showToast`
+  // identity, which (sitting directly in this effect's deps, as it used to) re-fired the effect
+  // for as long as `payrollQuery.error` stayed non-null: an infinite `Maximum update depth
+  // exceeded` loop that every OTHER test here missed only because every other test passes a
+  // stable `vi.fn()` instead of an App-shaped one.
+  //
+  // The root cause is now fixed at the source -- useToast.js wraps showToast in useCallback([]),
+  // so it has a stable identity everywhere in production, and this ref is no longer load-bearing
+  // there. Kept anyway, deliberately, rather than deleted: this file's own regression test
+  // (PayrollPage.test.jsx, "does not call showToast more than once ... driven by an App-shaped
+  // (unstable) showToast") renders through a harness whose counting wrapper AROUND showToast is
+  // itself a fresh closure every render of that harness, independent of useToast.js's fix --
+  // removing this ref would put that still-locally-unstable wrapper directly in this effect's
+  // deps and fail that test, for a reason that has nothing to do with the bug this ref was
+  // written to fix. Still keyed on the error's MESSAGE (a primitive), not the Error object:
+  // `payrollQuery` polls every 60s (refetchInterval above), and a repeated failure hands back a
+  // new Error instance each attempt even when the text is identical, which would otherwise
+  // re-toast the same message every poll.
   const showToastRef = useRef(showToast);
   useEffect(() => {
     showToastRef.current = showToast;
@@ -1860,6 +1870,10 @@ export function PayrollPage({ user, showToast }) {
             rows={periodLines}
             getRowKey={(line) => line.employeeId}
             gridClassName="payroll-table"
+            // Restores what `.payroll-table-region .table-panel` used to do.
+            // A full payroll is 200+ rows; without the cap the table grows to
+            // the page instead of scrolling inside its own region.
+            panelClassName="max-h-[min(68vh,760px)] overflow-auto"
             pageSize={Math.max(periodLines.length, 25)}
             searchable
             searchPlaceholder="ค้นหาพนักงาน"
@@ -2305,8 +2319,25 @@ export function PayrollPage({ user, showToast }) {
               {/* ล.ย.01 tax-allowance drill-down (issue #387 screen 3) — surgical addition below
                   the existing ค่าลดหย่อนรวม line above. Composes the year's declaration register
                   client-side (no employeeId filter exists on GET /declarations) — see
-                  TaxAllowanceDrilldown.jsx. */}
-              <CollapsibleSection title="รายละเอียดค่าลดหย่อน (ล.ย.01)" defaultOpen={false}>
+                  TaxAllowanceDrilldown.jsx.
+
+                  Title/subtitle (2026-08, "register shows what payroll actually uses"): this used
+                  to be titled "รายละเอียดค่าลดหย่อน" directly under ค่าลดหย่อนรวม, reading as if it
+                  broke that number down. It does not — ค่าลดหย่อนรวม above is computed from
+                  hr.employee_tax_allowance (what PayrollCalculator actually applied this run);
+                  TaxAllowanceDrilldown below reads ONLY hr.tax_allowance_declaration, a separate
+                  table the two can legitimately disagree with (most visibly for a grandfathered
+                  employee, where this section reads "no declaration" under a non-zero total above).
+                  Retitled to name what it actually is, with the relationship stated explicitly
+                  rather than implied by adjacency. Full reconciliation detail (what payroll is
+                  applying vs. what was declared, and whether they agree) lives on the HR register
+                  TaxAllowanceDrilldown already links out to below ("ดูในหน้าตรวจสอบของ HR") — not
+                  duplicated here, per "minimal diff, do not restructure this panel". */}
+              <CollapsibleSection
+                title="ประวัติการยื่นแบบ ล.ย.01"
+                subtitle="อาจไม่ตรงกับค่าลดหย่อนรวมด้านบน ซึ่งคำนวณจากข้อมูลที่ใช้จริงในระบบเงินเดือน"
+                defaultOpen={false}
+              >
                 <TaxAllowanceDrilldown
                   employeeId={selectedLine.employeeId}
                   employeeCode={selectedLine.employeeCode}

@@ -4,6 +4,7 @@ import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.Map;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ContentDisposition;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import th.co.glr.hr.attachment.FileAttachmentBlobRepository;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -36,10 +38,13 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRequests.UpdateFactoryQuoteDraftReq
 public class FactoryQuoteController {
     private final FactoryQuoteService factoryQuotes;
     private final SessionContext sessions;
+    private final FileAttachmentBlobRepository attachmentBlobs;
 
-    public FactoryQuoteController(FactoryQuoteService factoryQuotes, SessionContext sessions) {
+    public FactoryQuoteController(FactoryQuoteService factoryQuotes, SessionContext sessions,
+                                  FileAttachmentBlobRepository attachmentBlobs) {
         this.factoryQuotes = factoryQuotes;
         this.sessions = sessions;
+        this.attachmentBlobs = attachmentBlobs;
     }
 
     @PostMapping("/pricing-requests/{pricingRequestId}/factory-email-drafts")
@@ -126,14 +131,28 @@ public class FactoryQuoteController {
         return Map.of("attachment", factoryQuotes.uploadAttachment(factoryQuoteId, file, user));
     }
 
+    // V134 storage-durability fix: factoryQuotes#attachmentFileLocation has ALREADY confirmed the
+    // bytes are available (DATABASE, or DISK_LEGACY with a file that still resolves), throwing 410
+    // itself otherwise -- see LeaveController#downloadAttachment's identical shape for the pattern
+    // this mirrors.
     @GetMapping("/factory-quote-attachments/{attachmentId}/file")
     ResponseEntity<Resource> downloadAttachment(@PathVariable long attachmentId, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         FactoryQuoteAttachmentDto attachment = factoryQuotes.getAttachment(attachmentId, user);
-        String path = factoryQuotes.attachmentFilePath(attachmentId, user);
-        Resource resource = new FileSystemResource(path);
-        if (!resource.exists()) {
-            throw new ApiException(org.springframework.http.HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบราคาโรงงานนี้");
+        FactoryQuoteRepository.AttachmentFileLocation location =
+            factoryQuotes.attachmentFileLocation(attachmentId, user);
+        Resource resource;
+        if ("DATABASE".equals(location.storageState())) {
+            byte[] content = attachmentBlobs.findContent(attachmentId)
+                .orElseThrow(() -> new ApiException(org.springframework.http.HttpStatus.GONE,
+                    "ไฟล์เอกสารนี้สูญหายจากระบบจัดเก็บ กรุณาติดต่อฝ่ายบุคคล"));
+            resource = new ByteArrayResource(content);
+        } else {
+            resource = new FileSystemResource(location.filePath());
+            if (!resource.exists()) {
+                throw new ApiException(org.springframework.http.HttpStatus.GONE,
+                    "ไฟล์เอกสารนี้สูญหายจากระบบจัดเก็บ กรุณาติดต่อฝ่ายบุคคล");
+            }
         }
         String mime = attachment.mimeType() != null ? attachment.mimeType() : MediaType.APPLICATION_OCTET_STREAM_VALUE;
         return ResponseEntity.ok()

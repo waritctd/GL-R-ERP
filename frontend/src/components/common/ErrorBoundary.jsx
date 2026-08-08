@@ -1,4 +1,5 @@
 import { Component } from 'react';
+import { Button } from './Button.jsx';
 import { StatePanel } from './StatePanel.jsx';
 
 export class ErrorBoundary extends Component {
@@ -39,14 +40,14 @@ function DefaultErrorFallback({ reset }) {
       title="โหลดหน้านี้ไม่สำเร็จ"
       description="ลองใหม่อีกครั้ง หรือโหลดหน้าใหม่หากข้อมูลยังไม่แสดง"
       action={(
-        <button type="button" className="secondary-button" onClick={reset}>
+        <Button type="button" variant="secondary" onClick={reset}>
           ลองใหม่
-        </button>
+        </Button>
       )}
       secondaryAction={(
-        <button type="button" className="primary-button" onClick={() => window.location.reload()}>
+        <Button type="button" variant="primary" onClick={() => window.location.reload()}>
           โหลดหน้าใหม่
-        </button>
+        </Button>
       )}
     />
   );

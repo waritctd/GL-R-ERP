@@ -17,6 +17,11 @@ export const queryKeys = {
   // Evidence attachments (decision #5, 2026-08-01). Mirrors TaxAllowanceDeclarationController's
   // nested .../{id}/attachments endpoint.
   taxAllowanceAttachments: (declarationId) => ['taxAllowanceAttachments', declarationId ?? ''],
+  // C1 stored tax allowance (hr.employee_tax_allowance) -- "register shows what payroll actually
+  // uses" (2026-08). GET /api/payroll/tax-allowances?year=, joined into TaxAllowanceReviewPage.jsx's
+  // register by employeeId. Distinct key from taxAllowanceDeclarationsRegister above: same UI
+  // screen, two different backend tables (see that page's own header comment).
+  taxAllowances: (year) => ['taxAllowances', year ?? ''],
   notifications: () => ['notifications'],
   leaveRequests: (filters = {}) => ['leave', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   leaveBalances: (employeeId, year) => ['leave', 'balances', employeeId, year],
@@ -42,6 +47,8 @@ export const queryKeys = {
   leaveCalendarContext: (from, to) => ['leave', 'calendarContext', from ?? '', to ?? ''],
   overtimeRequests: (filters = {}) => ['overtime', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   overtimeEmployees: () => ['overtime', 'employees'],
+  attendanceCorrectionRequests: (filters = {}) =>
+    ['attendanceCorrection', 'list', filters.status ?? '', filters.employeeId ?? ''],
   // CommissionController#list only ever takes payrollMonth (no status param —
   // see CommissionPage.jsx's imperative load()); kept here so CeoOverview's
   // unfiltered fetch shares one cache entry with anything else that reads

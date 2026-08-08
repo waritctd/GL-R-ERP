@@ -12,8 +12,11 @@ import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { formGridSpan2, FormGrid, Panel, RowActions } from '../../components/common/Layout.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { specialMoneyStatusLabel as statusInfo, SPECIAL_MONEY_STATUSES } from '../../utils/format.js';
+import {
+  pendingApproverText, specialMoneyStatusLabel as statusInfo, SPECIAL_MONEY_STATUSES,
+} from '../../utils/format.js';
 import { AttachmentList } from './AttachmentList.jsx';
 import { EntitlementPanel } from './EntitlementPanel.jsx';
 import { RuleCard } from './RuleCard.jsx';
@@ -689,269 +692,271 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
 
       {/* Request -- group -> type -> RULE CARD -> fields -> estimate -> evidence. */}
       <Panel title="ยื่นคำขอเงินสวัสดิการ">
-        <FormGrid as="form" onSubmit={handleSubmit(submitSpecialMoney)} noValidate>
-          {hasMultipleSubmitOptions ? (
-            <FormField label="พนักงาน" htmlFor="smr-employee" error={errors.employeeId?.message}>
-              <select id="smr-employee" {...register('employeeId')} required>
-                <option value="">เลือกพนักงาน</option>
-                {submitEmployeeOptions.map((employee) => (
-                  <option key={employee.employeeId} value={employee.employeeId}>
-                    {employee.employeeName} · {employee.employeeCode}{employee.directReport ? ' · ลูกทีม' : ''}
-                  </option>
-                ))}
-              </select>
-            </FormField>
-          ) : (
-            <FormField label="พนักงาน" htmlFor="smr-employee-display">
-              <input id="smr-employee-display" value={currentEmployee?.nameTh || user.name || '-'} disabled />
-            </FormField>
-          )}
-
-          <div className={formGridSpan2}>
-            {/* TypePicker replaces the flat 12-option <select> (plan §"Type grouping"). The
-                hidden input keeps react-hook-form's own registration/validation wiring for
-                'requestType' identical to before -- TypePicker.onSelect writes through
-                setValue(), same as every other controlled field in this form. */}
-            <input type="hidden" {...register('requestType')} />
-            <span id="smr-type-label" className="mb-1.5 block text-sm font-bold text-text">
-              ประเภทคำขอ<span className="field-required" aria-hidden="true"> *</span>
-            </span>
-            {/* `role="group"` is required for `aria-labelledby` to mean anything here -- a bare
-                `<div>` has no role that exposes an accessible-name slot, so the label
-                association was previously a no-op for assistive tech despite looking wired up.
-                `aria-describedby` -> the error paragraph below is likewise new: the error existed
-                on screen but was never programmatically associated with the control it
-                describes. */}
-            <div
-              role="group"
-              aria-labelledby="smr-type-label"
-              aria-describedby={requestTypeError ? 'smr-type-error' : undefined}
-            >
-              <TypePicker
-                groups={groupedTypeOptions}
-                value={requestType}
-                onSelect={(value) => setValue('requestType', value, { shouldValidate: true, shouldDirty: true })}
-              />
-            </div>
-            {requestTypeError ? (
-              <p id="smr-type-error" className="m-0 mt-1.5 text-xs font-bold text-danger" role="alert">{requestTypeError}</p>
-            ) : null}
-          </div>
-
-          {requestType ? (
-            <div className={formGridSpan2}>
-              <RuleCard requestType={requestType} typeMeta={selectedTypeMeta} className="border-t border-border pt-3" />
-              {uniformAlreadyClaimedThisYear ? (
-                <p className="m-0 mt-2 flex items-center gap-1.5 text-xs font-bold text-warning" role="alert">
-                  <Icon name="triangleAlert" size={13} />
-                  เบิกชุดฟอร์มประจำปีนี้ไปแล้ว — ปีนี้เบิกซ้ำไม่ได้
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-
-          {['TRAVEL_PER_DIEM', 'TRAVEL_LODGING'].includes(requestType) ? (
-            <>
-              <FormField label="วันที่เริ่มเดินทาง" htmlFor="smr-event-date" error={errors.eventDate?.message} required>
-                <input id="smr-event-date" type="date" {...register('eventDate')} required />
-              </FormField>
-              <FormField label="วันที่สิ้นสุด" htmlFor="smr-event-end-date" error={errors.eventEndDate?.message} required>
-                <input id="smr-event-end-date" type="date" {...register('eventEndDate')} required />
-              </FormField>
-              <FormField
-                label="จังหวัดปลายทาง"
-                htmlFor="smr-province"
-                error={errors.province?.message}
-                hint={blockingWarning ? undefined : 'ต้องเลือกจากรายการ — ระบบตรวจสอบจังหวัดยกเว้นด้วยชื่อที่ตรงกันเท่านั้น'}
-                required
-              >
-                <select id="smr-province" {...register('province')} required>
-                  <option value="">เลือกจังหวัด</option>
-                  {THAI_PROVINCES.map((province) => (
-                    <option key={province} value={province}>{province}</option>
+        <SafeForm onSubmit={handleSubmit(submitSpecialMoney)} noValidate>
+          <FormGrid>
+            {hasMultipleSubmitOptions ? (
+              <FormField label="พนักงาน" htmlFor="smr-employee" error={errors.employeeId?.message}>
+                <select id="smr-employee" {...register('employeeId')} required>
+                  <option value="">เลือกพนักงาน</option>
+                  {submitEmployeeOptions.map((employee) => (
+                    <option key={employee.employeeId} value={employee.employeeId}>
+                      {employee.employeeName} · {employee.employeeCode}{employee.directReport ? ' · ลูกทีม' : ''}
+                    </option>
                   ))}
                 </select>
               </FormField>
-              {requestType === 'TRAVEL_PER_DIEM' ? (
-                <FormField label="บทบาท" htmlFor="smr-role" error={errors.role?.message} required>
-                  <select id="smr-role" {...register('role')} required>
-                    <option value="">เลือกบทบาท</option>
-                    <option value="driver">คนขับ</option>
-                    <option value="loader">ผู้ช่วย/ยกของ</option>
-                  </select>
-                </FormField>
-              ) : (
-                <FormField label="จำนวนเงินค่าที่พัก" htmlFor="smr-amount" error={errors.requestedAmountInput?.message} required>
-                  <input id="smr-amount" type="number" min="0" step="1" {...register('requestedAmountInput')} required />
-                </FormField>
-              )}
-            </>
-          ) : null}
-
-          {requestType === 'MEDICAL' ? (
-            <>
-              <FormField label="วันที่ใบเสร็จ" htmlFor="smr-receipt-date" error={errors.receiptDate?.message} required>
-                <input id="smr-receipt-date" type="date" {...register('receiptDate')} required />
+            ) : (
+              <FormField label="พนักงาน" htmlFor="smr-employee-display">
+                <input id="smr-employee-display" value={currentEmployee?.nameTh || user.name || '-'} disabled />
               </FormField>
-              <FormField label="จำนวนเงินที่ขอเบิก" htmlFor="smr-amount" error={errors.requestedAmountInput?.message} required>
-                <input id="smr-amount" type="number" min="0" step="1" {...register('requestedAmountInput')} required />
-              </FormField>
-            </>
-          ) : null}
-
-          {AID_TYPES.includes(requestType) ? (
-            <>
-              <FormField label="วันที่เกิดเหตุการณ์" htmlFor="smr-event-date" error={errors.eventDate?.message} required>
-                <input id="smr-event-date" type="date" {...register('eventDate')} required />
-              </FormField>
-              {requestType === 'AID_FUNERAL' ? (
-                <FormField label="ความสัมพันธ์กับผู้เสียชีวิต" htmlFor="smr-relation" error={errors.relation?.message} required>
-                  <select id="smr-relation" {...register('relation')} required>
-                    <option value="">เลือกความสัมพันธ์</option>
-                    <option value="parent">บิดา/มารดา</option>
-                    <option value="spouse">คู่สมรส</option>
-                    <option value="child">บุตร</option>
-                  </select>
-                </FormField>
+            )}
+  
+            <div className={formGridSpan2}>
+              {/* TypePicker replaces the flat 12-option <select> (plan §"Type grouping"). The
+                  hidden input keeps react-hook-form's own registration/validation wiring for
+                  'requestType' identical to before -- TypePicker.onSelect writes through
+                  setValue(), same as every other controlled field in this form. */}
+              <input type="hidden" {...register('requestType')} />
+              <span id="smr-type-label" className="mb-1.5 block text-sm font-bold text-text">
+                ประเภทคำขอ<span className="field-required" aria-hidden="true"> *</span>
+              </span>
+              {/* `role="group"` is required for `aria-labelledby` to mean anything here -- a bare
+                  `<div>` has no role that exposes an accessible-name slot, so the label
+                  association was previously a no-op for assistive tech despite looking wired up.
+                  `aria-describedby` -> the error paragraph below is likewise new: the error existed
+                  on screen but was never programmatically associated with the control it
+                  describes. */}
+              <div
+                role="group"
+                aria-labelledby="smr-type-label"
+                aria-describedby={requestTypeError ? 'smr-type-error' : undefined}
+              >
+                <TypePicker
+                  groups={groupedTypeOptions}
+                  value={requestType}
+                  onSelect={(value) => setValue('requestType', value, { shouldValidate: true, shouldDirty: true })}
+                />
+              </div>
+              {requestTypeError ? (
+                <p id="smr-type-error" className="m-0 mt-1.5 text-xs font-bold text-danger" role="alert">{requestTypeError}</p>
               ) : null}
-            </>
-          ) : null}
-
-          {UNIFORM_TYPES.includes(requestType) ? (
-            <>
-              {requestType === 'UNIFORM_ANNUAL' ? (
-                <FormField label="วิธีเบิก" htmlFor="smr-uniform-mode" required>
-                  <select id="smr-uniform-mode" {...register('uniformMode')}>
-                    <option value="SELF_BUY">ซื้อเอง (ใบเสร็จเดือนพฤษภาคม)</option>
-                    <option value="TAILORED">ตัดชุดกับร้านที่บริษัทกำหนด</option>
+            </div>
+  
+            {requestType ? (
+              <div className={formGridSpan2}>
+                <RuleCard requestType={requestType} typeMeta={selectedTypeMeta} className="border-t border-border pt-3" />
+                {uniformAlreadyClaimedThisYear ? (
+                  <p className="m-0 mt-2 flex items-center gap-1.5 text-xs font-bold text-warning" role="alert">
+                    <Icon name="triangleAlert" size={13} />
+                    เบิกชุดฟอร์มประจำปีนี้ไปแล้ว — ปีนี้เบิกซ้ำไม่ได้
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+  
+            {['TRAVEL_PER_DIEM', 'TRAVEL_LODGING'].includes(requestType) ? (
+              <>
+                <FormField label="วันที่เริ่มเดินทาง" htmlFor="smr-event-date" error={errors.eventDate?.message} required>
+                  <input id="smr-event-date" type="date" {...register('eventDate')} required />
+                </FormField>
+                <FormField label="วันที่สิ้นสุด" htmlFor="smr-event-end-date" error={errors.eventEndDate?.message} required>
+                  <input id="smr-event-end-date" type="date" {...register('eventEndDate')} required />
+                </FormField>
+                <FormField
+                  label="จังหวัดปลายทาง"
+                  htmlFor="smr-province"
+                  error={errors.province?.message}
+                  hint={blockingWarning ? undefined : 'ต้องเลือกจากรายการ — ระบบตรวจสอบจังหวัดยกเว้นด้วยชื่อที่ตรงกันเท่านั้น'}
+                  required
+                >
+                  <select id="smr-province" {...register('province')} required>
+                    <option value="">เลือกจังหวัด</option>
+                    {THAI_PROVINCES.map((province) => (
+                      <option key={province} value={province}>{province}</option>
+                    ))}
                   </select>
                 </FormField>
-              ) : null}
-              <FormField label="วันที่เบิก" htmlFor="smr-event-date" error={errors.eventDate?.message} required>
-                <input id="smr-event-date" type="date" {...register('eventDate')} required />
-              </FormField>
-              {requestType === 'UNIFORM_ANNUAL' && watched.uniformMode !== 'TAILORED' ? (
+                {requestType === 'TRAVEL_PER_DIEM' ? (
+                  <FormField label="บทบาท" htmlFor="smr-role" error={errors.role?.message} required>
+                    <select id="smr-role" {...register('role')} required>
+                      <option value="">เลือกบทบาท</option>
+                      <option value="driver">คนขับ</option>
+                      <option value="loader">ผู้ช่วย/ยกของ</option>
+                    </select>
+                  </FormField>
+                ) : (
+                  <FormField label="จำนวนเงินค่าที่พัก" htmlFor="smr-amount" error={errors.requestedAmountInput?.message} required>
+                    <input id="smr-amount" type="number" min="0" step="1" {...register('requestedAmountInput')} required />
+                  </FormField>
+                )}
+              </>
+            ) : null}
+  
+            {requestType === 'MEDICAL' ? (
+              <>
                 <FormField label="วันที่ใบเสร็จ" htmlFor="smr-receipt-date" error={errors.receiptDate?.message} required>
                   <input id="smr-receipt-date" type="date" {...register('receiptDate')} required />
                 </FormField>
-              ) : null}
-              {/* Piece count applies in BOTH UNIFORM_ANNUAL modes (evaluateUniformAnnual checks
-                  it regardless of uniformMode), but UNIFORM_PREPROBATION_KIT's piece counts are
-                  fixed by policy -- its evaluator never reads shirtCount/trouserCount. */}
-              {requestType !== 'UNIFORM_PREPROBATION_KIT' ? (
-                <>
-                  <FormField label="จำนวนเสื้อ (ชิ้น)" htmlFor="smr-shirt-count" error={errors.shirtCount?.message}>
-                    <input id="smr-shirt-count" type="number" min="0" step="1" {...register('shirtCount')} />
-                  </FormField>
-                  <FormField label="จำนวนกางเกง (ชิ้น)" htmlFor="smr-trouser-count" error={errors.trouserCount?.message}>
-                    <input id="smr-trouser-count" type="number" min="0" step="1" {...register('trouserCount')} />
-                  </FormField>
-                </>
-              ) : null}
-              {requestType === 'UNIFORM_PREPROBATION_KIT' ? (
-                <div className={formGridSpan2}>
-                  <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
-                    <input type="checkbox" className="h-4 w-4 shrink-0" {...register('needsBackSupport')} />
-                    ต้องการสายรัดหลัง (กรณีของเดิมไม่เพียงพอ)
-                  </label>
-                </div>
-              ) : null}
-              {requestType === 'UNIFORM_NEW_STAFF'
-                || requestType === 'UNIFORM_PREPROBATION_KIT'
-                || (requestType === 'UNIFORM_ANNUAL' && watched.uniformMode === 'TAILORED') ? (
-                <FormField
-                  label={requestType === 'UNIFORM_ANNUAL' ? 'จำนวนเงินที่ขอเบิก (ตามใบแจ้งหนี้ร้านตัด)' : 'จำนวนเงินที่ขอเบิก'}
-                  htmlFor="smr-amount"
-                  error={errors.requestedAmountInput?.message}
-                  required
-                >
+                <FormField label="จำนวนเงินที่ขอเบิก" htmlFor="smr-amount" error={errors.requestedAmountInput?.message} required>
                   <input id="smr-amount" type="number" min="0" step="1" {...register('requestedAmountInput')} required />
                 </FormField>
-              ) : null}
-            </>
-          ) : null}
-
-          {(requestType === 'TRAINING' || requestType === 'OTHER') ? (
-            <>
-              <FormField label="วันที่" htmlFor="smr-event-date" error={errors.eventDate?.message} required>
-                <input id="smr-event-date" type="date" {...register('eventDate')} required />
-              </FormField>
-              <FormField label="จำนวนเงินที่ขอเบิก" htmlFor="smr-amount" error={errors.requestedAmountInput?.message} required>
-                <input id="smr-amount" type="number" min="0" step="1" {...register('requestedAmountInput')} required />
-              </FormField>
-            </>
-          ) : null}
-
-          {requestType ? (
+              </>
+            ) : null}
+  
+            {AID_TYPES.includes(requestType) ? (
+              <>
+                <FormField label="วันที่เกิดเหตุการณ์" htmlFor="smr-event-date" error={errors.eventDate?.message} required>
+                  <input id="smr-event-date" type="date" {...register('eventDate')} required />
+                </FormField>
+                {requestType === 'AID_FUNERAL' ? (
+                  <FormField label="ความสัมพันธ์กับผู้เสียชีวิต" htmlFor="smr-relation" error={errors.relation?.message} required>
+                    <select id="smr-relation" {...register('relation')} required>
+                      <option value="">เลือกความสัมพันธ์</option>
+                      <option value="parent">บิดา/มารดา</option>
+                      <option value="spouse">คู่สมรส</option>
+                      <option value="child">บุตร</option>
+                    </select>
+                  </FormField>
+                ) : null}
+              </>
+            ) : null}
+  
+            {UNIFORM_TYPES.includes(requestType) ? (
+              <>
+                {requestType === 'UNIFORM_ANNUAL' ? (
+                  <FormField label="วิธีเบิก" htmlFor="smr-uniform-mode" required>
+                    <select id="smr-uniform-mode" {...register('uniformMode')}>
+                      <option value="SELF_BUY">ซื้อเอง (ใบเสร็จเดือนพฤษภาคม)</option>
+                      <option value="TAILORED">ตัดชุดกับร้านที่บริษัทกำหนด</option>
+                    </select>
+                  </FormField>
+                ) : null}
+                <FormField label="วันที่เบิก" htmlFor="smr-event-date" error={errors.eventDate?.message} required>
+                  <input id="smr-event-date" type="date" {...register('eventDate')} required />
+                </FormField>
+                {requestType === 'UNIFORM_ANNUAL' && watched.uniformMode !== 'TAILORED' ? (
+                  <FormField label="วันที่ใบเสร็จ" htmlFor="smr-receipt-date" error={errors.receiptDate?.message} required>
+                    <input id="smr-receipt-date" type="date" {...register('receiptDate')} required />
+                  </FormField>
+                ) : null}
+                {/* Piece count applies in BOTH UNIFORM_ANNUAL modes (evaluateUniformAnnual checks
+                    it regardless of uniformMode), but UNIFORM_PREPROBATION_KIT's piece counts are
+                    fixed by policy -- its evaluator never reads shirtCount/trouserCount. */}
+                {requestType !== 'UNIFORM_PREPROBATION_KIT' ? (
+                  <>
+                    <FormField label="จำนวนเสื้อ (ชิ้น)" htmlFor="smr-shirt-count" error={errors.shirtCount?.message}>
+                      <input id="smr-shirt-count" type="number" min="0" step="1" {...register('shirtCount')} />
+                    </FormField>
+                    <FormField label="จำนวนกางเกง (ชิ้น)" htmlFor="smr-trouser-count" error={errors.trouserCount?.message}>
+                      <input id="smr-trouser-count" type="number" min="0" step="1" {...register('trouserCount')} />
+                    </FormField>
+                  </>
+                ) : null}
+                {requestType === 'UNIFORM_PREPROBATION_KIT' ? (
+                  <div className={formGridSpan2}>
+                    <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+                      <input type="checkbox" className="h-4 w-4 shrink-0" {...register('needsBackSupport')} />
+                      ต้องการสายรัดหลัง (กรณีของเดิมไม่เพียงพอ)
+                    </label>
+                  </div>
+                ) : null}
+                {requestType === 'UNIFORM_NEW_STAFF'
+                  || requestType === 'UNIFORM_PREPROBATION_KIT'
+                  || (requestType === 'UNIFORM_ANNUAL' && watched.uniformMode === 'TAILORED') ? (
+                  <FormField
+                    label={requestType === 'UNIFORM_ANNUAL' ? 'จำนวนเงินที่ขอเบิก (ตามใบแจ้งหนี้ร้านตัด)' : 'จำนวนเงินที่ขอเบิก'}
+                    htmlFor="smr-amount"
+                    error={errors.requestedAmountInput?.message}
+                    required
+                  >
+                    <input id="smr-amount" type="number" min="0" step="1" {...register('requestedAmountInput')} required />
+                  </FormField>
+                ) : null}
+              </>
+            ) : null}
+  
+            {(requestType === 'TRAINING' || requestType === 'OTHER') ? (
+              <>
+                <FormField label="วันที่" htmlFor="smr-event-date" error={errors.eventDate?.message} required>
+                  <input id="smr-event-date" type="date" {...register('eventDate')} required />
+                </FormField>
+                <FormField label="จำนวนเงินที่ขอเบิก" htmlFor="smr-amount" error={errors.requestedAmountInput?.message} required>
+                  <input id="smr-amount" type="number" min="0" step="1" {...register('requestedAmountInput')} required />
+                </FormField>
+              </>
+            ) : null}
+  
+            {requestType ? (
+              <div className={formGridSpan2}>
+                {/* The tax chip lives in RuleCard's "ภาษี" row now (rendered just above, once per
+                    type) -- it used to also render here, which meant it showed twice on screen for
+                    the same type. */}
+                <div className="border border-border rounded-md p-3.5">
+                  <div className="text-2xl font-extrabold tabular-nums" data-testid="smr-computed-amount">{formatMoney(finalAmount)}</div>
+                  {estimate.working ? <div className="text-xs text-icon-muted mt-1">{estimate.working}</div> : null}
+                  <div className="text-xs text-icon-muted mt-0.5">
+                    จ่ายในงวด {formatThaiMonthYear(cutoff.targetMonth)}
+                  </div>
+                </div>
+                {estimate.warnings.map((warning) => (
+                  <p key={warning} className="m-0 mt-2 text-xs font-bold text-danger" role="alert">{warning}</p>
+                ))}
+              </div>
+            ) : null}
+  
             <div className={formGridSpan2}>
-              {/* The tax chip lives in RuleCard's "ภาษี" row now (rendered just above, once per
-                  type) -- it used to also render here, which meant it showed twice on screen for
-                  the same type. */}
-              <div className="border border-border rounded-md p-3.5">
-                <div className="text-2xl font-extrabold tabular-nums" data-testid="smr-computed-amount">{formatMoney(finalAmount)}</div>
-                {estimate.working ? <div className="text-xs text-icon-muted mt-1">{estimate.working}</div> : null}
-                <div className="text-xs text-icon-muted mt-0.5">
-                  จ่ายในงวด {formatThaiMonthYear(cutoff.targetMonth)}
+              <FormField label="เหตุผล / รายละเอียด" htmlFor="smr-reason" error={errors.reason?.message} required>
+                <textarea id="smr-reason" rows={3} {...register('reason')} required />
+              </FormField>
+            </div>
+  
+            {requestType ? (
+              <div className={formGridSpan2}>
+                <FormField
+                  label="หลักฐานประกอบ"
+                  htmlFor="smr-evidence"
+                  // Type-aware: TRAVEL_PER_DIEM is evidenceRequired=false (the only such type -- see
+                  // RuleCard's own "ไม่บังคับแนบหลักฐาน" row directly above this field), so telling its
+                  // requester the request "จะอนุมัติไม่ได้จนกว่าจะแนบเอกสาร" was a direct contradiction
+                  // of what the rule card two elements up on the same screen already said correctly.
+                  hint={selectedTypeMeta?.evidenceRequired === false
+                    ? `${evidenceLabel(requestType)} (ไม่บังคับ) — ไฟล์ PDF, JPG หรือ PNG`
+                    : `${evidenceLabel(requestType)} — ไฟล์ PDF, JPG หรือ PNG. คำขอประเภทที่ต้องมีหลักฐานจะอนุมัติไม่ได้จนกว่าจะแนบเอกสาร`}
+                >
+                  <FileUploadField
+                    id="smr-evidence"
+                    accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
+                    onChange={(event) => setEvidenceFile(event.target.files?.[0] || null)}
+                  />
+                </FormField>
+              </div>
+            ) : null}
+  
+            {/* Submit errors arrive as ONE 400 string with every violation joined by "; " -- split
+                into a real list instead of one run-on sentence (plan §"Backend contract"). */}
+            {submitViolations.length > 0 ? (
+              <div className={formGridSpan2}>
+                <div className="rounded-md border border-danger-border bg-danger-bg p-3" role="alert">
+                  <p className="m-0 text-xs font-bold text-danger">ส่งคำขอไม่สำเร็จ:</p>
+                  <ul className="m-0 mt-1.5 list-disc pl-4 text-sm text-text">
+                    {/* Keyed by index, not by the string: the evaluator can emit the same violation
+                        twice (e.g. one per uniform piece type), and duplicate keys would collide. */}
+                    {submitViolations.map((violation, index) => (
+                      <li key={index}>{violation}</li>
+                    ))}
+                  </ul>
                 </div>
               </div>
-              {estimate.warnings.map((warning) => (
-                <p key={warning} className="m-0 mt-2 text-xs font-bold text-danger" role="alert">{warning}</p>
-              ))}
-            </div>
-          ) : null}
-
-          <div className={formGridSpan2}>
-            <FormField label="เหตุผล / รายละเอียด" htmlFor="smr-reason" error={errors.reason?.message} required>
-              <textarea id="smr-reason" rows={3} {...register('reason')} required />
-            </FormField>
-          </div>
-
-          {requestType ? (
-            <div className={formGridSpan2}>
-              <FormField
-                label="หลักฐานประกอบ"
-                htmlFor="smr-evidence"
-                // Type-aware: TRAVEL_PER_DIEM is evidenceRequired=false (the only such type -- see
-                // RuleCard's own "ไม่บังคับแนบหลักฐาน" row directly above this field), so telling its
-                // requester the request "จะอนุมัติไม่ได้จนกว่าจะแนบเอกสาร" was a direct contradiction
-                // of what the rule card two elements up on the same screen already said correctly.
-                hint={selectedTypeMeta?.evidenceRequired === false
-                  ? `${evidenceLabel(requestType)} (ไม่บังคับ) — ไฟล์ PDF, JPG หรือ PNG`
-                  : `${evidenceLabel(requestType)} — ไฟล์ PDF, JPG หรือ PNG. คำขอประเภทที่ต้องมีหลักฐานจะอนุมัติไม่ได้จนกว่าจะแนบเอกสาร`}
-              >
-                <FileUploadField
-                  id="smr-evidence"
-                  accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
-                  onChange={(event) => setEvidenceFile(event.target.files?.[0] || null)}
-                />
-              </FormField>
-            </div>
-          ) : null}
-
-          {/* Submit errors arrive as ONE 400 string with every violation joined by "; " -- split
-              into a real list instead of one run-on sentence (plan §"Backend contract"). */}
-          {submitViolations.length > 0 ? (
-            <div className={formGridSpan2}>
-              <div className="rounded-md border border-danger-border bg-danger-bg p-3" role="alert">
-                <p className="m-0 text-xs font-bold text-danger">ส่งคำขอไม่สำเร็จ:</p>
-                <ul className="m-0 mt-1.5 list-disc pl-4 text-sm text-text">
-                  {/* Keyed by index, not by the string: the evaluator can emit the same violation
-                      twice (e.g. one per uniform piece type), and duplicate keys would collide. */}
-                  {submitViolations.map((violation, index) => (
-                    <li key={index}>{violation}</li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          ) : null}
-
-          <RowActions className={formGridSpan2}>
-            <Button type="submit" disabled={saving || !requestType || blockingWarning} className="max-[720px]:min-h-11 max-[720px]:w-full">
-              <Icon name="plus" />
-              ส่งคำขอ
-            </Button>
-          </RowActions>
-        </FormGrid>
+            ) : null}
+  
+            <RowActions className={formGridSpan2}>
+              <Button type="submit" disabled={saving || !requestType || blockingWarning} className="max-[720px]:min-h-11 max-[720px]:w-full">
+                <Icon name="plus" />
+                ส่งคำขอ
+              </Button>
+            </RowActions>
+          </FormGrid>
+        </SafeForm>
       </Panel>
 
       {/* My requests -- history; rejected rows carry note + rule + evidence. */}
@@ -1034,6 +1039,10 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
           const attachable = canAttach(request);
           const isRejected = request.status === 'REJECTED';
           const showAttachments = !isRejected && (attachable || Number(request.attachmentCount || 0) > 0);
+          const isPending = request.status === 'SUBMITTED' || request.status === 'MANAGER_APPROVED';
+          const pendingApproverNote = isPending
+            ? pendingApproverText(request.pendingApproverRole, request.pendingApproverName)
+            : null;
           return (
             <div className={`${TABLE_GRID} data-row`} key={request.id}>
               <span data-label="ประเภท / รายละเอียด" className="max-[720px]:order-1">
@@ -1045,6 +1054,9 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
               </span>
               <span data-label="สถานะ" className="max-[720px]:order-2">
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                {/* No "รอ" prefix -- the StatusBadge above already says that; repeating it made
+                    this note a superset of the badge's own text (review #pending-approver-info). */}
+                {pendingApproverNote ? <small className="text-text-muted">{pendingApproverNote}</small> : null}
                 {typeMeta?.evidenceRequired && request.status === 'SUBMITTED' && !request.attachmentCount ? (
                   <small className="text-warning">ยังไม่ได้แนบเอกสาร — อนุมัติไม่ได้</small>
                 ) : null}

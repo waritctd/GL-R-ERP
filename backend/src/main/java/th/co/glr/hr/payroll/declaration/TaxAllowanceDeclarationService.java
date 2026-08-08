@@ -58,6 +58,15 @@ public class TaxAllowanceDeclarationService {
     private static final Set<String> EVIDENCE_MIME_TYPES =
         Set.of("application/pdf", "image/jpeg", "image/png");
 
+    // V135 (feat/tax-allowance-sections): mirrors TAX_ALLOWANCE_GROUPS' five `key`s in
+    // frontend/src/features/taxAllowance/taxAllowanceSchema.js. No shared enum exists between the
+    // frontend and backend for this grouping -- unlike TaxAllowanceCapEntry's `category` strings,
+    // which TaxAllowanceCapCatalog owns authoritatively, the five-section grouping is a UI
+    // information-architecture concept with no backend equivalent to reuse. Keep both lists in sync
+    // by hand if a section is ever added, renamed, or removed.
+    private static final Set<String> EVIDENCE_SECTION_KEYS =
+        Set.of("family", "insurance", "savings", "housing", "donation");
+
     private final TaxAllowanceDeclarationRepository repository;
     private final PayrollRepository payrollRepository;
     private final EmployeeRepository employeeRepository;
@@ -452,18 +461,42 @@ public class TaxAllowanceDeclarationService {
     // whether an attachment id exists to a caller with no business seeing it).
 
     @Transactional
-    public TaxAllowanceAttachmentDto uploadAttachment(long declarationId, MultipartFile file, UserPrincipal actor) {
+    public TaxAllowanceAttachmentDto uploadAttachment(
+        long declarationId, MultipartFile file, String sectionKey, UserPrincipal actor
+    ) {
         requireOwnerOrHr(declarationId, actor);
-        FileStorageService.StoredFile stored =
-            fileStorage.store("tax-allowance-declaration", declarationId, file, EVIDENCE_MIME_TYPES);
+        String normalizedSectionKey = normalizeSectionKey(sectionKey);
+        // V134 storage-durability fix: this evidence file goes straight to the database now -- see
+        // FileStorageService#storeInDatabase's javadoc.
+        FileStorageService.StoredContent stored =
+            fileStorage.storeInDatabase("tax-allowance-declaration", declarationId, file, EVIDENCE_MIME_TYPES);
         // uploaded_by is actor.employeeId(), NOT actor.id() -- the column FKs hr.employee, and for
         // an HR-on-behalf upload actor.employeeId() is HR's own employee row, correctly distinct
         // from the declaration's beneficiary employee_id.
-        TaxAllowanceAttachmentDto attachment = repository.saveAttachment(declarationId, stored.fileName(),
-            stored.filePath(), stored.mimeType(), stored.fileSize(), actor.employeeId());
+        TaxAllowanceAttachmentDto attachment = repository.saveAttachmentWithContent(declarationId, stored.fileName(),
+            stored.storageKey(), stored.mimeType(), stored.fileSize(), actor.employeeId(), normalizedSectionKey,
+            stored.content());
         auditService.record(actor, "UPLOAD_TAX_ALLOWANCE_ATTACHMENT", "tax_allowance_declaration",
             declarationId, null, attachment);
         return attachment;
+    }
+
+    /**
+     * Blank/whitespace-only ({@code @RequestParam(required = false)} on the controller means an
+     * omitted form field arrives as {@code null}, but an EMPTY one arrives as {@code ""}) normalizes
+     * to {@code null} ("general/uncategorized", V135's own nullable-by-design choice — see that
+     * migration's header). Anything else must be one of {@link #EVIDENCE_SECTION_KEYS} or the
+     * upload is rejected outright, rather than silently storing an unrecognised tag the frontend's
+     * per-section filter would never match.
+     */
+    private String normalizeSectionKey(String sectionKey) {
+        if (sectionKey == null || sectionKey.isBlank()) {
+            return null;
+        }
+        if (!EVIDENCE_SECTION_KEYS.contains(sectionKey)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "sectionKey ไม่ถูกต้อง");
+        }
+        return sectionKey;
     }
 
     public List<TaxAllowanceAttachmentDto> listAttachments(long declarationId, UserPrincipal actor) {
@@ -483,11 +516,25 @@ public class TaxAllowanceDeclarationService {
         if (attachment.deletedAt() != null) {
             throw new ApiException(HttpStatus.NOT_FOUND, "ไฟล์นี้ถูกลบแล้ว");
         }
-        String path = repository.findAttachmentFilePath(attachmentId);
-        if (path == null) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบนี้");
+        TaxAllowanceDeclarationRepository.AttachmentFileLocation location =
+            repository.findAttachmentFileLocation(attachmentId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบนี้"));
+        // V134 storage-durability fix: availability is checked only AFTER the 404/ownership/
+        // tombstone checks above, matching LeaveService#resolveAttachmentForDownload's ordering --
+        // see that method's javadoc for why the order itself is a security property.
+        if (!bytesAvailable(location)) {
+            throw new ApiException(HttpStatus.GONE, "ไฟล์เอกสารนี้สูญหายจากระบบจัดเก็บ กรุณาติดต่อฝ่ายบุคคล");
         }
-        return new TaxAllowanceAttachmentDownload(attachment, path);
+        return new TaxAllowanceAttachmentDownload(attachment, location.filePath(), location.storageState());
+    }
+
+    /** Mirrors {@code LeaveService#bytesAvailable} -- see that method's javadoc. */
+    private boolean bytesAvailable(TaxAllowanceDeclarationRepository.AttachmentFileLocation location) {
+        return switch (location.storageState()) {
+            case "DATABASE" -> true;
+            case "DISK_LEGACY" -> fileStorage.existsOnDisk(location.filePath());
+            default -> false;
+        };
     }
 
     /** Tombstone only — copy of {@code FactoryQuoteService#deleteAttachment}'s shape, never a hard delete. */

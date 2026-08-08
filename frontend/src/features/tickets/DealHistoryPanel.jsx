@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
+import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate } from '../../utils/format.js';
@@ -250,12 +252,7 @@ export function DealHistoryPanel({
   }
 
   return (
-    <section className="panel">
-      <div className="panel-header">
-        <h2>ประวัติดีล</h2>
-        <span className="text-2xs font-normal text-text-muted">History</span>
-      </div>
-
+    <Panel title="ประวัติดีล" actions={<span className="text-2xs font-normal text-text-muted">History</span>}>
       <div className="ticket-events">
         {rows.length === 0 && !loading ? (
           // FIX 1 (Opus review): when `canViewActivityFeed` is false,
@@ -303,13 +300,13 @@ export function DealHistoryPanel({
             placeholder="เพิ่มความคิดเห็น…"
             style={{ resize: 'vertical' }}
           />
-          <button
-            type="button" className="secondary-button self-end"
+          <Button
+            type="button" variant="secondary" className="self-end"
             onClick={onSubmitComment}
             disabled={commentSubmitting || !commentText.trim()}
           >
             ส่งความคิดเห็น
-          </button>
+          </Button>
         </div>
       ) : null}
 
@@ -347,16 +344,16 @@ export function DealHistoryPanel({
               placeholder="รายละเอียดการติดต่อ / ผลที่ได้"
             />
           </label>
-          <button
-            type="button" className="secondary-button self-end"
+          <Button
+            type="button" variant="secondary" className="self-end"
             disabled={addingActivity || !activityDraft.activityDate}
             onClick={submitActivity}
           >
             <Icon name="plus" size={14} />
             บันทึกกิจกรรม
-          </button>
+          </Button>
         </div>
       ) : null}
-    </section>
+    </Panel>
   );
 }

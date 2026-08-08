@@ -65,6 +65,11 @@ const ProcurementFulfilmentPage = lazy(() => import('./features/procurement/Proc
 // API with no UI at all) — HR/CEO only, gated via canManageAttendanceCalendar. Never gated on
 // SALES_ENABLED: this is attendance/HR-core, not the sales/CRM stack.
 const AttendanceCalendarPage = lazy(() => import('./features/attendanceCalendar/AttendanceCalendarPage.jsx').then(toDefault('AttendanceCalendarPage')));
+// e2e-only fixture (#safe-form-primitive review round, F2) — see the component's own doc comment
+// for why it exists. Route registration below is gated on VITE_USE_MOCKS, so this is unreachable
+// in a production build (no VITE_ vars are set there at all) even though the lazy chunk itself
+// still ships, same as every other route in this file.
+const SafeFormSubmitterProbe = lazy(() => import('./dev/SafeFormSubmitterProbe.jsx').then(toDefault('SafeFormSubmitterProbe')));
 
 // Thin wrappers that source the ticket id from the URL for the frozen sales
 // pages (they already fetch by id internally — branch 5 only rewires how the
@@ -465,6 +470,13 @@ export function App() {
             path="/attendance"
             element={<AttendancePage user={user} employees={employees} showToast={showToast} />}
           />
+
+          {/* e2e-only (#safe-form-primitive review round, F2) — see SafeFormSubmitterProbe.jsx's
+              own doc comment. VITE_USE_MOCKS is never 'true' in production (no VITE_ vars are set
+              there at all), so this route does not exist outside a local/mock/e2e context. */}
+          {import.meta.env.VITE_USE_MOCKS === 'true' && (
+            <Route path="/__e2e/safe-form-submitter-probe" element={<SafeFormSubmitterProbe />} />
+          )}
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

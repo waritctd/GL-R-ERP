@@ -413,6 +413,38 @@ describe('SpecialMoneyPanel', () => {
     });
   });
 
+  // feat/pending-approver-info: "who this is waiting on" beside the SUBMITTED/MANAGER_APPROVED
+  // status badge -- welfare is CEO-only, single-stage, so the role is always "ceo" here.
+  describe('pending-approver note', () => {
+    it('renders the note for a SUBMITTED request, and omits it for a REJECTED one', async () => {
+      api.specialMoney.list.mockResolvedValue({
+        requests: [
+          submittedRequest({ pendingApproverRole: 'ceo', pendingApproverName: 'ราม' }),
+          rejectedRequest({ pendingApproverRole: null, pendingApproverName: null }),
+        ],
+      });
+      renderPanel();
+
+      // No "รอ" prefix on the note itself (review #pending-approver-info) -- the status badge
+      // ("รอ CEO อนุมัติ") already conveys pending-ness, so this bare "CEO (คุณราม)" doesn't
+      // duplicate it. The REJECTED row (rejectedRequest, pendingApproverRole: null) renders no
+      // such note at all.
+      expect(await screen.findByText('CEO (คุณราม)')).not.toBeNull();
+    });
+
+    it('shows the role alone (CEO) when the backend could not resolve a single approver name', async () => {
+      api.specialMoney.list.mockResolvedValue({
+        requests: [submittedRequest({ pendingApproverRole: 'ceo', pendingApproverName: null })],
+      });
+      renderPanel();
+
+      await screen.findByText(/พนักงาน ทดสอบ ·/);
+      // Scoped to the approver note's own <small>, matching OvertimePage.test.jsx's sibling
+      // assertion -- bare "CEO" could otherwise also match a StatusBadge with that exact label.
+      expect(await screen.findByText('CEO', { selector: 'small.text-text-muted' })).not.toBeNull();
+    });
+  });
+
   // The history table used to call api.specialMoney.list({status}) with no dates at all, which the
   // REAL backend (SpecialMoneyService.list():66-68) silently defaults to "this calendar month" --
   // this fixture's mock does not reproduce that filtering itself (same caveat as the review-queue

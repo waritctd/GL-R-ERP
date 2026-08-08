@@ -349,9 +349,11 @@ public class FactoryQuoteService {
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
         requireMutablePricingRequest(summary, MUTABLE_STATUSES);
         requireActiveDeal(summary.ticketId());
-        FileStorageService.StoredFile stored = fileStorage.store("factory-quotes", quoteId, file, Set.of());
-        FactoryQuoteAttachmentDto attachment = quotes.saveAttachment(quoteId, stored.fileName(), stored.filePath(),
-            stored.mimeType(), stored.fileSize(), actor.id());
+        // V134 storage-durability fix: this evidence file goes straight to the database now -- see
+        // FileStorageService#storeInDatabase's javadoc.
+        FileStorageService.StoredContent stored = fileStorage.storeInDatabase("factory-quotes", quoteId, file, Set.of());
+        FactoryQuoteAttachmentDto attachment = quotes.saveAttachmentWithContent(quoteId, stored.fileName(),
+            stored.storageKey(), stored.mimeType(), stored.fileSize(), actor.id(), stored.content());
         addEvent(summary, actor, PricingRequestEventKind.FACTORY_RESPONSE_RECEIVED, summary.status(), summary.status(),
             "Factory quote attachment uploaded for " + quote.factoryName() + ": " + attachment.fileName());
         return attachment;
@@ -365,13 +367,30 @@ public class FactoryQuoteService {
         return attachment;
     }
 
-    public String attachmentFilePath(long attachmentId, UserPrincipal actor) {
+    /**
+     * V134 storage-durability fix: resolves the attachment's storage location AND confirms its
+     * bytes are actually available (DATABASE, or DISK_LEGACY with a file that still resolves),
+     * throwing 410 GONE otherwise -- checked only AFTER {@link #getAttachment}'s own 404/role
+     * checks above, mirroring {@code LeaveService#resolveAttachmentForDownload}'s ordering (see
+     * that method's javadoc for why the order itself is a security property).
+     */
+    public FactoryQuoteRepository.AttachmentFileLocation attachmentFileLocation(long attachmentId, UserPrincipal actor) {
         getAttachment(attachmentId, actor);
-        String path = quotes.findAttachmentFilePath(attachmentId);
-        if (path == null) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบราคาโรงงานนี้");
+        FactoryQuoteRepository.AttachmentFileLocation location = quotes.findAttachmentFileLocation(attachmentId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบราคาโรงงานนี้"));
+        if (!bytesAvailable(location)) {
+            throw new ApiException(HttpStatus.GONE, "ไฟล์เอกสารนี้สูญหายจากระบบจัดเก็บ กรุณาติดต่อฝ่ายบุคคล");
         }
-        return path;
+        return location;
+    }
+
+    /** Mirrors {@code LeaveService#bytesAvailable} -- see that method's javadoc. */
+    private boolean bytesAvailable(FactoryQuoteRepository.AttachmentFileLocation location) {
+        return switch (location.storageState()) {
+            case "DATABASE" -> true;
+            case "DISK_LEGACY" -> fileStorage.existsOnDisk(location.filePath());
+            default -> false;
+        };
     }
 
     /**

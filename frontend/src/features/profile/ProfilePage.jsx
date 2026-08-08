@@ -92,7 +92,7 @@ export function ProfilePage({ user, employee, profileRequests, onCreateRequest, 
       {/* The full request table, absorbed from the former /my-requests page —
           same `ownRequests` data, so a separate page only split one story in
           two. `.table-panel` is a sibling of the panel above, never nested. */}
-      <section className="table-panel">
+      <Panel flush>
         <div className="flex items-center justify-between gap-[14px] py-4 px-5 border-b border-border">
           <h2 className="m-0 text-lg">คำขอแก้ไขของฉัน</h2>
           {pendingCount > 0 ? (
@@ -124,7 +124,7 @@ export function ProfilePage({ user, employee, profileRequests, onCreateRequest, 
             </div>
           );
         })}
-      </section>
+      </Panel>
 
       {requestField ? <ChangeRequestModal requestField={requestField} onClose={() => setRequestField(null)} onSubmit={submitRequest} /> : null}
     </PageStack>

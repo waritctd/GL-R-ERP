@@ -7,6 +7,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { FormGrid, formGridSpan2 } from '../../components/common/Layout.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { divisions, statuses } from '../../data/referenceData.js';
 
 function uniqueOptions(rows, valueKey, labelKey) {
@@ -129,97 +130,99 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
         </>
       )}
     >
-      <FormGrid as="form" id="employee-form" onSubmit={handleSubmit(submit)} noValidate>
-        <FormField label="ชื่อ-นามสกุล" htmlFor="employee-nameTh" error={errors.nameTh?.message} required>
-          <input
-            id="employee-nameTh"
-            {...register('nameTh')}
-            aria-invalid={Boolean(errors.nameTh)}
-            aria-describedby={errors.nameTh ? fieldErrorId('employee-nameTh') : undefined}
-            required
-          />
-        </FormField>
-        <FormField label="Name" htmlFor="employee-nameEn">
-          <input id="employee-nameEn" {...register('nameEn')} />
-        </FormField>
-        <FormField label="ชื่อเล่น" htmlFor="employee-nickName">
-          <input id="employee-nickName" {...register('nickName')} />
-        </FormField>
-        <FormField label="อีเมล" htmlFor="employee-email" error={errors.email?.message} required>
-          <input
-            id="employee-email"
-            type="email"
-            {...register('email')}
-            aria-invalid={Boolean(errors.email)}
-            aria-describedby={errors.email ? fieldErrorId('employee-email') : undefined}
-            required
-          />
-        </FormField>
-        <FormField label="เบอร์โทร" htmlFor="employee-phone" error={errors.phone?.message} required>
-          <input
-            id="employee-phone"
-            {...register('phone')}
-            aria-invalid={Boolean(errors.phone)}
-            aria-describedby={errors.phone ? fieldErrorId('employee-phone') : undefined}
-            required
-          />
-        </FormField>
-        <FormField label="ฝ่าย" htmlFor="employee-divisionId">
-          <select id="employee-divisionId" {...register('divisionId', { onChange: () => setValue('departmentTh', '') })}>
-            {divisionOptions.map((division) => <option key={division.value} value={division.value}>{division.label}</option>)}
-          </select>
-        </FormField>
-        <FormField label="แผนก" htmlFor="employee-departmentTh">
-          <input id="employee-departmentTh" list="department-options" {...register('departmentTh')} />
-          <datalist id="department-options">
-            {departmentOptions.map((department) => <option key={department.value} value={department.value}>{department.label}</option>)}
-          </datalist>
-        </FormField>
-        <FormField label="ตำแหน่ง" htmlFor="employee-positionTh">
-          <input id="employee-positionTh" {...register('positionTh')} />
-        </FormField>
-        <FormField label="ระดับ" htmlFor="employee-level">
-          <input id="employee-level" {...register('level')} />
-        </FormField>
-        <FormField label="เงินเดือน" htmlFor="employee-salary">
-          <input id="employee-salary" type="number" {...register('salary')} />
-        </FormField>
-        <FormField label="ค่าตอบแทนกรรมการ" htmlFor="employee-directorRemuneration">
-          <input id="employee-directorRemuneration" type="number" min="0" step="0.01" {...register('directorRemuneration')} />
-        </FormField>
-        <FormField
-          label="ภาษีหัก ณ ที่จ่าย (กำหนดเอง)"
-          htmlFor="employee-withholdingTaxOverride"
-          hint="เว้นว่าง = คำนวณอัตโนมัติ"
-        >
-          <input
-            id="employee-withholdingTaxOverride"
-            type="number"
-            min="0"
-            step="0.01"
-            {...register('withholdingTaxOverride')}
-          />
-        </FormField>
-        <FormField label="สถานะ" htmlFor="employee-statusId">
-          <select id="employee-statusId" {...register('statusId')}>
-            {statuses.map((status) => <option key={status.id} value={status.id}>{status.th}</option>)}
-          </select>
-        </FormField>
-        <FormField label="วันที่เริ่มงาน" htmlFor="employee-hireDate">
-          <input id="employee-hireDate" type="date" {...register('hireDate')} />
-        </FormField>
-        <div className={formGridSpan2}>
-          <FormField label="ที่อยู่ปัจจุบัน" htmlFor="employee-address">
-            <textarea id="employee-address" rows="2" {...register('address')} />
+      <SafeForm id="employee-form" onSubmit={handleSubmit(submit)} noValidate>
+        <FormGrid>
+          <FormField label="ชื่อ-นามสกุล" htmlFor="employee-nameTh" error={errors.nameTh?.message} required>
+            <input
+              id="employee-nameTh"
+              {...register('nameTh')}
+              aria-invalid={Boolean(errors.nameTh)}
+              aria-describedby={errors.nameTh ? fieldErrorId('employee-nameTh') : undefined}
+              required
+            />
           </FormField>
-        </div>
-        <FormField label="ผู้ติดต่อฉุกเฉิน" htmlFor="employee-emergencyName">
-          <input id="employee-emergencyName" {...register('emergencyName')} />
-        </FormField>
-        <FormField label="เบอร์ฉุกเฉิน" htmlFor="employee-emergencyPhone">
-          <input id="employee-emergencyPhone" {...register('emergencyPhone')} />
-        </FormField>
-      </FormGrid>
+          <FormField label="Name" htmlFor="employee-nameEn">
+            <input id="employee-nameEn" {...register('nameEn')} />
+          </FormField>
+          <FormField label="ชื่อเล่น" htmlFor="employee-nickName">
+            <input id="employee-nickName" {...register('nickName')} />
+          </FormField>
+          <FormField label="อีเมล" htmlFor="employee-email" error={errors.email?.message} required>
+            <input
+              id="employee-email"
+              type="email"
+              {...register('email')}
+              aria-invalid={Boolean(errors.email)}
+              aria-describedby={errors.email ? fieldErrorId('employee-email') : undefined}
+              required
+            />
+          </FormField>
+          <FormField label="เบอร์โทร" htmlFor="employee-phone" error={errors.phone?.message} required>
+            <input
+              id="employee-phone"
+              {...register('phone')}
+              aria-invalid={Boolean(errors.phone)}
+              aria-describedby={errors.phone ? fieldErrorId('employee-phone') : undefined}
+              required
+            />
+          </FormField>
+          <FormField label="ฝ่าย" htmlFor="employee-divisionId">
+            <select id="employee-divisionId" {...register('divisionId', { onChange: () => setValue('departmentTh', '') })}>
+              {divisionOptions.map((division) => <option key={division.value} value={division.value}>{division.label}</option>)}
+            </select>
+          </FormField>
+          <FormField label="แผนก" htmlFor="employee-departmentTh">
+            <input id="employee-departmentTh" list="department-options" {...register('departmentTh')} />
+            <datalist id="department-options">
+              {departmentOptions.map((department) => <option key={department.value} value={department.value}>{department.label}</option>)}
+            </datalist>
+          </FormField>
+          <FormField label="ตำแหน่ง" htmlFor="employee-positionTh">
+            <input id="employee-positionTh" {...register('positionTh')} />
+          </FormField>
+          <FormField label="ระดับ" htmlFor="employee-level">
+            <input id="employee-level" {...register('level')} />
+          </FormField>
+          <FormField label="เงินเดือน" htmlFor="employee-salary">
+            <input id="employee-salary" type="number" {...register('salary')} />
+          </FormField>
+          <FormField label="ค่าตอบแทนกรรมการ" htmlFor="employee-directorRemuneration">
+            <input id="employee-directorRemuneration" type="number" min="0" step="0.01" {...register('directorRemuneration')} />
+          </FormField>
+          <FormField
+            label="ภาษีหัก ณ ที่จ่าย (กำหนดเอง)"
+            htmlFor="employee-withholdingTaxOverride"
+            hint="เว้นว่าง = คำนวณอัตโนมัติ"
+          >
+            <input
+              id="employee-withholdingTaxOverride"
+              type="number"
+              min="0"
+              step="0.01"
+              {...register('withholdingTaxOverride')}
+            />
+          </FormField>
+          <FormField label="สถานะ" htmlFor="employee-statusId">
+            <select id="employee-statusId" {...register('statusId')}>
+              {statuses.map((status) => <option key={status.id} value={status.id}>{status.th}</option>)}
+            </select>
+          </FormField>
+          <FormField label="วันที่เริ่มงาน" htmlFor="employee-hireDate">
+            <input id="employee-hireDate" type="date" {...register('hireDate')} />
+          </FormField>
+          <div className={formGridSpan2}>
+            <FormField label="ที่อยู่ปัจจุบัน" htmlFor="employee-address">
+              <textarea id="employee-address" rows="2" {...register('address')} />
+            </FormField>
+          </div>
+          <FormField label="ผู้ติดต่อฉุกเฉิน" htmlFor="employee-emergencyName">
+            <input id="employee-emergencyName" {...register('emergencyName')} />
+          </FormField>
+          <FormField label="เบอร์ฉุกเฉิน" htmlFor="employee-emergencyPhone">
+            <input id="employee-emergencyPhone" {...register('emergencyPhone')} />
+          </FormField>
+        </FormGrid>
+      </SafeForm>
     </Modal>
   );
 }

@@ -11,8 +11,10 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
+  addDaysIso,
   attendanceFlagLabels,
   attendanceSourceLabel,
   attendanceStatusLabel,
@@ -26,8 +28,12 @@ import {
 // Reproduces `.filter-bar` for this page's native <form onSubmit> (Enter-to-submit
 // needed); Layout.jsx's FilterBar only renders a <div> — same pattern established in
 // OvertimePage/LeavePage (docs/agent-handoffs/29_tw-convert-overtime-leave.md).
+//
+// `items-end`, not `items-center` — see MyLeaveTab.jsx's identical FILTER_BAR_CLASS
+// for the full explanation. Only reachable for HR/manager (`!isSelfView`), so it
+// never showed on the employee self-view, but it is the same defect and the same fix.
 const FILTER_BAR_CLASS =
-  'flex flex-wrap gap-[10px] items-center bg-surface border border-border rounded-md p-[14px]';
+  'flex flex-wrap gap-[10px] items-end bg-surface border border-border rounded-md p-[14px]';
 
 // Earlier than any punch the scanners have produced (the oldest on record is Nov 2020), so a
 // backfill covers everything without needing to look up where history starts. The backend walks
@@ -45,15 +51,18 @@ function attendanceMode(user) {
   return 'employee';
 }
 
+// How far back the date stepper/picker may browse. Deliberately NOT full history -- backfill
+// computes all of it, but presenting years of never-before-reviewed "late" days on day one would
+// be a personnel problem rather than a feature. Product decision (2026-08): widened from
+// "this month only" to a rolling 3-month window so a Bangkok-morning check on the 1st/2nd of a
+// month can still reach last month's tail end.
+const BROWSABLE_MONTHS_BACK = 3;
+
 /**
  * The date window the page may show.
- *
- * Deliberately capped at the current month. Backfill computes all of history, but presenting years
- * of never-before-reviewed "late" days on day one would be a personnel problem rather than a
- * feature; older months are a later UI change, not a recompute.
  */
 function monthBounds() {
-  return { start: bangkokMonthStartIso(), today: bangkokTodayIso() };
+  return { start: bangkokMonthStartIso(undefined, BROWSABLE_MONTHS_BACK), today: bangkokTodayIso() };
 }
 
 export function AttendancePage({ user, showToast }) {
@@ -65,7 +74,11 @@ export function AttendancePage({ user, showToast }) {
   // always reachable in 'company' mode — the roster it needs (employeeOptions) is already loaded
   // below.
   const canMarkPresent = hasPermission(user.role, 'canMarkAttendance');
-  const { start: monthStart, today } = useMemo(() => monthBounds(), []);
+  // Deliberately not memoized: `monthBounds()` is two Intl.DateTimeFormat calls, cheap enough to
+  // recompute on every render, and memoizing it with an empty dep array froze "today" at mount --
+  // a tab left open past Bangkok midnight would keep clamping the stepper/picker to the previous
+  // day's bounds.
+  const { start: monthStart, today } = monthBounds();
 
   // Employees read their own month at a glance; everyone else answers "who is late today", so
   // they get a single day plus a stepper.
@@ -91,8 +104,13 @@ export function AttendancePage({ user, showToast }) {
   const [devices, setDevices] = useState([]);
   const [importDeviceCode, setImportDeviceCode] = useState('');
 
+  // The self-view fetch is deliberately NOT widened along with the picker's 3-month browsable
+  // window: it has no date control to reach further back with (the whole filter bar is gated on
+  // !isSelfView below), and AttendanceDailyService.MAX_RANGE_DAYS caps any query at <92 days --
+  // a 3-month-back `from` combined with a late-month `today` can exceed that and 400. Kept at the
+  // current month, matching both the copy below ("...ในเดือนนี้") and the API's hard cap.
   const range = isSelfView
-    ? { from: monthStart, to: today }
+    ? { from: bangkokMonthStartIso(), to: today }
     : { from: selectedDate, to: selectedDate };
 
   // Issue #422 B2: onto react-query so this screen participates in the shared cache (an OT
@@ -126,12 +144,23 @@ export function AttendancePage({ user, showToast }) {
   // this one. Worth doing if this page ever talks to a slow/rate-limited backend.
   const loading = daysQuery.isLoading;
 
-  // Adversarial-review fix (P0): same infinite-loop hazard as PayrollPage's identical effect --
-  // `showToast` (useToast()/App.jsx) is a plain, re-created-per-render function; with it in this
-  // effect's deps, calling it re-renders App, which hands a new `showToast` identity back down,
-  // which re-fires this effect for as long as `daysQuery.error` stays non-null. A ref holds the
-  // latest callback without being a dependency, and the effect keys on the error's MESSAGE (a
-  // primitive) instead of the Error object or the callback.
+  // PR #426 (P0, adversarial review) introduced this showToastRef indirection because `showToast`
+  // (useToast()/App.jsx) used to be a plain, re-created-per-render function: with it in this
+  // effect's deps, calling it re-rendered App, which handed back a new `showToast` identity, which
+  // re-fired this effect for as long as `daysQuery.error` stayed non-null.
+  //
+  // The root cause is now fixed at the source -- useToast.js wraps showToast in useCallback([]),
+  // so it has a stable identity everywhere in production, and this ref is no longer load-bearing
+  // there. Kept anyway, deliberately, rather than deleted: this file's own regression test
+  // (AttendancePage.test.jsx, "does not call showToast more than once ... driven by an App-shaped
+  // (unstable) showToast") renders through a harness whose counting wrapper AROUND showToast is
+  // itself a fresh closure every render of that harness, independent of useToast.js's fix --
+  // removing this ref would put that still-locally-unstable wrapper directly in this effect's
+  // deps and fail that test, for a reason that has nothing to do with the bug this ref was
+  // written to fix. Still keyed on the error's MESSAGE (a primitive), not the Error object:
+  // `daysQuery` polls every 60s (refetchInterval above), and a repeated failure hands back a new
+  // Error instance each attempt even when the text is identical, which would otherwise re-toast
+  // the same message every poll.
   const showToastRef = useRef(showToast);
   useEffect(() => {
     showToastRef.current = showToast;
@@ -228,10 +257,12 @@ export function AttendancePage({ user, showToast }) {
   }, [expandedKey, punchesByKey, rowKey, showToast]);
 
   function stepDay(deltaDays) {
-    const next = new Date(`${selectedDate}T00:00:00+07:00`);
-    next.setDate(next.getDate() + deltaDays);
-    const iso = next.toISOString().slice(0, 10);
-    // Clamp to the current month in both directions — see monthBounds().
+    // Pure YYYY-MM-DD calendar arithmetic -- NOT `new Date(...).toISOString()`. That round trip
+    // reads the UTC calendar day off a Bangkok-midnight instant, which is always one day behind
+    // the Bangkok date intended (Bangkok midnight is 17:00 UTC the previous day), netting a 2-day
+    // back-step and a stuck forward-step. See addDaysIso's comment in utils/format.js.
+    const iso = addDaysIso(selectedDate, deltaDays);
+    // Clamp to the browsable window in both directions — see monthBounds().
     if (iso < monthStart || iso > today) return;
     setSelectedDate(iso);
   }
@@ -465,7 +496,7 @@ export function AttendancePage({ user, showToast }) {
             </span>
           </button>
           {importOpen ? (
-            <form className="attendance-import-panel border-t border-border" onSubmit={importFile}>
+            <SafeForm className="attendance-import-panel border-t border-border" onSubmit={importFile}>
               <label className="attendance-import-device">
                 เครื่องสแกน / สถานที่
                 <select
@@ -504,7 +535,7 @@ export function AttendancePage({ user, showToast }) {
                   {lastImport.skipped_punch_count} · ผิดพลาด {lastImport.error_count}
                 </span>
               ) : null}
-            </form>
+            </SafeForm>
           ) : null}
           {importOpen ? (
             <div className="flex flex-wrap items-center gap-3 border-t border-border p-[14px]">
@@ -704,17 +735,17 @@ function MarkPresentModal({ employees, defaultDate, minDate, maxDate, submitting
       onClose={submitting ? undefined : onClose}
       footer={(
         <>
-          <button type="button" className="secondary-button" onClick={onClose} disabled={submitting}>
+          <Button type="button" variant="secondary" onClick={onClose} disabled={submitting}>
             ยกเลิก
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="primary-button"
+            variant="primary"
             disabled={submitting}
             onClick={() => onSubmit({ date, employeeIds: [...selected], notes: notes.trim() || undefined })}
           >
             {submitting ? 'กำลังบันทึก…' : `บันทึก (${selected.size} คน)`}
-          </button>
+          </Button>
         </>
       )}
     >

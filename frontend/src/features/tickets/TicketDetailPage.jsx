@@ -4,13 +4,16 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
+import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { Tabs, TabPanel } from '../../components/common/Tabs.jsx';
+import { cn } from '../../utils/cn.js';
 import {
   dealStageLabel,
   formatMoney,
@@ -354,11 +357,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   // ── Slice F: ราคาตั้ง on the deal's item rows — same FX/markup wiring as
   // TicketCreateModal.jsx's own estimate inputs (see that file's comment for the full
-  // rationale). Both fetches degrade silently — retry: false, no showToast from an effect (this
-  // repo's useToast has an unstable identity, see CLAUDE.md) — and estimateReady requires BOTH to
-  // have actually succeeded with a usable multiplier. Never default markupMultiplier to 1: an
-  // un-marked-up supplier cost displayed as ราคาตั้ง is exactly the number
-  // dealEstimatePricing.js's header comment says must never appear on screen.
+  // rationale). Both fetches degrade silently by design — retry: false, no error toast — because
+  // this is optional pricing-estimate enrichment, not critical page data (same non-critical
+  // pattern as attachmentsQuery below, which also stays silent on failure); estimateReady requires
+  // BOTH to have actually succeeded with a usable multiplier. This is unrelated to useToast's
+  // (now-fixed, see useToast.js) identity: the ticketQuery effect a little further down this same
+  // file does call showToast from an effect, deliberately -- that failure IS critical page data.
+  // Never default markupMultiplier to 1: an un-marked-up supplier cost displayed as ราคาตั้ง is
+  // exactly the number dealEstimatePricing.js's header comment says must never appear on screen.
   const fxRatesQuery = useQuery({
     queryKey: queryKeys.fxRates(),
     queryFn: () => api.fxRates.list().then((res) => res.fxRates ?? []),
@@ -654,33 +660,38 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   if (loading) {
     return (
       <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]" aria-busy="true" aria-label="กำลังโหลดข้อมูลดีล">
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between' }}>
-          <div style={{ flex: 1 }}>
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1">
             <Skeleton width={80} height={28} radius="var(--radius-md)" className="skeleton" />
-            <div style={{ marginTop: 12 }}>
+            <div className="mt-3">
               <Skeleton width="40%" height={22} />
             </div>
-            <div style={{ marginTop: 8 }}>
+            <div className="mt-2">
               <Skeleton width={220} height={16} />
             </div>
           </div>
         </div>
-        <section className="panel">
-          <div className="panel-header">
+        <Panel>
+          <Panel.Header>
             <Skeleton width="30%" height={16} />
-          </div>
-          <div style={{ padding: '14px 18px' }}>
+          </Panel.Header>
+          <div className="p-[14px_18px]">
             <SkeletonText lines={4} />
           </div>
-        </section>
-        <section className="table-panel">
-          <div className="panel-header">
+        </Panel>
+        {/* bordered/px-5 py-4 (vs. the legacy 16px-inline/0-vertical .table-panel >
+            .panel-header) is the same small, deliberate shift the CommissionPage
+            port (f7c2cace) already accepted for this exact class of header —
+            Panel.Header's own doc comment calls the old borderless header a
+            defect fixed by construction. */}
+        <Panel flush>
+          <Panel.Header bordered>
             <Skeleton width="30%" height={16} />
-          </div>
-          <div style={{ padding: '14px 18px' }}>
+          </Panel.Header>
+          <div className="p-[14px_18px]">
             <SkeletonText lines={5} />
           </div>
-        </section>
+        </Panel>
       </div>
     );
   }
@@ -689,10 +700,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     return (
       <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
         <EmptyState icon="fileText" title="ไม่พบดีล" description="กลับไปหน้ารายการ" />
-        <button type="button" className="secondary-button" onClick={onBack}>
+        <Button type="button" variant="secondary" onClick={onBack}>
           <Icon name="chevronLeft" />
           กลับ
-        </button>
+        </Button>
       </div>
     );
   }
@@ -884,28 +895,28 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // three have their own primary buttons, so this page's own primaryAction
   // no longer drives that chain.
   const primaryAction = can.confirmCustomer ? (
-    <button type="button" className="primary-button" disabled={actionLoading} data-testid="ticket-detail-confirm-customer"
+    <Button type="button" variant="primary" disabled={actionLoading} data-testid="ticket-detail-confirm-customer"
       onClick={() => doAction(() => api.tickets.confirmCustomer(ticketId), 'ลูกค้ายืนยันแล้ว')}>
       ลูกค้ายืนยัน
-    </button>
+    </Button>
   ) : can.confirmFinalPayment ? (
-    <button type="button" className="primary-button" disabled={actionLoading} data-testid="ticket-detail-confirm-final"
+    <Button type="button" variant="primary" disabled={actionLoading} data-testid="ticket-detail-confirm-final"
       onClick={() => setConfirm({ kind: 'finalPayment' })}>
       ยืนยันชำระครบ (Final Payment)
-    </button>
+    </Button>
   ) : can.confirmClose ? (
-    <button type="button" className="primary-button" disabled={actionLoading} data-testid="ticket-detail-confirm-close"
+    <Button type="button" variant="primary" disabled={actionLoading} data-testid="ticket-detail-confirm-close"
       onClick={() => doAction(() => api.tickets.confirmCloseReady(ticketId),
         'ยืนยันพร้อมปิดงานแล้ว — รอ CEO ตรวจสอบ')}>
       <Icon name="check" size={14} />
       ยืนยันพร้อมปิดงาน
-    </button>
+    </Button>
   ) : can.verifyClose ? (
-    <button type="button" className="primary-button" disabled={actionLoading} data-testid="ticket-detail-verify-close"
+    <Button type="button" variant="primary" disabled={actionLoading} data-testid="ticket-detail-verify-close"
       onClick={() => doAction(() => api.tickets.verifyClose(ticketId), 'ตรวจสอบและปิดงานแล้ว')}>
       <Icon name="check" size={14} />
       ตรวจสอบและปิดงาน
-    </button>
+    </Button>
   ) : null;
 
   // Sticky action bar (ticket-detail IA rebuild Phase 1). `primaryAction`
@@ -958,10 +969,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     // resolver-derived), so they are not folded into this generic id.
     if (to && to !== `/tickets/${ticketId}`) {
       stickyPrimaryAction = (
-        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => navigate(to)}>
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => navigate(to)}>
           {workStateAction.label}
           <Icon name="chevronRight" size={14} />
-        </button>
+        </Button>
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'create_pcr') {
@@ -972,10 +983,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       // then calls the ref (see this component's own doc comment on
       // `runOnTab`).
       stickyPrimaryAction = (
-        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('items', () => pricingRequestPanelRef.current?.openCreate())}>
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('items', () => pricingRequestPanelRef.current?.openCreate())}>
           <Icon name="plus" size={14} />
           {workStateAction.label}
-        </button>
+        </Button>
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'issue_quotation') {
@@ -983,27 +994,27 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       // renamed the old "ใบเสนอราคา" tab id from `quotations` to `documents`
       // — same panel, same content, same gate).
       stickyPrimaryAction = (
-        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('documents', () => dealQuotationPanelRef.current?.openIssueQuotation())}>
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('documents', () => dealQuotationPanelRef.current?.openIssueQuotation())}>
           {workStateAction.label}
-        </button>
+        </Button>
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'confirm_order') {
       // DealQuotationPanel now lives inside the "เอกสาร" tab (see comment above).
       stickyPrimaryAction = (
-        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('documents', () => dealQuotationPanelRef.current?.openConfirmOrder())}>
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('documents', () => dealQuotationPanelRef.current?.openConfirmOrder())}>
           {workStateAction.label}
-        </button>
+        </Button>
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (jumpId) {
       // Every IN_PAGE_JUMP_TARGET id now lives inside a tab — JUMP_TARGET_TAB
       // names which one, so runOnTab can switch there before scrolling.
       stickyPrimaryAction = (
-        <button type="button" className="primary-button" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab(JUMP_TARGET_TAB[jumpId] ?? activeTab, () => scrollToSection(jumpId))}>
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab(JUMP_TARGET_TAB[jumpId] ?? activeTab, () => scrollToSection(jumpId))}>
           {workStateAction.label}
           <Icon name="chevronRight" size={14} />
-        </button>
+        </Button>
       );
       stickyPrimaryLabel = workStateAction.label;
     }
@@ -1380,20 +1391,20 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 Import Request button moved to DealFulfilmentPanel (Phase 3
                 Slice S4). */}
             {sections.quotation && latestQuotation && (
-              <button type="button" className="secondary-button"
+              <Button type="button" variant="secondary"
                 disabled={downloadingQuotationKey === `${latestQuotation.id}-pdf`}
                 onClick={() => handleDownloadQuotation(latestQuotation.id, latestQuotation.number, 'pdf')}>
                 <Icon name="fileText" size={14} />
                 {downloadingQuotationKey === `${latestQuotation.id}-pdf`
                   ? 'กำลังดาวน์โหลด…'
                   : `ใบเสนอราคา ${latestQuotation.number} (PDF)`}
-              </button>
+              </Button>
             )}
             {can.downloadRemainingInvoice && (
-              <button type="button" className="secondary-button" disabled={downloadingInvoice}
+              <Button type="button" variant="secondary" disabled={downloadingInvoice}
                 onClick={handleDownloadRemainingInvoice}>
                 {downloadingInvoice ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ'}
-              </button>
+              </Button>
             )}
           </>
         ) : null}
@@ -1472,31 +1483,35 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       </TabPanel>
 
       <TabPanel id="items" idPrefix="ticket-detail" active={visibleActiveTab === 'items'}>
-          <section className="table-panel">
-            <div className="panel-header" style={{ padding: '14px 18px', borderBottom: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2>รายการสินค้า ({editMode ? editDraft.length : items.length} รายการ)</h2>
-              {can.editItems && !editMode && (
-                <button type="button" className="secondary-button" disabled={actionLoading}
-                  onClick={() => {
-                    setEditDraft(items.map((item) => ({ ...item })));
-                    setEditNote('');
-                    setEditMode(true);
-                    setFieldErrorsForPrefix('editItems.qty.', {});
-                  }}>
-                  <Icon name="pencil" size={14} />
-                  แก้ไขรายการสินค้า
-                </button>
-              )}
-            </div>
-
+          {/* flush + title/actions picks up Panel's standard bordered-header inset
+              (20px/16px, border-border-subtle) in place of the old inline 14px/18px
+              padding and var(--color-border) rule — the same small, disclosed shift
+              the CommissionPage port (f7c2cace) already made for this exact
+              "table-topped panel with its own inline header padding" case. */}
+          <Panel
+            flush
+            title={`รายการสินค้า (${editMode ? editDraft.length : items.length} รายการ)`}
+            actions={can.editItems && !editMode ? (
+              <Button type="button" variant="secondary" disabled={actionLoading}
+                onClick={() => {
+                  setEditDraft(items.map((item) => ({ ...item })));
+                  setEditNote('');
+                  setEditMode(true);
+                  setFieldErrorsForPrefix('editItems.qty.', {});
+                }}>
+                <Icon name="pencil" size={14} />
+                แก้ไขรายการสินค้า
+              </Button>
+            ) : null}
+          >
             {editMode ? (
-              <div style={{ padding: '14px 18px' }}>
+              <div className="p-[14px_18px]">
                 {editDraft.map((item, index) => (
-                  <div key={index} style={{ border: '1px solid var(--color-border-subtle)', borderRadius: 8, padding: '12px 14px', marginBottom: 10, background: 'var(--color-surface-muted)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-muted)' }}>รายการที่ {index + 1}</span>
+                  <div key={index} className="mb-2.5 rounded-md border border-border-subtle bg-surface-muted p-[12px_14px]">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-xs font-bold text-text-muted">รายการที่ {index + 1}</span>
                       {editDraft.length > 1 && (
-                        <button type="button" className="icon-button" style={{ color: 'var(--color-danger)' }} aria-label={`ลบรายการที่ ${index + 1}`}
+                        <Button type="button" variant="icon" className="text-danger" aria-label={`ลบรายการที่ ${index + 1}`}
                           onClick={() => {
                             setEditDraft((d) => d.filter((_, i) => i !== index));
                             // Removing a row shifts every later row's index down by
@@ -1518,10 +1533,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                             });
                           }}>
                           <Icon name="close" size={14} />
-                        </button>
+                        </Button>
                       )}
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <div className="grid grid-cols-2 gap-2">
                       {[
                         { key: 'brand', label: 'ชื่อยี่ห้อ', placeholder: 'เช่น SCG, Cotto' },
                         { key: 'model', label: 'ชื่อรุ่น', placeholder: 'ชื่อรุ่น' },
@@ -1530,8 +1545,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                         { key: 'size', label: 'ขนาด', placeholder: 'เช่น 60x60 ซม.' },
                         { key: 'factory', label: 'โรงงาน', placeholder: 'เช่น SCG Ceramics' },
                       ].map(({ key, label, placeholder }) => (
-                        <label key={key} style={{ margin: 0 }}>
-                          <span style={{ fontSize: 12 }}>{label}</span>
+                        <label key={key} className="m-0">
+                          <span className="text-xs">{label}</span>
                           <input value={item[key] || ''} placeholder={placeholder}
                             onChange={(e) => setEditDraft((d) => d.map((r, i) => {
                               if (i !== index) return r;
@@ -1548,11 +1563,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                         </label>
                       ))}
                       {/* Unit basis toggle */}
-                      <div style={{ margin: 0, gridColumn: '1 / -1' }}>
-                        <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>หน่วยที่ใช้สั่ง</span>
-                        <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <div className="col-span-full m-0">
+                        <span className="mb-1 block text-xs">หน่วยที่ใช้สั่ง</span>
+                        <div className="flex flex-wrap items-center gap-4">
                           {[{ value: 'PIECE', label: 'แผ่น' }, { value: 'SQM', label: 'ตร.ม.' }].map((opt) => (
-                            <label key={opt.value} style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer', fontSize: 13 }}>
+                            <label key={opt.value} className="flex cursor-pointer items-center gap-1.5 text-sm">
                               <input type="radio" name={`editUnitBasis-${index}`} value={opt.value}
                                 checked={(item.unitBasis || 'PIECE') === opt.value}
                                 onChange={() => setEditDraft((d) => d.map((r, ri) => {
@@ -1564,12 +1579,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                                   }
                                   return u;
                                 }))}
-                                style={{ width: 16, height: 16, accentColor: 'var(--color-info-dot)', cursor: 'pointer' }} />
+                                className="h-4 w-4 cursor-pointer accent-info-dot" />
                               <strong>{opt.label}</strong>
                             </label>
                           ))}
                           {item.sqmPerPiece && (
-                            <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>· 1 แผ่น = {item.sqmPerPiece} ตร.ม.</span>
+                            <span className="text-2xs text-text-muted">· 1 แผ่น = {item.sqmPerPiece} ตร.ม.</span>
                           )}
                         </div>
                       </div>
@@ -1577,8 +1592,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                       {/* Qty inputs */}
                       {(item.unitBasis || 'PIECE') === 'PIECE' ? (
                         <>
-                          <label style={{ margin: 0 }}>
-                            <span style={{ fontSize: 12 }}>จำนวน (แผ่น)</span>
+                          <label className="m-0">
+                            <span className="text-xs">จำนวน (แผ่น)</span>
                             <input type="number" value={item.qty ?? ''} step="1"
                               id={`edit-item-qty-${index}`}
                               ref={(el) => { fieldRefs.current[`editItems.qty.${index}`] = el; }}
@@ -1595,22 +1610,22 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                               aria-describedby={fieldErrors[`editItems.qty.${index}`] ? fieldErrorId(`edit-item-qty-${index}`) : undefined}
                             />
                             {fieldErrors[`editItems.qty.${index}`] ? (
-                              <p id={fieldErrorId(`edit-item-qty-${index}`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                              <p id={fieldErrorId(`edit-item-qty-${index}`)} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">
                                 {fieldErrors[`editItems.qty.${index}`]}
                               </p>
                             ) : null}
                           </label>
-                          <div style={{ margin: 0 }}>
-                            <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>พื้นที่รวม (ตร.ม.)</span>
-                            <div style={{ padding: '7px 10px', border: '1px solid var(--color-border-subtle)', borderRadius: 6, background: 'var(--color-surface-muted)', fontSize: 13, color: item.qtySqm ? 'var(--color-icon-muted)' : 'var(--color-text-muted)' }}>
+                          <div className="m-0">
+                            <span className="mb-1 block text-xs">พื้นที่รวม (ตร.ม.)</span>
+                            <div className={cn('rounded-[6px] border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm', item.qtySqm ? 'text-icon-muted' : 'text-text-muted')}>
                               {item.qtySqm ? `${Number(item.qtySqm).toFixed(3)} ตร.ม.` : '—'}
                             </div>
                           </div>
                         </>
                       ) : (
                         <>
-                          <label style={{ margin: 0 }}>
-                            <span style={{ fontSize: 12 }}>พื้นที่ (ตร.ม.)</span>
+                          <label className="m-0">
+                            <span className="text-xs">พื้นที่ (ตร.ม.)</span>
                             {/* Governs qty when this row is in SQM mode (qty is
                                 derived from qtySqm × sqmPerPiece below) — so the
                                 per-row qty error, if any, attaches here rather
@@ -1631,22 +1646,22 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                               aria-describedby={fieldErrors[`editItems.qty.${index}`] ? fieldErrorId(`edit-item-qtysqm-${index}`) : undefined}
                             />
                             {fieldErrors[`editItems.qty.${index}`] ? (
-                              <p id={fieldErrorId(`edit-item-qtysqm-${index}`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                              <p id={fieldErrorId(`edit-item-qtysqm-${index}`)} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">
                                 {fieldErrors[`editItems.qty.${index}`]}
                               </p>
                             ) : null}
                           </label>
-                          <div style={{ margin: 0 }}>
-                            <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>จำนวน (แผ่น)</span>
-                            <div style={{ padding: '7px 10px', border: '1px solid var(--color-border-subtle)', borderRadius: 6, background: 'var(--color-surface-muted)', fontSize: 13, color: item.qty ? 'var(--color-icon-muted)' : 'var(--color-text-muted)' }}>
+                          <div className="m-0">
+                            <span className="mb-1 block text-xs">จำนวน (แผ่น)</span>
+                            <div className={cn('rounded-[6px] border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm', item.qty ? 'text-icon-muted' : 'text-text-muted')}>
                               {item.qty ? `${item.qty} แผ่น` : '—'}
                             </div>
                           </div>
                         </>
                       )}
                       {ROLE_PERMISSIONS.canProposePrices.includes(role) && (
-                        <label style={{ margin: 0, gridColumn: '1 / -1' }}>
-                          <span style={{ fontSize: 12 }}>ราคาที่เสนอ (บาท)</span>
+                        <label className="col-span-full m-0">
+                          <span className="text-xs">ราคาที่เสนอ (บาท)</span>
                           <input type="number" min="0" step="0.01"
                             value={item.proposedPrice ?? ''}
                             placeholder="ราคา/หน่วย"
@@ -1656,17 +1671,17 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                     </div>
                   </div>
                 ))}
-                <button type="button" className="secondary-button"
+                <Button type="button" variant="secondary"
                   onClick={() => setEditDraft((d) => [...d, { brand: '', model: '', color: '', texture: '', size: '', qty: 1, proposedPrice: null }])}
-                  style={{ marginBottom: 12 }}>
+                  className="mb-3">
                   <Icon name="plus" size={14} /> เพิ่มรายการ
-                </button>
-                <label style={{ fontSize: 13, display: 'block', marginBottom: 10 }}>
+                </Button>
+                <label className="mb-2.5 block text-sm">
                   หมายเหตุการแก้ไข
-                  <input value={editNote} onChange={(e) => setEditNote(e.target.value)} placeholder="ระบุสาเหตุที่แก้ไข (ถ้ามี)" style={{ marginTop: 4 }} />
+                  <input value={editNote} onChange={(e) => setEditNote(e.target.value)} placeholder="ระบุสาเหตุที่แก้ไข (ถ้ามี)" className="mt-1" />
                 </label>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button type="button" className="primary-button" disabled={actionLoading}
+                <div className="flex gap-2">
+                  <Button type="button" variant="primary" disabled={actionLoading}
                     onClick={() => {
                       // UX-03 (slice 5b): this used to be one toast covering every
                       // row ("กรุณากรอกจำนวนสินค้าให้ครบทุกรายการ") — the exact
@@ -1706,11 +1721,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                       }), 'บันทึกการแก้ไขแล้ว');
                     }}>
                     บันทึกการแก้ไข
-                  </button>
-                  <button type="button" className="secondary-button" disabled={actionLoading}
+                  </Button>
+                  <Button type="button" variant="secondary" disabled={actionLoading}
                     onClick={() => { setEditMode(false); setEditDraft([]); setEditNote(''); setFieldErrorsForPrefix('editItems.qty.', {}); }}>
                     ยกเลิก
-                  </button>
+                  </Button>
                 </div>
               </div>
             ) : (
@@ -1741,52 +1756,52 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                   <div key={item.id ?? i} className="ticket-items-table data-row" style={{ gridTemplateColumns: itemsGridCols }}>
                     <span data-label="ยี่ห้อ / รุ่น">
                       <strong>{item.brand}</strong>
-                      {item.model && <small style={{ color: 'var(--color-text-muted)' }}>{item.model}</small>}
-                      {item.factory && <small style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>{item.factory}</small>}
+                      {item.model && <small className="text-text-muted">{item.model}</small>}
+                      {item.factory && <small className="text-2xs text-text-muted">{item.factory}</small>}
                     </span>
-                    <span data-label="สี / เนื้อผิว" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <span data-label="สี / เนื้อผิว" className="flex flex-col gap-0.5">
                       {item.color && <span>{item.color}</span>}
-                      {item.texture && <small style={{ color: 'var(--color-text-muted)' }}>{item.texture}</small>}
-                      {item.size && <small style={{ color: 'var(--color-text-muted)' }}>{item.size}</small>}
+                      {item.texture && <small className="text-text-muted">{item.texture}</small>}
+                      {item.size && <small className="text-text-muted">{item.size}</small>}
                     </span>
                     <span data-label="จำนวน">
                       {item.unitBasis === 'SQM'
-                        ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small style={{ display: 'block', color: 'var(--color-text-muted)' }}>{item.qty} แผ่น</small></>
-                        : <>{item.qty} แผ่น{item.qtySqm != null && <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
+                        ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small className="block text-text-muted">{item.qty} แผ่น</small></>
+                        : <>{item.qty} แผ่น{item.qtySqm != null && <small className="block text-text-muted">{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
                       }
                     </span>
-                    <span data-label="ราคาตั้ง" style={{ fontSize: 12 }}>
+                    <span data-label="ราคาตั้ง" className="text-xs">
                       {!estimateReady ? (
-                        <span style={{ color: 'var(--color-text-muted)' }}>ยังคำนวณไม่ได้ (กำลังโหลดอัตราแลกเปลี่ยน/ตัวคูณ)</span>
+                        <span className="text-text-muted">ยังคำนวณไม่ได้ (กำลังโหลดอัตราแลกเปลี่ยน/ตัวคูณ)</span>
                       ) : (() => {
                         const lineEstimate = computeItemEstimateThb(item, estimateContext);
                         return lineEstimate.ok ? (
                           <span>
                             <strong>{formatThb(lineEstimate.unitThb)}</strong>
-                            <small style={{ display: 'block', color: 'var(--color-text-muted)' }}>รวม {formatThb(lineEstimate.total)} บาท</small>
+                            <small className="block text-text-muted">รวม {formatThb(lineEstimate.total)} บาท</small>
                           </span>
                         ) : (
-                          <span style={{ color: 'var(--color-text-muted)' }}>ยังคำนวณไม่ได้ ({estimateReasonLabel(lineEstimate.reason)})</span>
+                          <span className="text-text-muted">ยังคำนวณไม่ได้ ({estimateReasonLabel(lineEstimate.reason)})</span>
                         );
                       })()}
                     </span>
                     {showCalcBreakdown ? (
                       <>
-                        <span data-label="ราคาโรงงาน" style={{ fontSize: 12 }}>
+                        <span data-label="ราคาโรงงาน" className="text-xs">
                           {item.rawPrice != null
-                            ? <><strong>{Number(item.rawPrice).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</strong><small style={{ color: 'var(--color-text-muted)' }}> {item.rawCurrency}/{item.rawUnit === 'sqm' ? 'ตร.ม.' : 'แผ่น'}</small></>
-                            : <span style={{ color: 'var(--color-text-muted)' }}>-</span>}
-                          {item.calcConfigVersion && <small style={{ display: 'block', color: 'var(--color-text-muted)', fontSize: 10 }}>สูตรราคาเวอร์ชัน {item.calcConfigVersion}</small>}
+                            ? <><strong>{Number(item.rawPrice).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</strong><small className="text-text-muted"> {item.rawCurrency}/{item.rawUnit === 'sqm' ? 'ตร.ม.' : 'แผ่น'}</small></>
+                            : <span className="text-text-muted">-</span>}
+                          {item.calcConfigVersion && <small className="block text-[10px] text-text-muted">สูตรราคาเวอร์ชัน {item.calcConfigVersion}</small>}
                         </span>
-                        <code data-label="ต้นทุน (THB/ชิ้น)" style={{ color: 'var(--color-info)' }}>{item.calcedCost != null ? formatMoney(item.calcedCost) : '—'}</code>
+                        <code data-label="ต้นทุน (THB/ชิ้น)" className="text-info">{item.calcedCost != null ? formatMoney(item.calcedCost) : '—'}</code>
                         <span data-label="ราคาขาย (THB/ชิ้น)">
-                          <code style={{ color: item.manualPrice != null ? 'var(--color-override)' : 'var(--color-success)', fontWeight: 700 }}>
+                          <code className={cn('font-bold', item.manualPrice != null ? 'text-override' : 'text-success')}>
                             {item.manualPrice != null ? formatMoney(item.manualPrice) : item.calcedPrice != null ? formatMoney(item.calcedPrice) : '—'}
                           </code>
                           {/* CEO manual-override entry (D10) was ticket-native and retired along
                               with calculatePrices/approve — this is now a read-only readout of
                               whatever the 3 stranded legacy tickets already carry. */}
-                          {item.manualPrice != null && <small style={{ display: 'block', color: 'var(--color-override)', fontSize: 10 }}>override</small>}
+                          {item.manualPrice != null && <small className="block text-[10px] text-override">override</small>}
                         </span>
                       </>
                     ) : (
@@ -1805,13 +1820,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 the old (now-dissolved) การดำเนินการอื่น ๆ grab-bag below the
                 table. */}
             {st === 'draft' && isOwner && items.length === 0 && (
-              <div style={{ padding: '0 18px 16px' }}>
+              <div className="p-[0_18px_16px]">
                 <span className="rounded-lg border border-border bg-surface-subtle px-3 py-2 text-xs text-text-muted">
                   ดีลนี้ยังไม่มีรายการสินค้า — กด “แก้ไขรายการสินค้า” เพื่อเพิ่มก่อนส่งขอราคา
                 </span>
               </div>
             )}
-          </section>
+          </Panel>
 
           {/* id: the sticky bar's CREATE_PCR jump target (see
               IN_PAGE_JUMP_TARGET above). Slice C2b: PricingRequestPanel
@@ -1939,15 +1954,15 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               ticketDetailTabs.js's own comment on this tab's gate), so the
               action can never end up stranded behind a hidden `money` tab. */}
           {can.revokeCloseConfirm && (
-            <section className="panel" style={{ background: 'var(--color-surface-muted)' }}>
-              <div style={{ padding: '12px 18px', display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-                <button type="button" className="secondary-button" disabled={actionLoading}
+            <Panel className="bg-surface-muted">
+              <div className="flex flex-wrap gap-2.5 p-[12px_18px]">
+                <Button type="button" variant="secondary" disabled={actionLoading}
                   onClick={() => doAction(() => api.tickets.revokeCloseConfirmation(ticketId, {}),
                     'ยกเลิกการยืนยันปิดงานแล้ว')}>
                   ยกเลิกการยืนยันปิดงาน
-                </button>
+                </Button>
               </div>
-            </section>
+            </Panel>
           )}
       </TabPanel>
 
@@ -2061,26 +2076,26 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           <p className="mt-1 text-xs text-danger-dark">การดำเนินการเหล่านี้ส่งผลต่อทั้งดีล และบางรายการย้อนกลับไม่ได้ — ใช้เมื่อจำเป็นเท่านั้น</p>
           <div className="mt-3 flex flex-wrap gap-2">
             {canLostDeal ? (
-              <button
+              // Button's own `danger` variant (bg-surface text-danger border-danger-border) is
+              // byte-identical to this hand-rolled secondary+override, so it replaces both here.
+              <Button
                 type="button"
-                className="secondary-button"
-                style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}
+                variant="danger"
                 disabled={actionLoading}
                 onClick={() => dealStagePanelRef.current?.openMarkLost()}
               >
                 เสียงาน
-              </button>
+              </Button>
             ) : null}
             {can.cancel ? (
-              <button
+              <Button
                 type="button"
-                className="secondary-button"
-                style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}
+                variant="danger"
                 disabled={actionLoading}
                 onClick={() => setConfirm({ kind: 'cancelTicket' })}
               >
                 ยกเลิก
-              </button>
+              </Button>
             ) : null}
           </div>
         </section>
@@ -2093,15 +2108,15 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           onClose={closePaymentModal}
           footer={(
             <>
-              <button type="button" className="secondary-button" onClick={closePaymentModal}>ยกเลิก</button>
-              <button type="button" className="primary-button" disabled={actionLoading} onClick={handleRecordPayment}>
+              <Button type="button" variant="secondary" onClick={closePaymentModal}>ยกเลิก</Button>
+              <Button type="button" variant="primary" disabled={actionLoading} onClick={handleRecordPayment}>
                 บันทึก
-              </button>
+              </Button>
             </>
           )}
         >
-          <div style={{ display: 'grid', gap: 12 }}>
-            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+          <div className="grid gap-3">
+            <label className="grid gap-1.5 text-sm font-semibold">
               ประเภท
               <select value={paymentDraft.kind} onChange={(e) => setPaymentDraft((draft) => ({ ...draft, kind: e.target.value }))}>
                 <option value="DEPOSIT">มัดจำ</option>
@@ -2109,8 +2124,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 <option value="ADJUSTMENT">ปรับปรุงยอด/คืนเงิน</option>
               </select>
             </label>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
-              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-2.5">
+              <label className="grid gap-1.5 text-sm font-semibold">
                 จำนวนเงิน
                 <input type="number" min="0" step="0.01"
                   id="payment-amount"
@@ -2124,28 +2139,28 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                   aria-describedby={fieldErrors['payment.amount'] ? fieldErrorId('payment-amount') : undefined}
                 />
                 {fieldErrors['payment.amount'] ? (
-                  <p id={fieldErrorId('payment-amount')} role="alert" style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                  <p id={fieldErrorId('payment-amount')} role="alert" className="m-0 text-2xs font-bold text-danger">
                     {fieldErrors['payment.amount']}
                   </p>
                 ) : null}
               </label>
-              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              <label className="grid gap-1.5 text-sm font-semibold">
                 วันที่รับเงิน
                 <input type="date" value={paymentDraft.receivedAt}
                   onChange={(e) => setPaymentDraft((draft) => ({ ...draft, receivedAt: e.target.value }))} />
               </label>
             </div>
-            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+            <label className="grid gap-1.5 text-sm font-semibold">
               เลขอ้างอิง
               <input value={paymentDraft.receiptRef}
                 onChange={(e) => setPaymentDraft((draft) => ({ ...draft, receiptRef: e.target.value }))} />
             </label>
-            <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+            <label className="grid gap-1.5 text-sm font-semibold">
               หมายเหตุ
               <textarea rows={3} value={paymentDraft.note}
                 onChange={(e) => setPaymentDraft((draft) => ({ ...draft, note: e.target.value }))} />
             </label>
-            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
+            <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={paymentDraft.allowOverpayment}
                 onChange={(e) => setPaymentDraft((draft) => ({ ...draft, allowOverpayment: e.target.checked }))} />
               ยืนยันรับชำระเกินยอด
@@ -2160,38 +2175,38 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           onClose={() => setBillingModal(false)}
           footer={(
             <>
-              <button type="button" className="secondary-button" onClick={() => setBillingModal(false)}>ยกเลิก</button>
-              <button type="button" className="primary-button" disabled={actionLoading} onClick={handleSetBilling}>
+              <Button type="button" variant="secondary" onClick={() => setBillingModal(false)}>ยกเลิก</Button>
+              <Button type="button" variant="primary" disabled={actionLoading} onClick={handleSetBilling}>
                 บันทึก
-              </button>
+              </Button>
             </>
           )}
         >
-          <div style={{ display: 'grid', gap: 12 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
-              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+          <div className="grid gap-3">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2.5">
+              <label className="grid gap-1.5 text-sm font-semibold">
                 วันที่วางบิล
                 <input type="date" value={billingDraft.billingDate}
                   onChange={(e) => setBillingDraft((draft) => ({ ...draft, billingDate: e.target.value }))} />
               </label>
-              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              <label className="grid gap-1.5 text-sm font-semibold">
                 วันครบกำหนด
                 <input type="date" value={billingDraft.dueDate}
                   onChange={(e) => setBillingDraft((draft) => ({ ...draft, dueDate: e.target.value }))} />
               </label>
-              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              <label className="grid gap-1.5 text-sm font-semibold">
                 เครดิต (วัน)
                 <input type="number" min="0" value={billingDraft.creditTermDays}
                   onChange={(e) => setBillingDraft((draft) => ({ ...draft, creditTermDays: e.target.value }))} />
               </label>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
-              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2.5">
+              <label className="grid gap-1.5 text-sm font-semibold">
                 ติดตามล่าสุด
                 <input type="date" value={billingDraft.lastFollowUpAt}
                   onChange={(e) => setBillingDraft((draft) => ({ ...draft, lastFollowUpAt: e.target.value }))} />
               </label>
-              <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 600 }}>
+              <label className="grid gap-1.5 text-sm font-semibold">
                 ติดตามครั้งถัดไป
                 <input type="date" value={billingDraft.nextFollowUpAt}
                   onChange={(e) => setBillingDraft((draft) => ({ ...draft, nextFollowUpAt: e.target.value }))} />
@@ -2215,15 +2230,15 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           onClose={() => { setShowReviseForm(false); setReviseReason(''); clearFieldError('revise.reason'); }}
           footer={(
             <>
-              <button type="button" className="secondary-button" disabled={actionLoading}
+              <Button type="button" variant="secondary" disabled={actionLoading}
                 onClick={() => { setShowReviseForm(false); setReviseReason(''); clearFieldError('revise.reason'); }}>
                 ยกเลิก
-              </button>
+              </Button>
               {/* This button is already disabled={!reviseReason.trim()} (unchanged
                   below), so the guard inside onClick is defensive/unreachable
                   through the UI — wired for consistency with the other 3 forms
                   in this slice, not because a user can trigger it here. */}
-              <button type="button" className="primary-button" disabled={actionLoading || !reviseReason.trim()}
+              <Button type="button" variant="primary" disabled={actionLoading || !reviseReason.trim()}
                 onClick={() => {
                   if (!reviseReason.trim()) {
                     setFieldError('revise.reason', 'กรุณาระบุเหตุผล');
@@ -2234,42 +2249,42 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                   doAction(() => api.tickets.revision(ticketId, { scope: reviseScope, reason: reviseReason.trim() }), 'ส่งคำขอแก้ไขแล้ว');
                 }}>
                 ยืนยันขอแก้ไข
-              </button>
+              </Button>
             </>
           )}
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>ประเภทการแก้ไข</div>
+          <div className="flex flex-col gap-2.5">
+            <div className="text-sm font-semibold">ประเภทการแก้ไข</div>
             {[
               { value: 'QTY_OR_NOTE',  label: 'แก้จำนวน / หมายเหตุ / % มัดจำ', sub: 'ไม่ต้องอนุมัติใหม่ — ออกเอกสารรอบแก้ไขใหม่ได้เลย' },
               { value: 'PRICE_CHANGE', label: 'แก้ราคา / ส่วนลดต่อหน่วย',       sub: 'CEO ต้องอนุมัติใหม่' },
               { value: 'NEW_ITEM',     label: 'เพิ่มสินค้าใหม่',                sub: 'ฝ่ายนำเข้าตั้งราคา → CEO อนุมัติ' },
             ].map((opt) => (
               // eslint-disable-next-line jsx-a11y/label-has-associated-control -- label nests the radio control; its text is the dynamic opt.label
-              <label key={opt.value} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer', fontSize: 13 }}>
+              <label key={opt.value} className="flex cursor-pointer items-start gap-2.5 text-sm">
                 <input type="radio" name="reviseScope" value={opt.value}
                   checked={reviseScope === opt.value}
                   onChange={() => setReviseScope(opt.value)}
-                  style={{ marginTop: 2, flexShrink: 0, width: 16, height: 16, accentColor: 'var(--color-info-dot)', cursor: 'pointer' }} />
+                  className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-info-dot" />
                 <span>
                   <strong>{opt.label}</strong>
-                  <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)' }}>{opt.sub}</span>
+                  <span className="block text-xs text-text-muted">{opt.sub}</span>
                 </span>
               </label>
             ))}
-            <label style={{ fontSize: 13, fontWeight: 600 }}>
+            <label className="text-sm font-semibold">
               เหตุผลการแก้ไข *
               <textarea rows={2}
                 id="revise-reason"
                 ref={(el) => { fieldRefs.current['revise.reason'] = el; }}
                 value={reviseReason}
                 onChange={(e) => { setReviseReason(e.target.value); clearFieldError('revise.reason'); }}
-                placeholder="ระบุเหตุผล…" style={{ marginTop: 4 }}
+                placeholder="ระบุเหตุผล…" className="mt-1"
                 aria-invalid={fieldErrors['revise.reason'] ? true : undefined}
                 aria-describedby={fieldErrors['revise.reason'] ? fieldErrorId('revise-reason') : undefined}
               />
               {fieldErrors['revise.reason'] ? (
-                <p id={fieldErrorId('revise-reason')} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                <p id={fieldErrorId('revise-reason')} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">
                   {fieldErrors['revise.reason']}
                 </p>
               ) : null}
@@ -2315,19 +2330,19 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           const outstanding = Number(summary.amountOutstanding ?? 0);
           const hasOutstanding = outstanding > 0;
           return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <p className="confirm-dialog-message" style={{ margin: 0 }}>
+            <div className="flex flex-col gap-2">
+              <p className="confirm-dialog-message m-0">
                 {hasOutstanding
                   ? 'ระบบจะบันทึกรับชำระส่วนที่เหลือเต็มจำนวนเป็นรายการ BALANCE แล้วทำเครื่องหมายดีลนี้ว่าชำระครบแล้ว'
                   : 'ยอดคงเหลือเป็นศูนย์อยู่แล้ว ระบบจะทำเครื่องหมายดีลนี้ว่าชำระครบแล้วโดยไม่บันทึกรายการรับชำระใหม่'}
               </p>
               {hasOutstanding && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700, borderTop: '1px solid var(--color-border)', paddingTop: 8 }}>
+                <div className="flex justify-between border-t border-border pt-2 text-md font-bold">
                   <span>ยอดที่จะบันทึกเป็นรับชำระ (คงเหลือ)</span>
                   <span className="font-mono">{formatMoney(outstanding)}</span>
                 </div>
               )}
-              <p style={{ margin: 0, fontSize: 12, color: 'var(--color-icon-muted)' }}>
+              <p className="m-0 text-xs text-icon-muted">
                 สถานะการชำระเงินจะเปลี่ยนเป็น &quot;ชำระครบแล้ว&quot; และไม่สามารถย้อนกลับได้
               </p>
             </div>

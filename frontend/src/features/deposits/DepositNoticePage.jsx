@@ -4,9 +4,11 @@ import { z } from 'zod';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
+import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
@@ -33,7 +35,7 @@ function money(v) {
 // advances the ticket's payment track, so it is the one action worth
 // validating before the confirm dialog even opens. Every field below is
 // hand-wired (not <FormField>): each candidate control already lives inside
-// a pre-existing `<label style={{...}}>` or a CSS-grid table row whose exact
+// a pre-existing `<label className="...">` or a CSS-grid table row whose exact
 // markup this task must not restyle (UX-18 is a separate, out-of-scope
 // finding) — nesting <FormField>'s own <label> inside those would either
 // produce an invalid nested <label> or silently change spacing/typography.
@@ -186,10 +188,12 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   // did before (the old onChange handler had its own `.catch(() => {})`).
   const loadError = depositNoticesQuery.error || noteTemplatesQuery.error;
 
+  // showToast (useToast.js) is now a stable useCallback([]) identity, so it belongs directly in
+  // this effect's deps -- the eslint-disable this line used to carry (to route around showToast's
+  // then-unstable identity retriggering the effect) is no longer needed.
   useEffect(() => {
     if (loadError) showToast('error', loadError.message || 'โหลดไม่สำเร็จ');
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once per new error identity, not on every showToast identity change
-  }, [loadError]);
+  }, [loadError, showToast]);
 
   function retryLoad() {
     depositNoticesQuery.refetch();
@@ -463,24 +467,24 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   if (loading) {
     return (
       <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]" aria-busy="true" aria-label="กำลังโหลดใบแจ้งยอดเงินรับมัดจำ">
-        <header style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+        <header className="flex items-center gap-3 mb-1">
           <Skeleton width={80} height={28} />
-          <div style={{ flex: 1 }}>
+          <div className="flex-1">
             <Skeleton width="35%" height={20} />
           </div>
         </header>
-        <section className="panel">
-          <div className="panel-header"><Skeleton width="25%" height={16} /></div>
-          <div style={{ padding: '14px 18px' }}>
+        <Panel>
+          <Panel.Header><Skeleton width="25%" height={16} /></Panel.Header>
+          <div className="px-4.5 py-3.5">
             <SkeletonText lines={4} />
           </div>
-        </section>
-        <section className="panel">
-          <div className="panel-header"><Skeleton width="25%" height={16} /></div>
-          <div style={{ padding: '14px 18px' }}>
+        </Panel>
+        <Panel>
+          <Panel.Header><Skeleton width="25%" height={16} /></Panel.Header>
+          <div className="px-4.5 py-3.5">
             <SkeletonText lines={3} />
           </div>
-        </section>
+        </Panel>
       </div>
     );
   }
@@ -502,21 +506,21 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           493 vs clientWidth 375) — burying the primary "ออกเอกสาร" action off
           the right edge with no visible scrollbar affordance. Wrapping keeps
           every action reachable without horizontal scrolling. */}
-      <header style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 4, flexWrap: 'wrap' }}>
-        <button type="button" className="secondary-button" onClick={onBack}>
+      <header className="flex flex-wrap items-start gap-3 mb-1">
+        <Button variant="secondary" onClick={onBack}>
           <Icon name="chevronLeft" size={14} /> กลับ
-        </button>
-        <div style={{ flex: 1, minWidth: 220 }}>
-          <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>
+        </Button>
+        <div className="min-w-[220px] flex-1">
+          <h1 className="m-0 text-[20px] font-extrabold">
             ใบแจ้งยอดเงินรับมัดจำ
             {doc?.version > 1 && (
-              <span style={{ marginLeft: 8, fontSize: 13, fontWeight: 400, color: 'var(--color-text-muted)' }}>ครั้งที่ {doc.version}</span>
+              <span className="ml-2 text-sm font-normal text-text-muted">ครั้งที่ {doc.version}</span>
             )}
           </h1>
           {doc && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
+            <div className="mt-1 flex items-center gap-2">
               {doc.docNumber && (
-                <code style={{ fontSize: 12, background: 'var(--color-surface-subtle)', padding: '2px 8px', borderRadius: 4 }}>{doc.docNumber}</code>
+                <code className="rounded bg-surface-subtle px-2 py-0.5 text-xs">{doc.docNumber}</code>
               )}
               <StatusBadge tone={isIssued ? 'success' : 'neutral'}>
                 {isIssued ? 'ออกแล้ว' : 'Draft'}
@@ -529,14 +533,14 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               ~L2266-2345) — no new API calls, nothing invented. Pieces are
               omitted individually when the underlying field is empty. */}
           {doc && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', marginTop: 8, fontSize: 13, color: 'var(--color-text-muted)' }}>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-text-muted">
               {doc.customerName && (
-                <span>ลูกค้า <strong style={{ color: 'var(--color-text-secondary)' }}>{doc.customerName}</strong></span>
+                <span>ลูกค้า <strong className="text-text-secondary">{doc.customerName}</strong></span>
               )}
               {isIssued ? (
-                <span>ออกโดย <strong style={{ color: 'var(--color-text-secondary)' }}>{doc.issuedByName || '-'}</strong> · {formatThaiDate(doc.issueDate)}</span>
+                <span>ออกโดย <strong className="text-text-secondary">{doc.issuedByName || '-'}</strong> · {formatThaiDate(doc.issueDate)}</span>
               ) : (
-                doc.preparerName && <span>จัดทำโดย <strong style={{ color: 'var(--color-text-secondary)' }}>{doc.preparerName}</strong></span>
+                doc.preparerName && <span>จัดทำโดย <strong className="text-text-secondary">{doc.preparerName}</strong></span>
               )}
             </div>
           )}
@@ -547,58 +551,58 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
             live-looking buttons whose handlers silently no-op'd on `if (!doc) return;`.
             No doc now means no action buttons, not dead ones. */}
         {doc && !isIssued && (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button type="button" className="secondary-button" onClick={handleSave} disabled={saving}>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={handleSave} disabled={saving}>
               บันทึก
-            </button>
-            <button type="button" className="secondary-button" onClick={handlePreview} disabled={saving}>
+            </Button>
+            <Button variant="secondary" onClick={handlePreview} disabled={saving}>
               <Icon name="fileText" size={14} /> Preview
-            </button>
-            <button type="button" className="primary-button" onClick={handleIssue} disabled={saving}>
+            </Button>
+            <Button variant="primary" onClick={handleIssue} disabled={saving}>
               <Icon name="check" size={14} /> ออกเอกสาร
-            </button>
+            </Button>
           </div>
         )}
         {doc && isIssued && (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button type="button" className="secondary-button" onClick={handleDownloadXlsx} disabled={downloading === 'xlsx'}>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={handleDownloadXlsx} disabled={downloading === 'xlsx'}>
               <Icon name="fileText" size={14} /> {downloading === 'xlsx' ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด Excel'}
-            </button>
-            <button type="button" className="secondary-button" onClick={handleDownloadPdf} disabled={downloading === 'pdf'}>
+            </Button>
+            <Button variant="secondary" onClick={handleDownloadPdf} disabled={downloading === 'pdf'}>
               <Icon name="fileText" size={14} /> {downloading === 'pdf' ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด PDF'}
-            </button>
+            </Button>
           </div>
         )}
       </header>
 
       {loadError && !doc ? (
-        <section className="panel">
+        <Panel>
           <EmptyState icon="fileText" title="โหลดข้อมูลไม่สำเร็จ" description={loadError.message || 'โหลดไม่สำเร็จ'} />
-          <div style={{ padding: '0 18px 18px', display: 'flex', justifyContent: 'center' }}>
-            <button type="button" className="secondary-button" onClick={retryLoad}>
+          <div className="flex justify-center px-4.5 pb-4.5">
+            <Button variant="secondary" onClick={retryLoad}>
               <Icon name="refresh" size={14} /> ลองใหม่
-            </button>
+            </Button>
           </div>
-        </section>
+        </Panel>
       ) : !doc ? (
-        <section className="panel">
+        <Panel>
           <EmptyState
             icon="fileText"
             title="ยังไม่มีใบแจ้งยอดเงินรับมัดจำ"
             description="สร้างเอกสารฉบับร่างเพื่อเริ่มกรอกรายละเอียดใบแจ้งยอดมัดจำสำหรับคำขอราคานี้"
           />
-          <div style={{ padding: '0 18px 18px', display: 'flex', justifyContent: 'center' }}>
-            <button type="button" className="primary-button" onClick={handleCreateDraft} disabled={creatingDraft}>
+          <div className="flex justify-center px-4.5 pb-4.5">
+            <Button variant="primary" onClick={handleCreateDraft} disabled={creatingDraft}>
               <Icon name="plus" size={14} />
               {creatingDraft ? 'กำลังสร้าง…' : 'สร้างเอกสารฉบับร่าง'}
-            </button>
+            </Button>
           </div>
-        </section>
+        </Panel>
       ) : (
-      <div style={{ display: 'grid', gridTemplateColumns: previewHtml ? '1fr 1fr' : '1fr', gap: 16 }}>
+      <div className={previewHtml ? 'grid grid-cols-2 gap-4' : 'grid grid-cols-1 gap-4'}>
         {/* ── Left: Form ── */}
         {/* min-width: 0 fix: this flex column is a CSS-grid item (parent grid
-            at previewHtml ? '1fr 1fr' : '1fr') and, like all flex/grid items,
+            at previewHtml ? grid-cols-2 : grid-cols-1) and, like all flex/grid items,
             defaults to min-width: auto — it refuses to shrink below its
             content's min-content width. Thai has no inter-word spaces, so a
             long unbreakable label/value run inside the panels below forced
@@ -606,14 +610,13 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
             (verified: content-scroll scrollWidth 418 vs clientWidth 375).
             min-w-0 lets it shrink to the grid track and wrap/truncate
             normally instead. */}
-        <div className="min-w-0" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div className="flex min-w-0 flex-col gap-3.5">
 
           {/* Customer */}
-          <section className="panel">
-            <div className="panel-header"><h2>ข้อมูลลูกค้า</h2></div>
-            <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ position: 'relative' }}>
-                <label htmlFor="doc-customer-search" style={{ fontSize: 12 }}>ค้นหาลูกค้า (master)</label>
+          <Panel title="ข้อมูลลูกค้า">
+            <div className="flex flex-col gap-2.5 px-4.5 py-3.5">
+              <div className="relative">
+                <label htmlFor="doc-customer-search" className="text-xs">ค้นหาลูกค้า (master)</label>
                 <input
                   id="doc-customer-search"
                   value={customerSearch}
@@ -621,19 +624,19 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                   placeholder="ชื่อบริษัท หรือ เลขภาษี…"
                 />
                 {customerSearch && customers.length > 0 && (
-                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'var(--color-surface)', border: '1px solid var(--color-border-subtle)', borderRadius: 6, zIndex: 50, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', maxHeight: 180, overflowY: 'auto' }}>
+                  <div className="absolute left-0 right-0 top-full z-50 max-h-[180px] overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_12px_rgba(0,0,0,0.1)]">
                     {customers.map((c) => (
                       <button key={c.id} type="button"
                         onClick={() => selectCustomer(c)}
-                        style={{ width: '100%', padding: '8px 12px', textAlign: 'left', border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, borderBottom: '1px solid var(--color-surface-subtle)' }}>
-                        <strong style={{ display: 'block' }}>{c.name}</strong>
-                        <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>{c.taxId} · {c.address}</span>
+                        className="w-full cursor-pointer border-0 border-b border-surface-subtle bg-transparent px-3 py-2 text-left text-sm">
+                        <strong className="block">{c.name}</strong>
+                        <span className="text-2xs text-text-muted">{c.taxId} · {c.address}</span>
                       </button>
                     ))}
                   </div>
                 )}
               </div>
-              <label style={{ fontSize: 12 }}>
+              <label className="text-xs">
                 ชื่อบริษัท / หน่วยงาน *
                 <input
                   id="doc-customer-name"
@@ -646,38 +649,37 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                 />
               </label>
               {fieldErrors.customerName ? (
-                <p id={fieldErrorId('doc-customer-name')} role="alert" style={{ margin: 0, fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>
+                <p id={fieldErrorId('doc-customer-name')} role="alert" className="m-0 text-2xs font-bold text-danger">
                   {fieldErrors.customerName}
                 </p>
               ) : null}
-              <label style={{ fontSize: 12 }}>
+              <label className="text-xs">
                 เลขประจำตัวผู้เสียภาษี
                 <input value={form.customerTaxId} disabled={isIssued}
                   onChange={(e) => setField('customerTaxId', e.target.value)} placeholder="0000000000000" />
               </label>
-              <label style={{ fontSize: 12 }}>
+              <label className="text-xs">
                 ที่อยู่
                 <textarea rows={2} value={form.customerAddress} disabled={isIssued}
-                  onChange={(e) => setField('customerAddress', e.target.value)} placeholder="ที่อยู่…" style={{ resize: 'vertical' }} />
+                  onChange={(e) => setField('customerAddress', e.target.value)} placeholder="ที่อยู่…" className="resize-y" />
               </label>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <label style={{ fontSize: 12 }}>
+              <div className="grid grid-cols-2 gap-2.5">
+                <label className="text-xs">
                   ชื่อโครงการ
                   <input value={form.projectName} disabled={isIssued}
                     onChange={(e) => setField('projectName', e.target.value)} placeholder="โครงการ…" />
                 </label>
-                <label style={{ fontSize: 12 }}>
+                <label className="text-xs">
                   อ้างอิง PO / ใบเสนอราคา
                   <input value={form.reference} disabled={isIssued}
                     onChange={(e) => setField('reference', e.target.value)} placeholder="PO-XXXX" />
                 </label>
               </div>
             </div>
-          </section>
+          </Panel>
 
           {/* Items table */}
-          <section className="panel">
-            <div className="panel-header"><h2>รายการสินค้า ({form.items.length} รายการ)</h2></div>
+          <Panel title={`รายการสินค้า (${form.items.length} รายการ)`}>
             {/*
               UX-03: this whole panel body is the scroll/focus target for the
               "at least 1 line item" rule — there's no single input to point
@@ -691,25 +693,25 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               tabIndex={-1}
               aria-invalid={fieldErrors.items ? true : undefined}
               aria-describedby={fieldErrors.items ? fieldErrorId('doc-items-panel') : undefined}
-              style={{ padding: '0 18px 14px' }}
+              className="px-4.5 pb-3.5"
             >
               {/* Muted Floor fix: was Ink Faint (#94a3b8) on a table header label —
                   DESIGN.md specifies Ink Muted (#5c6b80) for `.table-head` overline text. */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) minmax(0,60px) minmax(0,80px) minmax(0,80px) minmax(0,80px)', gap: 6, padding: '8px 0', borderBottom: '1px solid var(--color-border)', fontSize: 11, fontWeight: 700, color: 'var(--color-text-muted)' }}>
-                <span>รายละเอียด</span><span style={{ textAlign: 'right' }}>จำนวน</span>
-                <span style={{ textAlign: 'right' }}>ราคา/หน่วย</span>
-                <span style={{ textAlign: 'right' }}>ราคาสุทธิ</span>
-                <span style={{ textAlign: 'right' }}>เป็นเงิน</span>
+              <div className="grid grid-cols-[minmax(0,3fr)_minmax(0,60px)_minmax(0,80px)_minmax(0,80px)_minmax(0,80px)] gap-1.5 border-b border-border py-2 text-2xs font-bold text-text-muted">
+                <span>รายละเอียด</span><span className="text-right">จำนวน</span>
+                <span className="text-right">ราคา/หน่วย</span>
+                <span className="text-right">ราคาสุทธิ</span>
+                <span className="text-right">เป็นเงิน</span>
               </div>
               {form.items.map((it, idx) => (
-                <div key={idx} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,3fr) minmax(0,60px) minmax(0,80px) minmax(0,80px) minmax(0,80px)', gap: 6, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--color-surface-muted)' }}>
+                <div key={idx} className="grid grid-cols-[minmax(0,3fr)_minmax(0,60px)_minmax(0,80px)_minmax(0,80px)_minmax(0,80px)] items-center gap-1.5 border-b border-surface-muted py-1.5">
                   {isIssued ? (
                     <>
-                      <span style={{ fontSize: 13 }}>{it.description}</span>
-                      <span style={{ fontSize: 13, textAlign: 'right' }}>{it.qty}</span>
-                      <span style={{ fontSize: 13, textAlign: 'right' }}>{money(it.unitPrice)}</span>
-                      <span style={{ fontSize: 13, textAlign: 'right' }}>{money(it.netUnitPrice)}</span>
-                      <code style={{ fontSize: 12, textAlign: 'right' }}>{money((it.netUnitPrice ?? it.unitPrice) * it.qty)}</code>
+                      <span className="text-sm">{it.description}</span>
+                      <span className="text-right text-sm">{it.qty}</span>
+                      <span className="text-right text-sm">{money(it.unitPrice)}</span>
+                      <span className="text-right text-sm">{money(it.netUnitPrice)}</span>
+                      <code className="text-right text-xs">{money((it.netUnitPrice ?? it.unitPrice) * it.qty)}</code>
                     </>
                   ) : (
                     <>
@@ -721,9 +723,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                           onChange={(e) => setItemField(idx, 'description', e.target.value)}
                           aria-invalid={fieldErrors[`items.${idx}.description`] ? true : undefined}
                           aria-describedby={fieldErrors[`items.${idx}.description`] ? fieldErrorId(`doc-item-${idx}-description`) : undefined}
-                          style={{ fontSize: 12, width: '100%', boxSizing: 'border-box' }} />
+                          className="w-full box-border text-xs" />
                         {fieldErrors[`items.${idx}.description`] ? (
-                          <p id={fieldErrorId(`doc-item-${idx}-description`)} role="alert" style={{ margin: '2px 0 0', fontSize: 10, fontWeight: 700, color: 'var(--color-danger)' }}>
+                          <p id={fieldErrorId(`doc-item-${idx}-description`)} role="alert" className="mx-0 mb-0 mt-0.5 text-[10px] font-bold text-danger">
                             {fieldErrors[`items.${idx}.description`]}
                           </p>
                         ) : null}
@@ -735,20 +737,20 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                           onChange={(e) => setItemField(idx, 'qty', e.target.value)}
                           aria-invalid={fieldErrors[`items.${idx}.qty`] ? true : undefined}
                           aria-describedby={fieldErrors[`items.${idx}.qty`] ? fieldErrorId(`doc-item-${idx}-qty`) : undefined}
-                          style={{ fontSize: 12, textAlign: 'right', width: '100%', boxSizing: 'border-box' }} />
+                          className="w-full box-border text-right text-xs" />
                         {fieldErrors[`items.${idx}.qty`] ? (
-                          <p id={fieldErrorId(`doc-item-${idx}-qty`)} role="alert" style={{ margin: '2px 0 0', fontSize: 10, fontWeight: 700, color: 'var(--color-danger)' }}>
+                          <p id={fieldErrorId(`doc-item-${idx}-qty`)} role="alert" className="mx-0 mb-0 mt-0.5 text-[10px] font-bold text-danger">
                             {fieldErrors[`items.${idx}.qty`]}
                           </p>
                         ) : null}
                       </div>
                       <input type="number" value={it.unitPrice ?? ''} placeholder="ราคา"
                         onChange={(e) => setItemField(idx, 'unitPrice', e.target.value)}
-                        style={{ fontSize: 12, textAlign: 'right' }} />
+                        className="text-right text-xs" />
                       <input type="number" value={it.netUnitPrice ?? it.unitPrice ?? ''} placeholder="สุทธิ"
                         onChange={(e) => setItemField(idx, 'netUnitPrice', e.target.value)}
-                        style={{ fontSize: 12, textAlign: 'right' }} />
-                      <code style={{ fontSize: 12, textAlign: 'right', color: 'var(--color-text-secondary)' }}>
+                        className="text-right text-xs" />
+                      <code className="text-right text-xs text-text-secondary">
                         {money(((it.netUnitPrice ?? it.unitPrice) || 0) * (it.qty || 0))}
                       </code>
                     </>
@@ -756,41 +758,39 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                 </div>
               ))}
               {!isIssued && (
-                <button type="button" className="secondary-button" style={{ marginTop: 8, fontSize: 12 }}
+                <Button variant="secondary" className="mt-2 text-xs"
                   onClick={() => {
                     setForm((f) => ({ ...f, items: [...f.items, { seq: f.items.length + 1, description: '', qty: 1, unit: 'แผ่น', unitPrice: 0, netUnitPrice: 0 }] }));
                     clearFieldError('items');
                   }}>
                   <Icon name="plus" size={12} /> เพิ่มรายการ
-                </button>
+                </Button>
               )}
               {fieldErrors.items ? (
-                <p id={fieldErrorId('doc-items-panel')} role="alert" style={{ margin: '8px 0 0', fontSize: 12, fontWeight: 700, color: 'var(--color-danger)' }}>
+                <p id={fieldErrorId('doc-items-panel')} role="alert" className="mx-0 mb-0 mt-2 text-xs font-bold text-danger">
                   {fieldErrors.items}
                 </p>
               ) : null}
             </div>
-          </section>
+          </Panel>
 
           {/* Notes */}
-          <section className="panel">
-            <div className="panel-header"><h2>หมายเหตุ</h2></div>
-            <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <Panel title="หมายเหตุ">
+            <div className="flex flex-col gap-2 px-4.5 py-3.5">
               {noteTemplates.map((t) => (
-                <label key={t.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, cursor: isIssued ? 'default' : 'pointer', lineHeight: 1.5 }}>
+                <label key={t.id} className={`flex items-start gap-2 text-sm leading-normal ${isIssued ? 'cursor-default' : 'cursor-pointer'}`}>
                   <input type="checkbox" disabled={isIssued}
                     checked={form.notes.includes(t.text)}
                     onChange={() => toggleNote(t.text)}
-                    style={{ width: 14, height: 14, marginTop: 3, flexShrink: 0, accentColor: 'var(--color-info-dot)', cursor: isIssued ? 'default' : 'pointer' }} />
-                  <span style={{ flex: 1, minWidth: 0 }}>{t.text}</span>
+                    className={`mt-[3px] h-3.5 w-3.5 shrink-0 accent-info-dot ${isIssued ? 'cursor-default' : 'cursor-pointer'}`} />
+                  <span className="min-w-0 flex-1">{t.text}</span>
                 </label>
               ))}
             </div>
-          </section>
+          </Panel>
 
           {/* Summary + Deposit % */}
-          <section className="panel">
-            <div className="panel-header"><h2>สรุปยอด</h2></div>
+          <Panel title="สรุปยอด">
             {/*
               UX-03: scroll/focus target for the "total must be > 0" rule —
               total is a computed value with no single input of its own, so
@@ -803,21 +803,20 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               tabIndex={-1}
               aria-invalid={fieldErrors.total ? true : undefined}
               aria-describedby={fieldErrors.total ? fieldErrorId('doc-summary-panel') : undefined}
-              style={{ padding: '14px 18px' }}
+              className="px-4.5 py-3.5"
             >
               {!isIssued && (
-                <label style={{ fontSize: 12, marginBottom: 12, display: 'block' }}>
+                <label className="mb-3 block text-xs">
                   % มัดจำ
-                  <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                  <div className="mt-1 flex gap-1.5">
                     {DEPOSIT_OPTIONS.map((opt) => (
                       <button key={opt.value} type="button"
                         onClick={() => setField('depositPercent', opt.value)}
-                        style={{
-                          padding: '4px 12px', borderRadius: 6, fontSize: 13, cursor: 'pointer', border: '1px solid',
-                          background: form.depositPercent == opt.value ? 'var(--color-info-dot)' : 'var(--color-surface-subtle)',
-                          color: form.depositPercent == opt.value ? 'var(--color-surface)' : 'var(--color-text-secondary)',
-                          borderColor: form.depositPercent == opt.value ? 'var(--color-info-dot)' : 'var(--color-border-muted)',
-                        }}>
+                        className={`cursor-pointer rounded-[6px] border px-3 py-1 text-sm ${
+                          form.depositPercent == opt.value
+                            ? 'border-info-dot bg-info-dot text-surface'
+                            : 'border-border-muted bg-surface-subtle text-text-secondary'
+                        }`}>
                         {opt.label}
                       </button>
                     ))}
@@ -830,13 +829,13 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                 { label: 'ภาษีมูลค่าเพิ่ม 7% (คิดจากมัดจำ)', value: vat },
                 { label: 'รวมเป็นเงินที่ต้องชำระ', value: total, bold: true },
               ].map(({ label, value, bold }) => (
-                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--color-surface-subtle)', fontSize: 13 }}>
-                  <span style={{ color: 'var(--color-icon-muted)' }}>{label}</span>
-                  <code className="font-mono" style={{ fontWeight: bold ? 700 : 400, color: bold ? 'var(--color-text)' : 'var(--color-text-secondary)' }}>{money(value)} บาท</code>
+                <div key={label} className="flex justify-between border-b border-surface-subtle py-[5px] text-sm">
+                  <span className="text-icon-muted">{label}</span>
+                  <code className={`font-mono ${bold ? 'font-bold text-text' : 'font-normal text-text-secondary'}`}>{money(value)} บาท</code>
                 </div>
               ))}
               {fieldErrors.total ? (
-                <p id={fieldErrorId('doc-summary-panel')} role="alert" style={{ margin: '8px 0 0', fontSize: 12, fontWeight: 700, color: 'var(--color-danger)' }}>
+                <p id={fieldErrorId('doc-summary-panel')} role="alert" className="mx-0 mb-0 mt-2 text-xs font-bold text-danger">
                   {fieldErrors.total}
                 </p>
               ) : null}
@@ -845,34 +844,34 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                   flips this document to ISSUED (fields above become read-only via
                   `isIssued`), and moves the parent ticket to `document_issued`. */}
               {!isIssued && (
-                <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
+                <p className="mx-0 mb-0 mt-2.5 text-xs leading-[1.6] text-text-muted">
                   กด &quot;ออกเอกสาร&quot; เพื่อออกเลขที่เอกสารอย่างเป็นทางการ — หลังจากนี้จะแก้ไขข้อมูลในเอกสารนี้ไม่ได้อีก และคำขอราคาจะเปลี่ยนสถานะเป็น &quot;ออกใบแจ้งยอดมัดจำแล้ว&quot;
                 </p>
               )}
             </div>
-          </section>
+          </Panel>
         </div>
 
         {/* ── Right: Preview ── */}
         {previewHtml && (
-          <div style={{ position: 'sticky', top: 16, height: 'calc(100vh - 120px)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <strong style={{ fontSize: 13 }}>Preview</strong>
-              <button type="button" className="icon-button" onClick={() => setPreview('')} title="ปิดตัวอย่าง" aria-label="ปิดตัวอย่าง"><Icon name="close" size={14} /></button>
+          <div className="sticky top-4 h-[calc(100vh_-_120px)]">
+            <div className="mb-2 flex items-center justify-between">
+              <strong className="text-sm">Preview</strong>
+              <Button variant="icon" onClick={() => setPreview('')} title="ปิดตัวอย่าง" aria-label="ปิดตัวอย่าง"><Icon name="close" size={14} /></Button>
             </div>
             <iframe
               ref={iframeRef}
               srcDoc={previewHtml}
-              style={{ width: '100%', height: 'calc(100% - 32px)', border: '1px solid var(--color-border-subtle)', borderRadius: 8 }}
+              className="h-[calc(100%_-_32px)] w-full rounded-md border border-border-subtle"
               title="Deposit notice preview"
             />
             {previewLoading && (
               <div
-                style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.8)' }}
+                className="absolute inset-0 flex items-center justify-center bg-white/80"
                 aria-busy="true"
                 aria-label="กำลังโหลดตัวอย่างเอกสาร"
               >
-                <div style={{ width: '80%', maxWidth: 360, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div className="flex w-[80%] max-w-[360px] flex-col gap-2.5">
                   <Skeleton width="60%" height={18} />
                   <SkeletonText lines={6} />
                 </div>
@@ -887,19 +886,19 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
         open={confirmIssue}
         title="ยืนยันการออกเอกสาร"
         message={(
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <p className="confirm-dialog-message" style={{ margin: 0 }}>
+          <div className="flex flex-col gap-2">
+            <p className="confirm-dialog-message m-0">
               ตรวจสอบยอดเงินก่อนออกเอกสารให้ <strong>{form.customerName || 'ลูกค้า'}</strong> — <strong>หลังจากนี้จะไม่สามารถแก้ไขได้</strong>
             </p>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid var(--color-border)', paddingTop: 8 }}>
-              <span style={{ color: 'var(--color-icon-muted)' }}>ขอรับเงินมัดจำ ({Math.round(Number(form.depositPercent) * 100)}%)</span>
+            <div className="flex justify-between border-t border-border pt-2 text-sm">
+              <span className="text-icon-muted">ขอรับเงินมัดจำ ({Math.round(Number(form.depositPercent) * 100)}%)</span>
               <code className="font-mono">{money(deposit)} บาท</code>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-              <span style={{ color: 'var(--color-icon-muted)' }}>ภาษีมูลค่าเพิ่ม 7%</span>
+            <div className="flex justify-between text-sm">
+              <span className="text-icon-muted">ภาษีมูลค่าเพิ่ม 7%</span>
               <code className="font-mono">{money(vat)} บาท</code>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700 }}>
+            <div className="flex justify-between text-md font-bold">
               <span>รวมเป็นเงินที่ต้องชำระ</span>
               <code className="font-mono">{money(total)} บาท</code>
             </div>

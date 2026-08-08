@@ -279,7 +279,7 @@ public class AttendanceDailyRepository {
         return written;
     }
 
-    private static SqlParameterSource upsertParams(AttendanceDailyRecord record) {
+    private static MapSqlParameterSource upsertParams(AttendanceDailyRecord record) {
         return new MapSqlParameterSource()
             .addValue("employeeId", record.employeeId())
             .addValue("workDate", record.workDate())
@@ -293,6 +293,63 @@ public class AttendanceDailyRepository {
             .addValue("earlyLeaveMinutes", record.earlyLeaveMinutes())
             .addValue("overtimeMinutes", record.overtimeMinutes())
             .addValue("punchCount", record.punchCount());
+    }
+
+    /**
+     * Writes one day's derived row as an <strong>authoritative HR correction</strong> — unlike
+     * {@link #upsert}/{@link #upsertAll} (which defer to an existing {@code is_manual_override}),
+     * this always wins and always sets {@code is_manual_override = TRUE}, the same unconditional
+     * shape as {@link #upsertWfhPresent} just below. Used by
+     * {@code AttendanceCorrectionService#approve} after it inserts the corrected punch(es): the
+     * caller computes {@code record} the ordinary way (via {@code AttendanceDailyCalculator}, from
+     * the day's now-corrected punch set), and this method is only responsible for making that
+     * computed row stick — see {@code AttendanceDailyService#applyManualCorrection}.
+     *
+     * <p>Once written, the row is protected the same way any other manual override is: {@link
+     * #upsertAll}'s {@code WHERE is_manual_override = FALSE} guard means a later device re-sync or
+     * backfill recalculation can never silently overwrite it again. This method's own WRITE (this
+     * method called again for the same day) is itself unconditional, exactly like {@link
+     * #upsertWfhPresent} — a second CEO-approved correction is always allowed to write a new row.
+     *
+     * <p><strong>That does not mean a second correction can narrow an earlier one's recorded time.</strong>
+     * Corrections only ADD a punch; they never remove one, and {@code record} here is computed by
+     * {@code AttendanceDailyCalculator} as {@code check_in = MIN(punch_time)} /
+     * {@code check_out = MAX(punch_time)} over the day's full (now-corrected) punch set. A second
+     * correction that tries to move {@code check_in} LATER than an already-recorded punch has no
+     * effect on the derived value — the earlier, earlier-in-the-day punch still wins the MIN. Only
+     * widening the window (an earlier check-in, or a later check-out) actually changes what's
+     * recorded (review #attendance-correction-request).
+     */
+    public void upsertOverride(AttendanceDailyRecord record) {
+        jdbc.update("""
+            INSERT INTO hr.attendance_daily (
+                employee_id, work_date, site_code,
+                check_in_punch_id, check_out_punch_id, check_in, check_out,
+                total_minutes, late_minutes, early_leave_minutes, overtime_minutes,
+                punch_count, is_absent, is_manual_override, calculated_at, updated_at
+            )
+            VALUES (
+                :employeeId, :workDate, :siteCode,
+                :checkInPunchId, :checkOutPunchId, :checkIn, :checkOut,
+                :totalMinutes, :lateMinutes, :earlyLeaveMinutes, :overtimeMinutes,
+                :punchCount, :isAbsent, TRUE, now(), now()
+            )
+            ON CONFLICT (employee_id, work_date) DO UPDATE SET
+                site_code           = EXCLUDED.site_code,
+                check_in_punch_id   = EXCLUDED.check_in_punch_id,
+                check_out_punch_id  = EXCLUDED.check_out_punch_id,
+                check_in            = EXCLUDED.check_in,
+                check_out           = EXCLUDED.check_out,
+                total_minutes       = EXCLUDED.total_minutes,
+                late_minutes        = EXCLUDED.late_minutes,
+                early_leave_minutes = EXCLUDED.early_leave_minutes,
+                overtime_minutes    = EXCLUDED.overtime_minutes,
+                punch_count         = EXCLUDED.punch_count,
+                is_absent           = EXCLUDED.is_absent,
+                is_manual_override  = TRUE,
+                calculated_at       = now(),
+                updated_at          = now()
+            """, upsertParams(record).addValue("isAbsent", record.absent()));
     }
 
     /**

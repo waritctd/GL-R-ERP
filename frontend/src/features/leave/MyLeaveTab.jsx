@@ -13,6 +13,7 @@ import { FieldList } from '../../components/common/FieldList.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { QuotaBar } from '../../components/common/QuotaBar.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -24,13 +25,21 @@ import {
 import { canSubmitOwnLeave } from './leaveSurfaceTabs.js';
 import {
   buildLeaveRequestColumns, LEAVE_REQUEST_TABLE_GRID, leaveRequestRowKey,
-  renderLeaveRequestExpanded,
+  PendingApproverNote, renderLeaveRequestExpanded,
 } from './leaveRequestTable.jsx';
 
 // FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
 // (Enter-to-submit on the search button), so its exact utility string is reproduced
 // here rather than wrapping a <form> inside a non-form primitive.
-const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-center bg-surface border border-border rounded-md p-[14px]';
+//
+// `items-end`, not `items-center`. Every field in this row is a bare `<label>`
+// stack (label text above a control), except the trailing "ค้นหา" Button, which
+// has no label above it. Centring the row centres each LABELLED STACK, not its
+// control, so the unlabelled Button — the shortest single-height item — landed
+// visibly above the bottom edge of the date/status controls beside it (measured
+// button top=740 vs input top=751 at 1440px, an 11px stagger). Same defect class
+// as #530 (TaxAllowanceReviewPage's filter row); it just hadn't reached this file.
+const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-end bg-surface border border-border rounded-md p-[14px]';
 
 // Leave-surface IA rebuild Phase A1 (later narrowed by owner feedback, "one primary card, not
 // every quota card at once"): the everyday-vs-rare balance split. SICK/PERSONAL/VACATION are what
@@ -172,9 +181,9 @@ function OwnRequestsSection({
           </strong>
           <span className="flex items-center gap-1.5">
             <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-            <button
+            <Button
               type="button"
-              className="icon-button"
+              variant="icon"
               aria-expanded={expanded}
               aria-controls={expandedRowRegionId(request.id)}
               title={expanded ? 'ซ่อนรายละเอียด' : 'ดูรายละเอียด'}
@@ -182,9 +191,10 @@ function OwnRequestsSection({
               onClick={() => onToggleExpand(request.id)}
             >
               <Icon name={expanded ? 'chevronUp' : 'chevronDown'} size={14} />
-            </button>
+            </Button>
           </span>
         </div>
+        <PendingApproverNote request={request} />
         <span className="min-w-0 truncate text-xs text-text-muted">
           {request.leaveTypeNameTh || request.leaveTypeCode} · {formatDays(request.totalDays)}
         </span>
@@ -369,7 +379,6 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
   const initialFilters = {
     from: monthStartIso(),
     to: todayIso(),
-    employeeId: '',
     status: '',
   };
   const [filters, setFilters] = useState(initialFilters);
@@ -386,12 +395,6 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
   const [previewTypeCode, setPreviewTypeCode] = useState('');
 
   // --- Reads (TanStack Query) ---
-  const employeesQuery = useQuery({
-    queryKey: queryKeys.leaveEmployees(),
-    queryFn: () => api.leave.employees().then((response) => response.employees || []),
-  });
-  const employeeOptions = useMemo(() => employeesQuery.data ?? [], [employeesQuery.data]);
-
   const leaveTypesQuery = useQuery({
     queryKey: queryKeys.leaveTypes(),
     queryFn: () => api.leave.types().then((response) => response.leaveTypes || []),
@@ -405,14 +408,23 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
   // these background refetches blanked the table into an EmptyState -- `isPending` below drives
   // the skeleton (first load only); `isFetching` alone now only powers a quiet, non-destructive
   // header indicator that never removes the rows already on screen.
+  //
+  // Bugfix (2026-08): this used to omit `employeeId` whenever no filter value was applied, which
+  // for any actor with direct reports meant LeaveService#list's own default scoping ("self OR
+  // reports_to_employee_id = actor" -- see LeaveRepository#findRequests) genuinely served their
+  // reports' requests into a panel titled "คำขอลาของฉัน". `employeeId` is now ALWAYS the actor's
+  // own id -- this tab shows exactly one person's requests, never more. The team-wide view that
+  // used to leak in here moved to TeamLeaveTab.jsx ("ลูกทีม"), correctly labelled. `enabled`
+  // mirrors balancesQuery below: never fetch before an acting employee id is actually known.
   const requestsQuery = useQuery({
-    queryKey: queryKeys.leaveRequests(appliedFilters),
+    queryKey: queryKeys.leaveRequests({ ...appliedFilters, employeeId: ownEmployeeId }),
     queryFn: () => api.leave.list({
       from: appliedFilters.from,
       to: appliedFilters.to,
       status: appliedFilters.status,
-      ...(appliedFilters.employeeId ? { employeeId: appliedFilters.employeeId } : {}),
+      employeeId: ownEmployeeId,
     }).then((response) => response.requests || []),
+    enabled: !!ownEmployeeId,
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
   });
@@ -448,8 +460,6 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
   // known.
   const primaryBalanceLoading = !ownEmployeeId || balancesQuery.isPending;
 
-  const hasMultipleEmployeeOptions = employeeOptions.length > 1;
-
   const totals = useMemo(() => {
     const submitted = requests.filter((request) => request.status === 'SUBMITTED').length;
     const approved = requests.filter((request) => request.status === 'APPROVED');
@@ -467,6 +477,15 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
     return { submitted, approved: approved.length, approvedDays, remainingDays };
   }, [requests, everydayBalances]);
 
+  // Restored (review fix, 2026-08): this "ปฏิทินวันลา" panel lived here pre-branch and was
+  // visible to EVERY employee. This branch's original cut moved it into TeamLeaveTab.jsx, which
+  // is gated on hasTeamMembers -- so any employee with no direct reports (the majority of the
+  // workforce) lost their leave calendar entirely. Restored here, deliberately DIFFERENT from
+  // the pre-branch version in one respect: `requests` above is now always scoped to this file's
+  // own `ownEmployeeId` (this branch's own fix), so this calendar shows only the actor's own
+  // leave days -- it never leaks a direct report's days the way the pre-branch "ของฉัน" tab's
+  // calendar silently did (the same class of bug, second symptom). The team-wide calendar lives
+  // in TeamLeaveTab.jsx, correctly scoped and labelled.
   const activeCalendarItems = useMemo(
     () => requests
       .filter((request) => ['SUBMITTED', 'APPROVED'].includes(request.status))
@@ -602,7 +621,7 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
         </p>
       </Panel>
 
-      <form className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
+      <SafeForm className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
         <label>
           จากวันที่
           <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
@@ -622,17 +641,6 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
             <option value="AUTO_REJECTED">โควตาไม่พอ</option>
           </select>
         </label>
-        {hasMultipleEmployeeOptions ? (
-          <label>
-            พนักงาน
-            <select value={filters.employeeId} onChange={(event) => updateFilter('employeeId', event.target.value)}>
-              <option value="">ทุกคน</option>
-              {employeeOptions.map((employee) => (
-                <option key={employee.employeeId} value={employee.employeeId}>{employee.employeeName} · {employee.employeeCode}</option>
-              ))}
-            </select>
-          </label>
-        ) : null}
         <Button type="submit" disabled={requestsQuery.isPending}>
           <Icon name="search" />
           ค้นหา
@@ -643,7 +651,7 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
             กำลังอัปเดต…
           </span>
         ) : null}
-      </form>
+      </SafeForm>
 
       <Panel title="ปฏิทินวันลา">
         <div className="leave-calendar-list">
@@ -657,14 +665,17 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
                   <strong>{formatDateRange(request.startDate, request.endDate)}</strong>
                   <small>{request.employeeName || request.employeeCode} · {request.leaveTypeNameTh}</small>
                 </span>
-                <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                <span className="flex flex-col items-end gap-1">
+                  <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                  <PendingApproverNote request={request} />
+                </span>
               </div>
             );
           })}
         </div>
       </Panel>
 
-      <Panel title="คำขอลาของฉัน" className="!p-0">
+      <Panel title="คำขอลาของฉัน" flush>
         <OwnRequestsSection
           requestsQuery={requestsQuery}
           rows={requests}
