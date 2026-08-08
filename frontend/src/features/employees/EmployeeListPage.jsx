@@ -346,7 +346,7 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
           <Button
             type="button"
             variant="secondary"
-            className="max-[720px]:flex-1"
+            className="mobile:flex-1"
             id="employee-filter-toggle"
             aria-expanded={filtersOpen}
             aria-controls="employee-filter-panel"
@@ -364,7 +364,7 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
             <Button
               type="button"
               variant="secondary"
-              className="max-[720px]:flex-1"
+              className="mobile:flex-1"
               onClick={() => setSearchParams(new URLSearchParams(), { replace: true })}
             >
               <Icon name="refresh" />
@@ -454,7 +454,7 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
         columns={columns}
         rows={filteredEmployees}
         getRowKey={(employee) => employee.id}
-        gridClassName="grid-cols-[minmax(0,2.2fr)_minmax(0,0.9fr)_minmax(0,1.7fr)_minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(78px,0.6fr)] max-[1040px]:min-w-[980px]"
+        gridClassName="grid-cols-[minmax(0,2.2fr)_minmax(0,0.9fr)_minmax(0,1.7fr)_minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(78px,0.6fr)] nav-drawer:min-w-[980px]"
         searchable={false}
         sort={{ key: sortKey, dir: sortDir }}
         onSortChange={(next) => updateParams({ sort: next ? `${next.key}.${next.dir}` : '' })}

@@ -489,7 +489,7 @@ export function PriceImportPage({ showToast }) {
             variant="primary"
             onClick={() => setConfirmUpload(true)}
             disabled={!file || uploading}
-            className="max-[720px]:min-h-11 max-[720px]:w-full"
+            className="mobile:min-h-11 mobile:w-full"
           >
             <Icon name="upload" />
             {uploading ? 'กำลังอัปโหลด…' : 'อัปโหลดและบันทึกราคาใช้งาน'}

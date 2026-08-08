@@ -93,7 +93,7 @@ function PanelHeader({ bordered = false, className, children, ...props }) {
       className={cn(
         'flex min-h-11 flex-wrap items-center justify-between gap-[14px]',
         bordered
-          ? 'mb-0 border-b border-border-subtle px-5 py-4 max-[720px]:px-4 max-[720px]:py-3.5'
+          ? 'mb-0 border-b border-border-subtle px-5 py-4 mobile:px-4 mobile:py-3.5'
           : 'mb-4',
         className,
       )}
@@ -143,7 +143,7 @@ export function FormGrid({ single = false, className, children, ...props }) {
   return (
     <div
       className={cn(
-        'grid items-start gap-[14px] max-[720px]:grid-cols-1',
+        'grid items-start gap-[14px] mobile:grid-cols-1',
         single ? 'grid-cols-1' : 'grid-cols-2',
         className,
       )}
@@ -155,7 +155,7 @@ export function FormGrid({ single = false, className, children, ...props }) {
 }
 
 /** Reproduces `.span-2` (grid-column: span 2; span 1 at ≤720px). Apply to a FormGrid child. */
-export const formGridSpan2 = 'col-span-2 max-[720px]:col-span-1';
+export const formGridSpan2 = 'col-span-2 mobile:col-span-1';
 
 /**
  * StatGrid — reproduces `.stat-grid`:
@@ -169,7 +169,7 @@ export function StatGrid({ className, children, ...props }) {
   return (
     <div
       className={cn(
-        'grid grid-cols-4 gap-[14px] max-[1040px]:grid-cols-2 max-[720px]:grid-cols-2 max-[720px]:gap-2.5',
+        'grid grid-cols-4 gap-[14px] nav-drawer:grid-cols-2 mobile:grid-cols-2 mobile:gap-2.5',
         className,
       )}
       {...props}

@@ -667,7 +667,7 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                 </div>
               ) : null}
 
-              <div className="grid grid-cols-2 gap-4 max-[720px]:grid-cols-1">
+              <div className="grid grid-cols-2 gap-4 mobile:grid-cols-1">
                 <FormField label="วันที่เริ่ม" htmlFor="leave-start-date" error={startDateError} required>
                   <input
                     id="leave-start-date"
@@ -748,7 +748,7 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                 </label>
               </div>
               {formSubDay ? (
-                <div className="grid grid-cols-2 gap-4 max-[720px]:grid-cols-1">
+                <div className="grid grid-cols-2 gap-4 mobile:grid-cols-1">
                   <FormField label="เวลาเริ่ม" htmlFor="leave-start-time" error={errors.startTime?.message} required>
                     <input
                       id="leave-start-time"
@@ -887,7 +887,7 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
 
               {!step3Blocking && step3Preview ? (
                 <div className="grid gap-3 rounded-md border border-border-subtle bg-surface-subtle p-3">
-                  <div className="grid grid-cols-2 gap-3 text-sm max-[720px]:grid-cols-1">
+                  <div className="grid grid-cols-2 gap-3 text-sm mobile:grid-cols-1">
                     <span><strong className="block text-text-muted">รวมวันลา</strong>{formatDays(step3Preview.totalDays)}</span>
                     <span><strong className="block text-text-muted">รับค่าจ้าง / ไม่รับค่าจ้าง</strong>{formatDays(step3Preview.paidDays)} / {formatDays(step3Preview.unpaidDays)}</span>
                   </div>
@@ -937,7 +937,7 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
               ) : null}
 
               <CollapsibleSection title="ข้อมูลติดต่อระหว่างลา / ตำแหน่งงาน" subtitle="ดึงจากข้อมูลพนักงานอัตโนมัติ แก้ไขได้" defaultOpen={false}>
-                <div className="grid grid-cols-2 gap-4 max-[720px]:grid-cols-1">
+                <div className="grid grid-cols-2 gap-4 mobile:grid-cols-1">
                   <FormField label="ตำแหน่ง" htmlFor="leave-position-display">
                     <input id="leave-position-display" value={contactDefaultsQuery.data?.positionTh || '-'} disabled />
                   </FormField>

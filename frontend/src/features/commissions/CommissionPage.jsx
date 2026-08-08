@@ -1286,8 +1286,8 @@ function AccountCreateFromDeal({
               <input type="number" min="0" step="0.01" value={createForm.overpayment} onChange={(event) => updateCreateForm('overpayment', event.target.value)} />
             </label>
 
-            <div className="span-2 flex flex-wrap justify-end gap-[10px] max-[720px]:flex-col-reverse">
-              <Button type="submit" variant="primary" className="max-[720px]:!min-h-11 max-[720px]:!w-full" disabled={saving || !loadedTicket}>
+            <div className="span-2 flex flex-wrap justify-end gap-[10px] mobile:flex-col-reverse">
+              <Button type="submit" variant="primary" className="mobile:!min-h-11 mobile:!w-full" disabled={saving || !loadedTicket}>
                 <Icon name="check" size={14} />
                 บันทึกและสร้างคำขอค่าคอม
               </Button>
@@ -1397,11 +1397,11 @@ function ManualCommissionForm({ form, onChange, repOptions, onSubmit, onCancel, 
           />
         </label>
 
-        <div className="span-2 flex flex-wrap justify-end gap-[10px] max-[720px]:flex-col-reverse">
-          <Button type="button" variant="secondary" className="max-[720px]:!min-h-11 max-[720px]:!w-full" disabled={saving} onClick={onCancel}>
+        <div className="span-2 flex flex-wrap justify-end gap-[10px] mobile:flex-col-reverse">
+          <Button type="button" variant="secondary" className="mobile:!min-h-11 mobile:!w-full" disabled={saving} onClick={onCancel}>
             ยกเลิก
           </Button>
-          <Button type="submit" variant="primary" className="max-[720px]:!min-h-11 max-[720px]:!w-full" disabled={saving}>
+          <Button type="submit" variant="primary" className="mobile:!min-h-11 mobile:!w-full" disabled={saving}>
             <Icon name="check" size={14} />
             บันทึกค่าคอม
           </Button>

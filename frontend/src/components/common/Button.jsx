@@ -35,7 +35,7 @@ export const buttonVariants = cva(
     'border-transparent',
     '!font-bold',
     'min-h-[38px]',
-    'max-[720px]:min-h-[44px]',
+    'mobile:min-h-[44px]',
     'py-0',
     'disabled:cursor-not-allowed',
     'disabled:opacity-[0.55]',
@@ -50,7 +50,7 @@ export const buttonVariants = cva(
         // Opts out of the 44px mobile floor only: forcing an inline prose link
         // into a tap box breaks text flow. Keeps the 38px desktop floor it
         // already had, so desktop is unchanged.
-        text: 'border-0 bg-transparent text-primary p-0 max-[720px]:min-h-0',
+        text: 'border-0 bg-transparent text-primary p-0 mobile:min-h-0',
         // Stays 44x44 at every width: DESIGN.md specs the icon button as a
         // 44x44 square, and it already cleared the touch floor — shrinking it
         // to 38px on desktop would regress the spec and the topbar.

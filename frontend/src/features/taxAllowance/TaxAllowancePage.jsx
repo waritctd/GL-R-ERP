@@ -345,7 +345,7 @@ export function TaxAllowancePage({ user, showToast }) {
             <Button
               type="button"
               variant={statusAction.variant}
-              className="max-[720px]:w-full"
+              className="mobile:w-full"
               onClick={statusAction.onClick}
             >
               {statusAction.label}

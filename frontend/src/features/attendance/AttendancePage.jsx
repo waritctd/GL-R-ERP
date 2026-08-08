@@ -523,7 +523,7 @@ export function AttendancePage({ user, showToast }) {
               <Button
                 type="submit"
                 variant="success"
-                className="max-[720px]:min-h-11 max-[720px]:w-full"
+                className="mobile:min-h-11 mobile:w-full"
                 disabled={importing || !selectedFile || !importDeviceCode}
               >
                 <Icon name="plus" />
@@ -550,7 +550,7 @@ export function AttendancePage({ user, showToast }) {
                 variant="secondary"
                 onClick={() => setRecalcOpen(true)}
                 disabled={recalculating}
-                className="max-[720px]:min-h-11 max-[720px]:w-full"
+                className="mobile:min-h-11 mobile:w-full"
               >
                 <Icon name="refresh" />
                 {recalculating ? 'กำลังคำนวณ' : 'คำนวณข้อมูลย้อนหลัง'}
@@ -660,7 +660,7 @@ export function AttendancePage({ user, showToast }) {
         gridClassName={
           isSelfView
             ? 'grid-cols-[0.75fr_0.45fr_0.45fr_0.35fr_0.8fr_1.55fr_minmax(78px,0.7fr)] reflow-cards'
-            : 'grid-cols-[1.2fr_0.45fr_0.45fr_0.35fr_0.8fr_1.55fr_minmax(78px,0.7fr)] max-[900px]:min-w-[840px] reflow-cards'
+            : 'grid-cols-[1.2fr_0.45fr_0.45fr_0.35fr_0.8fr_1.55fr_minmax(78px,0.7fr)] attendance-scroll:min-w-[840px] reflow-cards'
         }
         mobileCard={(day) => (
           <AttendanceDayCard

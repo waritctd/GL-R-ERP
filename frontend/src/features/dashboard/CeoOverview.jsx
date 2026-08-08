@@ -366,7 +366,7 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
             )}
           </Panel>
 
-          <div className="grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] max-[1040px]:grid-cols-1">
+          <div className="grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] nav-drawer:grid-cols-1">
             <Panel title="ยอดตามทีม/ฝ่าย">
               {/* No target/quota field exists on any endpoint the CEO can reach
                   (see the repBreakdown comment above) — bars are sized against
