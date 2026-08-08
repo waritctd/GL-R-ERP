@@ -44,6 +44,10 @@ import th.co.glr.hr.ticket.TicketRepository;
  * task spec calls out explicitly: idempotency, and never retro-altering an already-processed
  * month's persisted {@code hr.payroll_line} row.
  */
+import th.co.glr.hr.config.AppProperties;
+
+import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
+
 class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest {
     private TaxAllowanceDeclarationRepository declarationRepository;
     private TaxAllowanceDeclarationService service;
@@ -92,7 +96,8 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
             mock(AuditService.class),
             mock(FileStorageService.class),
             payrollService,
-            new NotificationRepository(jdbc));
+            new NotificationRepository(jdbc),
+            new AppProperties(), new LorYor01Renderer());
 
         hrEmployeeId = seedEmployee("EXP-HR", new BigDecimal("50000.00"));
     }
@@ -186,7 +191,8 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
             null, null, null,
             null,
             null,
-            null);
+            null,
+            null);                   // lorYor01 — no ล.ย.01 form detail in this fixture
         TaxAllowanceDeclarationDto declaration = service.submitOwn(request, employeeActor(employeeId));
         service.approve(declaration.declarationId(), null, hrActor());
         service.apply(declaration.declarationId(), null, hrActor());
