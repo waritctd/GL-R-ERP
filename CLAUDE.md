@@ -5,7 +5,11 @@ This repository is a GL&R **HR + Sales/CRM portal** growing into an ERP platform
 ## Start every session by reading context
 1. **Read this file and `AGENTS.md` before starting.** They hold the product identity, the current priorities, and the non-negotiable rules. There is no longer a separate handoff corpus to read — it was retired in 2026-07 (see "Where the old docs went" below).
 2. **Always run `git status` before making any changes** and confirm which branch you are on.
-3. **Check you are not on a stale base.** With several worktrees in play, `git fetch` then `git rev-list --left-right --count HEAD...origin/main` before you build anything substantial — this repo has had a full feature built on a base that `main` had already moved past.
+3. **Keep local `main` identical to `origin/main` — always.** `main` is never a place to hold work, so it should only ever fast-forward. Sync it at session start, after every merge, and before cutting any branch:
+   ```
+   git fetch origin main && git merge --ff-only origin/main
+   ```
+   `--ff-only` is the point: it refuses to create a merge commit on `main`, so a failure means something was committed locally that should not have been — investigate rather than force it. Verify with `git rev-list --left-right --count HEAD...origin/main`, which must read `0  0`. **Branch from `origin/main`, not from a stale local `main`**: with several worktrees in play this repo has had a full feature built on a base `main` had already moved past, and a branch cut from a stale base is the thing that turns into repeated mid-flight syncs later.
 4. **Check for concurrent activity before starting substantial work.** `git branch -a` / `git log --all --oneline -10` to see what other worktrees or agents have pushed recently, and list open PRs to see if another session is already on the same files or surface. Two agents silently touching the same area is how conflicting changes and repeated merge-fixups happen — see the branch-lifetime note below.
 
 ## Scope rules — non-negotiable
@@ -174,25 +178,17 @@ The frontend is migrating from the single global `frontend/src/styles.css` to a 
   a second or third `git fetch origin main && git merge/rebase` mid-flight has grown too large or sat
   open too long; both cost real agent time re-reading diffs and re-resolving conflicts. `feat/leave-rules-tab`
   synced `main` four times before merging — that pattern is the thing to avoid, not repeat.
-- **Stacked PRs: read [`STACKED-PRS.md`](STACKED-PRS.md) before creating any branch.** Many sessions
-  build here in parallel, so the base you pick matters as much as the diff. The short version:
-  - Branch off `main` with **`git town hack`** by default. Stack a child with **`git town append`**
-    *only* when the work genuinely cannot compile, pass tests, or be reviewed without unmerged work
-    from another branch. "Related" and "would conflict later" are **not** dependencies.
-  - Max stack depth **3**; one parent per branch; the smallest, least controversial piece goes at
-    the bottom.
-  - Never create a stacked branch with plain `git switch -c` — Git Town needs the recorded parent
-    (`git town set-parent` / `git town branch` to inspect).
-  - Resync the whole chain with **`git town sync --stack`** after `main` moves. `git town undo` backs
-    out any Git Town command. ⚠️ **`sync` pushes** (branches *and* tags) and stashes your working
-    tree — it is not a read-only catch-up. `--dry-run` first; see `STACKED-PRS.md` §4.
-  - Merge **bottom-up on GitHub with a merge commit** — **squashing a PR that has children orphans
-    every branch above it.**
-  - A stacked PR body must open with a **Stack** block (base, position, what is above, "review only
-    the diff against the parent"), and still carries its own full evidence — it inherits none from
-    its parent.
-  - Config is checked in at [`git-town.toml`](git-town.toml); install the CLI with
-    `brew install git-town`. New branches are never auto-pushed or auto-proposed.
+- **Stacked PRs run on Git Town — read [`STACKED-PRS.md`](STACKED-PRS.md) before creating any branch.**
+  It has the mechanics (depth cap, recorded parents, the required PR **Stack** block, resync and
+  recovery); config is checked in at [`git-town.toml`](git-town.toml). Three things belong here
+  because getting them wrong is expensive and you will not have read that file yet:
+  - **Default to `git town hack` off `main`. Stack only for a genuine dependency** — the work cannot
+    compile, pass tests, or be reviewed without another branch's unmerged commits. "Related" and
+    "would conflict later" are **not** dependencies, and a needless stack is pure cost.
+  - ⚠️ **`git town sync` pushes** — branches *and* tags — and stashes your working tree. It is not a
+    read-only catch-up, so never run it when a push has not been asked for. `--dry-run` first.
+  - ⚠️ **Merge bottom-up with a merge commit. Squashing a PR that has children orphans every branch
+    above it.**
 - **Rework costs a full second pass — verify before handing off, not after review flags it.** Commits
   like `review fixes for V116` (a second pass on quota bookkeeping and probation resolution after
   review) are exactly the pattern to prevent: for business-logic-sensitive surfaces (leave/payroll
