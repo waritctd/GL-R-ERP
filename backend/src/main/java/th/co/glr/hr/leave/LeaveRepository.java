@@ -51,6 +51,13 @@ public class LeaveRepository {
         public Set<LocalDate> holidaysBetween(LocalDate fromDate, LocalDate toDate) {
             return Set.of();
         }
+
+        // Consistent with this stand-in's whole premise (no calendar data exists, for any date) --
+        // every year reports zero rows, same as isHoliday reports false for every date.
+        @Override
+        public boolean hasHolidaysForYear(int year) {
+            return false;
+        }
     };
     // Phase A0a (structured rejection outcome, V131): serializes/deserializes
     // hr.leave_request.system_note_params (a flat Map<String,String>) to/from jsonb -- see #toJson/

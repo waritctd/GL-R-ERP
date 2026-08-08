@@ -13,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
+import th.co.glr.hr.attendance.schedule.DbHolidayCalendar;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -55,7 +56,8 @@ class OvertimeRetroactiveScopeIntegrationTest extends AbstractPostgresIntegratio
             mock(AuditService.class),
             mock(NotificationService.class),
             new AppProperties(),
-            mock(AttendanceDailyService.class));
+            mock(AttendanceDailyService.class),
+            new DbHolidayCalendar(jdbc));
 
         salesDivision = insertDivision("SLS", "ฝ่ายขาย");
         factoryDivision = insertDivision("FAC", "ฝ่ายโรงงาน");
