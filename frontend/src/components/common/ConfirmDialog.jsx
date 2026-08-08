@@ -88,12 +88,16 @@ export function ConfirmDialog({
         </>
       }
     >
-      {typeof message === 'string' ? <p className="confirm-dialog-message">{message}</p> : message}
+      {typeof message === 'string' ? <p className="confirm-dialog-message text-text-secondary leading-normal">{message}</p> : message}
       {requireReason ? (
-        <label className="confirm-dialog-reason" htmlFor="confirm-dialog-reason">
+        <label
+          className="confirm-dialog-reason grid content-start gap-[7px] mt-[14px] text-text-secondary text-[length:var(--text-sm)] font-bold"
+          htmlFor="confirm-dialog-reason"
+        >
           {reasonLabel}
           <textarea
             id="confirm-dialog-reason"
+            className="min-h-[84px]"
             ref={reasonRef}
             value={reason}
             onChange={(event) => setReason(event.target.value)}

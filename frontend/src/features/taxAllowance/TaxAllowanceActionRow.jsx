@@ -1,5 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { Icon } from '../../components/common/Icon.jsx';
+import { STAT_ICON_TILE_CLASSES, STAT_TONE_CLASSES } from '../../components/common/StatCard.jsx';
+import { cn } from '../../utils/cn.js';
 
 /**
  * Landing-page nudge for ล.ย.01, shown ONLY when the employee actually has something to do.
@@ -61,7 +63,7 @@ export function TaxAllowanceActionRow({ summary }) {
       className="bg-surface border border-border rounded-md p-5 w-full text-left cursor-pointer flex items-center justify-between gap-4 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover mobile:flex-col mobile:items-start mobile:gap-3"
     >
       <span className="flex items-center gap-3 min-w-0">
-        <span className={`stat-icon !mb-0 stat-${prompt.tone}`}>
+        <span className={cn(STAT_ICON_TILE_CLASSES, '!mb-0', STAT_TONE_CLASSES[prompt.tone])}>
           <Icon name={prompt.icon} size={21} />
         </span>
         <span className="min-w-0">

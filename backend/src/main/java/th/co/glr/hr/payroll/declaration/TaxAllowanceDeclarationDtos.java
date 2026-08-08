@@ -52,7 +52,9 @@ public final class TaxAllowanceDeclarationDtos {
         OffsetDateTime expiredAt,
         OffsetDateTime reverifiedAt,
         Long reverifiedById,
-        Long supersededById
+        Long supersededById,
+        /** แบบ ล.ย.01 detail (V137). Never null on a read — empty() when the row predates the form. */
+        LorYor01Details lorYor01
     ) {}
 
     /**
@@ -64,6 +66,66 @@ public final class TaxAllowanceDeclarationDtos {
      * the row lands on the caller regardless — see
      * {@code TaxAllowanceDeclarationScopeIntegrationTest} for the test that pins this.
      */
+    /**
+     * The parts of แบบ ล.ย.01 that are not allowance amounts: the header block, ข้อ 1-2 สถานภาพ, the
+     * per-parent ticks in ข้อ 4/ข้อ 6, and the two free-text slots.
+     *
+     * <p>Carried as ONE nested component on the submit requests rather than ~20 more flat ones. Two
+     * reasons. It keeps {@code TaxAllowanceDeclarationSubmitRequest} and
+     * {@code TaxAllowanceOnBehalfRequest} — which are hand-duplicated — from drifting field by
+     * field. And it keeps each request at the same parameter count, so {@code contract.test.js}'s
+     * arity check against {@code hrApi.js} still means something instead of being re-baselined.
+     *
+     * <p>Nulls mean "not answered", which on a form is different from zero or false: a blank box and
+     * a ticked "no" are not the same statement to the Revenue Department.
+     *
+     * <p>Deliberately absent: ข้อ 11 (LTF). The form prints it, but LTF purchases stopped being
+     * deductible after tax year 2019, so there is nothing an employee could truthfully declare —
+     * the line renders blank. See V137.
+     */
+    public record LorYor01Details(
+        // header — ส่วนหัว
+        String taxpayerId,
+        String firstNameTh,
+        String lastNameTh,
+        LorYor01AddressPayload address,
+        // ข้อ 1 / ข้อ 2
+        String maritalState,
+        String spousalStatus,
+        Boolean spouseHasIncome,
+        // ข้อ 3
+        @PositiveOrZero Integer childrenTotal,
+        @PositiveOrZero BigDecimal childExtraAllowance,
+        // ข้อ 4
+        Boolean ownFatherSupported,
+        Boolean ownMotherSupported,
+        Boolean spouseFatherSupported,
+        Boolean spouseMotherSupported,
+        @PositiveOrZero BigDecimal spouseParentCareAllowance,
+        // ข้อ 6
+        Boolean ownFatherHealthInsured,
+        Boolean ownMotherHealthInsured,
+        Boolean spouseFatherHealthInsured,
+        Boolean spouseMotherHealthInsured,
+        // ข้อ 9
+        @PositiveOrZero BigDecimal providentFundAllowance,
+        // ข้อ 10 / ข้อ 15 free text
+        String rmfSellerName,
+        String otherDonationNote
+    ) {
+        public static LorYor01Details empty() {
+            return new LorYor01Details(null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, null, null, null);
+        }
+    }
+
+    /** ที่อยู่ as ล.ย.01 asks for it — 13 slots, of which hr.employee_address can hold 8 before V137. */
+    public record LorYor01AddressPayload(
+        String building, String roomNo, String floor, String village,
+        String houseNo, String moo, String soi, String junction, String road,
+        String subDistrict, String district, String province, String postalCode
+    ) {}
+
     public record TaxAllowanceDeclarationSubmitRequest(
         @NotNull Integer taxYear,
         // ล.ย.01 ข้อ 2.2: null means "in force from January", same default upsertTaxAllowances uses.
@@ -89,7 +151,8 @@ public final class TaxAllowanceDeclarationDtos {
         @PositiveOrZero Integer disabledCareCount,
         Boolean disabilityCardHolder,
         @PositiveOrZero Integer parentCareCount,
-        String documentReference
+        String documentReference,
+        LorYor01Details lorYor01
     ) {}
 
     /**
@@ -122,7 +185,8 @@ public final class TaxAllowanceDeclarationDtos {
         @PositiveOrZero Integer disabledCareCount,
         Boolean disabilityCardHolder,
         @PositiveOrZero Integer parentCareCount,
-        String documentReference
+        String documentReference,
+        LorYor01Details lorYor01
     ) {}
 
     /** Reject requires a reason (decision #6 / {@code chk_tad_rejected_has_reason}); approve does not. */

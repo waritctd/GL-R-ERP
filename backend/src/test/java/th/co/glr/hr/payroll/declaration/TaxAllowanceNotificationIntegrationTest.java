@@ -36,6 +36,10 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * <p>Goes through the real service and a real {@link NotificationRepository} against real Postgres
  * — a mocked repository would "pass" while the INSERT wrote a different employee_id.
  */
+import th.co.glr.hr.config.AppProperties;
+
+import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
+
 class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegrationTest {
     private TaxAllowanceDeclarationRepository repository;
     private TaxAllowanceDeclarationService service;
@@ -56,7 +60,8 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
             mock(FileStorageService.class),
             mock(PayrollService.class),
             // Real, not mocked: the whole point is which employee_id reaches the INSERT.
-            new NotificationRepository(jdbc));
+            new NotificationRepository(jdbc),
+            new AppProperties(), new LorYor01Renderer());
 
         employeeA = seedEmployee("TAN-A");
         employeeB = seedEmployee("TAN-B");
@@ -161,7 +166,8 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
             null, null, null,        // childCount, childCountDouble, disabledCareCount
             null,                    // disabilityCardHolder
             null,                    // parentCareCount
-            null);                   // documentReference
+            null,                   // documentReference
+            null);                   // lorYor01 — no ล.ย.01 form detail in this fixture
         return service.submitOwn(request, employeeActor(employeeId));
     }
 

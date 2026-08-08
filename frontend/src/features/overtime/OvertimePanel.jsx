@@ -928,7 +928,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           }
           return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <p className="confirm-dialog-message" style={{ margin: 0 }}>
+              <p className="confirm-dialog-message text-text-secondary leading-normal" style={{ margin: 0 }}>
                 ตรวจสอบแผน OT ของ <strong>{request.employeeName || request.employeeCode || request.employeeId}</strong> ก่อนอนุมัติ
               </p>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid var(--color-border)', paddingTop: 8 }}>

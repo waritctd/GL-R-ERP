@@ -123,161 +123,16 @@
   font-weight: 500;
 }
 
-/* Stat card captions ("Headcount", "Approvals", …) are data text, not an
-   icon/placeholder, so per DESIGN.md's Muted Floor Rule they must not go
-   below Ink Muted (#5c6b80) — Ink Faint is reserved for icons/placeholders. */
-.stat-helper {
-  display: block;
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  font-weight: 500;
-}
-
-
-.breadcrumbs {
-  margin-bottom: var(--space-2);
-}
-
-.breadcrumbs ol {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.breadcrumbs li {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-size: var(--text-xs);
-  min-width: 0;
-}
-
-.breadcrumbs a,
-.breadcrumbs button {
-  border: 0;
-  background: transparent;
-  padding: 0;
-  color: var(--color-primary);
-  font-size: var(--text-xs);
-  font-weight: 600;
-  cursor: pointer;
-  overflow-wrap: anywhere;
-  text-decoration: none;
-}
-
-.breadcrumbs a:hover,
-.breadcrumbs button:hover {
-  text-decoration: underline;
-}
-
-.breadcrumbs [aria-current="page"] {
-  color: var(--color-text-muted);
-  font-weight: 600;
-}
-
-
-.button-loading-spinner {
-  position: absolute;
-  width: 16px;
-  height: 16px;
-  border: 2px solid currentColor;
-  border-right-color: transparent;
-  border-radius: var(--radius-pill);
-  animation: button-loading-spin 700ms linear infinite;
-}
-
-@keyframes button-loading-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .button-loading-spinner {
-    animation: none;
-  }
-}
-
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
 }
 
-.stat-card,
 .profile-strip {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-}
-
-.stat-card {
-  padding: 16px;
-}
-
-.stat-icon {
-  width: 40px;
-  height: 40px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-md);
-  margin-bottom: 14px;
-}
-
-.stat-indigo,
-.status-indigo {
-  background: var(--color-info-bg-alt);
-  color: var(--color-info-dark);
-}
-
-.stat-teal,
-.status-teal,
-.status-success {
-  background: var(--color-success-bg);
-  color: var(--color-success-dark);
-}
-
-.stat-amber,
-.status-warning {
-  background: var(--color-warning-bg);
-  color: var(--color-warning);
-}
-
-.stat-blue {
-  background: var(--color-info-bg);
-  color: var(--color-info);
-}
-
-.stat-rose,
-.status-danger {
-  background: var(--color-danger-bg);
-  color: var(--color-danger-dark);
-}
-
-.status-neutral {
-  background: var(--color-surface-subtle);
-  color: var(--color-icon-muted);
-}
-
-.status-info {
-  background: var(--color-info-bg);
-  color: var(--color-info);
-}
-
-.stat-value {
-  color: var(--color-text);
-  font-size: var(--text-3xl);
-  font-weight: 800;
-  line-height: 1.1;
-}
-
-.stat-label {
-  margin-top: 5px;
-  font-weight: 700;
 }
 
 
@@ -1246,32 +1101,6 @@
   border-bottom: 0;
 }
 
-.status-tabs {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-  padding: 4px 0;
-}
-
-.status-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: 1px solid var(--color-border-subtle);
-  background: var(--color-surface);
-  border-radius: var(--radius-lg);
-  padding: 5px 14px;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: filter 0.1s;
-}
-
-.status-tab:hover:not(.active) { background: var(--color-surface-subtle); }
-.status-tab.active { filter: brightness(0.96); }
-
 .ticket-events {
   display: flex;
   flex-direction: column;
@@ -1302,25 +1131,6 @@
 .event-dot.comment    { background: var(--color-text-muted); }
 .event-dot.created    { background: var(--color-success-soft); }
 .event-dot.success    { background: var(--color-success); }
-
-.ticket-detail-grid {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: 16px;
-  align-items: start;
-  min-width: 0;
-}
-
-.ticket-detail-grid > * {
-  min-width: 0;
-  overflow: hidden;
-}
-
-@media (max-width: 900px) {
-  .ticket-detail-grid {
-    grid-template-columns: 1fr;
-  }
-}
 
 .employee-cell {
   display: flex;
@@ -1436,45 +1246,35 @@
   font-weight: 700;
 }
 
-.avatar {
-  display: grid;
-  place-items: center;
-  flex: 0 0 auto;
-  border-radius: var(--radius-md);
-  font-weight: 800;
-}
+/* StatusBadge is deliberately NOT ported to Tailwind, unlike Avatar and
+   StatCard which moved in the same change. It cannot be, on its own: four
+   rules in this file override it in specific contexts, and every one of them
+   wins today only because this rule sits in `@layer legacy` alongside them and
+   loses on selector specificity. Tailwind utilities live in `@layer utilities`,
+   which beats `legacy` regardless of specificity, so porting ANY property this
+   rule shares with those four inverts the relationship and silently changes
+   rendering:
 
-/* Compact variant for dense mobile record cards, where a 38px avatar sets the
-   whole row's height and pushes the card taller than the text needs. */
-.avatar-xs {
-  width: 28px;
-  height: 28px;
-  font-size: var(--text-2xs);
-}
+     .data-row > span > span            display: block -- stretches the badge
+                                        into a full-width bar in labelled cells.
+                                        Measured: porting `display`/`width` here
+                                        turned those bars back into compact
+                                        pills, which changed row heights and
+                                        shifted every row of /tickets. Caught by
+                                        the visual harness on 5 surfaces.
+     .ticket-filter-bar > .status-badge display: none -- a ported `display`
+                                        would make a hidden badge VISIBLE.
+     .ticket-list-page ... .status-badge  white-space: normal -- a ported
+                                        `whitespace-nowrap` would stop long
+                                        labels wrapping.
+     .data-row > span|td > .status-badge  re-pins display/width for the nested
+                                        case (see that rule's own comment).
 
-.avatar-sm {
-  width: 38px;
-  height: 38px;
-  font-size: var(--text-sm);
-}
-
-.avatar-md {
-  width: 46px;
-  height: 46px;
-}
-
-.avatar-lg {
-  width: 64px;
-  height: 64px;
-  font-size: var(--text-xl);
-}
-
-.avatar-xl {
-  width: 78px;
-  height: 78px;
-  font-size: var(--text-3xl);
-}
-
+   Porting this needs those four migrated in the same change; it is a bigger
+   unit of work than a primitive swap, so it is deliberately left for a later
+   slice rather than half-done here. The tone rules below keep only their
+   `.status-*` halves — the `.stat-*` halves moved to STAT_TONE_CLASSES in
+   StatCard.jsx. */
 .status-badge {
   display: inline-flex;
   align-items: center;
@@ -1489,36 +1289,35 @@
   white-space: nowrap;
 }
 
-button.status-badge,
-a.status-badge {
-  min-height: 44px;
-  padding: 8px 14px;
+.status-indigo {
+  background: var(--color-info-bg-alt);
+  color: var(--color-info-dark);
 }
 
-.tabs {
-  display: flex;
-  gap: 2px;
-  border-bottom: 1px solid var(--color-border-input);
-  overflow-x: auto;
+.status-teal,
+.status-success {
+  background: var(--color-success-bg);
+  color: var(--color-success-dark);
 }
 
-.tabs button {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 44px;
-  padding: 0 14px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--color-text-muted);
-  font-weight: 700;
-  white-space: nowrap;
+.status-warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
 }
 
-.tabs button.active {
-  color: var(--color-primary);
-  border-bottom-color: var(--color-primary);
+.status-danger {
+  background: var(--color-danger-bg);
+  color: var(--color-danger-dark);
+}
+
+.status-neutral {
+  background: var(--color-surface-subtle);
+  color: var(--color-icon-muted);
+}
+
+.status-info {
+  background: var(--color-info-bg);
+  color: var(--color-info);
 }
 
 .timeline-list > div {
@@ -1536,78 +1335,6 @@ a.status-badge {
   color: var(--color-text-muted);
 }
 
-.empty-state {
-  min-height: 220px;
-  display: grid;
-  place-items: center;
-  align-content: center;
-  gap: 8px;
-  /* Text color defaults to Ink Muted at the container level so bare text
-     nodes (callers that skip <strong>/<span>, e.g. SalesOverview.jsx,
-     EmployeeSelfService.jsx, EmployeeDashboard.jsx) inherit a contrast-safe
-     color instead of falling through to Ink Faint. Only the icon is pinned
-     to Ink Faint below (DESIGN.md: Ink Faint is for icons/placeholders
-     only, never for text on a light surface). */
-  color: var(--color-text-muted);
-  text-align: center;
-}
-
-.empty-state svg {
-  color: var(--color-text-faint);
-}
-
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  background: rgba(15, 23, 42, 0.52);
-}
-
-.modal-panel {
-  width: min(720px, 100%);
-  max-height: min(760px, calc(100dvh - 40px));
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  box-shadow: var(--shadow-lg-heavy);
-}
-
-.modal-header,
-.modal-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 18px 20px;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.modal-header h2,
-.modal-header p {
-  margin: 0;
-}
-
-.modal-header p {
-  color: var(--color-text-muted);
-  font-size: var(--text-sm);
-}
-
-.modal-body {
-  overflow: auto;
-  padding: 20px;
-}
-
-.modal-footer {
-  justify-content: flex-end;
-  border-top: 1px solid var(--color-border);
-  border-bottom: 0;
-}
-
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1616,61 +1343,6 @@ a.status-badge {
 
 .span-2 {
   grid-column: span 2;
-}
-
-.toast {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  z-index: 80;
-  min-height: 48px;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  border: 0;
-  border-radius: var(--radius-md);
-  padding: 12px 16px;
-  background: var(--color-text);
-  color: var(--color-surface);
-  box-shadow: var(--shadow-md);
-}
-
-.toast-success svg {
-  color: var(--color-teal-focus);
-}
-
-.toast-error svg {
-  color: var(--color-danger-soft);
-}
-
-.loading-veil {
-  position: fixed;
-  inset: 0;
-  z-index: 90;
-  display: grid;
-  place-items: center;
-  background: rgba(255, 255, 255, 0.55);
-  color: var(--color-text);
-  font-weight: 800;
-}
-
-/* ConfirmDialog */
-.confirm-dialog-message {
-  color: var(--color-text-secondary);
-  line-height: 1.5;
-}
-
-.confirm-dialog-reason {
-  display: grid;
-  gap: 7px;
-  margin-top: 14px;
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  font-weight: 700;
-}
-
-.confirm-dialog-reason textarea {
-  min-height: 84px;
 }
 
 /* FormField — the `.form-field` grid itself is now Tailwind, on the component
@@ -1695,237 +1367,6 @@ select.is-invalid:focus,
 textarea.is-invalid:focus {
   border-color: var(--color-danger);
   box-shadow: 0 0 0 3px var(--color-danger-bg);
-}
-
-/* Collapsible section */
-.collapsible-section {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-}
-
-.collapsible-section + .collapsible-section {
-  margin-top: var(--space-4);
-}
-
-.collapsible-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.collapsible-header-button {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  background: none;
-  border: 0;
-  text-align: left;
-  padding: var(--space-4);
-  color: var(--color-text);
-  border-radius: var(--radius-md);
-}
-
-.collapsible-header-button:hover {
-  background: var(--color-surface-hover);
-}
-
-.collapsible-header-button:focus-visible {
-  outline: none;
-  box-shadow: var(--shadow-focus-ring);
-}
-
-.collapsible-header-right {
-  padding-right: var(--space-4);
-}
-
-/* Static variant (`collapsible={false}`): a heading, not a 44px-target button,
-   so it needs less room. Read-only record views stack many short groups, and
-   the collapsible padding stack (16px header + 16px FieldList margin) leaves
-   32px of dead space under every title. */
-.collapsible-header-static {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  padding: var(--space-3) var(--space-3) 0;
-}
-
-.collapsible-section.is-static .collapsible-body {
-  padding: 0 var(--space-3) var(--space-3);
-}
-
-.collapsible-section.is-static .collapsible-title {
-  font-size: var(--text-base);
-  margin: 0;
-}
-
-.collapsible-section.is-static .collapsible-header-right {
-  padding: var(--space-3) var(--space-3) 0 0;
-}
-
-.collapsible-title-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.collapsible-title {
-  font-size: var(--text-lg);
-  font-weight: 700;
-  color: var(--color-text);
-}
-
-.collapsible-subtitle {
-  font-size: var(--text-xs);
-  font-weight: 500;
-  color: var(--color-text-muted);
-}
-
-.collapsible-chevron {
-  flex: none;
-  color: var(--color-icon-muted);
-  transform: rotate(-90deg);
-  transition: transform 0.15s ease;
-}
-
-.collapsible-chevron.is-open {
-  transform: rotate(0deg);
-}
-
-.collapsible-body {
-  padding: 0 var(--space-4) var(--space-4);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .collapsible-chevron {
-    transition: none;
-  }
-}
-
-/* Info tip */
-.info-tip {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  margin-left: var(--space-1);
-}
-
-.info-tip-trigger {
-  /* Item 4c fix (2026-07-31): the VISIBLE badge stays a small 16px circle deliberately -- there are
-     ~11 of these in the payroll detail panel alone, and a 44px glyph on every field label would be
-     visual noise the "?" hint doesn't warrant. `position: relative` anchors the invisible `::before`
-     hit-slop below, which is what actually grows the touch/click target to >=44x44 without changing
-     what's drawn. */
-  position: relative;
-  width: 16px;
-  height: 16px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--color-border-strong);
-  background: var(--color-surface-subtle);
-  color: var(--color-text-muted);
-  font-size: var(--text-2xs);
-  font-weight: 700;
-  line-height: 1;
-}
-
-/* Item 4c fix (2026-07-31): an invisible hit-slop, not a bigger visible circle (see the comment
-   above). `content: ''` with no background/border paints nothing; `inset: -14px` on all sides grows
-   the CLICKABLE region from the visible 16x16 badge to the WCAG 2.5.5/2.5.8 floor of 44x44
-   (16 + 14 + 14 = 44) without moving or resizing the glyph itself. A pseudo-element's rendered area
-   is not a separate event target -- a click anywhere inside it is dispatched to `.info-tip-trigger`
-   (the actual `<button>`), so no extra JS/handler wiring is needed for this to work. */
-.info-tip-trigger::before {
-  content: '';
-  position: absolute;
-  inset: -14px;
-}
-
-.info-tip-trigger:hover {
-  background: var(--color-info-bg-alt);
-  color: var(--color-info-dark);
-  border-color: var(--color-info);
-}
-
-.info-tip-trigger:focus-visible {
-  outline: none;
-  box-shadow: var(--shadow-focus-ring);
-}
-
-.info-tip-bubble {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 100;
-  width: max-content;
-  max-width: 240px;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-md);
-  background: var(--color-text);
-  color: var(--color-surface);
-  font-size: var(--text-xs);
-  font-weight: 500;
-  box-shadow: var(--shadow-md);
-  pointer-events: none;
-}
-
-.info-tip-bubble[hidden] {
-  display: none;
-}
-
-/* Skeleton */
-.skeleton {
-  display: block;
-  background: linear-gradient(
-    90deg,
-    var(--color-surface-muted) 25%,
-    var(--color-border) 37%,
-    var(--color-surface-muted) 63%
-  );
-  background-size: 400% 100%;
-  animation: skeleton-shimmer 1.4s ease infinite;
-}
-
-.skeleton-text {
-  display: grid;
-  gap: 8px;
-}
-
-.skeleton-card {
-  display: grid;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-}
-
-.skeleton-card-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-@keyframes skeleton-shimmer {
-  0% {
-    background-position: 100% 50%;
-  }
-  100% {
-    background-position: 0 50%;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .skeleton {
-    animation: none;
-    background: var(--color-surface-muted);
-  }
 }
 
 /* Tablet band (721–1040px): the persistent sidebar is GONE — navigation is
@@ -2125,38 +1566,6 @@ textarea.is-invalid:focus {
     gap: 10px;
   }
 
-  .stat-card {
-    padding: 12px;
-  }
-
-  .stat-icon {
-    width: 30px;
-    height: 30px;
-    margin-bottom: 8px;
-  }
-
-  .stat-icon svg {
-    width: 16px;
-    height: 16px;
-  }
-
-  .stat-value {
-    font-size: var(--text-xl);
-  }
-
-  .stat-label {
-    margin-top: 3px;
-    font-size: var(--text-xs);
-  }
-
-  .stat-helper {
-    margin-top: 1px;
-    display: block;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-
   /* `.profile-strip` (dashboard identity card) has the same missing-h2-size
      gap as `.detail-hero` — on mobile the flex row becomes a column, which
      exposes the browser's default h2 margins (~20px top+bottom) as dead
@@ -2188,26 +1597,6 @@ textarea.is-invalid:focus {
 
   .span-2 {
     grid-column: span 1;
-  }
-
-  /* Thai has no inter-word spaces, so a long breadcrumb label is a single
-     unbreakable run that stretches the page container past the viewport
-     (43px on the deposit notice). Let the labels wrap instead. */
-  .breadcrumbs,
-  .breadcrumbs li,
-  .breadcrumbs li > span,
-  .breadcrumbs a,
-  .breadcrumbs button {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  /* Status filter chips are a primary mobile interaction (they filter the
-     work queue), but padding alone leaves them 28px tall — well under the
-     touch floor. Desktop keeps its denser 28px chip. */
-  .status-tab {
-    min-height: 44px;
-    padding: 5px 16px;
   }
 
   .ticket-list-page {
