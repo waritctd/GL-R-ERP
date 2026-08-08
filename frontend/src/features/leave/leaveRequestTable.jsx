@@ -35,7 +35,7 @@ const LEAVE_PURPOSE_LABEL_BY_CODE = new Map(LEAVE_PURPOSE_OPTIONS.map((option) =
 // note, actions. Reflows to cards below 721px via each tab's own `mobileCard` -- this
 // grid only governs the >=721px table layout, same convention as the pre-A1
 // LEAVE_TABLE_GRID it replaces.
-export const LEAVE_REQUEST_TABLE_GRID = 'grid-cols-[minmax(0,2.25rem)_minmax(0,1.3fr)_minmax(0,1.05fr)_minmax(0,1.5fr)_minmax(0,0.95fr)_minmax(0,1.3fr)_minmax(0,1fr)] max-[1040px]:min-w-[980px] reflow-cards';
+export const LEAVE_REQUEST_TABLE_GRID = 'grid-cols-[minmax(0,2.25rem)_minmax(0,1.3fr)_minmax(0,1.05fr)_minmax(0,1.5fr)_minmax(0,0.95fr)_minmax(0,1.3fr)_minmax(0,1fr)] nav-drawer:min-w-[980px] reflow-cards';
 
 export function leaveRequestRowKey(request) {
   return request.id;

@@ -14,7 +14,7 @@ import { formatShortDate } from '../../utils/format.js';
 import { HolidayFormModal } from './HolidayFormModal.jsx';
 import { parseCooldownSeconds, summarizeFetchOutcomes } from './holidayFetch.js';
 
-const GRID = 'grid-cols-[minmax(0,0.9fr)_minmax(0,2.1fr)_minmax(0,1fr)_minmax(0,0.8fr)] max-[1040px]:min-w-[620px] reflow-cards';
+const GRID = 'grid-cols-[minmax(0,0.9fr)_minmax(0,2.1fr)_minmax(0,1fr)_minmax(0,0.8fr)] nav-drawer:min-w-[620px] reflow-cards';
 
 // Default cooldown fallback if a 429 message somehow doesn't carry a parseable seconds figure
 // (message shape changed server-side) — matches BotHolidayFetchService.MANUAL_FETCH_COOLDOWN

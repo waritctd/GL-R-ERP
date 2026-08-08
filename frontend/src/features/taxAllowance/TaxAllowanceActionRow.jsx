@@ -58,7 +58,7 @@ export function TaxAllowanceActionRow({ summary }) {
     <button
       type="button"
       onClick={() => navigate('/tax-allowance')}
-      className="bg-surface border border-border rounded-md p-5 w-full text-left cursor-pointer flex items-center justify-between gap-4 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-3"
+      className="bg-surface border border-border rounded-md p-5 w-full text-left cursor-pointer flex items-center justify-between gap-4 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover mobile:flex-col mobile:items-start mobile:gap-3"
     >
       <span className="flex items-center gap-3 min-w-0">
         <span className={`stat-icon !mb-0 stat-${prompt.tone}`}>
@@ -69,7 +69,7 @@ export function TaxAllowanceActionRow({ summary }) {
           <span className="block !text-xs !text-text-muted">{description}</span>
         </span>
       </span>
-      <span className="flex items-center gap-2 max-[720px]:w-full max-[720px]:justify-between">
+      <span className="flex items-center gap-2 mobile:w-full mobile:justify-between">
         <span className="!text-sm !font-bold !text-primary">{prompt.cta}</span>
         <Icon name="chevronRight" size={16} className="text-text-faint" />
       </span>

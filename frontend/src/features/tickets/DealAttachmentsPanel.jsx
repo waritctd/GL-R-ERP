@@ -59,7 +59,7 @@ export function DealAttachmentsPanel({
       // TicketDetailPage.test.jsx, "offers NO ใบกำกับภาษี upload
       // control in เอกสาร".
       actions={canUpload && (
-        <label className="cursor-pointer max-[720px]:w-full" htmlFor="ticket-attachment-file">
+        <label className="cursor-pointer mobile:w-full" htmlFor="ticket-attachment-file">
           <input
             id="ticket-attachment-file"
             type="file"
@@ -77,7 +77,7 @@ export function DealAttachmentsPanel({
           <span
             className={cn(
               buttonVariants({ variant: 'secondary' }),
-              'gap-1 px-2.5 py-1 text-xs max-[720px]:min-h-11 max-[720px]:w-full',
+              'gap-1 px-2.5 py-1 text-xs mobile:min-h-11 mobile:w-full',
             )}
           >
             <Icon name="upload" size={13} />

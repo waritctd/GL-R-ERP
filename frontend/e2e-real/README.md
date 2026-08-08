@@ -1,10 +1,41 @@
-# Real-backend e2e (`npm run test:e2e:real`)
+# Real-backend e2e (`npm run test:e2e`)
 
 Browser + API end-to-end tests against the **real stack**: Vite dev server → Spring Boot →
 Postgres. No mocks anywhere in the path.
 
-This is the counterpart to `frontend/e2e/` (`npm run test:e2e`), which drives the **mock**
-frontend (`VITE_USE_MOCKS=true`). Both are kept — they answer different questions.
+**This is now the repository's only e2e suite.** The mock-frontend suite that lived in
+`frontend/e2e/` (`VITE_USE_MOCKS=true`, its own `playwright.config.js` and `e2e-ci.yml`) was
+removed on 2026-08-08, owner ruling: one e2e job per PR instead of two.
+
+### What the removal cost — read this before assuming parity
+
+The suites overlapped on **8 of the mock suite's 73 tests** (`auth.spec.js`, `rbac.spec.js`) —
+both covered better here, because this suite asks the real service. The other **65 tests were not
+duplicated by anything in this directory**, and that coverage is currently gone:
+
+| Removed spec | What it covered, and nothing here replaces |
+|---|---|
+| `phase4a-acceptance` (18) | DataTable callers across desktop/tablet/mobile viewports |
+| `form-field-alignment` (9) | field/label alignment across every form surface |
+| `hr.spec` (7) | HR screens driven through the UI |
+| `implicit-submission` (5) | Enter-key submit behaviour |
+| `safety-foundations` (5) | assorted UI safety invariants |
+| `pcr-chain` (5) | pricing-request workflow through the UI |
+| `deposit-fulfilment-close` (4) | deposit → fulfilment → close journey |
+| `table-alignment` (3) | table column alignment |
+| `commission` (2), `deal-creation` (2) | sales workflows through the UI |
+| `shared-shell` (2) | responsive app shell at mobile/tablet |
+| `panel-header-spacing` (2) | panel header spacing |
+| `safe-form-submitter-guard` (1) | the `SafeForm` submitter guard |
+
+Most of that is **visual/layout and form-behaviour** coverage this suite does not attempt —
+`route-coverage.spec.js` asserts pages *load* without crashing or 5xx-ing, never that they look
+right. The sales/HR journey specs are unreplaced too: exactly one business workflow (overtime) is
+driven end to end here.
+
+Recovering any of them: `git show e08a5d03^:frontend/e2e/<file>`. Porting a *journey* spec is
+mostly mechanical (real credential login instead of quick-login); porting a *visual* spec is not —
+those lean on the mock's fully-populated fixtures, which the demo seed does not match.
 
 ## Why this suite exists
 
@@ -214,7 +245,7 @@ cd backend && ./mvnw -DskipTests package
 cd ../frontend && node scripts/start-e2e-backend.mjs
 
 # 3. The suite, in another terminal
-cd frontend && npm run test:e2e:real
+cd frontend && npm run test:e2e
 ```
 
 `scripts/start-e2e-backend.mjs` sets the environment the suite needs and fails with an
