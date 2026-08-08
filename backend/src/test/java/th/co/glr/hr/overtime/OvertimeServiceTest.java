@@ -1297,7 +1297,18 @@ class OvertimeServiceTest {
             true,
             timestamp, timestamp,
             // feat/pending-approver-info: no test using this fixture asserts on these.
-            null, null
+            null, null,
+            // Merge resolution (main -> uat): OvertimeRequestDto gained suggestedDayType on main in
+            // feat/ot-nonworkday-rate-suggestion, while these cancel fixtures live only on uat, so
+            // neither branch saw the other and git merged both cleanly into code that would not
+            // compile. Same value and same reason as main's own requestDto fixture: the field is
+            // DISCARDED and recomputed by OvertimeService#withSuggestedDayType the moment this
+            // fixture round-trips through requireRequest (every cancel path does). "WORKDAY" is not
+            // arbitrary -- it is what that recomputation produces for this fixture's fixed
+            // 2026-07-15 workDate under this class's default stubs (holidayCalendar -> not a
+            // holiday, scheduleResolver -> every day is a workday). It must match, or eq(...)
+            // assertions comparing this fixture against the service's decorated DTO fail.
+            "WORKDAY"
         );
     }
 
@@ -1329,7 +1340,18 @@ class OvertimeServiceTest {
             true,
             timestamp, timestamp,
             // feat/pending-approver-info: no test using this fixture asserts on these.
-            null, null
+            null, null,
+            // Merge resolution (main -> uat): OvertimeRequestDto gained suggestedDayType on main in
+            // feat/ot-nonworkday-rate-suggestion, while these cancel fixtures live only on uat, so
+            // neither branch saw the other and git merged both cleanly into code that would not
+            // compile. Same value and same reason as main's own requestDto fixture: the field is
+            // DISCARDED and recomputed by OvertimeService#withSuggestedDayType the moment this
+            // fixture round-trips through requireRequest (every cancel path does). "WORKDAY" is not
+            // arbitrary -- it is what that recomputation produces for this fixture's fixed
+            // 2026-07-15 workDate under this class's default stubs (holidayCalendar -> not a
+            // holiday, scheduleResolver -> every day is a workday). It must match, or eq(...)
+            // assertions comparing this fixture against the service's decorated DTO fail.
+            "WORKDAY"
         );
     }
 
@@ -1359,7 +1381,18 @@ class OvertimeServiceTest {
             true,
             timestamp, timestamp,
             // feat/pending-approver-info: no test using this fixture asserts on these.
-            null, null
+            null, null,
+            // Merge resolution (main -> uat): OvertimeRequestDto gained suggestedDayType on main in
+            // feat/ot-nonworkday-rate-suggestion, while these cancel fixtures live only on uat, so
+            // neither branch saw the other and git merged both cleanly into code that would not
+            // compile. Same value and same reason as main's own requestDto fixture: the field is
+            // DISCARDED and recomputed by OvertimeService#withSuggestedDayType the moment this
+            // fixture round-trips through requireRequest (every cancel path does). "WORKDAY" is not
+            // arbitrary -- it is what that recomputation produces for this fixture's fixed
+            // 2026-07-15 workDate under this class's default stubs (holidayCalendar -> not a
+            // holiday, scheduleResolver -> every day is a workday). It must match, or eq(...)
+            // assertions comparing this fixture against the service's decorated DTO fail.
+            "WORKDAY"
         );
     }
 
