@@ -402,13 +402,12 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
     return ['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED'].includes(request.status) && managesRequest(request);
   }
 
+  // Always confirm before cancelling -- matches the self-cancel pattern in
+  // MyLeaveTab.requestCancel and SpecialMoneyPanel.cancel. The row action is
+  // already gated by (canCancel || managerCancellable), so eligibility is
+  // decided at render time; this function no longer needs to re-check it.
   function cancel(id) {
-    const request = requests.find((item) => item.id === id);
-    if (request && canManagerCancel(request)) {
-      setConfirmState({ kind: 'cancel', id });
-      return;
-    }
-    doCancel(id, '');
+    setConfirmState({ kind: 'cancel', id });
   }
 
   function doCancel(id, reviewerNote) {

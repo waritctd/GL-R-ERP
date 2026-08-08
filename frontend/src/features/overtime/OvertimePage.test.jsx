@@ -231,3 +231,58 @@ describe('OvertimePage pending-approver note', () => {
     expect(await screen.findByText('CEO', { selector: 'small.text-text-muted' })).not.toBeNull();
   });
 });
+
+// Mirrors MyLeaveTab.test.jsx's "Phase A4: self-cancel confirmation" case -- OT's own-request
+// cancel used to skip the ConfirmDialog entirely (falling through to doCancel(id, '') for the
+// canCancel path while only canManagerCancel opened it), the one self-service cancel in the app
+// with no confirmation step before an irreversible mutation.
+describe('OvertimePage self-cancel confirmation', () => {
+  const ownSubmittedRow = {
+    id: 2002,
+    employeeId: 1,
+    employeeName: 'พนักงาน ทดสอบ',
+    employeeCode: 'GLR-001',
+    workDate: isoDaysFromToday(0),
+    plannedStartAt: `${isoDaysFromToday(0)}T18:00:00+07:00`,
+    plannedEndAt: `${isoDaysFromToday(0)}T20:00:00+07:00`,
+    plannedMinutes: 120,
+    actualMinutes: 0,
+    payableMinutes: 0,
+    dayType: 'WORKDAY',
+    status: 'SUBMITTED',
+    reason: 'ทดสอบระบบ',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.overtime.employees.mockResolvedValue({
+      employees: [{
+        employeeId: 1,
+        employeeName: 'พนักงาน ทดสอบ',
+        employeeCode: 'GLR-001',
+        self: true,
+        directReport: false,
+      }],
+    });
+    api.overtime.list.mockResolvedValue({ requests: [ownSubmittedRow] });
+  });
+
+  it('clicking ยกเลิก on a SUBMITTED own request opens a ConfirmDialog and does NOT cancel until confirmed', async () => {
+    renderOvertimePage();
+
+    await screen.findByText('ทดสอบระบบ');
+    fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
+
+    // Same-tick sanity check, not the real proof -- mutate() doesn't invoke the mutationFn
+    // synchronously, so this alone would still pass under the old bug. The dialog actually
+    // appearing (next line) is what proves the row action didn't cancel by itself.
+    expect(api.overtime.cancel).not.toHaveBeenCalled();
+    const dialogConfirmButton = await screen.findByRole('button', { name: 'ยกเลิกคำขอ' });
+    // Optional reason -- an employee cancelling their own request is not held to the mandatory
+    // reason an approver's reject requires.
+    expect(dialogConfirmButton.disabled).toBe(false);
+
+    fireEvent.click(dialogConfirmButton);
+    await waitFor(() => expect(api.overtime.cancel).toHaveBeenCalledWith(2002, { reviewerNote: null }));
+  });
+});
