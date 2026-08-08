@@ -56,6 +56,45 @@ Two of these files go deep on a few things; two go wide over everything.
   access-denied view, with no 5xx from anything it fetches. The permission oracle is the real
   `user` object the backend issued for that session, not a hand-maintained stand-in.
 
+**Writes — the only place this suite mutates anything:**
+
+- **`write-overtime.spec.js`** — the overtime approval chain driven end to end:
+  `SUBMITTED →(division manager)→ MANAGER_APPROVED →(CEO)→ APPROVED`, with each refusal asserted
+  separately. This is where **issue #199** is pinned: `mockApi.js` let HR approve overtime, and
+  the real `OvertimeService` answers 403 because HR is not in the chain at all. It also pins two
+  rules that are easy to get backwards — the **CEO cannot skip the manager stage**, and a refused
+  approval leaves the request's status untouched (a 403 that still mutated would look safe and
+  not be). Plus the CSRF control, which is only reachable on an authenticated write.
+- **`write-authz.spec.js`** — every resource-scoped write endpoint (98, across
+  POST/PUT/PATCH/DELETE) × every role = 588 requests, asserting that **no role ever gets a 2xx
+  from a write against a resource that does not exist**. A 2xx there would mean an endpoint
+  mutating or creating without an existence check.
+
+### How the write specs stay safe on a shared database
+
+There is no per-test database reset, and the specs are built so none is needed:
+
+- each test creates its **own** record and touches only that id — never a global count, never a
+  row it did not create;
+- each test **cancels what it created**, including from `APPROVED` (a division manager may cancel
+  at any live status, which also unwinds the attendance minutes the approval credited);
+- the work date is always **today** in `Asia/Bangkok`, because approval is gated on the payroll
+  month still being open. A hardcoded date passes until that month is processed and then fails
+  for a reason unrelated to the code under test;
+- the breadth sweep only touches **resource-scoped** writes against a placeholder id. Collection
+  writes (`POST /api/employees`, `POST /api/overtime`) are excluded precisely because those *can*
+  create something — sweeping them across six roles would mean writing rows into a shared
+  database to discover who is allowed to write rows. The measured result of the sweep is
+  **0 × 2xx**, which is both the assertion and the evidence that it mutated nothing.
+
+Verified by running the write specs twice back to back against an already-dirtied database: both
+runs pass identically.
+
+`scripts/reset-e2e-db.mjs` exists for when you want a pristine seed anyway — an interrupted run,
+an experiment that left rows in a strange state. It drops and recreates the database so Flyway
+re-seeds on the next backend start, and it refuses to run while the backend still holds a
+connection. CI never needs it: each job gets a brand-new Postgres service container.
+
 ### The drift guards are the point
 
 A coverage suite that stops covering new code is worse than none, because the green check still
@@ -75,14 +114,25 @@ into a second mock run.
 
 ### Backend behaviour this suite surfaced
 
-Two things the sweep found on the real backend. Neither is fixed here — this branch is test-only,
-and changing a controller's response status is an API-contract change that belongs in its own
-branch (`CLAUDE.md`, "as a side effect"). Both are recorded so they stay visible.
+Things the sweeps found on the real backend. None is fixed here — this branch is test-only, and
+changing a controller's response status is an API-contract change that belongs in its own branch
+(`CLAUDE.md`, "as a side effect"). All are recorded so they stay visible.
 
-- **`GET /api/price-import/profile/{factoryId}` with an unknown id returns 500, not 404.** A real
-  id returns 200 and its profile JSON, so this is specifically the missing-row path. It is listed
-  in `api-surface.spec.js`'s `KNOWN_SERVER_ERRORS` as an **exact** expectation, not a skip: a new
-  server error anywhere fails the sweep, and so does fixing this one without deleting its entry.
+- **`PriceImportController` has no missing-resource handling, on any verb.** An unknown id yields
+  500 rather than 404 for `GET /api/price-import/profile/{factoryId}`, `POST
+  /api/price-import/validate/{id}` and `POST /api/price-import/commit/{id}` alike — a real id
+  returns 200, so it is specifically the missing-row path. Recorded as **exact** expectations
+  (`KNOWN_SERVER_ERRORS` in `api-surface.spec.js` for the read, `write-authz.spec.js` for the
+  writes), not skips: a new server error fails the sweep, and so does fixing one of these without
+  deleting its entry. Only `import` and `ceo` reach the defect — every other role is refused 403
+  before the lookup, which means it is invisible to five of the six roles.
+- **CSRF is enforced by the app, not by Spring.** `SecurityConfig` calls
+  `.csrf(AbstractHttpConfigurer::disable)`, but `CsrfCookieFilter` (`@Order(0)`) implements the
+  OWASP double-submit pattern by hand — an authenticated write without an `X-XSRF-TOKEN` header
+  matching the `XSRF-TOKEN` cookie is 403. The read-only specs never met it because Spring
+  Security's chain runs at order −100 and rejects an *anonymous* write with 401 first, so CSRF is
+  only reachable once authenticated. `helpers/api.js` handles the header; `write-overtime.spec.js`
+  asserts the control is live rather than merely configured.
 - **A wrong HTTP verb returns 500, not 405.** `GET` on a POST-only endpoint produces
   `{"message":"เกิดข้อผิดพลาดภายในระบบ","status":500}` — an unhandled
   `HttpRequestMethodNotSupportedException` reaching the generic error handler. This is why
@@ -96,19 +146,21 @@ branch (`CLAUDE.md`, "as a side effect"). Both are recorded so they stay visible
   employee in the AC-ฝ่ายบัญชี, WH-คลังสินค้า or QC&ISO divisions, so `account`, `warehouse` and
   `qc` are **untested here**. `account` in particular is a real gap: it is in
   `TicketAccessPolicy.VIEWER_ROLES` and is the only role permitted to confirm payments.
-- **Nothing is asserted about a successful WRITE.** Every request this suite makes is a GET or an
-  anonymous POST that the filter chain rejects before it runs, so the suite is idempotent and
-  leaves the shared demo database as it found it. What that buys — and what it costs — is worth
-  being precise about:
-  - covered: every endpoint refuses an unauthenticated caller, on both verbs;
-  - covered: the deny direction of the role gates, since a 403 happens before any mutation;
-  - **not covered: that an authorised create/update/approve actually does the right thing.**
-    The business workflows (submit a pricing request, approve overtime, confirm a deposit,
-    close a deal) are exercised only by the mock suite, against `mockApi.js`.
+- **Overtime is the only business workflow driven end to end.** Every other multi-step flow —
+  leave, a pricing request, a deposit confirmation, closing a deal — is still exercised only by
+  the mock suite, against `mockApi.js`.
+- **Leave was attempted and deliberately left out**, because the demo seed cannot produce a
+  reviewable leave request. Measured against `demo.sales`: `LEAVE_WITHOUT_PAY`, `MATERNITY` and
+  `MILITARY` all land straight in `APPROVED` with no review stage; `ORDINATION` lands in
+  `AUTO_REJECTED` (`HIRE_DATE_MISSING_MIN_SERVICE` — the demo employees carry no hire date);
+  `SICK` requires an attachment; `PERSONAL` and `VACATION` have zero quota. So there is nothing
+  in a `SUBMITTED` state for HR to review, and the leave review path cannot be reached at all
+  from this seed.
 
-    Closing that gap needs a per-run database reset — without one, mutating tests accumulate rows
-    and become order-dependent — which is a real piece of work and deliberately not in this
-    branch.
+  That is worth knowing on its own: it means **HR's leave-review authorization is untested**,
+  and it is the interesting counterpart to #199 — `LeaveService.REVIEW_ALL_ROLES` is `{hr}`, so
+  HR *can* review leave while being refused overtime. Testing that asymmetry needs seed data the
+  demo migration does not currently provide.
 - **"Every route loads" is not "every route works".** `route-coverage.spec.js` asserts each page
   renders without hitting the error boundary and without a 5xx behind it. It does not assert the
   page shows the *right* thing; `smoke.spec.js` does that for two screens only.

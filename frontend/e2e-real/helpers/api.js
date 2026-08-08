@@ -8,10 +8,22 @@ import { DEMO_PASSWORD, personaFor } from './accounts.js';
 // only mask a result, never produce one. The browser specs (auth/smoke) go through the proxy
 // like a real user does; this module is for asserting what the SERVICE returns.
 //
-// CSRF: SecurityConfig disables it (`.csrf(AbstractHttpConfigurer::disable)`), so no
-// X-XSRF-TOKEN dance is needed here. Session auth is a cookie (GLR_HR_SESSION), which each
-// Playwright request context keeps isolated from the others — that isolation is what lets one
-// spec hold six concurrent role sessions without them trampling each other.
+// Session auth is a cookie (GLR_HR_SESSION), which each Playwright request context keeps
+// isolated from the others — that isolation is what lets one spec hold six concurrent role
+// sessions without them trampling each other.
+//
+// CSRF — this file used to say no X-XSRF-TOKEN dance was needed, on the grounds that
+// SecurityConfig calls `.csrf(AbstractHttpConfigurer::disable)`. That is true of SPRING's CSRF
+// and false of this application's: `CsrfCookieFilter` (@Order(0)) implements the OWASP
+// double-submit pattern by hand, issuing an `XSRF-TOKEN` cookie and requiring it echoed back in
+// an `X-XSRF-TOKEN` header on every unsafe method. An authenticated write without that header is
+// **403 "Invalid CSRF token"**. Use `writeHeaders()` / the `apiWrite` helpers below for anything
+// that is not a GET.
+//
+// The two filters' ORDER is why the read-only specs never noticed. Spring Security's chain runs
+// at order -100, so an ANONYMOUS write is rejected 401 there before CsrfCookieFilter (order 0)
+// ever sees it — which is what makes api-surface.spec.js's "anonymous POST ⇒ 401" sweep correct
+// as written. CSRF only becomes reachable once a request is authenticated.
 export const BACKEND_URL = process.env.E2E_BACKEND_URL || 'http://127.0.0.1:8080';
 
 /** A request context with no session — every guarded endpoint must answer 401 to it. */
@@ -66,4 +78,50 @@ export async function apiSessionsFor(roles) {
 
 export async function disposeSessions(sessions) {
   await Promise.all(Object.values(sessions ?? {}).map((context) => context.dispose()));
+}
+
+// ── Writes ───────────────────────────────────────────────────────────────────
+
+/**
+ * The CSRF header a state-changing request needs, read from the context's own cookie jar.
+ *
+ * Deliberately re-read per call rather than captured at login: `CsrfCookieFilter` issues a fresh
+ * token to any caller that arrives without one, so a stale captured value would start failing
+ * the moment a context lost or rotated its cookie — and it would fail as a 403, which looks
+ * exactly like an authorization result. That confusion is worth designing out of a suite whose
+ * whole job is telling real 403s from noise.
+ */
+export async function writeHeaders(context) {
+  const { cookies } = await context.storageState();
+  const token = cookies.find((cookie) => cookie.name === 'XSRF-TOKEN')?.value;
+  if (!token) {
+    throw new Error(
+      'No XSRF-TOKEN cookie on this request context. CsrfCookieFilter issues one to every ' +
+        '/api/** caller, so its absence means no /api request has been made on this context yet.'
+    );
+  }
+  return { 'X-XSRF-TOKEN': token };
+}
+
+/**
+ * POST/PUT/PATCH/DELETE with the CSRF header attached. Never throws on a non-2xx — the status
+ * IS the assertion in most of this suite.
+ */
+export async function apiWrite(context, method, path, data) {
+  const headers = await writeHeaders(context);
+  return context.fetch(path, {
+    method: method.toUpperCase(),
+    headers,
+    ...(data === undefined ? {} : { data }),
+    failOnStatusCode: false,
+  });
+}
+
+/** Same request, deliberately WITHOUT the CSRF header — for asserting the filter is live. */
+export function apiWriteWithoutCsrf(context, method, path, data) {
+  return context.fetch(path, {
+    method: method.toUpperCase(),
+    ...(data === undefined ? {} : { data }),
+    failOnStatusCode: false,
+  });
 }
