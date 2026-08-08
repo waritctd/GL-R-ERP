@@ -1,19 +1,21 @@
 import { defineConfig, devices } from '@playwright/test';
 
 // Browser + API e2e against the REAL stack: Vite dev server → Spring Boot → Postgres.
-// The sibling `playwright.config.js` drives the MOCK frontend (VITE_USE_MOCKS=true); this
-// config is its counterpart and the two never share a test directory, a port, or a report dir.
+// The repository's ONLY e2e config since 2026-08-08. It used to have a sibling,
+// `playwright.config.js`, driving the MOCK frontend (VITE_USE_MOCKS=true); that suite and its CI
+// job were removed so a PR runs one e2e job rather than two. What that cost is itemised in
+// e2e-real/README.md — most of it was visual/layout coverage this suite does not attempt.
 //
-// Why both exist: CLAUDE.md is explicit that mockApi.js's authorization is not authoritative
-// and diverges from the Java services (issue #199 — the mock let HR approve OT that the real
-// OvertimeService 403s). A green mock run is evidence about plumbing, never about permissions.
-// This suite is the other half: everything it asserts came from the real service.
+// Why this one survived: CLAUDE.md is explicit that mockApi.js's authorization is not
+// authoritative and diverges from the Java services (issue #199 — the mock let HR approve OT that
+// the real OvertimeService 403s). A green mock run was evidence about plumbing, never about
+// permissions; everything this suite asserts came from the real service.
 //
-// The port is deliberately distinct from every other frontend in the repo — 5174 is `npm run
-// dev`, 5200 is the `frontend-mock` launch config, 5250 is the mock e2e suite. 5251 is ours.
-// Combined with reuseExistingServer:false and --strictPort below, this suite always starts its
-// own server and never adopts one that happens to be listening: adopting a mock-mode server
-// would leave every assertion in this directory green and meaningless.
+// The port stays distinct from every other frontend in the repo — 5174 is `npm run dev`, 5200 is
+// the `frontend-mock` launch config (still available for manual mock-mode work). Combined with
+// reuseExistingServer:false and --strictPort below, this suite always starts its own server and
+// never adopts one that happens to be listening: adopting a mock-mode server would leave every
+// assertion in this directory green and meaningless.
 const FRONTEND_PORT = Number(process.env.E2E_REAL_FRONTEND_PORT || 5251);
 const BACKEND_URL = process.env.E2E_BACKEND_URL || 'http://127.0.0.1:8080';
 
