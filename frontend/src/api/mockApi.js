@@ -3063,6 +3063,39 @@ function overtimeMinutesBetween(startAt, endAt) {
   return diff;
 }
 
+// Bangkok-local calendar date of an ISO instant string, formatted "YYYY-MM-DD" -- mirrors
+// OvertimeService#validatePlannedWindow's own zone (BUSINESS_ZONE = Asia/Bangkok) for comparing an
+// OffsetDateTime against a LocalDate.
+function bangkokDateOf(isoValue) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Bangkok',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(isoValue));
+}
+
+// Pure calendar-day arithmetic on a "YYYY-MM-DD" string -- same technique as utils/format.js's
+// addDaysIso (Date.UTC used purely as neutral day-count math, never as a timezone conversion,
+// since a bare calendar date has no zone attached).
+function addCalendarDaysIso(iso, deltaDays) {
+  const [year, month, day] = iso.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + deltaDays);
+  return date.toISOString().slice(0, 10);
+}
+
+// A2 (OT UAT defect #3): mirrors OvertimeService#validatePlannedWindow's new ≤24h guard --
+// plannedEndAt's Bangkok-local calendar date must be workDate or workDate+1. The redesigned form
+// can never produce anything longer, but a caller bypassing it still could -- CLAUDE.md is explicit
+// that a mock more permissive than production is the dangerous direction.
+function validateOvertimePlannedWindowSpan(payload) {
+  const endDateIso = bangkokDateOf(payload.plannedEndAt);
+  if (endDateIso < payload.workDate || endDateIso > addCalendarDaysIso(payload.workDate, 1)) {
+    fail('เวลาสิ้นสุดการทำงานล่วงเวลาต้องอยู่ในวันที่ทำงานหรือวันถัดไปเท่านั้น', 400);
+  }
+}
+
 // Mirrors OvertimeService.validateRetroactiveWindow(). Advance notice was removed, so same-day and
 // backdated requests are accepted — bounded by how far back they reach and by a reason that
 // explains the delay.
@@ -4912,6 +4945,7 @@ export const api = {
       findEmployee(employeeId);
       validateOvertimeRetroactiveWindow(payload);
       const plannedMinutes = overtimeMinutesBetween(payload.plannedStartAt, payload.plannedEndAt);
+      validateOvertimePlannedWindowSpan(payload);
       // SECURITY: payload.dayType is unauthenticated client input and is deliberately never used
       // to set pay -- mirrors OvertimeService#submit's identical comment. day_type/multiplier must
       // always be DERIVED from the calendar (deriveOvertimeDayType), never DECLARED by the caller.
@@ -4963,7 +4997,9 @@ export const api = {
         // calculation as well as the CEO's status flip. Mirrors OvertimeService.ceoDirectApprove.
         if (!hasManagerApproverFor(request.employeeId)) {
           if (user.role !== 'ceo') {
-            fail('คำขอนี้ไม่มีขั้นอนุมัติของหัวหน้างาน (ฝ่ายนี้ไม่มีผู้จัดการ หรือผู้ยื่นเป็นผู้จัดการเอง) จึงต้องให้ CEO พิจารณาเท่านั้น', 403);
+            // A3 (OT UAT defect #4): mirrors OvertimeService#requireCeoForManagerlessRequest --
+            // state the outcome positively rather than naming the missing manager stage.
+            fail('คำขอนี้ต้องให้ CEO พิจารณาเท่านั้น', 403);
           }
           // Re-derived and FROZEN here, from the calendar, not carried over from whatever create()
           // stored -- mirrors OvertimeService#calculate, invoked by the real
@@ -5026,7 +5062,9 @@ export const api = {
         // Symmetric with approve(): the sole reviewer must be able to refuse as well as accept.
         if (!hasManagerApproverFor(request.employeeId)) {
           if (user.role !== 'ceo') {
-            fail('คำขอนี้ไม่มีขั้นอนุมัติของหัวหน้างาน (ฝ่ายนี้ไม่มีผู้จัดการ หรือผู้ยื่นเป็นผู้จัดการเอง) จึงต้องให้ CEO พิจารณาเท่านั้น', 403);
+            // A3 (OT UAT defect #4): mirrors OvertimeService#requireCeoForManagerlessRequest --
+            // state the outcome positively rather than naming the missing manager stage.
+            fail('คำขอนี้ต้องให้ CEO พิจารณาเท่านั้น', 403);
           }
         } else if (!canReviewOvertime(user, request.employeeId)) {
           fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);

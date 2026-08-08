@@ -10,7 +10,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
-import { attendanceStatusLabel, formatThaiDate } from '../../utils/format.js';
+import { attendanceStatusLabel, formatBangkokTime, formatThaiDate } from '../../utils/format.js';
 import { cn } from '../../utils/cn.js';
 
 /**
@@ -34,18 +34,6 @@ function todayIso() {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
-function bangkokTimeOfDay(isoValue) {
-  if (!isoValue) return '-';
-  const date = new Date(isoValue);
-  if (Number.isNaN(date.getTime())) return '-';
-  return new Intl.DateTimeFormat('th-TH', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-    timeZone: 'Asia/Bangkok',
-  }).format(date);
-}
-
 function formatWorkDate(value) {
   if (!value) return '-';
   const date = new Date(`${value}T00:00:00+07:00`);
@@ -58,7 +46,7 @@ function formatDateRange(start, end) {
 }
 
 function otDetail(request) {
-  const window = `${bangkokTimeOfDay(request.plannedStartAt)}-${bangkokTimeOfDay(request.plannedEndAt)}`;
+  const window = `${formatBangkokTime(request.plannedStartAt)}-${formatBangkokTime(request.plannedEndAt)}`;
   return `OT ${formatWorkDate(request.workDate)} · ${window} น.`;
 }
 

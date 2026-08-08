@@ -555,6 +555,15 @@ public class OvertimeService {
         if (!startWorkDate.equals(request.workDate())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ทำงานต้องตรงกับวันที่เริ่มต้นตามแผน");
         }
+        // A2 (OT UAT defect #3): the redesigned submit form offers only two date pickers (วันที่ทำ
+        // OT / วันที่สิ้นสุด), which together can express at most a next-day window -- so the API
+        // must refuse anything longer, or a caller bypassing the form could still submit a
+        // multi-day window the UI can never produce. Checked in BUSINESS_ZONE, matching how
+        // startWorkDate is derived just above.
+        LocalDate endWorkDate = request.plannedEndAt().atZoneSameInstant(BUSINESS_ZONE).toLocalDate();
+        if (endWorkDate.isAfter(request.workDate().plusDays(1))) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เวลาสิ้นสุดการทำงานล่วงเวลาต้องอยู่ในวันที่ทำงานหรือวันถัดไปเท่านั้น");
+        }
     }
 
     /**
@@ -639,10 +648,9 @@ public class OvertimeService {
      */
     private void requireCeoForManagerlessRequest(UserPrincipal user) {
         if (user == null || !"ceo".equals(user.role())) {
-            throw new ApiException(
-                HttpStatus.FORBIDDEN,
-                "คำขอนี้ไม่มีขั้นอนุมัติของหัวหน้างาน (ฝ่ายนี้ไม่มีผู้จัดการ หรือผู้ยื่นเป็นผู้จัดการเอง)"
-                    + " จึงต้องให้ CEO พิจารณาเท่านั้น");
+            // A3 (OT UAT defect #4): state the outcome positively -- who must review this -- rather
+            // than naming the missing stage. Mirrored verbatim in mockApi.js.
+            throw new ApiException(HttpStatus.FORBIDDEN, "คำขอนี้ต้องให้ CEO พิจารณาเท่านั้น");
         }
     }
 
@@ -704,9 +712,13 @@ public class OvertimeService {
             managerApproverRepository.findManagerApproverEmployeeIds(request.employeeId());
         boolean goesToCeo = managerApprovers.isEmpty();
 
+        // A3 (OT UAT defect #4): neither message names the missing manager stage anymore -- the
+        // employee/CEO need to know who holds the request, not that a stage is absent. The title
+        // on the CEO notification below already says "รอ CEO อนุมัติ", so the body needs nothing
+        // extra to make that point.
         String title = "ส่งคำขอ OT แล้ว";
         String message = "คำขอ OT วันที่ " + request.workDate()
-            + (goesToCeo ? " ถูกส่งให้ CEO พิจารณาแล้ว (ไม่มีขั้นอนุมัติของหัวหน้างาน)" : " ถูกส่งให้ผู้จัดการตรวจสอบแล้ว");
+            + (goesToCeo ? " ถูกส่งให้ CEO พิจารณาแล้ว" : " ถูกส่งให้ผู้จัดการตรวจสอบแล้ว");
         notificationService.notify(request.employeeId(), "OVERTIME_SUBMITTED", title, message, "/overtime", true);
 
         if (goesToCeo) {
@@ -715,8 +727,7 @@ public class OvertimeService {
                     ceoEmployeeId,
                     "OVERTIME_PENDING_CEO",
                     "มีคำขอ OT รอ CEO อนุมัติ",
-                    request.employeeName() + " ส่งคำขอ OT วันที่ " + request.workDate()
-                        + " ซึ่งไม่มีขั้นอนุมัติของหัวหน้างาน",
+                    request.employeeName() + " ส่งคำขอ OT วันที่ " + request.workDate(),
                     "/overtime",
                     true
                 );
