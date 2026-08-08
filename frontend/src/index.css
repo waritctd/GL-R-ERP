@@ -1,4 +1,20 @@
-@layer theme, legacy, utilities;
+/* Layer order: theme, base, legacy, utilities.
+
+   `base` sits between `theme` and `legacy` deliberately. The reset and
+   bare-element defaults in `@layer base` below used to live in styles.css,
+   co-located with the class-level rules that override them (`.currency-input
+   input`, `.status-tab`, and the like) -- and lost to them there purely on
+   selector specificity, both rules in the same cascade layer. Splitting them
+   into their own layer, positioned BEFORE `legacy`, reproduces that same
+   losing relationship deliberately: a `@layer` always loses to a layer
+   declared later, regardless of specificity, so `base`'s bare-element
+   selectors keep losing to `legacy`'s class selectors exactly as they did
+   when they were one file and one layer -- nothing rendered changes.
+
+   This app deliberately does NOT import `tailwindcss/preflight.css` -- the
+   reset in `@layer base` below is the only browser-default reset this app
+   has. Do not delete it expecting Tailwind to supply one; nothing else does. */
+@layer theme, base, legacy, utilities;
 
 @import "tailwindcss/theme.css" layer(theme);
 @import "./styles.css" layer(legacy);
@@ -309,5 +325,269 @@
     --motion-fast: 0ms;
     --motion-standard: 0ms;
     --motion-slow: 0ms;
+  }
+}
+
+@layer base {
+  /* Base layer: reset + bare-element defaults, moved out of styles.css as
+     the first slice of retiring it (see the `@layer` comment above for why
+     this layer sits where it does). Order mirrors styles.css's original
+     source order for these rules -- that order is load-bearing in two
+     places, called out inline where it matters: `textarea`'s
+     `height: auto` must stay after the shared `height: 40px` rule, and the
+     ≤720px override must stay last. */
+
+  * {
+    box-sizing: border-box;
+  }
+
+  /* This `:root` used to also carry 29 custom-property token declarations
+     (--font-family, --font-family-mono, --text-*, --space-*, --radius-*,
+     --shadow-*) duplicating this file's own `@theme static` block above.
+     They are dropped here, not moved -- verified byte-for-byte identical to
+     `@theme static`, so dropping them changes nothing rendered.
+
+     They were not simply redundant, either: this `:root` used to live in
+     styles.css's `@layer legacy`, ordered AFTER `@layer theme` in the
+     `@layer theme, base, legacy, utilities;` statement above, so for any
+     property both blocks set, THIS copy was the one the cascade actually
+     served -- the `@theme static` values were silently dead. That was
+     verified empirically once already, when the *color* tokens were
+     de-duplicated the same way in an earlier fix (fix/ui-contrast-tokens:
+     editing a color here changed the rendered page; editing "the same"
+     token in `@theme static` did not, until the color tokens were
+     removed). The non-color tokens stayed in styles.css at the time, out
+     of scope for a colour-only fix; this refactor finishes the job, so
+     `@theme static` is now the single source of truth for all 29. */
+  :root {
+    color-scheme: light;
+    font-family: var(--font-family);
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  html,
+  body,
+  #root {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background: var(--color-bg);
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  code {
+    font-family: var(--font-family-mono);
+  }
+
+  /* `align-content: start` is load-bearing, not cosmetic. This rule makes every
+     <label> a grid, and ~185 hand-rolled field wrappers across src/features rely
+     on it to stack their label text above their control. Wherever such a label is
+     itself a stretched grid/flex item — the common case, since `align-items`
+     defaults to `stretch` — the spare height of the row was distributed into
+     these auto rows, growing the *control* rather than leaving whitespace below
+     it. How much it grew depended on how many rows that field happened to have,
+     i.e. whether it carried a hint line, so two fields side by side in one row
+     ended up different heights and different vertical positions. Packing the rows
+     to the start leaves the control at its natural height and the slack at the
+     bottom, where it belongs. Same fix as FormField.jsx's `content-start`. */
+  label {
+    display: grid;
+    align-content: start;
+    gap: 7px;
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+    font-weight: 700;
+  }
+
+  /* `height`, not `min-height`: a fixed-height control cannot absorb a stretched
+     parent's spare height, so it stays aligned with its neighbour even where a
+     wrapper misses the `align-content: start` above. `textarea` overrides this
+     back to auto below — it is the one control that must still grow.
+
+     The exclusion is wrapped in `:where()` for its zero specificity, which is
+     still load-bearing — but READ THE SECOND REASON BELOW BEFORE TOUCHING IT,
+     because the original one no longer applies and looks removable.
+
+     Originally: a bare `input:not([type='checkbox']):not([type='radio'])`
+     scores (0,2,1) — higher than `.currency-input input` (0,1,1) — so this
+     rule's `padding: 0 12px` won over the 34px left inset those wrappers use
+     to clear their symbol, and the ฿ glyph landed on top of the value.
+     That reason is now MOOT: `.currency-input` / `.input-with-icon` /
+     `.search-field` all live in styles.css's `@layer legacy`, which is ordered
+     after `@layer base`, so they beat this rule on layer order no matter what
+     it scores. Verified — removing `:where()` leaves every desktop and tablet
+     surface pixel-identical, the ฿ inset included.
+
+     The reason it MUST stay is now intra-layer, not cross-layer. The ≤720px
+     `height: 44px` override at the bottom of this layer reuses this same
+     selector, so it also scores (0,0,1), and it wins purely by being declared
+     later. Raise this rule to (0,2,1) and specificity beats source order: the
+     40px height wins at ≤720px too, and every text input silently loses the
+     mobile touch-target floor. Measured — that exact mutation reddens 3 of the
+     5 mobile visual-baseline surfaces and none of the desktop or tablet ones,
+     which is the whole tell: the damage is mobile-only and invisible on the
+     viewport most people check. */
+  input:where(:not([type='checkbox'], [type='radio'])),
+  select,
+  textarea {
+    width: 100%;
+    height: 40px;
+    font-size: 16px;
+    border: 1.5px solid var(--color-border-input);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    color: var(--color-text);
+    outline: none;
+    padding: 0 12px;
+  }
+
+  /* Native checkbox/radio are excluded from the box above and reset here: they
+     were inheriting `width: 100%` and the 40px padded box, which rendered a bare
+     radio as a full-width bar with its label pushed off screen (measured 668px
+     on the ล.ย.01 form).
+
+     16px rather than the 13px UA default — 13px reads undersized beside 14px
+     Thai label text, and 16px is already what the three call sites that worked
+     around the old bug picked by hand (`h-4 w-4` in TypePicker.jsx,
+     SpecialMoneyPanel.jsx, LeaveRequestPage.jsx), so this makes the default
+     agree with them instead of leaving two sizes in the app.
+
+     Row heights are deliberately NOT raised to the 44px mobile floor that
+     buttons and status chips carry in styles.css: these rows are `py-2 text-sm`
+     by design, they clear WCAG 2.2 SC 2.5.8 through the spacing exception, and
+     the welfare TypePicker stacks 12 of them — a floor there would cost ~108px
+     of scrolling at 375px for no accessibility gain (owner call, 2026-08-04).
+
+     They keep the shared `input:focus` ring below. `border: 0` is safe: with
+     `appearance` left at `auto` the browser paints the native widget, so the old
+     1.5px border was never visible on them anyway. */
+  input[type='checkbox'],
+  input[type='radio'] {
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: 0;
+    accent-color: var(--color-primary);
+  }
+
+  textarea {
+    height: auto;
+    min-height: 40px;
+    padding: 10px 12px;
+    resize: vertical;
+  }
+
+  input:focus,
+  select:focus,
+  textarea:focus {
+    border-color: var(--color-primary-hover);
+    box-shadow: var(--shadow-focus-ring);
+  }
+
+  :where(
+    a[href],
+    button,
+    summary,
+    [role="button"],
+    [role="link"],
+    [role="checkbox"],
+    [role="radio"],
+    [role="switch"],
+    [role="tab"],
+    [tabindex]:not([tabindex="-1"])
+  ):focus {
+    outline: 2px solid var(--color-primary-hover);
+    outline-offset: 2px;
+    box-shadow: var(--shadow-focus-ring);
+  }
+
+  @supports selector(:focus-visible) {
+    :where(
+      a[href],
+      button,
+      summary,
+      [role="button"],
+      [role="link"],
+      [role="checkbox"],
+      [role="radio"],
+      [role="switch"],
+      [role="tab"],
+      [tabindex]:not([tabindex="-1"])
+    ):focus {
+      outline: none;
+      box-shadow: none;
+    }
+
+    :where(
+      a[href],
+      button,
+      summary,
+      [role="button"],
+      [role="link"],
+      [role="checkbox"],
+      [role="radio"],
+      [role="switch"],
+      [role="tab"],
+      [tabindex]:not([tabindex="-1"])
+    ):focus-visible {
+      outline: 2px solid var(--color-primary-hover);
+      outline-offset: 2px;
+      box-shadow: var(--shadow-focus-ring);
+    }
+  }
+
+  /* Extracted out of styles.css's own ≤720px media block -- the rest of
+     that block's rules stay there in styles.css; re-wrapped in the same
+     media condition here since this rule is mobile-only, same as it always
+     was. This MUST stay the LAST rule in `@layer base`: it ties the 40px
+     rule above on specificity (0,0,1), so source order is the only thing
+     making it win at ≤720px -- moving it earlier would silently kill the
+     mobile touch-target floor. */
+  @media (max-width: 720px) {
+    /* Text controls join the same 44px floor. Two reasons, and the second is
+       why this rule is here rather than left alone:
+
+       1. They were below the floor. A 40px input is a touch target on a phone
+          exactly as much as the buttons in styles.css are.
+       2. They used to reach 44px by accident, and the base rule's fixed
+          `height` took that away. `align-items: stretch` only stretches a flex
+          item whose cross-size is `auto`, so under the old `min-height: 40px`
+          an input sharing a flex row with one of those 44px buttons was
+          silently stretched to match it. An explicit `height` opts out of
+          stretch, which left ProcurementDetailPage's four inline record-forms
+          (`/factory-purchase-orders/:id`, six inputs in `flex flex-wrap` rows
+          beside a `.primary-button`) with their inputs ending 4px above the
+          button — measured 699 vs 703 at 700px. Matching the floor restores a
+          flush row deliberately instead of by side effect.
+
+       `textarea` is excluded along with checkbox/radio: it is the growable
+       control, and pinning its height would undo `height: auto` above. */
+    input:where(:not([type='checkbox'], [type='radio'])),
+    select {
+      height: 44px;
+    }
   }
 }
