@@ -152,7 +152,13 @@ The frontend is migrating from the single global `frontend/src/styles.css` to a 
   ```
   mkdir -p .claude/skills && for d in .agents/skills/*/; do ln -sfn "../../$d" ".claude/skills/$(basename "$d")"; done
   ```
-  **Every worktree needs its own run** — the symlinks are gitignored, so a fresh `git worktree add` starts without them. Check `ls .claude/skills` before relying on them; invoke them rather than freehanding IA or visual design decisions.
+  **Re-run that loop in two situations, not one.** It links only what exists *at the moment it runs*, and it is not idempotent against a changing `.agents/skills/`:
+  1. **Every new worktree** — the symlinks are gitignored, so a fresh `git worktree add` starts with none.
+  2. **After any merge that adds a skill** — an already-linked worktree that pulls in a new one gets the committed directory with no symlink.
+
+  Both failures are **silent**: nothing errors, the skill is simply absent from the listing and the session freehands instead. Confirmed twice on 2026-08-08 — a new worktree started bare, and an already-linked worktree merged `main`, gained `retired-docs`, and did not load it. **`ls .claude/skills` and compare against `ls .agents/skills` before relying on any of them**; the counts must match. Invoke these skills rather than freehanding IA or visual design decisions.
+
+  Note `.agents/skills/` is no longer only design skills — it also carries `retired-docs` and `playwright-best-practices`. The loop covers all of them; this section just happens to be where it is documented.
 
 ## Branch & agent discipline
 - **One branch per task.** `main` must stay deployable; branch off `main`, open a PR, merge only after review.
