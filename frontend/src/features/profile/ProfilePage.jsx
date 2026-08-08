@@ -64,13 +64,16 @@ export function ProfilePage({ user, employee, profileRequests, onCreateRequest, 
       </DetailHero>
 
       <Panel title="ข้อมูลติดต่อ">
-        <div className="editable-list">
+        <div className="editable-list grid gap-2.5">
           {requestableFields.map((field) => (
-            <div key={field.fieldKey}>
+            <div
+              key={field.fieldKey}
+              className="flex items-center justify-between gap-3 min-w-0 py-2.5 border-b border-surface-subtle"
+            >
               <Icon name={field.icon} />
-              <span>
+              <span className="min-w-0 flex-1">
                 <strong>{field.fieldLabel}</strong>
-                <small>{field.displayValue ?? field.oldValue}</small>
+                <small className="block text-[length:var(--text-xs)] font-medium text-text-muted">{field.displayValue ?? field.oldValue}</small>
               </span>
               {isEmployee ? (
                 <Button

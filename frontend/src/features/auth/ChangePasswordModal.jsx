@@ -180,7 +180,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
                   type="password"
                   {...register('currentPassword')}
                   autoComplete="current-password"
-                  className={errors.currentPassword ? 'is-invalid' : ''}
+                  className={errors.currentPassword ? 'border-danger focus:border-danger focus:[box-shadow:0_0_0_3px_var(--color-danger-bg)]' : ''}
                   aria-invalid={Boolean(errors.currentPassword)}
                   aria-describedby={errors.currentPassword ? fieldErrorId('change-password-current') : undefined}
                   required
@@ -198,7 +198,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
                   {...register('newPassword')}
                   autoComplete="new-password"
                   minLength={8}
-                  className={newPasswordTooShort ? 'is-invalid' : ''}
+                  className={newPasswordTooShort ? 'border-danger focus:border-danger focus:[box-shadow:0_0_0_3px_var(--color-danger-bg)]' : ''}
                   aria-invalid={newPasswordTooShort}
                   aria-describedby={newPasswordTooShort ? fieldErrorId('change-password-new') : undefined}
                   required
@@ -215,13 +215,13 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
                   type="password"
                   {...register('confirmPassword')}
                   autoComplete="new-password"
-                  className={confirmPasswordFieldError ? 'is-invalid' : ''}
+                  className={confirmPasswordFieldError ? 'border-danger focus:border-danger focus:[box-shadow:0_0_0_3px_var(--color-danger-bg)]' : ''}
                   aria-invalid={Boolean(confirmPasswordFieldError)}
                   aria-describedby={confirmPasswordFieldError ? fieldErrorId('change-password-confirm') : undefined}
                   required
                 />
               </FormField>
-              {(formError || submitError) ? <div className="form-error" role="alert">{formError || submitError}</div> : null}
+              {(formError || submitError) ? <div className="py-2.5 px-3 rounded-md bg-danger-bg text-danger-dark font-bold text-[length:var(--text-sm)]" role="alert">{formError || submitError}</div> : null}
             </FormGrid>
           </SafeForm>
         </div>

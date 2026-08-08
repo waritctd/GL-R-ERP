@@ -97,7 +97,7 @@ function ApprovalChain({ steps }) {
 function MyRequestRow({ row }) {
   const showChain = !TERMINAL_NEGATIVE.has(row.status);
   return (
-    <div className="request-feed-item compact">
+    <div className="request-feed-item flex items-center justify-between gap-3 min-w-0 py-2.5 border-b border-surface-subtle">
       <span>
         <strong>{row.title}</strong>
         <small>{row.dateLabel}</small>
@@ -307,7 +307,7 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], dash
           </span>
         )}
       >
-        <div className="request-feed">
+        <div className="request-feed grid gap-2.5">
           {myRequests.length === 0 ? (
             <div className="grid min-h-[220px] place-items-center content-center gap-2 text-center text-text-muted">ยังไม่มีคำขอล่าสุด</div>
           ) : myRequests.map((row) => <MyRequestRow key={row.id} row={row} />)}

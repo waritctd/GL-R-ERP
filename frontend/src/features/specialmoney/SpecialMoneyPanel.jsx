@@ -718,7 +718,7 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
                   setValue(), same as every other controlled field in this form. */}
               <input type="hidden" {...register('requestType')} />
               <span id="smr-type-label" className="mb-1.5 block text-sm font-bold text-text">
-                ประเภทคำขอ<span className="field-required" aria-hidden="true"> *</span>
+                ประเภทคำขอ<span className="field-required text-danger ml-0.5" aria-hidden="true"> *</span>
               </span>
               {/* `role="group"` is required for `aria-labelledby` to mean anything here -- a bare
                   `<div>` has no role that exposes an accessible-name slot, so the label
@@ -1064,13 +1064,13 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
               <span data-label="งวดจ่าย" className="mobile:order-3">
                 {request.payrollMonth ? `งวด ${formatThaiMonthYear(new Date(`${request.payrollMonth}T00:00:00`))}` : 'ยังไม่กำหนด'}
               </span>
-              <span className="row-actions mobile:order-4">
+              <RowActions className="mobile:order-4 mobile:flex-wrap">
                 {canCancel(request) ? (
                   <Button type="button" variant="icon" title="ยกเลิกคำขอ" aria-label="ยกเลิกคำขอ" disabled={saving} onClick={() => cancel(request.id)}>
                     <Icon name="close" size={14} />
                   </Button>
                 ) : null}
-              </span>
+              </RowActions>
               {/* Rejection (plan §"Rejection"): reviewerNote in a real callout (never truncated
                   by `.data-row`'s ellipsis rule -- this sits in a plain <div>, not a
                   `.data-row > span`), then the same rule card, then the attached evidence. This
