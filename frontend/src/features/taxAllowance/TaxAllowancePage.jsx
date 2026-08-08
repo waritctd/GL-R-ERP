@@ -10,7 +10,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { TaxAllowanceForm } from './TaxAllowanceForm.jsx';
-import { buildAllowanceSubmitBody, defaultAllowanceValues, TAX_ALLOWANCE_GROUPS, UNCATEGORIZED_EVIDENCE_KEY } from './taxAllowanceSchema.js';
+import { buildAllowanceSubmitBody, defaultAllowanceValues, SIGNED_FORM_EVIDENCE_KEY, UNCATEGORIZED_EVIDENCE_KEY } from './taxAllowanceSchema.js';
 import { selectCurrentDeclaration, selectResumableDeclaration, taxAllowanceStatusInfo } from './taxAllowanceStatus.js';
 
 // Editable directly (or via "แก้ไข / ยื่นฉบับใหม่"): no declaration yet, or the current one was
@@ -20,11 +20,9 @@ import { selectCurrentDeclaration, selectResumableDeclaration, taxAllowanceStatu
 // PENDING's way out is withdrawal, not editing — see the withdraw action below.
 const EDITABLE_STATUS_KEYS = new Set(['NONE', 'REJECTED', 'EXPIRED']);
 
-// Valid `?view=` values (#tax-allowance-ia-hub-review): the five TAX_ALLOWANCE_GROUPS keys plus
-// `review`; anything missing, stale, or hand-edited falls back to the hub. Built from the same
-// schema TaxAllowanceForm itself reads, so this can never drift out of sync with the set of
-// sections that actually exist.
-const VALID_VIEW_KEYS = new Set([...TAX_ALLOWANCE_GROUPS.map((group) => group.key), 'review']);
+// `?view=` is gone. The screen is now one page of collapsibles in the government form's own order
+// (owner ruling 2026-08-08), so there are no sub-screens left to address by URL — see
+// TaxAllowanceForm's javadoc for why the wizard went.
 
 // Status-specific explanation line for the unified status region below (#tax-allowance-ia-hub-review
 // collapses four independent conditional banners into one — see the region's own comment). No entry
@@ -64,8 +62,6 @@ export function TaxAllowancePage({ user, showToast }) {
   const taxYear = yearOptions.includes(requestedYear) ? requestedYear : currentYear;
   const isCurrentYear = taxYear === currentYear;
 
-  const requestedView = searchParams.get('view') || '';
-  const view = VALID_VIEW_KEYS.has(requestedView) ? requestedView : 'hub';
 
   // `replace` defaults to false (a real history entry, i.e. push) -- the merge/delete-empty logic
   // itself is the TaxAllowanceReviewPage.jsx idiom, copied verbatim and left alone (review-verified
@@ -86,13 +82,6 @@ export function TaxAllowancePage({ user, showToast }) {
       return next;
     }, { replace });
   }, [setSearchParams]);
-
-  // `'hub'` maps to no `?view=` at all (the target structure's "absent → HUB"), not a literal
-  // `?view=hub` — keeps the resting-state URL clean and matches VALID_VIEW_KEYS, which does not
-  // include the string `'hub'`. Pushes (updateParams' default) -- see that function's own comment.
-  function goToView(nextView) {
-    updateParams({ view: nextView === 'hub' ? '' : nextView });
-  }
 
   const [editing, setEditing] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
@@ -152,12 +141,12 @@ export function TaxAllowancePage({ user, showToast }) {
       // this internally; that responsibility now belongs to whoever changes the year, since the page
       // owns `?view=`). `replace: true`, unlike a plain view change -- a year is a filter on this
       // screen, not a screen of its own (see `updateParams`' own comment).
-      updateParams({ year: nextYear, view: '' }, { replace: true });
+      updateParams({ year: nextYear }, { replace: true });
     }
   }
 
   function confirmYearChange() {
-    updateParams({ year: pendingYearChange, view: '' }, { replace: true });
+    updateParams({ year: pendingYearChange }, { replace: true });
     setPendingYearChange(null);
   }
 
@@ -229,6 +218,46 @@ export function TaxAllowancePage({ user, showToast }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const defaultValues = useMemo(() => defaultAllowanceValues(current ?? resumable), [current, resumable, taxYear]);
 
+  /**
+   * Owner decision #3: the signed scan gates submit.
+   *
+   * Reads the STAGED bucket, not the server's attachment list, because while `editing` there is no
+   * declarationId to have uploaded against yet — the file is held client-side and flushed after
+   * submit succeeds, exactly like every other piece of evidence on this screen. The backend refuses
+   * to APPROVE a declaration with no signed_form attachment, so this gate is the courtesy and that
+   * one is the enforcement; neither alone is enough.
+   */
+  const signedFormAttached = (stagedEvidence[SIGNED_FORM_EVIDENCE_KEY] ?? []).length > 0;
+
+  /**
+   * Renders the filled ล.ย.01 from the CURRENT, unsaved values and hands it to the browser to
+   * download. Nothing is persisted — the employee prints it, signs it, and attaches the scan back.
+   */
+  const pdfMutation = useMutation({
+    mutationFn: (body) => api.payroll.renderMyTaxAllowanceForm(body),
+    onSuccess: (blob) => {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `loryor01-${taxYear}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      showToast?.('สร้างไฟล์ PDF แล้ว — พิมพ์ ลงนาม แล้วแนบกลับเพื่อยื่น', 'success');
+    },
+    onError: (error) => showToast?.(error?.message || 'สร้างไฟล์ PDF ไม่สำเร็จ', 'error'),
+  });
+
+  function handleGeneratePdf(values) {
+    if (!values) return;
+    pdfMutation.mutate(buildAllowanceSubmitBody(values, {
+      taxYear,
+      effectiveMonth: values.effectiveMonth,
+      documentReference: values.documentReference,
+    }));
+  }
+
   const submitMutation = useMutation({
     mutationFn: (body) => api.payroll.submitMyTaxAllowanceDeclaration(body),
     onSuccess: async (created) => {
@@ -238,7 +267,6 @@ export function TaxAllowancePage({ user, showToast }) {
       // Land back on the hub -- REVIEW's own submit button is about to disappear under the
       // now-PENDING declaration's `readOnly`, and leaving the employee stranded there with the
       // control they just used suddenly gone would read as broken, not successful.
-      updateParams({ view: '' });
       await flushStagedEvidence(created.declarationId);
     },
     onError: (error) => showToast?.('error', error.message || 'ยื่นแบบแจ้งไม่สำเร็จ'),
@@ -371,9 +399,10 @@ export function TaxAllowancePage({ user, showToast }) {
           submitting={submitMutation.isPending}
           submitLabel={statusInfo.key === 'NONE' ? 'ยื่นแบบแจ้ง' : 'ยื่นฉบับใหม่'}
           onSubmit={handleSubmit}
-          view={view}
-          onViewChange={goToView}
           onDirtyChange={setFormDirty}
+          onGeneratePdf={handleGeneratePdf}
+          generatingPdf={pdfMutation.isPending}
+          signedFormAttached={signedFormAttached}
           evidenceMode={evidenceMode}
           evidenceDeclarationId={current?.declarationId ?? null}
           stagedEvidenceBySection={stagedEvidence}

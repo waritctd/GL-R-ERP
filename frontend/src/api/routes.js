@@ -238,6 +238,10 @@ export const API_ROUTES = {
       // Tax-effect estimate (decision #4, 2026-08-01). Reuses the SAME body shape as `me` (POST) --
       // no employeeId field anywhere, same self-scoping idiom.
       estimate: '/api/payroll/tax-allowances/declarations/me/estimate',
+      // แบบ ล.ย.01 as a printable PDF. `form` renders a SAVED declaration; `formDraft` renders
+      // unsaved values, because the employee must sign the sheet before a declaration exists.
+      form: (declarationId) => `/api/payroll/tax-allowances/declarations/${declarationId}/form.pdf`,
+      formDraft: '/api/payroll/tax-allowances/declarations/me/form.pdf',
       withdraw: (id) => `/api/payroll/tax-allowances/declarations/${id}`,
       register: '/api/payroll/tax-allowances/declarations',
       onBehalf: '/api/payroll/tax-allowances/declarations/on-behalf',

@@ -498,6 +498,23 @@ export const api = {
     // reimplemented here. Mirrors PayrollService#estimateAllowanceEffect.
     estimateMyTaxAllowanceDeclaration: (declaration) =>
       apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.estimate, { method: 'POST', body: declaration }),
+    // แบบ ล.ย.01 as a flattened PDF of the government's own form. Both return a Blob rather than
+    // JSON, so they use fetch directly — the same shape downloadTaxAllowanceAttachment uses.
+    renderMyTaxAllowanceForm: async (declaration) => {
+      const res = await fetch(API_ROUTES.payroll.taxAllowanceDeclarations.formDraft, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...csrfHeaders('POST') },
+        body: JSON.stringify(declaration),
+      });
+      if (!res.ok) throw new Error('สร้างไฟล์ PDF แบบ ล.ย.01 ไม่สำเร็จ');
+      return res.blob();
+    },
+    downloadTaxAllowanceForm: async (declarationId) => {
+      const res = await fetch(API_ROUTES.payroll.taxAllowanceDeclarations.form(declarationId), { credentials: 'include' });
+      if (!res.ok) throw new Error('ดาวน์โหลดแบบ ล.ย.01 ไม่สำเร็จ');
+      return res.blob();
+    },
     // HR/CEO register (view), HR-only mutations (approve/reject/apply/on-behalf).
     getTaxAllowanceDeclarations: (params) => apiRequest(withQuery(API_ROUTES.payroll.taxAllowanceDeclarations.register, params)),
     createTaxAllowanceDeclarationOnBehalf: (declaration) =>
