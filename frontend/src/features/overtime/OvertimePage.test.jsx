@@ -321,14 +321,31 @@ describe('OvertimePage holiday verdict', () => {
     api.overtime.create.mockResolvedValue({ request: { id: 1001 } });
   });
 
-  it('shows the HOLIDAY verdict (3x) with the holiday name when the selected date is a company holiday', async () => {
+  // Uses a REAL production holiday name (2026-12-07, 149 chars -- the longest row in prod's
+  // hr.holiday, and the reason V129 widened name_th from VARCHAR(120) to TEXT), not a tidy
+  // 12-char stand-in. The verdict pill is `rounded-full`, a shape that asserts "one short line";
+  // interpolating a name this long into it wrapped inside the pill and read as broken. Pinning a
+  // realistic worst-case label here is what keeps the pill and the name structurally separate.
+  const LONGEST_REAL_HOLIDAY_NAME =
+    'ชดเชยวันคล้ายวันพระบรมราชสมภพ พระบาทสมเด็จพระบรมชนกาธิเบศร มหาภูมิพลอดุลยเดชมหาราช บรมนาถบพิตร วันชาติ และวันพ่อแห่งชาติ (วันเสาร์ที่ 5 ธันวาคม 2569)';
+
+  it('shows the HOLIDAY verdict (3x) and the holiday name separately, so a long real name cannot break the pill', async () => {
     const today = isoDaysFromToday(0);
     api.leave.calendarContext.mockResolvedValue({
-      calendarContext: { holidays: [{ holidayDate: today, nameTh: 'วันหยุดทดสอบ' }] },
+      calendarContext: { holidays: [{ holidayDate: today, nameTh: LONGEST_REAL_HOLIDAY_NAME }] },
     });
     renderOvertimePage();
 
-    expect(await screen.findByText('วันหยุดบริษัท: วันหยุดทดสอบ · 3x')).not.toBeNull();
+    // The pill carries ONLY the fixed verdict + rate -- an exact-match query, so if the
+    // variable-length name is ever interpolated back into it this fails immediately.
+    expect(await screen.findByText('วันหยุดบริษัท · 3x')).not.toBeNull();
+
+    // ...and the name is still shown, as its own wrappable element. TWO matches is correct, not a
+    // duplicate-render bug: the same holiday is legitimately both an entry in the วันหยุดที่จะถึง
+    // panel (it is upcoming) and the verdict for the currently selected date. Asserting the count
+    // rather than using findAllByText loosely, so a genuine double-render inside one region would
+    // still fail.
+    expect(screen.getAllByText(LONGEST_REAL_HOLIDAY_NAME)).toHaveLength(2);
   });
 
   it('shows the WORKDAY verdict (1.5x) when the calendar loaded and the selected date has no holiday', async () => {

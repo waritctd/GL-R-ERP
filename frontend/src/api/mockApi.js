@@ -3105,24 +3105,47 @@ function validateOvertimeRetroactiveWindow(payload) {
 // without a matching name there). `.has()` -- all `deriveOvertimeDayType`/
 // `validateOvertimeDayTypeClaim` below have ever needed -- means exactly the same thing on a Map
 // as it did on the Set it replaces, so neither of those changes at all.
-// NOTE ON COVERAGE, not just correctness: these must be spread across the whole year, not just
-// clustered in Q1/Q4. `UpcomingHolidays` (PR 2) shows a rolling ~90-day forward window, so a
-// fixture whose entries all sit in Jan-May and December renders that panel EMPTY for most of the
-// year -- which is exactly what happened before 08-12/10-13/10-23 were added: the feature's
-// headline surface showed its empty state under `VITE_USE_MOCKS=true`, the default verification
-// surface, and read as "working" because the empty state is itself a legitimate render.
-// A fixture that never constructs the interesting state is the same class of lie as a mock that
-// is more permissive than production. If you add a date, keep the year's gaps in mind.
+// COPIED VERBATIM FROM PRODUCTION, 2026-08-08: all 19 rows of `hr.holiday` (every one source=BANK,
+// i.e. fetched from the BOT financial-institutions-holidays feed). Do not "tidy" these names.
+//
+// Three things a hand-written fixture got wrong here, each of which hid a real problem:
+//
+//  1. COVERAGE. `UpcomingHolidays` shows a rolling ~90-day forward window. An earlier fixture
+//     clustered in Jan-May + December, leaving a 7-month hole, so the panel rendered its EMPTY
+//     STATE for most of the year -- including "today". That is not a visible failure: an empty
+//     state is a legitimate render, so the feature's headline surface read as working while never
+//     once showing a holiday.
+//  2. THE DATES WERE WRONG. The hand-written version had 2026-12-05 (วันพ่อแห่งชาติ). Production
+//     does NOT: 5 Dec 2026 falls on a Saturday, so the observed bank holiday is the SUBSTITUTE on
+//     Mon 2026-12-07, and 2026-12-10 (วันรัฐธรรมนูญ) was missing entirely. Thai holidays shift for
+//     weekends; guessing them is how a fixture drifts from the thing it stands in for.
+//  3. THE NAMES WERE FAR TOO SHORT. The hand-written names ran 9-17 chars. Production's LONGEST is
+//     **149 characters** (2026-12-07 below) and four exceed 60. This is why V129 had to widen
+//     `name_th` from VARCHAR(120) to TEXT -- a real 2026 BOT response overflowed the column. Short
+//     fixture names would let a layout that cannot survive a 149-char label pass every mock-mode
+//     check and then break on first contact with production data. `UpcomingHolidays` and the OT
+//     verdict badge both render this field: keep the long ones here so the UI is always exercised
+//     against the worst case that actually exists.
 const MOCK_HOLIDAY_DATES = new Map([
   ['2026-01-01', 'วันขึ้นปีใหม่'],
+  ['2026-01-02', 'วันหยุดทำการเพิ่มเป็นกรณีพิเศษ'],
+  ['2026-03-03', 'วันมาฆบูชา'],
+  ['2026-04-06', 'วันพระบาทสมเด็จพระพุทธยอดฟ้าจุฬาโลกมหาราช และวันที่ระลึกมหาจักรีบรมราชวงศ์'],
   ['2026-04-13', 'วันสงกรานต์'],
   ['2026-04-14', 'วันสงกรานต์'],
   ['2026-04-15', 'วันสงกรานต์'],
   ['2026-05-01', 'วันแรงงานแห่งชาติ'],
-  ['2026-08-12', 'วันแม่แห่งชาติ'],
+  ['2026-05-04', 'วันฉัตรมงคล'],
+  ['2026-06-01', 'ชดเชยวันวิสาขบูชา (วันอาทิตย์ที่ 31 พฤษภาคม 2569)'],
+  ['2026-06-03', 'วันเฉลิมพระชนมพรรษาสมเด็จพระนางเจ้าสุทิดา พัชรสุธาพิมลลักษณ พระบรมราชินี'],
+  ['2026-07-28', 'วันเฉลิมพระชนมพรรษาพระบาทสมเด็จพระเจ้าอยู่หัว'],
+  ['2026-07-29', 'วันอาสาฬหบูชา'],
+  ['2026-08-12', 'วันเฉลิมพระชนมพรรษาสมเด็จพระนางเจ้าสิริกิติ์ พระบรมราชินีนาถ พระบรมราชชนนีพันปีหลวง และวันแม่แห่งชาติ'],
   ['2026-10-13', 'วันนวมินทรมหาราช'],
   ['2026-10-23', 'วันปิยมหาราช'],
-  ['2026-12-05', 'วันพ่อแห่งชาติ'],
+  // The 149-char worst case. If a label breaks the layout, it breaks here first.
+  ['2026-12-07', 'ชดเชยวันคล้ายวันพระบรมราชสมภพ พระบาทสมเด็จพระบรมชนกาธิเบศร มหาภูมิพลอดุลยเดชมหาราช บรมนาถบพิตร วันชาติ และวันพ่อแห่งชาติ (วันเสาร์ที่ 5 ธันวาคม 2569)'],
+  ['2026-12-10', 'วันรัฐธรรมนูญ'],
   ['2026-12-31', 'วันสิ้นปี'],
 ]);
 // Years the mock calendar is considered "loaded" for -- distinct from a date simply being absent

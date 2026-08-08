@@ -46,12 +46,20 @@ describe('mockApi.leave.calendarContext', () => {
   it('populates holidays in the Aug-Nov window, so the upcoming-holidays panel is not empty there', async () => {
     await api.auth.login({ role: 'employee' });
     const { calendarContext } = await api.leave.calendarContext({ from: '2026-08-01', to: '2026-11-30' });
-    // Names matter, not just dates -- LeaveCalendarHolidayDto carries nameTh and the panel renders it.
-    expect(calendarContext.holidays).toEqual([
-      { holidayDate: '2026-08-12', nameTh: 'วันแม่แห่งชาติ' },
-      { holidayDate: '2026-10-13', nameTh: 'วันนวมินทรมหาราช' },
-      { holidayDate: '2026-10-23', nameTh: 'วันปิยมหาราช' },
+    expect(calendarContext.holidays.map((holiday) => holiday.holidayDate)).toEqual([
+      '2026-08-12', '2026-10-13', '2026-10-23',
     ]);
+
+    // The window must also contain at least one of production's genuinely LONG labels. Production's
+    // 19 rows average 35 chars but reach 149, and four exceed 60 -- which is why V129 had to widen
+    // name_th from VARCHAR(120) to TEXT after a real BOT response overflowed it. UpcomingHolidays
+    // and the OT verdict badge both render this field, so a fixture of tidy 12-char names would let
+    // a layout that cannot survive a real label pass every mock-mode check.
+    // Asserting the LENGTH PROPERTY rather than the literal string on purpose: the exact wording is
+    // BOT's to change, the "labels here are long" constraint is ours to keep.
+    const augustHoliday = calendarContext.holidays[0];
+    expect(augustHoliday.nameTh).toMatch(/^วันเฉลิมพระชนมพรรษาสมเด็จพระนางเจ้าสิริกิติ์/);
+    expect(augustHoliday.nameTh.length).toBeGreaterThan(60);
   });
 
   it('rejects a missing from/to the same shape as the real endpoint', async () => {

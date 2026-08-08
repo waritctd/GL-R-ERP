@@ -609,9 +609,20 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               identical convention for its own dynamic calendar-context note. */}
           <div className={formGridSpan2} aria-live="polite" aria-busy={dayTypeVerdictQuery.isFetching}>
             {verdictIsHoliday ? (
-              <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-warning-border bg-warning-bg-soft px-3 py-1.5 text-xs font-bold text-warning-dark">
-                <Icon name="triangleAlert" size={13} />
-                {`วันหยุดบริษัท: ${verdictHoliday.nameTh} · 3x`}
+              // The name is deliberately OUTSIDE the pill. `hr.holiday.name_th` is not a short
+              // label: production's 19 BANK rows average 35 chars and reach **149**
+              // ("ชดเชยวันคล้ายวันพระบรมราชสมภพ ... (วันเสาร์ที่ 5 ธันวาคม 2569)"), which is why V129
+              // had to widen the column from VARCHAR(120) to TEXT. Interpolated into the pill it
+              // either stretched it off-grid or wrapped inside a `rounded-full`, which reads as
+              // broken -- a pill shape asserts "one short line" and a 149-char label breaks that
+              // promise. Pill keeps the fixed verdict + rate; the variable-length name sits beside
+              // it as ordinary text that is allowed to wrap.
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="inline-flex w-fit shrink-0 items-center gap-1.5 rounded-full border border-warning-border bg-warning-bg-soft px-3 py-1.5 text-xs font-bold text-warning-dark">
+                  <Icon name="triangleAlert" size={13} />
+                  วันหยุดบริษัท · 3x
+                </span>
+                <span className="min-w-0 text-xs text-text-muted">{verdictHoliday.nameTh}</span>
               </span>
             ) : verdictResolved ? (
               <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-border bg-surface-subtle px-3 py-1.5 text-xs font-bold text-text-muted">
