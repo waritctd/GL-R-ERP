@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation, useNavigationType } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TaxAllowancePage } from './TaxAllowancePage.jsx';
 import { api } from '../../api/index.js';
@@ -73,6 +73,22 @@ function renderPage({ entry = '/tax-allowance' } = {}) {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+}
+
+/**
+ * Waits for an evidence picker to actually mount before firing at it.
+ *
+ * The panel only renders once `evidenceMode` is set, and the page deliberately refuses to decide
+ * whether this year is editable until the declarations query has SETTLED — so a picker queried
+ * synchronously right after `findByRole` resolves is reliably null. `last` picks the sign-off
+ * panel's picker when more than one ข้อ is open.
+ */
+async function findPicker({ last = false } = {}) {
+  return waitFor(() => {
+    const pickers = document.querySelectorAll('input[type="file"]');
+    expect(pickers.length).toBeGreaterThan(0);
+    return last ? pickers[pickers.length - 1] : pickers[0];
+  });
 }
 
 describe('TaxAllowancePage', () => {
@@ -248,7 +264,7 @@ describe('TaxAllowancePage', () => {
       fireEvent.click(await screen.findByRole('button', { name: /ข้อ 7/ }));
 
       const file = new File(['x'], 'cert.pdf', { type: 'application/pdf' });
-      fireEvent.change(document.querySelector('input[type="file"]'), { target: { files: [file] } });
+      fireEvent.change(await findPicker(), { target: { files: [file] } });
 
       // Attached immediately, during fill-in -- no round trip needed to SEE it.
       expect(await screen.findByText('cert.pdf')).not.toBeNull();
@@ -263,8 +279,7 @@ describe('TaxAllowancePage', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /ตรวจทาน ลงนาม และยื่น/ }));
       const signed = new File(['y'], 'signed.pdf', { type: 'application/pdf' });
-      const pickers = document.querySelectorAll('input[type="file"]');
-      fireEvent.change(pickers[pickers.length - 1], { target: { files: [signed] } });
+      fireEvent.change(await findPicker({ last: true }), { target: { files: [signed] } });
       await screen.findByText('signed.pdf');
 
       const submit = screen.getByRole('button', { name: 'ยื่นแบบแจ้ง' });
@@ -335,7 +350,7 @@ describe('TaxAllowancePage', () => {
 
       fireEvent.click(await screen.findByRole('button', { name: /ข้อ 7/ }));
       const file = new File(['x'], 'cert.pdf', { type: 'application/pdf' });
-      fireEvent.change(document.querySelector('input[type="file"]'), { target: { files: [file] } });
+      fireEvent.change(await findPicker(), { target: { files: [file] } });
       await screen.findByText('cert.pdf');
 
       fireEvent.change(screen.getByLabelText('ปีภาษี'), { target: { value: String(currentYear - 1) } });
@@ -345,11 +360,12 @@ describe('TaxAllowancePage', () => {
 
     it('proceeds with the year switch once confirmed', async () => {
       api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [] });
-      // Starts on the family SECTION (not the hub) so this also proves the reset-to-hub half of the
-      // claim -- "เลขที่เอกสารอ้างอิง" (used by the other dirty-form test above) lives on the hub only,
-      // so dirtying via this section's own field is what's available here.
       renderPage();
 
+      // Dirties the form through a ข้อ's own field rather than the declaration-level ones, so this
+      // also covers the case that matters after the restructure: a value typed inside a
+      // collapsible still counts as unsaved work worth confirming before it is discarded.
+      fireEvent.click(await screen.findByRole('button', { name: /ข้อ 7/ }));
       fireEvent.change(await screen.findByLabelText('จำนวนเงิน'), { target: { value: '1000' } });
       fireEvent.change(screen.getByLabelText('ปีภาษี'), { target: { value: String(currentYear - 1) } });
       fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันเปลี่ยนปีภาษี' }));

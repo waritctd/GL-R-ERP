@@ -17,7 +17,6 @@ import {
   MARITAL_STATE_OPTIONS,
   SPOUSAL_STATUS_OPTIONS,
   declaredAllowanceTotalFromValues,
-  readFieldValue,
   sectionDeclaredTotal,
   sectionHasValue,
 } from './taxAllowanceSchema.js';
