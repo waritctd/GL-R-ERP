@@ -54,8 +54,8 @@ const SCHEMA = allowanceZodSchema();
 function MoneyField({ id, label, hint, error, disabled, register, required }) {
   return (
     <FormField label={label} htmlFor={id} hint={hint} error={error} required={required}>
-      <span className="currency-input">
-        <span className="currency-input-symbol" aria-hidden="true">฿</span>
+      <span className="relative block">
+        <span className="currency-input-symbol absolute left-3 top-1/2 z-[1] text-text-muted font-black leading-none pointer-events-none -translate-y-1/2" aria-hidden="true">฿</span>
         <input
           id={id}
           type="number"
@@ -65,6 +65,7 @@ function MoneyField({ id, label, hint, error, disabled, register, required }) {
           placeholder="0.00"
           disabled={disabled}
           {...register}
+          className="pl-[34px]"
         />
       </span>
     </FormField>

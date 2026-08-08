@@ -721,7 +721,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               id="ot-start-time"
               type="time"
               {...register('startTime')}
-              className={errors.startTime ? 'is-invalid' : ''}
+              className={errors.startTime ? 'border-danger focus:border-danger focus:[box-shadow:0_0_0_3px_var(--color-danger-bg)]' : ''}
               aria-invalid={Boolean(errors.startTime)}
               aria-describedby={errors.startTime ? fieldErrorId('ot-start-time') : undefined}
               required
@@ -758,7 +758,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               id="ot-end-time"
               type="time"
               {...register('endTime')}
-              className={plannedEndError ? 'is-invalid' : ''}
+              className={plannedEndError ? 'border-danger focus:border-danger focus:[box-shadow:0_0_0_3px_var(--color-danger-bg)]' : ''}
               aria-invalid={Boolean(plannedEndError)}
               aria-describedby={plannedEndError ? fieldErrorId('ot-end-time') : undefined}
               required
@@ -768,7 +768,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
             <FormField label="เหตุผลความจำเป็น" htmlFor="ot-reason" error={errors.reason?.message} required>
               <textarea
                 id="ot-reason"
-                className={errors.reason ? 'is-invalid' : ''}
+                className={errors.reason ? 'border-danger focus:border-danger focus:[box-shadow:0_0_0_3px_var(--color-danger-bg)]' : ''}
                 rows={3}
                 {...register('reason')}
                 aria-invalid={Boolean(errors.reason)}
@@ -862,7 +862,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
                   outlined, not filled) and step 9 rule 2 — mirrors the exact
                   success/danger icon-button tinting CommissionPage uses for the
                   same manager/CEO review pattern. */}
-              <span className="row-actions mobile:order-3">
+              <RowActions className="mobile:order-3 mobile:flex-wrap">
                 {reviewable ? (
                   <>
                     <Button
@@ -894,7 +894,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
                     <Icon name="close" size={14} />
                   </Button>
                 ) : null}
-              </span>
+              </RowActions>
             </div>
           );
         })}

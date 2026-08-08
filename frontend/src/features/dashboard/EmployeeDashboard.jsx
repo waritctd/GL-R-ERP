@@ -252,11 +252,11 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
       {mode === 'employee' ? <TaxAllowanceActionRow summary={taxAllowanceSummary} /> : null}
 
       {employee && mode !== 'employee' ? (
-        <section className="profile-strip">
+        <section className="bg-surface border border-border rounded-md flex items-center gap-[18px] p-5 mobile:p-[14px] mobile:gap-2.5 mobile:items-start mobile:flex-col">
           <Avatar employee={employee} size="lg" />
           <div>
-            <h2>{employee?.nameTh}</h2>
-            <p>{employee?.positionTh} · {employee?.departmentTh} · <code>{employee?.code}</code></p>
+            <h2 className="mobile:m-0 mobile:text-[length:var(--text-lg)] mobile:leading-[1.3]">{employee?.nameTh}</h2>
+            <p className="mobile:mt-0.5 mobile:mr-0 mobile:mb-0 mobile:ml-0 mobile:text-[length:var(--text-sm)] mobile:text-text-muted">{employee?.positionTh} · {employee?.departmentTh} · <code>{employee?.code}</code></p>
           </div>
           <StatusBadge tone={employee?.statusTone}>{employee?.statusTh}</StatusBadge>
         </section>
@@ -268,12 +268,12 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
           forced text into a numeric display slot. A bordered list inside this
           card, never a nested card (DESIGN.md). */}
       {employee && mode === 'employee' ? (
-        <section className="profile-strip !flex-col !items-stretch !gap-0">
+        <section className="bg-surface border border-border rounded-md flex p-5 mobile:p-[14px] !flex-col !items-stretch !gap-0">
           <div className="flex items-center gap-[18px] mobile:flex-col mobile:items-start mobile:gap-2.5">
             <Avatar employee={employee} size="lg" />
             <div className="min-w-0 flex-1">
-              <h2>{employee?.nameTh}</h2>
-              <p>{employee?.positionTh} · <code>{employee?.code}</code></p>
+              <h2 className="mobile:m-0 mobile:text-[length:var(--text-lg)] mobile:leading-[1.3]">{employee?.nameTh}</h2>
+              <p className="mobile:mt-0.5 mobile:mr-0 mobile:mb-0 mobile:ml-0 mobile:text-[length:var(--text-sm)] mobile:text-text-muted">{employee?.positionTh} · <code>{employee?.code}</code></p>
             </div>
             <StatusBadge tone={employee?.statusTone}>{employee?.statusTh}</StatusBadge>
           </div>
@@ -358,9 +358,16 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
       <div className={mode === 'employee' ? '' : DASHBOARD_GRID}>
         {mode !== 'employee' && quickActions.length > 0 ? (
           <Panel title="การดำเนินการด่วน">
-            <div className="action-list">
+            <div className="grid gap-2.5">
               {quickActions.map(([path, label]) => (
-                <button type="button" key={path} onClick={() => navigate(path)}>{label}</button>
+                <button
+                  type="button"
+                  key={path}
+                  onClick={() => navigate(path)}
+                  className="min-h-[46px] border border-border rounded-md bg-surface-muted text-text font-bold"
+                >
+                  {label}
+                </button>
               ))}
             </div>
           </Panel>
@@ -372,13 +379,13 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
             <Button type="button" variant="text" onClick={() => navigate(requestsFeedPath)}>ดูทั้งหมด</Button>
           ) : null}
         >
-          <div className="request-feed">
+          <div className="request-feed grid gap-2.5">
             {profileRequests.length === 0 ? (
               <div className="grid min-h-[220px] place-items-center content-center gap-2 text-center text-text-muted">ยังไม่มีคำขอล่าสุด</div>
             ) : profileRequests.slice(0, 5).map((request) => {
               const status = requestStatus(request.status);
               return (
-                <div className="request-feed-item compact" key={request.id}>
+                <div className="request-feed-item flex items-center justify-between gap-3 min-w-0 py-2.5 border-b border-surface-subtle" key={request.id}>
                   <span>
                     <strong>ขอแก้ไข{request.fieldLabel}</strong>
                     <small>{formatShortDate(request.requestedAt)}</small>

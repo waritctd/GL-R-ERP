@@ -389,18 +389,18 @@ export function TeamLeaveTab({ user, showToast }) {
       </SafeForm>
 
       <Panel title="ปฏิทินวันลา">
-        <div className="leave-calendar-list">
+        <div className="grid gap-2.5">
           {activeCalendarItems.length === 0 ? (
             <EmptyState icon="calendar" title="ยังไม่มีรายการวันลาในช่วงนี้" />
           ) : activeCalendarItems.map((request) => {
             const status = statusInfo(request.status);
             return (
-              <div className="leave-calendar-item" key={request.id}>
-                <span>
+              <div className="leave-calendar-item flex items-center justify-between gap-[14px] min-w-0 border-b border-surface-subtle py-2.5" key={request.id}>
+                <span className="min-w-0">
                   <strong>{formatDateRange(request.startDate, request.endDate)}</strong>
                   <small>{request.employeeName || request.employeeCode} · {request.leaveTypeNameTh}</small>
                 </span>
-                <span className="flex flex-col items-end gap-1">
+                <span className="flex flex-col items-end gap-1 min-w-0">
                   <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
                   <PendingApproverNote request={request} />
                 </span>

@@ -815,7 +815,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           <span>เพิ่มรายการสินค้าอย่างน้อย 1 รายการ ก่อนจึงจะสร้างคำขอราคาได้</span>
         </div>
 
-        {error ? <div className="form-error" role="alert">{error}</div> : null}
+        {error ? <div className="py-2.5 px-3 rounded-md bg-danger-bg text-danger-dark font-bold text-[length:var(--text-sm)]" role="alert">{error}</div> : null}
       </div>
     );
   }
@@ -1587,7 +1587,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           <span>สร้างดีลแล้วยังไม่มีราคา — ขั้นต่อไปคือ “สร้างคำขอราคา” จากหน้าดีล</span>
         </div>
 
-        {error ? <div className="form-error" role="alert">{error}</div> : null}
+        {error ? <div className="py-2.5 px-3 rounded-md bg-danger-bg text-danger-dark font-bold text-[length:var(--text-sm)]" role="alert">{error}</div> : null}
       </div>
     );
   }

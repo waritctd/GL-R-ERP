@@ -76,12 +76,14 @@ const FULFILLMENT_TRACK_KINDS = new Set([
   'STOCK_RESERVED', 'DELIVERY_RECORDED', 'DELIVERY_COMPLETED',
 ]);
 
+const EVENT_DOT_BASE = 'w-2 h-2 rounded-full mt-[5px] shrink-0';
+
 export function eventDotClass(kind) {
-  if (kind === 'CREATED') return 'event-dot created';
-  if (kind === 'COMMENTED' || kind === 'COMMENT') return 'event-dot comment';
-  if (PAYMENT_TRACK_KINDS.has(kind)) return 'event-dot success';
-  if (FULFILLMENT_TRACK_KINDS.has(kind)) return 'event-dot transition';
-  return 'event-dot transition';
+  if (kind === 'CREATED') return `${EVENT_DOT_BASE} bg-success-soft`;
+  if (kind === 'COMMENTED' || kind === 'COMMENT') return `${EVENT_DOT_BASE} bg-text-muted`;
+  if (PAYMENT_TRACK_KINDS.has(kind)) return `${EVENT_DOT_BASE} bg-success`;
+  if (FULFILLMENT_TRACK_KINDS.has(kind)) return `${EVENT_DOT_BASE} bg-info-dot`;
+  return `${EVENT_DOT_BASE} bg-info-dot`;
 }
 
 function today() {
