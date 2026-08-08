@@ -100,6 +100,18 @@ Two of these files go deep on a few things; two go wide over everything.
   POST/PUT/PATCH/DELETE) × every role = 588 requests, asserting that **no role ever gets a 2xx
   from a write against a resource that does not exist**. A 2xx there would mean an endpoint
   mutating or creating without an existence check.
+- **`write-overtime-holiday.spec.js`** — `day_type`/`pay_rate_multiplier` are derived exclusively
+  from `hr.holiday` (`OvertimeService#deriveDayType`), never from the client's
+  `SubmitOvertimeRequest.dayType` claim, which is validated but never trusted for pay
+  (`#resolveDayTypeSubmitNote`). Creates and deletes real holiday rows through the real
+  `HolidayController` CRUD (HR-gated) to drive every row of that decision table: a HOLIDAY claim
+  the calendar can actively disprove is refused with **no row created**; one it corroborates is
+  accepted at 3.00; a WORKDAY claim on a genuine holiday cannot suppress the real rate; an
+  ordinary day with no claim stores 1.50 unflagged; and a holiday HR adds after submit is still
+  picked up — and frozen — at manager approval. `hr.holiday` ships **empty**, so the
+  claim-contradicted case is only reachable once the calendar is deliberately loaded for that
+  year first (a sentinel row); every such case reads its setup back through a separate GET before
+  relying on it, rather than trusting its own create response.
 
 ### How the write specs stay safe on a shared database
 
