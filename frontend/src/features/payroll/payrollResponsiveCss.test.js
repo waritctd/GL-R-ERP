@@ -212,8 +212,19 @@ describe('payroll totals-footer money cell sizing (Item 2 regression guard)', ()
 //
 // The second assertion therefore inverts: styles.css must never DECLARE this token again.
 // Re-introducing the duplicate is the original hazard, not a fix for it -- a re-declared copy in
-// `@layer legacy` would silently outrank `@theme static` all over again. styles.css still
-// CONSUMES the token via `var(--shadow-focus-ring)` (2 call sites), which is fine and unaffected.
+// `@layer legacy` would silently outrank `@theme static` all over again.
+//
+// styles.css USED to still consume the token via `var(--shadow-focus-ring)` (2 call sites:
+// `.info-tip-trigger:focus-visible`, then `.collapsible-header-button:focus-visible`), and this
+// guard originally asserted that too, as a "declared-and-actually-used" sanity check. Both call
+// sites have since been ported to Tailwind arbitrary-value utilities on their components
+// (InfoTip.jsx's `focus-visible:[box-shadow:var(--shadow-focus-ring)]`, then
+// CollapsibleSection.jsx's `focus-visible:shadow-[var(--shadow-focus-ring)]`, Group C primitives
+// port) -- expected under this repo's Tailwind-first migration, not a regression, so styles.css
+// now has zero consuming references and the "still consumes it" half moved to index.css's own
+// `@layer base` instead, which has three permanent, non-migrating consumers of its own (the
+// `input:focus`/`select:focus`/`textarea:focus` rule and the `:focus`/`:focus-visible` fallback
+// pair for the generic interactive-element `:where(...)` selector, all just above this block).
 describe('focus-ring contrast token (Item 4a regression guard)', () => {
   it('uses the solid --color-indigo-ring token, not the old low-contrast rgba alpha', () => {
     expect(indexCss).toContain('--shadow-focus-ring: 0 0 0 3px var(--color-indigo-ring);');
@@ -223,7 +234,7 @@ describe('focus-ring contrast token (Item 4a regression guard)', () => {
 
   it('never re-declares --shadow-focus-ring in styles.css, where @layer legacy would outrank @theme', () => {
     expect(stylesCss).not.toMatch(/--shadow-focus-ring\s*:/);
-    expect(stylesCss).toContain('var(--shadow-focus-ring)');
+    expect(indexCss).toContain('var(--shadow-focus-ring)');
   });
 
   it('keeps --color-indigo-ring itself the known-good #2563eb (5.17:1 on white)', () => {

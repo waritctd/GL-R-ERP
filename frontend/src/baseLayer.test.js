@@ -192,10 +192,23 @@ describe('token de-duplication', () => {
     expect(declarations).toBeNull();
   });
 
-  it('still CONSUMES those tokens via var(), so the check above is not vacuous', () => {
-    // If styles.css stopped referencing them entirely, the assertion above would pass for the wrong
-    // reason. It must stay true that these tokens are used here and merely defined elsewhere.
-    expect(STYLES_CSS).toMatch(/var\(--radius-md\)/);
-    expect(STYLES_CSS).toMatch(/var\(--text-sm\)/);
+  it('declares each of them exactly once, and that once is index.css', () => {
+    // Non-vacuity, stated durably. The obvious formulation -- "styles.css still CONSUMES
+    // var(--radius-md)" -- is what this originally said, and it is a trap: styles.css is being
+    // retired, so a consumption assertion snaps the moment the last consumer is ported, for a
+    // reason that has nothing to do with the invariant. That exact failure hit
+    // payrollResponsiveCss.test.js's `toContain('var(--shadow-focus-ring)')` guard two commits
+    // apart -- the InfoTip port removed one consumer, the CollapsibleSection port removed the last.
+    //
+    // Asserting a positive count in index.css cannot go vacuous: if the token disappeared entirely
+    // the count would be 0 and this fails. And it keeps holding when styles.css reaches zero rules,
+    // which is the whole point of the programme this test belongs to.
+    const declarations = (css, token) =>
+      stripComments(css).match(new RegExp(`(^|[;{\\s])${token}\\s*:`, 'g')) ?? [];
+
+    for (const token of ['--font-family', '--text-sm', '--space-4', '--radius-md', '--shadow-md']) {
+      expect(declarations(INDEX_CSS, token), `${token} must be declared in index.css`).toHaveLength(1);
+      expect(declarations(STYLES_CSS, token), `${token} must NOT be declared in styles.css`).toHaveLength(0);
+    }
   });
 });

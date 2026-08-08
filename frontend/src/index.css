@@ -330,6 +330,16 @@
   }
 }
 
+/* Button loading-spinner keyframe, relocated from styles.css's retired `.button-loading-spinner`
+   rule (Group C primitives port). Referenced by Button.jsx's
+   `animate-[button-loading-spin_700ms_linear_infinite]` utility class. Left unlayered for the
+   same reason as skeleton-shimmer above. */
+@keyframes button-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Phase 3.4 — reduced-motion foundation for the tokens above. Nothing
    currently reads --motion-*, so this has no effect today; any future
    component that does `transition-duration: var(--motion-standard)`

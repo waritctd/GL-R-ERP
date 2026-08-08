@@ -223,7 +223,7 @@ export function AssignmentsTab({ showToast }) {
         onCancel={() => { setEndTarget(null); setEndError(''); }}
         message={endTarget ? (
           <div className="grid gap-3">
-            <p className="confirm-dialog-message">
+            <p className="confirm-dialog-message text-text-secondary leading-normal">
               สิ้นสุดการมอบหมาย {scopeTypeLabel(endTarget.scopeType)} รหัส {endTarget.scopeId} ({endTarget.scheduleCode})
               ที่เริ่มมีผลตั้งแต่ {formatShortDate(endTarget.effectiveFrom)}
             </p>

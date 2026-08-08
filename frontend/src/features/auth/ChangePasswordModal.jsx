@@ -140,21 +140,25 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
   }
 
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={forced ? undefined : onClose}>
+    <div
+      className="modal-backdrop fixed inset-0 z-50 grid place-items-center p-5 bg-overlay"
+      role="presentation"
+      onMouseDown={forced ? undefined : onClose}
+    >
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- dialog only stops backdrop click-through; it is not an interactive control */}
       <section
         ref={panelRef}
-        className="modal-panel"
+        className="modal-panel flex flex-col overflow-hidden rounded-md bg-surface shadow-[var(--shadow-lg-heavy)] w-[min(720px,100%)] max-h-[min(760px,calc(100dvh-40px))]"
         role="dialog"
         aria-modal="true"
         aria-label="เปลี่ยนรหัสผ่าน"
         tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header className="modal-header">
+        <header className="modal-header flex items-center justify-between gap-4 px-5 py-[18px] border-b border-border">
           <div>
-            <h2>เปลี่ยนรหัสผ่าน</h2>
-            <p>{forced ? 'กรุณาตั้งรหัสผ่านใหม่เพื่อความปลอดภัยก่อนเริ่มใช้งาน' : 'อัปเดตรหัสผ่านของคุณ'}</p>
+            <h2 className="m-0">เปลี่ยนรหัสผ่าน</h2>
+            <p className="m-0 text-text-muted text-[length:var(--text-sm)]">{forced ? 'กรุณาตั้งรหัสผ่านใหม่เพื่อความปลอดภัยก่อนเริ่มใช้งาน' : 'อัปเดตรหัสผ่านของคุณ'}</p>
           </div>
           {!forced && onClose ? (
             <Button type="button" variant="icon" onClick={onClose} title="ปิด" aria-label="ปิด">
@@ -162,7 +166,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
             </Button>
           ) : null}
         </header>
-        <div className="modal-body">
+        <div className="modal-body overflow-auto p-5">
           <SafeForm id="change-password-form" onSubmit={handleSubmit(submitPassword)} noValidate>
             <FormGrid single>
               <FormField
@@ -221,7 +225,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
             </FormGrid>
           </SafeForm>
         </div>
-        <footer className="modal-footer">
+        <footer className="modal-footer flex items-center justify-end gap-4 px-5 py-[18px] border-t border-border">
           {forced ? (
             <Button type="button" variant="secondary" onClick={onLogout}>ออกจากระบบ</Button>
           ) : (
