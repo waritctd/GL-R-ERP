@@ -3032,7 +3032,12 @@ function leaveContactDefaults(employee) {
   };
 }
 
-function buildLeaveRecord(record) {
+// `user` is the acting caller (not the request's own employee) -- mirrors LeaveService's
+// withCanReviewFlag(dto, user), which stamps canReview per-caller onto every returned DTO in
+// list/create/approve/reject/cancel. Reuses canReviewLeave(), the same hr-bypass-or-direct-manager
+// predicate the mock already gates approve/reject/cancel on, so the flag and the actual gate can
+// never diverge.
+function buildLeaveRecord(record, user) {
   const employee = db.employees.find((item) => item.id === record.employeeId);
   const managerEmployeeId = managerIdForEmployee(employee);
   const manager = managerEmployeeId ? db.employees.find((item) => item.id === managerEmployeeId) : null;
@@ -3045,6 +3050,7 @@ function buildLeaveRecord(record) {
     managerName: manager?.nameTh || null,
     leaveTypeNameTh: leaveType.nameTh,
     leaveTypeNameEn: leaveType.nameEn,
+    canReview: canReviewLeave(user, record.employeeId),
     ...pendingApproverForLeave(record, managerEmployeeId),
   };
 }
@@ -4420,7 +4426,7 @@ export const api = {
       if (params.status) list = list.filter((item) => item.status === params.status);
       if (params.from) list = list.filter((item) => item.endDate >= params.from);
       if (params.to) list = list.filter((item) => item.startDate <= params.to);
-      return delay({ requests: list.map(buildLeaveRecord) });
+      return delay({ requests: list.map((item) => buildLeaveRecord(item, user)) });
     },
 
     async create(payload) {
@@ -4519,7 +4525,7 @@ export const api = {
       request.employeeCode = employee.code;
       request.employeeName = employee.nameTh;
       db.leaveRequests.unshift(request);
-      return delay({ request: buildLeaveRecord(request) });
+      return delay({ request: buildLeaveRecord(request, user) });
     },
 
     async approve(id, payload = {}) {
@@ -4535,7 +4541,7 @@ export const api = {
       request.reviewedAt = now;
       request.reviewerNote = payload.reviewerNote || null;
       request.updatedAt = now;
-      return delay({ request: buildLeaveRecord(request) });
+      return delay({ request: buildLeaveRecord(request, user) });
     },
 
     async reject(id, payload = {}) {
@@ -4551,7 +4557,7 @@ export const api = {
       request.reviewedAt = now;
       request.reviewerNote = payload.reviewerNote || null;
       request.updatedAt = now;
-      return delay({ request: buildLeaveRecord(request) });
+      return delay({ request: buildLeaveRecord(request, user) });
     },
 
     async cancel(id, payload = {}) {
@@ -4567,7 +4573,7 @@ export const api = {
       request.cancelledAt = now;
       request.reviewerNote = payload.reviewerNote || request.reviewerNote;
       request.updatedAt = now;
-      return delay({ request: buildLeaveRecord(request) });
+      return delay({ request: buildLeaveRecord(request, user) });
     },
 
     // Phase A4: certificate-download button in ReviewQueueTab.jsx/MyLeaveTab.jsx. Mirrors
