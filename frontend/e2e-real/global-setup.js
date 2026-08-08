@@ -17,7 +17,7 @@ const HOW_TO_RUN = `
     cd ../frontend && node scripts/start-e2e-backend.mjs
 
     # 3. The suite, in another terminal
-    cd frontend && npm run test:e2e:real
+    cd frontend && npm run test:e2e
 `;
 
 /**
