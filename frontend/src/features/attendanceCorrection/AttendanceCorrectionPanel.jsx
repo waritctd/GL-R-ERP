@@ -16,12 +16,12 @@ import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { attendanceCorrectionStatusLabel as statusInfo } from '../../utils/format.js';
 
-const CORRECTION_TABLE_GRID = 'grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,1.4fr)_minmax(0,0.9fr)_minmax(0,0.75fr)] max-[1040px]:min-w-[860px] reflow-cards';
+const CORRECTION_TABLE_GRID = 'grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,1.4fr)_minmax(0,0.9fr)_minmax(0,0.75fr)] nav-drawer:min-w-[860px] reflow-cards';
 // FilterBar/FormGrid (Layout.jsx) render <div>s; the submit form needs native submit semantics
 // (Enter-to-submit) and this exact 2-col shape, so both utility strings are reproduced here the
 // same way OvertimePanel.jsx does for its own filter/submit forms.
 const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-end bg-surface border border-border rounded-md p-[14px]';
-const FORM_GRID_CLASS = 'grid gap-[14px] max-[720px]:grid-cols-1 grid-cols-2';
+const FORM_GRID_CLASS = 'grid gap-[14px] mobile:grid-cols-1 grid-cols-2';
 
 const CORRECTION_TYPE_LABELS = {
   CHECK_IN: 'เวลาเข้างาน',
@@ -327,7 +327,7 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
               </FormField>
             </div>
             <RowActions className={formGridSpan2}>
-              <Button type="submit" disabled={saving} className="max-[720px]:min-h-11 max-[720px]:w-full">
+              <Button type="submit" disabled={saving} className="mobile:min-h-11 mobile:w-full">
                 <Icon name="plus" />
                 ส่งคำขอ
               </Button>
@@ -367,11 +367,11 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
           const canCancel = request.status === 'SUBMITTED' && Number(request.employeeId) === Number(user.employeeId);
           return (
             <div className={`${CORRECTION_TABLE_GRID} data-row`} key={request.id}>
-              <span data-label="วันที่ / พนักงาน" className="max-[720px]:order-1">
+              <span data-label="วันที่ / พนักงาน" className="mobile:order-1">
                 <strong>{formatWorkDate(request.workDate)}</strong>
                 <small>{request.employeeName || request.employeeCode || request.employeeId}</small>
               </span>
-              <span data-label="รายการที่แก้ไข" className="max-[720px]:order-4">
+              <span data-label="รายการที่แก้ไข" className="mobile:order-4">
                 <strong>{CORRECTION_TYPE_LABELS[request.correctionType] || request.correctionType}</strong>
                 <small className="font-mono">
                   {request.requestedCheckIn ? `เข้า ${formatTime(request.requestedCheckIn)}` : ''}
@@ -379,15 +379,15 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
                   {request.requestedCheckOut ? `ออก ${formatTime(request.requestedCheckOut)}` : ''}
                 </small>
               </span>
-              <span data-label="เหตุผล" className="max-[720px]:order-5">
+              <span data-label="เหตุผล" className="mobile:order-5">
                 <strong>{request.reason}</strong>
                 <small>{request.reviewerNote || '-'}</small>
               </span>
-              <span data-label="สถานะ" className="max-[720px]:order-2">
+              <span data-label="สถานะ" className="mobile:order-2">
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
                 <small>{request.reviewedAt ? `${request.reviewedByName || '-'} · ${formatDateTime(request.reviewedAt)}` : '-'}</small>
               </span>
-              <span className="row-actions max-[720px]:order-3">
+              <span className="row-actions mobile:order-3">
                 {canReview ? (
                   <>
                     <Button

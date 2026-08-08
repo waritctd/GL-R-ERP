@@ -4,7 +4,7 @@ import { queryKeys } from '../../api/queryKeys.js';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 
-const GRID = 'grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.7fr)_minmax(0,1.6fr)_minmax(0,1.1fr)] max-[1040px]:min-w-[860px] reflow-cards';
+const GRID = 'grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.7fr)_minmax(0,1.6fr)_minmax(0,1.1fr)] nav-drawer:min-w-[860px] reflow-cards';
 
 // ISO day-of-week (1=Mon..7=Sun) -> Thai short label, matching hr.work_schedule_day.day_of_week
 // directly (WorkScheduleSummaryDto's own javadoc: "no translation needed either side").

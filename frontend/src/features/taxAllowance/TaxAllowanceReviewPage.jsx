@@ -24,7 +24,7 @@ import {
 } from './taxAllowanceStatus.js';
 import { Button } from '../../components/common/Button.jsx';
 
-const REGISTER_GRID = 'grid-cols-[minmax(0,0.4fr)_minmax(0,1.4fr)_minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.7fr)] max-[1040px]:min-w-[900px] reflow-cards';
+const REGISTER_GRID = 'grid-cols-[minmax(0,0.4fr)_minmax(0,1.4fr)_minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.7fr)] nav-drawer:min-w-[900px] reflow-cards';
 
 // `NONE` is the one chip that is NOT a backend status — it is the synthesized "this employee has
 // no declaration" row, which only exists when the employee list can be enumerated. It is filtered

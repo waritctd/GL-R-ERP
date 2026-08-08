@@ -1469,7 +1469,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             // IN_PAGE_JUMP_TARGET above) — scroll-mt so it doesn't tuck under
             // the sticky header, tabIndex so the jump can actually move focus
             // here.
-            <div id="deal-tracking-panel" tabIndex={-1} className="scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none">
+            <div id="deal-tracking-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
               <DealTrackingPanel
                 summary={summary}
                 events={events}
@@ -1838,7 +1838,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               exactly: `items` itself is unconditionally visible, so nothing
               upstream any longer enforces `sections.pricingRequest` for
               this panel. */}
-          <div id="pricing-request-panel" tabIndex={-1} className="scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none">
+          <div id="pricing-request-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
             {canViewPricingRequests && Boolean(sections.pricingRequest) ? (
               <PricingRequestPanel ref={pricingRequestPanelRef} ticketId={ticketId} deal={summary} ticketItems={items} user={user} />
             ) : null}
@@ -1888,7 +1888,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               wrapper stays for any other in-page anchor that might still
               want it. */}
           {sections.dealQuotation && canViewPricingRequests ? (
-            <div id="deal-quotation-panel" tabIndex={-1} className="scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none">
+            <div id="deal-quotation-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
               <DealQuotationPanel ref={dealQuotationPanelRef} ticketId={ticketId} pricingRequests={pricingRequests} user={user} showToast={showToast} />
             </div>
           ) : null}
@@ -1930,7 +1930,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               doc/payment bits that used to live directly on this page.
               id: the sticky bar's account-role jump target (chaseOverdue/
               confirmDeposit/confirmFinalPayment/confirmCloseReady). */}
-          <div id="deal-deposit-panel" tabIndex={-1} className="scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none">
+          <div id="deal-deposit-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
             {sections.depositNotice ? (
               <DealDepositPanel
                 ticketId={ticketId}
@@ -1976,7 +1976,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               directly on this page. Reuses the existing `delivery` section
               id (salesViewScope.js) rather than adding a parallel one.
               id (DOM): the sticky bar's import-role fulfilment jump target. */}
-          <div id="deal-fulfilment-panel" tabIndex={-1} className="scroll-mt-[300px] max-[720px]:scroll-mt-[420px] outline-none">
+          <div id="deal-fulfilment-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
             {sections.delivery ? (
               <DealFulfilmentPanel
                 ticketId={ticketId}

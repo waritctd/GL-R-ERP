@@ -24,7 +24,7 @@ import {
 // Three-tile grid: no shared primitive has this exact ratio (StatGrid is
 // 4-col). Mirrors LeavePage's LEAVE_BALANCE_GRID pattern (3-col, 1-col
 // ≤720px) — see that file for the precedent.
-const TILE_GRID = 'grid grid-cols-3 gap-3 max-[1040px]:grid-cols-1 max-[720px]:grid-cols-1';
+const TILE_GRID = 'grid grid-cols-3 gap-3 nav-drawer:grid-cols-1 mobile:grid-cols-1';
 
 // Terminal negative states: a stepper implies "still progressing", which is
 // wrong once a request has been stopped. Rejected/cancelled rows show only
@@ -228,7 +228,7 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], dash
       <button
         type="button"
         onClick={() => navigate('/attendance')}
-        className="bg-surface border border-border rounded-md p-5 w-full text-left cursor-pointer flex items-center justify-between gap-4 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-3"
+        className="bg-surface border border-border rounded-md p-5 w-full text-left cursor-pointer flex items-center justify-between gap-4 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover mobile:flex-col mobile:items-start mobile:gap-3"
       >
         <span className="flex items-center gap-3 min-w-0">
           <span className={`stat-icon !mb-0 stat-${hasCheckedIn ? 'teal' : 'amber'}`}>
@@ -243,7 +243,7 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], dash
             </span>
           </span>
         </span>
-        <span className="flex items-center gap-2 max-[720px]:w-full max-[720px]:justify-between">
+        <span className="flex items-center gap-2 mobile:w-full mobile:justify-between">
           <span className="!text-sm !font-bold !text-primary">
             {hasCheckedIn ? 'ลงเวลาออกงาน / ลงเวลาเข้างาน' : 'ลงเวลาเข้างาน'}
           </span>

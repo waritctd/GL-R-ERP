@@ -32,7 +32,7 @@ import {
   payrollCutoffInfo,
 } from './specialMoneyRules.js';
 
-const TABLE_GRID = 'grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.7fr)] max-[1040px]:min-w-[820px] reflow-cards';
+const TABLE_GRID = 'grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.7fr)] nav-drawer:min-w-[820px] reflow-cards';
 
 // The policy PDF is bundled at build time (frontend/public/policy/, served as-is at this path —
 // see App.jsx's other public/ references for the convention). "ระเบียบสวัสดิการ_8_6_61.pdf" as the
@@ -678,7 +678,7 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
           target="_blank"
           rel="noopener noreferrer"
           download={POLICY_PDF_DOWNLOAD_NAME}
-          className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-bold text-primary max-[720px]:ml-0"
+          className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-bold text-primary mobile:ml-0"
         >
           <Icon name="fileText" size={15} />
           ระเบียบสวัสดิการ (PDF)
@@ -950,7 +950,7 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
             ) : null}
   
             <RowActions className={formGridSpan2}>
-              <Button type="submit" disabled={saving || !requestType || blockingWarning} className="max-[720px]:min-h-11 max-[720px]:w-full">
+              <Button type="submit" disabled={saving || !requestType || blockingWarning} className="mobile:min-h-11 mobile:w-full">
                 <Icon name="plus" />
                 ส่งคำขอ
               </Button>
@@ -1045,14 +1045,14 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
             : null;
           return (
             <div className={`${TABLE_GRID} data-row`} key={request.id}>
-              <span data-label="ประเภท / รายละเอียด" className="max-[720px]:order-1">
+              <span data-label="ประเภท / รายละเอียด" className="mobile:order-1">
                 <strong>{typeMeta?.thaiLabel || request.requestType}</strong>
                 <small>
                   {request.employeeName || request.employeeCode} · {formatDate(request.eventDate)} ·{' '}
                   <span className="tabular-nums">{formatMoney(request.approvedAmount ?? request.requestedAmount)}</span>
                 </small>
               </span>
-              <span data-label="สถานะ" className="max-[720px]:order-2">
+              <span data-label="สถานะ" className="mobile:order-2">
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
                 {/* No "รอ" prefix -- the StatusBadge above already says that; repeating it made
                     this note a superset of the badge's own text (review #pending-approver-info). */}
@@ -1061,10 +1061,10 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
                   <small className="text-warning">ยังไม่ได้แนบเอกสาร — อนุมัติไม่ได้</small>
                 ) : null}
               </span>
-              <span data-label="งวดจ่าย" className="max-[720px]:order-3">
+              <span data-label="งวดจ่าย" className="mobile:order-3">
                 {request.payrollMonth ? `งวด ${formatThaiMonthYear(new Date(`${request.payrollMonth}T00:00:00`))}` : 'ยังไม่กำหนด'}
               </span>
-              <span className="row-actions max-[720px]:order-4">
+              <span className="row-actions mobile:order-4">
                 {canCancel(request) ? (
                   <Button type="button" variant="icon" title="ยกเลิกคำขอ" aria-label="ยกเลิกคำขอ" disabled={saving} onClick={() => cancel(request.id)}>
                     <Icon name="close" size={14} />
