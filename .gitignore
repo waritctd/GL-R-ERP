@@ -87,3 +87,15 @@ backend/target/e2e-uploads/
 frontend/screenshots/
 frontend/GL&R Design Audit/
 frontend/UX Agents.md
+
+# Visual-regression baselines (frontend/e2e-visual/visual-baseline.spec.js,
+# opt-in via VISUAL_BASELINE=1 — see that file's header comment for usage).
+# Large PNGs of payroll/employee/commission screens — this repository is
+# PUBLIC, same reason frontend/screenshots/ is ignored above. Regenerate
+# locally with `--update-snapshots` before each migration slice. (Restores
+# the equivalent frontend/e2e/*.spec.js-snapshots/ entry PR #592 removed
+# along with frontend/e2e/ itself; playwright.visual.config.js does not
+# override the default report/output-dir names, so this suite's run
+# artifacts are already covered by the "Playwright e2e (Stage K2)" block
+# above rather than needing a dedicated entry here.)
+frontend/e2e-visual/*.spec.js-snapshots/
