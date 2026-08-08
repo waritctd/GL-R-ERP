@@ -1,5 +1,6 @@
 import { useId, useState } from 'react';
 import { Icon } from './Icon.jsx';
+import { cn } from '../../utils/cn.js';
 
 /**
  * Accessible titled section for progressive disclosure of long forms.
@@ -40,28 +41,31 @@ export function CollapsibleSection({
 
   if (!collapsible) {
     return (
-      <section className="collapsible-section is-static" aria-labelledby={headerId}>
-        <div className="collapsible-header">
-          <div className="collapsible-header-static">
-            <span className="collapsible-title-group">
-              <h2 id={headerId} className="collapsible-title">{title}</h2>
-              {subtitle ? <span className="collapsible-subtitle">{subtitle}</span> : null}
+      <section
+        className="collapsible-section is-static border border-border rounded-md bg-surface [&+&]:mt-4"
+        aria-labelledby={headerId}
+      >
+        <div className="collapsible-header flex items-center justify-between gap-3">
+          <div className="flex-1 flex items-center pt-3 px-3 pb-0">
+            <span className="collapsible-title-group flex flex-col gap-0.5">
+              <h2 id={headerId} className="collapsible-title text-[length:var(--text-base)] m-0">{title}</h2>
+              {subtitle ? <span className="collapsible-subtitle text-[length:var(--text-xs)] font-medium text-text-muted">{subtitle}</span> : null}
             </span>
           </div>
-          {headerRight ? <div className="collapsible-header-right">{headerRight}</div> : null}
+          {headerRight ? <div className="collapsible-header-right pt-3 pr-3 pb-0 pl-0">{headerRight}</div> : null}
         </div>
-        <div className="collapsible-body">{children}</div>
+        <div className="collapsible-body pt-0 px-3 pb-3">{children}</div>
       </section>
     );
   }
 
   return (
-    <section className="collapsible-section">
-      <div className="collapsible-header">
+    <section className="collapsible-section border border-border rounded-md bg-surface [&+&]:mt-4">
+      <div className="collapsible-header flex items-center justify-between gap-3">
         <button
           type="button"
           id={headerId}
-          className="collapsible-header-button"
+          className="collapsible-header-button flex-1 flex items-center gap-2 bg-transparent border-0 text-left p-4 text-text rounded-md hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
           aria-expanded={open}
           aria-controls={bodyId}
           onClick={() => setOpen((value) => !value)}
@@ -69,17 +73,21 @@ export function CollapsibleSection({
           <Icon
             name="chevronDown"
             size={16}
-            className={`collapsible-chevron${open ? ' is-open' : ''}`}
+            className={cn(
+              'collapsible-chevron flex-none text-icon-muted transition-transform duration-150 ease-[ease] motion-reduce:transition-none',
+              open ? 'rotate-0' : '-rotate-90',
+              open && 'is-open',
+            )}
           />
-          <span className="collapsible-title-group">
-            <span className="collapsible-title">{title}</span>
-            {subtitle ? <span className="collapsible-subtitle">{subtitle}</span> : null}
+          <span className="collapsible-title-group flex flex-col gap-0.5">
+            <span className="collapsible-title text-[length:var(--text-lg)] font-bold text-text">{title}</span>
+            {subtitle ? <span className="collapsible-subtitle text-[length:var(--text-xs)] font-medium text-text-muted">{subtitle}</span> : null}
           </span>
         </button>
-        {headerRight ? <div className="collapsible-header-right">{headerRight}</div> : null}
+        {headerRight ? <div className="collapsible-header-right pr-4">{headerRight}</div> : null}
       </div>
       {open ? (
-        <div id={bodyId} role="region" aria-labelledby={headerId} className="collapsible-body">
+        <div id={bodyId} role="region" aria-labelledby={headerId} className="collapsible-body pt-0 px-4 pb-4">
           {children}
         </div>
       ) : null}

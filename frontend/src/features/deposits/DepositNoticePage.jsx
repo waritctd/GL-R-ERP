@@ -887,7 +887,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
         title="ยืนยันการออกเอกสาร"
         message={(
           <div className="flex flex-col gap-2">
-            <p className="confirm-dialog-message m-0">
+            <p className="confirm-dialog-message text-text-secondary leading-normal m-0">
               ตรวจสอบยอดเงินก่อนออกเอกสารให้ <strong>{form.customerName || 'ลูกค้า'}</strong> — <strong>หลังจากนี้จะไม่สามารถแก้ไขได้</strong>
             </p>
             <div className="flex justify-between border-t border-border pt-2 text-sm">

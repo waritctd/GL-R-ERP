@@ -1080,7 +1080,7 @@ export function CommissionPage({ user, showToast }) {
           if (isManualKind(record.kind)) {
             return (
               <div className="flex flex-col gap-2">
-                <p className="confirm-dialog-message m-0">
+                <p className="confirm-dialog-message text-text-secondary leading-normal m-0">
                   ตรวจสอบก่อนอนุมัติค่าคอมแบบ <strong>{MANUAL_KIND_LABELS[record.kind] || record.kind}</strong> ของ <strong>{record.salesRepName || record.salesRepId}</strong>
                 </p>
                 <div className="flex justify-between text-md font-bold border-t border-border pt-2">
@@ -1096,7 +1096,7 @@ export function CommissionPage({ user, showToast }) {
           }
           return (
             <div className="flex flex-col gap-2">
-              <p className="confirm-dialog-message m-0">
+              <p className="confirm-dialog-message text-text-secondary leading-normal m-0">
                 ตรวจสอบยอดก่อนอนุมัติใบกำกับ <strong>{record.invoiceDetails.invoiceNumber}</strong> ของ <strong>{record.salesRepName || record.salesRepId}</strong>
               </p>
               {record.dealAmountMismatch && (

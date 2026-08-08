@@ -43,6 +43,10 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * the second property, and this class's own javadoc mutation-check note in the PR body for how
  * that pin was verified to actually fail if the short-circuit is reintroduced.
  */
+import th.co.glr.hr.config.AppProperties;
+
+import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
+
 class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegrationTest {
     private TaxAllowanceDeclarationRepository repository;
     private TaxAllowanceDeclarationService service;
@@ -67,7 +71,8 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
             fileStorage,
             // The estimate endpoint is not exercised by this class — a mock is enough.
             mock(PayrollService.class),
-            new NotificationRepository(jdbc));
+            new NotificationRepository(jdbc),
+            new AppProperties(), new LorYor01Renderer());
 
         employeeA = seedEmployee("TAA-A");
         employeeB = seedEmployee("TAA-B");
@@ -211,7 +216,8 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
             null, null, null,         // childCount, childCountDouble, disabledCareCount
             null,                     // disabilityCardHolder
             null,                     // parentCareCount
-            null);                    // documentReference
+            null,                    // documentReference
+            null);                   // lorYor01 — no ล.ย.01 form detail in this fixture
         return service.submitOwn(request, employeeActor(employeeId)).declarationId();
     }
 

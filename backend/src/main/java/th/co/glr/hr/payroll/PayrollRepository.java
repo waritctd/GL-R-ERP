@@ -34,6 +34,41 @@ public class PayrollRepository {
 
     private final NamedParameterJdbcTemplate jdbc;
 
+    /**
+     * Total employee SSO contributions recorded for one employee in one TAX YEAR — ข้อ 13 of ล.ย.01.
+     *
+     * <p>Deliberately NOT a reuse of {@link #findYearToDateByEmployee}: that one filters
+     * {@code pp.payroll_month < :payrollMonth}, excluding the current period because it feeds a
+     * forward projection. Correct there, wrong here — a ล.ย.01 states what has actually been
+     * contributed, so the current month counts.
+     *
+     * <p>Unions the seed table for the same reason the YTD query does: an employee who joined before
+     * go-live has pre-system contributions in {@code payroll_year_to_date_seed}, and omitting it
+     * would understate their filing. VOID periods are excluded, matching every other money query.
+     *
+     * <p>ข้อ 13 is DERIVED, never typed: the employee cannot choose this number, so a form filed in
+     * January legitimately shows nothing here yet.
+     */
+    public BigDecimal sumSocialSecurityForTaxYear(long employeeId, int taxYear) {
+        BigDecimal total = jdbc.queryForObject("""
+            SELECT COALESCE(SUM(amount), 0) FROM (
+                SELECT pl.social_security AS amount
+                  FROM hr.payroll_line pl
+                  JOIN hr.payroll_period pp ON pp.period_id = pl.period_id
+                 WHERE pl.employee_id = :employeeId
+                   AND EXTRACT(YEAR FROM pp.payroll_month) = :taxYear
+                   AND pp.status <> 'VOID'
+                UNION ALL
+                SELECT s.social_security AS amount
+                  FROM hr.payroll_year_to_date_seed s
+                 WHERE s.employee_id = :employeeId AND s.tax_year = :taxYear
+            ) contributions
+            """,
+            Map.of("employeeId", employeeId, "taxYear", taxYear),
+            BigDecimal.class);
+        return total == null ? BigDecimal.ZERO : total;
+    }
+
     public PayrollRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }

@@ -4,6 +4,9 @@ import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.Map;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -186,5 +189,47 @@ public class TaxAllowanceDeclarationController {
     public TaxAllowanceCapsResponse getCaps(@RequestParam int year, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return service.getCaps(year, user);
+    }
+
+    // ---- แบบ ล.ย.01 PDF ----------------------------------------------------------------------
+
+    /**
+     * The official ล.ย.01 for a saved declaration, flattened and ready to print. Owner or HR only —
+     * enforced in the service, which re-resolves the declaration on every call.
+     */
+    @GetMapping("/declarations/{declarationId}/form.pdf")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<byte[]> lorYor01Pdf(@PathVariable long declarationId, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return pdf(service.renderLorYor01(declarationId, user), "loryor01-" + declarationId + ".pdf");
+    }
+
+    /**
+     * The official ล.ย.01 for an UNSAVED draft, so the employee can print and sign it before filing.
+     *
+     * <p>POST rather than GET because the whole draft travels in the body — same shape and same
+     * reasoning as {@code /declarations/me/estimate} above. Nothing is persisted, and the form is
+     * always rendered for {@code actor.employeeId()}, never a target named in the body.
+     */
+    @PostMapping("/declarations/me/form.pdf")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<byte[]> lorYor01DraftPdf(
+        @Valid @RequestBody TaxAllowanceDeclarationSubmitRequest request, HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return pdf(service.renderLorYor01Draft(request, user), "loryor01-draft.pdf");
+    }
+
+    /**
+     * Same hardening as the evidence download: {@code attachment} so a browser never renders it
+     * inline, and {@code nosniff} so a mislabelled body cannot be re-interpreted as HTML.
+     */
+    private ResponseEntity<byte[]> pdf(byte[] body, String filename) {
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION,
+                ContentDisposition.attachment().filename(filename).build().toString())
+            .header("X-Content-Type-Options", "nosniff")
+            .contentType(MediaType.APPLICATION_PDF)
+            .body(body);
     }
 }

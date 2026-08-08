@@ -13,7 +13,8 @@
     "lint": "eslint src",
     "audit": "node scripts/audit-gate.mjs",
     "test": "vitest run",
-    "test:e2e": "playwright test --config playwright.real.config.js"
+    "test:e2e": "playwright test --config playwright.real.config.js",
+    "test:visual": "playwright test --config playwright.visual.config.js"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",
