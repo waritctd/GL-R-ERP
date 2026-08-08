@@ -178,8 +178,8 @@ The frontend is migrating from the single global `frontend/src/styles.css` to a 
   - Never create a stacked branch with plain `git switch -c` — Git Town needs the recorded parent
     (`git town set-parent` / `git town branch` to inspect).
   - Resync the whole chain with **`git town sync --stack`** after `main` moves. `git town undo` backs
-    out any Git Town command. ⚠️ **`sync` is currently blocked repo-wide** by diverged release tags,
-    and it *pushes* — see the warning in `STACKED-PRS.md` §4 before running it.
+    out any Git Town command. ⚠️ **`sync` pushes** (branches *and* tags) and stashes your working
+    tree — it is not a read-only catch-up. `--dry-run` first; see `STACKED-PRS.md` §4.
   - Merge **bottom-up on GitHub with a merge commit** — **squashing a PR that has children orphans
     every branch above it.**
   - A stacked PR body must open with a **Stack** block (base, position, what is above, "review only
