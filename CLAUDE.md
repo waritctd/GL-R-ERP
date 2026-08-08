@@ -223,7 +223,7 @@ still cite those paths; treat such a pointer as a history reference, not a live 
 lost — use the `retired-docs` skill to read any of them back out of git history.
 
 ## Repo quick facts
-- **Frontend styling is mid-migration:** Tailwind 4 (`@tailwindcss/vite`) with tokens in `src/index.css`, alongside a legacy global `src/styles.css` (~2k lines) being progressively retired.
+- **Frontend styling is mid-migration:** Tailwind 4 (`@tailwindcss/vite`) with tokens in `src/index.css`, alongside a legacy global `src/styles.css` being progressively retired. `styles.css` is imported as `@import "./styles.css" layer(legacy)` — so a Tailwind utility **always** beats a `styles.css` rule regardless of selector specificity. Measure computed styles before assuming a legacy rule still applies.
 - **There is no `typecheck` script** — this is a plain JS project with no TypeScript. Validation is `npm run lint && npm test && npm run build`. Do not claim a typecheck ran.
 - **npm scripts live in `frontend/`**, not the repo root (there is no root `package.json`).
 - **Backend:** session auth via `SessionSecurityFilter`. `SecurityConfig` is **default-deny** — `anyRequest().authenticated()`, with only four anonymous exceptions (OPTIONS preflight, `POST /api/auth/login`, `POST /api/attendance/punch`, `GET /actuator/health`). Read the file (39 lines) rather than assuming — this bullet claimed `permitAll` and "no Actuator/OpenAPI" until 2026-08-08, and both were wrong. **Role checks live in the controllers, not the filter chain**, so "authenticated" is the only guarantee `SecurityConfig` gives you.
