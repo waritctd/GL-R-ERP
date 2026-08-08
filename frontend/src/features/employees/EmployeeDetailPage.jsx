@@ -185,12 +185,15 @@ function HistoryTab({ employee, canSeeSalary }) {
   return (
     <InfoGrid two className="items-start">
       <CollapsibleSection title="ประวัติการมอบหมายงาน" collapsible={false}>
-        <div className="timeline-list">
+        <div className="grid gap-2.5">
           {employee.assignments.map((assignment) => (
-            <div key={`${assignment.from}-${assignment.title}`} className={assignment.current ? 'current' : ''}>
+            <div
+              key={`${assignment.from}-${assignment.title}`}
+              className={`pb-[18px] pl-[15px] border-l-[3px] ${assignment.current ? 'border-accent' : 'border-border-subtle'}`}
+            >
               <strong>{assignment.title}</strong>
-              <span>{assignment.division} · {assignment.department}</span>
-              <small>{formatThaiDate(assignment.from)} - {assignment.to ? formatThaiDate(assignment.to) : 'ปัจจุบัน'}</small>
+              <span className="block text-text-muted">{assignment.division} · {assignment.department}</span>
+              <small className="block text-text-muted">{formatThaiDate(assignment.from)} - {assignment.to ? formatThaiDate(assignment.to) : 'ปัจจุบัน'}</small>
             </div>
           ))}
         </div>

@@ -58,7 +58,11 @@ public class OvertimeController {
     @PostMapping("/{id}/approve")
     OvertimeDetailResponse approve(
             @PathVariable long id,
-            @Valid @RequestBody(required = false) ReviewOvertimeRequest request,
+            // ApproveOvertimeRequest, not ReviewOvertimeRequest -- see that record's Javadoc. This
+            // is the one write path where a caller-supplied dayType may reach pay_rate_multiplier,
+            // and only because the caller has already passed this stage's own approve-only
+            // authorization inside OvertimeService#approve.
+            @Valid @RequestBody(required = false) ApproveOvertimeRequest request,
             HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new OvertimeDetailResponse(overtimeService.approve(id, request, user));

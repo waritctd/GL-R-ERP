@@ -21,6 +21,24 @@
 //      Any output is a real difference — read the *-diff.png under
 //      test-results/ before assuming it is noise.
 //
+// ── CAPTURE THE BASELINE AND THE DIFF ON THE SAME DAY ────────────────────────
+// These screenshots contain today's date: the dashboard greeting ("8 ส.ค. 2569"),
+// request rows, and the attendance grid all render it. A baseline taken before
+// midnight and diffed after produces a wall of red — 12 of 15 surfaces on
+// 2026-08-08/09 — that is entirely one changed digit per screenshot. It reads
+// exactly like a catastrophic regression and is not one.
+//
+// The tell: `import` is the only role whose dashboard renders no date, so a pure
+// rollover shows up as "everything failed except import". If you see that shape,
+// re-capture the baseline and re-run before investigating anything else. Always
+// open a *-diff.png — the pass/fail count alone cannot distinguish a rollover
+// from a real defect, and this harness's whole value is that a human looks.
+//
+// (Freezing the clock would remove the hazard, but the app reads Bangkok "today"
+// in several places — useIsMobile-style hooks, attendance's day grid, leave
+// balances — so a frozen date changes which rows render and would need its own
+// verification. Same-day capture is the cheaper correct answer.)
+//
 // PW_CHROMIUM overrides the browser binary for sandboxes whose preinstalled
 // Chromium does not match the pinned @playwright/test revision.
 import { test, expect } from '@playwright/test';

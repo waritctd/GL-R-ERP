@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { allLawReferencedEntries, LAW_REF_EXEMPTIONS, LAW_SOURCES } from './taxAllowanceSchema.js';
+import {
+  allLawReferencedEntries,
+  AUTO_GRANTED_ROWS,
+  LAW_REF_EXEMPTIONS,
+  LAW_SOURCES,
+  LOR_YOR_01_SECTIONS,
+} from './taxAllowanceSchema.js';
 
 // Guards the ล.ย.01 form's legal citations at the data layer (feat/tax-allowance-law-references).
 // See taxAllowanceSchema.js's own header comment for what each LAW_SOURCES entry genuinely is and
@@ -109,10 +115,32 @@ describe('taxAllowanceSchema — every allowance field cites a law source', () =
     }
   });
 
-  it('covers all 21 declared allowance fields plus the 2 auto-granted rows', () => {
-    // Not a load-bearing check on the literal number 23 — it is a tripwire: if a field is ever
-    // added to TAX_ALLOWANCE_GROUPS/AUTO_GRANTED_ROWS, this count moves and the diff becomes visible
-    // in review instead of the new field silently having no lawRef and no exemption.
-    expect(allLawReferencedEntries()).toHaveLength(23);
+  it('covers every field across the ล.ย.01 sections plus the auto-granted row', () => {
+    // Not a load-bearing check on the literal number — it is a tripwire: if a field is ever added
+    // to LOR_YOR_01_SECTIONS/AUTO_GRANTED_ROWS this count moves and the diff becomes visible in
+    // review, instead of the new field silently having no lawRef and no exemption.
+    const fromSections = LOR_YOR_01_SECTIONS.reduce((n, section) => n + section.fields.length, 0);
+    expect(allLawReferencedEntries()).toHaveLength(fromSections + AUTO_GRANTED_ROWS.length);
+    expect(allLawReferencedEntries()).toHaveLength(28);
+  });
+
+  it('the three ข้อ the form prints but nobody fills carry a note instead of fields', () => {
+    // ข้อ 11 (LTF, abolished after 2019) and ข้อ 13 (SSO, derived from payroll) must never grow an
+    // input. identity/status are structural sections whose controls are hand-rendered.
+    for (const key of ['item11', 'item13']) {
+      const section = LOR_YOR_01_SECTIONS.find((s) => s.key === key);
+      expect(section.fields, `${key} must stay uneditable`).toHaveLength(0);
+      expect(section.note?.length, `${key} must explain why it is uneditable`).toBeGreaterThan(20);
+    }
+  });
+
+  it('no hint repeats a baht figure — live caps come from /caps, never from this file', () => {
+    // The 2562 form prints superseded limits (ข้อ 7 says 10,000; the current one is 100,000).
+    // Copying any of them into a hint is the exact defect this file's header forbids.
+    for (const field of LOR_YOR_01_SECTIONS.flatMap((s) => s.fields)) {
+      if (!field.hint) continue;
+      expect(field.hint, `${field.key}'s hint must not hardcode a baht cap`)
+        .not.toMatch(/[\d,]{4,}\s*บาท/);
+    }
   });
 });

@@ -387,7 +387,7 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
                 <small>{request.reviewedAt ? `${request.reviewedByName || '-'} · ${formatDateTime(request.reviewedAt)}` : '-'}</small>
               </span>
-              <span className="row-actions mobile:order-3">
+              <RowActions className="mobile:order-3 mobile:flex-wrap">
                 {canReview ? (
                   <>
                     <Button
@@ -419,7 +419,7 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
                     <Icon name="close" size={14} />
                   </Button>
                 ) : null}
-              </span>
+              </RowActions>
             </div>
           );
         })}

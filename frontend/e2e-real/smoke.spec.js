@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { PERSONAS, REAL_ROLES, personaFor } from './helpers/accounts.js';
 import { expectAuthenticated, loginAs } from './helpers/auth.js';
+import { captureJson } from './helpers/network.js';
 
 // End-to-end through every layer: browser → Vite dev proxy → Spring controller → service →
 // repository → Postgres, and back into the DOM.
@@ -17,18 +18,23 @@ test.describe('real data reaches the browser', () => {
   test('hr sees the employee directory served from Postgres', async ({ page }) => {
     await loginAs(page, 'hr');
 
-    const [response] = await Promise.all([
+    // captureJson, not waitForResponse + a later .json(): HR's shell already fetches
+    // /api/employees on the `/` landing (App.jsx:126 → useHrData.js:22), so this waiter can bind
+    // to a response belonging to the document goto() is about to replace — and a deferred read of
+    // an evicted body is the flake this suite hit on 2026-08-08. helpers/network.js has the full
+    // account. Keep the body read eager; do not "simplify" this back to a bare waitForResponse.
+    const [{ status, json }] = await Promise.all([
       // Matched on the exact pathname, not a substring: /employees is also the prefix of
       // several other endpoints, and a substring match silently binds to whichever fires
       // first — which is how this assertion would end up inspecting the wrong payload.
-      page.waitForResponse((r) => apiPath(r) === '/api/employees' && r.request().method() === 'GET'),
+      captureJson(page, (r) => apiPath(r) === '/api/employees' && r.request().method() === 'GET'),
       page.goto('/employees'),
     ]);
-    expect(response.status()).toBe(200);
+    expect(status).toBe(200);
 
     // EmployeesResponse serialises its list as `employees` (not `items` — the record component
     // is renamed on the wire), each row carrying `code` for the employee_code column.
-    const { employees, total } = await response.json();
+    const { employees, total } = json;
     expect(employees.length).toBeGreaterThan(0);
     expect(total).toBeGreaterThan(0);
 
@@ -42,14 +48,17 @@ test.describe('real data reaches the browser', () => {
   test('sales sees the deal pipeline served from Postgres', async ({ page }) => {
     await loginAs(page, 'sales');
 
-    const [response] = await Promise.all([
-      page.waitForResponse((r) => apiPath(r) === '/api/tickets' && r.request().method() === 'GET'),
+    // Same eager-read requirement as the employees test above, and for the same reason: sales'
+    // `/` landing fetches /api/tickets itself (SalesOverview.jsx:92), so the response this binds
+    // to may belong to the document goto() replaces.
+    const [{ status, json }] = await Promise.all([
+      captureJson(page, (r) => apiPath(r) === '/api/tickets' && r.request().method() === 'GET'),
       page.goto('/tickets'),
     ]);
-    expect(response.status()).toBe(200);
+    expect(status).toBe(200);
 
     // TicketListResponse serialises its list as `tickets`, same renaming as employees above.
-    const { tickets } = await response.json();
+    const { tickets } = json;
     expect(tickets.length).toBeGreaterThan(0);
     // The demo deals are seeded with the 'DEMO-TKT-' code prefix (V21).
     expect(tickets.some((ticket) => ticket.code?.startsWith('DEMO-TKT-'))).toBe(true);
