@@ -3,7 +3,7 @@
    `base` sits between `theme` and `legacy` deliberately. The reset and
    bare-element defaults in `@layer base` below used to live in styles.css,
    co-located with the class-level rules that override them (`.currency-input
-   input`, `.status-tab`, and the like) -- and lost to them there purely on
+   input`, `.input-with-icon input`, and the like) -- and lost to them there purely on
    selector specificity, both rules in the same cascade layer. Splitting them
    into their own layer, positioned BEFORE `legacy`, reproduces that same
    losing relationship deliberately: a `@layer` always loses to a layer
@@ -63,9 +63,10 @@
 }
 /* ≤900px — AttendancePage's non-self-view day grid needs a min-width floor below
    this point so its seven columns scroll instead of crushing the status column
-   off-screen (see AttendancePage.jsx's gridClassName). Unrelated to styles.css's
-   own `@media (max-width: 900px)` `.ticket-detail-grid` rule, which shares only
-   the number. */
+   off-screen (see AttendancePage.jsx's gridClassName). This is now the app's only
+   900px boundary: styles.css used to carry an unrelated `@media (max-width: 900px)`
+   block for `.ticket-detail-grid` that shared nothing but the number, and it was
+   deleted with that rule as dead code. Do not reintroduce a second one. */
 @custom-variant attendance-scroll {
   @media (max-width: 900px) {
     @slot;
@@ -251,8 +252,10 @@
      all non-text: decorative/redundant icons (chevrons, search, file, the
      sidebar logout icon-button, and the `.empty-state svg` icon — the
      `.empty-state` container itself was moved to --color-text-muted by
-     this same fix so bare text nodes inside it no longer render in Faint,
-     see styles.css) and — deliberately — muted text ON THE DARK SIDEBAR
+     this same fix so bare text nodes inside it no longer render in Faint
+     (now a `text-text-muted`/`text-text-faint` Tailwind pair directly on
+     EmptyState.jsx, Group B primitives port) and — deliberately — muted
+     text ON THE DARK SIDEBAR
      (`.nav-item small`, `.sidebar-account small`, `.nav-group-header`, and
      now `.brand small`, see styles.css), where this same value clears
      7.30:1 against --color-sidebar-bg. Do not add a new call site of this
@@ -312,6 +315,29 @@
   --page-gutter-mobile: 16px;
   --page-gutter-tablet: 20px;
   --page-gutter-desktop: 24px;
+}
+
+/* Skeleton shimmer keyframe, relocated from styles.css's retired `.skeleton` rule (Group B
+   primitives port). Referenced by Skeleton.jsx's `animate-[skeleton-shimmer_1.4s_ease_infinite]`
+   utility class. Left unlayered (not inside @layer theme/base/legacy/utilities) so it is simply
+   "the" definition, with no cascade-layer ordering to reason about. */
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+/* Button loading-spinner keyframe, relocated from styles.css's retired `.button-loading-spinner`
+   rule (Group C primitives port). Referenced by Button.jsx's
+   `animate-[button-loading-spin_700ms_linear_infinite]` utility class. Left unlayered for the
+   same reason as skeleton-shimmer above. */
+@keyframes button-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Phase 3.4 — reduced-motion foundation for the tokens above. Nothing

@@ -85,11 +85,13 @@ describe('design tokens — Phase 3.4 infrastructure', () => {
   });
 
   it('overlay colors match the existing hardcoded literals they will eventually replace', () => {
-    // styles.css:1465 .modal-backdrop / :2036 mobile drawer backdrop
+    // Modal.jsx's backdrop now consumes this token directly via `bg-overlay` (Group C
+    // primitives port) — the old styles.css `.modal-backdrop { background: rgba(...) }`
+    // literal is gone, but the mobile drawer backdrop below is still a hardcoded literal.
     expect(indexCss).toContain('rgba(15, 23, 42, 0.52)');
-    // styles.css:2036 (drawer) — distinct from the modal overlay above
+    // styles.css mobile drawer backdrop — distinct from the modal overlay above
     expect(indexCss).toContain('rgba(15, 23, 42, 0.48)');
-    // styles.css:1551 .loading-veil
+    // styles.css .loading-veil
     expect(indexCss).toContain('rgba(255, 255, 255, 0.55)');
   });
 

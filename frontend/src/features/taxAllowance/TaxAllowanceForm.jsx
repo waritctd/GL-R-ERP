@@ -81,7 +81,8 @@ function CountField({ id, label, unit, hint, error, disabled, register }) {
 
 // Compact, REAL link to a field's underlying legal source (taxAllowanceSchema.js's `LAW_SOURCES`,
 // via each field's `lawRef`). Deliberately NOT rendered through InfoTip: `.info-tip-bubble` is
-// `pointer-events: none` by design (styles.css's own comment on it) -- a hover/focus tooltip meant
+// `pointer-events-none` by design (InfoTip.jsx's own className, Group B primitives port; formerly
+// styles.css) -- a hover/focus tooltip meant
 // for inert text, never something a mouse can reach inside. A clickable law citation living in there
 // would be a link nobody could actually click, which is exactly the "label asserts something the
 // code doesn't do" defect class this feature exists to avoid, just aimed at a link instead of a

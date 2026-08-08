@@ -386,7 +386,7 @@ export function ReviewQueueTab({ user, showToast }) {
           if (!confirmRequest) return 'ยืนยันการอนุมัติคำขอลานี้?';
           return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <p className="confirm-dialog-message" style={{ margin: 0 }}>
+              <p className="confirm-dialog-message text-text-secondary leading-normal" style={{ margin: 0 }}>
                 ตรวจสอบคำขอลาของ <strong>{confirmRequest.employeeName || confirmRequest.employeeCode || confirmRequest.employeeId}</strong> ก่อนอนุมัติ
               </p>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid var(--color-border)', paddingTop: 8 }}>
