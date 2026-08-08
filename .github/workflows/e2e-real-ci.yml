@@ -1,0 +1,133 @@
+name: E2E (Playwright, real backend)
+
+# Browser + API e2e against the REAL stack — Vite dev server → Spring Boot → Postgres.
+# The sibling `e2e-ci.yml` runs the same tool against the MOCK frontend; both are kept because
+# they answer different questions (see frontend/e2e-real/README.md).
+#
+# NON-GATING, like e2e-ci.yml: intentionally not a required check yet. Promote once proven
+# stable across a few PR cycles.
+#
+# Triggered by backend changes too, not just frontend ones — unlike the mock suite, this one
+# can actually break when a Java role gate or a migration moves, which is the point of it.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - 'backend/**'
+      - '.github/workflows/e2e-real-ci.yml'
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - 'backend/**'
+      - '.github/workflows/e2e-real-ci.yml'
+
+jobs:
+  e2e-real:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: hris
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        # The backend fails fast on an unreachable datasource, so gate the whole job on the DB
+        # actually accepting connections rather than merely having been created.
+        options: >-
+          --health-cmd "pg_isready -U postgres -d hris"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: maven
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build backend jar
+        working-directory: backend
+        # Tests are skipped on purpose: backend-ci.yml already runs them, and this job's
+        # subject is the running service, not its unit suite.
+        run: ./mvnw -B -DskipTests package
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Get installed Playwright version
+        id: playwright-version
+        working-directory: frontend
+        run: echo "version=$(node -e "console.log(require('./package-lock.json').packages['node_modules/@playwright/test'].version)")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      - name: Install Playwright chromium (+ OS deps)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright OS deps only (browser cache hit)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        working-directory: frontend
+        run: npx playwright install-deps chromium
+
+      - name: Start backend (demo seed profile)
+        working-directory: frontend
+        # Flyway applies db/migration + db/migration-demo on boot under SPRING_PROFILES_ACTIVE=demo,
+        # which is what creates the login accounts this suite drives. The script also sets the
+        # CORS origin for the suite's dev-server port — without it every login 403s.
+        # Backgrounded with stdout/stderr redirected to a file: without the redirect the step
+        # would hold the runner's stdout open and never finish. The job tears the process down
+        # when it ends, so there is no explicit stop step.
+        run: node scripts/start-e2e-backend.mjs > "$RUNNER_TEMP/backend.log" 2>&1 &
+
+      - name: Wait for backend to be healthy
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf -o /dev/null http://127.0.0.1:8080/actuator/health; then
+              echo "backend healthy after ${i} attempt(s)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::backend did not become healthy within 5 minutes"
+          cat "$RUNNER_TEMP/backend.log"
+          exit 1
+
+      - name: Run real-backend e2e
+        working-directory: frontend
+        run: npm run test:e2e:real
+
+      - name: Backend log (on failure)
+        if: failure()
+        run: cat "$RUNNER_TEMP/backend.log"
+
+      - name: Upload Playwright HTML report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-real
+          path: frontend/playwright-report-real/
+          retention-days: 14
