@@ -26,6 +26,16 @@ public class DbHolidayCalendar implements HolidayCalendar {
         return Boolean.TRUE.equals(exists);
     }
 
+    /** See {@link HolidayCalendar#hasHolidaysForYear}'s Javadoc for why this is distinct from {@link #isHoliday}. */
+    @Override
+    public boolean hasHolidaysForYear(int year) {
+        Boolean exists = jdbc.queryForObject(
+            "SELECT EXISTS(SELECT 1 FROM hr.holiday WHERE EXTRACT(YEAR FROM holiday_date) = :year)",
+            new MapSqlParameterSource("year", year),
+            Boolean.class);
+        return Boolean.TRUE.equals(exists);
+    }
+
     @Override
     public Set<LocalDate> holidaysBetween(LocalDate fromDate, LocalDate toDate) {
         Set<LocalDate> dates = new HashSet<>();

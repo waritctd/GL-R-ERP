@@ -17,6 +17,13 @@ vi.mock('../../api/index.js', () => ({
       reject: vi.fn(),
       cancel: vi.fn(),
     },
+    // #ot-holiday-visibility: OvertimePanel now reads this unconditionally (UpcomingHolidays'
+    // ~90-day panel AND the single-day verdict-badge lookup both call it) -- every describe block
+    // below that renders OvertimePage needs its own default resolved value, or the verdict/panel
+    // queries error out under every pre-existing test too.
+    leave: {
+      calendarContext: vi.fn(),
+    },
   },
 }));
 
@@ -79,6 +86,10 @@ describe('OvertimePage form validation', () => {
     });
     api.overtime.list.mockResolvedValue({ requests: [] });
     api.overtime.create.mockResolvedValue({ request: { id: 1001 } });
+    // Default: no holidays anywhere -- keeps every test below on the WORKDAY verdict/empty
+    // UpcomingHolidays panel, uninvolved with what each test actually asserts on. The verdict
+    // states themselves are covered by their own describe block further down.
+    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [] } });
   });
 
   it('blocks submit when planned end is not after planned start', async () => {
@@ -185,6 +196,7 @@ describe('OvertimePage pending-approver note', () => {
         directReport: false,
       }],
     });
+    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [] } });
   });
 
   it('renders the note for a SUBMITTED request with a manager stage, and omits it for an APPROVED one', async () => {
@@ -229,5 +241,146 @@ describe('OvertimePage pending-approver note', () => {
     // #pending-approver-info) could otherwise match a StatusBadge whose own label happens to be
     // "CEO" text too, depending on status.
     expect(await screen.findByText('CEO', { selector: 'small.text-text-muted' })).not.toBeNull();
+  });
+});
+
+// Mirrors MyLeaveTab.test.jsx's "Phase A4: self-cancel confirmation" case -- OT's own-request
+// cancel used to skip the ConfirmDialog entirely (falling through to doCancel(id, '') for the
+// canCancel path while only canManagerCancel opened it), the one self-service cancel in the app
+// with no confirmation step before an irreversible mutation.
+describe('OvertimePage self-cancel confirmation', () => {
+  const ownSubmittedRow = {
+    id: 2002,
+    employeeId: 1,
+    employeeName: 'พนักงาน ทดสอบ',
+    employeeCode: 'GLR-001',
+    workDate: isoDaysFromToday(0),
+    plannedStartAt: `${isoDaysFromToday(0)}T18:00:00+07:00`,
+    plannedEndAt: `${isoDaysFromToday(0)}T20:00:00+07:00`,
+    plannedMinutes: 120,
+    actualMinutes: 0,
+    payableMinutes: 0,
+    dayType: 'WORKDAY',
+    status: 'SUBMITTED',
+    reason: 'ทดสอบระบบ',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.overtime.employees.mockResolvedValue({
+      employees: [{
+        employeeId: 1,
+        employeeName: 'พนักงาน ทดสอบ',
+        employeeCode: 'GLR-001',
+        self: true,
+        directReport: false,
+      }],
+    });
+    api.overtime.list.mockResolvedValue({ requests: [ownSubmittedRow] });
+    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [] } });
+  });
+
+  it('clicking ยกเลิก on a SUBMITTED own request opens a ConfirmDialog and does NOT cancel until confirmed', async () => {
+    renderOvertimePage();
+
+    await screen.findByText('ทดสอบระบบ');
+    fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
+
+    // Same-tick sanity check, not the real proof -- mutate() doesn't invoke the mutationFn
+    // synchronously, so this alone would still pass under the old bug. The dialog actually
+    // appearing (next line) is what proves the row action didn't cancel by itself.
+    expect(api.overtime.cancel).not.toHaveBeenCalled();
+    const dialogConfirmButton = await screen.findByRole('button', { name: 'ยกเลิกคำขอ' });
+    // Optional reason -- an employee cancelling their own request is not held to the mandatory
+    // reason an approver's reject requires.
+    expect(dialogConfirmButton.disabled).toBe(false);
+
+    fireEvent.click(dialogConfirmButton);
+    await waitFor(() => expect(api.overtime.cancel).toHaveBeenCalledWith(2002, { reviewerNote: null }));
+  });
+});
+
+// #ot-holiday-visibility (PR 2): the verdict badge and its pre-flight mismatch note, both driven
+// by api.leave.calendarContext -- see OvertimePanel.jsx's own comments on dayTypeVerdictQuery/
+// dayTypeMismatch for the decision table this predicts (OvertimeService#validateDayTypeClaim).
+// Mock-mode only: this exercises the FRONTEND's reading of calendarContext's response shape, not
+// whether the real backend actually derives/validates day types correctly (see PR 1 for that).
+describe('OvertimePage holiday verdict', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.overtime.employees.mockResolvedValue({
+      employees: [{
+        employeeId: 1,
+        employeeName: 'พนักงาน ทดสอบ',
+        employeeCode: 'GLR-001',
+        self: true,
+        directReport: false,
+      }],
+    });
+    api.overtime.list.mockResolvedValue({ requests: [] });
+    api.overtime.create.mockResolvedValue({ request: { id: 1001 } });
+  });
+
+  // Uses a REAL production holiday name (2026-12-07, 149 chars -- the longest row in prod's
+  // hr.holiday, and the reason V129 widened name_th from VARCHAR(120) to TEXT), not a tidy
+  // 12-char stand-in. The verdict pill is `rounded-full`, a shape that asserts "one short line";
+  // interpolating a name this long into it wrapped inside the pill and read as broken. Pinning a
+  // realistic worst-case label here is what keeps the pill and the name structurally separate.
+  const LONGEST_REAL_HOLIDAY_NAME =
+    'ชดเชยวันคล้ายวันพระบรมราชสมภพ พระบาทสมเด็จพระบรมชนกาธิเบศร มหาภูมิพลอดุลยเดชมหาราช บรมนาถบพิตร วันชาติ และวันพ่อแห่งชาติ (วันเสาร์ที่ 5 ธันวาคม 2569)';
+
+  it('shows the HOLIDAY verdict (3x) and the holiday name separately, so a long real name cannot break the pill', async () => {
+    const today = isoDaysFromToday(0);
+    api.leave.calendarContext.mockResolvedValue({
+      calendarContext: { holidays: [{ holidayDate: today, nameTh: LONGEST_REAL_HOLIDAY_NAME }] },
+    });
+    renderOvertimePage();
+
+    // The pill carries ONLY the fixed verdict + rate -- an exact-match query, so if the
+    // variable-length name is ever interpolated back into it this fails immediately.
+    expect(await screen.findByText('วันหยุดบริษัท · 3x')).not.toBeNull();
+
+    // ...and the name is still shown, as its own wrappable element. TWO matches is correct, not a
+    // duplicate-render bug: the same holiday is legitimately both an entry in the วันหยุดที่จะถึง
+    // panel (it is upcoming) and the verdict for the currently selected date. Asserting the count
+    // rather than using findAllByText loosely, so a genuine double-render inside one region would
+    // still fail.
+    expect(screen.getAllByText(LONGEST_REAL_HOLIDAY_NAME)).toHaveLength(2);
+  });
+
+  it('shows the WORKDAY verdict (1.5x) when the calendar loaded and the selected date has no holiday', async () => {
+    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [] } });
+    renderOvertimePage();
+
+    // Disambiguated from the identically-worded ประเภท OT <option> (Testing Library sees option
+    // text too) -- same technique the pending-approver-note tests above already use.
+    expect(await screen.findByText('วันทำงานปกติ · 1.5x', { selector: 'span' })).not.toBeNull();
+  });
+
+  it('shows the "calendar not loaded" verdict when the holiday lookup fails', async () => {
+    api.leave.calendarContext.mockRejectedValue(new Error('เครือข่ายขัดข้อง'));
+    renderOvertimePage();
+
+    expect(await screen.findByText('ปฏิทินยังไม่ได้โหลด')).not.toBeNull();
+  });
+
+  it('warns inline on ประเภท OT that submitting HOLIDAY will be refused when the date is not a holiday', async () => {
+    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [] } });
+    renderOvertimePage();
+
+    await screen.findByText('วันทำงานปกติ · 1.5x', { selector: 'span' });
+    fireEvent.change(screen.getByLabelText(/ประเภท OT/), { target: { value: 'HOLIDAY' } });
+
+    expect(await screen.findByText(/ระบบจะปฏิเสธคำขอนี้/)).not.toBeNull();
+  });
+
+  it('notes inline that a HOLIDAY date pays 3x automatically even while WORKDAY stays selected', async () => {
+    const today = isoDaysFromToday(0);
+    api.leave.calendarContext.mockResolvedValue({
+      calendarContext: { holidays: [{ holidayDate: today, nameTh: 'วันหยุดทดสอบ' }] },
+    });
+    renderOvertimePage();
+
+    expect(await screen.findByText(/ระบบจะคำนวณอัตรา 3x ให้โดยอัตโนมัติ/)).not.toBeNull();
   });
 });

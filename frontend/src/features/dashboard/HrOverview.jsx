@@ -27,7 +27,7 @@ import { ActionQueue } from './ActionQueue.jsx';
  * below only ever surface actions HR genuinely owns.
  */
 
-const DASHBOARD_GRID = 'grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] max-[1040px]:grid-cols-2 max-[720px]:grid-cols-1';
+const DASHBOARD_GRID = 'grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] nav-drawer:grid-cols-2 mobile:grid-cols-1';
 
 function AttendanceStat({ label, value, tone }) {
   return (
@@ -40,7 +40,7 @@ function AttendanceStat({ label, value, tone }) {
 
 function HrTaskRow({ label, detail, cta, onClick }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-surface-subtle py-3 last:border-b-0 last:pb-0 max-[560px]:flex-col max-[560px]:items-start max-[560px]:gap-2">
+    <div className="flex items-center justify-between gap-4 border-b border-surface-subtle py-3 last:border-b-0 last:pb-0 mobile-sm:flex-col mobile-sm:items-start mobile-sm:gap-2">
       <span className="min-w-0">
         <span className="block text-sm font-bold text-text">{label}</span>
         <span className="block text-xs text-text-muted">{detail}</span>
@@ -204,7 +204,7 @@ export function HrOverview({ employees, dashboardSummary }) {
         title="การลงเวลาวันนี้"
         actions={<Button type="button" variant="text" onClick={() => navigate('/attendance')}>ดูรายละเอียด</Button>}
       >
-        <div className="grid grid-cols-3 gap-3 max-[560px]:grid-cols-1">
+        <div className="grid grid-cols-3 gap-3 mobile-sm:grid-cols-1">
           <AttendanceStat label="มาแล้ว" value={stats.todayPresent} tone="accent" />
           <AttendanceStat label="มาสาย" value={stats.lateToday} tone="warning" />
           <AttendanceStat label="ยังไม่ออก" value={stats.missingCheckout} tone="info" />

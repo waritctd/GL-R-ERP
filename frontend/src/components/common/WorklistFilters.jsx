@@ -18,7 +18,7 @@ import { Icon } from './Icon.jsx';
  * accent) rendered before the count — purely visual, so it is marked
  * `aria-hidden`.
  *
- * Meets the 44px mobile touch floor via the same `max-[720px]:min-h-[44px]`
+ * Meets the 44px mobile touch floor via the same `mobile:min-h-[44px]`
  * utility Button.jsx uses, so this row's chips grow exactly like every other
  * touch target in the app once viewport crosses 720px.
  *
@@ -77,7 +77,7 @@ export function WorklistFilters({ items, activeKey, onSelect, ariaLabel }) {
               onClick={() => onSelect(item.key)}
               className={cn(
                 'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border px-3.5 py-1.5 text-sm font-bold',
-                'max-[720px]:min-h-[44px]',
+                'mobile:min-h-[44px]',
                 active
                   ? 'border-info-border bg-info-bg-alt text-info'
                   : 'bg-surface text-text-muted hover:text-text',

@@ -7,6 +7,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { dealStageLabel, ticketPriorityLabel } from '../../utils/format.js';
 import { computeItemEstimateThb, formatThb, summarizeItemsEstimate } from './dealEstimatePricing.js';
@@ -389,9 +390,10 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   // Both fetches degrade silently: if EITHER fails, `estimateReady` below stays false and every
   // ราคาตั้ง display site is skipped entirely, leaving the existing catalog reference price as the
   // only price shown (a deal must stay creatable with zero prices — V50). Never surfaced via
-  // showToast from an effect — this repo's useToast has an unstable identity that turns a toast in
-  // a useEffect dep array into an infinite render loop (see CLAUDE.md); these are silent, no-toast
-  // failures on purpose. `retry: false` keeps a genuinely-down endpoint from stalling the modal.
+  // showToast from an effect — this is optional estimate enrichment, not critical modal data, so
+  // these are silent, no-toast failures on purpose (independent of useToast's own identity, which
+  // useToast.js now keeps stable via useCallback([])). `retry: false` keeps a genuinely-down
+  // endpoint from stalling the modal.
   const fxRatesQuery = useQuery({
     queryKey: queryKeys.fxRates(),
     queryFn: () => api.fxRates.list().then((res) => res.fxRates ?? []),
@@ -1620,6 +1622,33 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     );
   }
 
+  // CRITICAL (HTML implicit submission, fix/form-enter-submits-real-records; migrated to
+  // SafeForm's `canSubmit` under #safe-form-primitive): this <form> wraps all 7 sub-views below,
+  // and a form with no submit button but exactly ONE field that blocks implicit submission fires
+  // a real 'submit' event on Enter with no button ever pressed. That was true for DETAILS
+  // (renderDetailsView's ชื่อดีล input is its only such field -- the textarea and role="radio"
+  // priority chips don't count) and, before a project/customer is picked, for PROJECT and
+  // CUSTOMER too — `submit()` used to run regardless of `view`, so typing a deal title and
+  // pressing Enter filed a real deal (confirmed in a real browser; jsdom does not implement
+  // implicit submission, which is why the suite stayed green with the bug live — see
+  // TicketCreateModal.test.jsx's `fireEvent.submit(form)` cases).
+  //
+  // `canSubmit={view === 'hub' || view === 'review'}` reproduces the old bespoke
+  // `handleFormSubmit`'s condition exactly, matching renderFooter()'s own condition for when a
+  // real `type="submit" form="ticket-create-form"` button exists (above) — not `view === 'review'`
+  // alone: CUSTOMER/PROJECT/CONTACT/ITEMS/DETAILS never render one, so they can never legitimately
+  // submit, implicit or explicit, and are unconditionally blocked here. HUB is different from
+  // every other non-REVIEW view — a linked submit button is in the DOM the whole time HUB is
+  // showing (it lives in the modal's footer, a sibling of this <form>, wired via `form=` — see
+  // Modal.jsx), so HUB never satisfies "no submit button" and was never part of this bug class;
+  // narrowing this gate to review-only would silently turn that real, working button into a dead
+  // click instead of closing a hole that was never open on HUB. `canSubmit` is a RESTRICTION and
+  // never a permission (see SafeForm.jsx's header): SafeForm's submitter guard still applies on
+  // top of it, so BOTH must pass. That AND costs this form nothing — HUB/REVIEW's footer button is
+  // real and always in the DOM whenever `canSubmit` is true — but it does mean the happy-path
+  // tests have to carry a real submitter rather than dispatching a bare `fireEvent.submit(form)`;
+  // see `submitForm()` in TicketCreateModal.test.jsx.
+
   return (
     <Modal
       title="สร้างดีลใหม่"
@@ -1638,7 +1667,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         our aria-wired per-field errors and scroll-to-first-invalid below
         would never run for exactly the case they exist to handle.
       */}
-      <form id="ticket-create-form" onSubmit={submit} noValidate>
+      <SafeForm id="ticket-create-form" onSubmit={submit} canSubmit={view === 'hub' || view === 'review'} noValidate>
         {view === 'hub' && renderHub()}
         {view === 'customer' && renderCustomerView()}
         {view === 'project' && renderProjectView()}
@@ -1646,7 +1675,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         {view === 'items' && renderItemsView()}
         {view === 'details' && renderDetailsView()}
         {view === 'review' && renderReviewView()}
-      </form>
+      </SafeForm>
     </Modal>
   );
 }

@@ -4,37 +4,81 @@
 @import "./styles.css" layer(legacy);
 @import "tailwindcss/utilities.css" layer(utilities);
 
-/* Phase 3.4 — breakpoint variants (docs/ui-repair/03-design-foundation/TOKENS.md §K).
-   Single source of truth for the app's two responsive bands, so a future change to
-   either value happens in one place instead of the ~121 existing `max-[720px]`
-   call sites. These are NEW, additive variants (`mobile:` / `tablet:`) — no
-   existing call site is migrated onto them in this phase; see
-   LEGACY_STYLE_MIGRATION.md "Breakpoint token" for that follow-up. Plain
-   `--breakpoint-*` theme keys were not used here because Tailwind's `--breakpoint-*`
-   namespace generates min-width variants, which is the wrong direction for this
-   app's max-width "mobile" concept. */
-@custom-variant mobile {
-  @media (max-width: 720px) {
+/* Breakpoint variants (Phase 3.4, docs/ui-repair/03-design-foundation/TOKENS.md §K;
+   migration completed 2026-08-08). Single source of truth for the app's responsive
+   bands, so a future change to any of these numbers happens in one place.
+
+   WHY THESE EXIST AT ALL — never write `max-[720px]:` again.
+   Tailwind's arbitrary `max-[Npx]:` variant is EXCLUSIVE of its own boundary: it
+   compiles to `(width < 720px)`, which the production build then downlevels to
+   `not all and (width>=720px)`. Either way it is FALSE at exactly 720px. But this
+   app's JS reads the band inclusively — useIsMobile.js's MOBILE_QUERY is
+   `(max-width: 720px)` — and so does styles.css. So at exactly 720px the JS branch
+   said "mobile" while every `max-[720px]:` utility said "desktop", and a
+   `grid-cols-2 max-[720px]:grid-cols-1` pair fell through to the 2-column base.
+   Measured on the real bundle: AccountOverview's stat grid went 2 cols at 719px ->
+   3 cols at 720px, and 3 cols at 1039px -> 5 cols at 1040px. The variants below are
+   hand-written with the traditional INCLUSIVE `max-width`, so CSS and JS agree at
+   every integer width.
+
+   DECLARATION ORDER IS LOAD-BEARING — widest band first.
+   Tailwind sorts its own built-in `max-*` variants widest-first, so the narrower
+   band wins. `@custom-variant`s do NOT get that treatment: they emit in the order
+   they are declared here (verified — candidate/file-scan order has no effect), and
+   same-layer, same-specificity utilities are won by whichever is emitted LAST.
+   Declaring `mobile` before `nav-drawer` would therefore make ≤1040px beat ≤720px
+   and silently invert every element that sets one property in both bands
+   (AccountOverview.jsx, Layout.jsx's StatGrid, and 13 others). Keep this list
+   sorted widest -> narrowest, and add new variants in the right slot.
+
+   Plain `--breakpoint-*` theme keys are not used because Tailwind's
+   `--breakpoint-*` namespace generates min-width variants, which is the wrong
+   direction for this app's max-width "mobile" concept. */
+
+/* ≤1040px — the off-canvas navigation drawer used by AppShell's hamburger button
+   and styles.css's drawer rules (see `@media (max-width: 1040px)` there). A
+   dedicated variant rather than the union of `mobile`/`tablet` because this is a
+   single inclusive cutoff, not two disjoint bands. This variant and styles.css's
+   media query are provably identical (both emit `(width<=1040px)` in the built CSS). */
+@custom-variant nav-drawer {
+  @media (max-width: 1040px) {
     @slot;
   }
 }
+/* ≤900px — AttendancePage's non-self-view day grid needs a min-width floor below
+   this point so its seven columns scroll instead of crushing the status column
+   off-screen (see AttendancePage.jsx's gridClassName). Unrelated to styles.css's
+   own `@media (max-width: 900px)` `.ticket-detail-grid` rule, which shares only
+   the number. */
+@custom-variant attendance-scroll {
+  @media (max-width: 900px) {
+    @slot;
+  }
+}
+/* 721–1040px — the tablet band proper. Declared after `nav-drawer` because it is
+   the narrower (more specific) of the two overlapping bands and should win. */
 @custom-variant tablet {
   @media (min-width: 721px) and (max-width: 1040px) {
     @slot;
   }
 }
-/* Nav-drawer band (≤1040px): the off-canvas navigation drawer used by
-   AppShell's hamburger button and styles.css's drawer rules (see
-   `@media (max-width: 1040px)` there). A dedicated variant instead of
-   reusing `mobile`/`tablet` because this boundary is a single inclusive
-   ≤1040px cutoff, not the union of two disjoint bands — and instead of
-   Tailwind's built-in `max-[1041px]:` because that compiles to an EXCLUSIVE
-   `(width < 1041px)`, one pixel off from styles.css's inclusive
-   `(max-width: 1040px)`, leaving fractional widths between 1040 and 1041px
-   matched by neither or both. This variant and styles.css's media query are
-   provably identical (both emit `(width<=1040px)` in the built CSS). */
-@custom-variant nav-drawer {
-  @media (max-width: 1040px) {
+/* ≤720px — the app's primary mobile band. Mirrors useIsMobile.js's MOBILE_QUERY
+   exactly; the two must never drift. */
+@custom-variant mobile {
+  @media (max-width: 720px) {
+    @slot;
+  }
+}
+/* ≤560px / ≤520px — sub-mobile bands where dashboard card rows stop fitting
+   (HrOverview's task rows and attendance stats; ImportOverview's pulse tiles
+   switch to a horizontal scroller). */
+@custom-variant mobile-sm {
+  @media (max-width: 560px) {
+    @slot;
+  }
+}
+@custom-variant mobile-xs {
+  @media (max-width: 520px) {
     @slot;
   }
 }

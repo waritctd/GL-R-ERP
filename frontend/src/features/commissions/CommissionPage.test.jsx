@@ -54,6 +54,7 @@ function renderPage(user) {
 
 const hrUser = { id: 900, employeeId: 900, name: 'HR Test', role: 'hr' };
 const salesUser = { id: 10, employeeId: 10, name: 'พนักงานขาย ทดสอบ', role: 'sales' };
+const salesManagerUser = { id: 30, employeeId: 30, name: 'ผู้จัดการฝ่ายขาย ทดสอบ', role: 'sales_manager' };
 
 function invoiceDetails(overrides = {}) {
   return {
@@ -363,5 +364,61 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
 
     expect(imageCompression).not.toHaveBeenCalled();
     expect(invoiceAttachment.name).toBe('tax-invoice-0042.pdf');
+  });
+});
+
+// P0 fix (fix/commission-approved-record-immutable): CommissionService#updateDeductions now
+// refuses an APPROVED record outright (see the backend integration test,
+// CommissionApprovedRecordImmutableIntegrationTest). Before this fix the pencil rendered for
+// every non-manual record regardless of status -- per V102's census every one of prod's 1,132
+// commission records is APPROVED, so the unguarded pencil would 409 on essentially every row a
+// sales_manager/CEO could click it on. Reuses canReviewRecord, the exact gate the approve/reject
+// buttons beside it already use.
+describe('CommissionPage — edit-deductions pencil gated on reviewable status (fix/commission-approved-record-immutable)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('hides the edit pencil for an APPROVED record (matches every prod commission record today)', async () => {
+    api.commissions.list.mockResolvedValue({ commissions: [saleRecord()] }); // default status: APPROVED
+    renderPage(salesManagerUser);
+
+    await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
+    // Wait for the row itself before asserting an absence, so a failed/slow load could never
+    // produce a false "hidden" pass.
+    await screen.findByText('INV-405-0001');
+
+    expect(screen.queryByRole('button', { name: 'แก้ไขค่าหัก' })).toBeNull();
+    // The approve/reject buttons use the exact same canReviewRecord gate the pencil now reuses --
+    // both must also be absent here, proving this is that shared gate and not a pencil-only rule.
+    expect(screen.queryByRole('button', { name: 'ผู้จัดการอนุมัติ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ผู้จัดการปฏิเสธ' })).toBeNull();
+    // Not "hide everything": the sanctioned correction path for an APPROVED SALE record --
+    // clawback -- stays offered.
+    expect(screen.getByRole('button', { name: 'บันทึกหักคืน' })).not.toBeNull();
+  });
+
+  it('still shows the edit pencil for a SUBMITTED record reviewed by a sales_manager', async () => {
+    const submitted = saleRecord({
+      id: 601,
+      status: 'SUBMITTED',
+      approvedById: null,
+      approvedAt: null,
+      managerApprovedBy: null,
+      managerApprovedByName: null,
+      managerApprovedAt: null,
+      ceoApprovedBy: null,
+      ceoApprovedByName: null,
+      ceoApprovedAt: null,
+      invoiceDetails: invoiceDetails({ id: 601, invoiceNumber: 'INV-405-0601' }),
+    });
+    api.commissions.list.mockResolvedValue({ commissions: [submitted] });
+    renderPage(salesManagerUser);
+
+    await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
+    await screen.findByText('INV-405-0601');
+
+    expect(screen.getByRole('button', { name: 'แก้ไขค่าหัก' })).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'ผู้จัดการอนุมัติ' })).not.toBeNull();
   });
 });

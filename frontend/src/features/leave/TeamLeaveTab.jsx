@@ -10,6 +10,7 @@ import { DataTable, expandedRowRegionId } from '../../components/common/DataTabl
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
@@ -344,7 +345,7 @@ export function TeamLeaveTab({ user, showToast }) {
 
   return (
     <>
-      <form className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
+      <SafeForm className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
         <label>
           จากวันที่
           <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
@@ -385,7 +386,7 @@ export function TeamLeaveTab({ user, showToast }) {
             กำลังอัปเดต…
           </span>
         ) : null}
-      </form>
+      </SafeForm>
 
       <Panel title="ปฏิทินวันลา">
         <div className="leave-calendar-list">

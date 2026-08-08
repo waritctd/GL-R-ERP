@@ -94,7 +94,7 @@ export function UserMenu({
           id={menuId}
           role="menu"
           aria-label="เมนูผู้ใช้"
-          className="absolute top-[calc(100%+12px)] right-0 z-[200] w-[min(240px,calc(100vw-32px))] max-w-[calc(100vw-32px)] overflow-hidden rounded-md border border-border-subtle bg-surface shadow-[0_8px_24px_rgba(0,0,0,0.12)] max-[720px]:fixed max-[720px]:top-[74px] max-[720px]:right-4 max-[720px]:left-4 max-[720px]:w-auto max-[720px]:max-w-none"
+          className="absolute top-[calc(100%+12px)] right-0 z-[200] w-[min(240px,calc(100vw-32px))] max-w-[calc(100vw-32px)] overflow-hidden rounded-md border border-border-subtle bg-surface shadow-[0_8px_24px_rgba(0,0,0,0.12)] mobile:fixed mobile:top-[74px] mobile:right-4 mobile:left-4 mobile:w-auto mobile:max-w-none"
         >
           <div className="py-3 px-4 border-b border-border">
             <strong className="block !text-sm !text-text truncate">{employee?.nameTh || user.name}</strong>

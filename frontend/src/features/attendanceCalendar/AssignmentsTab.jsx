@@ -14,7 +14,7 @@ import { AssignmentFormModal } from './AssignmentFormModal.jsx';
 import { todayIso } from './dateHelpers.js';
 import { SCOPE_TYPES, scopeTypeLabel } from './scopeTypes.js';
 
-const GRID = 'grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,0.8fr)] max-[1040px]:min-w-[760px] reflow-cards';
+const GRID = 'grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,0.8fr)] nav-drawer:min-w-[760px] reflow-cards';
 
 /**
  * การมอบหมาย tab: list/create/end for hr.work_schedule_assignment.

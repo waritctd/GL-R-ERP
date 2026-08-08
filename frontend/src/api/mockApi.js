@@ -69,7 +69,7 @@ import {
 // fake-able stores only (see demoPayroll.js's own header for what's deliberately excluded).
 import {
   buildDemoCommissions, buildDemoTaxAllowanceDeclarations, buildDemoTaxAllowanceAttachments,
-  buildDemoDeductionObligations, buildDemoPayrollInputDrafts,
+  buildDemoEmployeeTaxAllowances, buildDemoDeductionObligations, buildDemoPayrollInputDrafts,
 } from '../data/demoPayroll.js';
 
 const db = createDemoDatabase();
@@ -241,6 +241,12 @@ db.taxAllowanceDeclarations = db.taxAllowanceDeclarations?.length
 // which are NOT.
 db.taxAllowanceAttachments = db.taxAllowanceAttachments?.length
   ? db.taxAllowanceAttachments : buildDemoTaxAllowanceAttachments();
+// hr.employee_tax_allowance (C1 stored allowance -- "register shows what payroll actually uses",
+// 2026-08): a SEPARATE store from taxAllowanceDeclarations above -- see buildDemoEmployeeTaxAllowances'
+// own header comment in demoPayroll.js for why this is genuinely fake-able and what the four seeded
+// rows cover.
+db.employeeTaxAllowances = db.employeeTaxAllowances?.length
+  ? db.employeeTaxAllowances : buildDemoEmployeeTaxAllowances(db.employees);
 // Deduction obligation tracking (issue #373): the record + status transitions themselves perform
 // no payroll/tax calculation -- they only track an instruction and its lifecycle -- so, like
 // taxAllowanceDeclarations above, this CAN be faked genuinely here. The remittance ledger is the
@@ -743,6 +749,12 @@ let mockFactoryPurchaseOrderItemSeq = 1;
   delete db.salesSeed;
 }
 
+// Mirrors CustomerService.VIEWER_ROLES, which itself aliases TicketAccessPolicy.VIEWER_ROLES
+// rather than hand-copying it (issue #389 records a real divergence bug from hand-copying this
+// exact set). Named here for the same reason: three customer reads share it, and an inline copy
+// per call site is how the Java side drifted before. `requireTicketViewer` below wraps the same
+// list but cannot be reused -- it takes a ticket id and applies a sales-ownership check.
+const CUSTOMER_VIEWER_ROLES = ['sales', 'import', 'ceo', 'account', 'sales_manager'];
 const PRICING_REQUEST_VIEWER_ROLES = ['sales', 'import', 'ceo', 'sales_manager'];
 const PRICING_REQUEST_RECIPIENT_VALUES = PRICING_REQUEST_RECIPIENT_OPTIONS.map((o) => o.code);
 const PRICING_REQUEST_QUANTITY_TYPE_VALUES = PRICING_REQUEST_QUANTITY_TYPE_OPTIONS.map((o) => o.code);
@@ -1588,8 +1600,22 @@ function requireTaxAllowanceAttachmentAccess(declaration, user) {
 // frontend/src/features/taxAllowance/taxAllowanceSchema.js. Kept in sync by hand in all three places.
 const TAX_ALLOWANCE_SECTION_KEYS = new Set(['family', 'insurance', 'savings', 'housing', 'donation']);
 
+// Mirrors TaxAllowanceCapCatalog#capsFor exactly -- a lookup TABLE, not a computation, so this is a
+// faithful stand-in rather than the "mock reimplements the algorithm" trap CLAUDE.md warns about.
+// Both year conditions below have a named counterpart in the Java catalogue AND in PayrollCalculator;
+// all three are kept in sync by hand, and TaxAllowanceCapCatalogTest drives the real calculator so
+// the two Java copies cannot drift silently. This third copy has no such guard -- when a cap changes,
+// change it here too or mock-mode UI quietly shows a different number than production.
 function taxAllowanceCapsFor(taxYear) {
   const ssfDeductible = taxYear < 2025;
+  // Thai ESG's enhanced ฿300,000 ceiling covers units bought 1 Jan 2024 - 31 Dec 2026 (ปีภาษี
+  // 2567-2569); ฿100,000 outside that window on EITHER side. Unlike SSF this is not a sunset to
+  // zero -- the deduction continues, only the ceiling steps down, and the 30% income rate is
+  // unchanged either way. Mirrors THAI_ESG_ENHANCED_CAP_FIRST_TAX_YEAR / _LAST_TAX_YEAR.
+  // The closed range is deliberate: SSF's cutoff is a one-way sunset so one comparison suffices,
+  // but this enhancement is temporary at both ends -- don't "simplify" it to a single inequality.
+  const thaiEsgEnhanced = taxYear >= 2024 && taxYear <= 2026;
+  const thaiEsgCeiling = thaiEsgEnhanced ? 300000 : 100000;
   return [
     { category: 'personal', kind: 'FLAT', groupId: null, ownCap: 60000, groupCap: null, maxTotal: null, incomeRate: null, multiplier: null, declarable: false },
     { category: 'spouse', kind: 'FLAT', groupId: null, ownCap: 60000, groupCap: null, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
@@ -1604,7 +1630,7 @@ function taxAllowanceCapsFor(taxYear) {
     { category: 'rmf', kind: 'PERCENT_OF_INCOME', groupId: 'retirement', ownCap: 500000, groupCap: 500000, maxTotal: null, incomeRate: 0.30, multiplier: null, declarable: true },
     { category: 'ssf', kind: 'PERCENT_OF_INCOME', groupId: 'retirement', ownCap: ssfDeductible ? 200000 : 0, groupCap: 500000, maxTotal: null, incomeRate: ssfDeductible ? 0.30 : 0, multiplier: null, declarable: true },
     { category: 'pension', kind: 'PERCENT_OF_INCOME', groupId: 'retirement', ownCap: 200000, groupCap: 500000, maxTotal: null, incomeRate: 0.15, multiplier: null, declarable: true },
-    { category: 'thai_esg', kind: 'PERCENT_OF_INCOME', groupId: null, ownCap: 300000, groupCap: null, maxTotal: null, incomeRate: 0.30, multiplier: null, declarable: true },
+    { category: 'thai_esg', kind: 'PERCENT_OF_INCOME', groupId: null, ownCap: thaiEsgCeiling, groupCap: null, maxTotal: null, incomeRate: 0.30, multiplier: null, declarable: true },
     { category: 'home_loan_interest', kind: 'FLAT', groupId: null, ownCap: 100000, groupCap: null, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
     { category: 'education_donation', kind: 'PERCENT_OF_INCOME', groupId: 'donation', ownCap: null, groupCap: null, maxTotal: null, incomeRate: 0.10, multiplier: 2, declarable: true },
     { category: 'general_donation', kind: 'PERCENT_OF_INCOME', groupId: 'donation', ownCap: null, groupCap: null, maxTotal: null, incomeRate: 0.10, multiplier: null, declarable: true },
@@ -3006,7 +3032,12 @@ function leaveContactDefaults(employee) {
   };
 }
 
-function buildLeaveRecord(record) {
+// `user` is the acting caller (not the request's own employee) -- mirrors LeaveService's
+// withCanReviewFlag(dto, user), which stamps canReview per-caller onto every returned DTO in
+// list/create/approve/reject/cancel. Reuses canReviewLeave(), the same hr-bypass-or-direct-manager
+// predicate the mock already gates approve/reject/cancel on, so the flag and the actual gate can
+// never diverge.
+function buildLeaveRecord(record, user) {
   const employee = db.employees.find((item) => item.id === record.employeeId);
   const managerEmployeeId = managerIdForEmployee(employee);
   const manager = managerEmployeeId ? db.employees.find((item) => item.id === managerEmployeeId) : null;
@@ -3019,6 +3050,7 @@ function buildLeaveRecord(record) {
     managerName: manager?.nameTh || null,
     leaveTypeNameTh: leaveType.nameTh,
     leaveTypeNameEn: leaveType.nameEn,
+    canReview: canReviewLeave(user, record.employeeId),
     ...pendingApproverForLeave(record, managerEmployeeId),
   };
 }
@@ -3056,6 +3088,108 @@ function validateOvertimeRetroactiveWindow(payload) {
   if (reason.length < OT_BACKDATED_REASON_MIN_LENGTH) {
     fail('คำขอทำงานล่วงเวลาย้อนหลังต้องระบุเหตุผลที่ยื่นล่าช้าอย่างชัดเจน', 400);
   }
+}
+
+// Mirrors DbHolidayCalendar / hr.holiday (V115) -- deliberately NOT the same store as the
+// `holidays` mock namespace below (HolidayController's admin CRUD), which stays an honest
+// "nothing persisted" stub per its own comment (list() always returns [], every write throws).
+// This is a separate, fixed, read-only calendar: the mock-appropriate equivalent of "HR has
+// already loaded the calendar for these years". Letting overtime's day-type derivation depend on
+// the admin-CRUD store would make it impossible to ever populate from the mock UI at all, since
+// that store's create/update/remove all reject. Extend the entries below if a demo/test needs
+// another corroborated holiday.
+//
+// A Map (date -> nameTh), not a bare Set: `leave.calendarContext` below
+// (#ot-holiday-visibility, PR 2) needs the same NAME `LeaveCalendarHolidayDto` carries, and a
+// second, separate name lookup risked drifting out of sync with this one (a date added here
+// without a matching name there). `.has()` -- all `deriveOvertimeDayType`/
+// `validateOvertimeDayTypeClaim` below have ever needed -- means exactly the same thing on a Map
+// as it did on the Set it replaces, so neither of those changes at all.
+// COPIED VERBATIM FROM PRODUCTION, 2026-08-08: all 19 rows of `hr.holiday` (every one source=BANK,
+// i.e. fetched from the BOT financial-institutions-holidays feed). Do not "tidy" these names.
+//
+// Three things a hand-written fixture got wrong here, each of which hid a real problem:
+//
+//  1. COVERAGE. `UpcomingHolidays` shows a rolling ~90-day forward window. An earlier fixture
+//     clustered in Jan-May + December, leaving a 7-month hole, so the panel rendered its EMPTY
+//     STATE for most of the year -- including "today". That is not a visible failure: an empty
+//     state is a legitimate render, so the feature's headline surface read as working while never
+//     once showing a holiday.
+//  2. THE DATES WERE WRONG. The hand-written version had 2026-12-05 (วันพ่อแห่งชาติ). Production
+//     does NOT: 5 Dec 2026 falls on a Saturday, so the observed bank holiday is the SUBSTITUTE on
+//     Mon 2026-12-07, and 2026-12-10 (วันรัฐธรรมนูญ) was missing entirely. Thai holidays shift for
+//     weekends; guessing them is how a fixture drifts from the thing it stands in for.
+//  3. THE NAMES WERE FAR TOO SHORT. The hand-written names ran 9-17 chars. Production's LONGEST is
+//     **149 characters** (2026-12-07 below) and four exceed 60. This is why V129 had to widen
+//     `name_th` from VARCHAR(120) to TEXT -- a real 2026 BOT response overflowed the column. Short
+//     fixture names would let a layout that cannot survive a 149-char label pass every mock-mode
+//     check and then break on first contact with production data. `UpcomingHolidays` and the OT
+//     verdict badge both render this field: keep the long ones here so the UI is always exercised
+//     against the worst case that actually exists.
+const MOCK_HOLIDAY_DATES = new Map([
+  ['2026-01-01', 'วันขึ้นปีใหม่'],
+  ['2026-01-02', 'วันหยุดทำการเพิ่มเป็นกรณีพิเศษ'],
+  ['2026-03-03', 'วันมาฆบูชา'],
+  ['2026-04-06', 'วันพระบาทสมเด็จพระพุทธยอดฟ้าจุฬาโลกมหาราช และวันที่ระลึกมหาจักรีบรมราชวงศ์'],
+  ['2026-04-13', 'วันสงกรานต์'],
+  ['2026-04-14', 'วันสงกรานต์'],
+  ['2026-04-15', 'วันสงกรานต์'],
+  ['2026-05-01', 'วันแรงงานแห่งชาติ'],
+  ['2026-05-04', 'วันฉัตรมงคล'],
+  ['2026-06-01', 'ชดเชยวันวิสาขบูชา (วันอาทิตย์ที่ 31 พฤษภาคม 2569)'],
+  ['2026-06-03', 'วันเฉลิมพระชนมพรรษาสมเด็จพระนางเจ้าสุทิดา พัชรสุธาพิมลลักษณ พระบรมราชินี'],
+  ['2026-07-28', 'วันเฉลิมพระชนมพรรษาพระบาทสมเด็จพระเจ้าอยู่หัว'],
+  ['2026-07-29', 'วันอาสาฬหบูชา'],
+  ['2026-08-12', 'วันเฉลิมพระชนมพรรษาสมเด็จพระนางเจ้าสิริกิติ์ พระบรมราชินีนาถ พระบรมราชชนนีพันปีหลวง และวันแม่แห่งชาติ'],
+  ['2026-10-13', 'วันนวมินทรมหาราช'],
+  ['2026-10-23', 'วันปิยมหาราช'],
+  // The 149-char worst case. If a label breaks the layout, it breaks here first.
+  ['2026-12-07', 'ชดเชยวันคล้ายวันพระบรมราชสมภพ พระบาทสมเด็จพระบรมชนกาธิเบศร มหาภูมิพลอดุลยเดชมหาราช บรมนาถบพิตร วันชาติ และวันพ่อแห่งชาติ (วันเสาร์ที่ 5 ธันวาคม 2569)'],
+  ['2026-12-10', 'วันรัฐธรรมนูญ'],
+  ['2026-12-31', 'วันสิ้นปี'],
+]);
+// Years the mock calendar is considered "loaded" for -- distinct from a date simply being absent
+// from the set above, same distinction HolidayCalendar#hasHolidaysForYear's Javadoc draws in the
+// real service (an empty-for-this-date calendar vs. a calendar nobody has loaded yet).
+const MOCK_HOLIDAY_LOADED_YEARS = new Set([2026]);
+
+// Mirrors OvertimeService#deriveDayType -- the ONLY source of truth for day_type /
+// pay_rate_multiplier, at both create() and approve() below. NEVER read a caller-supplied
+// dayType for pay; see validateOvertimeDayTypeClaim for how that field is used instead (a claim
+// to validate, never a pay input).
+//
+// P0 THIS CLOSES IN MOCK MODE TOO (issue #199's "mock more permissive than production" shape --
+// see CLAUDE.md "Mock API contract"): this file used to do `dayType: payload.dayType || 'WORKDAY'`
+// at create() and `request.dayType === 'HOLIDAY' ? 3 : 1.5` at approve(), so under
+// VITE_USE_MOCKS=true a caller could self-declare HOLIDAY (3.00x) on an ordinary day and be paid
+// double, with no way to reproduce the real service's 400. This mock is NOT authoritative --
+// verify day-type behaviour against OvertimeService, never this file (CLAUDE.md) -- but it must
+// not be MORE permissive than the service it stands in for, either.
+function deriveOvertimeDayType(workDate) {
+  return MOCK_HOLIDAY_DATES.has(workDate) ? 'HOLIDAY' : 'WORKDAY';
+}
+
+// Mirrors OvertimeService#validateDayTypeClaim's decision table exactly: a HOLIDAY claim the mock
+// calendar can actively disprove (year "loaded", date not in the set) is refused outright (400,
+// naming the date). A claim it cannot yet corroborate (year not in MOCK_HOLIDAY_LOADED_YEARS) is
+// accepted but flagged for HR, matching OvertimeService's DAY_TYPE_CLAIM_UNVERIFIED_NOTE_PREFIX
+// note. Either way the claim never reaches dayType/multiplier -- deriveOvertimeDayType alone
+// decides those.
+function validateOvertimeDayTypeClaim(claim, workDate) {
+  if (!claim) return null;
+  const normalized = String(claim).trim().toUpperCase();
+  if (!['WORKDAY', 'HOLIDAY'].includes(normalized)) {
+    fail('ประเภทวันทำงานล่วงเวลาไม่ถูกต้อง', 400);
+  }
+  if (normalized !== 'HOLIDAY') return null;
+  const year = Number(workDate.slice(0, 4));
+  if (!MOCK_HOLIDAY_LOADED_YEARS.has(year)) {
+    return `[รอตรวจสอบ] แจ้ง HOLIDAY แต่ปี ${year} ไม่มีปฏิทิน บันทึกเป็น WORKDAY โปรดตรวจสอบ`;
+  }
+  if (!MOCK_HOLIDAY_DATES.has(workDate)) {
+    fail(`วันที่ ${workDate} ไม่ใช่วันหยุดตามปฏิทินบริษัท จึงไม่สามารถแจ้งว่าเป็นวันหยุด (HOLIDAY) ได้`, 400);
+  }
+  return null;
 }
 
 function buildOvertimeRecord(record) {
@@ -4394,7 +4528,7 @@ export const api = {
       if (params.status) list = list.filter((item) => item.status === params.status);
       if (params.from) list = list.filter((item) => item.endDate >= params.from);
       if (params.to) list = list.filter((item) => item.startDate <= params.to);
-      return delay({ requests: list.map(buildLeaveRecord) });
+      return delay({ requests: list.map((item) => buildLeaveRecord(item, user)) });
     },
 
     async create(payload) {
@@ -4500,7 +4634,7 @@ export const api = {
       request.employeeCode = employee.code;
       request.employeeName = employee.nameTh;
       db.leaveRequests.unshift(request);
-      return delay({ request: buildLeaveRecord(request) });
+      return delay({ request: buildLeaveRecord(request, user) });
     },
 
     async approve(id, payload = {}) {
@@ -4516,7 +4650,7 @@ export const api = {
       request.reviewedAt = now;
       request.reviewerNote = payload.reviewerNote || null;
       request.updatedAt = now;
-      return delay({ request: buildLeaveRecord(request) });
+      return delay({ request: buildLeaveRecord(request, user) });
     },
 
     async reject(id, payload = {}) {
@@ -4532,7 +4666,7 @@ export const api = {
       request.reviewedAt = now;
       request.reviewerNote = payload.reviewerNote || null;
       request.updatedAt = now;
-      return delay({ request: buildLeaveRecord(request) });
+      return delay({ request: buildLeaveRecord(request, user) });
     },
 
     async cancel(id, payload = {}) {
@@ -4548,7 +4682,7 @@ export const api = {
       request.cancelledAt = now;
       request.reviewerNote = payload.reviewerNote || request.reviewerNote;
       request.updatedAt = now;
-      return delay({ request: buildLeaveRecord(request) });
+      return delay({ request: buildLeaveRecord(request, user) });
     },
 
     // Phase A4: certificate-download button in ReviewQueueTab.jsx/MyLeaveTab.jsx. Mirrors
@@ -4667,17 +4801,29 @@ export const api = {
 
     // Leave-request composer, Phase C: mirrors LeaveController#calendarContext's SHAPE only, NOT
     // real schedule resolution. This is a SMALL FIXED FIXTURE -- Mon-Fri/08:30-17:30, no six-day
-    // (OPS_6D) awareness, and `holidays` is always empty (same "no persisted hr.holiday store"
-    // stance as the holidays.list() stub above) -- it does NOT call TieredWorkScheduleResolver or
-    // read hr.work_schedule_assignment. `nonWorkingDates` here is plain Sat/Sun arithmetic, not
-    // LeaveDayMath's schedule/holiday-aware predicate. Do NOT read a mock-mode render of this as
-    // evidence a six-day employee or a real holiday shows up correctly -- verify against the real
-    // backend (LeaveCalendarContextIntegrationTest).
+    // (OPS_6D) awareness -- it does NOT call TieredWorkScheduleResolver or read
+    // hr.work_schedule_assignment. `nonWorkingDates` here is plain Sat/Sun arithmetic, not
+    // LeaveDayMath's schedule/holiday-aware predicate (it does NOT fold `holidays` in, unlike the
+    // real LeaveCalendarContextService#get -> LeaveRepository#workingDayPredicate).
+    //
+    // #ot-holiday-visibility (PR 2): `holidays` USED TO be unconditionally `[]` -- that made the
+    // OT verdict badge, UpcomingHolidays, and the leave composer's own holiday note all
+    // unverifiable under VITE_USE_MOCKS=true, since every one of them reads this field. Now
+    // sourced from MOCK_HOLIDAY_DATES (the same fixed calendar deriveOvertimeDayType/
+    // validateOvertimeDayTypeClaim already read), filtered to [from, to] -- still NOT the real
+    // persisted hr.holiday store (that honesty belongs to the holidays.list() admin-CRUD stub
+    // below, which stays an empty stub on purpose; see its own comment).
+    // Do NOT read a mock-mode render of this as evidence a six-day employee or a real holiday
+    // shows up correctly -- verify against the real backend (LeaveCalendarContextIntegrationTest).
     async calendarContext(params = {}) {
       requireSession();
       const { from, to } = params;
       if (!from || !to) fail('ต้องระบุวันที่เริ่มต้นและวันที่สิ้นสุด', 400);
       if (to < from) fail('วันที่สิ้นสุดต้องไม่มาก่อนวันที่เริ่มต้น', 400);
+      const holidays = [...MOCK_HOLIDAY_DATES.entries()]
+        .filter(([date]) => date >= from && date <= to)
+        .map(([holidayDate, nameTh]) => ({ holidayDate, nameTh }))
+        .sort((a, b) => (a.holidayDate < b.holidayDate ? -1 : a.holidayDate > b.holidayDate ? 1 : 0));
       const nonWorkingDates = [];
       const cursor = new Date(`${from}T00:00:00`);
       const end = new Date(`${to}T00:00:00`);
@@ -4699,7 +4845,7 @@ export const api = {
         calendarContext: {
           from,
           to,
-          holidays: [],
+          holidays,
           schedule: {
             workStart: LEAVE_WORKDAY_START,
             workEnd: LEAVE_WORKDAY_END,
@@ -4773,6 +4919,13 @@ export const api = {
       findEmployee(employeeId);
       validateOvertimeRetroactiveWindow(payload);
       const plannedMinutes = overtimeMinutesBetween(payload.plannedStartAt, payload.plannedEndAt);
+      // SECURITY: payload.dayType is unauthenticated client input and is deliberately never used
+      // to set pay -- mirrors OvertimeService#submit's identical comment. day_type/multiplier must
+      // always be DERIVED from the calendar (deriveOvertimeDayType), never DECLARED by the caller.
+      // The claim is still validated (validateOvertimeDayTypeClaim), only to refuse an
+      // actively-disprovable claim or flag an unverifiable one -- either way it never feeds dayType.
+      const submitTimeNote = validateOvertimeDayTypeClaim(payload.dayType, payload.workDate);
+      const dayType = deriveOvertimeDayType(payload.workDate);
       const id = Math.max(0, ...db.overtimeRequests.map((item) => item.id)) + 1;
       const now = new Date().toISOString();
       const request = {
@@ -4782,12 +4935,12 @@ export const api = {
         plannedStartAt: payload.plannedStartAt,
         plannedEndAt: payload.plannedEndAt,
         plannedMinutes,
-        dayType: payload.dayType || 'WORKDAY',
+        dayType,
         reason: payload.reason,
         status: 'SUBMITTED',
         actualMinutes: null,
         payableMinutes: null,
-        calculationNote: null,
+        calculationNote: submitTimeNote,
         requestedById: user.employeeId,
         requestedByName: user.name,
         requestedAt: now,
@@ -4813,13 +4966,19 @@ export const api = {
       if (!request) fail('ไม่พบคำขอทำงานล่วงเวลานี้', 404);
       const now = new Date().toISOString();
       if (request.status === 'SUBMITTED') {
-        const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
         // Manager-less route: SUBMITTED straight to APPROVED, doing the manager step's minute
         // calculation as well as the CEO's status flip. Mirrors OvertimeService.ceoDirectApprove.
         if (!hasManagerApproverFor(request.employeeId)) {
           if (user.role !== 'ceo') {
             fail('คำขอนี้ไม่มีขั้นอนุมัติของหัวหน้างาน (ฝ่ายนี้ไม่มีผู้จัดการ หรือผู้ยื่นเป็นผู้จัดการเอง) จึงต้องให้ CEO พิจารณาเท่านั้น', 403);
           }
+          // Re-derived and FROZEN here, from the calendar, not carried over from whatever create()
+          // stored -- mirrors OvertimeService#calculate, invoked by the real
+          // ceoDirectApprove AFTER its own authorization check (requireCeoForManagerlessRequest),
+          // same ordering kept here so a REJECTED approve attempt never mutates dayType as a
+          // side effect. See deriveOvertimeDayType's comment for why this is the only source.
+          request.dayType = deriveOvertimeDayType(request.workDate);
+          const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
           request.status = 'APPROVED';
           request.actualMinutes = request.actualMinutes ?? request.plannedMinutes;
           request.payableMinutes = Math.round(request.actualMinutes * multiplier);
@@ -4834,6 +4993,10 @@ export const api = {
           return delay({ request: buildOvertimeRecord(request) });
         }
         if (!canReviewOvertime(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+        // Same re-derive-after-authz ordering as the manager-less branch above, matching
+        // OvertimeService.managerApprove calling calculate() after requireManager().
+        request.dayType = deriveOvertimeDayType(request.workDate);
+        const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
         request.status = 'MANAGER_APPROVED';
         request.actualMinutes = request.actualMinutes ?? request.plannedMinutes;
         request.payableMinutes = Math.round(request.actualMinutes * multiplier);
@@ -5100,6 +5263,15 @@ export const api = {
       // direction: it under-reports usage, so mock-mode UI says "you may still claim" on a type the
       // real backend refuses. `approvedCountLifetimeByType` is a misnomer on the DTO too -- it has
       // always carried the in-flight-inclusive count. Do not "fix" it to match its name.
+      //
+      // P0 fix (fix/welfare-cap-year-bypass): findUsage's two year-scoped maps ALSO no longer key
+      // on eventDate -- an employee-supplied, unbounded field that let the annual cap be defeated by
+      // filing against a year nothing had been approved against yet. They key on the same two
+      // server-stamped columns the real findUsage now does (see that method's Javadoc): payrollMonth
+      // for the APPROVED amount sum (assigned by approve(), never by the client), and requestedAt
+      // for the in-flight-inclusive count (stamped at create(), never by the client). Both already
+      // exist on every mock row -- this mirrors which column the real query reads, not the cap
+      // ENFORCEMENT itself: create() below still accepts any requestedAmount uncapped, unchanged.
       const ACTIVE_STATUSES = ['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED'];
       const approvedAmountThisYearByType = {};
       const approvedCountLifetimeByType = {};
@@ -5108,12 +5280,12 @@ export const api = {
         .filter((item) => item.employeeId === employeeId && ACTIVE_STATUSES.includes(item.status))
         .forEach((item) => {
           approvedCountLifetimeByType[item.requestType] = (approvedCountLifetimeByType[item.requestType] || 0) + 1;
-          if (new Date(item.eventDate).getFullYear() === year) {
+          if (new Date(item.requestedAt).getFullYear() === year) {
             activeCountThisYearByType[item.requestType] = (activeCountThisYearByType[item.requestType] || 0) + 1;
-            if (item.status === 'APPROVED') {
-              approvedAmountThisYearByType[item.requestType] =
-                (approvedAmountThisYearByType[item.requestType] || 0) + Number(item.approvedAmount || 0);
-            }
+          }
+          if (item.status === 'APPROVED' && item.payrollMonth && new Date(item.payrollMonth).getFullYear() === year) {
+            approvedAmountThisYearByType[item.requestType] =
+              (approvedAmountThisYearByType[item.requestType] || 0) + Number(item.approvedAmount || 0);
           }
         });
       return delay({
@@ -5552,6 +5724,33 @@ export const api = {
       if (['VOID', 'REJECTED'].includes(record.status)) {
         fail('ไม่สามารถแก้ไขรายการค่าคอมมิชชั่นที่ถูกยกเลิกแล้วได้', 409);
       }
+      if (isManualCommissionKind(record.kind)) {
+        fail('รายการค่าคอมมิชชั่นแบบกรอกเองไม่มีรายการหักจากใบกำกับภาษีให้แก้ไข', 409);
+      }
+      // P0 fix (fix/commission-approved-record-immutable): mirrors CommissionService
+      // #updateDeductions's two new guards exactly (same order, same Thai text) -- a CLAWBACK
+      // shares invoice_id with the original sale it reverses (createClawback below), so editing
+      // one through its own id would silently rewrite the ORIGINAL's invoiceDetails/amounts too;
+      // an APPROVED record already fed payrollReadySummary and has no route back to
+      // SUBMITTED/MANAGER_APPROVED for re-review -- createClawback is the only sanctioned
+      // correction. Checked before the APPROVED check for the same reason as the backend: a
+      // clawback is always created APPROVED, so the status check alone would also catch it, but
+      // would name the wrong reason.
+      if (record.kind === 'CLAWBACK') {
+        fail('รายการเรียกคืนค่าคอมมิชชั่นคำนวณจากรายการต้นทางโดยอัตโนมัติ ไม่สามารถแก้ไขได้โดยตรง', 409);
+      }
+      if (record.status === 'APPROVED') {
+        fail('รายการค่าคอมมิชชั่นที่อนุมัติแล้วไม่สามารถแก้ไขได้ กรุณาใช้การเรียกคืนค่าคอมมิชชั่นแทน', 409);
+      }
+      // KNOWN GAP (same shape as the OvertimeService one near OT_RETROACTIVE_WINDOW_DAYS above):
+      // the Java service also refuses this write once the record's payroll month is already
+      // PROCESSED or seed-covered (CommissionService#requireCommissionPayrollMonthOpen). There is
+      // no payroll_period collection in this mock, and none of the other six commission call
+      // sites that guard is called from (createManualCommission/submit/createFromDeal/
+      // createClawback/managerApprove/ceoApprove, all below) mirror it here either -- this is not
+      // a new gap, just the existing one restated for a seventh site. The mock is therefore more
+      // permissive than prod on a record whose month has already closed -- do not read a
+      // successful mock edit as proof the backend would accept it.
       const valueOrExisting = (value, existing) => (value === null || value === undefined || value === '' ? existing : Number(value));
       Object.assign(record.invoiceDetails, {
         grossAmount: valueOrExisting(payload.grossAmount, record.invoiceDetails.grossAmount),
@@ -5993,13 +6192,27 @@ export const api = {
       throw new Error('ส่งอีเมลสลิปเงินเดือนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
     // C1/C2 reconciliation additions (2026-07-21): same "view broader than edit" split as the rest
-    // of this namespace (GET is hr/ceo, PUT is hr-only). Like preview/process above, these carry
-    // real payroll numbers (tax allowances, YTD income), so mock mode surfaces a clear
-    // "not supported" error on writes rather than fabricating figures; GET returns an empty list so
-    // the UI's empty state renders correctly.
-    async getTaxAllowances() {
+    // of this namespace (GET is hr/ceo, PUT is hr-only). Like preview/process above, PUT carries
+    // real payroll numbers (tax allowances), so mock mode surfaces a clear "not supported" error on
+    // that write rather than fabricating figures.
+    //
+    // GET used to return an empty list unconditionally, regardless of `year` -- documented as a
+    // deliberate gap in contract.test.js's ARITY_EXEMPTIONS. "Register shows what payroll actually
+    // uses" (2026-08) gave this endpoint its first UI caller (TaxAllowanceReviewPage.jsx), so an
+    // empty fixture is no longer an honest stand-in -- it would be exactly CLAUDE.md's "mock omits a
+    // field the feature keys on" shape, where the register's join against this endpoint would never
+    // see a row under VITE_USE_MOCKS=true. Now genuinely reads db.employeeTaxAllowances (seeded by
+    // buildDemoEmployeeTaxAllowances, demoPayroll.js) filtered by `year`, same shape
+    // getTaxAllowanceDeclarations below already uses. Mirrors PayrollRepository#findTaxAllowanceRows'
+    // `ORDER BY e.employee_code, eta.effective_month` (one row per effective_month, not one per
+    // employee -- see that repository method's own doc comment).
+    async getTaxAllowances(year) {
       hasRole('hr', 'ceo');
-      return delay({ taxYear: new Date().getFullYear(), items: [] });
+      const taxYear = year ? Number(year) : new Date().getFullYear();
+      const items = db.employeeTaxAllowances
+        .filter((row) => row.taxYear === taxYear)
+        .sort((a, b) => (a.employeeCode || '').localeCompare(b.employeeCode || '') || a.effectiveMonth - b.effectiveMonth);
+      return delay({ taxYear, items });
     },
     async saveTaxAllowances() {
       hasRole('hr');
@@ -6898,6 +7111,15 @@ export const api = {
   },
 
   // Mirrors CustomerController (customer/).
+  //
+  // P0 fix (customer master read gate): the three reads below used to be requireSession() only
+  // — authenticated, not authorized, same bug the real CustomerController had. Now gated to
+  // CustomerService.VIEWER_ROLES (an alias of TicketAccessPolicy.VIEWER_ROLES — the same set
+  // requireTicketViewer above uses), derived from the two real callers: TicketCreateModal's
+  // picker (sales only ever reaches it — canCreateTickets) and DepositNoticePage's customer
+  // search (the full canViewTickets audience). Leaving this open while the real backend now
+  // 403s employee/warehouse/qc/hr would make VITE_USE_MOCKS=true lie about the permission —
+  // exactly the "mock more permissive than production" direction CLAUDE.md warns about.
   customers: {
     async create(payload) {
       hasRole('sales'); // deal-entry flow; mirrors CustomerController's requireAnyRole('sales')
@@ -6910,7 +7132,7 @@ export const api = {
     // match in insertion order — unbounded and unsorted — so a caller counting results, or
     // reading "the first customer", saw something production would never return (issue #434).
     async search(q) {
-      requireSession();
+      hasRole(...CUSTOMER_VIEWER_ROLES);
       const lower = (q ?? '').toLowerCase();
       const results = lower
         ? mockCustomers.filter((c) => c.name.toLowerCase().includes(lower) || (c.taxId ?? '').includes(lower))
@@ -6919,7 +7141,7 @@ export const api = {
       return delay({ customers: ordered.slice(0, CUSTOMER_SEARCH_LIMIT) });
     },
     async contacts(customerId) {
-      requireSession();
+      hasRole(...CUSTOMER_VIEWER_ROLES);
       return delay({ contacts: mockContacts.filter((c) => c.customerId === Number(customerId)) });
     },
     async createContact(customerId, payload) {
@@ -6929,7 +7151,7 @@ export const api = {
       return delay({ contact });
     },
     async projects(customerId) {
-      requireSession();
+      hasRole(...CUSTOMER_VIEWER_ROLES);
       return delay({ projects: mockProjects.filter((p) => p.customerId === Number(customerId)) });
     },
     async createProject(customerId, payload) {

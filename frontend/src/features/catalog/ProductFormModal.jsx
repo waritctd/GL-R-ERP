@@ -6,6 +6,7 @@ import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 
 // UX-03: the only validation rule this form has ever had — price is required
 // and must be > 0. Every other field is genuinely optional; do not add
@@ -96,7 +97,7 @@ export function ProductFormModal({ product, factoryId, onClose, onSaved }) {
         </>
       }
     >
-      <form id="product-form" onSubmit={handleSubmit(submit)} className="space-y-3" noValidate>
+      <SafeForm id="product-form" onSubmit={handleSubmit(submit)} className="space-y-3" noValidate>
         <div className="grid grid-cols-2 gap-3">
           <FormField label="รหัสสินค้า" htmlFor="pf-code">
             <input id="pf-code" type="text" {...register('productCode')} />
@@ -155,7 +156,7 @@ export function ProductFormModal({ product, factoryId, onClose, onSaved }) {
           </FormField>
         </div>
         {submitError && <p className="text-sm text-red-600" role="alert">{submitError}</p>}
-      </form>
+      </SafeForm>
     </Modal>
   );
 }

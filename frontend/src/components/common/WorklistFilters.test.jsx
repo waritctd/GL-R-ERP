@@ -55,7 +55,7 @@ describe('WorklistFilters', () => {
     render(<WorklistFilters items={items} activeKey="" onSelect={() => {}} ariaLabel="ตัวกรอง" />);
 
     for (const button of screen.getAllByRole('button')) {
-      expect(button.className).toContain('max-[720px]:min-h-[44px]');
+      expect(button.className).toContain('mobile:min-h-[44px]');
     }
   });
 

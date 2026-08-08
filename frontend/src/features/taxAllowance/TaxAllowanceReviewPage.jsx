@@ -19,23 +19,43 @@ import { TaxAllowanceBreakdown } from './TaxAllowanceBreakdown.jsx';
 import { TaxAllowanceEvidenceCount } from './TaxAllowanceEvidenceCount.jsx';
 import { TaxAllowanceForm } from './TaxAllowanceForm.jsx';
 import { buildAllowanceSubmitBody, declaredAllowanceTotal, defaultAllowanceValues } from './taxAllowanceSchema.js';
-import { taxAllowanceStatusInfo } from './taxAllowanceStatus.js';
+import {
+  hasAllowanceDisagreement, resolvePayrollAllowance, taxAllowanceStatusInfo, taxAllowanceStatusShortLabel,
+} from './taxAllowanceStatus.js';
 import { Button } from '../../components/common/Button.jsx';
 
-const REGISTER_GRID = 'grid-cols-[minmax(0,0.4fr)_minmax(0,1.4fr)_minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.7fr)] max-[1040px]:min-w-[900px] reflow-cards';
+const REGISTER_GRID = 'grid-cols-[minmax(0,0.4fr)_minmax(0,1.4fr)_minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.7fr)] nav-drawer:min-w-[900px] reflow-cards';
 
 // `NONE` is the one chip that is NOT a backend status — it is the synthesized "this employee has
 // no declaration" row, which only exists when the employee list can be enumerated. It is filtered
 // out for a viewer without that access (see `visibleStatusChips` below), because for them it can
 // only ever match zero rows.
+//
+// Labels come from `taxAllowanceStatusShortLabel` (taxAllowanceStatus.js) — the canonical map —
+// rather than a literal here: this array used to carry its own copy of each label and it had
+// already drifted from that map (APPROVED_UNAPPLIED and EXPIRED both read differently here than on
+// the StatusBadge). `''` (ทั้งหมด) isn't a status at all, so it keeps its own literal, and
+// `requiresEmployeeList` is a register-only display concern, not status vocabulary — both stay here.
 const STATUS_CHIPS = [
   { key: '', label: 'ทั้งหมด' },
-  { key: 'NONE', label: 'ยังไม่ได้ยื่น', requiresEmployeeList: true },
-  { key: 'PENDING', label: 'รอ HR ตรวจสอบ' },
-  { key: 'APPROVED_UNAPPLIED', label: 'ยังไม่ใช้กับเงินเดือน' },
-  { key: 'APPLIED', label: 'ใช้กับเงินเดือนแล้ว' },
-  { key: 'EXPIRED', label: 'หมดอายุ' },
-  { key: 'REJECTED', label: 'ปฏิเสธ' },
+  { key: 'NONE', label: taxAllowanceStatusShortLabel('NONE'), requiresEmployeeList: true },
+  // "register shows what payroll actually uses" (2026-08): the queue of employees whose
+  // hr.employee_tax_allowance row is still reducing withholding right now but was never reviewed
+  // through a declaration (taxAllowanceStatusInfo's GRANDFATHERED_APPLIED branch,
+  // taxAllowanceStatus.js). Same requiresEmployeeList reasoning as NONE just above -- this key can
+  // only ever land on a synthesized no-declaration row, which needs the full employee list to exist.
+  { key: 'GRANDFATHERED_APPLIED', label: taxAllowanceStatusShortLabel('GRANDFATHERED_APPLIED'), requiresEmployeeList: true },
+  // F6 review remediation: the MIRROR queue GRANDFATHERED_APPLIED above was missing -- employees
+  // whose old allowance row lapsed (EXPIRED_UNVERIFIED, taxAllowanceStatusInfo's
+  // GRANDFATHERED_EXPIRED branch) and so silently STOPPED reducing withholding. HR needs to find
+  // those at least as much as the still-applying-unreviewed case; without this chip there was no way
+  // to filter to them at all. Same requiresEmployeeList reasoning as the two chips above.
+  { key: 'GRANDFATHERED_EXPIRED', label: taxAllowanceStatusShortLabel('GRANDFATHERED_EXPIRED'), requiresEmployeeList: true },
+  { key: 'PENDING', label: taxAllowanceStatusShortLabel('PENDING') },
+  { key: 'APPROVED_UNAPPLIED', label: taxAllowanceStatusShortLabel('APPROVED_UNAPPLIED') },
+  { key: 'APPLIED', label: taxAllowanceStatusShortLabel('APPLIED') },
+  { key: 'EXPIRED', label: taxAllowanceStatusShortLabel('EXPIRED') },
+  { key: 'REJECTED', label: taxAllowanceStatusShortLabel('REJECTED') },
 ];
 
 const MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => index + 1);
@@ -110,6 +130,18 @@ function OnBehalfModal({ row, caps, onClose, onSubmit, submitting }) {
  * employee list, can only ever match zero rows — so the one question this view cannot answer
  * ("who hasn't filed?") was the one it appeared to answer with an empty table. The subtitle, the
  * chip row and the empty state all key off `canListEmployees` now.
+ *
+ * <p><strong>"Register shows what payroll actually uses" (2026-08).</strong> A THIRD read joins in
+ * here: `GET /api/payroll/tax-allowances?year=` (hr.employee_tax_allowance —
+ * `PayrollReconciliationDtos.EmployeeTaxAllowanceDto`), which is what `PayrollCalculator` actually
+ * reads to compute withholding and previously had no UI caller at all. It is a SEPARATE table from
+ * the declaration register above, joined into `rows` below by employeeId
+ * (`resolvePayrollAllowance`, taxAllowanceStatus.js) — same HR+CEO gate as the declaration register
+ * (`PayrollController#getTaxAllowances`: `hasAnyRole('HR','CEO')`), so no new exposure. A
+ * no-declaration employee with a live payroll row is no longer indistinguishable from one with
+ * genuinely nothing (`taxAllowanceStatusInfo`'s GRANDFATHERED_APPLIED/GRANDFATHERED_EXPIRED
+ * branches); the two tables can also legitimately disagree for an employee who has BOTH, which the
+ * expanded row (`TaxAllowanceBreakdown`) surfaces rather than the summary badge (no 9th column).
  */
 export function TaxAllowanceReviewPage({ user, showToast }) {
   const queryClient = useQueryClient();
@@ -179,6 +211,12 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
     queryKey: queryKeys.taxAllowanceDeclarationsRegister({ year: taxYear }),
     queryFn: () => api.payroll.getTaxAllowanceDeclarations({ year: taxYear }).then((response) => response.items || []),
   });
+  // "Register shows what payroll actually uses" (2026-08) — see this component's own header
+  // comment. hr.employee_tax_allowance, NOT hr.tax_allowance_declaration; joined into `rows` below.
+  const payrollAllowancesQuery = useQuery({
+    queryKey: queryKeys.taxAllowances(taxYear),
+    queryFn: () => api.payroll.getTaxAllowances(taxYear).then((response) => response.items || []),
+  });
   // Same queryKey/queryFn shape as useHrData's own employees query (no params) — deliberately, so
   // this shares one cache entry with it instead of colliding under the same key with a
   // differently-filtered result. Filtered to active employees locally instead.
@@ -194,6 +232,7 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
 
   const rows = useMemo(() => {
     const declarations = declarationsQuery.data ?? [];
+    const payrollAllowances = payrollAllowancesQuery.data ?? [];
     // Prefer a non-terminal (not WITHDRAWN/SUPERSEDED) row over a terminal one when both exist for
     // the same employee — same "current declaration" rule as taxAllowanceStatus.selectCurrentDeclaration.
     // An employee whose only rows are terminal (e.g. a withdrawn draft) correctly ends up with NO
@@ -208,27 +247,40 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
       }
     }
 
+    // "Register shows what payroll actually uses" (2026-08) — joins the SECOND source in (see this
+    // component's header comment). `payrollResolution` stays authoritative only when `declaration`
+    // is null (taxAllowanceStatusInfo); `hasDisagreement`/`payrollAllowance` feed the expanded row
+    // (TaxAllowanceBreakdown) regardless of whether a declaration exists, since the two can disagree
+    // even when both are present.
+    function buildRow(employeeId, employeeCode, employeeName, declaration) {
+      const payrollResolution = resolvePayrollAllowance(payrollAllowances, employeeId, taxYear);
+      const payrollAllowance = payrollResolution?.applying ?? payrollResolution?.expired ?? null;
+      // F4 review remediation: sourced from the ONE shared predicate (taxAllowanceStatus.js) that
+      // TaxAllowanceBreakdown's own expanded-row flag also reads now, rather than this file keeping
+      // an inline copy that had quietly drifted from it (this copy excluded an EXPIRED_UNVERIFIED
+      // `payrollAllowance` correctly; the other one didn't -- see that function's own doc comment).
+      const hasDisagreement = hasAllowanceDisagreement(declaration, payrollAllowance);
+      return {
+        employeeId,
+        employeeCode,
+        employeeName,
+        declaration,
+        payrollAllowance,
+        hasDisagreement,
+        statusInfo: taxAllowanceStatusInfo(declaration, payrollResolution),
+      };
+    }
+
     if (canListEmployees && employeesQuery.data) {
-      return activeEmployees.map((employee) => {
-        const declaration = currentByEmployee.get(employee.id) ?? null;
-        return {
-          employeeId: employee.id,
-          employeeCode: employee.code,
-          employeeName: employee.nameTh,
-          declaration,
-          statusInfo: taxAllowanceStatusInfo(declaration),
-        };
-      });
+      return activeEmployees.map((employee) => buildRow(
+        employee.id, employee.code, employee.nameTh, currentByEmployee.get(employee.id) ?? null,
+      ));
     }
     // CEO fallback (no employee-list access): one row per employee that HAS a declaration.
-    return [...currentByEmployee.entries()].map(([employeeId, declaration]) => ({
-      employeeId,
-      employeeCode: declaration.employeeCode,
-      employeeName: declaration.employeeName,
-      declaration,
-      statusInfo: taxAllowanceStatusInfo(declaration),
-    }));
-  }, [declarationsQuery.data, employeesQuery.data, activeEmployees, canListEmployees]);
+    return [...currentByEmployee.entries()].map(([employeeId, declaration]) => buildRow(
+      employeeId, declaration.employeeCode, declaration.employeeName, declaration,
+    ));
+  }, [declarationsQuery.data, payrollAllowancesQuery.data, employeesQuery.data, activeEmployees, canListEmployees, taxYear]);
 
   const filteredRows = useMemo(
     () => (statusFilter ? rows.filter((row) => row.statusInfo.key === statusFilter) : rows),
@@ -237,6 +289,16 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
 
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: queryKeys.taxAllowanceDeclarationsRegister({ year: taxYear }) });
+    // F5 review remediation: approving/applying/reverifying a declaration can write
+    // hr.employee_tax_allowance (TaxAllowanceDeclarationService#apply/#reverify -- see
+    // taxAllowanceStatus.js's own comment on those two methods), which is exactly what
+    // `payrollAllowancesQuery` above reads. Without this, the expanded row's payroll-side panel
+    // (TaxAllowanceBreakdown) and the summary badge/disagreement flag it feeds kept showing
+    // pre-action data until a manual reload -- the register going stale doing the one thing this
+    // feature exists to keep honest. Bare-prefix form (not `queryKeys.taxAllowances(taxYear)`),
+    // same idiom `['tickets']`/`['payroll']`/`['pricingRequests']` already use elsewhere in this
+    // codebase for "invalidate the whole namespace, not just this one param combination".
+    queryClient.invalidateQueries({ queryKey: ['taxAllowances'] });
   }
 
   const approveMutation = useMutation({
@@ -299,7 +361,29 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
     {
       key: 'status',
       header: 'สถานะ',
-      render: (row) => <StatusBadge tone={row.statusInfo.tone}>{row.statusInfo.label}</StatusBadge>,
+      // The disagreement flag rides in THIS column (not a 9th one — the table is tight at 1040px,
+      // see REGISTER_GRID above) so the summary row still answers "is there a problem here" even
+      // when a declaration exists and keeps its own ordinary badge; "what exactly" is the expanded
+      // row's job (TaxAllowanceBreakdown), not this cell's.
+      render: (row) => (
+        <span className="inline-flex flex-wrap items-center gap-1.5">
+          <StatusBadge tone={row.statusInfo.tone}>{row.statusInfo.label}</StatusBadge>
+          {row.hasDisagreement ? (
+            <span
+              className="inline-flex items-center gap-1 text-2xs font-bold text-warning-dark"
+              // F1: "ระบบเงินเดือนใช้จริง" (what payroll actually uses) would overclaim -- the
+              // figure this compares against is the RAW stored hr.employee_tax_allowance total,
+              // before PayrollCalculator's caps, not the post-clamp applied amount (see
+              // TaxAllowanceBreakdown.jsx's own comment on `payrollTotal`). "บันทึกในระบบเงินเดือน"
+              // (recorded in the payroll system) makes the same "these two disagree" point honestly.
+              title="ยอดที่ประกาศไว้ในแบบ ล.ย.01 กับยอดที่บันทึกในระบบเงินเดือนไม่ตรงกัน — ดูรายละเอียดในแถวขยาย"
+            >
+              <Icon name="triangleAlert" size={12} />
+              ยอดไม่ตรงกัน
+            </span>
+          ) : null}
+        </span>
+      ),
     },
     {
       key: 'declared',
@@ -349,7 +433,29 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
         if (status === 'EXPIRED') {
           items.push({ key: 'reverify', label: 'ยืนยันใหม่', icon: 'refresh', onSelect: () => setReverifyTarget(row) });
         }
-        items.push({ key: 'onBehalf', label: 'ยื่นแทนพนักงาน', icon: 'userPlus', onSelect: () => setOnBehalfTarget(row) });
+        // "ยื่นแทนพนักงาน" is a CREATE verb (a new, HR-authored, auto-approved declaration), not a
+        // review verb — offering it unconditionally used to sit it in the same list as อนุมัติ/
+        // ปฏิเสธ/ใช้กับเงินเดือน/ยืนยันใหม่ regardless of whether creating a fresh one made any
+        // sense for the row's current state. OverflowMenu (components/common/OverflowMenu.jsx) has
+        // no separator/group concept to render it as visually distinct, so the fix here is which
+        // statuses offer it at all:
+        //  - NONE: the only path in for staff who never log in (decision #9) — always offered.
+        //  - REJECTED / EXPIRED: that submission is already settled (a final HR decision) or lapsed
+        //    (inert) — refiling starts fresh, it does not discard anything live. Always offered.
+        //  - APPROVED_UNAPPLIED: HR's own prior approval, not an unreviewed employee claim, and the
+        //    only way to correct it before it reaches payroll (there is no "unapprove"). The modal
+        //    pre-fills the existing values, so nothing is silently blind-overwritten. Kept.
+        //  - PENDING: dropped. The backend (TaxAllowanceDeclarationService#createOnBehalf) clears
+        //    the way by unconditionally WITHDRAWING any pending row first — so next to อนุมัติ/
+        //    ปฏิเสธ, the two actions that actually decide THIS submission, "ยื่นแทนพนักงาน" would
+        //    silently discard an employee's own live, awaiting-review submission with no recorded
+        //    reason. HR wanting to override a pending submission should reject it (which requires a
+        //    reason) and refile from REJECTED, not skip past review.
+        //  - APPLIED: dropped — the declaration is already in effect, so filing a new one is not a
+        //    next step at all (the clear case: this status now shows no menu, nothing to do here).
+        if (status !== 'PENDING' && status !== 'APPLIED') {
+          items.push({ key: 'onBehalf', label: 'ยื่นแทนพนักงาน', icon: 'userPlus', onSelect: () => setOnBehalfTarget(row) });
+        }
         return <OverflowMenu items={items} label={`การดำเนินการสำหรับ ${row.employeeName}`} />;
       },
     },
@@ -358,14 +464,22 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
   return (
     <PageStack>
       <PageHeader
-        title="ตรวจสอบแบบแจ้ง ล.ย.01 (ค่าลดหย่อนภาษี)"
+        // Matches the sidebar's own pattern (AppShell.jsx: ค่าลดหย่อนภาษี / ตรวจสอบค่าลดหย่อนภาษี)
+        // and the employee page's noun order (TaxAllowancePage.jsx: "ค่าลดหย่อนภาษี (แบบ ล.ย.01)")
+        // instead of inverting it — both pages are titles for the same object, ล.ย.01.
+        title="ตรวจสอบค่าลดหย่อนภาษี (แบบ ล.ย.01)"
         // The two audiences are looking at genuinely different tables, so they are told so. HR
         // sees one row per active employee (non-filers included, synthesized below); a viewer
         // without employee-list access sees only declarations that exist. Same honesty the
         // evidence column already practises for a viewer who cannot open attachments.
         subtitle={canListEmployees
           ? 'ใครมีค่าลดหย่อนอะไรบ้าง — ต่อการยื่นแบบ ล.ย.01 ของพนักงานทุกคน'
-          : 'เฉพาะแบบแจ้ง ล.ย.01 ที่ยื่นเข้ามาแล้ว — พนักงานที่ยังไม่ได้ยื่นจะไม่ปรากฏในตารางนี้'}
+          // Appended, not edited in place: the original sentence stays byte-identical (existing
+          // tests match it verbatim) and the new sentence states the SAME "no employee list"
+          // limitation now also hides a no-declaration employee with a live payroll allowance
+          // (GRANDFATHERED_APPLIED/GRANDFATHERED_EXPIRED — see this component's header comment).
+          : 'เฉพาะแบบแจ้ง ล.ย.01 ที่ยื่นเข้ามาแล้ว — พนักงานที่ยังไม่ได้ยื่นจะไม่ปรากฏในตารางนี้ '
+            + 'พนักงานที่มีค่าลดหย่อนเดิมจากก่อนระบบนี้แต่ไม่เคยยื่นแบบแจ้งก็จะไม่ปรากฏเช่นกัน'}
       />
 
       <FilterRow>
@@ -404,15 +518,35 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
         // Merges into the existing params instead of replacing them, so typing in the search box
         // no longer wipes the year/status the viewer just chose.
         onSearchChange={(value) => updateParams({ q: value })}
-        loading={declarationsQuery.isLoading || (canListEmployees && employeesQuery.isLoading)}
-        error={declarationsQuery.error}
-        onRetry={() => declarationsQuery.refetch()}
-        emptyState={{
-          icon: 'clipboard',
-          title: canListEmployees ? 'ไม่มีข้อมูลพนักงานในปีนี้' : 'ยังไม่มีแบบแจ้ง ล.ย.01 ในปีนี้',
-        }}
+        loading={declarationsQuery.isLoading || payrollAllowancesQuery.isLoading || (canListEmployees && employeesQuery.isLoading)}
+        error={declarationsQuery.error || payrollAllowancesQuery.error}
+        onRetry={() => { declarationsQuery.refetch(); payrollAllowancesQuery.refetch(); }}
+        // `rows` (pre-status-filter) vs `filteredRows` (post-filter, what DataTable actually got)
+        // restores DataTable's own "(กรองจาก N)" screen-reader clause (DataTable.jsx: FIX G/F7) for
+        // the zero-row case, same as TicketListPage's `unfilteredTotal={allDeals.length}`. It does
+        // NOT by itself change the visible empty-state text below — DataTable's EmptyState `title`
+        // never reads `unfilteredTotal` (confirmed by reading DataTable.jsx/EmptyState.jsx directly:
+        // the visible `<strong>` always renders `emptyState.title` verbatim, aria-hidden so it isn't
+        // announced a second time; only the separate sr-only live region gets the "(กรองจาก N)"
+        // clause). The conditional title/description below is the part that fixes what a SIGHTED
+        // viewer sees, same split TicketListPage.jsx already uses (`activeFilterCount > 0 ? ... :
+        // ...` alongside its own `unfilteredTotal`) — the two props are a pair, not alternatives.
+        unfilteredTotal={rows.length}
+        emptyState={statusFilter && rows.length > 0
+          ? {
+            // Reachable from any chip whose bucket is empty for this tax year (e.g. REJECTED with
+            // no rejections) — distinct from "no employee data at all", which used to render here
+            // and claim exactly that even though `rows` (every other status) was non-empty.
+            icon: 'clipboard',
+            title: 'ไม่พบพนักงานที่ตรงกับตัวกรองนี้',
+            description: `ลองเลือก "ทั้งหมด" เพื่อดูพนักงานทั้งหมด ${rows.length} คน`,
+          }
+          : {
+            icon: 'clipboard',
+            title: canListEmployees ? 'ไม่มีข้อมูลพนักงานในปีนี้' : 'ยังไม่มีแบบแจ้ง ล.ย.01 ในปีนี้',
+          }}
         renderExpanded={(row) => (row.employeeId === expandedEmployeeId
-          ? <TaxAllowanceBreakdown declaration={row.declaration} caps={caps} />
+          ? <TaxAllowanceBreakdown declaration={row.declaration} caps={caps} payrollAllowance={row.payrollAllowance} />
           : null)}
       />
 
