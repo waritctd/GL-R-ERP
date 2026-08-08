@@ -126,7 +126,7 @@ export function FormField({ label, htmlFor, id, error, hint, required = false, c
           */}
           <span className="form-field__label-text">
             {label}
-            {required ? <span className="field-required" aria-hidden="true"> *</span> : null}
+            {required ? <span className="field-required text-danger ml-0.5" aria-hidden="true"> *</span> : null}
           </span>
         </label>
       ) : null}

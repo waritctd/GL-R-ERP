@@ -977,7 +977,7 @@ export function PricingRequestCreateModal({
         </div>
 
         {info ? <div className="text-xs font-bold text-info" role="status">{info}</div> : null}
-        {error ? <div className="form-error" role="alert">{error}</div> : null}
+        {error ? <div className="py-2.5 px-3 rounded-md bg-danger-bg text-danger-dark font-bold text-[length:var(--text-sm)]" role="alert">{error}</div> : null}
       </div>
     </Modal>
   );

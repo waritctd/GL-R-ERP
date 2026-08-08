@@ -10,7 +10,7 @@ import { DataTable } from '../../components/common/DataTable.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { Panel } from '../../components/common/Layout.jsx';
+import { FormGrid, formGridSpan2, Panel } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -1233,7 +1233,8 @@ function AccountCreateFromDeal({
               behaviour change, out of scope for this migration) or a jsdom/test-only fix upstream;
               flagged as a followup rather than silently either weakening this gate everywhere or
               leaving two tests red. */}
-          <SafeForm className="form-grid" onSubmit={onSubmit} allowSubmitterlessSubmit>
+          <SafeForm onSubmit={onSubmit} allowSubmitterlessSubmit>
+            <FormGrid>
             <label>
               Invoice Number *
               <input value={createForm.invoiceNumber} onChange={(event) => updateCreateForm('invoiceNumber', event.target.value)} required />
@@ -1286,12 +1287,13 @@ function AccountCreateFromDeal({
               <input type="number" min="0" step="0.01" value={createForm.overpayment} onChange={(event) => updateCreateForm('overpayment', event.target.value)} />
             </label>
 
-            <div className="span-2 flex flex-wrap justify-end gap-[10px] mobile:flex-col-reverse">
+            <div className={`${formGridSpan2} flex flex-wrap justify-end gap-[10px] mobile:flex-col-reverse`}>
               <Button type="submit" variant="primary" className="mobile:!min-h-11 mobile:!w-full" disabled={saving || !loadedTicket}>
                 <Icon name="check" size={14} />
                 บันทึกและสร้างคำขอค่าคอม
               </Button>
             </div>
+            </FormGrid>
           </SafeForm>
         </div>
       </Panel>
@@ -1336,7 +1338,8 @@ function ManualCommissionForm({ form, onChange, repOptions, onSubmit, onCancel, 
   const isAdjustment = form.kind === 'ADJUSTMENT';
   return (
     <Panel flush title="เพิ่มค่าคอมด้วยตนเอง">
-      <SafeForm className="form-grid p-[18px]" onSubmit={onSubmit}>
+      <SafeForm className="p-[18px]" onSubmit={onSubmit}>
+        <FormGrid>
         <label>
           ประเภท *
           <select value={form.kind} onChange={(event) => onChange('kind', event.target.value)}>
@@ -1357,7 +1360,7 @@ function ManualCommissionForm({ form, onChange, repOptions, onSubmit, onCancel, 
           />
         </label>
         {repOptions.length > 0 && (
-          <label className="span-2">
+          <label className={formGridSpan2}>
             หรือเลือกจากรายชื่อ (รายการนี้มาจากดีลที่มีอยู่ อาจไม่ครบทุกคน)
             <select value="" onChange={(event) => { if (event.target.value) onChange('salesRepId', event.target.value); }}>
               <option value="">— เลือกพนักงานขาย —</option>
@@ -1387,7 +1390,7 @@ function ManualCommissionForm({ form, onChange, repOptions, onSubmit, onCancel, 
           รอบเดือน
           <input type="month" value={form.payrollMonth} onChange={(event) => onChange('payrollMonth', event.target.value)} />
         </label>
-        <label className="span-2">
+        <label className={formGridSpan2}>
           เหตุผล *
           <textarea
             rows={2}
@@ -1397,7 +1400,7 @@ function ManualCommissionForm({ form, onChange, repOptions, onSubmit, onCancel, 
           />
         </label>
 
-        <div className="span-2 flex flex-wrap justify-end gap-[10px] mobile:flex-col-reverse">
+        <div className={`${formGridSpan2} flex flex-wrap justify-end gap-[10px] mobile:flex-col-reverse`}>
           <Button type="button" variant="secondary" className="mobile:!min-h-11 mobile:!w-full" disabled={saving} onClick={onCancel}>
             ยกเลิก
           </Button>
@@ -1406,6 +1409,7 @@ function ManualCommissionForm({ form, onChange, repOptions, onSubmit, onCancel, 
             บันทึกค่าคอม
           </Button>
         </div>
+        </FormGrid>
       </SafeForm>
     </Panel>
   );

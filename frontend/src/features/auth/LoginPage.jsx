@@ -28,9 +28,9 @@ export function LoginPage({ onLogin, loading, error }) {
   }
 
   return (
-    <main className="login-screen">
-      <section className="login-panel">
-        <div className="login-brand">
+    <main className="min-h-[100dvh] grid place-items-center p-7 bg-bg-alt">
+      <section className="w-[min(440px,100%)] flex flex-col bg-surface border border-border-strong rounded-md overflow-hidden shadow-lg">
+        <div className="bg-surface-muted pt-7 px-[34px] pb-6 flex gap-3 items-start border-b border-border mobile:pt-6 mobile:px-6 mobile:pb-5">
           <span className="brand-mark">
             <i />
             <i />
@@ -38,21 +38,21 @@ export function LoginPage({ onLogin, loading, error }) {
             <i />
           </span>
           <span>
-            <strong>{PRODUCT_MARK}</strong>
-            <small>{PRODUCT_PORTAL_LABEL}</small>
+            <strong className="block text-[length:var(--text-xl)] leading-none">{PRODUCT_MARK}</strong>
+            <small className="text-text-muted text-[length:var(--text-xs)]">{PRODUCT_PORTAL_LABEL}</small>
           </span>
         </div>
 
-        <SafeForm className="login-form" onSubmit={submit}>
+        <SafeForm className="pt-7 px-[34px] pb-[34px] flex flex-col gap-[18px] mobile:pt-5 mobile:px-6 mobile:pb-7" onSubmit={submit}>
           <div>
-            <h1>เข้าสู่ระบบ</h1>
-            <p>เข้าสู่ระบบด้วยบัญชี GL&R</p>
+            <h1 className="m-0 text-[length:var(--text-2xl)] leading-[1.2] [overflow-wrap:anywhere] text-balance">เข้าสู่ระบบ</h1>
+            <p className="mt-1 mr-0 mb-0 ml-0 max-w-[72ch] text-text-muted [overflow-wrap:anywhere]">เข้าสู่ระบบด้วยบัญชี GL&R</p>
           </div>
 
           <label>
             อีเมล
-            <span className="input-with-icon">
-              <Icon name="mail" />
+            <span className="relative block">
+              <Icon name="mail" className="absolute left-3 top-1/2 -translate-y-1/2 text-text-faint" />
               <input
                 data-testid="login-email"
                 value={form.email}
@@ -61,14 +61,15 @@ export function LoginPage({ onLogin, loading, error }) {
                 inputMode="email"
                 autoComplete="email"
                 required
+                className="pl-10"
               />
             </span>
           </label>
 
           <label>
             รหัสผ่าน
-            <span className="input-with-icon">
-              <Icon name="lock" />
+            <span className="relative block">
+              <Icon name="lock" className="absolute left-3 top-1/2 -translate-y-1/2 text-text-faint" />
               <input
                 data-testid="login-password"
                 value={form.password}
@@ -76,11 +77,12 @@ export function LoginPage({ onLogin, loading, error }) {
                 type="password"
                 autoComplete="current-password"
                 required
+                className="pl-10"
               />
             </span>
           </label>
 
-          {error ? <div className="form-error">{error}</div> : null}
+          {error ? <div className="py-2.5 px-3 rounded-md bg-danger-bg text-danger-dark font-bold text-[length:var(--text-sm)]">{error}</div> : null}
 
           <Button type="submit" data-testid="login-submit" disabled={loading}>
             <Icon name="check" />
