@@ -496,12 +496,16 @@ export function AttendancePage({ user, showToast }) {
             </span>
           </button>
           {importOpen ? (
-            <SafeForm className="attendance-import-panel border-t border-border" onSubmit={importFile}>
-              <label className="attendance-import-device">
+            <SafeForm
+              className="grid grid-cols-[minmax(180px,1fr)_minmax(200px,1fr)_minmax(220px,1.2fr)_auto] gap-3 items-center bg-surface border border-border rounded-md p-3.5 nav-drawer:grid-cols-[1fr] border-t border-border"
+              onSubmit={importFile}
+            >
+              <label className="grid gap-1 text-[length:var(--text-xs)] font-semibold text-icon-muted">
                 เครื่องสแกน / สถานที่
                 <select
                   value={importDeviceCode}
                   onChange={(event) => setImportDeviceCode(event.target.value)}
+                  className="font-medium"
                 >
                   {devices.length === 0 ? (
                     <option value="">ไม่พบเครื่องสแกน</option>
@@ -530,7 +534,7 @@ export function AttendancePage({ user, showToast }) {
                 {importing ? 'กำลังนำเข้า' : 'นำเข้า'}
               </Button>
               {lastImport ? (
-                <span className="attendance-import-result">
+                <span className="block text-text-muted text-[length:var(--text-xs)] col-span-full font-bold">
                   {lastImport.status}: เพิ่ม {lastImport.inserted_punch_count} · ข้าม{' '}
                   {lastImport.skipped_punch_count} · ผิดพลาด {lastImport.error_count}
                 </span>

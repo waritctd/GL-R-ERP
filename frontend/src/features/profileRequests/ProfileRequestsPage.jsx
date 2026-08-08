@@ -82,7 +82,7 @@ export function ProfileRequestsPage({ profileRequests, onReview, showToast }) {
               <span data-label="ค่าใหม่"><strong>{request.newValue}</strong></span>
               <span data-label="วันที่">{formatShortDate(request.requestedAt)}</span>
               {request.status === 'pending' ? (
-                <RowActions>
+                <RowActions className="mobile:flex-wrap">
                   <Button
                     type="button"
                     variant="danger"
