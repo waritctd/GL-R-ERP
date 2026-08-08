@@ -41,9 +41,9 @@ class OvertimeServiceTest {
     // stay about the overtime rules. The real sync is covered by the integration tests.
     private final AttendanceDailyService attendanceDailyService = mock(AttendanceDailyService.class);
     private final ManagerApproverRepository managerApproverRepository = mock(ManagerApproverRepository.class);
-    // Defaults every date to "not a holiday" and every year to "no rows at all" (Mockito's boolean
-    // default is false) unless a test stubs a specific date/year -- i.e. every case in this class
-    // gets WORKDAY/1.50x with no claim-validation flag unless it opts in.
+    // Defaults every date to "not a holiday" (Mockito's boolean default is false) unless a test
+    // stubs a specific date -- i.e. every case in this class gets WORKDAY/1.50x unless it opts in.
+    // Year coverage is handled separately by assumeTheHolidayCalendarIsLoadedForTheYear below.
     private final HolidayCalendar holidayCalendar = mock(HolidayCalendar.class);
     private final OvertimeService overtimeService = new OvertimeService(
         overtimeRepository,
@@ -64,6 +64,23 @@ class OvertimeServiceTest {
     @BeforeEach
     void assumeAManagerStageExists() {
         when(managerApproverRepository.hasManagerApprover(anyLong())).thenReturn(true);
+    }
+
+    /**
+     * A Mockito boolean stub defaults to {@code false}, which here would mean "the calendar has
+     * never been loaded for this year" and would attach {@code
+     * OvertimeService#resolveDayTypeSubmitNote}'s unverified-calendar flag to every submission in
+     * this class that does not stub a work date's year explicitly -- most of which are about
+     * something else entirely (retroactive windows, notifications, approval routing) and would
+     * break on an unrelated, incidental non-null {@code calculation_note}. Default to {@code true}
+     * so each test gets an ordinary, unflagged submission unless it opts in to the unloaded-calendar
+     * scenario by overriding this stub for the relevant year (see {@code
+     * holidayClaimWithNoCalendarDataForTheYearIsAcceptedAndFlagged} and the {@code
+     * *WithNoCalendarDataForTheYearIsAcceptedAndFlagged} tests below).
+     */
+    @BeforeEach
+    void assumeTheHolidayCalendarIsLoadedForTheYear() {
+        when(holidayCalendar.hasHolidaysForYear(anyInt())).thenReturn(true);
     }
 
     @Test
@@ -238,6 +255,10 @@ class OvertimeServiceTest {
      * The other claim-validation branch: the calendar has never been loaded for the work date's year
      * at all, so a HOLIDAY claim can be neither confirmed nor refused. It is accepted (money still
      * comes from deriveDayType alone, i.e. WORKDAY here) but flagged in calculation_note for HR.
+     *
+     * <p>See {@link #workdayClaimWithNoCalendarDataForTheYearIsAcceptedAndFlagged} and {@link
+     * #blankClaimWithNoCalendarDataForTheYearIsAcceptedAndFlagged} below for the non-HOLIDAY claims
+     * -- the flag is not conditioned on what was claimed, only on whether the calendar can speak.
      */
     @Test
     void holidayClaimWithNoCalendarDataForTheYearIsAcceptedAndFlagged() {
@@ -256,6 +277,90 @@ class OvertimeServiceTest {
         verify(overtimeRepository).create(
             eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY),
             eq(workDate.withDayOfMonth(1)), anyString());
+    }
+
+    /**
+     * THE exact gap this fix closes. Before this change, {@code validateDayTypeClaim} returned
+     * {@code null} the instant the claim was anything other than HOLIDAY -- so an unloaded
+     * calendar's silence was flagged ONLY when the caller happened to claim HOLIDAY, which {@code
+     * OvertimePanel.jsx}'s submit dropdown never defaults to. A WORKDAY claim in a year the
+     * calendar has zero rows for must now ALSO carry the flag: it is {@code deriveDayType}'s own
+     * WORKDAY default that is unverified here, not the claim. Written wrong-way-round on purpose:
+     * asserts the note is PRESENT where the pre-fix behaviour left it absent.
+     */
+    @Test
+    void workdayClaimWithNoCalendarDataForTheYearIsAcceptedAndFlagged() {
+        LocalDate workDate = LocalDate.now().plusDays(4);
+        SubmitOvertimeRequest request = claimSubmit(workDate, "WORKDAY");
+        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
+        when(holidayCalendar.hasHolidaysForYear(workDate.getYear())).thenReturn(false);
+        when(overtimeRepository.create(
+                eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY),
+                eq(workDate.withDayOfMonth(1)), anyString()))
+            .thenReturn(59L);
+        when(overtimeRepository.findById(59L)).thenReturn(Optional.of(requestDto(59L, 10L, "SUBMITTED")));
+
+        overtimeService.submit(request, user("employee", 10L));
+
+        verify(overtimeRepository).create(
+            eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY),
+            eq(workDate.withDayOfMonth(1)), anyString());
+    }
+
+    /**
+     * The other half of the exact gap: {@code OvertimePanel.jsx}'s dropdown defaults to WORKDAY,
+     * but a caller can also submit with {@code dayType} entirely blank/{@code null} ("no claim
+     * made" -- see {@code SubmitOvertimeRequest}'s Javadoc). Even with NO claim at all, a year the
+     * calendar has zero rows for must still be flagged: the derivation is unverified regardless of
+     * whether the caller said anything.
+     */
+    @Test
+    void blankClaimWithNoCalendarDataForTheYearIsAcceptedAndFlagged() {
+        LocalDate workDate = LocalDate.now().plusDays(4);
+        SubmitOvertimeRequest request = claimSubmit(workDate, null);
+        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
+        when(holidayCalendar.hasHolidaysForYear(workDate.getYear())).thenReturn(false);
+        when(overtimeRepository.create(
+                eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY),
+                eq(workDate.withDayOfMonth(1)), anyString()))
+            .thenReturn(62L);
+        when(overtimeRepository.findById(62L)).thenReturn(Optional.of(requestDto(62L, 10L, "SUBMITTED")));
+
+        overtimeService.submit(request, user("employee", 10L));
+
+        verify(overtimeRepository).create(
+            eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY),
+            eq(workDate.withDayOfMonth(1)), anyString());
+    }
+
+    /**
+     * Proves the flag is not just always-on: once the calendar HAS data for the work date's year, an
+     * ordinary WORKDAY claim carries NO note at all -- same as before this fix. Without this test,
+     * "the note now also fires for WORKDAY/blank claims in an unloaded year" would be
+     * indistinguishable from "the note fires unconditionally, regardless of the calendar" -- see
+     * this class's {@code assumeTheHolidayCalendarIsLoadedForTheYear} default, made explicit here
+     * rather than relied on implicitly so this test still documents its own precondition.
+     */
+    @Test
+    void workdayClaimIsAcceptedWithNoNoteWhenTheCalendarIsLoadedForTheYear() {
+        LocalDate workDate = LocalDate.now().plusDays(4);
+        SubmitOvertimeRequest request = claimSubmit(workDate, "WORKDAY");
+        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
+        when(holidayCalendar.hasHolidaysForYear(workDate.getYear())).thenReturn(true);
+        // isHoliday defaults to false (Mockito's boolean default) -- an ordinary day a loaded
+        // calendar simply does not list, same fixture shape as
+        // divisionManagerSubmissionResolvesWorkdayWhenTheCalendarHasNoEntry above.
+        when(overtimeRepository.create(
+                eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY),
+                eq(workDate.withDayOfMonth(1)), isNull()))
+            .thenReturn(63L);
+        when(overtimeRepository.findById(63L)).thenReturn(Optional.of(requestDto(63L, 10L, "SUBMITTED")));
+
+        overtimeService.submit(request, user("employee", 10L));
+
+        verify(overtimeRepository).create(
+            eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY),
+            eq(workDate.withDayOfMonth(1)), isNull());
     }
 
     @Test
@@ -637,7 +742,7 @@ class OvertimeServiceTest {
         return new SubmitOvertimeRequest(null, workDate, startAt, startAt.plusHours(2), "WORKDAY", reason);
     }
 
-    /** A self-filed (employeeId null) future-dated request carrying the given {@code dayType} claim -- for exercising validateDayTypeClaim directly. */
+    /** A self-filed (employeeId null) future-dated request carrying the given {@code dayType} claim -- for exercising resolveDayTypeSubmitNote directly. */
     private SubmitOvertimeRequest claimSubmit(LocalDate workDate, String dayTypeClaim) {
         OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
         return new SubmitOvertimeRequest(null, workDate, startAt, startAt.plusHours(2), dayTypeClaim, "Urgent delivery");
