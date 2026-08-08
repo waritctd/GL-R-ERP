@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LeaveRequestPage } from './LeaveRequestPage.jsx';
@@ -19,6 +19,10 @@ vi.mock('../../api/index.js', () => ({
       create: vi.fn(),
       cancel: vi.fn(),
       preview: vi.fn(),
+      // #leave-holiday-visibility: step 2 now reads this unconditionally (the วันหยุดที่จะถึง
+      // panel AND the per-selection calendar-context note both call it) -- every test that
+      // reaches step 2 needs a default resolved value, or both queries error out silently.
+      calendarContext: vi.fn(),
     },
   },
 }));
@@ -121,6 +125,10 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     api.leave.preview.mockImplementation((payload) => Promise.resolve(
       payload?.startDate ? approvedPreview(payload) : dateless_ok_preview,
     ));
+    // Default: no holidays anywhere -- keeps every test below on the empty-state วันหยุดที่จะถึง
+    // panel and the "all working days" calendar-context note, uninvolved with what each test
+    // actually asserts on. The holiday-visibility cases below override this per-test.
+    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
   });
 
   it('step 1: a categorically-blocked type is disabled and shows the real backend reason', async () => {
@@ -217,6 +225,77 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
       expect.objectContaining({ depth: 'QUICK' }),
       expect.anything(),
     ));
+  });
+
+  // #leave-holiday-visibility (PR 3): holidays are now visible BEFORE a date is picked, not only
+  // after -- this panel sits above the date inputs and never touches startDate/endDate at all, so
+  // rendering it here (with no date field ever changed by this test) is itself the proof it does
+  // not depend on what the employee has, or has not yet, chosen.
+  it('step 2: shows the วันหยุดที่จะถึง panel above the date inputs, so holidays are visible before picking a date', async () => {
+    api.leave.calendarContext.mockResolvedValue({
+      calendarContext: {
+        holidays: [{ holidayDate: '2026-08-15', nameTh: 'วันหยุดทดสอบ' }],
+        // Empty on purpose: the reactive per-selection note further down only lists holiday
+        // NAMES once nonWorkingDates is non-empty (see that block's own comment) -- keeping it
+        // empty here means any "วันหยุดทดสอบ" on screen can only be coming from the panel.
+        nonWorkingDates: [],
+      },
+    });
+
+    await goToStep2ForVacation();
+
+    const panelHeading = await screen.findByRole('heading', { name: 'วันหยุดที่จะถึง' });
+    expect(panelHeading.closest('section').textContent).toMatch(/วันหยุดทดสอบ/);
+  });
+
+  // #leave-holiday-visibility (PR 3): real วันหยุดบริษัท names run up to 149 chars
+  // (MOCK_HOLIDAY_DATES in mockApi.js is a verbatim copy of production's hr.holiday -- the reason
+  // V129 widened name_th from VARCHAR(120) to TEXT). The reactive per-selection note used to
+  // interpolate `${formatDate(...)} (${nameTh})` straight into one run-on sentence, comma-joined
+  // with every other holiday in range -- fine at a hand-written fixture's 9-17 chars, an
+  // unreadable wall of text at production length with two holidays in one selected range.
+  it('step 2: a multi-day range with two long company-holiday names renders each on its own line, not a comma-joined wall of text', async () => {
+    const LONG_NAME_1 = 'ชดเชยวันคล้ายวันพระบรมราชสมภพ พระบาทสมเด็จพระบรมชนกาธิเบศร มหาภูมิพลอดุลยเดชมหาราช บรมนาถบพิตร วันชาติ และวันพ่อแห่งชาติ (วันเสาร์ที่ 5 ธันวาคม 2569)';
+    const LONG_NAME_2 = 'วันพระบาทสมเด็จพระพุทธยอดฟ้าจุฬาโลกมหาราช และวันที่ระลึกมหาจักรีบรมราชวงศ์';
+    const start = '2099-12-07';
+    const end = '2099-12-08';
+
+    // Keyed on params so only the note's own SELECTED-range query (start..end) returns these
+    // holidays -- the วันหยุดที่จะถึง panel's separate ~90-day-forward query stays empty, which
+    // isolates this assertion to the note under test instead of also matching the panel's own
+    // (legitimately duplicate, per OvertimePage.test.jsx's own precedent) render of the same
+    // names.
+    api.leave.calendarContext.mockImplementation((params) => Promise.resolve({
+      calendarContext: params?.from === start && params?.to === end
+        ? {
+          holidays: [
+            { holidayDate: start, nameTh: LONG_NAME_1 },
+            { holidayDate: end, nameTh: LONG_NAME_2 },
+          ],
+          nonWorkingDates: [start, end],
+        }
+        : { holidays: [], nonWorkingDates: [] },
+    }));
+
+    await goToStep2ForVacation();
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: start } });
+    fireEvent.change(screen.getByLabelText(/วันที่สิ้นสุด/), { target: { value: end } });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('calendar-context-note').textContent).toMatch(LONG_NAME_1);
+    });
+    const note = screen.getByTestId('calendar-context-note');
+
+    // Each long name is its OWN element (an exact-text match only succeeds if some element's
+    // full text is exactly this string, not a substring of a longer run-on sentence) sitting in
+    // its own list row -- never comma-joined into the same element as the other.
+    const firstNameEl = within(note).getByText(LONG_NAME_1);
+    const secondNameEl = within(note).getByText(LONG_NAME_2);
+    expect(firstNameEl.closest('li')).not.toBeNull();
+    expect(secondNameEl.closest('li')).not.toBeNull();
+    expect(firstNameEl.closest('li')).not.toBe(secondNameEl.closest('li'));
+    expect(firstNameEl.closest('li').textContent).not.toMatch(LONG_NAME_2);
+    expect(secondNameEl.closest('li').textContent).not.toMatch(LONG_NAME_1);
   });
 
   it('full happy path: sends the same create() payload shape the pre-A2 form sent, via step 3', async () => {

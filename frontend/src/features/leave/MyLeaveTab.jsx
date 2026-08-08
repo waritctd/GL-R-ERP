@@ -17,8 +17,9 @@ import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { UpcomingHolidays } from '../../components/common/UpcomingHolidays.jsx';
 import { downloadBlob } from '../../utils/download.js';
-import { leaveStatusLabel as statusInfo } from '../../utils/format.js';
+import { addDaysIso, leaveStatusLabel as statusInfo } from '../../utils/format.js';
 import {
   formatDateRange, formatDays, monthStartIso, todayIso, yearFrom,
 } from './leaveFormatting.js';
@@ -551,6 +552,14 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
     cancelMutation.mutate({ id, reviewerNote });
   }
 
+  // Upcoming-holidays panel: a fixed ~90-day forward window from today, same convention
+  // OvertimePanel.jsx's own call and the leave composer's step 2 both use, so "what's coming up"
+  // reads identically everywhere it appears. Distinct from "ปฏิทินวันลา" below, which lists the
+  // ACTOR'S OWN leave days (requests), not company holidays -- see UpcomingHolidays.jsx's own
+  // doc comment on why it stays feature-agnostic rather than growing a second copy here.
+  const holidayWindowFrom = todayIso();
+  const holidayWindowTo = addDaysIso(holidayWindowFrom, 90);
+
   return (
     <>
       <CompactStatRow
@@ -652,6 +661,12 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
           </span>
         ) : null}
       </SafeForm>
+
+      {/* Holidays visible up front, not just after picking dates in the composer (this PR's own
+          goal) -- alongside "ปฏิทินวันลา" below rather than replacing or disturbing it: that panel
+          is the actor's OWN leave days, this one is company holidays, and both are "what's coming
+          up at a glance" panels that belong next to each other. */}
+      <UpcomingHolidays from={holidayWindowFrom} to={holidayWindowTo} />
 
       <Panel title="ปฏิทินวันลา">
         <div className="leave-calendar-list">
