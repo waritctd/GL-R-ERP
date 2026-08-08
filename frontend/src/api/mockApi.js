@@ -3143,9 +3143,9 @@ function validateOvertimeRetroactiveWindow(payload) {
 // A Map (date -> nameTh), not a bare Set: `leave.calendarContext` below
 // (#ot-holiday-visibility, PR 2) needs the same NAME `LeaveCalendarHolidayDto` carries, and a
 // second, separate name lookup risked drifting out of sync with this one (a date added here
-// without a matching name there). `.has()` -- all `deriveOvertimeDayType`/
-// `validateOvertimeDayTypeClaim` below have ever needed -- means exactly the same thing on a Map
-// as it did on the Set it replaces, so neither of those changes at all.
+// without a matching name there). `.has()` -- all `suggestOvertimeDayType`/
+// `resolveOvertimeDayTypeSubmitNote` below have ever needed -- means exactly the same thing on a
+// Map as it did on the Set it replaces, so neither of those changes at all.
 // COPIED VERBATIM FROM PRODUCTION, 2026-08-08: all 19 rows of `hr.holiday` (every one source=BANK,
 // i.e. fetched from the BOT financial-institutions-holidays feed). Do not "tidy" these names.
 //
@@ -3194,43 +3194,87 @@ const MOCK_HOLIDAY_DATES = new Map([
 // real service (an empty-for-this-date calendar vs. a calendar nobody has loaded yet).
 const MOCK_HOLIDAY_LOADED_YEARS = new Set([2026]);
 
-// Mirrors OvertimeService#deriveDayType -- the ONLY source of truth for day_type /
-// pay_rate_multiplier, at both create() and approve() below. NEVER read a caller-supplied
-// dayType for pay; see validateOvertimeDayTypeClaim for how that field is used instead (a claim
-// to validate, never a pay input).
+// Mirrors the plain Sat/Sun arithmetic `leave.calendarContext` above already uses for
+// `nonWorkingDates` -- NOT schedule-aware (no OPS_6D six-day awareness, no
+// hr.work_schedule_assignment equivalent). Reproduced here rather than shared, because
+// suggestOvertimeDayType below takes a single ISO date, not a [from, to] range. LOCAL date
+// components via `new Date(...).getDay()` on a bare (no offset) ISO string -- same technique,
+// same caveat as calendarContext's own loop above.
+function isWeekendIso(dateIso) {
+  const day = new Date(`${dateIso}T00:00:00`).getDay();
+  return day === 0 || day === 6;
+}
+
+// Mirrors OvertimeService#suggestDayType -- the system's SUGGESTION only, consulted at create()
+// and as approve()'s fallback when the approver supplies no override below. NEVER read a
+// caller-supplied dayType directly for pay; see resolveOvertimeDayTypeSubmitNote for how the
+// employee's field is used instead (compared against this suggestion, never a pay input by
+// itself), and approve()'s own payload.dayType handling for the ONE field that may set pay.
 //
 // P0 THIS CLOSES IN MOCK MODE TOO (issue #199's "mock more permissive than production" shape --
 // see CLAUDE.md "Mock API contract"): this file used to do `dayType: payload.dayType || 'WORKDAY'`
 // at create() and `request.dayType === 'HOLIDAY' ? 3 : 1.5` at approve(), so under
 // VITE_USE_MOCKS=true a caller could self-declare HOLIDAY (3.00x) on an ordinary day and be paid
-// double, with no way to reproduce the real service's 400. This mock is NOT authoritative --
-// verify day-type behaviour against OvertimeService, never this file (CLAUDE.md) -- but it must
-// not be MORE permissive than the service it stands in for, either.
-function deriveOvertimeDayType(workDate) {
-  return MOCK_HOLIDAY_DATES.has(workDate) ? 'HOLIDAY' : 'WORKDAY';
+// double, with no way to reproduce the real service's derivation. This mock is NOT authoritative
+// -- verify day-type behaviour against OvertimeService, never this file (CLAUDE.md) -- but it
+// must not be MORE permissive than the service it stands in for, either.
+//
+// ⚠️ WIDENED (feat/ot-nonworkday-rate-suggestion, renamed from deriveOvertimeDayType) to also
+// suggest HOLIDAY for a weekend, folding in a non-workday alongside a recorded holiday -- but
+// ONLY as plain Sat/Sun arithmetic (isWeekendIso above), NOT TieredWorkScheduleResolver's real
+// EMPLOYEE > DEPARTMENT > DIVISION > company-default tiering. This mock has no six-day (OPS_6D)
+// schedule concept at all -- an OPS_6D employee's Saturday is a WORKDAY in production but reads
+// as a suggested HOLIDAY here. Per CLAUDE.md ("where the mock mirrors a backend computation"),
+// mock-driven tests are NOT independent evidence for this rule -- do not read a mock-mode render
+// of this as proof for an OPS_6D employee (e.g. จำเนียร, 10051); verify against
+// OvertimeDayTypeDerivedFromCalendarIntegrationTest's real TieredWorkScheduleResolver-backed
+// cases instead.
+function suggestOvertimeDayType(workDate) {
+  return MOCK_HOLIDAY_DATES.has(workDate) || isWeekendIso(workDate) ? 'HOLIDAY' : 'WORKDAY';
 }
 
-// Mirrors OvertimeService#validateDayTypeClaim's decision table exactly: a HOLIDAY claim the mock
-// calendar can actively disprove (year "loaded", date not in the set) is refused outright (400,
-// naming the date). A claim it cannot yet corroborate (year not in MOCK_HOLIDAY_LOADED_YEARS) is
-// accepted but flagged for HR, matching OvertimeService's DAY_TYPE_CLAIM_UNVERIFIED_NOTE_PREFIX
-// note. Either way the claim never reaches dayType/multiplier -- deriveOvertimeDayType alone
-// decides those.
-function validateOvertimeDayTypeClaim(claim, workDate) {
-  if (!claim) return null;
-  const normalized = String(claim).trim().toUpperCase();
+// Parses `value` as WORKDAY/HOLIDAY (case-insensitive), or null for "nothing supplied"
+// (blank/undefined/null). Throws 400 for anything non-blank that isn't recognised -- a 400 about
+// SYNTAX, not about the value being wrong. Pure parsing shared by BOTH the submit-time claim
+// (resolveOvertimeDayTypeSubmitNote, untrusted for pay) and the approve-time override (approve()
+// below, trusted AS the pay input) -- mirrors OvertimeService#parseOvertimeDayType's identical
+// dual-use: the trust boundary lives at the CALL SITE, not in this parser.
+function parseOvertimeDayTypeValue(value) {
+  if (!value) return null;
+  const normalized = String(value).trim().toUpperCase();
   if (!['WORKDAY', 'HOLIDAY'].includes(normalized)) {
     fail('ประเภทวันทำงานล่วงเวลาไม่ถูกต้อง', 400);
   }
-  if (normalized !== 'HOLIDAY') return null;
-  const year = Number(workDate.slice(0, 4));
-  if (!MOCK_HOLIDAY_LOADED_YEARS.has(year)) {
-    return `[รอตรวจสอบ] แจ้ง HOLIDAY แต่ปี ${year} ไม่มีปฏิทิน บันทึกเป็น WORKDAY โปรดตรวจสอบ`;
+  return normalized;
+}
+
+function overtimeDayTypeLabel(value) {
+  return value === 'HOLIDAY' ? 'วันหยุด (3x)' : 'วันทำงานปกติ (1.5x)';
+}
+
+// Mirrors OvertimeService#resolveDayTypeSubmitNote's decision table (feat/ot-nonworkday-rate-
+// suggestion narrowed and extended this from the original P0 fix's shape -- see git history for
+// the removed outright refusal of a HOLIDAY claim the calendar could actively disprove; owner
+// ruling 2026-08-08 replaced that refusal with a flag). Two independent flags can fire, neither a
+// rejection:
+//  1. the suggestion is WORKDAY (i.e. not a recorded holiday AND not a weekend) AND the calendar
+//     year is not "loaded" -- an unrecorded public holiday could still be hiding on this date. A
+//     suggestion of HOLIDAY is never unverified in this sense (schedule/holiday already certain);
+//  2. the claim (if any) disagrees with the suggestion, in EITHER direction -- accepted either
+//     way, never refused.
+// Either way the claim never reaches dayType/multiplier -- suggestOvertimeDayType (or the
+// approver's own override at approve()) alone decides those.
+function resolveOvertimeDayTypeSubmitNote(claim, workDate) {
+  const claimed = parseOvertimeDayTypeValue(claim);
+  const suggested = suggestOvertimeDayType(workDate);
+  const notes = [];
+  if (suggested === 'WORKDAY' && !MOCK_HOLIDAY_LOADED_YEARS.has(Number(workDate.slice(0, 4)))) {
+    notes.push(`[รอตรวจสอบ] ปฏิทินวันหยุดปี ${workDate.slice(0, 4)} ยังไม่ได้โหลด อัตรา OT อาจไม่ถูกต้อง โปรดตรวจสอบ`);
   }
-  if (!MOCK_HOLIDAY_DATES.has(workDate)) {
-    fail(`วันที่ ${workDate} ไม่ใช่วันหยุดตามปฏิทินบริษัท จึงไม่สามารถแจ้งว่าเป็นวันหยุด (HOLIDAY) ได้`, 400);
+  if (claimed && claimed !== suggested) {
+    notes.push(`[ไม่ตรงกับที่ระบบแนะนำ] พนักงานระบุ ${overtimeDayTypeLabel(claimed)} แต่ระบบแนะนำ ${overtimeDayTypeLabel(suggested)} โปรดตรวจสอบก่อนอนุมัติ`);
   }
-  return null;
+  return notes.length === 0 ? null : notes.join(' ');
 }
 
 function buildOvertimeRecord(record) {
@@ -3251,6 +3295,10 @@ function buildOvertimeRecord(record) {
     // it. Omitting it here would leave the field undefined, which the panel reads as "has a manager
     // stage" -- the CEO would then never see the button on a manager-less request under mocks.
     hasManagerApprover: hasManagerApproverFor(record.employeeId),
+    // feat/ot-nonworkday-rate-suggestion: computed fresh on every read, mirroring
+    // OvertimeRequestDto#suggestedDayType -- never persisted, never a pay input by itself. See
+    // suggestOvertimeDayType's own comment for the OPS_6D caveat this mock cannot honour.
+    suggestedDayType: suggestOvertimeDayType(record.workDate),
     ...pendingApproverForOvertime(record),
   };
 }
@@ -4843,8 +4891,8 @@ export const api = {
     // #ot-holiday-visibility (PR 2): `holidays` USED TO be unconditionally `[]` -- that made the
     // OT verdict badge, UpcomingHolidays, and the leave composer's own holiday note all
     // unverifiable under VITE_USE_MOCKS=true, since every one of them reads this field. Now
-    // sourced from MOCK_HOLIDAY_DATES (the same fixed calendar deriveOvertimeDayType/
-    // validateOvertimeDayTypeClaim already read), filtered to [from, to] -- still NOT the real
+    // sourced from MOCK_HOLIDAY_DATES (the same fixed calendar suggestOvertimeDayType/
+    // resolveOvertimeDayTypeSubmitNote already read), filtered to [from, to] -- still NOT the real
     // persisted hr.holiday store (that honesty belongs to the holidays.list() admin-CRUD stub
     // below, which stays an empty stub on purpose; see its own comment).
     // Do NOT read a mock-mode render of this as evidence a six-day employee or a real holiday
@@ -4954,13 +5002,17 @@ export const api = {
       validateOvertimeRetroactiveWindow(payload);
       const plannedMinutes = overtimeMinutesBetween(payload.plannedStartAt, payload.plannedEndAt);
       validateOvertimePlannedWindowSpan(payload);
-      // SECURITY: payload.dayType is unauthenticated client input and is deliberately never used
-      // to set pay -- mirrors OvertimeService#submit's identical comment. day_type/multiplier must
-      // always be DERIVED from the calendar (deriveOvertimeDayType), never DECLARED by the caller.
-      // The claim is still validated (validateOvertimeDayTypeClaim), only to refuse an
-      // actively-disprovable claim or flag an unverifiable one -- either way it never feeds dayType.
-      const submitTimeNote = validateOvertimeDayTypeClaim(payload.dayType, payload.workDate);
-      const dayType = deriveOvertimeDayType(payload.workDate);
+      // SECURITY: payload.dayType is the employee's REQUEST, unauthenticated client input, and is
+      // deliberately never used to set pay -- mirrors OvertimeService#submit's identical comment.
+      // day_type/multiplier at create() are always DERIVED (suggestOvertimeDayType), never
+      // DECLARED by the caller, at every stage -- feat/ot-nonworkday-rate-suggestion changed WHO
+      // may later override the suggestion (the APPROVER, at approve() below, from an actor already
+      // authorized to approve), never this field. The claim is still compared against the
+      // suggestion (resolveOvertimeDayTypeSubmitNote) to flag a disagreement for the approver --
+      // never to refuse the submit (that refusal was REMOVED, owner ruling 2026-08-08) and never
+      // to feed dayType directly.
+      const submitTimeNote = resolveOvertimeDayTypeSubmitNote(payload.dayType, payload.workDate);
+      const dayType = suggestOvertimeDayType(payload.workDate);
       const id = Math.max(0, ...db.overtimeRequests.map((item) => item.id)) + 1;
       const now = new Date().toISOString();
       const request = {
@@ -5009,12 +5061,13 @@ export const api = {
             // state the outcome positively rather than naming the missing manager stage.
             fail('คำขอนี้ต้องให้ CEO พิจารณาเท่านั้น', 403);
           }
-          // Re-derived and FROZEN here, from the calendar, not carried over from whatever create()
-          // stored -- mirrors OvertimeService#calculate, invoked by the real
-          // ceoDirectApprove AFTER its own authorization check (requireCeoForManagerlessRequest),
-          // same ordering kept here so a REJECTED approve attempt never mutates dayType as a
-          // side effect. See deriveOvertimeDayType's comment for why this is the only source.
-          request.dayType = deriveOvertimeDayType(request.workDate);
+          // The APPROVER's decision (feat/ot-nonworkday-rate-suggestion) -- parsed only AFTER the
+          // authorization check above, mirroring OvertimeService#ceoDirectApprove's own ordering
+          // (calculate() runs AFTER requireCeoForManagerlessRequest), so a REJECTED approve
+          // attempt never mutates dayType as a side effect. Falls back to the suggestion when
+          // absent/blank -- see suggestOvertimeDayType's comment for that default source.
+          const approverDayType = parseOvertimeDayTypeValue(payload.dayType);
+          request.dayType = approverDayType || suggestOvertimeDayType(request.workDate);
           const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
           request.status = 'APPROVED';
           request.actualMinutes = request.actualMinutes ?? request.plannedMinutes;
@@ -5030,9 +5083,10 @@ export const api = {
           return delay({ request: buildOvertimeRecord(request) });
         }
         if (!canReviewOvertime(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-        // Same re-derive-after-authz ordering as the manager-less branch above, matching
+        // Same authorized-decision ordering as the manager-less branch above, matching
         // OvertimeService.managerApprove calling calculate() after requireManager().
-        request.dayType = deriveOvertimeDayType(request.workDate);
+        const approverDayType = parseOvertimeDayTypeValue(payload.dayType);
+        request.dayType = approverDayType || suggestOvertimeDayType(request.workDate);
         const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
         request.status = 'MANAGER_APPROVED';
         request.actualMinutes = request.actualMinutes ?? request.plannedMinutes;
@@ -5048,6 +5102,10 @@ export const api = {
       }
       if (request.status === 'MANAGER_APPROVED') {
         if (user.role !== 'ceo') fail('เฉพาะ CEO เท่านั้นที่สามารถอนุมัติคำขอทำงานล่วงเวลาที่หัวหน้างานอนุมัติแล้วได้', 403);
+        // Freeze point does not move (feat/ot-nonworkday-rate-suggestion): payload.dayType is
+        // DELIBERATELY never read on this branch -- day_type/multiplier were already frozen at
+        // the SUBMITTED->MANAGER_APPROVED step above, and this final CEO sign-off inherits that
+        // decision, mirroring OvertimeService#ceoApprove (which never re-derives either).
         request.status = 'APPROVED';
         request.ceoApprovedBy = user.employeeId;
         request.ceoApprovedAt = now;
