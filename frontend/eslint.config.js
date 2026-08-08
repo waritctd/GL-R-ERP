@@ -4,8 +4,9 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import jsxA11y from 'eslint-plugin-jsx-a11y';
 import globals from 'globals';
 
-// Extracted so the two exemption blocks at the bottom can drop ONE of these rules
-// without silently losing the other.
+// Extracted so the exemption block at the bottom can drop ONE of these rules without
+// silently losing the other. (`no-restricted-syntax: 'off'` would drop both, which is how
+// a file ends up quietly exempt from a guard nobody meant to exempt it from.)
 const RAW_FORM_RULE = {
   selector: 'JSXOpeningElement[name.name="form"]',
   message:
@@ -107,20 +108,6 @@ export default [
     files: ['src/components/common/SafeForm.jsx'],
     rules: {
       'no-restricted-syntax': ['error', ...INCLUSIVE_BREAKPOINT_RULES],
-    },
-  },
-  {
-    // TEMPORARY exemption -- delete this block once PR #587 (feat/ot-holiday-visibility) lands.
-    // The 2026-08-08 migration converted all 183 other `max-[Npx]:` call sites onto the inclusive
-    // variants but deliberately skipped this file: #587 is adding ~123 lines to it concurrently and
-    // it is the densest call site in the app (10 occurrences), so converting it here would have
-    // guaranteed a hand-resolved conflict. Its 10 occurrences still carry the off-by-one described
-    // above -- including FORM_GRID_CLASS, which stays 2-column at exactly 720px. Convert them and
-    // remove this block; breakpointVariants.test.js pins the exemption to this exact file and will
-    // fail if it is widened.
-    files: ['src/features/overtime/OvertimePanel.jsx'],
-    rules: {
-      'no-restricted-syntax': ['error', RAW_FORM_RULE],
     },
   },
 ];

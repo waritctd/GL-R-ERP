@@ -27,12 +27,11 @@ import { describe, it, expect } from 'vitest';
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 const INDEX_CSS = fs.readFileSync(path.join(SRC, 'index.css'), 'utf8');
 
-// The one file still carrying the old variant, and the only permitted exemption. PR #587
-// (feat/ot-holiday-visibility) is concurrently adding ~123 lines to it, and at 10 occurrences it is
-// the densest call site in the app, so the migration skipped it rather than force a hand-resolved
-// conflict. Delete this entry and the matching eslint.config.js block together when #587 lands.
-const EXEMPT = ['features/overtime/OvertimePanel.jsx'];
-
+// There is deliberately NO exemption list. `OvertimePanel.jsx` briefly held one while PR #587
+// (feat/ot-holiday-visibility) was adding ~123 lines to it concurrently; that PR merged, its 10
+// occurrences were converted in the same commit as this, and the exemption was deleted along with
+// its ESLint counterpart. Do not reintroduce an allowlist here — the assertion below is deliberately
+// absolute, because "one temporary exception" is how a codebase-wide defect grows back.
 const EXCLUSIVE_VARIANT = new RegExp(`max-\\[\\d+px\\]${':'}`);
 
 function sourceFiles(dir, out = []) {
@@ -45,19 +44,13 @@ function sourceFiles(dir, out = []) {
 }
 
 describe('inclusive breakpoint variants', () => {
-  it('has no exclusive max-width variant left in src, outside the documented exemption', () => {
+  it('has no exclusive max-width variant anywhere in src', () => {
     const offenders = sourceFiles(SRC)
       .filter((f) => EXCLUSIVE_VARIANT.test(fs.readFileSync(f, 'utf8')))
       .map((f) => path.relative(SRC, f))
       .sort();
 
-    expect(offenders).toEqual([...EXEMPT].sort());
-  });
-
-  it('keeps the exemption to exactly one file', () => {
-    // A widening exemption list is how this defect comes back at scale: the whole point of the
-    // migration is that there is one known-bad file, not a growing allowlist.
-    expect(EXEMPT).toHaveLength(1);
+    expect(offenders).toEqual([]);
   });
 
   it('declares the pure max-width variants widest-first, so the narrower band wins', () => {

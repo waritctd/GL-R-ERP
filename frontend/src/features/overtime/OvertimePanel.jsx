@@ -17,7 +17,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { UpcomingHolidays } from '../../components/common/UpcomingHolidays.jsx';
 import { overtimeStatusLabel as statusInfo, pendingApproverText } from '../../utils/format.js';
 
-const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,0.75fr)] max-[1040px]:min-w-[940px] reflow-cards';
+const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,0.75fr)] nav-drawer:min-w-[940px] reflow-cards';
 // FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
 // (Enter-to-submit on the search button), so its exact utility string is reproduced
 // here rather than wrapping a <form> inside a non-form primitive.
@@ -28,7 +28,7 @@ const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax
 const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-end bg-surface border border-border rounded-md p-[14px]';
 // FormGrid (Layout.jsx) renders a <div>; the submit form needs to be a native <form>
 // for onSubmit/noValidate, so its exact (2-column) utility string is reproduced here.
-const FORM_GRID_CLASS = 'grid gap-[14px] max-[720px]:grid-cols-1 grid-cols-2';
+const FORM_GRID_CLASS = 'grid gap-[14px] mobile:grid-cols-1 grid-cols-2';
 
 function bangkokDateParts(date = new Date()) {
   return Object.fromEntries(new Intl.DateTimeFormat('en-US', {
@@ -705,7 +705,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
             </FormField>
           </div>
           <RowActions className={formGridSpan2}>
-            <Button type="submit" disabled={saving || hasTimeRangeError} className="max-[720px]:min-h-11 max-[720px]:w-full">
+            <Button type="submit" disabled={saving || hasTimeRangeError} className="mobile:min-h-11 mobile:w-full">
               <Icon name="plus" />
               ส่งคำขอ
             </Button>
@@ -740,28 +740,28 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
             <div className={`${OVERTIME_TABLE_GRID} data-row`} key={request.id}>
               {/* Mobile order (step 8 rule 7 — summary -> actions -> details): this
                   span is the summary (who/when) and stays first on every viewport. */}
-              <span data-label="วันที่ / พนักงาน" className="max-[720px]:order-1">
+              <span data-label="วันที่ / พนักงาน" className="mobile:order-1">
                 <strong>{formatWorkDate(request.workDate)}</strong>
                 <small>{request.employeeName || request.employeeCode || request.employeeId}</small>
               </span>
-              <span data-label="แผน OT" className="max-[720px]:order-4">
+              <span data-label="แผน OT" className="mobile:order-4">
                 <strong>{formatDateTime(request.plannedStartAt)}</strong>
                 <small>
                   {formatDateTime(request.plannedEndAt)} · {formatMinutes(request.plannedMinutes)} · {request.dayType === 'HOLIDAY' ? '3x' : '1.5x'}
                 </small>
               </span>
-              <span data-label="เหตุผล" className="max-[720px]:order-5">
+              <span data-label="เหตุผล" className="mobile:order-5">
                 <strong>{request.reason}</strong>
                 <small>{request.reviewerNote || request.calculationNote || '-'}</small>
               </span>
               {/* Pure-numeric column: right-aligned + mono on desktop so the figures
                   line up for scanning (DESIGN.md mono is for "figures needing
                   alignment"). Left on mobile, where it reads as a stacked card. */}
-              <span data-label="เวลาจริง / จ่ายได้" className="max-[720px]:order-6 min-[721px]:text-right">
+              <span data-label="เวลาจริง / จ่ายได้" className="mobile:order-6 min-[721px]:text-right">
                 <strong className="font-mono">{formatMinutes(request.actualMinutes)}</strong>
                 <small className="font-mono">จ่ายได้ {formatMinutes(request.payableMinutes)}</small>
               </span>
-              <span data-label="ขั้นอนุมัติ" className="max-[720px]:order-2">
+              <span data-label="ขั้นอนุมัติ" className="mobile:order-2">
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
                 {/* No "รอ" prefix -- the StatusBadge above already says that (รอผู้จัดการ/รอ CEO);
                     repeating it made this note a superset of the badge's own text, which broke an
@@ -774,7 +774,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
                   outlined, not filled) and step 9 rule 2 — mirrors the exact
                   success/danger icon-button tinting CommissionPage uses for the
                   same manager/CEO review pattern. */}
-              <span className="row-actions max-[720px]:order-3">
+              <span className="row-actions mobile:order-3">
                 {reviewable ? (
                   <>
                     <Button
