@@ -166,7 +166,10 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], dash
       dateLabel: formatShortDate(request.workDate),
       requestedAt: request.requestedAt || request.workDate,
       status: request.status,
-      statusInfo: overtimeStatusLabel(request.status),
+      // A1: pass pendingApproverRole through -- a status-only call mislabels every SUBMITTED
+      // request 'รอผู้จัดการ' on this dashboard too, including the ones OvertimeService routes
+      // straight to the CEO.
+      statusInfo: overtimeStatusLabel(request.status, request.pendingApproverRole),
       chain: chainForRequest('ot', request),
     }));
     const profileRows = profileRequests.map((request) => ({

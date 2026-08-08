@@ -120,8 +120,18 @@ class OvertimeServiceTest {
         // The failure this guards against is silent: a request routed to the CEO while only a
         // manager -- who cannot clear it -- is told about it, so it sits unreviewed with everyone
         // believing someone else has it.
-        verify(notificationService).notify(eq(500L), eq("OVERTIME_PENDING_CEO"), anyString(), anyString(), eq("/overtime"), eq(true));
+        ArgumentCaptor<String> employeeBody = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> ceoBody = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(eq(10L), eq("OVERTIME_SUBMITTED"), anyString(), employeeBody.capture(), eq("/overtime"), eq(true));
+        verify(notificationService).notify(eq(500L), eq("OVERTIME_PENDING_CEO"), anyString(), ceoBody.capture(), eq("/overtime"), eq(true));
         verify(notificationService, never()).notify(anyLong(), eq("OVERTIME_PENDING_MANAGER"), anyString(), anyString(), anyString(), anyBoolean());
+        // A3 (OT UAT defect #4): both bodies used to say a stage is MISSING ("... (ไม่มีขั้นอนุมัติ
+        // ของหัวหน้างาน)" / "... ซึ่งไม่มีขั้นอนุมัติของหัวหน้างาน"). The anyString() calls above
+        // would not catch a regression back to that framing -- these pin the actual text, matching
+        // the owner's ruling that the reader needs to be told who holds the request, not that a
+        // stage is absent.
+        assertThat(employeeBody.getValue()).doesNotContain("ขั้นอนุมัติของหัวหน้างาน");
+        assertThat(ceoBody.getValue()).doesNotContain("ขั้นอนุมัติของหัวหน้างาน");
     }
 
     @Test
@@ -226,6 +236,46 @@ class OvertimeServiceTest {
 
         verify(overtimeRepository).create(eq(10L), eq(99L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY), eq(workDate.withDayOfMonth(1)), isNull());
         verify(overtimeRepository, never()).create(anyLong(), anyLong(), any(), anyInt(), eq(OvertimeDayType.HOLIDAY), any(), any());
+    }
+
+    /**
+     * A2 (OT UAT defect #3): the redesigned two-date-picker submit form (วันที่ทำ OT / วันที่สิ้นสุด)
+     * can express at most a next-day window, so the API must refuse anything longer -- a caller
+     * bypassing the form could otherwise still submit a multi-day window the UI can never produce.
+     */
+    @Test
+    void plannedWindowLongerThanOneDayIsRejected() {
+        LocalDate workDate = LocalDate.now().plusDays(4);
+        OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
+        // Ends TWO days after workDate.
+        SubmitOvertimeRequest request = new SubmitOvertimeRequest(
+            null, workDate, startAt, startAt.plusDays(2), "WORKDAY", "Urgent delivery");
+        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
+
+        assertThatThrownBy(() -> overtimeService.submit(request, user("employee", 10L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.BAD_REQUEST);
+
+        verify(overtimeRepository, never()).create(
+            anyLong(), anyLong(), any(SubmitOvertimeRequest.class), anyInt(), any(OvertimeDayType.class), any(LocalDate.class), any());
+    }
+
+    /** The boundary case the guard above must still ACCEPT: the overnight window the redesigned form is meant to keep supporting. */
+    @Test
+    void plannedWindowEndingExactlyOneDayAfterWorkDateIsAccepted() {
+        LocalDate workDate = LocalDate.now().plusDays(4);
+        // 22:00 -> next-day 02:00.
+        OffsetDateTime startAt = workDate.atTime(22, 0).atOffset(java.time.ZoneOffset.ofHours(7));
+        OffsetDateTime endAt = startAt.plusHours(4);
+        SubmitOvertimeRequest request = new SubmitOvertimeRequest(
+            null, workDate, startAt, endAt, "WORKDAY", "Overnight shift coverage");
+        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
+        when(overtimeRepository.create(eq(10L), eq(10L), eq(request), eq(240), eq(OvertimeDayType.WORKDAY), eq(workDate.withDayOfMonth(1)), isNull()))
+            .thenReturn(64L);
+        when(overtimeRepository.findById(64L)).thenReturn(Optional.of(requestDto(64L, 10L, "SUBMITTED")));
+
+        assertThat(overtimeService.submit(request, user("employee", 10L)).id()).isEqualTo(64L);
     }
 
     /**
@@ -541,7 +591,13 @@ class OvertimeServiceTest {
         assertThat(calculation.payableMinutes()).isEqualTo(100);
         verify(auditService).record(eq(actor), eq("MANAGER_APPROVE_OVERTIME_REQUEST"), eq("overtime_request"), eq(77L), eq(submitted), any(OvertimeRequestDto.class));
         verify(notificationService).notify(eq(10L), eq("OVERTIME_MANAGER_APPROVED"), anyString(), anyString(), eq("/overtime"), eq(true));
-        verify(notificationService).notify(eq(500L), eq("OVERTIME_PENDING_CEO"), anyString(), anyString(), eq("/overtime"), eq(true));
+        ArgumentCaptor<String> ceoBody = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(eq(500L), eq("OVERTIME_PENDING_CEO"), anyString(), ceoBody.capture(), eq("/overtime"), eq(true));
+        // A3: this is a DIFFERENT "OVERTIME_PENDING_CEO" body than the manager-less route's
+        // (notifyManagerApproved's, not notifySubmitted's) and never carried the retired framing --
+        // pinned anyway so a future edit that unifies the two CEO notification bodies cannot
+        // reintroduce it here either.
+        assertThat(ceoBody.getValue()).doesNotContain("ขั้นอนุมัติของหัวหน้างาน");
     }
 
     @Test
