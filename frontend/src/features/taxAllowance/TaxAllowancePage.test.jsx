@@ -184,7 +184,7 @@ describe('TaxAllowancePage', () => {
           declaration({
             status: 'APPROVED',
             submittedAt: `${currentYear}-01-01T00:00:00.000Z`,
-            allowances: { spouseAllowance: 60000 },
+            allowances: { lifeInsuranceAllowance: 60000 },
           }),
           // Deliberately submitted LATER than the APPROVED row above -- proves `current` wins because
           // it IS current, not merely because it happens to be the most recent row overall.
@@ -192,7 +192,7 @@ describe('TaxAllowancePage', () => {
             declarationId: 40,
             status: 'WITHDRAWN',
             submittedAt: `${currentYear}-06-01T00:00:00.000Z`,
-            allowances: { spouseAllowance: 12345 },
+            allowances: { lifeInsuranceAllowance: 12345 },
           }),
         ],
       });
@@ -202,7 +202,8 @@ describe('TaxAllowancePage', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /ข้อ 7/ }));
       expect(await screen.findByLabelText('จำนวนเงิน')).not.toBeNull();
-      expect(screen.getByLabelText('จำนวนเงิน').value).toBe('25000');
+      // 60,000 (the APPROVED row), not 12,345 (the later WITHDRAWN one).
+      expect(screen.getByLabelText('จำนวนเงิน').value).toBe('60000');
     });
   });
 
@@ -247,8 +248,7 @@ describe('TaxAllowancePage', () => {
       fireEvent.click(await screen.findByRole('button', { name: /ข้อ 7/ }));
 
       const file = new File(['x'], 'cert.pdf', { type: 'application/pdf' });
-      const input = document.querySelector('input[type="file"]');
-      fireEvent.change(input, { target: { files: [file] } });
+      fireEvent.change(document.querySelector('input[type="file"]'), { target: { files: [file] } });
 
       // Attached immediately, during fill-in -- no round trip needed to SEE it.
       expect(await screen.findByText('cert.pdf')).not.toBeNull();
@@ -256,15 +256,27 @@ describe('TaxAllowancePage', () => {
       // But genuinely not sent yet -- there is no declarationId for a brand-new declaration.
       expect(api.payroll.uploadTaxAllowanceAttachment).not.toHaveBeenCalled();
 
-      // Back to the hub, into review, then the ONE real submit control in the whole flow --
-      // SECTION itself never carries one (#tax-allowance-ia-hub-review).
-      fireEvent.click(screen.getByRole('button', { name: 'ยื่นแบบแจ้ง' }));
+      // Submitting is blocked until the signed form is back (owner decision #3), so the flow has
+      // to go through that panel — which is the point: evidence staged mid-fill-in has to survive
+      // the extra step, not just an immediate submit.
+      expect(screen.getByRole('button', { name: 'ยื่นแบบแจ้ง' }).disabled).toBe(true);
+
+      fireEvent.click(screen.getByRole('button', { name: /ตรวจทาน ลงนาม และยื่น/ }));
+      const signed = new File(['y'], 'signed.pdf', { type: 'application/pdf' });
+      const pickers = document.querySelectorAll('input[type="file"]');
+      fireEvent.change(pickers[pickers.length - 1], { target: { files: [signed] } });
+      await screen.findByText('signed.pdf');
+
+      const submit = screen.getByRole('button', { name: 'ยื่นแบบแจ้ง' });
+      await waitFor(() => expect(submit.disabled).toBe(false));
+      fireEvent.click(submit);
 
       await waitFor(() => expect(api.payroll.submitMyTaxAllowanceDeclaration).toHaveBeenCalled());
-      // Flushed against the REAL declarationId the submit just returned, tagged with the section
-      // it was picked under while filling in -- proves this is not "attach after a first submit",
-      // it is the SAME pick from mid-fill-in finally reaching the server.
-      await waitFor(() => expect(api.payroll.uploadTaxAllowanceAttachment).toHaveBeenCalledWith(77, file, 'family'));
+      // Flushed against the REAL declarationId the submit just returned, tagged with the ข้อ it was
+      // picked under while filling in -- proves this is not "attach after a first submit", it is
+      // the SAME pick from mid-fill-in finally reaching the server.
+      await waitFor(() => expect(api.payroll.uploadTaxAllowanceAttachment).toHaveBeenCalledWith(77, file, 'item7'));
+      expect(api.payroll.uploadTaxAllowanceAttachment).toHaveBeenCalledWith(77, signed, 'signed_form');
     });
   });
 
