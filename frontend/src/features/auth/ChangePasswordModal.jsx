@@ -6,6 +6,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { FormGrid } from '../../components/common/Layout.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
 
@@ -162,61 +163,63 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
           ) : null}
         </header>
         <div className="modal-body">
-          <FormGrid as="form" single id="change-password-form" onSubmit={handleSubmit(submitPassword)} noValidate>
-            <FormField
-              label="รหัสผ่านปัจจุบัน"
-              htmlFor="change-password-current"
-              error={errors.currentPassword?.message}
-              required
-            >
-              <input
-                id="change-password-current"
-                type="password"
-                {...register('currentPassword')}
-                autoComplete="current-password"
-                className={errors.currentPassword ? 'is-invalid' : ''}
-                aria-invalid={Boolean(errors.currentPassword)}
-                aria-describedby={errors.currentPassword ? fieldErrorId('change-password-current') : undefined}
+          <SafeForm id="change-password-form" onSubmit={handleSubmit(submitPassword)} noValidate>
+            <FormGrid single>
+              <FormField
+                label="รหัสผ่านปัจจุบัน"
+                htmlFor="change-password-current"
+                error={errors.currentPassword?.message}
                 required
-              />
-            </FormField>
-            <FormField
-              label="รหัสผ่านใหม่"
-              htmlFor="change-password-new"
-              error={newPasswordTooShort ? NEW_PASSWORD_TOO_SHORT_MESSAGE : undefined}
-              hint={!newPasswordTooShort ? 'อย่างน้อย 8 ตัวอักษร' : undefined}
-            >
-              <input
-                id="change-password-new"
-                type="password"
-                {...register('newPassword')}
-                autoComplete="new-password"
-                minLength={8}
-                className={newPasswordTooShort ? 'is-invalid' : ''}
-                aria-invalid={newPasswordTooShort}
-                aria-describedby={newPasswordTooShort ? fieldErrorId('change-password-new') : undefined}
+              >
+                <input
+                  id="change-password-current"
+                  type="password"
+                  {...register('currentPassword')}
+                  autoComplete="current-password"
+                  className={errors.currentPassword ? 'is-invalid' : ''}
+                  aria-invalid={Boolean(errors.currentPassword)}
+                  aria-describedby={errors.currentPassword ? fieldErrorId('change-password-current') : undefined}
+                  required
+                />
+              </FormField>
+              <FormField
+                label="รหัสผ่านใหม่"
+                htmlFor="change-password-new"
+                error={newPasswordTooShort ? NEW_PASSWORD_TOO_SHORT_MESSAGE : undefined}
+                hint={!newPasswordTooShort ? 'อย่างน้อย 8 ตัวอักษร' : undefined}
+              >
+                <input
+                  id="change-password-new"
+                  type="password"
+                  {...register('newPassword')}
+                  autoComplete="new-password"
+                  minLength={8}
+                  className={newPasswordTooShort ? 'is-invalid' : ''}
+                  aria-invalid={newPasswordTooShort}
+                  aria-describedby={newPasswordTooShort ? fieldErrorId('change-password-new') : undefined}
+                  required
+                />
+              </FormField>
+              <FormField
+                label="ยืนยันรหัสผ่านใหม่"
+                htmlFor="change-password-confirm"
+                error={confirmPasswordFieldError}
                 required
-              />
-            </FormField>
-            <FormField
-              label="ยืนยันรหัสผ่านใหม่"
-              htmlFor="change-password-confirm"
-              error={confirmPasswordFieldError}
-              required
-            >
-              <input
-                id="change-password-confirm"
-                type="password"
-                {...register('confirmPassword')}
-                autoComplete="new-password"
-                className={confirmPasswordFieldError ? 'is-invalid' : ''}
-                aria-invalid={Boolean(confirmPasswordFieldError)}
-                aria-describedby={confirmPasswordFieldError ? fieldErrorId('change-password-confirm') : undefined}
-                required
-              />
-            </FormField>
-            {(formError || submitError) ? <div className="form-error" role="alert">{formError || submitError}</div> : null}
-          </FormGrid>
+              >
+                <input
+                  id="change-password-confirm"
+                  type="password"
+                  {...register('confirmPassword')}
+                  autoComplete="new-password"
+                  className={confirmPasswordFieldError ? 'is-invalid' : ''}
+                  aria-invalid={Boolean(confirmPasswordFieldError)}
+                  aria-describedby={confirmPasswordFieldError ? fieldErrorId('change-password-confirm') : undefined}
+                  required
+                />
+              </FormField>
+              {(formError || submitError) ? <div className="form-error" role="alert">{formError || submitError}</div> : null}
+            </FormGrid>
+          </SafeForm>
         </div>
         <footer className="modal-footer">
           {forced ? (

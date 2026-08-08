@@ -12,14 +12,19 @@ import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { formGridSpan2, Panel, PageStack, RowActions } from '../../components/common/Layout.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { overtimeStatusLabel as statusInfo } from '../../utils/format.js';
+import { overtimeStatusLabel as statusInfo, pendingApproverText } from '../../utils/format.js';
 
 const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,0.75fr)] max-[1040px]:min-w-[940px] reflow-cards';
 // FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
 // (Enter-to-submit on the search button), so its exact utility string is reproduced
 // here rather than wrapping a <form> inside a non-form primitive.
-const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-center bg-surface border border-border rounded-md p-[14px]';
+//
+// `items-end`, not `items-center` — see MyLeaveTab.jsx's identical FILTER_BAR_CLASS
+// for the full explanation. This form is unconditional (renders for every viewer,
+// including employee self-view), so the stagger was live on the OT tab of "คำขอ".
+const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-end bg-surface border border-border rounded-md p-[14px]';
 // FormGrid (Layout.jsx) renders a <div>; the submit form needs to be a native <form>
 // for onSubmit/noValidate, so its exact (2-column) utility string is reproduced here.
 const FORM_GRID_CLASS = 'grid gap-[14px] max-[720px]:grid-cols-1 grid-cols-2';
@@ -436,7 +441,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
         ]}
       />
 
-      <form className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
+      <SafeForm className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
         <label>
           จากวันที่
           <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
@@ -471,10 +476,10 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           <Icon name="search" />
           ค้นหา
         </Button>
-      </form>
+      </SafeForm>
 
       <Panel title="ยื่นคำขอ OT">
-        <form className={FORM_GRID_CLASS} onSubmit={handleSubmit(submitOvertime)} noValidate>
+        <SafeForm className={FORM_GRID_CLASS} onSubmit={handleSubmit(submitOvertime)} noValidate>
           {hasMultipleSubmitOptions ? (
             <FormField label="พนักงาน" htmlFor="ot-employee" error={errors.employeeId?.message}>
               <select
@@ -574,10 +579,10 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               ส่งคำขอ
             </Button>
           </RowActions>
-        </form>
+        </SafeForm>
       </Panel>
 
-      <section className="table-panel">
+      <Panel flush>
         <div className={`${OVERTIME_TABLE_GRID} table-head`}>
           <span>วันที่ / พนักงาน</span>
           <span>แผน OT</span>
@@ -592,6 +597,10 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           <EmptyState icon="clock" title="ยังไม่มีคำขอ OT" description="ลองเปลี่ยนช่วงวันที่หรือยื่นคำขอใหม่" />
         ) : requests.map((request) => {
           const status = statusInfo(request.status);
+          const isPending = request.status === 'SUBMITTED' || request.status === 'MANAGER_APPROVED';
+          const pendingApproverNote = isPending
+            ? pendingApproverText(request.pendingApproverRole, request.pendingApproverName)
+            : null;
           const reviewable = canReviewRequest(request);
           const approveTitle = canCeoApprove(request) ? 'CEO อนุมัติ' : 'ผู้จัดการอนุมัติ';
           const canCancel = request.status === 'SUBMITTED' && Number(request.employeeId) === Number(user.employeeId);
@@ -623,6 +632,10 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               </span>
               <span data-label="ขั้นอนุมัติ" className="max-[720px]:order-2">
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                {/* No "รอ" prefix -- the StatusBadge above already says that (รอผู้จัดการ/รอ CEO);
+                    repeating it made this note a superset of the badge's own text, which broke an
+                    e2e locator matching the badge's exact label (review #pending-approver-info). */}
+                {pendingApproverNote ? <small className="text-text-muted">{pendingApproverNote}</small> : null}
                 <small>ผู้จัดการ: {request.managerApprovedAt ? `${request.managerApprovedByName || '-'} · ${formatDateTime(request.managerApprovedAt)}` : '-'}</small>
                 <small>CEO: {request.ceoApprovedAt ? `${request.ceoApprovedByName || '-'} · ${formatDateTime(request.ceoApprovedAt)}` : '-'}</small>
               </span>
@@ -666,7 +679,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
             </div>
           );
         })}
-      </section>
+      </Panel>
 
       <ConfirmDialog
         open={confirmState?.kind === 'approve'}

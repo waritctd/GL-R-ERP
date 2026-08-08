@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { PRODUCT_MARK, PRODUCT_PORTAL_LABEL } from '../../app/product.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 
 const quickAccounts = [
   { role: 'hr', label: 'ฝ่ายบุคคล', helper: 'พนักงานทั้งหมด · อนุมัติคำขอ', icon: 'badgeCheck' },
@@ -42,7 +43,7 @@ export function LoginPage({ onLogin, loading, error }) {
           </span>
         </div>
 
-        <form className="login-form" onSubmit={submit}>
+        <SafeForm className="login-form" onSubmit={submit}>
           <div>
             <h1>เข้าสู่ระบบ</h1>
             <p>เข้าสู่ระบบด้วยบัญชี GL&R</p>
@@ -110,7 +111,7 @@ export function LoginPage({ onLogin, loading, error }) {
               </div>
             </div>
           )}
-        </form>
+        </SafeForm>
       </section>
     </main>
   );

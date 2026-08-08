@@ -1,3 +1,4 @@
+import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -189,9 +190,9 @@ export function DealStateHeader({
             <span className="hidden min-w-0 max-w-[22rem] truncate text-xs font-bold text-info xl:block">{bannerText}</span>
           ) : null}
           {onRefresh ? (
-            <button type="button" className="icon-button" onClick={onRefresh} title="รีเฟรช" aria-label="รีเฟรช">
+            <Button type="button" variant="icon" onClick={onRefresh} title="รีเฟรช" aria-label="รีเฟรช">
               <Icon name="refresh" />
-            </button>
+            </Button>
           ) : null}
           {hasActionBar ? (
             <div data-testid="ticket-action-bar" className="ml-auto flex shrink-0 items-center gap-2">
@@ -204,7 +205,7 @@ export function DealStateHeader({
   }
 
   return (
-    <section data-testid="deal-state-header" data-condensed="false" className="flex flex-col gap-4 bg-surface p-4 sm:p-5 mobile:gap-3 mobile:rounded-lg mobile:border mobile:border-border mobile:p-3 mobile:shadow-sm">
+    <section data-testid="deal-state-header" data-condensed="false" className="flex flex-col gap-4 bg-surface p-4 sm:p-5 mobile:gap-3 mobile:rounded-lg mobile:border mobile:border-border mobile:p-3">
       <div className="relative flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 mobile:pr-12">
           <div className="flex flex-wrap items-center gap-2">
@@ -228,9 +229,9 @@ export function DealStateHeader({
           </div>
         </div>
         {onRefresh ? (
-          <button type="button" className="icon-button mobile:absolute mobile:right-0 mobile:top-0" onClick={onRefresh} title="รีเฟรช" aria-label="รีเฟรช">
+          <Button type="button" variant="icon" className="mobile:absolute mobile:right-0 mobile:top-0" onClick={onRefresh} title="รีเฟรช" aria-label="รีเฟรช">
             <Icon name="refresh" />
-          </button>
+          </Button>
         ) : null}
       </div>
 

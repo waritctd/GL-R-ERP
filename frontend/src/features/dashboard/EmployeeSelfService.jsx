@@ -9,6 +9,7 @@ import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
+import { TaxAllowanceActionRow } from '../taxAllowance/TaxAllowanceActionRow.jsx';
 import {
   bangkokTodayIso,
   formatBangkokTime,
@@ -28,7 +29,9 @@ const TILE_GRID = 'grid grid-cols-3 gap-3 max-[1040px]:grid-cols-1 max-[720px]:g
 // Terminal negative states: a stepper implies "still progressing", which is
 // wrong once a request has been stopped. Rejected/cancelled rows show only
 // the status badge, never the chain.
-const TERMINAL_NEGATIVE = new Set(['REJECTED', 'CANCELLED', 'AUTO_REJECTED', 'rejected']);
+// EXPIRED joins these for ล.ย.01: an expired declaration has stopped progressing, so a stepper
+// implying "still on its way" would be wrong in exactly the way this set exists to prevent.
+const TERMINAL_NEGATIVE = new Set(['REJECTED', 'CANCELLED', 'AUTO_REJECTED', 'rejected', 'EXPIRED']);
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -56,6 +59,16 @@ function chainForRequest(kind, request) {
     return [
       { label: 'ส่งแล้ว', done: true },
       { label: 'อนุมัติ', done: request.status === 'APPROVED', name: request.reviewedByName, at: request.reviewedAt },
+    ];
+  }
+  // ล.ย.01: HR approval and payroll application are two distinct steps, and the gap between them
+  // matters — an approved-but-unapplied declaration is not yet reducing anyone's tax. The status
+  // badge already refuses to call that state "done"; the chain shows the same thing structurally.
+  if (kind === 'taxAllowance') {
+    return [
+      { label: 'ส่งแล้ว', done: true },
+      { label: 'HR ตรวจสอบ', done: request.status === 'APPROVED', at: request.reviewedAt },
+      { label: 'ใช้กับเงินเดือน', done: !!request.appliedAt, at: request.appliedAt },
     ];
   }
   return [
@@ -94,7 +107,7 @@ function MyRequestRow({ row }) {
   );
 }
 
-export function EmployeeSelfService({ user, employee, profileRequests = [], dashboardSummary, showToast }) {
+export function EmployeeSelfService({ user, employee, profileRequests = [], dashboardSummary, taxAllowanceSummary, showToast }) {
   const navigate = useNavigate();
 
   // Omitting from/to gives the current calendar month (mirrors
@@ -164,10 +177,23 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], dash
       statusInfo: requestStatus(request.status),
       chain: chainForRequest('profile', request),
     }));
-    return [...leaveRows, ...otRows, ...profileRows]
+    // ล.ย.01 is a request with an approval chain exactly like the three above, and it was the one
+    // the employee had no way to track. `statusInfo` comes from the shared taxAllowanceStatus
+    // helper, so its labels stay identical to the ones on /tax-allowance and /profile.
+    const declaration = taxAllowanceSummary?.declaration;
+    const taxAllowanceRows = declaration ? [{
+      id: `tax-allowance-${declaration.declarationId}`,
+      title: 'แบบแจ้ง ล.ย.01 (ค่าลดหย่อนภาษี)',
+      dateLabel: formatShortDate(declaration.submittedAt),
+      requestedAt: declaration.submittedAt,
+      status: declaration.status,
+      statusInfo: taxAllowanceSummary.statusInfo,
+      chain: chainForRequest('taxAllowance', declaration),
+    }] : [];
+    return [...leaveRows, ...otRows, ...profileRows, ...taxAllowanceRows]
       .sort((a, b) => String(b.requestedAt || '').localeCompare(String(a.requestedAt || '')))
       .slice(0, 8);
-  }, [ownLeaveQuery.data, ownOvertimeQuery.data, profileRequests]);
+  }, [ownLeaveQuery.data, ownOvertimeQuery.data, profileRequests, taxAllowanceSummary]);
 
   const latestPayrollPeriodId = dashboardSummary?.latestPayrollPeriodId;
   const ownPayslipMutation = useMutation({
@@ -202,7 +228,7 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], dash
       <button
         type="button"
         onClick={() => navigate('/attendance')}
-        className="bg-surface border border-border rounded-md shadow-sm p-5 w-full text-left cursor-pointer flex items-center justify-between gap-4 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-3"
+        className="bg-surface border border-border rounded-md p-5 w-full text-left cursor-pointer flex items-center justify-between gap-4 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-3"
       >
         <span className="flex items-center gap-3 min-w-0">
           <span className={`stat-icon !mb-0 stat-${hasCheckedIn ? 'teal' : 'amber'}`}>
@@ -224,6 +250,10 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], dash
           <Icon name="chevronRight" size={16} className="text-text-faint" />
         </span>
       </button>
+
+      {/* Only rendered when there is something to file — see TaxAllowanceActionRow. Sits with the
+          attendance card above the tiles because it is an action, not a metric. */}
+      <TaxAllowanceActionRow summary={taxAllowanceSummary} />
 
       <div className={TILE_GRID}>
         <StatCard

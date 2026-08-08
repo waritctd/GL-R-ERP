@@ -879,7 +879,7 @@ export function TicketListPage({ user, showToast }) {
 
   return (
     <div
-      className="page-stack ticket-list-page"
+      className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] ticket-list-page"
       // `inert` removes the page behind the sheet from focus order, pointer
       // hit-testing and the accessibility tree in one attribute. React 18 has
       // no boolean-prop support for it, so the empty string is used to emit the
@@ -890,6 +890,15 @@ export function TicketListPage({ user, showToast }) {
       <PageHeader
         title="รายการดีล"
         subtitle="ติดตามดีลตามขอบเขตบทบาทและตัวกรองที่เลือก"
+        // This page used to key its own denser mobile heading/actions treatment
+        // off the shared `.page-heading`/`.page-actions` legacy classes via a
+        // `.ticket-list-page` ancestor selector in styles.css — deleted along
+        // with the base rule (Tailwind's utilities layer would have silently
+        // out-cascaded a legacy-layer override anyway, see styles-css-loses-to-
+        // tailwind-utilities). Reproduced here directly instead.
+        headingClassName="mobile:leading-[1.15]"
+        subtitleClassName="mobile:mt-0.5 mobile:text-sm mobile:leading-[1.35]"
+        actionsClassName="mobile:grid mobile:w-full mobile:grid-cols-[44px_minmax(0,1fr)] mobile:gap-2 [&>*:only-child]:mobile:col-start-1"
         actions={(
           <>
             <Button

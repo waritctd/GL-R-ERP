@@ -13,6 +13,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
+import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.payroll.PayrollAllowanceEstimateResult;
 import th.co.glr.hr.payroll.PayrollPeriodDto;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
@@ -57,6 +58,15 @@ public class TaxAllowanceDeclarationService {
     private static final Set<String> EVIDENCE_MIME_TYPES =
         Set.of("application/pdf", "image/jpeg", "image/png");
 
+    // V135 (feat/tax-allowance-sections): mirrors TAX_ALLOWANCE_GROUPS' five `key`s in
+    // frontend/src/features/taxAllowance/taxAllowanceSchema.js. No shared enum exists between the
+    // frontend and backend for this grouping -- unlike TaxAllowanceCapEntry's `category` strings,
+    // which TaxAllowanceCapCatalog owns authoritatively, the five-section grouping is a UI
+    // information-architecture concept with no backend equivalent to reuse. Keep both lists in sync
+    // by hand if a section is ever added, renamed, or removed.
+    private static final Set<String> EVIDENCE_SECTION_KEYS =
+        Set.of("family", "insurance", "savings", "housing", "donation");
+
     private final TaxAllowanceDeclarationRepository repository;
     private final PayrollRepository payrollRepository;
     private final EmployeeRepository employeeRepository;
@@ -64,6 +74,7 @@ public class TaxAllowanceDeclarationService {
     private final AuditService auditService;
     private final FileStorageService fileStorage;
     private final PayrollService payrollService;
+    private final NotificationRepository notifications;
 
     public TaxAllowanceDeclarationService(
         TaxAllowanceDeclarationRepository repository,
@@ -72,7 +83,8 @@ public class TaxAllowanceDeclarationService {
         TaxAllowanceCapCatalog capCatalog,
         AuditService auditService,
         FileStorageService fileStorage,
-        PayrollService payrollService
+        PayrollService payrollService,
+        NotificationRepository notifications
     ) {
         this.repository = repository;
         this.payrollRepository = payrollRepository;
@@ -81,6 +93,7 @@ public class TaxAllowanceDeclarationService {
         this.auditService = auditService;
         this.fileStorage = fileStorage;
         this.payrollService = payrollService;
+        this.notifications = notifications;
     }
 
     // ---- Employee self-service ------------------------------------------------------------
@@ -216,6 +229,9 @@ public class TaxAllowanceDeclarationService {
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after approve"));
         auditService.record(actor, "APPROVE_TAX_ALLOWANCE_DECLARATION", "tax_allowance_declaration",
             declarationId, existing, updated);
+        notifyOwner(existing.employeeId(), "TAX_ALLOWANCE_APPROVED",
+            "แบบแจ้ง ล.ย.01 ได้รับการอนุมัติ",
+            "ฝ่ายบุคคลอนุมัติแบบแจ้งค่าลดหย่อนภาษีปี " + existing.taxYear() + " แล้ว");
         return updated;
     }
 
@@ -240,6 +256,11 @@ public class TaxAllowanceDeclarationService {
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after reject"));
         auditService.record(actor, "REJECT_TAX_ALLOWANCE_DECLARATION", "tax_allowance_declaration",
             declarationId, existing, updated);
+        // The reason travels in the notification body: it is the only thing that tells the employee
+        // what to change, and re-opening the page to find it is exactly the round trip this avoids.
+        notifyOwner(existing.employeeId(), "TAX_ALLOWANCE_REJECTED",
+            "แบบแจ้ง ล.ย.01 ถูกปฏิเสธ",
+            "ฝ่ายบุคคลปฏิเสธแบบแจ้งค่าลดหย่อนภาษีปี " + existing.taxYear() + ": " + reviewerNote);
         return updated;
     }
 
@@ -356,6 +377,13 @@ public class TaxAllowanceDeclarationService {
             int rows = repository.expireApplied(candidate.declarationId());
             if (rows > 0) {
                 payrollRepository.expireTaxAllowanceVerification(candidate.employeeId(), candidate.taxYear());
+                // Notified per row, inside the `rows > 0` guard: a candidate whose conditional
+                // UPDATE matched nothing (a concurrent sweep already flipped it) must not produce a
+                // second notification for the same expiry.
+                notifyOwner(candidate.employeeId(), "TAX_ALLOWANCE_EXPIRED",
+                    "แบบแจ้ง ล.ย.01 หมดอายุ",
+                    "แบบแจ้งค่าลดหย่อนภาษีปี " + candidate.taxYear()
+                        + " หมดอายุแล้ว กรุณายื่นฉบับใหม่เพื่อคงสิทธิลดหย่อน");
                 expiredCount++;
             }
         }
@@ -433,18 +461,42 @@ public class TaxAllowanceDeclarationService {
     // whether an attachment id exists to a caller with no business seeing it).
 
     @Transactional
-    public TaxAllowanceAttachmentDto uploadAttachment(long declarationId, MultipartFile file, UserPrincipal actor) {
+    public TaxAllowanceAttachmentDto uploadAttachment(
+        long declarationId, MultipartFile file, String sectionKey, UserPrincipal actor
+    ) {
         requireOwnerOrHr(declarationId, actor);
-        FileStorageService.StoredFile stored =
-            fileStorage.store("tax-allowance-declaration", declarationId, file, EVIDENCE_MIME_TYPES);
+        String normalizedSectionKey = normalizeSectionKey(sectionKey);
+        // V134 storage-durability fix: this evidence file goes straight to the database now -- see
+        // FileStorageService#storeInDatabase's javadoc.
+        FileStorageService.StoredContent stored =
+            fileStorage.storeInDatabase("tax-allowance-declaration", declarationId, file, EVIDENCE_MIME_TYPES);
         // uploaded_by is actor.employeeId(), NOT actor.id() -- the column FKs hr.employee, and for
         // an HR-on-behalf upload actor.employeeId() is HR's own employee row, correctly distinct
         // from the declaration's beneficiary employee_id.
-        TaxAllowanceAttachmentDto attachment = repository.saveAttachment(declarationId, stored.fileName(),
-            stored.filePath(), stored.mimeType(), stored.fileSize(), actor.employeeId());
+        TaxAllowanceAttachmentDto attachment = repository.saveAttachmentWithContent(declarationId, stored.fileName(),
+            stored.storageKey(), stored.mimeType(), stored.fileSize(), actor.employeeId(), normalizedSectionKey,
+            stored.content());
         auditService.record(actor, "UPLOAD_TAX_ALLOWANCE_ATTACHMENT", "tax_allowance_declaration",
             declarationId, null, attachment);
         return attachment;
+    }
+
+    /**
+     * Blank/whitespace-only ({@code @RequestParam(required = false)} on the controller means an
+     * omitted form field arrives as {@code null}, but an EMPTY one arrives as {@code ""}) normalizes
+     * to {@code null} ("general/uncategorized", V135's own nullable-by-design choice — see that
+     * migration's header). Anything else must be one of {@link #EVIDENCE_SECTION_KEYS} or the
+     * upload is rejected outright, rather than silently storing an unrecognised tag the frontend's
+     * per-section filter would never match.
+     */
+    private String normalizeSectionKey(String sectionKey) {
+        if (sectionKey == null || sectionKey.isBlank()) {
+            return null;
+        }
+        if (!EVIDENCE_SECTION_KEYS.contains(sectionKey)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "sectionKey ไม่ถูกต้อง");
+        }
+        return sectionKey;
     }
 
     public List<TaxAllowanceAttachmentDto> listAttachments(long declarationId, UserPrincipal actor) {
@@ -464,11 +516,25 @@ public class TaxAllowanceDeclarationService {
         if (attachment.deletedAt() != null) {
             throw new ApiException(HttpStatus.NOT_FOUND, "ไฟล์นี้ถูกลบแล้ว");
         }
-        String path = repository.findAttachmentFilePath(attachmentId);
-        if (path == null) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบนี้");
+        TaxAllowanceDeclarationRepository.AttachmentFileLocation location =
+            repository.findAttachmentFileLocation(attachmentId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบนี้"));
+        // V134 storage-durability fix: availability is checked only AFTER the 404/ownership/
+        // tombstone checks above, matching LeaveService#resolveAttachmentForDownload's ordering --
+        // see that method's javadoc for why the order itself is a security property.
+        if (!bytesAvailable(location)) {
+            throw new ApiException(HttpStatus.GONE, "ไฟล์เอกสารนี้สูญหายจากระบบจัดเก็บ กรุณาติดต่อฝ่ายบุคคล");
         }
-        return new TaxAllowanceAttachmentDownload(attachment, path);
+        return new TaxAllowanceAttachmentDownload(attachment, location.filePath(), location.storageState());
+    }
+
+    /** Mirrors {@code LeaveService#bytesAvailable} -- see that method's javadoc. */
+    private boolean bytesAvailable(TaxAllowanceDeclarationRepository.AttachmentFileLocation location) {
+        return switch (location.storageState()) {
+            case "DATABASE" -> true;
+            case "DISK_LEGACY" -> fileStorage.existsOnDisk(location.filePath());
+            default -> false;
+        };
     }
 
     /** Tombstone only — copy of {@code FactoryQuoteService#deleteAttachment}'s shape, never a hard delete. */
@@ -506,6 +572,23 @@ public class TaxAllowanceDeclarationService {
     }
 
     // ---- helpers ----------------------------------------------------------------------------
+
+    /**
+     * Notifies the declaration's OWNER — never the acting reviewer. Every caller below passes the
+     * declaration's own {@code employeeId}, not {@code actor.employeeId()}: HR approving on behalf
+     * of someone must not send itself the notice.
+     *
+     * <p>Uses the generic {@link NotificationRepository#insert} rather than {@code notifyEmployee}/
+     * {@code notifyEmployeeForPricingRequest}: those hardcode a ticket/pricing-request link and
+     * resolve their title through the ticket-scoped {@code TICKET_EVENT_TITLES} map, neither of
+     * which fits ล.ย.01. The link is the employee's own declaration page.
+     *
+     * <p>Joins the caller's transaction, like {@link AuditService#record} — an approve that rolls
+     * back must not leave a notification claiming it happened.
+     */
+    private void notifyOwner(long ownerEmployeeId, String type, String title, String message) {
+        notifications.insert(ownerEmployeeId, type, title, message, "/tax-allowance");
+    }
 
     private void requireEmployeeActor(UserPrincipal actor) {
         if (actor == null || actor.employeeId() == null) {

@@ -175,6 +175,16 @@ export function buildDemoCommissions() {
 // ── Tax allowance declarations (db.taxAllowanceDeclarations / db.taxAllowanceAttachments) —
 // mirrors the DECLARATION workflow only (submit/withdraw/approve/reject/on-behalf never run
 // real tax math). status: PENDING / APPROVED / REJECTED / SUPERSEDED / WITHDRAWN.
+//
+// `effectiveMonth`/`appliedEffectiveMonth` are plain 1-12 month NUMBERS, never a 'YYYY-MM' string —
+// TaxAllowanceDeclarationDto declares them `int` / `Integer` (backend/.../declaration/
+// TaxAllowanceDeclarationDtos.java), and `taxYear` alongside already carries the year. These were
+// seeded as strings until 2026-08; contract.test.js compares the method surface and arity only,
+// never field value types, so nothing caught it. Three UI sites read the month raw and all three
+// were wrong under VITE_USE_MOCKS=true: TaxAllowanceReviewPage's applied column and
+// taxAllowanceStatus.js's APPLIED badge both rendered "ตั้งแต่เดือน 2026-07", and ApplyDialog seeds
+// its <select> from `declaration.effectiveMonth` against options 1-12, which a string matches none
+// of. Keep these integers — see buildDemoEmployeeTaxAllowances below, which seeds the same field.
 function blankAllowances(overrides = {}) {
   return {
     spouseAllowance: 0, childAllowance: 0, parentCareAllowance: 0, disabledCareAllowance: 0,
@@ -193,7 +203,7 @@ export function buildDemoTaxAllowanceDeclarations(employees) {
   return [
     {
       declarationId: 1, employeeId: employees[8].id, employeeCode: employees[8].code, employeeName: employees[8].nameTh,
-      taxYear: 2026, effectiveMonth: '2026-08',
+      taxYear: 2026, effectiveMonth: 8,
       allowances: blankAllowances({ spouseAllowance: 60000, lifeInsuranceAllowance: 30000 }),
       documentReference: 'ล.ย.01-2026-0009', status: 'PENDING',
       submittedById: employees[8].id, submittedAt: now, onBehalf: false,
@@ -204,18 +214,18 @@ export function buildDemoTaxAllowanceDeclarations(employees) {
     },
     {
       declarationId: 2, employeeId: employees[12].id, employeeCode: employees[12].code, employeeName: employees[12].nameTh,
-      taxYear: 2026, effectiveMonth: '2026-07',
+      taxYear: 2026, effectiveMonth: 7,
       allowances: blankAllowances({ childAllowance: 30000, childCount: 1, rmfAllowance: 50000 }),
       documentReference: 'ล.ย.01-2026-0010', status: 'APPROVED',
       submittedById: employees[12].id, submittedAt: now, onBehalf: false,
       reviewedById: employees[20].id, reviewedAt: now, reviewerNote: null,
-      appliedAt: now, appliedById: employees[20].id, appliedEffectiveMonth: '2026-07',
+      appliedAt: now, appliedById: employees[20].id, appliedEffectiveMonth: 7,
       expiresOn: '2026-12-31', expiredAt: null, reverifiedAt: null, reverifiedById: null,
       supersededById: null,
     },
     {
       declarationId: 3, employeeId: employees[2].id, employeeCode: employees[2].code, employeeName: employees[2].nameTh,
-      taxYear: 2026, effectiveMonth: '2026-07',
+      taxYear: 2026, effectiveMonth: 7,
       allowances: blankAllowances({ homeLoanInterestAllowance: 40000 }),
       documentReference: 'ล.ย.01-2026-0011', status: 'REJECTED',
       submittedById: employees[2].id, submittedAt: now, onBehalf: false,
@@ -227,29 +237,29 @@ export function buildDemoTaxAllowanceDeclarations(employees) {
     },
     {
       declarationId: 4, employeeId: employees[19].id, employeeCode: employees[19].code, employeeName: employees[19].nameTh,
-      taxYear: 2026, effectiveMonth: '2026-01',
+      taxYear: 2026, effectiveMonth: 1,
       allowances: blankAllowances({ spouseAllowance: 60000, parentCareAllowance: 30000, parentCareCount: 1 }),
       documentReference: 'ล.ย.01-2026-0002', status: 'SUPERSEDED',
       submittedById: employees[19].id, submittedAt: now, onBehalf: false,
       reviewedById: employees[20].id, reviewedAt: now, reviewerNote: null,
-      appliedAt: now, appliedById: employees[20].id, appliedEffectiveMonth: '2026-01',
+      appliedAt: now, appliedById: employees[20].id, appliedEffectiveMonth: 1,
       expiresOn: null, expiredAt: null, reverifiedAt: null, reverifiedById: null,
       supersededById: 5,
     },
     {
       declarationId: 5, employeeId: employees[19].id, employeeCode: employees[19].code, employeeName: employees[19].nameTh,
-      taxYear: 2026, effectiveMonth: '2026-08',
+      taxYear: 2026, effectiveMonth: 8,
       allowances: blankAllowances({ spouseAllowance: 60000, parentCareAllowance: 60000, parentCareCount: 2 }),
       documentReference: 'ล.ย.01-2026-0012', status: 'APPROVED',
       submittedById: employees[19].id, submittedAt: now, onBehalf: false,
       reviewedById: employees[20].id, reviewedAt: now, reviewerNote: null,
-      appliedAt: now, appliedById: employees[20].id, appliedEffectiveMonth: '2026-08',
+      appliedAt: now, appliedById: employees[20].id, appliedEffectiveMonth: 8,
       expiresOn: '2026-12-31', expiredAt: null, reverifiedAt: null, reverifiedById: null,
       supersededById: null,
     },
     {
       declarationId: 6, employeeId: employees[15].id, employeeCode: employees[15].code, employeeName: employees[15].nameTh,
-      taxYear: 2026, effectiveMonth: '2026-06',
+      taxYear: 2026, effectiveMonth: 6,
       allowances: blankAllowances({ ssfAllowance: 20000 }),
       documentReference: 'ล.ย.01-2026-0007', status: 'WITHDRAWN',
       submittedById: employees[15].id, submittedAt: now, onBehalf: false,
@@ -267,6 +277,97 @@ export function buildDemoTaxAllowanceAttachments() {
     { attachmentId: 1, declarationId: 1, fileName: 'life-insurance-policy.pdf', mimeType: 'application/pdf', fileSize: 184320, uploadedBy: 9, uploadedAt: now, deletedAt: null, deletedBy: null, deleteReason: null },
     { attachmentId: 2, declarationId: 2, fileName: 'birth-certificate-child1.pdf', mimeType: 'application/pdf', fileSize: 95210, uploadedBy: 13, uploadedAt: now, deletedAt: null, deletedBy: null, deleteReason: null },
     { attachmentId: 3, declarationId: 2, fileName: 'rmf-purchase-receipt.pdf', mimeType: 'application/pdf', fileSize: 61200, uploadedBy: 13, uploadedAt: now, deletedAt: null, deletedBy: null, deleteReason: null },
+  ];
+}
+
+// ── Stored tax allowance (db.employeeTaxAllowances) — mirrors hr.employee_tax_allowance, the table
+// PayrollCalculator actually reads to compute withholding (PayrollRepository
+// #findTaxAllowancesByEmployee), NOT tax_allowance_declaration above. Its own verification_status
+// (V95): VERIFIED / GRANDFATHERED_UNVERIFIED / EXPIRED_UNVERIFIED. Until this seed (2026-08,
+// "register shows what payroll actually uses"), GET /api/payroll/tax-allowances returned an empty
+// fixture unconditionally regardless of the year argument (contract.test.js's own former note on
+// that ARITY_EXEMPTIONS entry) — the exact "mock omits a field the feature keys on" shape CLAUDE.md
+// warns about: TaxAllowanceReviewPage's new join would never see a single row under
+// VITE_USE_MOCKS=true. Genuinely fake-able for the same reason taxAllowanceDeclarations is: reading
+// these rows performs no tax calculation. Writing them (mockApi's saveTaxAllowances, the legacy bulk
+// PUT) IS real payroll math and stays a "not supported in mock mode" stub, unchanged by this seed.
+//
+// Four rows, covering every combination this feature's UI branches on. `effectiveMonth` values are
+// chosen to still qualify under `resolvePayrollAllowance` (taxAllowanceStatus.js) for any "today"
+// from August 2026 onward -- see that function's own comment on why a past tax year always resolves
+// against December instead of drifting out of range.
+//  - employees[5] (id 6): GRANDFATHERED_UNVERIFIED, NO declaration at all -- the central case this
+//    whole feature exists for ("42 rows imported from personreduce.csv" in prod): still reducing
+//    this employee's withholding right now, never reviewed through any declaration. Also carries the
+//    F1 review-remediation demonstration case: an rmfAllowance of 600,000, chosen to exceed BOTH
+//    PayrollCalculator#retirementAllowance's flat 500,000 retirement-cluster ceiling and its 30%-of-
+//    projected-income sub-cap for this employee's salary (~156,000/month here) -- the concrete
+//    "stored 600,000, payroll applies far less" example the relabelled panel (TaxAllowanceBreakdown)
+//    must not misreport as the applied figure. See that component's own comment on `payrollTotal`.
+//    spouseAllowance stays too (60,000, exactly its own flat cap -- a control field that does NOT
+//    clamp, so the panel isn't demonstrating a difference on every field at once).
+//  - employees[10] (id 11): EXPIRED_UNVERIFIED, NO declaration -- the grace period lapsed;
+//    PayrollRepository's WHERE clause now excludes it, so it no longer reduces withholding, but it
+//    is a real (lapsed) figure, not "nothing" -- must read distinctly from employees[5] AND from a
+//    genuinely-empty employee.
+//  - employees[12] (id 13): GRANDFATHERED_UNVERIFIED, alongside declarationId 2 (APPROVED, applied,
+//    declared total 80,000) -- but this row's total is 90,000. Models a legacy bulk-PUT edit made
+//    after the declaration was applied and never reconciled -- the disagreement case.
+//  - employees[19] (id 20): VERIFIED, alongside declarationId 5 (APPROVED, applied, declared total
+//    120,000) -- this row totals 120,000 too. The normal, correctly-wired path
+//    (TaxAllowanceDeclarationService#apply upserts + verifies in one transaction), included so
+//    "disagreement only on disagreement" has a real agreeing case to prove the negative against, not
+//    just the absence of the other three rows.
+export function buildDemoEmployeeTaxAllowances(employees) {
+  const now = new Date().toISOString();
+  const row = (overrides) => ({
+    taxYear: 2026,
+    documentReference: null,
+    updatedAt: now,
+    verifiedById: null,
+    verifiedAt: null,
+    verificationDeadline: null,
+    ...overrides,
+  });
+
+  return [
+    row({
+      employeeId: employees[5].id, employeeCode: employees[5].code, employeeName: employees[5].nameTh,
+      effectiveMonth: 1,
+      allowances: blankAllowances({ spouseAllowance: 60000, rmfAllowance: 600000 }),
+      verificationStatus: 'GRANDFATHERED_UNVERIFIED',
+      verificationDeadline: '2026-12-31',
+      documentReference: 'personreduce.csv#6 (นำเข้าก่อน V95)',
+      updatedAt: '2026-01-05T00:00:00.000Z',
+    }),
+    row({
+      employeeId: employees[10].id, employeeCode: employees[10].code, employeeName: employees[10].nameTh,
+      effectiveMonth: 1,
+      allowances: blankAllowances({ lifeInsuranceAllowance: 25000 }),
+      verificationStatus: 'EXPIRED_UNVERIFIED',
+      verificationDeadline: '2026-06-30',
+      documentReference: 'personreduce.csv#11 (นำเข้าก่อน V95)',
+      updatedAt: '2026-01-05T00:00:00.000Z',
+    }),
+    row({
+      employeeId: employees[12].id, employeeCode: employees[12].code, employeeName: employees[12].nameTh,
+      effectiveMonth: 7,
+      allowances: blankAllowances({ childAllowance: 30000, childCount: 1, rmfAllowance: 60000 }),
+      verificationStatus: 'GRANDFATHERED_UNVERIFIED',
+      verificationDeadline: '2026-12-31',
+      documentReference: 'ปรับยอด RMF ผ่านระบบเดิม (ไม่ผ่านแบบแจ้ง)',
+      updatedAt: '2026-07-15T00:00:00.000Z',
+    }),
+    row({
+      employeeId: employees[19].id, employeeCode: employees[19].code, employeeName: employees[19].nameTh,
+      effectiveMonth: 8,
+      allowances: blankAllowances({ spouseAllowance: 60000, parentCareAllowance: 60000, parentCareCount: 2 }),
+      verificationStatus: 'VERIFIED',
+      verifiedById: employees[20].id,
+      verifiedAt: now,
+      documentReference: 'ล.ย.01-2026-0012',
+      updatedAt: now,
+    }),
   ];
 }
 

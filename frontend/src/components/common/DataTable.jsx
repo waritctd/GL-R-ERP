@@ -12,6 +12,7 @@ import { Button } from './Button.jsx';
 import { EmptyState } from './EmptyState.jsx';
 import { Icon } from './Icon.jsx';
 import { Skeleton } from './Skeleton.jsx';
+import { Panel } from './Layout.jsx';
 
 /**
  * Formalized `SortHeader` (lifted from TicketListPage) — a clickable
@@ -162,6 +163,15 @@ export function DataTable({
   rows,
   getRowKey,
   gridClassName,
+  // Applied to the card wrapper. Exists because the wrapper used to be a
+  // `.table-panel`, which let a page constrain it from CSS —
+  // `.payroll-table-region .table-panel { max-height: min(68vh,760px);
+  // overflow: auto }` was the only such caller. Once the wrapper became
+  // `<Panel flush>` that selector stopped matching and the payroll table
+  // silently lost its scroll region, growing unbounded instead. A prop keeps
+  // that reachable without a page-specific CSS rule reaching into a shared
+  // component's markup.
+  panelClassName,
   pageSize = 20,
   searchable = false,
   searchPlaceholder = 'ค้นหา...',
@@ -567,7 +577,7 @@ export function DataTable({
 
   function renderMobileList() {
     return (
-      <section className="table-panel" aria-busy={loading ? 'true' : undefined}>
+      <Panel flush className={panelClassName} aria-busy={loading ? 'true' : undefined}>
         {loading ? (
           <ul className="record-card-list" aria-label="กำลังโหลดข้อมูล">
             {Array.from({ length: skeletonRowCount }, (_, index) => (
@@ -617,13 +627,13 @@ export function DataTable({
           </ul>
         )}
         {showPagination ? renderPagination() : null}
-      </section>
+      </Panel>
     );
   }
 
   function renderTable() {
     return (
-      <section className="table-panel" aria-busy={loading ? 'true' : undefined}>
+      <Panel flush className={panelClassName} aria-busy={loading ? 'true' : undefined}>
         {(loading || sortedRows.length > 0) ? (
           <table className="data-table-table">
             {caption ? <caption className="sr-only">{caption}</caption> : null}
@@ -757,7 +767,7 @@ export function DataTable({
           )
         )}
         {showPagination ? renderPagination() : null}
-      </section>
+      </Panel>
     );
   }
 

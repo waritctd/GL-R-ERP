@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Panel } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { SalesTabs } from '../sales/SalesTabs.jsx';
 import { Skeleton, SkeletonCard } from '../../components/common/Skeleton.jsx';
@@ -145,7 +146,7 @@ export function TicketDashboard({ user, employee, showToast }) {
   ] : [];
 
   return (
-    <div className="page-stack">
+    <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
       <SalesTabs role={user.role} />
       <PageHeader title={greeting} subtitle={<GreetingSubtitle role={user.role} />} />
 
@@ -157,19 +158,19 @@ export function TicketDashboard({ user, employee, showToast }) {
             <SkeletonCard lines={1} />
             <SkeletonCard lines={1} />
           </div>
-          <div className="stat-grid" style={{ marginTop: 14 }}>
+          <div className="stat-grid mt-3.5">
             <SkeletonCard lines={1} />
             <SkeletonCard lines={1} />
             <SkeletonCard lines={1} />
             <SkeletonCard lines={1} />
           </div>
-          <section className="panel" style={{ padding: 0, overflow: 'hidden', marginTop: 14 }}>
-            <div className="panel-header" style={{ padding: '14px 18px' }}>
+          <Panel flush className="mt-3.5">
+            <Panel.Header bordered>
               <Skeleton width="30%" height={16} />
-            </div>
-            <div style={{ padding: '12px 18px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            </Panel.Header>
+            <div className="flex flex-col gap-2.5 px-4.5 py-3">
               {[0, 1, 2, 3].map((i) => (
-                <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                <div key={i} className="flex items-center gap-3">
                   <Skeleton width={60} height={14} />
                   <Skeleton width="40%" height={14} />
                   <Skeleton width={70} height={18} radius="var(--radius-pill)" />
@@ -177,7 +178,7 @@ export function TicketDashboard({ user, employee, showToast }) {
                 </div>
               ))}
             </div>
-          </section>
+          </Panel>
         </div>
       ) : summary && (
         <>
@@ -216,10 +217,7 @@ export function TicketDashboard({ user, employee, showToast }) {
           </div>
 
           {recent.length > 0 && (
-            <section className="panel" style={{ padding: 0, overflow: 'hidden' }}>
-              <div className="panel-header" style={{ padding: '14px 18px' }}>
-                <h2>คำขอราคาล่าสุด</h2>
-              </div>
+            <Panel flush title="คำขอราคาล่าสุด">
               {isMobile ? (
                 <div className="flex flex-col gap-2.5 p-3">
                   {recent.map((ticket) => (
@@ -271,7 +269,7 @@ export function TicketDashboard({ user, employee, showToast }) {
                   })}
                 </>
               )}
-            </section>
+            </Panel>
           )}
         </>
       )}

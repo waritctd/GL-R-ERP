@@ -1,6 +1,7 @@
 import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
+import { Panel } from '../../components/common/Layout.jsx';
 
 /**
  * "ต้องดำเนินการ" needs-action panel — ui-responsive-repair-plan.md Step 7.
@@ -33,20 +34,17 @@ export function ActionQueue({ items }) {
 
   if (active.length === 0) {
     return (
-      <section className="panel max-[720px]:hidden">
+      <Panel className="max-[720px]:hidden">
         <div className="flex items-center gap-3 text-text-muted">
           <Icon name="check" size={18} />
           <span className="text-sm font-bold">ไม่มีรายการที่ต้องดำเนินการตอนนี้</span>
         </div>
-      </section>
+      </Panel>
     );
   }
 
   return (
-    <section className="panel !p-0 overflow-hidden max-[720px]:hidden">
-      <div className="panel-header !mb-0 px-5 py-4">
-        <h2>ต้องดำเนินการ</h2>
-      </div>
+    <Panel flush title="ต้องดำเนินการ" className="max-[720px]:hidden">
       <div className="flex flex-col">
         {active.map((item) => {
           const Tag = item.to ? 'button' : 'div';
@@ -71,6 +69,6 @@ export function ActionQueue({ items }) {
           );
         })}
       </div>
-    </section>
+    </Panel>
   );
 }

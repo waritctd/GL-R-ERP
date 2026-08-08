@@ -202,11 +202,23 @@ public final class TaxAllowanceDeclarationDtos {
         OffsetDateTime uploadedAt,
         OffsetDateTime deletedAt,
         Long deletedBy,
-        String deleteReason
+        String deleteReason,
+        // V135: which of TAX_ALLOWANCE_GROUPS' five section keys this evidence belongs to. Null for
+        // every pre-V135 row -- the frontend shows those as "general/uncategorized", never drops them.
+        String sectionKey
     ) {}
 
-    /** Resolved (attachment metadata, file path) pair — the download gate has already run by the time this exists. */
-    public record TaxAllowanceAttachmentDownload(TaxAllowanceAttachmentDto attachment, String filePath) {}
+    /**
+     * Resolved (attachment metadata, file path, storage state) triple — the download gate has
+     * already run by the time this exists. {@code storageState} is one of {@code DATABASE} (bytes
+     * in {@code hr.file_attachment_blob}), {@code DISK_LEGACY} (bytes may still be at {@code
+     * filePath} on disk), or {@code MISSING} — V134 storage-durability fix. {@code
+     * TaxAllowanceDeclarationService#getAttachmentForDownload} has ALREADY confirmed the bytes are
+     * available before returning this (410 otherwise), so a caller holding one of these never needs
+     * to re-check {@code storageState} for availability — only to pick the right byte source.
+     */
+    public record TaxAllowanceAttachmentDownload(TaxAllowanceAttachmentDto attachment, String filePath,
+                                                  String storageState) {}
 
     /** Optional tombstone reason for {@code DELETE /tax-allowance-attachments/{id}}. */
     public record TaxAllowanceTombstoneRequest(String reason) {}

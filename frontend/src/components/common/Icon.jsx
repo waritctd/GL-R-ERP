@@ -17,6 +17,7 @@ import CircleUserRound from 'lucide-react/dist/esm/icons/circle-user-round.mjs';
 import ClipboardCheck from 'lucide-react/dist/esm/icons/clipboard-check.mjs';
 import Clock3 from 'lucide-react/dist/esm/icons/clock-3.mjs';
 import Ellipsis from 'lucide-react/dist/esm/icons/ellipsis.mjs';
+import ExternalLink from 'lucide-react/dist/esm/icons/external-link.mjs';
 import Home from 'lucide-react/dist/esm/icons/home.mjs';
 import Info from 'lucide-react/dist/esm/icons/info.mjs';
 import LayoutDashboard from 'lucide-react/dist/esm/icons/layout-dashboard.mjs';
@@ -59,6 +60,7 @@ const icons = {
   clock: Clock3,
   close: X,
   moreHorizontal: Ellipsis,
+  externalLink: ExternalLink,
   dashboard: LayoutDashboard,
   home: Home,
   info: Info,

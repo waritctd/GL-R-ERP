@@ -11,6 +11,7 @@ import java.util.Optional;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.approval.PendingApproverSql;
 import th.co.glr.hr.employee.ManagerApproverRepository;
 
 @Repository
@@ -469,6 +470,13 @@ public class OvertimeRepository {
             // round trip. Same expression the approve/reject gate uses, so the button the CEO sees
             // and the gate the server enforces cannot disagree.
             + ManagerApproverRepository.hasManagerApproverSql("e") + " AS has_manager_approver,"
+            // feat/pending-approver-info: read-only "who this is waiting on" names -- built from the
+            // SAME PEER_IS_MANAGER_APPROVER predicate has_manager_approver above already uses (see
+            // ManagerApproverRepository#managerApproverSingleNameSql's Javadoc), plus the generic
+            // single-active-ceo lookup PendingApproverSql provides. Neither is an authorization
+            // decision.
+            + ManagerApproverRepository.managerApproverSingleNameSql("e") + " AS division_manager_single_name,"
+            + PendingApproverSql.SINGLE_ACTIVE_CEO_NAME_SQL + " AS ceo_single_name,"
             + """
 
                    o.created_at,
@@ -521,8 +529,46 @@ public class OvertimeRepository {
             blankToNull(rs.getString("manager_name")),
             rs.getBoolean("has_manager_approver"),
             rs.getObject("created_at", OffsetDateTime.class),
-            rs.getObject("updated_at", OffsetDateTime.class)
+            rs.getObject("updated_at", OffsetDateTime.class),
+            resolvePendingApproverRole(rs),
+            resolvePendingApproverName(rs)
         );
+    }
+
+    /**
+     * feat/pending-approver-info: mirrors {@code OvertimeService#approve}'s own
+     * SUBMITTED/MANAGER_APPROVED branching exactly -- SUBMITTED with a manager stage routes to
+     * "manager"; SUBMITTED with none, or MANAGER_APPROVED, routes to "ceo" (the same {@code
+     * hasManagerApprover} column the approve endpoint's button visibility already keys off). Any
+     * other status (APPROVED/REJECTED/CANCELLED) has nobody left to wait on.
+     */
+    String resolvePendingApproverRole(ResultSet rs) throws SQLException {
+        String status = rs.getString("status");
+        if ("SUBMITTED".equals(status)) {
+            return rs.getBoolean("has_manager_approver") ? "manager" : "ceo";
+        }
+        if ("MANAGER_APPROVED".equals(status)) {
+            return "ceo";
+        }
+        return null;
+    }
+
+    /**
+     * feat/pending-approver-info: the paired display name -- {@code null} whenever the resolved
+     * role's candidate set is not exactly one active person (see {@code
+     * ManagerApproverRepository#managerApproverSingleNameSql} and {@code
+     * PendingApproverSql#SINGLE_ACTIVE_CEO_NAME_SQL}'s Javadoc). Deliberate ambiguity handling, not
+     * a bug -- see this feature's PR body.
+     */
+    String resolvePendingApproverName(ResultSet rs) throws SQLException {
+        String role = resolvePendingApproverRole(rs);
+        if ("manager".equals(role)) {
+            return blankToNull(rs.getString("division_manager_single_name"));
+        }
+        if ("ceo".equals(role)) {
+            return blankToNull(rs.getString("ceo_single_name"));
+        }
+        return null;
     }
 
     private Long nullableLong(ResultSet rs, String column) throws SQLException {

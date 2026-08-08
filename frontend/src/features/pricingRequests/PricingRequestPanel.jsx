@@ -2,8 +2,10 @@ import { forwardRef, useImperativeHandle, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
@@ -109,11 +111,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
   }));
 
   return (
-    <section className="table-panel">
-      <div className="panel-header">
-        <h2>คำขอราคา</h2>
-      </div>
-
+    <Panel flush title="คำขอราคา">
       {requests.length === 0 ? (
         <EmptyState
           icon="fileText"
@@ -155,39 +153,39 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                 {(canUpdatePricingRequest(user, pr) || canSubmitPricingRequest(user, pr) || canRequestInformation(user, pr) || canRespondInformation(user, pr) || canCancelPricingRequest(user, pr)) ? (
                   <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2">
                     {canUpdatePricingRequest(user, pr) ? (
-                      <button type="button" className="secondary-button" onClick={() => setEditingId(pr.id)}>
+                      <Button type="button" variant="secondary" onClick={() => setEditingId(pr.id)}>
                         แก้ไขร่าง
-                      </button>
+                      </Button>
                     ) : null}
                     {canSubmitPricingRequest(user, pr) ? (
-                      <button
+                      <Button
                         type="button"
-                        className="secondary-button"
+                        variant="secondary"
                         disabled={submitMutation.isPending}
                         onClick={() => submitMutation.mutate(pr.id)}
                       >
                         ส่งให้ฝ่ายนำเข้า
-                      </button>
+                      </Button>
                     ) : null}
                     {canRequestInformation(user, pr) ? (
-                      <button type="button" className="secondary-button" onClick={() => setRequestInfoDraft({ id: pr.id, message: '', dueDate: '' })}>
+                      <Button type="button" variant="secondary" onClick={() => setRequestInfoDraft({ id: pr.id, message: '', dueDate: '' })}>
                         ขอข้อมูลเพิ่มเติม
-                      </button>
+                      </Button>
                     ) : null}
                     {canRespondInformation(user, pr) ? (
-                      <button type="button" className="secondary-button" onClick={() => setRespondDraft({ id: pr.id, response: '' })}>
+                      <Button type="button" variant="secondary" onClick={() => setRespondDraft({ id: pr.id, response: '' })}>
                         ตอบข้อมูลเพิ่มเติม
-                      </button>
+                      </Button>
                     ) : null}
                     {canCancelPricingRequest(user, pr) ? (
-                      <button
+                      <Button
                         type="button"
-                        className="secondary-button"
+                        variant="secondary"
                         style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}
                         onClick={() => setCancelDraft({ id: pr.id, reason: '' })}
                       >
                         ยกเลิก
-                      </button>
+                      </Button>
                     ) : null}
                   </div>
                 ) : null}
@@ -277,15 +275,15 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
           onClose={() => setRespondDraft(null)}
           footer={(
             <>
-              <button type="button" className="secondary-button" onClick={() => setRespondDraft(null)}>ยกเลิก</button>
-              <button
+              <Button type="button" variant="secondary" onClick={() => setRespondDraft(null)}>ยกเลิก</Button>
+              <Button
                 type="button"
-                className="primary-button"
+                variant="primary"
                 disabled={!respondDraft.response.trim() || respondMutation.isPending}
                 onClick={() => respondMutation.mutate({ id: respondDraft.id, response: respondDraft.response.trim() })}
               >
                 บันทึก
-              </button>
+              </Button>
             </>
           )}
         >
@@ -306,10 +304,10 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
           onClose={() => setRequestInfoDraft(null)}
           footer={(
             <>
-              <button type="button" className="secondary-button" onClick={() => setRequestInfoDraft(null)}>ยกเลิก</button>
-              <button
+              <Button type="button" variant="secondary" onClick={() => setRequestInfoDraft(null)}>ยกเลิก</Button>
+              <Button
                 type="button"
-                className="primary-button"
+                variant="primary"
                 disabled={!requestInfoDraft.message.trim() || requestInfoMutation.isPending}
                 onClick={() => requestInfoMutation.mutate({
                   id: requestInfoDraft.id,
@@ -318,7 +316,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                 })}
               >
                 ส่งคำขอ
-              </button>
+              </Button>
             </>
           )}
         >
@@ -349,15 +347,15 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
           onClose={() => setCancelDraft(null)}
           footer={(
             <>
-              <button type="button" className="secondary-button" onClick={() => setCancelDraft(null)}>ปิด</button>
-              <button
+              <Button type="button" variant="secondary" onClick={() => setCancelDraft(null)}>ปิด</Button>
+              <Button
                 type="button"
-                className="primary-button"
+                variant="primary"
                 disabled={!cancelDraft.reason.trim() || cancelMutation.isPending}
                 onClick={() => cancelMutation.mutate({ id: cancelDraft.id, reason: cancelDraft.reason.trim() })}
               >
                 ยืนยันยกเลิก
-              </button>
+              </Button>
             </>
           )}
         >
@@ -371,6 +369,6 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
           </label>
         </Modal>
       ) : null}
-    </section>
+    </Panel>
   );
 });

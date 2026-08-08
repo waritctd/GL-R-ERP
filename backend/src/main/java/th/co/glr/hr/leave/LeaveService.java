@@ -334,14 +334,21 @@ public class LeaveService {
         // above (this method is @Transactional).
         leaveRepository.insertQuotaYearSplits(id, quotaYearSplits);
         if (hasAttachment) {
-            FileStorageService.StoredFile storedFile = fileStorage.store("leave", id, attachment, LEAVE_ATTACHMENT_MIME_TYPES);
-            LeaveAttachmentDto savedAttachment = leaveAttachments.save(
+            // V134 storage-durability fix: leave attachments (e.g. a SICK medical certificate) go
+            // straight to the database now -- never to the app container's ephemeral disk. See
+            // FileStorageService#storeInDatabase's javadoc for why, and LeaveAttachmentRepository
+            // #saveWithContent for how the blob insert and the storage_state flip land in this same
+            // @Transactional method.
+            FileStorageService.StoredContent storedContent =
+                fileStorage.storeInDatabase("leave", id, attachment, LEAVE_ATTACHMENT_MIME_TYPES);
+            LeaveAttachmentDto savedAttachment = leaveAttachments.saveWithContent(
                 id,
-                storedFile.fileName(),
-                storedFile.filePath(),
-                storedFile.mimeType(),
-                storedFile.fileSize(),
-                actorEmployeeId
+                storedContent.fileName(),
+                storedContent.storageKey(),
+                storedContent.mimeType(),
+                storedContent.fileSize(),
+                actorEmployeeId,
+                storedContent.content()
             );
             leaveRepository.attachFile(id, savedAttachment.id());
         }
@@ -2025,7 +2032,8 @@ public class LeaveService {
             dto.contactHouseNo(), dto.contactSubdistrict(), dto.contactDistrict(),
             dto.contactProvince(), dto.contactPhone(), dto.purposeCode(), dto.emergencyFiling(),
             dto.systemNoteCode(), dto.systemNoteParams(),
-            canReview);
+            canReview,
+            dto.pendingApproverRole(), dto.pendingApproverName());
     }
 
     /**
@@ -2081,19 +2089,54 @@ public class LeaveService {
      * authorization decision, not inferred from {@code mockApi.js} -- see the real-Postgres
      * integration test ({@code LeaveAttachmentDownloadAuthzIntegrationTest}) this phase ships
      * alongside it, written wrong-way-round (asserting what each caller CANNOT reach).
+     *
+     * <p><b>V134 storage-durability fix -- ordering is itself a security property, do not
+     * reorder:</b> this method now ALSO reports whether the attachment's bytes are actually
+     * available ({@link LeaveAttachmentRepository.AttachmentLocation#storageState()} {@code
+     * DATABASE}, or {@code DISK_LEGACY} with a file that still resolves), and throws {@code 410
+     * GONE} when they are not -- but that check runs STRICTLY AFTER the 404 (unknown id) and 403
+     * (known id, not permitted) checks above. If availability were checked first, a caller could
+     * distinguish "this id doesn't exist" (404) from "this id exists but its bytes are gone" (what
+     * would otherwise be 410) WITHOUT ever being authorized to know the id exists at all -- turning
+     * an availability signal into an existence-probe oracle. An unauthorized caller must always see
+     * exactly the same 403 an authorized caller with a perfectly healthy attachment would never see,
+     * regardless of whether the underlying row is DATABASE, DISK_LEGACY, or MISSING.
      */
     public LeaveAttachmentRepository.AttachmentLocation resolveAttachmentForDownload(long attachmentId, UserPrincipal user) {
+        // 1. Unknown id -> 404, before anything else.
         LeaveAttachmentRepository.AttachmentLocation location = leaveAttachments.findAttachmentLocation(attachmentId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบเอกสารนี้"));
         LeaveRequestDto owningRequest = leaveRepository.findById(location.leaveRequestId())
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบเอกสารนี้"));
+        // 2. Known id, caller not permitted -> 403.
         long actorEmployeeId = requireEmployeeId(user);
         boolean allowed = canAccessEmployee(actorEmployeeId, owningRequest.employeeId())
             || canReviewEmployee(owningRequest.employeeId(), actorEmployeeId, user);
         if (!allowed) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
+        // 3. Known id, permitted, bytes unavailable -> 410 GONE. Only reached once 1 and 2 have
+        // already let the caller through, so this can never leak existence to an unauthorized caller.
+        if (!bytesAvailable(location)) {
+            throw new ApiException(HttpStatus.GONE, "ไฟล์เอกสารนี้สูญหายจากระบบจัดเก็บ กรุณาติดต่อฝ่ายบุคคล");
+        }
         return location;
+    }
+
+    /**
+     * {@code DATABASE} rows are trusted without a second query here -- {@link
+     * LeaveAttachmentRepository#saveWithContent} inserts the blob and flips {@code storage_state}
+     * to {@code DATABASE} in the same transaction, so the two can never disagree for a row this
+     * query can see at all. {@code DISK_LEGACY} rows are checked against the actual filesystem
+     * (they may already be gone -- e.g. every UAT/Render deploy before this migration). Anything
+     * else ({@code MISSING}, or a future state this code doesn't know about) is unavailable.
+     */
+    private boolean bytesAvailable(LeaveAttachmentRepository.AttachmentLocation location) {
+        return switch (location.storageState()) {
+            case "DATABASE" -> true;
+            case "DISK_LEGACY" -> fileStorage.existsOnDisk(location.storagePath());
+            default -> false;
+        };
     }
 
     private LeaveRequestDto requireRequest(long id) {

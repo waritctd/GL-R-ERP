@@ -72,13 +72,13 @@ export function ProcurementFulfilmentPage({ user, showToast }) {
   }, [tickets]);
 
   return (
-    <div className="page-stack">
+    <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
       <PageHeader
         title="จัดซื้อ & นำเข้า"
         subtitle="งานส่งมอบ/รับเข้าคลังของดีลที่รับผิดชอบ + ใบสั่งซื้อโรงงานทั้งหมด"
       />
 
-      <Panel title="งานรับเข้าคลัง / ส่งมอบ" className="!p-0 overflow-hidden">
+      <Panel title="งานรับเข้าคลัง / ส่งมอบ" flush>
         {ticketsQuery.isLoading ? (
           <p className="px-4 py-6 text-sm text-text-muted">กำลังโหลดงานรับเข้าคลังและส่งมอบ…</p>
         ) : fulfilmentRows.length === 0 ? (

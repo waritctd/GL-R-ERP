@@ -88,11 +88,16 @@ function renderComposer(initialEntries = ['/leave/new']) {
 }
 
 async function goToStep2ForVacation() {
-  renderComposer();
+  // Returns the render utils (container, etc.) so callers that need to reach past the rendered
+  // output -- e.g. dispatching a raw DOM event straight at the <form> -- can do so without
+  // re-implementing this same setup. Existing callers that only awaited this for its side effects
+  // are unaffected; an ignored return value changes nothing for them.
+  const utils = renderComposer();
   const vacationButton = await screen.findByRole('button', { name: /ลาพักร้อน/ });
   fireEvent.click(vacationButton);
   fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
   await screen.findByText(/ขั้นตอนที่ 2\/3/);
+  return utils;
 }
 
 describe('LeaveRequestPage (Phase A2, #485)', () => {
@@ -154,6 +159,29 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
       expect(ordinationButton).toBeTruthy();
     });
     expect(await screen.findByText(/ใช้สิทธิ์ได้เพียงครั้งเดียวตลอดระยะเวลาที่เป็นพนักงาน/)).not.toBeNull();
+  });
+
+  // Real-backend gap found via click-through testing (not visible under mocks -- LeaveService's
+  // resolveTargetEmployee() gate has no mock-mode equivalent): a preview call can fail outright
+  // with a plain 403 instead of returning a LeaveRuleOutcome, e.g. HR/CEO requesting leave for
+  // themselves. That has no `code` for LeaveRulePanel's RULE_META, so before this fix it silently
+  // read as "not blocking" (an errored query's `data` is undefined) and left the type looking
+  // available with a permanently unresolved skeleton -- see PreviewErrorNotice's own comment.
+  it('step 1: a preview call that fails outright (not a LeaveRuleOutcome) disables the type with the real error message', async () => {
+    api.leave.preview.mockImplementation((payload) => {
+      if (payload?.leaveTypeCode === 'PERSONAL') {
+        return Promise.reject(new Error('ฝ่ายบุคคลและผู้บริหารไม่สามารถยื่นคำขอลาให้ตนเองได้ กรุณาให้ผู้อื่นดำเนินการแทน'));
+      }
+      return Promise.resolve(dateless_ok_preview);
+    });
+
+    renderComposer();
+
+    await waitFor(() => {
+      const button = screen.getByRole('button', { name: /ลากิจ/ });
+      expect(button.disabled).toBe(true);
+    });
+    expect(await screen.findByText(/ฝ่ายบุคคลและผู้บริหารไม่สามารถยื่นคำขอลาให้ตนเองได้/)).not.toBeNull();
   });
 
   it('step 1 -> 2: blocks advancing until a type is chosen, and moves focus to the step-2 heading', async () => {
@@ -342,9 +370,107 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(screen.getByRole('button', { name: /ส่งคำขอ/ }).disabled).toBe(true);
   });
 
+  // The safety-relevant half of the same gap as the step-1 test above: before this fix,
+  // `step3Blocking` read null on an errored FULL preview (undefined `data`), so the submit button
+  // fell back to enabled with no explanation -- an errored authorization check must gate submit
+  // exactly like a real blocking verdict, not silently read as a clean pass.
+  it('step 3: a preview call that fails outright (not a LeaveRuleOutcome) renders role="alert" and disables submit', async () => {
+    api.leave.preview.mockImplementation((payload) => {
+      if (!payload?.startDate) return Promise.resolve(dateless_ok_preview);
+      if (payload.depth === 'FULL') {
+        return Promise.reject(new Error('ฝ่ายบุคคลและผู้บริหารไม่สามารถยื่นคำขอลาให้ตนเองได้ กรุณาให้ผู้อื่นดำเนินการแทน'));
+      }
+      return Promise.resolve(approvedPreview(payload));
+    });
+
+    await goToStep2ForVacation();
+    const futureDate = '2099-12-31';
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบ' } });
+    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/ฝ่ายบุคคลและผู้บริหารไม่สามารถยื่นคำขอลาให้ตนเองได้/);
+    expect(screen.getByRole('button', { name: /ส่งคำขอ/ }).disabled).toBe(true);
+  });
+
   it('cancel from step 1 navigates back to /leave with the returnTab carried through', async () => {
     renderComposer(['/leave/new?returnTab=review']);
     fireEvent.click(await screen.findByRole('button', { name: 'ยกเลิก' }));
     await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/leave?tab=review'));
+  });
+});
+
+// HTML implicit submission (fix/form-enter-submits-real-records): a <form> with no submit button
+// but exactly ONE field that blocks implicit submission fires a real 'submit' event on Enter, no
+// button ever pressed. jsdom does not implement that algorithm at all (pressing "Enter" via
+// fireEvent does nothing special) -- e2e/implicit-submission.spec.js is the layer that reproduces
+// the real thing. See `canSubmit`'s own comment in LeaveRequestPage.jsx for why this describe
+// block is hardening, not a fix for a currently-reachable bug.
+//
+// `submitWithSubmitter` below, not `fireEvent.submit(form)`: this form is now `<SafeForm
+// canSubmit={step === 3} ...>` (#safe-form-primitive), and `canSubmit` is a RESTRICTION layered on
+// top of SafeForm's own submitter guard, not a replacement for it -- both checks always apply.
+// `fireEvent.submit(form)` dispatches a plain synthetic Event with no `.submitter` property at all
+// under jsdom, so it would be blocked by the submitter guard on EVERY step including step 3, which
+// would make "does NOT call create()" pass for the wrong reason on steps 1/2 (no submitter present
+// at all, not because `canSubmit` rejected it -- this repo's own documented vacuous-test shape)
+// and make "calls create()" on step 3 fail outright. A manually constructed `SubmitEvent` with an
+// explicit `submitter` is picked up by React's onSubmit exactly like a real click (verified), so
+// every case below now exercises `canSubmit` specifically. Mirrors
+// TaxAllowanceForm.test.jsx's "form-level submit gate blocks Enter-key implicit submission" and
+// TicketCreateModal.test.jsx's `submitForm()`.
+function submitWithSubmitter(form) {
+  form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: document.createElement('button') }));
+}
+
+describe('LeaveRequestPage implicit submission (Enter-key) hardening', () => {
+  // The gate's blocking branch (`event.preventDefault(); return;`) is synchronous, so a correctly
+  // gated step 1/2 never even calls `handleSubmit`, let alone awaits anything — but an assertion
+  // that only checks SYNCHRONOUSLY, right after the submit dispatch, proves nothing about whether
+  // the gate is doing that work: `handleSubmit(onSubmit)` is asynchronous (`onSubmit` itself is
+  // `async`), so if the gate were ever removed, `api.leave.create` would still not have been
+  // called yet at that exact synchronous instant either -- the assertion would keep passing for
+  // the wrong reason. Found via this file's own mutation-check (temporarily making
+  // `handleFormSubmit` call `handleSubmit(onSubmit)` unconditionally): a bare synchronous
+  // `expect(...).not.toHaveBeenCalled()` here stayed green regardless. Waiting a beat first means
+  // "not called" is checked once an unguarded submit would already have gotten there.
+  async function flushAsyncSubmitChain() {
+    await new Promise((resolve) => { setTimeout(resolve, 50); });
+  }
+
+  it('a real submit event on step 1 does not call create()', async () => {
+    const { container } = renderComposer();
+    await screen.findByRole('button', { name: /ลาพักร้อน/ });
+
+    submitWithSubmitter(container.querySelector('form'));
+    await flushAsyncSubmitChain();
+
+    expect(api.leave.create).not.toHaveBeenCalled();
+  });
+
+  it('a real submit event on step 2 does not call create()', async () => {
+    const { container } = await goToStep2ForVacation();
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2099-12-31' } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
+
+    submitWithSubmitter(container.querySelector('form'));
+    await flushAsyncSubmitChain();
+
+    expect(api.leave.create).not.toHaveBeenCalled();
+  });
+
+  it('a real submit event on step 3 calls create()', async () => {
+    const { container } = await goToStep2ForVacation();
+    const futureDate = '2099-12-31';
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
+    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
+    await screen.findByText(/ขั้นตอนที่ 3\/3/);
+    await waitFor(() => expect(screen.getByRole('button', { name: /ส่งคำขอ/ }).disabled).toBe(false));
+
+    submitWithSubmitter(container.querySelector('form'));
+
+    await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
   });
 });

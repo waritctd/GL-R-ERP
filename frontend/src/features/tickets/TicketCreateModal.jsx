@@ -3,9 +3,11 @@ import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { dealStageLabel, ticketPriorityLabel } from '../../utils/format.js';
 import { computeItemEstimateThb, formatThb, summarizeItemsEstimate } from './dealEstimatePricing.js';
@@ -206,17 +208,17 @@ function SearchSelect({ id, label, value, onSelect, placeholder, options, onSear
   // fieldErrorId so screen readers get field/error association (WCAG 3.3.1).
   const errorId = error && id ? fieldErrorId(id) : undefined;
   return (
-    <div style={{ position: 'relative' }}>
-      <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>{label}</span>
+    <div className="relative">
+      <span className="mb-1 block text-xs">{label}</span>
       {value ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#f8fafc', fontSize: 13 }}>
-          <span style={{ flex: 1 }}>{renderValue(value)}</span>
-          <button type="button" onClick={() => { onSelect(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-faint)', padding: 0 }}>
+        <div className="flex items-center gap-2 rounded-[6px] border border-border-muted bg-surface-muted px-2.5 py-1.5 text-sm">
+          <span className="flex-1">{renderValue(value)}</span>
+          <button type="button" onClick={() => { onSelect(null); }} className="cursor-pointer border-0 bg-transparent p-0 text-text-faint">
             <Icon name="close" size={14} />
           </button>
         </div>
       ) : (
-        <div style={{ position: 'relative' }}>
+        <div className="relative">
           <input
             id={id}
             ref={inputRef}
@@ -225,21 +227,21 @@ function SearchSelect({ id, label, value, onSelect, placeholder, options, onSear
             onFocus={() => { onSearch(searchValue); setOpen(true); }}
             onBlur={() => setTimeout(() => setOpen(false), 150)}
             placeholder={placeholder}
-            style={{ width: '100%', boxSizing: 'border-box' }}
+            className="box-border w-full"
             aria-required="true"
             aria-invalid={error ? true : undefined}
             aria-describedby={errorId}
           />
           {open && (
-            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.1)', maxHeight: SEARCH_SELECT_OPTIONS_MAX_HEIGHT, overflowY: 'auto' }}>
-              {loading && <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--color-text-muted)' }}>กำลังโหลด{label}…</div>}
-              {!loading && options.length === 0 && <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--color-text-muted)' }}>ไม่พบข้อมูล</div>}
+            // maxHeight stays inline: it's sourced from SEARCH_SELECT_OPTIONS_MAX_HEIGHT (a JS
+            // constant), which a static Tailwind arbitrary-value class can't reference.
+            <div className="absolute left-0 right-0 top-full z-50 overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_16px_rgba(0,0,0,0.1)]" style={{ maxHeight: SEARCH_SELECT_OPTIONS_MAX_HEIGHT }}>
+              {loading && <div className="px-3 py-2.5 text-xs text-text-muted">กำลังโหลด{label}…</div>}
+              {!loading && options.length === 0 && <div className="px-3 py-2.5 text-xs text-text-muted">ไม่พบข้อมูล</div>}
               {options.map((opt) => (
                 // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- dropdown option row; onMouseDown (not click) preserves input focus for typeahead
                 <div key={opt.id} onMouseDown={() => { onSelect(opt); setOpen(false); }}
-                  style={{ padding: '8px 12px', fontSize: 13, cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}
-                  onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
-                  onMouseLeave={(e) => e.currentTarget.style.background = ''}
+                  className="cursor-pointer border-b border-surface-subtle px-3 py-2 text-sm hover:bg-surface-muted"
                 >
                   {renderOption(opt)}
                 </div>
@@ -247,9 +249,7 @@ function SearchSelect({ id, label, value, onSelect, placeholder, options, onSear
               {onCreateNew && (
                 // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- dropdown action row; onMouseDown (not click) preserves input focus
                 <div onMouseDown={() => { setOpen(false); onCreateNew(); }}
-                  style={{ padding: '8px 12px', fontSize: 12, cursor: 'pointer', color: '#2563eb', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, borderTop: options.length > 0 ? '1px solid #e2e8f0' : 'none', background: '#f8fafc' }}
-                  onMouseEnter={(e) => e.currentTarget.style.background = '#eff6ff'}
-                  onMouseLeave={(e) => e.currentTarget.style.background = '#f8fafc'}
+                  className={`flex cursor-pointer items-center gap-1.5 bg-surface-muted px-3 py-2 text-xs font-semibold text-link hover:bg-info-row-active ${options.length > 0 ? 'border-t border-border-subtle' : ''}`}
                 >
                   <Icon name="plus" size={13} />
                   {createNewLabel || 'สร้างรายการใหม่'}
@@ -260,7 +260,7 @@ function SearchSelect({ id, label, value, onSelect, placeholder, options, onSear
         </div>
       )}
       {error ? (
-        <p id={errorId} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{error}</p>
+        <p id={errorId} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">{error}</p>
       ) : null}
     </div>
   );
@@ -390,9 +390,10 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   // Both fetches degrade silently: if EITHER fails, `estimateReady` below stays false and every
   // ราคาตั้ง display site is skipped entirely, leaving the existing catalog reference price as the
   // only price shown (a deal must stay creatable with zero prices — V50). Never surfaced via
-  // showToast from an effect — this repo's useToast has an unstable identity that turns a toast in
-  // a useEffect dep array into an infinite render loop (see CLAUDE.md); these are silent, no-toast
-  // failures on purpose. `retry: false` keeps a genuinely-down endpoint from stalling the modal.
+  // showToast from an effect — this is optional estimate enrichment, not critical modal data, so
+  // these are silent, no-toast failures on purpose (independent of useToast's own identity, which
+  // useToast.js now keeps stable via useCallback([])). `retry: false` keeps a genuinely-down
+  // endpoint from stalling the modal.
   const fxRatesQuery = useQuery({
     queryKey: queryKeys.fxRates(),
     queryFn: () => api.fxRates.list().then((res) => res.fxRates ?? []),
@@ -836,11 +837,11 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           loading={customerLoading}
           renderOption={(c) => (
             <div>
-              <div style={{ fontWeight: 600 }}>{c.name}</div>
-              {c.taxId && <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>เลขภาษี {c.taxId}</div>}
+              <div className="font-semibold">{c.name}</div>
+              {c.taxId && <div className="text-2xs text-text-muted">เลขภาษี {c.taxId}</div>}
             </div>
           )}
-          renderValue={(c) => <span><strong>{c.name}</strong>{c.taxId ? <span style={{ color: 'var(--color-text-muted)', fontSize: 12, marginLeft: 6 }}>({c.taxId})</span> : null}</span>}
+          renderValue={(c) => <span><strong>{c.name}</strong>{c.taxId ? <span className="ml-1.5 text-xs text-text-muted">({c.taxId})</span> : null}</span>}
           createNewLabel="สร้างบริษัท / ลูกค้าใหม่"
           onCreateNew={() => setShowNewCustomer(true)}
           inputRef={(el) => { fieldRefs.current.customer = el; }}
@@ -848,37 +849,37 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         />
 
         {showNewCustomer && !selectedCustomer && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '12px', border: '1px solid #bfdbfe', borderRadius: 8, background: '#eff6ff' }}>
-            <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: '#1d4ed8' }}>เพิ่มบริษัท / ลูกค้าใหม่</p>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              <label style={{ margin: 0, gridColumn: '1 / -1' }}>
-                <span style={{ fontSize: 11 }}>ชื่อบริษัท *</span>
+          <div className="flex flex-col gap-2 rounded-md border border-info-border bg-info-row-active p-3">
+            <p className="m-0 text-xs font-bold text-info">เพิ่มบริษัท / ลูกค้าใหม่</p>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="col-span-2 m-0">
+                <span className="text-2xs">ชื่อบริษัท *</span>
                 <input value={newCustomer.name} onChange={(e) => setNewCustomer((p) => ({ ...p, name: e.target.value }))} placeholder="บริษัท … จำกัด" />
               </label>
-              <label style={{ margin: 0 }}>
-                <span style={{ fontSize: 11 }}>เลขประจำตัวผู้เสียภาษี</span>
+              <label className="m-0">
+                <span className="text-2xs">เลขประจำตัวผู้เสียภาษี</span>
                 <input value={newCustomer.taxId} onChange={(e) => setNewCustomer((p) => ({ ...p, taxId: e.target.value }))} placeholder="0105xxxxxxxxx" />
               </label>
-              <label style={{ margin: 0 }}>
-                <span style={{ fontSize: 11 }}>สาขา</span>
+              <label className="m-0">
+                <span className="text-2xs">สาขา</span>
                 <input value={newCustomer.branch} onChange={(e) => setNewCustomer((p) => ({ ...p, branch: e.target.value }))} placeholder="สำนักงานใหญ่" />
               </label>
-              <label style={{ margin: 0 }}>
-                <span style={{ fontSize: 11 }}>โทรศัพท์</span>
+              <label className="m-0">
+                <span className="text-2xs">โทรศัพท์</span>
                 <input value={newCustomer.phone} onChange={(e) => setNewCustomer((p) => ({ ...p, phone: e.target.value }))} placeholder="02-xxx-xxxx" />
               </label>
-              <label style={{ margin: 0 }}>
-                <span style={{ fontSize: 11 }}>ที่อยู่</span>
+              <label className="m-0">
+                <span className="text-2xs">ที่อยู่</span>
                 <input value={newCustomer.address} onChange={(e) => setNewCustomer((p) => ({ ...p, address: e.target.value }))} placeholder="ที่อยู่บริษัท" />
               </label>
             </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-              <button type="button" className="primary-button" disabled={!newCustomer.name.trim() || customerSaving} onClick={handleCreateCustomer} style={{ fontSize: 12 }}>
+            <div className="mt-1 flex gap-2">
+              <Button variant="primary" className="text-xs" disabled={!newCustomer.name.trim() || customerSaving} onClick={handleCreateCustomer}>
                 {customerSaving ? 'กำลังบันทึก…' : 'บันทึกบริษัทใหม่'}
-              </button>
-              <button type="button" className="secondary-button" onClick={() => { setShowNewCustomer(false); setNewCustomer({ name: '', taxId: '', branch: 'สำนักงานใหญ่', address: '', phone: '' }); }} style={{ fontSize: 12 }}>
+              </Button>
+              <Button variant="secondary" className="text-xs" onClick={() => { setShowNewCustomer(false); setNewCustomer({ name: '', taxId: '', branch: 'สำนักงานใหญ่', address: '', phone: '' }); }}>
                 ยกเลิก
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -893,7 +894,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         {!selectedCustomer ? (
           <div className="flex flex-col items-start gap-2 rounded-lg border border-dashed border-border-strong bg-surface px-3.5 py-4 text-sm text-text-muted">
             <span>ต้องเลือกลูกค้าก่อน — โครงการต้องผูกกับลูกค้าเสมอ</span>
-            <button type="button" className="secondary-button" onClick={() => setView('customer')}>ไปที่ ลูกค้า</button>
+            <Button variant="secondary" onClick={() => setView('customer')}>ไปที่ ลูกค้า</Button>
           </div>
         ) : (
           <div
@@ -903,44 +904,44 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             aria-invalid={fieldErrors.project ? true : undefined}
             aria-describedby={fieldErrors.project ? fieldErrorId('project-field') : undefined}
           >
-            <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>โครงการ *</span>
+            <span className="mb-1 block text-xs">โครงการ *</span>
             {selectedProject ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', fontSize: 13 }}>
-                <Icon name="building" size={13} style={{ color: 'var(--color-text-muted)' }} />
-                <span style={{ flex: 1 }}>{selectedProject.name}</span>
-                <button type="button" onClick={() => setSelectedProject(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-faint)', padding: 0 }}>
+              <div className="flex items-center gap-2 rounded-[6px] border border-border-muted bg-surface px-2.5 py-1.5 text-sm">
+                <Icon name="building" size={13} className="text-text-muted" />
+                <span className="flex-1">{selectedProject.name}</span>
+                <button type="button" onClick={() => setSelectedProject(null)} className="cursor-pointer border-0 bg-transparent p-0 text-text-faint">
                   <Icon name="close" size={14} />
                 </button>
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <div className="flex flex-col gap-1.5">
+                <div className="flex flex-wrap gap-1.5">
                   {projectOptions.map((p) => (
                     <button key={p.id} type="button"
-                      style={{ padding: '4px 10px', border: '1px solid #cbd5e1', borderRadius: 20, fontSize: 12, background: '#fff', cursor: 'pointer' }}
+                      className="cursor-pointer rounded-pill border border-border-muted bg-surface px-2.5 py-1 text-xs"
                       onClick={() => { setSelectedProject(p); clearFieldError('project'); }}>
                       {p.name}
                     </button>
                   ))}
                   <button type="button"
-                    style={{ padding: '4px 10px', border: '1px dashed #94a3b8', borderRadius: 20, fontSize: 12, background: 'none', cursor: 'pointer', color: 'var(--color-text-muted)' }}
+                    className="cursor-pointer rounded-pill border border-dashed border-text-faint bg-transparent px-2.5 py-1 text-xs text-text-muted"
                     onClick={() => setShowNewProject((v) => !v)}>
                     <Icon name="plus" size={12} /> สร้างโครงการใหม่
                   </button>
                 </div>
                 {showNewProject && (
-                  <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                  <div className="mt-1 flex gap-1.5">
                     <input value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)}
-                      placeholder="ชื่อโครงการ" style={{ flex: 1 }} />
-                    <button type="button" className="primary-button" onClick={handleCreateProject} disabled={creatingProject} style={{ padding: '4px 12px', fontSize: 12 }}>
+                      placeholder="ชื่อโครงการ" className="flex-1" />
+                    <Button variant="primary" className="px-3 py-1 text-xs" onClick={handleCreateProject} disabled={creatingProject}>
                       {creatingProject ? 'กำลังเพิ่ม…' : 'เพิ่ม'}
-                    </button>
+                    </Button>
                   </div>
                 )}
               </div>
             )}
             {fieldErrors.project ? (
-              <p id={fieldErrorId('project-field')} role="alert" style={{ margin: '6px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{fieldErrors.project}</p>
+              <p id={fieldErrorId('project-field')} role="alert" className="mx-0 mb-0 mt-1.5 text-2xs font-bold text-danger">{fieldErrors.project}</p>
             ) : null}
           </div>
         )}
@@ -997,68 +998,68 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         {!selectedCustomer ? (
           <div className="flex flex-col items-start gap-2 rounded-lg border border-dashed border-border-strong bg-surface px-3.5 py-4 text-sm text-text-muted">
             <span>เลือกลูกค้าก่อนจึงจะเพิ่มผู้ติดต่อได้</span>
-            <button type="button" className="secondary-button" onClick={() => setView('customer')}>ไปที่ ลูกค้า</button>
+            <Button variant="secondary" onClick={() => setView('customer')}>ไปที่ ลูกค้า</Button>
           </div>
         ) : (
           <div>
-            <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>ผู้ติดต่อหลัก</span>
+            <span className="mb-1 block text-xs">ผู้ติดต่อหลัก</span>
             {selectedContact ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', fontSize: 13 }}>
-                <div style={{ flex: 1 }}>
+              <div className="flex items-center gap-2 rounded-[6px] border border-border-muted bg-surface px-2.5 py-1.5 text-sm">
+                <div className="flex-1">
                   <strong>{selectedContact.firstName} {selectedContact.lastName}</strong>
-                  {selectedContact.position && <span style={{ color: 'var(--color-text-muted)', fontSize: 12, marginLeft: 6 }}>{selectedContact.position}</span>}
+                  {selectedContact.position && <span className="ml-1.5 text-xs text-text-muted">{selectedContact.position}</span>}
                   {(selectedContact.email || selectedContact.phone) && (
-                    <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 2 }}>
+                    <div className="mt-0.5 text-2xs text-text-muted">
                       {selectedContact.email}{selectedContact.email && selectedContact.phone ? ' · ' : ''}{selectedContact.phone}
                     </div>
                   )}
                 </div>
-                <button type="button" onClick={() => setSelectedContact(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-faint)', padding: 0 }}>
+                <button type="button" onClick={() => setSelectedContact(null)} className="cursor-pointer border-0 bg-transparent p-0 text-text-faint">
                   <Icon name="close" size={14} />
                 </button>
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <div className="flex flex-col gap-1.5">
+                <div className="flex flex-wrap gap-1.5">
                   {contactOptions.map((c) => (
                     <button key={c.id} type="button"
-                      style={{ padding: '4px 10px', border: '1px solid #cbd5e1', borderRadius: 20, fontSize: 12, background: '#fff', cursor: 'pointer', textAlign: 'left' }}
+                      className="cursor-pointer rounded-pill border border-border-muted bg-surface px-2.5 py-1 text-left text-xs"
                       onClick={() => setSelectedContact(c)}>
                       {c.firstName} {c.lastName}
-                      {c.position ? <span style={{ color: 'var(--color-text-muted)', marginLeft: 4 }}>({c.position})</span> : null}
+                      {c.position ? <span className="ml-1 text-text-muted">({c.position})</span> : null}
                     </button>
                   ))}
                   <button type="button"
-                    style={{ padding: '4px 10px', border: '1px dashed #94a3b8', borderRadius: 20, fontSize: 12, background: 'none', cursor: 'pointer', color: 'var(--color-text-muted)' }}
+                    className="cursor-pointer rounded-pill border border-dashed border-text-faint bg-transparent px-2.5 py-1 text-xs text-text-muted"
                     onClick={() => setShowNewContact((v) => !v)}>
                     <Icon name="plus" size={12} /> เพิ่มผู้ติดต่อ
                   </button>
                 </div>
                 {showNewContact && (
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 4, padding: '10px', border: '1px solid #e2e8f0', borderRadius: 6, background: '#fff' }}>
-                    <label style={{ margin: 0 }}>
-                      <span style={{ fontSize: 11 }}>ชื่อ *</span>
+                  <div className="mt-1 grid grid-cols-2 gap-1.5 rounded-[6px] border border-border-subtle bg-surface p-2.5">
+                    <label className="m-0">
+                      <span className="text-2xs">ชื่อ *</span>
                       <input value={newContact.firstName} onChange={(e) => setNewContact((p) => ({ ...p, firstName: e.target.value }))} placeholder="ชื่อ" />
                     </label>
-                    <label style={{ margin: 0 }}>
-                      <span style={{ fontSize: 11 }}>นามสกุล</span>
+                    <label className="m-0">
+                      <span className="text-2xs">นามสกุล</span>
                       <input value={newContact.lastName} onChange={(e) => setNewContact((p) => ({ ...p, lastName: e.target.value }))} placeholder="นามสกุล" />
                     </label>
-                    <label style={{ margin: 0 }}>
-                      <span style={{ fontSize: 11 }}>ตำแหน่ง</span>
+                    <label className="m-0">
+                      <span className="text-2xs">ตำแหน่ง</span>
                       <input value={newContact.position} onChange={(e) => setNewContact((p) => ({ ...p, position: e.target.value }))} placeholder="เช่น ผู้จัดการ" />
                     </label>
-                    <label style={{ margin: 0 }}>
-                      <span style={{ fontSize: 11 }}>โทร</span>
+                    <label className="m-0">
+                      <span className="text-2xs">โทร</span>
                       <input value={newContact.phone} onChange={(e) => setNewContact((p) => ({ ...p, phone: e.target.value }))} placeholder="08x-xxx-xxxx" />
                     </label>
-                    <label style={{ margin: 0, gridColumn: '1 / -1' }}>
-                      <span style={{ fontSize: 11 }}>อีเมล</span>
+                    <label className="col-span-2 m-0">
+                      <span className="text-2xs">อีเมล</span>
                       <input value={newContact.email} onChange={(e) => setNewContact((p) => ({ ...p, email: e.target.value }))} placeholder="email@company.com" />
                     </label>
-                    <button type="button" className="primary-button" onClick={handleCreateContact} disabled={creatingContact} style={{ gridColumn: '1 / -1', fontSize: 12 }}>
+                    <Button variant="primary" className="col-span-2 text-xs" onClick={handleCreateContact} disabled={creatingContact}>
                       {creatingContact ? 'กำลังเพิ่ม…' : 'เพิ่มผู้ติดต่อ'}
-                    </button>
+                    </Button>
                   </div>
                 )}
               </div>
@@ -1088,11 +1089,11 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           </div>
         ) : null}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <div className="grid grid-cols-2 gap-2">
 
           {/* Brand with catalog autocomplete */}
-          <div style={{ position: 'relative', margin: 0 }}>
-            <span style={{ fontSize: 12, display: 'block', marginBottom: 3 }}>ชื่อยี่ห้อ *</span>
+          <div className="relative m-0">
+            <span className="mb-[3px] block text-xs">ชื่อยี่ห้อ *</span>
             <input
               id={`item-${index}-brand`}
               ref={(el) => { fieldRefs.current[`items.${index}.brand`] = el; }}
@@ -1107,25 +1108,23 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               aria-describedby={fieldErrors[`items.${index}.brand`] ? fieldErrorId(`item-${index}-brand`) : undefined}
             />
             {fieldErrors[`items.${index}.brand`] ? (
-              <p id={fieldErrorId(`item-${index}-brand`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{fieldErrors[`items.${index}.brand`]}</p>
+              <p id={fieldErrorId(`item-${index}-brand`)} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">{fieldErrors[`items.${index}.brand`]}</p>
             ) : null}
             {catalogFocus?.index === index && catalogFocus?.field === 'brand' && catalogResults.length > 0 && (
-              <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 60, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.12)', maxHeight: 200, overflowY: 'auto' }}>
+              <div className="absolute left-0 right-0 top-full z-[60] max-h-[200px] overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_16px_rgba(0,0,0,0.12)]">
                 {catalogResults.map((cat) => (
                   // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- autocomplete option row; onMouseDown (not click) preserves input focus for typeahead
                   <div key={cat.priceId ?? cat.id} onMouseDown={() => applyCatalogItem(index, cat, 'brand')}
-                    style={{ padding: '7px 10px', fontSize: 12, cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = '#f0f9ff'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = ''}
+                    className="cursor-pointer border-b border-surface-subtle px-2.5 py-[7px] text-xs hover:bg-info-row-active"
                   >
                     <strong>{cat.factoryName || cat.brand}</strong>
                     {' — '}
                     {cat.collection || cat.productName || cat.productCode || '—'}
-                    <span style={{ color: 'var(--color-text-muted)', marginLeft: 4 }}>
+                    <span className="ml-1 text-text-muted">
                       {[cat.color, cat.sizeRaw || cat.size].filter(Boolean).join(' · ')}
                     </span>
                     {cat.price && (
-                      <span style={{ color: '#2563eb', fontSize: 11, marginLeft: 6, fontWeight: 600 }}>
+                      <span className="ml-1.5 text-2xs font-semibold text-link">
                         {Number(cat.price).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {cat.currency}
                       </span>
                     )}
@@ -1135,8 +1134,8 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             )}
           </div>
 
-          <div style={{ position: 'relative', margin: 0 }}>
-            <span style={{ fontSize: 12, display: 'block', marginBottom: 3 }}>ชื่อรุ่น / Collection *</span>
+          <div className="relative m-0">
+            <span className="mb-[3px] block text-xs">ชื่อรุ่น / Collection *</span>
             <input
               id={`item-${index}-model`}
               ref={(el) => { fieldRefs.current[`items.${index}.model`] = el; }}
@@ -1151,25 +1150,23 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               aria-describedby={fieldErrors[`items.${index}.model`] ? fieldErrorId(`item-${index}-model`) : undefined}
             />
             {fieldErrors[`items.${index}.model`] ? (
-              <p id={fieldErrorId(`item-${index}-model`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{fieldErrors[`items.${index}.model`]}</p>
+              <p id={fieldErrorId(`item-${index}-model`)} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">{fieldErrors[`items.${index}.model`]}</p>
             ) : null}
             {catalogFocus?.index === index && catalogFocus?.field === 'model' && catalogResults.length > 0 && (
-              <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 60, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.12)', maxHeight: 200, overflowY: 'auto' }}>
+              <div className="absolute left-0 right-0 top-full z-[60] max-h-[200px] overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_16px_rgba(0,0,0,0.12)]">
                 {catalogResults.map((cat) => (
                   // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- autocomplete option row; onMouseDown (not click) preserves input focus for typeahead
                   <div key={cat.priceId ?? cat.id} onMouseDown={() => applyCatalogItem(index, cat, 'model')}
-                    style={{ padding: '7px 10px', fontSize: 12, cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = '#f0f9ff'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = ''}
+                    className="cursor-pointer border-b border-surface-subtle px-2.5 py-[7px] text-xs hover:bg-info-row-active"
                   >
                     <strong>{cat.factoryName || cat.brand}</strong>
                     {' — '}
                     {cat.collection || cat.productName || cat.productCode || '—'}
-                    <span style={{ color: 'var(--color-text-muted)', marginLeft: 4 }}>
+                    <span className="ml-1 text-text-muted">
                       {[cat.color, cat.sizeRaw || cat.size].filter(Boolean).join(' · ')}
                     </span>
                     {cat.price && (
-                      <span style={{ color: '#2563eb', fontSize: 11, marginLeft: 6, fontWeight: 600 }}>
+                      <span className="ml-1.5 text-2xs font-semibold text-link">
                         {Number(cat.price).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {cat.currency}
                       </span>
                     )}
@@ -1178,8 +1175,8 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               </div>
             )}
           </div>
-          <label style={{ margin: 0 }}>
-            <span style={{ fontSize: 12 }}>สี *</span>
+          <label className="m-0">
+            <span className="text-xs">สี *</span>
             <input
               id={`item-${index}-color`}
               ref={(el) => { fieldRefs.current[`items.${index}.color`] = el; }}
@@ -1192,11 +1189,11 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               aria-describedby={fieldErrors[`items.${index}.color`] ? fieldErrorId(`item-${index}-color`) : undefined}
             />
             {fieldErrors[`items.${index}.color`] ? (
-              <p id={fieldErrorId(`item-${index}-color`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{fieldErrors[`items.${index}.color`]}</p>
+              <p id={fieldErrorId(`item-${index}-color`)} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">{fieldErrors[`items.${index}.color`]}</p>
             ) : null}
           </label>
-          <label style={{ margin: 0 }}>
-            <span style={{ fontSize: 12 }}>เนื้อผิว *</span>
+          <label className="m-0">
+            <span className="text-xs">เนื้อผิว *</span>
             <input
               id={`item-${index}-texture`}
               ref={(el) => { fieldRefs.current[`items.${index}.texture`] = el; }}
@@ -1209,11 +1206,11 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               aria-describedby={fieldErrors[`items.${index}.texture`] ? fieldErrorId(`item-${index}-texture`) : undefined}
             />
             {fieldErrors[`items.${index}.texture`] ? (
-              <p id={fieldErrorId(`item-${index}-texture`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{fieldErrors[`items.${index}.texture`]}</p>
+              <p id={fieldErrorId(`item-${index}-texture`)} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">{fieldErrors[`items.${index}.texture`]}</p>
             ) : null}
           </label>
-          <label style={{ margin: 0 }}>
-            <span style={{ fontSize: 12 }}>ขนาด *</span>
+          <label className="m-0">
+            <span className="text-xs">ขนาด *</span>
             <input
               id={`item-${index}-size`}
               ref={(el) => { fieldRefs.current[`items.${index}.size`] = el; }}
@@ -1226,29 +1223,29 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               aria-describedby={fieldErrors[`items.${index}.size`] ? fieldErrorId(`item-${index}-size`) : undefined}
             />
             {fieldErrors[`items.${index}.size`] ? (
-              <p id={fieldErrorId(`item-${index}-size`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{fieldErrors[`items.${index}.size`]}</p>
+              <p id={fieldErrorId(`item-${index}-size`)} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">{fieldErrors[`items.${index}.size`]}</p>
             ) : null}
           </label>
-          <label style={{ margin: 0 }}>
-            <span style={{ fontSize: 12 }}>โรงงาน</span>
+          <label className="m-0">
+            <span className="text-xs">โรงงาน</span>
             <input value={item.factory} onChange={(e) => updateItem(index, 'factory', e.target.value)} placeholder="เช่น SCG Ceramics" />
           </label>
 
           {/* Unit basis toggle */}
-          <div style={{ margin: 0, gridColumn: '1 / -1' }}>
-            <span style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>หน่วยที่ใช้สั่ง *</span>
-            <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div className="col-span-2 m-0">
+            <span className="mb-1.5 block text-xs">หน่วยที่ใช้สั่ง *</span>
+            <div className="flex flex-wrap items-center gap-4">
               {[{ value: 'PIECE', label: 'แผ่น' }, { value: 'SQM', label: 'ตร.ม.' }].map((opt) => (
-                <label key={opt.value} style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer', fontSize: 13 }}>
+                <label key={opt.value} className="flex cursor-pointer items-center gap-1.5 text-sm">
                   <input type="radio" name={`unitBasis-${index}`} value={opt.value}
                     checked={(item.unitBasis || 'PIECE') === opt.value}
                     onChange={() => updateItem(index, 'unitBasis', opt.value)}
-                    style={{ width: 16, height: 16, accentColor: '#1e40af', cursor: 'pointer' }} />
+                    className="h-4 w-4 cursor-pointer accent-info-dot" />
                   <strong>{opt.label}</strong>
                 </label>
               ))}
               {item.sqmPerPiece && (
-                <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>· 1 แผ่น = {item.sqmPerPiece} ตร.ม.</span>
+                <span className="text-2xs text-text-muted">· 1 แผ่น = {item.sqmPerPiece} ตร.ม.</span>
               )}
             </div>
           </div>
@@ -1256,8 +1253,8 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           {/* Primary qty input */}
           {(item.unitBasis || 'PIECE') === 'PIECE' ? (
             <>
-              <label style={{ margin: 0 }}>
-                <span style={{ fontSize: 12 }}>จำนวน (แผ่น) *</span>
+              <label className="m-0">
+                <span className="text-xs">จำนวน (แผ่น) *</span>
                 <input type="number" value={item.qty} step="1"
                   id={`item-${index}-qty`}
                   ref={(el) => { fieldRefs.current[`items.${index}.qty`] = el; }}
@@ -1268,20 +1265,20 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   aria-describedby={fieldErrors[`items.${index}.qty`] ? fieldErrorId(`item-${index}-qty`) : undefined}
                 />
                 {fieldErrors[`items.${index}.qty`] ? (
-                  <p id={fieldErrorId(`item-${index}-qty`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{fieldErrors[`items.${index}.qty`]}</p>
+                  <p id={fieldErrorId(`item-${index}-qty`)} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">{fieldErrors[`items.${index}.qty`]}</p>
                 ) : null}
               </label>
-              <div style={{ margin: 0 }}>
-                <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>พื้นที่รวม (ตร.ม.)</span>
-                <div style={{ padding: '7px 10px', border: '1px solid #e2e8f0', borderRadius: 6, background: '#f8fafc', fontSize: 13, color: item.qtySqm ? '#475569' : 'var(--color-text-muted)' }}>
+              <div className="m-0">
+                <span className="mb-1 block text-xs">พื้นที่รวม (ตร.ม.)</span>
+                <div className={`rounded-[6px] border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm ${item.qtySqm ? 'text-icon-muted' : 'text-text-muted'}`}>
                   {item.qtySqm ? `${Number(item.qtySqm).toFixed(3)} ตร.ม.` : item.sqmPerPiece ? 'กรอกจำนวนแผ่นก่อน' : '—'}
                 </div>
               </div>
             </>
           ) : (
             <>
-              <label style={{ margin: 0 }}>
-                <span style={{ fontSize: 12 }}>พื้นที่ (ตร.ม.) *</span>
+              <label className="m-0">
+                <span className="text-xs">พื้นที่ (ตร.ม.) *</span>
                 <input type="number" value={item.qtySqm} min="0" step="0.001"
                   id={`item-${index}-qtySqm`}
                   ref={(el) => { fieldRefs.current[`items.${index}.qtySqm`] = el; }}
@@ -1292,12 +1289,12 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   aria-describedby={fieldErrors[`items.${index}.qtySqm`] ? fieldErrorId(`item-${index}-qtySqm`) : undefined}
                 />
                 {fieldErrors[`items.${index}.qtySqm`] ? (
-                  <p id={fieldErrorId(`item-${index}-qtySqm`)} role="alert" style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: 'var(--color-danger)' }}>{fieldErrors[`items.${index}.qtySqm`]}</p>
+                  <p id={fieldErrorId(`item-${index}-qtySqm`)} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">{fieldErrors[`items.${index}.qtySqm`]}</p>
                 ) : null}
               </label>
-              <div style={{ margin: 0 }}>
-                <span style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>จำนวน (แผ่น)</span>
-                <div style={{ padding: '7px 10px', border: '1px solid #e2e8f0', borderRadius: 6, background: '#f8fafc', fontSize: 13, color: item.qty ? '#475569' : 'var(--color-text-muted)' }}>
+              <div className="m-0">
+                <span className="mb-1 block text-xs">จำนวน (แผ่น)</span>
+                <div className={`rounded-[6px] border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm ${item.qty ? 'text-icon-muted' : 'text-text-muted'}`}>
                   {item.qty ? `${item.qty} แผ่น` : item.sqmPerPiece ? 'กรอกพื้นที่ก่อน' : '—'}
                 </div>
               </div>
@@ -1305,16 +1302,16 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           )}
 
           {item.catalogPrice != null ? (
-            <div style={{ margin: 0, gridColumn: '1 / -1', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', border: '1px solid #dfe5ee', borderRadius: 8, background: '#f8fafc' }}>
+            <div className="col-span-2 m-0 flex items-center justify-between rounded-md border border-border-input bg-surface-muted px-3 py-2.5">
               {/* Two-tone hierarchy restored here (review-remediation, fix/ui-contrast-tokens):
                   both label and caveat used to share --color-text-muted after the AA fix, which
                   flattened the label/caveat distinction to weight alone. The label now uses
                   --color-icon-muted (#475569, 7.24:1+ on this row's surfaces) so it reads a step
                   darker than the caveat's --color-text-muted (#5c6b80, 5.19:1) — both clear AA. */}
-              <span style={{ fontSize: 11, color: 'var(--color-icon-muted)', fontWeight: 700 }}>
-                ราคาอ้างอิง (แคตตาล็อก) <span style={{ fontWeight: 500, color: 'var(--color-text-muted)' }}>— ราคาขายจริงมาจากขั้นคำขอราคา</span>
+              <span className="text-2xs font-bold text-icon-muted">
+                ราคาอ้างอิง (แคตตาล็อก) <span className="font-medium text-text-muted">— ราคาขายจริงมาจากขั้นคำขอราคา</span>
               </span>
-              <span style={{ fontWeight: 800, fontSize: 14 }}>
+              <span className="text-md font-extrabold">
                 {Number(item.catalogPrice).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {item.catalogCurrency}
               </span>
             </div>
@@ -1325,18 +1322,18 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           {estimateReady && item.catalogPrice != null ? (() => {
             const lineEstimate = computeItemEstimateThb(item, estimateContext);
             return (
-              <div data-testid={`item-editor-estimate-${index}`} style={{ margin: 0, gridColumn: '1 / -1', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', border: '1px solid var(--color-accent)', borderRadius: 8, background: 'var(--color-success-bg)' }}>
-                <span style={{ fontSize: 11, color: 'var(--color-icon-muted)', fontWeight: 700 }}>
-                  ราคาตั้ง (ประมาณการ) <span style={{ fontWeight: 500, color: 'var(--color-text-muted)' }}>— ราคาแคตตาล็อก × อัตราแลกเปลี่ยน × ตัวคูณ CEO ไม่ใช่ราคาขายจริง</span>
+              <div data-testid={`item-editor-estimate-${index}`} className="col-span-2 m-0 flex items-center justify-between rounded-md border border-accent bg-success-bg px-3 py-2.5">
+                <span className="text-2xs font-bold text-icon-muted">
+                  ราคาตั้ง (ประมาณการ) <span className="font-medium text-text-muted">— ราคาแคตตาล็อก × อัตราแลกเปลี่ยน × ตัวคูณ CEO ไม่ใช่ราคาขายจริง</span>
                 </span>
                 {lineEstimate.ok ? (
-                  <span style={{ fontWeight: 800, fontSize: 14, textAlign: 'right' }}>
+                  <span className="text-right text-md font-extrabold">
                     {formatThb(lineEstimate.unitThb)} บาท/หน่วย
                     <br />
-                    <span style={{ fontSize: 12 }}>รวม {formatThb(lineEstimate.total)} บาท</span>
+                    <span className="text-xs">รวม {formatThb(lineEstimate.total)} บาท</span>
                   </span>
                 ) : (
-                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-muted)' }}>ยังคำนวณไม่ได้ ({estimateReasonLabel(lineEstimate.reason)})</span>
+                  <span className="text-xs font-bold text-text-muted">ยังคำนวณไม่ได้ ({estimateReasonLabel(lineEstimate.reason)})</span>
                 )}
               </div>
             );
@@ -1362,12 +1359,12 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             <p className="text-sm font-extrabold text-text">ยังไม่มีรายการสินค้า</p>
             <p className="text-xs text-text-muted">ค้นหาจากแคตตาล็อก หรือเพิ่มสินค้าที่ยังไม่มีในระบบเอง</p>
             <div className="mt-1 flex flex-wrap justify-center gap-2">
-              <button type="button" className="primary-button" style={{ fontSize: 12 }} onClick={addItem}>
+              <Button variant="primary" className="text-xs" onClick={addItem}>
                 <Icon name="plus" size={13} /> ค้นหาสินค้า
-              </button>
-              <button type="button" className="secondary-button" style={{ fontSize: 12 }} onClick={addItem}>
+              </Button>
+              <Button variant="secondary" className="text-xs" onClick={addItem}>
                 เพิ่มสินค้าเอง (custom)
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
@@ -1400,12 +1397,12 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   ) : null}
                 </div>
                 <div className="flex shrink-0 flex-col gap-1">
-                  <button type="button" className="icon-button" aria-label={`แก้ไขรายการที่ ${index + 1}`} onClick={() => setEditingItemIndex(index)}>
+                  <Button variant="icon" aria-label={`แก้ไขรายการที่ ${index + 1}`} onClick={() => setEditingItemIndex(index)}>
                     <Icon name="pencil" size={14} />
-                  </button>
-                  <button type="button" className="icon-button" aria-label={`ลบรายการที่ ${index + 1}`} style={{ color: 'var(--color-danger)' }} onClick={() => removeItem(index)}>
+                  </Button>
+                  <Button variant="icon" aria-label={`ลบรายการที่ ${index + 1}`} className="text-danger" onClick={() => removeItem(index)}>
                     <Icon name="close" size={14} />
-                  </button>
+                  </Button>
                 </div>
               </div>
             ))}
@@ -1422,9 +1419,9 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                 <span className="text-sm font-extrabold text-accent-dark">{formatThb(itemsEstimate.total)} บาท</span>
               </div>
             ) : null}
-            <button type="button" className="secondary-button" onClick={addItem}>
+            <Button variant="secondary" onClick={addItem}>
               <Icon name="plus" size={14} /> เพิ่มรายการสินค้า
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -1488,7 +1485,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             <p className="flex items-center gap-1.5 text-xs font-extrabold text-danger-dark">
               <Icon name="triangleAlert" size={14} /> ยังกรอกไม่ครบ {reviewOrder.length} รายการ
             </p>
-            <ul className="mt-1.5 flex flex-col gap-1 pl-4 text-2xs text-danger-dark" style={{ listStyle: 'disc' }}>
+            <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-4 text-2xs text-danger-dark">
               {reviewOrder.map((key) => (
                 <li key={key}>
                   {reviewErrors[key]}
@@ -1599,31 +1596,58 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     if (view === 'hub' || view === 'review') {
       return (
         <>
-          <button type="button" className="secondary-button" onClick={onClose} disabled={loading}>ยกเลิก</button>
-          <button type="button" className="secondary-button" onClick={handleSaveDraft} disabled={loading}>บันทึกร่าง</button>
-          <button type="submit" form="ticket-create-form" className="primary-button" disabled={loading || !canCreateNow} data-testid="ticket-create-submit">
+          <Button variant="secondary" onClick={onClose} disabled={loading}>ยกเลิก</Button>
+          <Button variant="secondary" onClick={handleSaveDraft} disabled={loading}>บันทึกร่าง</Button>
+          <Button type="submit" form="ticket-create-form" variant="primary" disabled={loading || !canCreateNow} data-testid="ticket-create-submit">
             <Icon name="fileText" />
             {loading ? 'กำลังสร้าง…' : 'สร้างดีล'}
-          </button>
+          </Button>
         </>
       );
     }
     if (view === 'items' && editingItemIndex != null) {
       return (
         <>
-          <button type="button" className="secondary-button" style={{ color: 'var(--color-danger)' }} onClick={() => removeItem(editingItemIndex)}>ลบ</button>
-          <button type="button" className="primary-button" onClick={() => setEditingItemIndex(null)}>
+          <Button variant="secondary" className="text-danger" onClick={() => removeItem(editingItemIndex)}>ลบ</Button>
+          <Button variant="primary" onClick={() => setEditingItemIndex(null)}>
             <Icon name="check" size={14} /> บันทึกรายการ
-          </button>
+          </Button>
         </>
       );
     }
     return (
-      <button type="button" className="primary-button" style={{ marginLeft: 'auto' }} onClick={() => setView('hub')}>
+      <Button variant="primary" className="ml-auto" onClick={() => setView('hub')}>
         <Icon name="check" size={14} /> {view === 'items' ? `เสร็จสิ้น · ${items.length} รายการ` : 'เสร็จสิ้น'}
-      </button>
+      </Button>
     );
   }
+
+  // CRITICAL (HTML implicit submission, fix/form-enter-submits-real-records; migrated to
+  // SafeForm's `canSubmit` under #safe-form-primitive): this <form> wraps all 7 sub-views below,
+  // and a form with no submit button but exactly ONE field that blocks implicit submission fires
+  // a real 'submit' event on Enter with no button ever pressed. That was true for DETAILS
+  // (renderDetailsView's ชื่อดีล input is its only such field -- the textarea and role="radio"
+  // priority chips don't count) and, before a project/customer is picked, for PROJECT and
+  // CUSTOMER too — `submit()` used to run regardless of `view`, so typing a deal title and
+  // pressing Enter filed a real deal (confirmed in a real browser; jsdom does not implement
+  // implicit submission, which is why the suite stayed green with the bug live — see
+  // TicketCreateModal.test.jsx's `fireEvent.submit(form)` cases).
+  //
+  // `canSubmit={view === 'hub' || view === 'review'}` reproduces the old bespoke
+  // `handleFormSubmit`'s condition exactly, matching renderFooter()'s own condition for when a
+  // real `type="submit" form="ticket-create-form"` button exists (above) — not `view === 'review'`
+  // alone: CUSTOMER/PROJECT/CONTACT/ITEMS/DETAILS never render one, so they can never legitimately
+  // submit, implicit or explicit, and are unconditionally blocked here. HUB is different from
+  // every other non-REVIEW view — a linked submit button is in the DOM the whole time HUB is
+  // showing (it lives in the modal's footer, a sibling of this <form>, wired via `form=` — see
+  // Modal.jsx), so HUB never satisfies "no submit button" and was never part of this bug class;
+  // narrowing this gate to review-only would silently turn that real, working button into a dead
+  // click instead of closing a hole that was never open on HUB. `canSubmit` is a RESTRICTION and
+  // never a permission (see SafeForm.jsx's header): SafeForm's submitter guard still applies on
+  // top of it, so BOTH must pass. That AND costs this form nothing — HUB/REVIEW's footer button is
+  // real and always in the DOM whenever `canSubmit` is true — but it does mean the happy-path
+  // tests have to carry a real submitter rather than dispatching a bare `fireEvent.submit(form)`;
+  // see `submitForm()` in TicketCreateModal.test.jsx.
 
   return (
     <Modal
@@ -1643,7 +1667,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         our aria-wired per-field errors and scroll-to-first-invalid below
         would never run for exactly the case they exist to handle.
       */}
-      <form id="ticket-create-form" onSubmit={submit} noValidate>
+      <SafeForm id="ticket-create-form" onSubmit={submit} canSubmit={view === 'hub' || view === 'review'} noValidate>
         {view === 'hub' && renderHub()}
         {view === 'customer' && renderCustomerView()}
         {view === 'project' && renderProjectView()}
@@ -1651,7 +1675,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         {view === 'items' && renderItemsView()}
         {view === 'details' && renderDetailsView()}
         {view === 'review' && renderReviewView()}
-      </form>
+      </SafeForm>
     </Modal>
   );
 }

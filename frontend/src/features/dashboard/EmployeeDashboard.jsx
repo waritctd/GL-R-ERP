@@ -11,6 +11,7 @@ import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
 import { formatShortDate, greetingName, requestStatus } from '../../utils/format.js';
 import { hasPermission, canAccessPath } from '../../app/permissions.js';
 import { SALES_ENABLED } from '../../app/features.js';
+import { TaxAllowanceActionRow } from '../taxAllowance/TaxAllowanceActionRow.jsx';
 import { ActionQueue } from './ActionQueue.jsx';
 
 /**
@@ -166,7 +167,7 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
-export function EmployeeDashboard({ user, employee, profileRequests = [], dashboardSummary, showToast }) {
+export function EmployeeDashboard({ user, employee, profileRequests = [], dashboardSummary, taxAllowanceSummary, showToast }) {
   const navigate = useNavigate();
   const pendingCount = profileRequests.filter((request) => request.status === 'pending').length;
   const years = employee?.hireDate ? new Date().getFullYear() - new Date(employee.hireDate).getFullYear() : 0;
@@ -244,6 +245,11 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
 
       {mode !== 'employee' ? <ActionQueue items={queueItems} /> : null}
 
+      {/* Same ล.ย.01 nudge the plain-employee landing gets — warehouse/qc land here rather than on
+          EmployeeSelfService, and were the one self-service tier with no route to the form.
+          Renders nothing unless there is something to file. */}
+      {mode === 'employee' ? <TaxAllowanceActionRow summary={taxAllowanceSummary} /> : null}
+
       {employee && mode !== 'employee' ? (
         <section className="profile-strip">
           <Avatar employee={employee} size="lg" />
@@ -291,7 +297,7 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
         <button
           type="button"
           onClick={() => navigate('/attendance')}
-          className="bg-surface border border-border rounded-md shadow-sm p-5 w-full text-left cursor-pointer flex items-center justify-between gap-4 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-2"
+          className="bg-surface border border-border rounded-md p-5 w-full text-left cursor-pointer flex items-center justify-between gap-4 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover max-[720px]:flex-col max-[720px]:items-start max-[720px]:gap-2"
         >
           <span className="flex items-center gap-3 min-w-0">
             <span className={`stat-icon !mb-0 stat-${dashboardSummary?.attendance?.todayStatus === 'PRESENT' ? 'teal' : 'amber'}`}>

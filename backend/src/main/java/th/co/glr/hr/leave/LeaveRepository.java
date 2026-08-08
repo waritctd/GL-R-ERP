@@ -25,6 +25,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.approval.PendingApproverSql;
 import th.co.glr.hr.attendance.schedule.HolidayCalendar;
 import th.co.glr.hr.attendance.schedule.WorkSchedule;
 import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
@@ -1125,6 +1126,18 @@ public class LeaveRepository {
     }
 
     public int cancel(long id, Long reviewedById, String reviewerNote) {
+        // Found via a live real-backend click-through (self-cancel: an employee cancelling their
+        // OWN request, reviewedById == null): "could not determine data type of parameter $2".
+        // Unlike #approve/#reject, where :reviewedById binds directly into a typed assignment
+        // (reviewed_by_id = :reviewedById), here BOTH bind params appear only inside
+        // COALESCE(...)/CASE WHEN ... IS NULL -- never in a context with an inferable column type
+        // on their own. Postgres' extended query protocol cannot infer a type from that shape,
+        // and a NULL value at bind time gives it nothing else to go on either. approve/reject
+        // never hit this because their SET target IS the type hint; cancel's self-cancel path
+        // (the only caller that can legitimately pass reviewedById == null) is the one shape that
+        // was never covered -- mocks don't touch real SQL, and no existing test exercises a real
+        // Postgres self-cancel. Explicit SQL types make the driver's job possible regardless of
+        // value or position.
         return jdbc.update("""
             UPDATE hr.leave_request
                SET status = 'CANCELLED',
@@ -1137,8 +1150,8 @@ public class LeaveRepository {
                AND status IN ('SUBMITTED', 'APPROVED')
             """, new MapSqlParameterSource()
             .addValue("id", id)
-            .addValue("reviewedById", reviewedById)
-            .addValue("reviewerNote", clean(reviewerNote)));
+            .addValue("reviewedById", reviewedById, java.sql.Types.BIGINT)
+            .addValue("reviewerNote", clean(reviewerNote), java.sql.Types.VARCHAR));
     }
 
     private String baseSelect() {
@@ -1185,7 +1198,16 @@ public class LeaveRepository {
                    lr.purpose_code,
                    lr.emergency_filing,
                    lr.system_note_code,
-                   lr.system_note_params
+                   lr.system_note_params,
+                   manager.is_active AS manager_is_active,
+                   COALESCE(NULLIF(TRIM(manager.nickname), ''), manager.first_name_th) AS manager_display_name,
+                   """
+            // feat/pending-approver-info: the "hr generically" fallback when there is no active
+            // direct manager -- see PendingApproverSql's Javadoc for the single-active-match rule
+            // and why this SQL must stay in lockstep with DivisionAccessPolicy#roleFor.
+            + PendingApproverSql.SINGLE_ACTIVE_HR_NAME_SQL + " AS hr_single_approver_name"
+            + """
+
               FROM hr.leave_request lr
               JOIN hr.employee e ON e.employee_id = lr.employee_id
               JOIN hr.leave_type lt ON lt.leave_type_code = lr.leave_type_code
@@ -1265,8 +1287,53 @@ public class LeaveRepository {
             fromJson(rs.getString("system_note_params")),
             // Phase A0b: placeholder -- this mapper has no actor to check "can review" against.
             // LeaveService#withCanReviewFlag overwrites this on every DTO it returns; see its Javadoc.
-            false
+            false,
+            resolvePendingApproverRole(rs),
+            resolvePendingApproverName(rs)
         );
+    }
+
+    /**
+     * feat/pending-approver-info: "manager" when the requester has an active direct manager, else
+     * "hr" -- leave has no CEO stage (see {@code LeaveService.REVIEW_ALL_ROLES}). {@code null} for
+     * any non-SUBMITTED status: an already-decided or auto-rejected request has nobody left to
+     * wait on.
+     *
+     * <p><strong>Not the same active-check as {@code LeaveService#isDirectManager}</strong> (review
+     * #pending-approver-info): that method's {@code access.active()} is the REQUESTER's own active
+     * flag (from {@code findEmployeeAccess(employeeId)}, keyed on the employee whose leave it is),
+     * not the manager's. {@link #hasActiveManager} below checks {@code manager_is_active} -- the
+     * MANAGER's own flag, off the already-joined manager row. This is a genuinely different (and
+     * stricter) check: an inactive-but-still-assigned manager here correctly falls through to "hr"
+     * rather than naming someone who can no longer act.
+     */
+    String resolvePendingApproverRole(ResultSet rs) throws SQLException {
+        if (!"SUBMITTED".equals(rs.getString("status"))) {
+            return null;
+        }
+        return hasActiveManager(rs) ? "manager" : "hr";
+    }
+
+    /**
+     * feat/pending-approver-info: the paired display name for {@link #resolvePendingApproverRole}.
+     * For "manager" this is always non-null when the role is "manager" (an active manager row was,
+     * by construction, found and joined). For "hr" this is {@code null} whenever more than one
+     * active hr-role employee exists -- {@link PendingApproverSql#SINGLE_ACTIVE_HR_NAME_SQL} only
+     * resolves a name for an UNAMBIGUOUS single match; HR ambiguity resolution (name omitted, role
+     * shown alone) is a deliberate judgement call, not an oversight -- see this feature's PR body.
+     */
+    String resolvePendingApproverName(ResultSet rs) throws SQLException {
+        if (!"SUBMITTED".equals(rs.getString("status"))) {
+            return null;
+        }
+        return hasActiveManager(rs)
+            ? blankToNull(rs.getString("manager_display_name"))
+            : blankToNull(rs.getString("hr_single_approver_name"));
+    }
+
+    boolean hasActiveManager(ResultSet rs) throws SQLException {
+        long managerId = rs.getLong("reports_to_employee_id");
+        return !rs.wasNull() && rs.getBoolean("manager_is_active");
     }
 
     private Long nullableLong(ResultSet rs, String column) throws SQLException {

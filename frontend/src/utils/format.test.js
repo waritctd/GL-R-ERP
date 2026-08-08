@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  addDaysIso,
   attendanceSourceLabel,
+  bangkokMonthStartIso,
   factoryQuoteStatusLabel,
   formatAddress,
   formatMoney,
@@ -244,5 +246,51 @@ describe('specialMoneyStatusLabel', () => {
     SPECIAL_MONEY_STATUSES.forEach((status) => {
       expect(specialMoneyStatusLabel(status).label).not.toBe(status);
     });
+  });
+});
+
+// Attendance date stepper bug: `new Date(iso + 'T00:00:00+07:00').toISOString().slice(0,10)`
+// reads the UTC calendar day off a Bangkok-midnight instant, which is one day behind the Bangkok
+// date intended -- netting a 2-day back-step and a stuck forward-step on the attendance page.
+// addDaysIso replaces that with pure YYYY-MM-DD calendar-field arithmetic.
+describe('addDaysIso', () => {
+  it('stepping +1 then -1 returns the original date', () => {
+    expect(addDaysIso(addDaysIso('2026-08-15', 1), -1)).toBe('2026-08-15');
+  });
+
+  it('steps a single day forward and backward with no timezone-induced skew', () => {
+    expect(addDaysIso('2026-08-15', 1)).toBe('2026-08-16');
+    expect(addDaysIso('2026-08-15', -1)).toBe('2026-08-14');
+  });
+
+  it('crosses a month boundary', () => {
+    expect(addDaysIso('2026-08-31', 1)).toBe('2026-09-01');
+    expect(addDaysIso('2026-09-01', -1)).toBe('2026-08-31');
+  });
+
+  it('crosses a year boundary', () => {
+    expect(addDaysIso('2026-12-31', 1)).toBe('2027-01-01');
+    expect(addDaysIso('2027-01-01', -1)).toBe('2026-12-31');
+  });
+});
+
+// bangkokMonthStartIso's monthsBack param (attendance page's 3-month-back browsable window) walks
+// calendar months on the Bangkok wall-clock date via a flat "months since epoch" count, so a
+// year rollover falls out of the Math.floor/modulo for free -- these pin that specific claim.
+describe('bangkokMonthStartIso monthsBack', () => {
+  it('defaults to the exact current month with no monthsBack argument', () => {
+    expect(bangkokMonthStartIso(new Date('2026-08-15T10:00:00Z'))).toBe('2026-08-01');
+  });
+
+  it('walks back within the same year when it does not cross a boundary', () => {
+    expect(bangkokMonthStartIso(new Date('2026-08-15T10:00:00Z'), 2)).toBe('2026-06-01');
+  });
+
+  it('rolls a February start back 3 months into the previous November', () => {
+    expect(bangkokMonthStartIso(new Date('2026-02-10T10:00:00Z'), 3)).toBe('2025-11-01');
+  });
+
+  it('rolls back across two year boundaries', () => {
+    expect(bangkokMonthStartIso(new Date('2026-01-15T10:00:00Z'), 14)).toBe('2024-11-01');
   });
 });

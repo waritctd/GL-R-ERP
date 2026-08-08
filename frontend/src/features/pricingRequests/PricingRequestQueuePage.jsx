@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Button } from '../../components/common/Button.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -106,14 +107,15 @@ function QueueCard({ row, onPickup, canPickup, pickingUp }) {
         <span className="text-xs text-text-muted">ต้องการภายใน {formatThaiDate(row.requiredDate)}</span>
       ) : null}
       {canPickup ? (
-        <button
+        <Button
           type="button"
-          className="primary-button mt-1"
+          variant="primary"
+          className="mt-1"
           disabled={pickingUp}
           onClick={() => onPickup(row.id)}
         >
           รับเรื่อง
-        </button>
+        </Button>
       ) : null}
     </>
   );
@@ -150,36 +152,36 @@ export function PricingRequestQueuePage({ user, showToast }) {
       header: '',
       render: (row) => (
         canPickupPricingRequest(user, row) ? (
-          <button
+          <Button
             type="button"
-            className="secondary-button"
+            variant="secondary"
             disabled={pickupMutation.isPending}
             onClick={() => pickupMutation.mutate(row.id)}
             data-testid="pcr-queue-pickup"
           >
             รับเรื่อง
-          </button>
+          </Button>
         ) : null
       ),
     },
   ];
 
   return (
-    <div className="page-stack">
+    <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
       <SalesTabs role={user.role} />
       <PageHeader
         title="คิวขอราคา"
         subtitle="คำขอราคาที่รอฝ่ายนำเข้าดำเนินการ"
         actions={(
-          <button
+          <Button
             type="button"
-            className="icon-button"
+            variant="icon"
             onClick={() => queryClient.invalidateQueries({ queryKey: ['pricingRequests', 'queue'] })}
             title="รีเฟรช"
             aria-label="รีเฟรช"
           >
             <Icon name="refresh" />
-          </button>
+          </Button>
         )}
       />
 

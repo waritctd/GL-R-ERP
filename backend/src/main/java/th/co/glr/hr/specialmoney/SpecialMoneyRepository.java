@@ -19,6 +19,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.approval.PendingApproverSql;
 import th.co.glr.hr.common.ApiException;
 
 /**
@@ -91,6 +92,36 @@ public class SpecialMoneyRepository {
             .findFirst();
     }
 
+    /**
+     * {@code year} is deliberately never {@code event_date}'s year -- see {@code
+     * SpecialMoneyService#usageYear}'s Javadoc for why that field cannot key an annual cap (it is
+     * employee-supplied and unbounded: {@link SubmitSpecialMoneyHttpRequest} marks it {@code
+     * @NotNull} only, V66 has no future-date check, and {@code evaluateMedical} does not even read
+     * it). The two queries below key on two DIFFERENT columns instead, because they run over
+     * different status sets and only one of those columns is populated for both:
+     *
+     * <ul>
+     *   <li><b>{@code approvedAmountThisYear}</b> -- {@code status = 'APPROVED'} only, so {@code
+     *       payroll_month} is always non-null ({@code chk_smr_approved_complete}) and is the exact
+     *       column that decides which calendar year's payroll actually pays this row -- V128's
+     *       {@code welfare_pay} is summed the same way. It is assigned by the server at approval
+     *       time ({@code SpecialMoneyService#ceoApproveFrom}) from {@code LocalDate.now(...)}, never
+     *       from client input.
+     *   <li><b>{@code activeCountThisYear}</b> -- also spans {@code SUBMITTED} /
+     *       {@code MANAGER_APPROVED}, which have no {@code payroll_month} yet (NULL until
+     *       approval), so it keys on {@code requested_at} instead: a server-stamped timestamp
+     *       ({@code DEFAULT now()}; {@link #create} never writes it explicitly and no method in
+     *       this class ever updates it afterwards) present on every row from the moment it is
+     *       created. Bangkok-zoned to match {@code SpecialMoneyService.BUSINESS_ZONE} -- this
+     *       connection has no session-level timezone configured, so a bare {@code EXTRACT(YEAR FROM
+     *       requested_at)} would extract whatever the server/session default (commonly UTC) says,
+     *       which can disagree with Bangkok's calendar date by up to 7 hours a day.
+     * </ul>
+     *
+     * <p>Both replacements are deliberately columns the employee never supplies on the request
+     * body, so neither can be walked back to "employee picks the year" the way {@code event_date}
+     * could.
+     */
     public UsageSnapshot findUsage(long employeeId, int year) {
         Map<SpecialMoneyType, BigDecimal> approvedAmountThisYear = new EnumMap<>(SpecialMoneyType.class);
         jdbc.query("""
@@ -98,7 +129,7 @@ public class SpecialMoneyRepository {
               FROM hr.special_money_request
              WHERE employee_id = :employeeId
                AND status = 'APPROVED'
-               AND EXTRACT(YEAR FROM event_date) = :year
+               AND EXTRACT(YEAR FROM payroll_month) = :year
              GROUP BY request_type
             """, new MapSqlParameterSource()
             .addValue("employeeId", employeeId)
@@ -136,7 +167,7 @@ public class SpecialMoneyRepository {
               FROM hr.special_money_request
              WHERE employee_id = :employeeId
                AND status IN ('SUBMITTED', 'MANAGER_APPROVED', 'APPROVED')
-               AND EXTRACT(YEAR FROM event_date) = :year
+               AND EXTRACT(YEAR FROM (requested_at AT TIME ZONE 'Asia/Bangkok')) = :year
              GROUP BY request_type
             """, new MapSqlParameterSource()
             .addValue("employeeId", employeeId)
@@ -566,7 +597,14 @@ public class SpecialMoneyRepository {
                    (SELECT COUNT(*) FROM hr.special_money_request_attachment a
                      WHERE a.special_money_request_id = s.special_money_request_id) AS attachment_count,
                    s.created_at,
-                   s.updated_at
+                   s.updated_at,
+                   """
+            // feat/pending-approver-info: read-only "who this is waiting on" -- welfare is
+            // CEO-only, single-stage (see SpecialMoneyService's class Javadoc), so the single
+            // generic lookup below is the only candidate this domain ever needs.
+            + PendingApproverSql.SINGLE_ACTIVE_CEO_NAME_SQL + " AS ceo_single_name"
+            + """
+
               FROM hr.special_money_request s
               JOIN hr.employee e ON e.employee_id = s.employee_id
               LEFT JOIN hr.employee requested_by ON requested_by.employee_id = s.requested_by_id
@@ -615,8 +653,30 @@ public class SpecialMoneyRepository {
             blankToNull(rs.getString("manager_name")),
             rs.getInt("attachment_count"),
             rs.getObject("created_at", OffsetDateTime.class),
-            rs.getObject("updated_at", OffsetDateTime.class)
+            rs.getObject("updated_at", OffsetDateTime.class),
+            resolvePendingApproverRole(rs),
+            resolvePendingApproverName(rs)
         );
+    }
+
+    /**
+     * feat/pending-approver-info: welfare is CEO-only, single-stage (see {@code
+     * SpecialMoneyService}'s class Javadoc -- {@code MANAGER_APPROVED} survives only for legacy
+     * rows and {@code ceoApproveFrom} handles both the same way), so both pending statuses resolve
+     * to "ceo". Any other status (APPROVED/REJECTED/CANCELLED) has nobody left to wait on.
+     */
+    String resolvePendingApproverRole(ResultSet rs) throws SQLException {
+        String status = rs.getString("status");
+        return "SUBMITTED".equals(status) || "MANAGER_APPROVED".equals(status) ? "ceo" : null;
+    }
+
+    /**
+     * feat/pending-approver-info: {@code null} whenever more than one active ceo-role employee
+     * exists -- see {@link PendingApproverSql#SINGLE_ACTIVE_CEO_NAME_SQL}'s Javadoc. Deliberate
+     * ambiguity handling, not a bug -- see this feature's PR body.
+     */
+    String resolvePendingApproverName(ResultSet rs) throws SQLException {
+        return "ceo".equals(resolvePendingApproverRole(rs)) ? blankToNull(rs.getString("ceo_single_name")) : null;
     }
 
     private SpecialMoneyType parseType(String value) {

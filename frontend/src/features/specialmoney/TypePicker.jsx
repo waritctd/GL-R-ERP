@@ -48,7 +48,20 @@ export function TypePicker({ groups, value, onSelect, className }) {
   }
 
   return (
-    <div className={cn('divide-y divide-border-subtle rounded-md border border-border', className)}>
+    <div
+      className={cn(
+        // Chrome harmonized with the พนักงาน select's own control styling (styles.css's shared
+        // `input/select/textarea` rule: 1.5px border-border-input, rounded-md, bg-surface) so this
+        // reads as the same family of control, even though it stays a grouped-radio disclosure
+        // underneath, not an actual <select> -- see the file-level comment above. Deliberately NOT
+        // `overflow-hidden`: the group headers are flush against the wrapper's edges with no
+        // padding, so clipping overflow also clips their :focus-visible ring (an outset outline +
+        // box-shadow, styles.css) on three sides -- the picker's primary keyboard affordance. The
+        // corners squaring off in a header's hover state is a fainter cost than that.
+        'divide-y divide-border-subtle rounded-md border-[1.5px] border-border-input bg-surface',
+        className,
+      )}
+    >
       {groups.map((group) => {
         if (group.items.length === 0) return null;
         const isOpen = openKeys.has(group.key);
@@ -59,13 +72,19 @@ export function TypePicker({ groups, value, onSelect, className }) {
             <button
               type="button"
               id={buttonId}
-              className="flex w-full items-center justify-between gap-2 bg-surface px-3.5 py-2.5 text-left text-sm font-bold text-text hover:bg-surface-subtle"
+              // `min-h-10` + `px-3` match the select's 40px height / 12px horizontal padding
+              // rhythm (styles.css: `height: 40px; padding: 0 12px`) for the same reason as the
+              // border/radius/background above -- one visual family, same disclosure behavior.
+              className="flex min-h-10 w-full items-center justify-between gap-2 bg-surface px-3 py-2.5 text-left text-sm font-bold text-text hover:bg-surface-subtle"
               aria-expanded={isOpen}
               aria-controls={panelId}
               onClick={() => toggleGroup(group.key)}
             >
               {group.label}
-              <Icon name={isOpen ? 'chevronUp' : 'chevronDown'} size={16} />
+              {/* Chevron doubles as the dropdown-affordance cue the select gets for free from its
+                  native browser arrow, and as the existing expand/collapse indicator -- up when
+                  open, down when collapsed, same icon this button already used. */}
+              <Icon name={isOpen ? 'chevronUp' : 'chevronDown'} size={16} className="shrink-0 text-icon-muted" />
             </button>
             <div
               id={panelId}
@@ -95,11 +114,15 @@ export function TypePicker({ groups, value, onSelect, className }) {
                     value={type.requestType}
                     checked={value === type.requestType}
                     onChange={() => onSelect(type.requestType)}
-                    // Legacy `styles.css` sets a blanket `input, select, textarea { width: 100% }`
-                    // (line ~222) that a bare radio input inherits same as any other input; an
-                    // explicit small fixed size is required or the radio balloons to fill its
-                    // label's full width and pushes the Thai label text off past the container's
-                    // right edge (measured: 1040px wide inside a 1060px label at 1440 viewport).
+                    // The explicit size is no longer load-bearing, only deliberate. It used to be
+                    // the workaround for `styles.css`'s blanket `input, select, textarea
+                    // { width: 100% }`, which a bare radio inherited like any other input and which
+                    // ballooned it to fill the label (measured: 1040px wide inside a 1060px label
+                    // at 1440 viewport, pushing the Thai text off the right edge). That base rule
+                    // now excludes checkbox/radio outright and resets them, so a bare radio is
+                    // ~13px on its own. `h-4 w-4` is kept because 16px reads better beside 14px
+                    // Thai text than the 13px UA default, and `shrink-0` because a flex row full
+                    // of long Thai labels would otherwise squash it.
                     className="h-4 w-4 shrink-0"
                   />
                   {type.thaiLabel}

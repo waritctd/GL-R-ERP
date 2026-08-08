@@ -182,7 +182,6 @@ const ARITY_EXEMPTIONS = {
   'payroll.downloadOwnPayslip': 'Deliberate "not supported in mock mode" stub — same reasoning as downloadPayslip.',
   'payroll.downloadPayslipsZip': 'Deliberate "not supported in mock mode" stub — bulk ZIP of payslips the mock cannot render individually.',
   'payroll.distributePayslips': 'Deliberate "not supported in mock mode" stub — the mock sends no email and has no payslips to attach.',
-  'payroll.getTaxAllowances': 'Returns an empty single-year fixture so the UI empty state renders; the mock stores no per-year allowance rows for the year argument to select.',
   'payroll.saveTaxAllowances': 'Deliberate "not supported in mock mode" stub — allowances change real withholding tax.',
   'payroll.estimateMyTaxAllowanceDeclaration': 'Deliberate "not supported in mock mode" stub — the estimate runs real Thai tax math through PayrollCalculator twice; reimplementing it here is exactly the mirrored-computation trap.',
   'payroll.applyTaxAllowanceDeclaration': 'Deliberate "not supported in mock mode" stub — applying promotes into hr.employee_tax_allowance and changes real withholding tax.',

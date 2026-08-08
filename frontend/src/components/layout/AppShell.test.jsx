@@ -67,8 +67,9 @@ describe('AppShell navigation (role-scoped views)', () => {
 
 // The 721–1040px band no longer has a persistent sidebar/rail at all (it was
 // superseded by the same off-canvas drawer used at ≤720px — see
-// styles.css's ≤1040px drawer block and AppShell's `nav-drawer:` hamburger
-// gate, both driven by the same custom variant so they can't drift apart).
+// Sidebar.jsx's `nav-drawer:` utilities and AppShell's `nav-drawer:` hamburger
+// gate, both driven by the same custom variant (index.css) so they can't
+// drift apart).
 // Sidebar itself has no width-conditional JS branch — group headers,
 // tooltips, and active-route highlighting are the same regardless of
 // viewport, so these assertions hold at every width, not just "tablet".

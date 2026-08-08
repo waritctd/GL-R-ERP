@@ -74,6 +74,17 @@ export const api = {
     reject: (id, payload = {}) => apiRequest(API_ROUTES.overtime.reject(id), { method: 'POST', body: payload }),
     cancel: (id, payload = {}) => apiRequest(API_ROUTES.overtime.cancel(id), { method: 'POST', body: payload }),
   },
+  // Mirrors AttendanceCorrectionController (attendance/correction/) — an employee who missed a
+  // clock-in/clock-out scan requests the correct time; CEO-only approval, NO manager stage (see
+  // AttendanceCorrectionService class javadoc). Unlike overtime/leave there is no `employees`
+  // lookup: submit is always self-only, so there is no "file on behalf of" picker to populate.
+  attendanceCorrection: {
+    list: (params) => apiRequest(withQuery(API_ROUTES.attendanceCorrection.list, params)),
+    create: (payload) => apiRequest(API_ROUTES.attendanceCorrection.create, { method: 'POST', body: payload }),
+    approve: (id, payload = {}) => apiRequest(API_ROUTES.attendanceCorrection.approve(id), { method: 'POST', body: payload }),
+    reject: (id, payload = {}) => apiRequest(API_ROUTES.attendanceCorrection.reject(id), { method: 'POST', body: payload }),
+    cancel: (id) => apiRequest(API_ROUTES.attendanceCorrection.cancel(id), { method: 'POST' }),
+  },
   specialMoney: {
     list: (params) => apiRequest(withQuery(API_ROUTES.specialMoney.list, params)),
     employees: () => apiRequest(API_ROUTES.specialMoney.employees),
@@ -132,9 +143,17 @@ export const api = {
       if (payload.contactProvince) formData.append('contactProvince', payload.contactProvince);
       if (payload.contactPhone) formData.append('contactPhone', payload.contactPhone);
       if (payload.attachmentFile) formData.append('attachment', payload.attachmentFile);
+      // Real-backend regression (found via a live click-through, not caught under mocks, which
+      // never enforce CSRF at all): every submission from LeaveRequestPage.jsx's payload object
+      // literal always sets `attachmentFile` (to `preparedAttachment`, null when no file was
+      // chosen), so `hasOwnProperty('attachmentFile')` above is ALWAYS true and every leave
+      // submit -- not just ones with a real attachment -- took this branch. This bare fetch()
+      // never attached the XSRF header the way `apiRequest()` and every other manual fetch() in
+      // this file already does, so every real submission 403'd with "Invalid CSRF token".
       const res = await fetch(API_ROUTES.leave.create, {
         method: 'POST',
         credentials: 'include',
+        headers: csrfHeaders('POST'),
         body: formData,
       });
       if (!res.ok) {
@@ -502,9 +521,14 @@ export const api = {
     // csrfHeaders('POST') is applied explicitly here (unlike several older attachment call sites
     // in this file, which forget it and 403 in production) -- see the tax-allowance plan doc's PR C
     // section, "two traps that will cost a day if missed".
-    uploadTaxAllowanceAttachment: async (declarationId, file) => {
+    // sectionKey (V135, feat/tax-allowance-sections): which of TAX_ALLOWANCE_GROUPS' five keys this
+    // evidence belongs to -- optional, so callers outside the tax-allowance section flow (none
+    // today) can omit it and get the pre-existing "general/uncategorized" behaviour. Sent as a plain
+    // form field alongside `file`, not JSON -- this is a multipart request.
+    uploadTaxAllowanceAttachment: async (declarationId, file, sectionKey) => {
       const formData = new FormData();
       formData.append('file', file);
+      if (sectionKey) formData.append('sectionKey', sectionKey);
       const res = await fetch(API_ROUTES.payroll.taxAllowanceDeclarations.attachments(declarationId), {
         method: 'POST',
         credentials: 'include',

@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,6 +22,7 @@ import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
+import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollCalculator;
@@ -100,7 +102,8 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             mock(FileStorageService.class),
             // The REAL PayrollService, wired above — this class's byte-for-byte pinning test needs
             // estimateAllowanceEffect to run the SAME calculator instance #preview does.
-            payrollService);
+            payrollService,
+            new NotificationRepository(jdbc));
 
         employeeId = seedEmployee("SEAM-EMP", new BigDecimal("50000.00"));
         hrEmployeeId = seedEmployee("SEAM-HR", new BigDecimal("50000.00"));
@@ -149,6 +152,51 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2026, 6, 1));
         assertThat(resolved).containsKey(employeeId);
         assertThat(resolved.get(employeeId).spouseAllowance()).isEqualByComparingTo("60000.00");
+    }
+
+    /**
+     * Regression guard for the reset-on-overwrite fix (PayrollRepository#upsertTaxAllowances,
+     * 2026-08-08): that fix makes upsertTaxAllowances itself downgrade an already-VERIFIED row back
+     * to GRANDFATHERED_UNVERIFIED when its content changes -- exactly the ON CONFLICT DO UPDATE
+     * branch a SECOND apply() over the same employee/year/effective-month drives. apply() must still
+     * end VERIFIED regardless, because it calls markTaxAllowanceVerified +
+     * setTaxAllowanceVerificationDeadline in the SAME transaction right after upsertTaxAllowances --
+     * this pins that ordering never regresses.
+     */
+    @Test
+    void applyingASecondDeclarationOverAnAlreadyVerifiedRowStillEndsVerified() {
+        TaxAllowanceDeclarationDto first = submit(new BigDecimal("60000"), 1);
+        service.approve(first.declarationId(), null, hrActor());
+        service.apply(first.declarationId(), null, hrActor());
+        assertThat(verificationStatusOf(employeeId)).isEqualTo("VERIFIED");
+
+        // A second declaration for the SAME employee/year/effective-month, with a DIFFERENT amount --
+        // its apply() drives upsertTaxAllowances down the ON CONFLICT DO UPDATE branch over a row
+        // that is currently VERIFIED, the exact interaction the reset-on-overwrite fix touches.
+        TaxAllowanceDeclarationDto second = submit(new BigDecimal("90000"), 1);
+        service.approve(second.declarationId(), null, hrActor());
+        service.apply(second.declarationId(), null, hrActor());
+
+        assertThat(countEmployeeTaxAllowanceRows(employeeId))
+            .as("still one dated row for this employee/year/month -- ON CONFLICT overwrote, not duplicated")
+            .isEqualTo(1);
+        assertThat(verificationStatusOf(employeeId))
+            .as("apply() must still end VERIFIED even though upsertTaxAllowances resets it mid-transaction")
+            .isEqualTo("VERIFIED");
+        Long verifiedBy = jdbc.queryForObject(
+            "SELECT verified_by_id FROM hr.employee_tax_allowance WHERE employee_id = :id",
+            Map.of("id", employeeId), Long.class);
+        assertThat(verifiedBy).isEqualTo(hrEmployeeId);
+        OffsetDateTime verifiedAt = jdbc.queryForObject(
+            "SELECT verified_at FROM hr.employee_tax_allowance WHERE employee_id = :id",
+            Map.of("id", employeeId), OffsetDateTime.class);
+        assertThat(verifiedAt).isNotNull();
+
+        Map<Long, th.co.glr.hr.payroll.PayrollTaxAllowanceInput> resolved =
+            payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2026, 6, 1));
+        assertThat(resolved.get(employeeId).spouseAllowance())
+            .as("the second declaration's NEW figure is what's actually live, not a stale skipped one")
+            .isEqualByComparingTo("90000.00");
     }
 
     @Test
@@ -279,6 +327,12 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             "SELECT COUNT(*) FROM hr.employee_tax_allowance WHERE employee_id = :employeeId",
             Map.of("employeeId", employeeId), Integer.class);
         return count == null ? 0 : count;
+    }
+
+    private String verificationStatusOf(long employeeId) {
+        return jdbc.queryForObject(
+            "SELECT verification_status FROM hr.employee_tax_allowance WHERE employee_id = :id",
+            Map.of("id", employeeId), String.class);
     }
 
     private PayrollLineDto lineFor(PayrollPeriodDto period) {

@@ -16,6 +16,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { formGridSpan2, Panel, PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { QuotaBar } from '../../components/common/QuotaBar.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { EVERYDAY_LEAVE_TYPE_CODES } from './MyLeaveTab.jsx';
 import { LeaveRulePanel } from './LeaveRulePanel.jsx';
@@ -156,12 +157,42 @@ function StepHeading({ innerRef, step, total, title }) {
   );
 }
 
+// A preview call can fail outright instead of returning a LeaveRuleOutcome -- most notably
+// LeaveService#resolveTargetEmployee's plain 403 ApiException when the acting employee is HR/CEO
+// requesting for themselves (SELF_SUBMIT_BLOCKED_ROLES). That has no `code` to look up in
+// LeaveRulePanel's RULE_META and no §5 section to link to, so it is never routed through
+// LeaveRulePanel -- doing so would render an "undefined" heading and a rules-tab link that goes
+// nowhere useful. `error.message` is already the backend's own Thai sentence (ApiExceptionHandler
+// serializes ApiException.getMessage() verbatim), so this only decides where/how to show it.
+function previewErrorMessage(error) {
+  return error?.message || 'ไม่สามารถตรวจสอบคำขอลานี้ได้ กรุณาลองใหม่อีกครั้ง';
+}
+
+function PreviewErrorNotice({ message, className }) {
+  if (!message) return null;
+  return (
+    <div className={`rounded-md border border-danger-border bg-surface p-3 ${className || ''}`}>
+      <div className="flex items-start gap-2.5">
+        <Icon name="triangleAlert" size={16} className="mt-0.5 shrink-0 text-danger" />
+        <div className="grid min-w-0 gap-1">
+          <strong className="text-sm font-bold text-danger">ไม่สามารถตรวจสอบคำขอนี้ได้</strong>
+          <p className="m-0 text-sm text-text">{message}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Step 1's type button -- a blocked type is disabled and shows the real backend verdict instead
 // of a guess; an unresolved (still-loading) type shows a skeleton rather than a false "available".
+// A type whose preview call errored outright (see PreviewErrorNotice above) stays disabled too,
+// with its own real reason -- never falls through to looking selectable just because `blocking`
+// happens to read null on an errored query.
 function TypeChoice({ type, outcomeQuery, selected, onSelect, showCondition }) {
   const loading = outcomeQuery.isPending;
   const blocking = outcomeQuery.data?.blocking ?? null;
-  const disabled = loading || Boolean(blocking);
+  const previewError = outcomeQuery.isError ? previewErrorMessage(outcomeQuery.error) : null;
+  const disabled = loading || Boolean(blocking) || Boolean(previewError);
   return (
     <div className="grid gap-2">
       <button
@@ -184,6 +215,7 @@ function TypeChoice({ type, outcomeQuery, selected, onSelect, showCondition }) {
         )}
       </button>
       {!loading && blocking ? <LeaveRulePanel outcome={blocking} tone="blocking" /> : null}
+      {!loading && previewError ? <PreviewErrorNotice message={previewError} /> : null}
     </div>
   );
 }
@@ -329,6 +361,9 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   const step2Blocking = step2Preview?.blocking ?? null;
   const step2BlockingTarget = step2Blocking ? step2FieldTarget(step2Blocking.code) : null;
   const step2Fetching = step2PreviewQuery.isFetching;
+  // Same "not every failure is a LeaveRuleOutcome" gap as step 1's TypeChoice -- see
+  // previewErrorMessage's own comment.
+  const step2Error = step2PreviewQuery.isError ? previewErrorMessage(step2PreviewQuery.error) : null;
 
   const previewCounters = step2Preview?.counters
     ?? (eligibilityByCode.get(leaveTypeCode)?.data?.counters)
@@ -397,6 +432,11 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   });
   const step3Preview = step3PreviewQuery.data ?? null;
   const step3Blocking = step3Preview?.blocking ?? null;
+  // Same "not every failure is a LeaveRuleOutcome" gap as step 1/2 -- see previewErrorMessage's
+  // own comment. This is the terminal, submit-gating checkpoint: an errored FULL preview must
+  // keep the submit button disabled exactly like a real `blocking` verdict would, not silently
+  // read as a clean pass because `step3Blocking` happens to be null on an errored query.
+  const step3Error = step3PreviewQuery.isError ? previewErrorMessage(step3PreviewQuery.error) : null;
 
   const balance = useMemo(() => {
     const type = leaveTypes.find((t) => t.code === leaveTypeCode);
@@ -480,6 +520,30 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
 
   const formSubDay = subDay;
 
+  // HARDENING, not a fix for a live bug (HTML implicit submission, fix/form-enter-submits-real-
+  // records; migrated to SafeForm's `canSubmit` under #safe-form-primitive): this <form> wraps all
+  // 3 steps and was, before this gate, safe today only because three facts happened to stack up,
+  // none of them load-bearing by design. Step 1's choices are all `<button type="button">` (zero
+  // fields that block implicit submission). Step 2 always renders at least two blocking fields
+  // (startDate + endDate, or four once sub-day adds startTime/endTime) — notably `endDate` stays
+  // MOUNTED (merely `disabled`) rather than removed from the DOM when sub-day is checked, which is
+  // what keeps that count at 2 instead of dropping to 1. Step 3 always renders the one real
+  // `<Button type="submit">` in this form. Change any one of those three — e.g. unmounting
+  // `endDate` instead of disabling it — and Enter in whatever single text field remained would
+  // silently file a real leave request, the same as the tax-allowance bug this gate shape was
+  // copied from (TaxAllowanceForm.jsx, #tax-allowance-ia-hub-review), and jsdom would not catch it
+  // — it does not implement implicit submission at all (see LeaveRequestPage.test.jsx's
+  // `fireEvent.submit(form)` cases, which exercise the same 'submit' event a real Enter keypress
+  // produces). `canSubmit={step === 3}` removes the dependency on those three accidents continuing
+  // to hold, exactly like the old bespoke `handleFormSubmit` did — and additionally, every OTHER
+  // step now also gets SafeForm's own submitter guard for free should this ever stop being a
+  // `canSubmit`-gated form. `canSubmit` is a RESTRICTION and never a permission (see SafeForm.jsx's
+  // header): it narrows submission to step 3, and SafeForm's submitter guard still applies on top,
+  // so BOTH must pass. Step 3's real submit button is always rendered — only ever `disabled` — so
+  // that AND costs this form nothing in production. It does mean a test proving step 3 submits has
+  // to carry a real submitter rather than dispatching a bare `fireEvent.submit(form)`; see
+  // `submitWithSubmitter` in LeaveRequestPage.test.jsx.
+
   return (
     <PageStack className="relative">
       <PageHeader
@@ -488,7 +552,7 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
         breadcrumbs={[{ label: 'การลา', onClick: () => goBackToSurface(false) }, { label: 'ยื่นคำขอลา' }]}
       />
 
-      <form onSubmit={handleSubmit(onSubmit)} noValidate className="grid gap-[18px]">
+      <SafeForm onSubmit={handleSubmit(onSubmit)} canSubmit={step === 3} noValidate className="grid gap-[18px]">
         {/* ── Step 1: เลือกประเภท ───────────────────────────────────────────── */}
         {step === 1 ? (
           <Panel>
@@ -574,6 +638,11 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                   ตรวจแบบเร็ว: ยังไม่ตรวจภาระงานของแผนก (coverageEvaluated) — จะตรวจครั้งสุดท้ายในขั้นตอน “ตรวจสอบก่อนส่ง”
                 </p>
               </div>
+              {step2Error ? (
+                <div className={formGridSpan2}>
+                  <PreviewErrorNotice message={step2Error} />
+                </div>
+              ) : null}
 
               <div className="grid grid-cols-2 gap-4 max-[720px]:grid-cols-1">
                 <FormField label="วันที่เริ่ม" htmlFor="leave-start-date" error={startDateError} required>
@@ -762,6 +831,12 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                 </div>
               ) : null}
 
+              {step3Error ? (
+                <div role="alert">
+                  <PreviewErrorNotice message={step3Error} />
+                </div>
+              ) : null}
+
               {!step3Blocking && step3Preview ? (
                 <div className="grid gap-3 rounded-md border border-border-subtle bg-surface-subtle p-3">
                   <div className="grid grid-cols-2 gap-3 text-sm max-[720px]:grid-cols-1">
@@ -848,7 +923,7 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
               <Button type="button" variant="secondary" onClick={() => setStep(2)}>ย้อนกลับ</Button>
               <Button
                 type="submit"
-                disabled={createMutation.isPending || Boolean(step3Blocking) || step3PreviewQuery.isFetching}
+                disabled={createMutation.isPending || Boolean(step3Blocking) || Boolean(step3Error) || step3PreviewQuery.isFetching}
               >
                 <Icon name="plus" />
                 ส่งคำขอ
@@ -856,7 +931,7 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
             </div>
           </Panel>
         ) : null}
-      </form>
+      </SafeForm>
     </PageStack>
   );
 }

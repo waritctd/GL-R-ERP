@@ -5,7 +5,10 @@ import { hasPermission } from '../../app/permissions.js';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { FormField } from '../../components/common/FormField.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
@@ -40,6 +43,8 @@ import {
   quantityTypeLabel,
 } from './pricingRequestMeta.js';
 import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
+import { buttonVariants } from '../../components/common/Button.jsx';
+import { cn } from '../../utils/cn.js';
 
 function isImport(user) {
   return user?.role === 'import';
@@ -82,7 +87,7 @@ function dispatchStatusBadge(quote) {
 function PricingRequestDetailSkeleton() {
   return (
     <div className="grid w-[min(760px,100%)] gap-3" aria-hidden="true">
-      <div className="grid gap-2 rounded-md border border-border bg-surface p-4 shadow-sm">
+      <div className="grid gap-2 rounded-md border border-border bg-surface p-4">
         <Skeleton height={24} width="42%" />
         <Skeleton height={14} width="64%" />
         <div className="grid gap-2 pt-2 sm:grid-cols-2">
@@ -92,12 +97,12 @@ function PricingRequestDetailSkeleton() {
           <Skeleton height={16} />
         </div>
       </div>
-      <div className="grid gap-2 rounded-md border border-border bg-surface p-4 shadow-sm">
+      <div className="grid gap-2 rounded-md border border-border bg-surface p-4">
         <Skeleton height={18} width="34%" />
         <Skeleton height={58} />
         <Skeleton height={58} />
       </div>
-      <div className="grid gap-2 rounded-md border border-border bg-surface p-4 shadow-sm">
+      <div className="grid gap-2 rounded-md border border-border bg-surface p-4">
         <Skeleton height={18} width="28%" />
         <SkeletonText lines={2} />
       </div>
@@ -517,7 +522,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
   if (detailQuery.isLoading) {
     return (
-      <div className="page-stack">
+      <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
         <StatePanel
           state="loading"
           title="กำลังโหลดคำขอราคา"
@@ -532,15 +537,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
   if (detailQuery.isError) {
     if (detailErrorStatus === 404) {
       return (
-        <div className="page-stack">
+        <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
           <StatePanel
             state="notFound"
             title="ไม่พบคำขอราคานี้"
             description="ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้"
             action={(
-              <button type="button" className="primary-button" onClick={returnToSafeList}>
+              <Button type="button" variant="primary" onClick={returnToSafeList}>
                 {canReturnToPricingQueue ? 'กลับไปที่คิวคำขอราคา' : 'กลับ'}
-              </button>
+              </Button>
             )}
           />
         </div>
@@ -549,15 +554,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
     if (detailErrorStatus === 403) {
       return (
-        <div className="page-stack">
+        <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
           <StatePanel
             state="denied"
             title="ยังเปิดคำขอราคานี้ไม่ได้"
             description="ระบบไม่เปิดเผยรายละเอียดของคำขอราคาที่คุณไม่มีสิทธิ์เข้าถึง"
             action={(
-              <button type="button" className="primary-button" onClick={returnToSafeList}>
+              <Button type="button" variant="primary" onClick={returnToSafeList}>
                 {canReturnToPricingQueue ? 'กลับไปที่คิวคำขอราคา' : 'กลับ'}
-              </button>
+              </Button>
             )}
           />
         </div>
@@ -565,21 +570,21 @@ export function PricingRequestDetailPage({ user, showToast }) {
     }
 
     return (
-      <div className="page-stack">
+      <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
         <StatePanel
           state="error"
           title={toUserErrorMessage(detailQuery.error, 'โหลดคำขอราคาไม่สำเร็จ')}
           description={toUserErrorDescription(detailQuery.error, 'ลองใหม่อีกครั้ง หรือกลับไปที่รายการคำขอ')}
           action={(
-            <button type="button" className="secondary-button" onClick={() => detailQuery.refetch()}>
+            <Button type="button" variant="secondary" onClick={() => detailQuery.refetch()}>
               <Icon name="refresh" size={14} />
               ลองใหม่
-            </button>
+            </Button>
           )}
           secondaryAction={(
-            <button type="button" className="primary-button" onClick={returnToSafeList}>
+            <Button type="button" variant="primary" onClick={returnToSafeList}>
               {canReturnToPricingQueue ? 'กลับไปที่คิวคำขอราคา' : 'กลับ'}
-            </button>
+            </Button>
           )}
         />
       </div>
@@ -588,15 +593,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
   if (!summary) {
     return (
-      <div className="page-stack">
+      <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
         <StatePanel
           state="notFound"
           title="ไม่พบคำขอราคานี้"
           description="ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้"
           action={(
-            <button type="button" className="primary-button" onClick={returnToSafeList}>
+            <Button type="button" variant="primary" onClick={returnToSafeList}>
               {canReturnToPricingQueue ? 'กลับไปที่คิวคำขอราคา' : 'กลับ'}
-            </button>
+            </Button>
           )}
         />
       </div>
@@ -604,33 +609,28 @@ export function PricingRequestDetailPage({ user, showToast }) {
   }
 
   return (
-    <div className="page-stack">
+    <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
       <PageHeader
         title={summary.requestCode}
         subtitle={`${summary.customerName ?? '-'}${summary.projectName ? ` · ${summary.projectName}` : ''}`}
         actions={(
-          <button type="button" className="secondary-button" onClick={() => navigate(-1)}>
+          <Button type="button" variant="secondary" onClick={() => navigate(-1)}>
             <Icon name="chevronLeft" size={14} />
             กลับ
-          </button>
+          </Button>
         )}
       />
 
-      <section className="table-panel">
-        <div className="panel-header">
-          <h2>ภาพรวม</h2>
-          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-        </div>
+      <Panel flush title="ภาพรวม" actions={<StatusBadge tone={status.tone}>{status.label}</StatusBadge>}>
         <div className="grid gap-3 p-4 md:grid-cols-2">
           <div className="text-sm"><strong>ดีล</strong> <Link to={`/tickets/${summary.ticketId}`} className="text-info underline">{summary.ticketCode}</Link></div>
           <div className="text-sm"><strong>ผู้รับ</strong> {pricingRequestRecipientLabel(summary.recipientType)}{summary.recipientLabel ? ` · ${summary.recipientLabel}` : ''}</div>
           <div className="text-sm"><strong>ต้องการภายใน</strong> {formatThaiDate(summary.requiredDate)}</div>
           <div className="text-sm"><strong>ฝ่ายนำเข้า</strong> ผู้รับเรื่องและประสานราคาโรงงาน</div>
         </div>
-      </section>
+      </Panel>
 
-      <section className="table-panel">
-        <div className="panel-header"><h2>รายการสินค้าและราคาตั้งต้น</h2></div>
+      <Panel flush title="รายการสินค้าและราคาตั้งต้น">
         <div className="flex flex-col gap-2 p-4">
           {(request.items ?? []).map((item) => (
             <div key={item.id} className="rounded-md border border-border bg-surface p-3">
@@ -647,23 +647,26 @@ export function PricingRequestDetailPage({ user, showToast }) {
             </div>
           ))}
         </div>
-      </section>
+      </Panel>
 
-      <section className="table-panel">
-        <div className="panel-header">
-          <h2>ไฟล์แนบประกอบคำขอราคา</h2>
-          {canEditPricingRequestAttachments ? (
-            <label className="secondary-button cursor-pointer">
-              <input type="file" className="hidden" onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) uploadPricingRequestAttachment.mutate(file);
-                event.target.value = '';
-              }} />
-              <Icon name="upload" size={13} />
-              แนบไฟล์
-            </label>
-          ) : null}
-        </div>
+      <Panel
+        flush
+        title="ไฟล์แนบประกอบคำขอราคา"
+        actions={canEditPricingRequestAttachments ? (
+          // Left as a <label> wrapping the hidden file input, not <Button>: a
+          // <button> cannot open the native file picker the way a <label>
+          // wrapping its <input type="file"> does.
+          <label className={cn(buttonVariants({ variant: 'secondary' }), 'cursor-pointer')}>
+            <input type="file" className="hidden" onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) uploadPricingRequestAttachment.mutate(file);
+              event.target.value = '';
+            }} />
+            <Icon name="upload" size={13} />
+            แนบไฟล์
+          </label>
+        ) : null}
+      >
         <div className="flex flex-col gap-1 p-4 text-xs text-text-muted">
           {pricingRequestAttachments.map((attachment) => (
             <div key={attachment.id} className="flex flex-wrap items-center gap-2">
@@ -684,66 +687,67 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 <StatusBadge tone="neutral">แนบไปกับอีเมลโรงงาน</StatusBadge>
               ) : null}
               {canEditPricingRequestAttachments ? (
-                <button
+                <Button
                   type="button"
-                  className="icon-button"
+                  variant="icon"
                   aria-label={`ลบไฟล์แนบ ${attachment.fileName}`}
                   onClick={() => deletePricingRequestAttachment.mutate(attachment.id)}
                 >
                   <Icon name="close" size={13} />
-                </button>
+                </Button>
               ) : null}
             </div>
           ))}
           {pricingRequestAttachments.length === 0 ? <span>ยังไม่มีไฟล์แนบ</span> : null}
         </div>
-      </section>
+      </Panel>
 
       {canRequestInformation(user, summary) ? (
-        <section className="table-panel">
-          <div className="panel-header"><h2>ขอข้อมูลจาก Sales</h2></div>
+        <Panel flush title="ขอข้อมูลจาก Sales">
           <div className="flex flex-wrap gap-2 p-4">
-            <input className="form-input min-w-64" value={infoMessage} onChange={(e) => setInfoMessage(e.target.value)} placeholder="ข้อความถึง Sales" />
-            <button type="button" className="secondary-button" disabled={!infoMessage || requestInfo.isPending} onClick={() => requestInfo.mutate()}>
+            {/* aria-label rather than a visible one: the section heading above
+                already names this field on screen, so a label would just repeat
+                it — but the heading is not programmatically associated with the
+                input, so a screen reader still needs the name spelled out. */}
+            <input className="form-input min-w-64" aria-label="ข้อความถึง Sales" value={infoMessage} onChange={(e) => setInfoMessage(e.target.value)} placeholder="ข้อความถึง Sales" />
+            <Button type="button" variant="secondary" disabled={!infoMessage || requestInfo.isPending} onClick={() => requestInfo.mutate()}>
               ส่งคำขอ
-            </button>
+            </Button>
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       {canRespondInformation(user, summary) ? (
-        <section className="table-panel">
-          <div className="panel-header"><h2>ตอบข้อมูลเพิ่มเติม</h2></div>
+        <Panel flush title="ตอบข้อมูลเพิ่มเติม">
           <div className="flex flex-wrap gap-2 p-4">
-            <input className="form-input min-w-64" value={salesResponse} onChange={(e) => setSalesResponse(e.target.value)} placeholder="ข้อมูลเพิ่มเติม" />
-            <button type="button" className="secondary-button" disabled={!salesResponse || respondInfo.isPending} onClick={() => respondInfo.mutate()}>
+            <input className="form-input min-w-64" aria-label="ข้อมูลเพิ่มเติม" value={salesResponse} onChange={(e) => setSalesResponse(e.target.value)} placeholder="ข้อมูลเพิ่มเติม" />
+            <Button type="button" variant="secondary" disabled={!salesResponse || respondInfo.isPending} onClick={() => respondInfo.mutate()}>
               ส่งข้อมูล
-            </button>
+            </Button>
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       {canCreateCustomerRevision ? (
-        <section className="table-panel">
-          <div className="panel-header"><h2>รอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า</h2></div>
+        <Panel flush title="รอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า">
           <div className="flex flex-wrap gap-2 p-4">
-            <button type="button" className="secondary-button" onClick={() => setRevisionModalOpen(true)}>
+            <Button type="button" variant="secondary" onClick={() => setRevisionModalOpen(true)}>
               สร้างรอบแก้ไข
-            </button>
+            </Button>
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       {canSeeRaw(user) ? (
-        <section className="table-panel">
-          <div className="panel-header">
-            <h2>ราคาโรงงาน</h2>
-            {isImport(user) ? (
-              <button type="button" className="primary-button" disabled={generateDrafts.isPending} onClick={() => generateDrafts.mutate()} data-testid="pcr-generate-drafts">
-                สร้างร่างอีเมล
-              </button>
-            ) : null}
-          </div>
+        <Panel
+          flush
+          title="ราคาโรงงาน"
+          actions={isImport(user) ? (
+            <Button type="button" variant="primary" disabled={generateDrafts.isPending} onClick={() => generateDrafts.mutate()} data-testid="pcr-generate-drafts">
+              สร้างร่างอีเมล
+            </Button>
+          ) : null}
+        >
           <div className="flex flex-col gap-3 p-4">
             {factoryQuotes.map((quote) => {
               const quoteStatus = factoryQuoteStatusLabel(quote.status);
@@ -770,7 +774,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     <StatusBadge tone={quote.current ? quoteStatus.tone : 'neutral'}>{quoteStatus.label}</StatusBadge>
                     {dispatchStatusBadge(quote)}
                     {isImport(user) && quote.status === 'DRAFT' && quote.dispatchStatus !== 'PENDING' && quote.dispatchStatus !== 'SENDING' ? (
-                      <button type="button" className="secondary-button" onClick={() => {
+                      <Button type="button" variant="secondary" onClick={() => {
                         // A FAILED dispatch has permanently exhausted its own clientRequestId (the
                         // backend's unique (created_by, client_request_id) index would just replay
                         // that same dead row), so a manual retry must mint a fresh idempotency key
@@ -782,10 +786,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         setConfirmAction({ type: 'sendQuote', quote, emailDraft });
                       }}>
                         {quote.dispatchStatus === 'FAILED' ? 'ส่งอีกครั้ง' : 'ส่ง'}
-                      </button>
+                      </Button>
                     ) : null}
-                    {isImport(user) && ['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) && quote.current ? <button type="button" className="secondary-button" onClick={() => readyQuote.mutate(quote)} data-testid="pcr-quote-ready">พร้อมคำนวณต้นทุน</button> : null}
-                    {isImport(user) && quote.status === 'RESPONSE_RECEIVED' && quote.current ? <button type="button" className="secondary-button" onClick={() => negotiateQuote.mutate(quote)}>เจรจา</button> : null}
+                    {isImport(user) && ['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) && quote.current ? <Button type="button" variant="secondary" onClick={() => readyQuote.mutate(quote)} data-testid="pcr-quote-ready">พร้อมคำนวณต้นทุน</Button> : null}
+                    {isImport(user) && quote.status === 'RESPONSE_RECEIVED' && quote.current ? <Button type="button" variant="secondary" onClick={() => negotiateQuote.mutate(quote)}>เจรจา</Button> : null}
                   </div>
                   <div className="mt-2 text-xs text-text-muted">{quote.emailTo ?? '-'} · {quote.supplierQuoteRef ?? '-'}</div>
                   {quote.dispatchStatus === 'FAILED' && quote.dispatchFailureMessage ? (
@@ -793,12 +797,41 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   ) : null}
                   {isImport(user) && quote.status === 'DRAFT' ? (
                     <div className="mt-3 grid gap-2 border-t border-border-subtle pt-3">
-                      <input className="form-input" value={emailDraft.emailTo} onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailTo: e.target.value } })} placeholder="อีเมลโรงงาน" />
-                      <input className="form-input" value={emailDraft.emailSubject} onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailSubject: e.target.value } })} placeholder="หัวข้ออีเมล" />
-                      <textarea className="form-input min-h-24" value={emailDraft.emailBody} onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailBody: e.target.value } })} placeholder="เนื้อหาอีเมล" />
-                      <button type="button" className="secondary-button" disabled={updateQuote.isPending} onClick={() => updateQuote.mutate({ quote, draft: emailDraft })}>
+                      {/* Real labels, not placeholders. A placeholder disappears
+                          the moment the field has a value — which is the state
+                          these fields spend their whole life in — so the only
+                          thing naming them vanished exactly when a reader
+                          needed it, and a screen reader had nothing to announce
+                          at all. ids are keyed on quote.id because this block
+                          renders once per factory quote. */}
+                      <FormField label="อีเมลโรงงาน" htmlFor={`pcr-email-to-${quote.id}`}>
+                        <input
+                          id={`pcr-email-to-${quote.id}`}
+                          type="email"
+                          className="form-input"
+                          value={emailDraft.emailTo}
+                          onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailTo: e.target.value } })}
+                        />
+                      </FormField>
+                      <FormField label="หัวข้ออีเมล" htmlFor={`pcr-email-subject-${quote.id}`}>
+                        <input
+                          id={`pcr-email-subject-${quote.id}`}
+                          className="form-input"
+                          value={emailDraft.emailSubject}
+                          onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailSubject: e.target.value } })}
+                        />
+                      </FormField>
+                      <FormField label="เนื้อหาอีเมล" htmlFor={`pcr-email-body-${quote.id}`}>
+                        <textarea
+                          id={`pcr-email-body-${quote.id}`}
+                          className="form-input min-h-24"
+                          value={emailDraft.emailBody}
+                          onChange={(e) => setEmailDrafts({ ...emailDrafts, [quote.id]: { ...emailDraft, emailBody: e.target.value } })}
+                        />
+                      </FormField>
+                      <Button type="button" variant="secondary" disabled={updateQuote.isPending} onClick={() => updateQuote.mutate({ quote, draft: emailDraft })}>
                         บันทึกร่างอีเมล
-                      </button>
+                      </Button>
                     </div>
                   ) : null}
                   {quote.items?.length ? (
@@ -815,7 +848,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       <div className="mb-2 flex flex-wrap items-center gap-2">
                         <span className="text-xs font-semibold text-text-muted">ไฟล์แนบ</span>
                         {isImport(user) ? (
-                          <label className="secondary-button cursor-pointer">
+                          // Left as a <label> wrapping the hidden file input, not <Button>: a
+                          // <button> cannot open the native file picker the way a <label>
+                          // wrapping its <input type="file"> does.
+                          <label className={cn(buttonVariants({ variant: 'secondary' }), 'cursor-pointer')}>
                             <input type="file" className="hidden" onChange={(event) => {
                               const file = event.target.files?.[0];
                               if (file) uploadQuoteAttachment.mutate({ quote, file });
@@ -839,44 +875,94 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   {isImport(user) && quote.current && ['DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(quote.status) ? (
                     <div className="mt-3 flex flex-col gap-2 border-t border-border-subtle pt-3">
                       <div className="grid gap-2 md:grid-cols-4">
-                        <input className="form-input" value={draft.supplierQuoteRef} onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, supplierQuoteRef: e.target.value } })} placeholder="เลขอ้างอิงใบเสนอราคา" />
-                        <input className="form-input" value={draft.defaultCurrency} onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, defaultCurrency: e.target.value } })} placeholder="สกุลเงิน" />
-                        <input className="form-input" value={draft.paymentTerms} onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, paymentTerms: e.target.value } })} placeholder="เงื่อนไขการชำระเงิน" />
-                        <input className="form-input" value={draft.leadTimeText} onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, leadTimeText: e.target.value } })} placeholder="ระยะเวลาผลิต/ส่งมอบ" />
+                        <FormField label="เลขอ้างอิงใบเสนอราคา" htmlFor={`pcr-quote-ref-${quote.id}`}>
+                          <input
+                            id={`pcr-quote-ref-${quote.id}`}
+                            className="form-input"
+                            value={draft.supplierQuoteRef}
+                            onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, supplierQuoteRef: e.target.value } })}
+                          />
+                        </FormField>
+                        <FormField label="สกุลเงิน" htmlFor={`pcr-quote-currency-${quote.id}`}>
+                          <input
+                            id={`pcr-quote-currency-${quote.id}`}
+                            className="form-input"
+                            value={draft.defaultCurrency}
+                            onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, defaultCurrency: e.target.value } })}
+                          />
+                        </FormField>
+                        <FormField label="เงื่อนไขการชำระเงิน" htmlFor={`pcr-quote-terms-${quote.id}`}>
+                          <input
+                            id={`pcr-quote-terms-${quote.id}`}
+                            className="form-input"
+                            value={draft.paymentTerms}
+                            onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, paymentTerms: e.target.value } })}
+                          />
+                        </FormField>
+                        <FormField label="ระยะเวลาผลิต/ส่งมอบ" htmlFor={`pcr-quote-leadtime-${quote.id}`}>
+                          <input
+                            id={`pcr-quote-leadtime-${quote.id}`}
+                            className="form-input"
+                            value={draft.leadTimeText}
+                            onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, leadTimeText: e.target.value } })}
+                          />
+                        </FormField>
                       </div>
-                      {draft.items.map((line, index) => (
-                        <div key={line.pricingRequestItemId} className="grid gap-2 md:grid-cols-4">
-                          <input className="form-input" value={line.rawUnitPrice} onChange={(e) => {
-                            const items = [...draft.items];
-                            items[index] = { ...line, rawUnitPrice: e.target.value };
-                            setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
-                          }} placeholder="ราคาโรงงาน" />
-                          <input className="form-input" value={line.currency} onChange={(e) => {
-                            const items = [...draft.items];
-                            items[index] = { ...line, currency: e.target.value };
-                            setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
-                          }} placeholder="สกุลเงิน" />
-                          <select className="form-input" value={line.unitBasis} onChange={(e) => {
-                            const items = [...draft.items];
-                            items[index] = { ...line, quotedUnit: e.target.value, unitBasis: e.target.value };
-                            setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
-                          }}>
-                            {UNIT_OPTIONS.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}
-                          </select>
-                          <input className="form-input" value={line.sqmPerUnit} onChange={(e) => {
-                            const items = [...draft.items];
-                            items[index] = { ...line, sqmPerUnit: e.target.value };
-                            setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
-                          }} placeholder="ตร.ม./หน่วย" />
+                      {/* The per-line rows are a grid, so the column names are
+                          stated once as a header rather than repeated as a
+                          visible label on every row — four labels per row
+                          across N items would bury the values. Each control
+                          still carries its own `aria-label` naming the column
+                          AND the item, because a screen reader reads these
+                          linearly with no column header to fall back on: it
+                          announces "ราคาโรงงาน รายการ #6", not "edit text". */}
+                      {draft.items.length ? (
+                        <div
+                          aria-hidden="true"
+                          className="hidden gap-2 px-1 text-2xs font-bold uppercase tracking-wide text-text-muted md:grid md:grid-cols-4"
+                        >
+                          <span>ราคาโรงงาน</span>
+                          <span>สกุลเงิน</span>
+                          <span>หน่วยที่เสนอ</span>
+                          <span>ตร.ม./หน่วย</span>
                         </div>
-                      ))}
-                      <button type="button" className="secondary-button" disabled={receiveQuote.isPending} data-testid="pcr-quote-save-response" onClick={() => {
+                      ) : null}
+                      {draft.items.map((line, index) => {
+                        const itemRef = `รายการ #${line.pricingRequestItemId}`;
+                        return (
+                          <div key={line.pricingRequestItemId} className="grid gap-2 md:grid-cols-4">
+                            <input className="form-input" aria-label={`ราคาโรงงาน ${itemRef}`} value={line.rawUnitPrice} onChange={(e) => {
+                              const items = [...draft.items];
+                              items[index] = { ...line, rawUnitPrice: e.target.value };
+                              setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
+                            }} placeholder="ราคาโรงงาน" />
+                            <input className="form-input" aria-label={`สกุลเงิน ${itemRef}`} value={line.currency} onChange={(e) => {
+                              const items = [...draft.items];
+                              items[index] = { ...line, currency: e.target.value };
+                              setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
+                            }} placeholder="สกุลเงิน" />
+                            <select className="form-input" aria-label={`หน่วยที่เสนอ ${itemRef}`} value={line.unitBasis} onChange={(e) => {
+                              const items = [...draft.items];
+                              items[index] = { ...line, quotedUnit: e.target.value, unitBasis: e.target.value };
+                              setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
+                            }}>
+                              {UNIT_OPTIONS.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}
+                            </select>
+                            <input className="form-input" aria-label={`ตร.ม./หน่วย ${itemRef}`} value={line.sqmPerUnit} onChange={(e) => {
+                              const items = [...draft.items];
+                              items[index] = { ...line, sqmPerUnit: e.target.value };
+                              setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
+                            }} placeholder="ตร.ม./หน่วย" />
+                          </div>
+                        );
+                      })}
+                      <Button type="button" variant="secondary" disabled={receiveQuote.isPending} data-testid="pcr-quote-save-response" onClick={() => {
                         const clientRequestId = receiveClientRequestIds[quote.id] ?? generateClientRequestId();
                         setReceiveClientRequestIds((cur) => ({ ...cur, [quote.id]: clientRequestId }));
                         receiveQuote.mutate({ quote, draft, clientRequestId });
                       }}>
                         บันทึกคำตอบ/รอบแก้ไข
-                      </button>
+                      </Button>
                     </div>
                   ) : null}
                 </div>
@@ -884,17 +970,26 @@ export function PricingRequestDetailPage({ user, showToast }) {
             })}
             {factoryQuotes.length === 0 ? <p className="text-sm text-text-muted">ยังไม่มีราคาโรงงาน</p> : null}
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       {canSeeRaw(user) ? (
-        <section className="table-panel">
-          <div className="panel-header">
-            <h2>ต้นทุนนำเข้า</h2>
-            {isImport(user) ? <button type="button" className="primary-button" onClick={() => createCosting.mutate()} data-testid="pcr-costing-create">สร้างร่างต้นทุน</button> : null}
-          </div>
+        <Panel
+          flush
+          title="ต้นทุนนำเข้า"
+          actions={isImport(user) ? <Button type="button" variant="primary" onClick={() => createCosting.mutate()} data-testid="pcr-costing-create">สร้างร่างต้นทุน</Button> : null}
+        >
           <div className="flex flex-col gap-3 p-4">
-            {isImport(user) ? <input className="form-input" value={costingNote} onChange={(e) => setCostingNote(e.target.value)} placeholder="หมายเหตุต้นทุน" /> : null}
+            {isImport(user) ? (
+              <FormField label="หมายเหตุต้นทุน" htmlFor="pcr-costing-note">
+                <input
+                  id="pcr-costing-note"
+                  className="form-input"
+                  value={costingNote}
+                  onChange={(e) => setCostingNote(e.target.value)}
+                />
+              </FormField>
+            ) : null}
             {costings.map((costing) => (
               <div key={costing.id} className="rounded-md border border-border bg-surface p-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -907,8 +1002,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <span className="text-xs text-text-muted">{costing.totalLandedCostThb != null ? formatCurrency(costing.totalLandedCostThb, 'THB') : '-'}</span>
                   {isImport(user) && costing.id === latestOpenCosting?.id ? (
                     <Fragment key={`costing-actions-${costing.id}`}>
-                      <button type="button" className="secondary-button" onClick={() => recalculateCosting.mutate(costing)} data-testid="pcr-costing-recalculate">คำนวณใหม่</button>
-                      <button type="button" className="secondary-button" disabled={costing.status !== 'CALCULATED' || costing.stale} onClick={() => setConfirmAction({ type: 'submitCosting', costing })} data-testid="pcr-costing-submit">ส่งให้ CEO ตรวจ</button>
+                      <Button type="button" variant="secondary" onClick={() => recalculateCosting.mutate(costing)} data-testid="pcr-costing-recalculate">คำนวณใหม่</Button>
+                      <Button type="button" variant="secondary" disabled={costing.status !== 'CALCULATED' || costing.stale} onClick={() => setConfirmAction({ type: 'submitCosting', costing })} data-testid="pcr-costing-submit">ส่งให้ CEO ตรวจ</Button>
                     </Fragment>
                   ) : null}
                 </div>
@@ -923,14 +1018,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
             ))}
             {costings.length === 0 ? <p className="text-sm text-text-muted">ยังไม่มีต้นทุนนำเข้า</p> : null}
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       {canSeeRawPricingDecision(user) ? (
-        <section className="table-panel">
-          <div className="panel-header">
-            <h2>การพิจารณาราคาขายของ CEO</h2>
-          </div>
+        <Panel flush title="การพิจารณาราคาขายของ CEO">
           <div className="flex flex-col gap-3 p-4">
             {!currentDecision && canStartCeoReview(user, summary) ? (
               <div className="flex flex-wrap items-center gap-2">
@@ -943,9 +1035,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     placeholder="0.20"
                   />
                 </label>
-                <button type="button" className="primary-button" disabled={startCeoReview.isPending} onClick={() => startCeoReview.mutate()} data-testid="pcr-ceo-start-review">
+                <Button type="button" variant="primary" disabled={startCeoReview.isPending} onClick={() => startCeoReview.mutate()} data-testid="pcr-ceo-start-review">
                   เริ่มพิจารณาราคาขาย
-                </button>
+                </Button>
               </div>
             ) : null}
             {!currentDecision && !canStartCeoReview(user, summary) ? (
@@ -1026,32 +1118,32 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   </div>
                   {editable ? (
                     <div className="mt-3 flex flex-wrap gap-2 border-t border-border-subtle pt-3">
-                      <button
+                      <Button
                         type="button"
-                        className="secondary-button"
+                        variant="secondary"
                         disabled={saveDecisionItems.isPending}
                         onClick={() => saveDecisionItems.mutate({ decision, items: decision.items })}
                         data-testid="pcr-ceo-save-decision-items"
                       >
                         บันทึกการเปลี่ยนแปลง
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="primary-button"
+                        variant="primary"
                         disabled={approveDecision.isPending || missingBeforeApprove.length > 0}
                         onClick={() => setConfirmAction({ type: 'approveDecision', decision })}
                         data-testid="pcr-ceo-approve"
                       >
                         อนุมัติราคาขาย
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="secondary-button"
+                        variant="secondary"
                         disabled={returnDecisionToImport.isPending}
                         onClick={() => setConfirmAction({ type: 'returnDecision', decision })}
                       >
                         ตีกลับให้ฝ่ายนำเข้าแก้ไข
-                      </button>
+                      </Button>
                       {missingBeforeApprove.length > 0 ? (
                         <span className="self-center text-xs text-danger">ทุกรายการต้องมีอัตรากำไรและราคาขั้นต่ำก่อนอนุมัติ</span>
                       ) : null}
@@ -1069,12 +1161,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
               </div>
             ) : null}
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       {!canSeeRawPricingDecision(user) && canSeePricingDecisionSalesView(user, summary) && decisionSalesView ? (
-        <section className="table-panel">
-          <div className="panel-header"><h2>ราคาขายที่อนุมัติ</h2></div>
+        <Panel flush title="ราคาขายที่อนุมัติ">
           <div className="flex flex-col gap-2 p-4">
             {decisionSalesView.items.map((item) => (
               <div key={item.pricingRequestItemId} className="rounded-md border border-border bg-surface p-3 text-sm">
@@ -1087,29 +1178,29 @@ export function PricingRequestDetailPage({ user, showToast }) {
               </div>
             ))}
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       {canViewCustomerQuotation(user, summary) ? (
-        <section className="table-panel">
-          <div className="panel-header">
-            <h2>ใบเสนอราคาลูกค้า</h2>
-            {currentCustomerQuotation ? (
-              (() => {
-                const status = quotationStatusLabel(currentCustomerQuotation.docStatus);
-                return (
-                  <StatusBadge tone={status.tone}>
-                    {status.label} · ครั้งที่ {currentCustomerQuotation.quotationRevisionNo}
-                  </StatusBadge>
-                );
-              })()
-            ) : null}
-          </div>
+        <Panel
+          flush
+          title="ใบเสนอราคาลูกค้า"
+          actions={currentCustomerQuotation ? (
+            (() => {
+              const status = quotationStatusLabel(currentCustomerQuotation.docStatus);
+              return (
+                <StatusBadge tone={status.tone}>
+                  {status.label} · ครั้งที่ {currentCustomerQuotation.quotationRevisionNo}
+                </StatusBadge>
+              );
+            })()
+          ) : null}
+        >
           <div className="flex flex-col gap-3 p-4">
             {!currentCustomerQuotation && canCreateCustomerQuotation(user, summary) ? (
-              <button type="button" className="primary-button self-start" onClick={() => createQuotation.mutate()} disabled={createQuotation.isPending}>
+              <Button type="button" variant="primary" className="self-start" onClick={() => createQuotation.mutate()} disabled={createQuotation.isPending}>
                 สร้างร่างใบเสนอราคาลูกค้า
-              </button>
+              </Button>
             ) : null}
             {!currentCustomerQuotation && !canCreateCustomerQuotation(user, summary) ? (
               <p className="text-sm text-text-muted">
@@ -1221,41 +1312,41 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   )}
 
                   <div className="flex flex-wrap gap-2">
-                    <button type="button" className="secondary-button" disabled={downloadingQuotationFormat === 'pdf'}
+                    <Button type="button" variant="secondary" disabled={downloadingQuotationFormat === 'pdf'}
                       onClick={() => handleDownloadCustomerQuotation(quotation, 'pdf')}>
                       ดูตัวอย่าง PDF
-                    </button>
-                    <button type="button" className="secondary-button" disabled={downloadingQuotationFormat === 'xlsx'}
+                    </Button>
+                    <Button type="button" variant="secondary" disabled={downloadingQuotationFormat === 'xlsx'}
                       onClick={() => handleDownloadCustomerQuotation(quotation, 'xlsx')}>
                       ดูตัวอย่าง XLSX
-                    </button>
+                    </Button>
                     {editable ? (
                       <Fragment key={`quotation-actions-${quotation.id}`}>
-                        <button type="button" className="secondary-button" onClick={() => saveQuotation.mutate(quotation)} disabled={saveQuotation.isPending}>
+                        <Button type="button" variant="secondary" onClick={() => saveQuotation.mutate(quotation)} disabled={saveQuotation.isPending}>
                           บันทึก
-                        </button>
-                        <button type="button" className="primary-button" disabled={issueQuotation.isPending}
+                        </Button>
+                        <Button type="button" variant="primary" disabled={issueQuotation.isPending}
                           onClick={() => setConfirmAction({ type: 'issueQuotation', quotation })}>
                           ออกใบเสนอราคา
-                        </button>
-                        <button type="button" className="danger-button" disabled={cancelQuotation.isPending}
+                        </Button>
+                        <Button type="button" variant="danger" disabled={cancelQuotation.isPending}
                           onClick={() => cancelQuotation.mutate(quotation)}>
                           ยกเลิกร่าง
-                        </button>
+                        </Button>
                       </Fragment>
                     ) : null}
                     {/* Widened per design correction 3: reachable once REVISION_REQUESTED too,
                         not only ISSUED — same guard the backend's createRevision now enforces. */}
                     {canCreateCommercialOnlyRevision(user, summary, quotation) ? (
-                      <button type="button" className="secondary-button" disabled={createQuotationRevision.isPending}
+                      <Button type="button" variant="secondary" disabled={createQuotationRevision.isPending}
                         onClick={() => createQuotationRevision.mutate(quotation)}>
                         {quotation.docStatus === 'REVISION_REQUESTED' ? 'สร้างรอบแก้ไขราคา/เงื่อนไข' : 'สร้างรอบแก้ไขใหม่'}
-                      </button>
+                      </Button>
                     ) : null}
                     {quotation.docStatus === 'REVISION_REQUESTED' && canManageCustomerQuotation(user, summary) ? (
-                      <button type="button" className="secondary-button" onClick={() => setRevisionModalOpen(true)}>
+                      <Button type="button" variant="secondary" onClick={() => setRevisionModalOpen(true)}>
                         สร้างรอบแก้ไขสินค้า/จำนวน/โรงงาน
-                      </button>
+                      </Button>
                     ) : null}
                   </div>
 
@@ -1270,18 +1361,18 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         onChange={(e) => setOutcomeNote(e.target.value)}
                       />
                       <div className="flex flex-wrap gap-2">
-                        <button type="button" className="primary-button" disabled={recordQuotationOutcome.isPending}
+                        <Button type="button" variant="primary" disabled={recordQuotationOutcome.isPending}
                           onClick={() => recordQuotationOutcome.mutate({ quotation, outcome: 'ACCEPTED' })}>
                           ลูกค้ายอมรับ
-                        </button>
-                        <button type="button" className="danger-button" disabled={recordQuotationOutcome.isPending}
+                        </Button>
+                        <Button type="button" variant="danger" disabled={recordQuotationOutcome.isPending}
                           onClick={() => recordQuotationOutcome.mutate({ quotation, outcome: 'REJECTED' })}>
                           ลูกค้าปฏิเสธ
-                        </button>
-                        <button type="button" className="secondary-button" disabled={recordQuotationOutcome.isPending}
+                        </Button>
+                        <Button type="button" variant="secondary" disabled={recordQuotationOutcome.isPending}
                           onClick={() => recordQuotationOutcome.mutate({ quotation, outcome: 'REVISION_REQUESTED' })}>
                           ลูกค้าขอแก้ไข
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   ) : null}
@@ -1310,7 +1401,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
               );
             })() : null}
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       {/* Step 6: Deposit, Payment, and Order Confirmation — only once the customer has accepted
@@ -1318,18 +1409,17 @@ export function PricingRequestDetailPage({ user, showToast }) {
           dual-track payment pipeline (TicketService.confirmCustomer/DepositNoticeService) rather
           than inventing a new one — see OrderConfirmationService's own class Javadoc. */}
       {summary.status === 'QUOTATION_ACCEPTED' ? (
-        <section className="table-panel">
-          <div className="panel-header"><h2>ยืนยันคำสั่งซื้อและออกใบแจ้งยอดเงินรับมัดจำ</h2></div>
+        <Panel flush title="ยืนยันคำสั่งซื้อและออกใบแจ้งยอดเงินรับมัดจำ">
           <div className="flex flex-col gap-3 p-4">
             {canConfirmOrder(user, summary) ? (
               <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
                 <p className="text-sm text-text-muted">
                   ลูกค้ายอมรับใบเสนอราคาแล้ว — ยืนยันคำสั่งซื้อเพื่อเริ่มขั้นตอนรับมัดจำและนำเข้าสินค้า
                 </p>
-                <button type="button" className="primary-button self-start" disabled={confirmOrder.isPending}
+                <Button type="button" variant="primary" className="self-start" disabled={confirmOrder.isPending}
                   onClick={() => confirmOrder.mutate()}>
                   ยืนยันคำสั่งซื้อ
-                </button>
+                </Button>
               </div>
             ) : null}
             {canCreateDepositNoticeFromQuotation(user, summary) ? (
@@ -1342,10 +1432,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <input type="number" min="0" max="1" step="0.05" className="w-24 rounded border border-border p-1 text-sm"
                     value={depositPercentInput} onChange={(e) => setDepositPercentInput(e.target.value)} />
                 </label>
-                <button type="button" className="primary-button self-start" disabled={createDepositNoticeFromQuotation.isPending}
+                <Button type="button" variant="primary" className="self-start" disabled={createDepositNoticeFromQuotation.isPending}
                   onClick={() => createDepositNoticeFromQuotation.mutate()}>
                   สร้างใบแจ้งยอดเงินรับมัดจำ
-                </button>
+                </Button>
               </div>
             ) : null}
             {!canConfirmOrder(user, summary) && !canCreateDepositNoticeFromQuotation(user, summary) ? (
@@ -1356,7 +1446,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
               </p>
             ) : null}
           </div>
-        </section>
+        </Panel>
       ) : null}
 
       <ConfirmDialog

@@ -11,11 +11,12 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Tabs, TabPanel } from '../../components/common/Tabs.jsx';
 import {
   canSubmitOwnLeave, defaultLeaveSurfaceTabId, LEAVE_SURFACE_TABS, resolveLeaveSurfaceTab,
-  visibleLeaveSurfaceTabIds,
+  resolveTabHelper, resolveTabLabel, visibleLeaveSurfaceTabIds,
 } from './leaveSurfaceTabs.js';
 import { MyLeaveTab } from './MyLeaveTab.jsx';
 import { ReviewQueueTab } from './ReviewQueueTab.jsx';
 import { RulesTab } from './RulesTab.jsx';
+import { TeamLeaveTab } from './TeamLeaveTab.jsx';
 
 const TAB_ID_PREFIX = 'leave-surface';
 
@@ -54,7 +55,17 @@ export function LeaveSurfacePage({ user, currentEmployee, showToast }) {
   });
   const reviewSignalRequests = useMemo(() => reviewSignalQuery.data ?? [], [reviewSignalQuery.data]);
 
-  const visibleTabIds = visibleLeaveSurfaceTabIds(user, reviewSignalRequests);
+  // Feeds ONLY the "ลูกทีม" tab's visibility check (leaveSurfaceTabs.js's `team.isVisible`,
+  // via hasTeamMembers) -- shares its cache key with TeamLeaveTab.jsx's own employees query
+  // (both read `queryKeys.leaveEmployees()`), so mounting that tab costs no extra request once
+  // this one has already landed. Same convention as reviewSignalQuery above.
+  const teamSignalQuery = useQuery({
+    queryKey: queryKeys.leaveEmployees(),
+    queryFn: () => api.leave.employees().then((response) => response.employees || []),
+  });
+  const teamSignalEmployeeOptions = useMemo(() => teamSignalQuery.data ?? [], [teamSignalQuery.data]);
+
+  const visibleTabIds = visibleLeaveSurfaceTabIds(user, reviewSignalRequests, teamSignalEmployeeOptions);
   // Plain (non-memoized) filter: `visibleTabIds` is itself freshly computed every render already
   // (it's not state), so memoizing this derived filter on top of it would only add an
   // (unusable, non-primitive) dependency without saving any real work -- LEAVE_SURFACE_TABS has
@@ -120,7 +131,17 @@ export function LeaveSurfacePage({ user, currentEmployee, showToast }) {
     // 1015 back to exactly 900 (== clientHeight) at 1440x900, with the input
     // still at the same in-page position -- just clipped/scrolled locally.
     <PageStack className="relative">
-      <div className="sticky top-0 z-10 -mx-4 border-b border-border bg-surface px-4 sm:mx-0 sm:border-0 sm:px-0">
+      {/* Part 3 bug fix (owner's explicit, repeated request): this used to be
+          `sticky top-0`. `.content-scroll` has `padding-top: 28px`, and
+          `position: sticky; top: 0` pins to that *content* box — so the
+          header parked 28px BELOW the scroll container's real top edge, and
+          that 28px band had no background of its own, letting scrolled
+          content show through above the "pinned" header. Reproduced exactly
+          in the browser (container top y=66, sticky pinned at y=94,
+          elementFromPoint in the band returned page content, not the
+          header). Now plain flow content — no sticky, no bleed
+          compensation. */}
+      <div>
         <PageHeader
           title="การลา"
           subtitle="ยื่นคำขอลา ตรวจโควตา และพิจารณาคำขอของทีมในที่เดียว"
@@ -145,7 +166,11 @@ export function LeaveSurfacePage({ user, currentEmployee, showToast }) {
           )}
         />
         <Tabs
-          items={visibleTabs.map(({ id, label, helper }) => ({ id, label, helper }))}
+          items={visibleTabs.map((tab) => ({
+            id: tab.id,
+            label: resolveTabLabel(tab, user),
+            helper: resolveTabHelper(tab, user),
+          }))}
           value={activeTab}
           onChange={setActiveTab}
           ariaLabel="การลา"
@@ -159,6 +184,10 @@ export function LeaveSurfacePage({ user, currentEmployee, showToast }) {
           currentEmployee={currentEmployee}
           showToast={showToast}
         />
+      </TabPanel>
+
+      <TabPanel id="team" idPrefix={TAB_ID_PREFIX} active={activeTab === 'team'}>
+        <TeamLeaveTab user={user} showToast={showToast} />
       </TabPanel>
 
       <TabPanel id="review" idPrefix={TAB_ID_PREFIX} active={activeTab === 'review'}>

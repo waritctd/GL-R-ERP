@@ -521,6 +521,35 @@ class SecurityAuthorizationIntegrationTest {
             .andExpect(jsonPath("$.estimateAvailable").exists());
     }
 
+    // ------------------------------------------------------------------------------------------
+    // P0 fix (customer master read gate, 2026-08): CustomerController's three GETs (search,
+    // {id}/contacts, {id}/projects) called only sessions.requireUser — authenticated, not
+    // authorized — so any role, including employee/warehouse/qc (no sales access anywhere else in
+    // the system), could read the customer master (taxId/address/phone) and every contact's
+    // name/email/phone. Now gated in CustomerService to the audience derived from every real
+    // caller: sales/import/ceo/account/sales_manager (TicketAccessPolicy.VIEWER_ROLES — the same
+    // set as canViewCatalog/canViewTickets on the frontend). CustomerReadAuthzIntegrationTest pins
+    // the exhaustive per-role, per-endpoint, wrong-way-round matrix against real Postgres; this
+    // case pins the same decision through the REAL SecurityFilterChain rather than a standalone
+    // MockMvc, matching this class's own stated purpose for every other endpoint here.
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void anEmployeeSessionCannotReadTheCustomerMasterButASalesSessionCan() throws Exception {
+        mvc.perform(get("/api/customers").session(sessionFor("employee")))
+            .andExpect(status().isForbidden());
+        mvc.perform(get("/api/customers").session(sessionFor("sales")))
+            .andExpect(status().isOk());
+    }
+
+    @Test
+    void warehouseAndQcCannotReadCustomerContactsOrProjectsEither() throws Exception {
+        mvc.perform(get("/api/customers/1/contacts").session(sessionFor("warehouse")))
+            .andExpect(status().isForbidden());
+        mvc.perform(get("/api/customers/1/projects").session(sessionFor("qc")))
+            .andExpect(status().isForbidden());
+    }
+
     private long extractAttachmentId(String json) {
         // Cheap, dependency-free extraction (this file has no Jackson ObjectMapper wired) --
         // {"attachment":{"attachmentId":123,...}}.

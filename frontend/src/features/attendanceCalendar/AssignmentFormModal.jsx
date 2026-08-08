@@ -1,6 +1,8 @@
 import { useState } from 'react';
+import { Button } from '../../components/common/Button.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { todayIso } from './dateHelpers.js';
 import { SCOPE_TYPES, scopeIdLabel } from './scopeTypes.js';
 
@@ -61,14 +63,14 @@ export function AssignmentFormModal({ schedules, busy, formError, onClose, onSub
       onClose={busy ? undefined : onClose}
       footer={(
         <>
-          <button type="button" className="secondary-button" onClick={onClose} disabled={busy}>ยกเลิก</button>
-          <button type="submit" form="assignment-form" className="primary-button" disabled={busy}>
+          <Button type="button" variant="secondary" onClick={onClose} disabled={busy}>ยกเลิก</Button>
+          <Button type="submit" form="assignment-form" variant="primary" disabled={busy}>
             {busy ? 'กำลังบันทึก...' : 'บันทึก'}
-          </button>
+          </Button>
         </>
       )}
     >
-      <form id="assignment-form" onSubmit={handleSubmit} className="grid gap-3.5">
+      <SafeForm id="assignment-form" onSubmit={handleSubmit} className="grid gap-3.5">
         <FormField label="ขอบเขต" htmlFor="assignment-scope-type" required>
           <select
             id="assignment-scope-type"
@@ -136,7 +138,7 @@ export function AssignmentFormModal({ schedules, busy, formError, onClose, onSub
             {formError}
           </p>
         ) : null}
-      </form>
+      </SafeForm>
     </Modal>
   );
 }
