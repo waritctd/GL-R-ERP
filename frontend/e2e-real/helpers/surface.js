@@ -92,12 +92,13 @@ export function isHeavyPath(path) {
 //
 // A path can appear more than once — `employees.detail` backs both a GET (`get`) and a PATCH
 // (`update`). Any GET usage makes it readable.
-function buildReadableSet() {
+function buildVerbMap() {
   const source = readFileSync(
     fileURLToPath(new URL('../../src/api/hrApi.js', import.meta.url)),
     'utf8'
   );
-  const readable = new Set();
+  /** name → Set of verbs hrApi.js calls it with. */
+  const verbs = new Map();
 
   for (const { name } of apiSurface()) {
     const reference = `API_ROUTES.${name.replace(/\(\)$/, '')}`;
@@ -135,20 +136,49 @@ function buildReadableSet() {
         }
         const call = source.slice(callStart, end + 1);
         // Only trust this call if it is the one referencing our route.
-        if (call.includes(reference) && !/method:\s*'(POST|PUT|PATCH|DELETE)'/.test(call)) {
-          readable.add(name);
+        if (call.includes(reference)) {
+          const explicit = call.match(/method:\s*'(POST|PUT|PATCH|DELETE)'/);
+          // No option bag ⇒ apiRequest defaults to GET (see hrApi.js's apiRequest signature).
+          const verb = explicit ? explicit[1] : 'GET';
+          if (!verbs.has(name)) verbs.set(name, new Set());
+          verbs.get(name).add(verb);
         }
       }
       from = index + reference.length;
       index = source.indexOf(reference, from);
     }
   }
-  return readable;
+  return verbs;
 }
 
-const READABLE = buildReadableSet();
+const VERBS = buildVerbMap();
+
+/** Every HTTP verb hrApi.js calls this endpoint with (a path can back more than one). */
+export function verbsFor(name) {
+  return [...(VERBS.get(name) ?? [])];
+}
 
 /** True when hrApi.js calls this endpoint with GET (explicitly or by omission). */
 export function isReadable(name) {
-  return READABLE.has(name);
+  return verbsFor(name).includes('GET');
+}
+
+/**
+ * Write endpoints that address a resource by id — the safe subset to sweep for authorization.
+ *
+ * Safe because the id is a placeholder that matches no row: every one of these is an action on
+ * an existing resource, so with a non-existent id the service can only refuse (403) or fail to
+ * find it (404). It cannot mutate a real row, and it cannot create the parent it was asked to
+ * act on. Collection-level writes (`POST /api/employees`, `POST /api/overtime`) are deliberately
+ * excluded — those genuinely can create something, so sweeping them across six roles would be
+ * writing rows into a shared database to find out who is allowed to.
+ */
+export function writeEndpointsWithId() {
+  return apiSurface()
+    .filter(({ name, path }) => path.includes(String(PLACEHOLDER_ID)))
+    .flatMap(({ name, path }) =>
+      verbsFor(name)
+        .filter((verb) => verb !== 'GET')
+        .map((verb) => ({ name, path, verb }))
+    );
 }
