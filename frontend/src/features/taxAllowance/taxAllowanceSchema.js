@@ -106,6 +106,19 @@ export const LAW_SOURCES = {
 // above LAW_SOURCES for which fields that applies to and why.
 export const LAW_REF_EXEMPTIONS = {};
 
+// ---------------------------------------------------------------------------------------------
+// THE BACKEND CONTRACT — unchanged by the ล.ย.01 restructure.
+//
+// These key lists are the wire shape `POST .../declarations/me` expects (see
+// TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationSubmitRequest). They are deliberately NOT the
+// same thing as "what the form shows": five of the money keys below are not on แบบ ล.ย.01 at all
+// (ssf, thaiEsg, pensionInsurance, maternity, politicalDonation) and the form no longer collects
+// them, but the columns still exist and the request still carries every component.
+//
+// ⚠️ CONSEQUENCE, accepted by the owner 2026-08-08: an amount the form does not collect submits as
+// 0, and `apply` upserts all sixteen into employee_tax_allowance. An employee currently claiming
+// SSF or Thai ESG loses it the first time they re-file. HR restores such a figure through the HR
+// tax-allowance editor, the same route that now sets spouseAllowance (below).
 export const ALLOWANCE_MONEY_KEYS = [
   'spouseAllowance',
   'childAllowance',
@@ -136,161 +149,274 @@ export const ALLOWANCE_CHECKBOX_KEYS = ['disabilityCardHolder'];
 
 export const ALL_ALLOWANCE_KEYS = [...ALLOWANCE_MONEY_KEYS, ...ALLOWANCE_COUNT_KEYS, ...ALLOWANCE_CHECKBOX_KEYS];
 
-// Shared between TaxAllowancePage.jsx (staged-evidence bucket key) and TaxAllowanceForm.jsx
-// (reading that bucket for step 1's general/uncategorized evidence list) -- one definition so the
-// two can't silently drift apart (review #tax-allowance-sections).
+/**
+ * Fields the FORM never asks for, because แบบ ล.ย.01 does not print them — HR supplies them at
+ * review through the existing HR tax-allowance editor.
+ *
+ * `spouseAllowance` is the interesting one: the form asks only for สถานภาพ (ข้อ 1) and whether the
+ * spouse has income (ข้อ 2), never a baht figure. Turning that status into ฿60,000 is payroll math,
+ * and the owner's ruling (2026-08-08) is that a human does it, exactly as on paper — the app
+ * deliberately does NOT derive it. `disabilityCardHolder` is the same shape: a qualifying condition
+ * of ข้อ 5 that the printed form has no box for.
+ */
+export const HR_SUPPLIED_KEYS = ['spouseAllowance', 'disabilityCardHolder'];
+
+/** The nested `lorYor01` payload's own keys — everything on the form that is not an amount. */
+export const LOR_YOR_01_DETAIL_KEYS = [
+  'taxpayerId', 'firstNameTh', 'lastNameTh',
+  'maritalState', 'spousalStatus', 'spouseHasIncome',
+  'childrenTotal', 'childExtraAllowance',
+  'ownFatherSupported', 'ownMotherSupported',
+  'spouseFatherSupported', 'spouseMotherSupported', 'spouseParentCareAllowance',
+  'ownFatherHealthInsured', 'ownMotherHealthInsured',
+  'spouseFatherHealthInsured', 'spouseMotherHealthInsured',
+  'providentFundAllowance', 'rmfSellerName', 'otherDonationNote',
+];
+
+export const LOR_YOR_01_ADDRESS_KEYS = [
+  'building', 'roomNo', 'floor', 'village', 'houseNo', 'moo', 'soi', 'junction', 'road',
+  'subDistrict', 'district', 'province', 'postalCode',
+];
+
+/** Attachment bucket for the signed, scanned form — required before submit (owner decision #3). */
+export const SIGNED_FORM_EVIDENCE_KEY = 'signed_form';
+
+/** The hub's general/uncategorised evidence bucket. */
 export const UNCATEGORIZED_EVIDENCE_KEY = '__uncategorized';
 
-// Field order/grouping mirrors the issue's screen 1 layout exactly: ครอบครัว → ประกัน →
-// การออมและการลงทุน → ที่อยู่อาศัย → เงินบริจาค.
-export const TAX_ALLOWANCE_GROUPS = [
+export const MARITAL_STATE_OPTIONS = [
+  { value: 'SINGLE', label: 'โสด' },
+  { value: 'WIDOWED', label: 'หม้าย' },
+  { value: 'MARRIED', label: 'สมรส' },
+  { value: 'DIED_DURING_YEAR', label: 'ตายระหว่างปีภาษี' },
+];
+
+export const SPOUSAL_STATUS_OPTIONS = [
+  { value: 'MARRIED_WHOLE_YEAR', label: 'สมรสและอยู่ร่วมกันตลอดปีภาษี' },
+  { value: 'MARRIED_DURING_YEAR', label: 'สมรสระหว่างปีภาษี' },
+  { value: 'DIVORCED_DURING_YEAR', label: 'หย่าระหว่างปีภาษี' },
+  { value: 'DIED_DURING_YEAR', label: 'ตายระหว่างปีภาษี' },
+];
+
+// ---------------------------------------------------------------------------------------------
+// THE FORM — one section per ข้อ, in the government form's own order and wording.
+//
+// This replaced five invented categories (ครอบครัว / ประกัน / การออมและการลงทุน / ที่อยู่อาศัย /
+// เงินบริจาค) that were grouped around modern Thai deductions rather than around the document the
+// employee is actually filing. Owner ruling 2026-08-08: the page follows the paper.
+//
+// `title` quotes the form. Do NOT paraphrase it to read better — an employee cross-checking the
+// screen against the PDF in front of them is the whole point of this structure.
+//
+// ⚠️ `hint` must never repeat the CAP figures the form prints in its own parentheticals. The 2562
+// form carries superseded numbers (ข้อ 7 prints ฿10,000; the current life-insurance limit is
+// ฿100,000), and this file's own header explains why an unsourced or stale Thai tax number must not
+// appear here. Live figures come from GET /api/payroll/tax-allowances/caps via `capCategory`.
+export const LOR_YOR_01_SECTIONS = [
   {
-    key: 'family',
-    title: 'ครอบครัว',
+    key: 'identity',
+    no: null,
+    title: 'ข้อมูลผู้มีเงินได้',
+    subtitle: 'ชื่อ เลขประจำตัวผู้เสียภาษีอากร และที่อยู่ตามแบบ ล.ย.01',
+    kind: 'identity',
+    fields: [],
+  },
+  {
+    key: 'status',
+    no: '1–2',
+    title: 'สถานภาพ และสถานะการมีเงินได้ของคู่สมรส',
+    kind: 'status',
+    fields: [],
+  },
+  {
+    key: 'item3',
+    no: '3',
+    title: 'บุตร',
     fields: [
-      { key: 'spouseAllowance', label: 'คู่สมรส (ไม่มีเงินได้)', capCategory: 'spouse', kind: 'money', lawRef: LAW_SOURCES.section47 },
-      { key: 'childAllowance', label: 'บุตร', capCategory: 'child', kind: 'money', lawRef: LAW_SOURCES.section47 },
-      { key: 'childCount', label: 'จำนวนบุตร', capCategory: 'child', kind: 'count', unit: 'คน', lawRef: LAW_SOURCES.section47 },
+      { key: 'lorYor01.childrenTotal', label: 'จำนวนบุตรรวม', kind: 'count', unit: 'คน', max: 9, lawRef: LAW_SOURCES.section47 },
+      { key: 'childCount', label: 'บุตร คนละ 30,000 บาท — มีสิทธินำมาหักลดหย่อนจำนวน', capCategory: 'child', kind: 'count', unit: 'คน', max: 9, lawRef: LAW_SOURCES.section47 },
+      { key: 'childAllowance', label: 'จำนวนเงิน (บุตร คนละ 30,000 บาท)', capCategory: 'child', kind: 'money', lawRef: LAW_SOURCES.section47 },
+      { key: 'childCountDouble', label: 'บุตรตั้งแต่คนที่สองที่เกิดในหรือหลัง พ.ศ. 2561 คนละ 60,000 บาท — จำนวน', capCategory: 'child_double', kind: 'count', unit: 'คน', max: 9, lawRef: LAW_SOURCES.section47 },
+      { key: 'lorYor01.childExtraAllowance', label: 'จำนวนเงิน (บุตร คนละ 60,000 บาท)', capCategory: 'child_double', kind: 'money', lawRef: LAW_SOURCES.section47 },
+    ],
+  },
+  {
+    key: 'item4',
+    no: '4',
+    title: 'ค่าอุปการะเลี้ยงดูบิดามารดา',
+    fields: [
+      { key: 'lorYor01.ownFatherSupported', label: 'บิดา (ของผู้มีเงินได้)', kind: 'checkbox', lawRef: LAW_SOURCES.section47 },
+      { key: 'lorYor01.ownMotherSupported', label: 'มารดา (ของผู้มีเงินได้)', kind: 'checkbox', lawRef: LAW_SOURCES.section47 },
+      { key: 'parentCareAllowance', label: 'จำนวนเงิน (ของผู้มีเงินได้)', capCategory: 'parent_care', kind: 'money', lawRef: LAW_SOURCES.section47 },
+      { key: 'lorYor01.spouseFatherSupported', label: 'บิดา (ของคู่สมรสที่ไม่มีเงินได้)', kind: 'checkbox', lawRef: LAW_SOURCES.section47 },
+      { key: 'lorYor01.spouseMotherSupported', label: 'มารดา (ของคู่สมรสที่ไม่มีเงินได้)', kind: 'checkbox', lawRef: LAW_SOURCES.section47 },
+      { key: 'lorYor01.spouseParentCareAllowance', label: 'จำนวนเงิน (ของคู่สมรสที่ไม่มีเงินได้)', capCategory: 'parent_care', kind: 'money', lawRef: LAW_SOURCES.section47 },
+    ],
+  },
+  {
+    key: 'item5',
+    no: '5',
+    title: 'ค่าอุปการะเลี้ยงดูคนพิการหรือคนทุพพลภาพ',
+    fields: [
+      { key: 'disabledCareCount', label: 'รวมทั้งสิ้น', capCategory: 'disabled_care', kind: 'count', unit: 'คน', max: 9, lawRef: LAW_SOURCES.section47 },
+      { key: 'disabledCareAllowance', label: 'จำนวนเงิน', capCategory: 'disabled_care', kind: 'money', lawRef: LAW_SOURCES.section47 },
+    ],
+  },
+  {
+    key: 'item6',
+    no: '6',
+    title: 'เบี้ยประกันสุขภาพบิดามารดา',
+    fields: [
+      { key: 'lorYor01.ownFatherHealthInsured', label: 'บิดา (ของผู้มีเงินได้)', kind: 'checkbox', lawRef: LAW_SOURCES.faq },
+      { key: 'lorYor01.ownMotherHealthInsured', label: 'มารดา (ของผู้มีเงินได้)', kind: 'checkbox', lawRef: LAW_SOURCES.faq },
+      { key: 'lorYor01.spouseFatherHealthInsured', label: 'บิดา (ของคู่สมรสที่ไม่มีเงินได้)', kind: 'checkbox', lawRef: LAW_SOURCES.faq },
+      { key: 'lorYor01.spouseMotherHealthInsured', label: 'มารดา (ของคู่สมรสที่ไม่มีเงินได้)', kind: 'checkbox', lawRef: LAW_SOURCES.faq },
+      { key: 'parentHealthInsuranceAllowance', label: 'จำนวนเงินรวม', capCategory: 'parent_health_insurance', kind: 'money', lawRef: LAW_SOURCES.faq },
+    ],
+  },
+  {
+    key: 'item7',
+    no: '7',
+    title: 'เบี้ยประกันชีวิตที่จ่ายภายในปีภาษี',
+    fields: [
+      { key: 'lifeInsuranceAllowance', label: 'จำนวนเงิน', capCategory: 'life_insurance', kind: 'money', lawRef: LAW_SOURCES.section47 },
+    ],
+  },
+  {
+    key: 'item8',
+    no: '8',
+    title: 'เบี้ยประกันสุขภาพที่จ่ายภายในปีภาษี',
+    fields: [
+      { key: 'healthInsuranceAllowance', label: 'จำนวนเงิน', capCategory: 'health_insurance', kind: 'money', lawRef: LAW_SOURCES.faq },
+    ],
+  },
+  {
+    key: 'item9',
+    no: '9',
+    title: 'เงินสะสมที่จ่ายเข้ากองทุนสำรองเลี้ยงชีพ หรือกองทุนการออมแห่งชาติ หรือกองทุน กบข. หรือกองทุนสงเคราะห์ครูโรงเรียนเอกชน',
+    fields: [
       {
-        key: 'childCountDouble',
-        label: 'จำนวนบุตรที่ได้สิทธิ 2 เท่า',
-        capCategory: 'child_double',
-        kind: 'count',
-        unit: 'คน',
-        hint: 'บุตรคนที่ 2 เป็นต้นไปที่เกิดตั้งแต่ พ.ศ. 2561 ได้รับสิทธิเพิ่มอีกหัวละ 30,000 บาท',
-        lawRef: LAW_SOURCES.section47,
-      },
-      { key: 'parentCareAllowance', label: 'อุปการะเลี้ยงดูบิดามารดา', capCategory: 'parent_care', kind: 'money', lawRef: LAW_SOURCES.section47 },
-      { key: 'parentCareCount', label: 'จำนวนบิดามารดาที่อุปการะ', capCategory: 'parent_care', kind: 'count', unit: 'คน', lawRef: LAW_SOURCES.section47 },
-      { key: 'disabledCareAllowance', label: 'อุปการะเลี้ยงดูคนพิการ/ทุพพลภาพ', capCategory: 'disabled_care', kind: 'money', lawRef: LAW_SOURCES.section47 },
-      { key: 'disabledCareCount', label: 'จำนวนคนพิการ/ทุพพลภาพที่อุปการะ', capCategory: 'disabled_care', kind: 'count', unit: 'คน', lawRef: LAW_SOURCES.section47 },
-      // ค่าฝากครรภ์และคลอดบุตร is not in ม.47's own named list (task research) -- FAQ, not section47.
-      { key: 'maternityAllowance', label: 'ค่าฝากครรภ์และคลอดบุตร', capCategory: 'maternity', kind: 'money', lawRef: LAW_SOURCES.faq },
-      {
-        key: 'disabilityCardHolder',
-        label: 'ผู้พิการที่อุปการะมีบัตรประจำตัวคนพิการ',
-        kind: 'checkbox',
-        hint: 'มีบัตร: ยกเว้นเงินได้ได้ทุกช่วงอายุ · ไม่มีบัตร: ยกเว้นได้เฉพาะอายุ 65 ปีขึ้นไป',
-        // A qualifying condition of the SAME "คนพิการ" line item above, not a separate allowance --
-        // shares that field's source rather than inventing a more specific one.
-        lawRef: LAW_SOURCES.section47,
-      },
-    ],
-  },
-  {
-    key: 'insurance',
-    title: 'ประกัน',
-    groupCapId: 'life_health',
-    fields: [
-      { key: 'lifeInsuranceAllowance', label: 'ประกันชีวิต', capCategory: 'life_insurance', kind: 'money', lawRef: LAW_SOURCES.section47 },
-      // Self/parent health insurance are NOT named in ม.47's own list (task research) -- FAQ, not
-      // section47, even though they sit in the same "ประกัน" group as life insurance above.
-      { key: 'healthInsuranceAllowance', label: 'ประกันสุขภาพ', capCategory: 'health_insurance', kind: 'money', lawRef: LAW_SOURCES.faq },
-      { key: 'parentHealthInsuranceAllowance', label: 'ประกันสุขภาพบิดามารดา', capCategory: 'parent_health_insurance', kind: 'money', lawRef: LAW_SOURCES.faq },
-    ],
-  },
-  {
-    key: 'savings',
-    title: 'การออมและการลงทุน',
-    groupCapId: 'retirement',
-    fields: [
-      { key: 'rmfAllowance', label: 'กองทุนรวมเพื่อการเลี้ยงชีพ (RMF)', capCategory: 'rmf', kind: 'money', lawRef: LAW_SOURCES.rmfSsf },
-      { key: 'ssfAllowance', label: 'กองทุนรวมเพื่อการออม (SSF)', capCategory: 'ssf', kind: 'money', lawRef: LAW_SOURCES.rmfSsf },
-      // Pension life insurance has no dedicated verified source (unlike RMF/SSF and Thai ESG, which
-      // "get their own" per the task) -- FAQ fallback, not stretched onto section47 or rmfSsf.
-      { key: 'pensionInsuranceAllowance', label: 'ประกันชีวิตแบบบำนาญ', capCategory: 'pension', kind: 'money', lawRef: LAW_SOURCES.faq },
-      { key: 'thaiEsgAllowance', label: 'กองทุนรวมไทยเพื่อความยั่งยืน (Thai ESG)', capCategory: 'thai_esg', kind: 'money', lawRef: LAW_SOURCES.thaiEsg },
-    ],
-  },
-  {
-    key: 'housing',
-    title: 'ที่อยู่อาศัย',
-    fields: [
-      { key: 'homeLoanInterestAllowance', label: 'ดอกเบี้ยเงินกู้ยืมเพื่อที่อยู่อาศัย', capCategory: 'home_loan_interest', kind: 'money', lawRef: LAW_SOURCES.section47 },
-    ],
-  },
-  {
-    key: 'donation',
-    title: 'เงินบริจาค',
-    fields: [
-      { key: 'educationDonation', label: 'เงินบริจาคสถานศึกษา/กีฬา (หักได้ 2 เท่า)', capCategory: 'education_donation', kind: 'money', lawRef: LAW_SOURCES.section47 },
-      { key: 'generalDonation', label: 'เงินบริจาคทั่วไป', capCategory: 'general_donation', kind: 'money', lawRef: LAW_SOURCES.section47 },
-      {
-        key: 'politicalDonation',
-        label: 'เงินบริจาคพรรคการเมือง',
-        capCategory: 'political_donation',
+        key: 'lorYor01.providentFundAllowance',
+        label: 'จำนวนเงิน',
+        capCategory: 'retirement',
         kind: 'money',
-        hint: 'แยกวงเงินต่างหาก ไม่รวมกับเพดานเงินบริจาคด้านบน',
-        lawRef: LAW_SOURCES.section47,
+        hint: 'บริษัทไม่มีกองทุนสำรองเลี้ยงชีพ — ช่องนี้สำหรับผู้ที่เป็นสมาชิกกองทุนการออมแห่งชาติ (กอช.) ด้วยตนเอง',
+        lawRef: LAW_SOURCES.faq,
       },
+    ],
+  },
+  {
+    key: 'item10',
+    no: '10',
+    title: 'ค่าซื้อหน่วยลงทุนในกองทุนรวมเพื่อการเลี้ยงชีพ (RMF)',
+    fields: [
+      { key: 'rmfAllowance', label: 'จำนวนเงิน', capCategory: 'rmf', kind: 'money', lawRef: LAW_SOURCES.rmfSsf },
+      { key: 'lorYor01.rmfSellerName', label: 'ชื่อผู้ขายหน่วยลงทุน', kind: 'text', lawRef: LAW_SOURCES.rmfSsf },
+    ],
+  },
+  {
+    key: 'item11',
+    no: '11',
+    title: 'ค่าซื้อหน่วยลงทุนในกองทุนรวมหุ้นระยะยาว (LTF)',
+    // Printed on the form, never fillable: LTF stopped being deductible after tax year 2019, so
+    // there is nothing an employee could truthfully declare and no column behind it (V137).
+    kind: 'retired',
+    note: 'กองทุนรวมหุ้นระยะยาว (LTF) สิ้นสุดสิทธิลดหย่อนตั้งแต่ปีภาษี 2563 เป็นต้นไป จึงไม่สามารถกรอกได้ และจะเว้นว่างไว้ในแบบที่พิมพ์ออกมา',
+    fields: [],
+  },
+  {
+    key: 'item12',
+    no: '12',
+    title: 'ดอกเบี้ยเงินกู้ยืมเพื่อซื้อ เช่าซื้อ หรือสร้างอาคารที่อยู่อาศัย',
+    fields: [
+      { key: 'homeLoanInterestAllowance', label: 'จำนวนเงิน', capCategory: 'home_loan_interest', kind: 'money', lawRef: LAW_SOURCES.section47 },
+    ],
+  },
+  {
+    key: 'item13',
+    no: '13',
+    title: 'เงินสมทบกองทุนประกันสังคมภายในปีภาษี',
+    // Derived, never typed: PayrollRepository#sumSocialSecurityForTaxYear sums what payroll actually
+    // recorded. A form filed in January legitimately shows nothing here yet.
+    kind: 'derived',
+    note: 'คำนวณอัตโนมัติจากยอดเงินสมทบที่หักไว้จริงในปีภาษีนี้ ไม่ต้องกรอกเอง',
+    fields: [],
+  },
+  {
+    key: 'item14',
+    no: '14',
+    title: 'เงินบริจาคสนับสนุนการศึกษา',
+    fields: [
+      { key: 'educationDonation', label: 'จำนวนเงิน', capCategory: 'education_donation', kind: 'money', lawRef: LAW_SOURCES.section47 },
+    ],
+  },
+  {
+    key: 'item15',
+    no: '15',
+    title: 'เงินบริจาคอื่น ๆ',
+    fields: [
+      { key: 'lorYor01.otherDonationNote', label: 'ระบุ', kind: 'text', lawRef: LAW_SOURCES.section47 },
+      { key: 'generalDonation', label: 'จำนวนเงิน', capCategory: 'general_donation', kind: 'money', lawRef: LAW_SOURCES.section47 },
     ],
   },
 ];
 
-// Rows granted automatically — never declared, never editable (decision #1 / issue #387).
-// `capCategory: null` (sso) means there is no `/caps` row for it at all; it is shown as a plain
-// label with no figure, since inventing one here would be exactly the "hardcoded Thai tax number"
-// the issue forbids.
+/** Rows granted automatically — never declared, never editable. */
 export const AUTO_GRANTED_ROWS = [
   { key: 'personal', label: 'ส่วนตัว', capCategory: 'personal', lawRef: LAW_SOURCES.section47 },
-  { key: 'sso', label: 'ประกันสังคม (SSO)', capCategory: null, note: 'หักตามฐานเงินเดือนและอัตราที่กฎหมายกำหนดโดยอัตโนมัติ', lawRef: LAW_SOURCES.section47 },
 ];
 
 /**
- * Every field/row this schema expects to carry a `lawRef` — every TAX_ALLOWANCE_GROUPS field plus
- * every AUTO_GRANTED_ROWS row, flattened to one list. Single source of truth for
- * taxAllowanceSchema.test.js's "every field has a lawRef, or a written LAW_REF_EXEMPTIONS reason"
- * check, so a field added to a group is automatically covered by that test with no second list to
- * remember to update.
+ * Every field/row this schema expects to carry a `lawRef`, flattened to one list — the single
+ * source of truth for taxAllowanceSchema.test.js, so a field added to a section is automatically
+ * covered with no second list to remember.
  */
 export function allLawReferencedEntries() {
-  return [...TAX_ALLOWANCE_GROUPS.flatMap((group) => group.fields), ...AUTO_GRANTED_ROWS];
+  return [...LOR_YOR_01_SECTIONS.flatMap((section) => section.fields), ...AUTO_GRANTED_ROWS];
 }
 
-/**
- * Whether the employee has entered anything for this GROUP's own fields yet — feeds the "กรอกแล้ว"
- * indicator on TaxAllowanceForm's step-1 section picker (progressive disclosure, #tax-allowance-
- * sections), so a returning user can see at a glance which of the five sections they have already
- * started.
- *
- * Deliberately its own helper, not a reuse of `computeGroupUsage` (taxAllowanceCaps.js):
- * `computeGroupUsage` answers "how much of a SHARED CEILING has been consumed" and only has an
- * opinion on the two groups that share one (life_health/retirement -- `groupCapId` on `insurance`/
- * `savings` below); it says nothing about `family`, `housing`, or `donation`, and is keyed by a
- * different id namespace (`groupId`, not `TAX_ALLOWANCE_GROUPS[].key`). This only asks "is any
- * field in this group non-default", for all five groups uniformly.
- */
-export function groupHasValue(group, values) {
-  if (!values) return false;
-  return group.fields.some((field) => {
-    const value = values[field.key];
-    return field.kind === 'checkbox' ? Boolean(value) : Number(value || 0) > 0;
+/** Reads a possibly-nested form key ("lorYor01.rmfSellerName" or "childAllowance"). */
+export function readFieldValue(values, key) {
+  if (!values) return undefined;
+  if (!key.includes('.')) return values[key];
+  const [outer, inner] = key.split('.');
+  return values[outer]?.[inner];
+}
+
+/** Whether the employee has entered anything for this ข้อ yet — drives the collapsed row's state. */
+export function sectionHasValue(section, values) {
+  return section.fields.some((field) => {
+    const value = readFieldValue(values, field.key);
+    if (field.kind === 'checkbox') return Boolean(value);
+    if (field.kind === 'text') return Boolean(value && String(value).trim());
+    return Number(value || 0) > 0;
   });
 }
 
-/**
- * Sum of just this GROUP's `kind: 'money'` fields, read from live `values` — the hub row and
- * review-recap subtotal for one section (#tax-allowance-ia-hub-review). Sibling of `groupHasValue`
- * above, not a replacement for it: `groupHasValue` also counts a nonzero COUNT field or a checked
- * checkbox as "something is here" (used to decide whether to show a subtotal at all, vs the
- * `ไม่ได้ประกาศ` fallback), while this only totals money — a group whose only entry is e.g.
- * `childCount` with no corresponding `childAllowance` yet would have `groupHasValue` true and this
- * return 0, which is the honest answer to "how many baht has this group declared so far", not a bug.
- */
-export function groupDeclaredTotal(group, values) {
-  if (!values) return 0;
-  return group.fields
+/** Sum of just this ข้อ's money fields — the subtotal on its collapsed row. */
+export function sectionDeclaredTotal(section, values) {
+  return section.fields
     .filter((field) => field.kind === 'money')
-    .reduce((sum, field) => sum + Number(values[field.key] || 0), 0);
+    .reduce((sum, field) => sum + Number(readFieldValue(values, field.key) || 0), 0);
 }
 
 export function defaultAllowanceValues(declaration) {
   const source = declaration?.allowances || {};
+  const detail = declaration?.lorYor01 || {};
   const values = {};
   for (const key of ALLOWANCE_MONEY_KEYS) values[key] = Number(source[key] || 0);
   for (const key of ALLOWANCE_COUNT_KEYS) values[key] = Number(source[key] || 0);
   values.disabilityCardHolder = Boolean(source.disabilityCardHolder);
   values.documentReference = declaration?.documentReference || '';
+  // `effectiveMonth` IS restored here, unlike the pre-restructure defaults, which silently reverted
+  // a re-prepared declaration to January while restoring documentReference right beside it.
+  values.effectiveMonth = declaration?.effectiveMonth ?? '';
+  values.lorYor01 = {};
+  for (const key of LOR_YOR_01_DETAIL_KEYS) values.lorYor01[key] = detail[key] ?? '';
+  values.lorYor01.address = {};
+  for (const key of LOR_YOR_01_ADDRESS_KEYS) {
+    values.lorYor01.address[key] = detail.address?.[key] ?? '';
+  }
   return values;
 }
 
@@ -298,34 +424,35 @@ export function emptyAllowanceValues() {
   return defaultAllowanceValues(null);
 }
 
-/**
- * Builds the exact body `POST .../declarations/me` (or `/on-behalf`, plus `employeeId` added by
- * the caller) expects — never includes `employeeId` here, per the self-service contract.
- */
-/** Sum of every declared baht amount — display-only (a total-so-far figure the employee/HR typed
- * in, not a capped or tax-adjusted figure). Never used as an input to the estimate call. */
+/** Sum of every declared baht amount — display only, never an input to the estimate call. */
 export function declaredAllowanceTotal(declaration) {
   const source = declaration?.allowances;
   if (!source) return 0;
   return ALLOWANCE_MONEY_KEYS.reduce((sum, key) => sum + Number(source[key] || 0), 0);
 }
 
-/**
- * Same "sum of every declared baht amount" figure as `declaredAllowanceTotal` above, but reads a
- * live react-hook-form `values` object instead of a submitted `declaration` — the hub and review
- * views (#tax-allowance-ia-hub-review) need this total WHILE the employee is still filling the form
- * in, before there is any `declaration.allowances` to sum. Deliberately not a call to
- * `declaredAllowanceTotal({ allowances: values })`: that would happen to work today because the two
- * key sets line up, but it would keep silently working if they ever drifted apart instead of failing
- * loudly, and it reads backwards at the call site (building a fake declaration just to satisfy a
- * shape). Two helpers, two sources (`declaration` vs live `values`) — same reasoning as
- * `groupHasValue`/`groupDeclaredTotal` above for why neither is a call-through to the other.
- */
+/** Same figure from a live react-hook-form `values`, while the employee is still typing. */
 export function declaredAllowanceTotalFromValues(values) {
   if (!values) return 0;
-  return ALLOWANCE_MONEY_KEYS.reduce((sum, key) => sum + Number(values[key] || 0), 0);
+  const amounts = ALLOWANCE_MONEY_KEYS.reduce((sum, key) => sum + Number(values[key] || 0), 0);
+  const extra = Number(values?.lorYor01?.childExtraAllowance || 0)
+    + Number(values?.lorYor01?.spouseParentCareAllowance || 0)
+    + Number(values?.lorYor01?.providentFundAllowance || 0);
+  return amounts + extra;
 }
 
+const blank = (value) => {
+  const trimmed = typeof value === 'string' ? value.trim() : value;
+  return trimmed === '' || trimmed === undefined ? null : trimmed;
+};
+
+/**
+ * Builds the exact body `POST .../declarations/me` expects — never includes `employeeId`.
+ *
+ * The five off-form amounts submit as 0 by construction: they are in ALLOWANCE_MONEY_KEYS (the wire
+ * shape) but have no control, so `values` never carries them. That is the accepted consequence of
+ * "strictly the 15 items" — see this file's contract note above.
+ */
 export function buildAllowanceSubmitBody(values, { taxYear, effectiveMonth, documentReference }) {
   const body = {
     taxYear,
@@ -335,5 +462,37 @@ export function buildAllowanceSubmitBody(values, { taxYear, effectiveMonth, docu
   for (const key of ALLOWANCE_MONEY_KEYS) body[key] = Number(values[key] || 0);
   for (const key of ALLOWANCE_COUNT_KEYS) body[key] = Number(values[key] || 0);
   body.disabilityCardHolder = Boolean(values.disabilityCardHolder);
+
+  const detail = values.lorYor01 || {};
+  body.lorYor01 = {
+    taxpayerId: blank(detail.taxpayerId),
+    firstNameTh: blank(detail.firstNameTh),
+    lastNameTh: blank(detail.lastNameTh),
+    address: LOR_YOR_01_ADDRESS_KEYS.reduce((acc, key) => {
+      acc[key] = blank(detail.address?.[key]);
+      return acc;
+    }, {}),
+    maritalState: blank(detail.maritalState),
+    spousalStatus: blank(detail.spousalStatus),
+    // A tri-state on the wire: null means neither ข้อ 2 box was ticked, which is different from
+    // "ticked ไม่มีเงินได้". The radio group stores '' / 'true' / 'false' as strings.
+    spouseHasIncome: detail.spouseHasIncome === '' || detail.spouseHasIncome == null
+      ? null
+      : detail.spouseHasIncome === true || detail.spouseHasIncome === 'true',
+    childrenTotal: Number(detail.childrenTotal || 0) || null,
+    childExtraAllowance: Number(detail.childExtraAllowance || 0),
+    ownFatherSupported: Boolean(detail.ownFatherSupported),
+    ownMotherSupported: Boolean(detail.ownMotherSupported),
+    spouseFatherSupported: Boolean(detail.spouseFatherSupported),
+    spouseMotherSupported: Boolean(detail.spouseMotherSupported),
+    spouseParentCareAllowance: Number(detail.spouseParentCareAllowance || 0),
+    ownFatherHealthInsured: Boolean(detail.ownFatherHealthInsured),
+    ownMotherHealthInsured: Boolean(detail.ownMotherHealthInsured),
+    spouseFatherHealthInsured: Boolean(detail.spouseFatherHealthInsured),
+    spouseMotherHealthInsured: Boolean(detail.spouseMotherHealthInsured),
+    providentFundAllowance: Number(detail.providentFundAllowance || 0),
+    rmfSellerName: blank(detail.rmfSellerName),
+    otherDonationNote: blank(detail.otherDonationNote),
+  };
   return body;
 }
