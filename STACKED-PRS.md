@@ -132,24 +132,27 @@ git town sync --all          # every local branch (use after a long absence)
 git town sync --stack --dry-run   # print the git commands without running them
 ```
 
-> ⚠️ **Two things to know before you run `sync`.**
->
-> **1. It pushes.** `git town sync` runs `git push -u origin <branch>` as part of its normal
-> operation — it is *not* a read-only "catch up on `main`". Never run it when the user has not asked
-> for a push. `git town sync --stack --dry-run` prints the exact git commands first; use it.
->
-> **2. It is currently blocked repo-wide.** Sync's first step is `git fetch --prune --tags`, which
-> fails because all three annotated release tags point at different commits locally than on origin:
->
-> ```
-> ! [rejected]  v0.1.0 -> v0.1.0  (would clobber existing tag)   ... same for v0.2.0, v0.3.0
-> ```
->
-> This is pre-existing and unrelated to any feature work (re-confirmed 2026-08-08). **Do not
-> `fetch --tags --force` to unblock a PR** — that silently discards local annotated tag objects for
-> published releases as a side effect of unrelated work. Until an owner decides which side is
-> authoritative, sync the chain by hand (`git fetch origin main`, then merge parent into child
-> bottom-up) or push and `gh pr create --base <parent>` directly; both reach the same end state.
+> ⚠️ **`sync` pushes.** It runs `git push -u origin <branch>` — and `git push --tags` — as part of
+> its normal operation. It is *not* a read-only "catch up on `main`", and this repo's rule is not to
+> push unasked. `git town sync --stack --dry-run` prints the exact git commands first; use it. Note
+> it also runs `git add -A` + `git stash` around the sync, so uncommitted work is swept up and
+> restored rather than left alone.
+
+**Resolved 2026-08-08 — the release tags.** `sync` was blocked repo-wide for a while: its first step
+is `git fetch --prune --tags`, which was rejected with `(would clobber existing tag)` for `v0.1.0`,
+`v0.2.0` and `v0.3.0`, because each pointed at a different commit locally than on origin.
+
+**Origin is authoritative.** Owner ruling. The local tags were stale pointers into pre-rewrite
+history: for all three, origin's target is reachable from `main` and carries the *same commit
+subject* as the local target, while the local target is unreachable — the signature of tags left
+behind by a history rewrite. Resolved with a one-time `git fetch --prune --tags --force origin`; the
+superseded local tag objects were preserved first under `refs/backup/pre-rewrite-tags/*` on the
+owner's machine.
+
+If you ever see that rejection again, it means new local tags have diverged — **do not reflexively
+`--force`.** Check first whether the local tag object is reachable from `main` and whether origin
+carries an equivalent; a `--force` discards local annotated tag objects for published releases, and
+that is only correct when they are known-redundant, as they were here.
 
 `git-town.toml` sets `feature-strategy = "merge"`: syncing **merges** the parent into the child
 rather than rebasing it. That is deliberate for this repo — rebasing rewrites history another
