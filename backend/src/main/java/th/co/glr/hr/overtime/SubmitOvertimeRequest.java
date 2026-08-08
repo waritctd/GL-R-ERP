@@ -17,12 +17,13 @@ import java.time.OffsetDateTime;
  * pay_rate_multiplier} by any path.
  *
  * <p>The field is kept, not deleted, because the claim itself is meaningful: {@code
- * OvertimeService#validateDayTypeClaim} checks it against {@link
+ * OvertimeService#resolveDayTypeSubmitNote} checks it against {@link
  * th.co.glr.hr.attendance.schedule.HolidayCalendar} and refuses outright a {@code HOLIDAY} claim the
- * calendar can actively disprove (loaded for the year, date not in it), while a claim the calendar
- * cannot yet corroborate (nothing loaded for the year at all) is accepted but flagged in {@code
- * calculation_note} for HR to review. A blank/null value is simply "no claim made" -- validated the
- * same as always (derived from the calendar, no flag).
+ * calendar can actively disprove (loaded for the year, date not in it). Separately -- and
+ * REGARDLESS of what this field holds, including blank/{@code null} -- a work date whose year the
+ * calendar has no data for at all is flagged in {@code calculation_note} for HR to review: the
+ * day-type DERIVATION is unverified in that case, a fact that has nothing to do with what (if
+ * anything) was claimed. A blank/null value is "no claim made", but it is not exempt from that flag.
  *
  * <p>Do not wire this field back into anything that sets {@code pay_rate_multiplier} or {@code
  * day_type} directly, even conditionally -- {@code deriveDayType} is the only permitted source for

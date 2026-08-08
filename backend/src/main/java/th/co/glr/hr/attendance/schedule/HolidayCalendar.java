@@ -26,9 +26,11 @@ public interface HolidayCalendar {
      * "nobody has loaded this year's holidays yet" — both return {@code false}.
      *
      * <p>Exists for callers that must react differently to those two cases — e.g. {@code
-     * OvertimeService#validateDayTypeClaim}, which refuses a HOLIDAY claim it can actively disprove
-     * (calendar loaded, date not in it) but only flags one it cannot yet verify at all (calendar
-     * empty for the year). Do not use this for money: it never participates in {@code
+     * OvertimeService#resolveDayTypeSubmitNote}, which flags EVERY submission for a year the
+     * calendar has no data for at all, regardless of what {@code SubmitOvertimeRequest.dayType}
+     * claimed (the DERIVATION is what's unverified there, not the claim), and separately refuses
+     * outright a HOLIDAY claim the calendar CAN actively disprove once it does have data for the
+     * year. Do not use this for money: it never participates in {@code
      * OvertimeService#deriveDayType}, which stays exactly "does {@link #isHoliday} say yes" — an
      * unloaded calendar still correctly resolves to WORKDAY, the conservative direction.
      */

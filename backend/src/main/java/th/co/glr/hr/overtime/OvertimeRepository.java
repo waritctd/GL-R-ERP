@@ -136,10 +136,11 @@ public class OvertimeRepository {
      * @param submitTimeCalculationNote nullable. Written straight into {@code calculation_note} at
      *     INSERT time -- normally {@code null} (nothing to say yet; a real calculation note is only
      *     produced at approval, see {@link #managerApprove}/{@link #ceoDirectApprove}). Non-null
-     *     exactly when {@code OvertimeService#validateDayTypeClaim} flagged an unverifiable HOLIDAY
-     *     claim (calendar has zero rows for the work date's year, so the claim can be neither
-     *     confirmed nor refused). Approval must APPEND to this, never overwrite it wholesale -- see
-     *     {@code OvertimeService#preserveDayTypeClaimFlag}.
+     *     exactly when {@code OvertimeService#resolveDayTypeSubmitNote} found the calendar has zero
+     *     rows for the work date's year at all -- the day-type DERIVATION is unverified, so this
+     *     fires regardless of what (if anything) {@code SubmitOvertimeRequest.dayType} claimed.
+     *     Approval must APPEND to this, never overwrite it wholesale -- see {@code
+     *     OvertimeService#preserveDayTypeClaimFlag}.
      */
     public long create(
             long employeeId,

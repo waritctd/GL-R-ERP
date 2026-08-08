@@ -39,12 +39,16 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * dayType} exclusively from {@link DbHolidayCalendar}, never from caller input (Cases 1-3 below),
  * and (2) {@code SubmitOvertimeRequest.dayType} is KEPT, not deleted, as a CLAIM the server
  * validates rather than trusts (Case 4 below) — see that record's Javadoc and {@code
- * OvertimeService#validateDayTypeClaim}. Either way, the claim never reaches {@code
+ * OvertimeService#resolveDayTypeSubmitNote}. Either way, the claim never reaches {@code
  * pay_rate_multiplier}: an unrecognised claim is refused (400, same message as always), a claim the
- * calendar can actively disprove is refused (400, naming the date), a claim the calendar cannot yet
- * verify is accepted but flagged in {@code calculation_note} for HR, and a claim that UNDER-states
+ * calendar can actively disprove is refused (400, naming the date), and a claim that UNDER-states
  * the true day type is silently corrected upward by {@link OvertimeService#deriveDayType} — the
- * claim can never suppress real holiday pay, only (harmlessly) fail to inflate it.
+ * claim can never suppress real holiday pay, only (harmlessly) fail to inflate it. Separately, and
+ * regardless of what (if anything) was claimed, a work date whose YEAR the calendar has zero rows
+ * for at all is accepted but flagged in {@code calculation_note} for HR — the DERIVATION is what is
+ * unverified there, a fact about the calendar, not the claim (widened from "only when a HOLIDAY
+ * claim can't be verified" in a follow-up fix; see {@code workdayClaimWithNoCalendarDataForTheYearIsAcceptedAndFlaggedToo}
+ * below and {@code OvertimeServiceTest} for the unit-level tests and mutation-check of that change).
  *
  * <p>Drives the real {@link OvertimeService}, {@link OvertimeRepository} and {@link
  * DbHolidayCalendar} against real Postgres end to end (submit → manager/CEO approve → payroll
@@ -80,9 +84,9 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * ported branch, actually run in this session):
  *
  * <p><b>Mutation 4</b>: deleted the {@code if (!holidayCalendar.isHoliday(workDate)) throw ...}
- * guard inside {@code validateDayTypeClaim} (the branch that refuses a HOLIDAY claim the calendar
- * can actively disprove), so a contradicted claim would silently fall through and be accepted. See
- * this session's final report for the exact test(s) that reddened.
+ * guard inside {@code resolveDayTypeSubmitNote} (the branch that refuses a HOLIDAY claim the
+ * calendar can actively disprove), so a contradicted claim would silently fall through and be
+ * accepted. See this session's final report for the exact test(s) that reddened.
  *
  * <p><b>Mutation 5</b>: deleted the {@code if (!holidayCalendar.hasHolidaysForYear(...))} guard (the
  * branch that flags, rather than trusts blindly, a HOLIDAY claim for a year the calendar has never
@@ -93,6 +97,19 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * inside {@code preserveDayTypeClaimFlag}, so approval would unconditionally overwrite {@code
  * calculation_note} instead of appending to a submit-time flag. See this session's final report for
  * the exact test(s) that reddened.
+ *
+ * <p>MUTATION-CHECK RECORD, Case 4 follow-up (widening the flag to fire regardless of the claim —
+ * fixed in a later session; see that session's final report for the full table, and {@code
+ * OvertimeServiceTest} for the unit tests it was run against, which is where this mutation-check
+ * actually lives — the two new mutations below are IT-level restatements of the same guards for this
+ * class's own record-keeping, not separately re-run against real Postgres per mutation):
+ *
+ * <p><b>Mutation 7</b>: reverted {@code resolveDayTypeSubmitNote} step 2 (the {@code
+ * hasHolidaysForYear} check) to fire only when the claim is HOLIDAY — i.e. back to this class's
+ * original Case-4 shape, before the follow-up widened it.
+ *
+ * <p><b>Mutation 8</b>: made the unverified-calendar note unconditional (returned regardless of
+ * {@code hasHolidaysForYear}), collapsing the distinction this fix exists to draw.
  */
 class OvertimeDayTypeDerivedFromCalendarIntegrationTest extends AbstractPostgresIntegrationTest {
 
@@ -310,7 +327,7 @@ class OvertimeDayTypeDerivedFromCalendarIntegrationTest extends AbstractPostgres
     // Case 4: the claim-validation layer -- SubmitOvertimeRequest.dayType is KEPT (this repo's
     // divergence from the ported branch, which deleted it) as a CLAIM the server validates but
     // NEVER trusts for pay. See SubmitOvertimeRequest's Javadoc and
-    // OvertimeService#validateDayTypeClaim for the decision table these cases exercise.
+    // OvertimeService#resolveDayTypeSubmitNote for the decision table these cases exercise.
     // -------------------------------------------------------------------------------------------
 
     /**
@@ -366,7 +383,9 @@ class OvertimeDayTypeDerivedFromCalendarIntegrationTest extends AbstractPostgres
      * from "loaded, and this date isn't in it", see {@code HolidayCalendar#hasHolidaysForYear}'s
      * Javadoc) -- the claim can be neither confirmed nor refused, so it is accepted (money still
      * comes exclusively from {@code deriveDayType}, i.e. WORKDAY here) but flagged in {@code
-     * calculation_note} for HR to review once the calendar is populated.
+     * calculation_note} for HR to review once the calendar is populated. The note names the
+     * unloaded YEAR, not the claim -- see {@link #workdayClaimWithNoCalendarDataForTheYearIsAcceptedAndFlaggedToo}
+     * below for proof this fires just as well with no HOLIDAY claim in sight.
      */
     @Test
     void holidayClaimWithNoCalendarDataForTheYearIsAcceptedAndFlagged() {
@@ -379,9 +398,34 @@ class OvertimeDayTypeDerivedFromCalendarIntegrationTest extends AbstractPostgres
             .isEqualTo("WORKDAY");
         assertThat(multiplierOf(id)).isEqualByComparingTo("1.50");
         assertThat(calculationNoteOf(id))
+            .as("the note is about the CALENDAR (names the year), not the claim -- it no longer mentions HOLIDAY at all, see resolveDayTypeSubmitNote's Javadoc")
             .isNotNull()
-            .contains(String.valueOf(FAR_FUTURE_YEAR_WITH_NO_HOLIDAY_DATA))
-            .contains("HOLIDAY");
+            .contains(String.valueOf(FAR_FUTURE_YEAR_WITH_NO_HOLIDAY_DATA));
+    }
+
+    /**
+     * THE exact gap this fix closes, proved end to end against real Postgres (the unit-level proof,
+     * including its own mutation-check, lives in {@code OvertimeServiceTest}). Before this fix,
+     * {@code validateDayTypeClaim} returned {@code null} the instant the claim was anything other
+     * than HOLIDAY, so an unloaded calendar's silence was flagged ONLY when the caller happened to
+     * claim HOLIDAY -- which {@code OvertimePanel.jsx}'s submit dropdown never defaults to. A
+     * WORKDAY claim (the dropdown's default) in a year the calendar has zero rows for must now ALSO
+     * carry the flag: it is {@code deriveDayType}'s own WORKDAY default that is unverified, not the
+     * claim. Written wrong-way-round: asserts the note is PRESENT where the pre-fix code left it
+     * absent.
+     */
+    @Test
+    void workdayClaimWithNoCalendarDataForTheYearIsAcceptedAndFlaggedToo() {
+        LocalDate workDate = aFarFutureYearWeekdayWithNoHolidayRow();
+
+        long id = overtimeService.submit(request(workDate, staff, "WORKDAY"), employee(staff)).id();
+
+        assertThat(dayTypeOf(id)).isEqualTo("WORKDAY");
+        assertThat(multiplierOf(id)).isEqualByComparingTo("1.50");
+        assertThat(calculationNoteOf(id))
+            .as("a WORKDAY claim -- OvertimePanel.jsx's dropdown default -- must be flagged too: the derivation is unverified independent of what was claimed")
+            .isNotNull()
+            .contains(String.valueOf(FAR_FUTURE_YEAR_WITH_NO_HOLIDAY_DATA));
     }
 
     /**

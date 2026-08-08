@@ -12,7 +12,7 @@ import java.time.OffsetDateTime;
  * attendance and {@code salary_basis} is resolved as of the work date, so all four freeze together.
  * See {@code OvertimeService#deriveDayType}. {@code SubmitOvertimeRequest.dayType} is a caller
  * CLAIM about this value, validated but never trusted for it — see
- * {@code OvertimeService#validateDayTypeClaim}.
+ * {@code OvertimeService#resolveDayTypeSubmitNote}.
  */
 public record OvertimeCalculation(
     OffsetDateTime actualStartAt,
