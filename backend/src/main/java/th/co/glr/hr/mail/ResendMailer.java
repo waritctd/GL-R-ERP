@@ -22,6 +22,13 @@ import org.springframework.stereotype.Component;
  * HTTP 429. Since this always runs on a background thread (never the request thread), a small
  * blocking retry-with-backoff here is safe and turns a transient rate-limit into a successful send
  * instead of a silently dropped notification.
+ *
+ * <p>{@code List-Unsubscribe} / {@code List-Unsubscribe-Post} were considered during the UAT
+ * deliverability pass (2026-08-08) and deliberately NOT added: every message this class sends is
+ * transactional HR mail (leave/OT notifications, payslips, factory quotes) that the recipient
+ * cannot opt out of - there is no list to unsubscribe from. A header advertising an unsubscribe
+ * mechanism that does not exist is worse for deliverability and worse for the recipient than no
+ * header at all. Do not re-add it without a real list-management path behind it.
  */
 @Component
 @ConditionalOnProperty(name = "app.mail.provider", havingValue = "resend")
@@ -40,43 +47,67 @@ public class ResendMailer implements Mailer {
 
     private final ResendSender sender;
     private final String fromAddress;
+    private final String replyTo;
 
     @Autowired
     public ResendMailer(@Value("${app.mail.resend-api-key:}") String apiKey,
-                        @Value("${app.mail.from:onboarding@resend.dev}") String fromAddress) {
+                        @Value("${app.mail.from:onboarding@resend.dev}") String fromAddress,
+                        @Value("${app.mail.reply-to:}") String replyTo) {
         // Constructing with a blank key is harmless (no network call happens until send()).
         Resend client = new Resend(apiKey);
         this.sender = client.emails()::send;
         this.fromAddress = fromAddress;
+        this.replyTo = replyTo == null ? "" : replyTo.trim();
     }
 
-    /** Package-private constructor for tests: inject a fake transport, skip the real Resend client. */
+    /** Package-private constructor for tests: inject a fake transport, skip the real Resend client.
+     * No Reply-To - see the 3-arg overload below for tests that need one. */
     ResendMailer(ResendSender sender, String fromAddress) {
+        this(sender, fromAddress, "");
+    }
+
+    /** Package-private constructor for tests that also need to exercise Reply-To. */
+    ResendMailer(ResendSender sender, String fromAddress, String replyTo) {
         this.sender = sender;
         this.fromAddress = fromAddress;
+        this.replyTo = replyTo == null ? "" : replyTo.trim();
     }
 
     @Override
     public void send(String to, String subject, String body) {
-        CreateEmailOptions request = CreateEmailOptions.builder()
+        CreateEmailOptions.Builder request = CreateEmailOptions.builder()
             .from(fromAddress)
             .to(to)
             .subject(subject)
-            .text(body)
-            .build();
-        sendWithRetry(request, to);
+            .text(body);
+        applyReplyTo(request);
+        sendWithRetry(request.build(), to);
     }
 
     @Override
-    public void sendHtml(String to, String subject, String htmlBody, String textBody) {
-        CreateEmailOptions request = CreateEmailOptions.builder()
+    public void sendHtml(String to, String subject, String htmlBody, String textBody, List<InlineImage> inlineImages) {
+        CreateEmailOptions.Builder request = CreateEmailOptions.builder()
             .from(fromAddress)
             .to(to)
             .subject(subject)
             .html(htmlBody)
-            .text(textBody)
-            .build();
-        sendWithRetry(request, to);
+            .text(textBody);
+        applyReplyTo(request);
+        if (!inlineImages.isEmpty()) {
+            // Resend has no separate "inline image" concept: an attachment becomes inline purely by
+            // carrying a contentId that the html matches via cid:<contentId> - confirmed by
+            // decompiling resend-java 4.13.0's Attachment.Builder (~/.m2), which exposes
+            // .contentId(String).
+            request.attachments(inlineImages.stream()
+                .map(image -> com.resend.services.emails.model.Attachment.builder()
+                    .fileName(image.filename())
+                    .content(Base64.getEncoder().encodeToString(image.bytes()))
+                    .contentType(image.mimeType() != null ? image.mimeType() : "application/octet-stream")
+                    .contentId(image.contentId())
+                    .build())
+                .toList());
+        }
+        sendWithRetry(request.build(), to);
     }
 
     @Override
@@ -94,14 +125,23 @@ public class ResendMailer implements Mailer {
                 .build())
             .toList();
 
-        CreateEmailOptions request = CreateEmailOptions.builder()
+        CreateEmailOptions.Builder request = CreateEmailOptions.builder()
             .from(fromAddress)
             .to(to)
             .subject(subject)
             .text(body)
-            .attachments(resendAttachments)
-            .build();
-        sendWithRetry(request, to);
+            .attachments(resendAttachments);
+        applyReplyTo(request);
+        sendWithRetry(request.build(), to);
+    }
+
+    /** Sets Reply-To on the request being built, or leaves it unset when {@code app.mail.reply-to}
+     * is blank (the default - no address is invented). Resend, like any RFC 5322 client, treats a
+     * missing Reply-To as "replies go to From", so omitting the header is a safe, valid default. */
+    private void applyReplyTo(CreateEmailOptions.Builder request) {
+        if (!replyTo.isBlank()) {
+            request.replyTo(replyTo);
+        }
     }
 
     private void sendWithRetry(CreateEmailOptions request, String to) {

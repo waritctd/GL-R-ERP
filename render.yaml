@@ -79,8 +79,13 @@ services:
       # gl-r-erp (demo/prod) above, so this has zero effect there. See NotificationEmailService.
       - key: APP_MAIL_OVERRIDE_TO
         value: fasaiglrhr@gmail.com
-      - key: APP_MAIL_SUBJECT_PREFIX
-        value: "[UAT TEST] "
+      # Appended (not prepended) to the subject: keeps the "this is a test email" safety property
+      # (APP_MAIL_OVERRIDE_TO's real inbox must never confuse this for a real one) without a
+      # bracketed keyword at the FRONT of the subject, which is a classic spam-filter trigger that a
+      # three-day-old sending domain can't afford. Leading space is deliberate - YAML-quoted so it
+      # survives - giving "Subject (UAT)" rather than "Subject(UAT)".
+      - key: APP_MAIL_SUBJECT_SUFFIX
+        value: " (UAT)"
       # Secrets — set in the Render dashboard, pointing at the NEW UAT Supabase project only.
       - key: SPRING_DATASOURCE_URL
         sync: false
@@ -109,11 +114,21 @@ services:
         value: resend
       - key: APP_MAIL_RESEND_API_KEY
         sync: false
-      # ⚠️ Do NOT set APP_MAIL_FROM. The Resend account is not domain-verified, so it may only send
-      # as the sandbox sender (application.yml's onboarding@resend.dev) and only TO the Resend
-      # account's own address — which is what APP_MAIL_OVERRIDE_TO above must stay pointed at. Any
-      # other From returns 403 domain-not-verified, and NotificationEmailService swallows send
-      # failures, so it fails SILENTLY. Revisit only once glr.co.th is verified in Resend.
+      # app.mail.from is a dashboard secret, set here only by name (sync:false — see the note above
+      # this env block: Render ignores this file's own value/sync for it, this is documentation of
+      # what an operator sets by hand). glr-trial.lat is verified in Resend and the live From: header
+      # uses an address on that domain (confirmed against a real received email, 2026-08-08).
+      # application.yml's onboarding@resend.dev is only the fallback used if this dashboard variable
+      # is ever unset - that sandbox sender can only send TO the Resend account's own address, which
+      # is why APP_MAIL_OVERRIDE_TO above exists as a safety net independent of which From is active.
+      - key: APP_MAIL_FROM
+        sync: false
+      # Optional. Unset here deliberately - do not invent an address. A Reply-To that resolves to a
+      # real, monitored mailbox is a positive deliverability signal; set APP_MAIL_REPLY_TO on the
+      # dashboard to one if/when an operator designates one. Blank = no Reply-To header at all
+      # (replies fall back to APP_MAIL_FROM, which is a valid default, not an error state).
+      - key: APP_MAIL_REPLY_TO
+        sync: false
       #
       # APP_MAIL_SMTP_* are unused on this service; delete any that were set during the SMTP attempt.
       - key: APP_UPLOADS_DIR
