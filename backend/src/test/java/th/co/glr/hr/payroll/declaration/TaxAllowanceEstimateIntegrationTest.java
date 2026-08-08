@@ -42,6 +42,10 @@ import th.co.glr.hr.ticket.TicketRepository;
  * against a REAL {@link PayrollService#preview} run for the same employee/month, never a
  * hand-computed expectation.
  */
+import th.co.glr.hr.config.AppProperties;
+
+import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
+
 class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTest {
     private TaxAllowanceDeclarationRepository declarationRepository;
     private TaxAllowanceDeclarationService service;
@@ -90,7 +94,8 @@ class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTes
             mock(AuditService.class),
             mock(FileStorageService.class),
             payrollService,
-            new NotificationRepository(jdbc));
+            new NotificationRepository(jdbc),
+            new AppProperties(), new LorYor01Renderer());
 
         hrEmployeeId = seedEmployee("EST-HR", new BigDecimal("50000.00"), "M");
     }
@@ -189,7 +194,8 @@ class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTes
             null, null, null,         // childCount, childCountDouble, disabledCareCount
             null,                     // disabilityCardHolder
             null,                     // parentCareCount
-            null);                    // documentReference
+            null,                    // documentReference
+            null);                   // lorYor01 — no ล.ย.01 form detail in this fixture
     }
 
     private long seedEmployee(String code, BigDecimal salary, String payType) {

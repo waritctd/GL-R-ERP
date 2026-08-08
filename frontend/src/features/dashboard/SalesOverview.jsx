@@ -192,7 +192,7 @@ export function SalesOverview({ user, employee }) {
           {loading ? (
             <p className="m-0 text-sm text-text-muted">กำลังโหลดงานที่ต้องทำ…</p>
           ) : worklist.length === 0 ? (
-            <div className="empty-state">ไม่มีสิ่งที่ต้องดำเนินการตอนนี้</div>
+            <div className="grid min-h-[220px] place-items-center content-center gap-2 text-center text-text-muted">ไม่มีสิ่งที่ต้องดำเนินการตอนนี้</div>
           ) : (
             <div className="flex flex-col">
               {worklist.map(({ deal, action }) => (

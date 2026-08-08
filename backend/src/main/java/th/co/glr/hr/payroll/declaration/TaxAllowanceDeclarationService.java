@@ -1,6 +1,9 @@
 package th.co.glr.hr.payroll.declaration;
 
 import java.time.LocalDate;
+import java.time.ZoneId;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -17,6 +20,13 @@ import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.payroll.PayrollAllowanceEstimateResult;
 import th.co.glr.hr.payroll.PayrollPeriodDto;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
+import java.io.IOException;
+import java.math.BigDecimal;
+import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.LorYor01Details;
+import th.co.glr.hr.payroll.declaration.loryor01.LorYor01FormAssembler;
+import th.co.glr.hr.payroll.declaration.loryor01.LorYor01FormData;
+import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
 import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.payroll.PayrollService;
 import th.co.glr.hr.payroll.PayrollTaxAllowanceInput;
@@ -75,6 +85,18 @@ public class TaxAllowanceDeclarationService {
     private final FileStorageService fileStorage;
     private final PayrollService payrollService;
     private final NotificationRepository notifications;
+    /**
+     * วัน/เดือน/ปี ที่แจ้งรายการ is a Thai calendar date on a Thai tax form, so it must be derived in
+     * Bangkok. Bare {@code LocalDate.now()} (as used elsewhere in this class) reads the JVM default,
+     * which on a UTC CI box is the PREVIOUS day between 17:00 and 23:59 Bangkok — a filing dated a
+     * day early. Same constant and same reasoning as OvertimeService.
+     */
+    private static final Logger LOG = LoggerFactory.getLogger(TaxAllowanceDeclarationService.class);
+
+    private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
+
+    private final AppProperties appProperties;
+    private final LorYor01Renderer lorYor01Renderer;
 
     public TaxAllowanceDeclarationService(
         TaxAllowanceDeclarationRepository repository,
@@ -84,7 +106,9 @@ public class TaxAllowanceDeclarationService {
         AuditService auditService,
         FileStorageService fileStorage,
         PayrollService payrollService,
-        NotificationRepository notifications
+        NotificationRepository notifications,
+        AppProperties appProperties,
+        LorYor01Renderer lorYor01Renderer
     ) {
         this.repository = repository;
         this.payrollRepository = payrollRepository;
@@ -94,6 +118,8 @@ public class TaxAllowanceDeclarationService {
         this.fileStorage = fileStorage;
         this.payrollService = payrollService;
         this.notifications = notifications;
+        this.appProperties = appProperties;
+        this.lorYor01Renderer = lorYor01Renderer;
     }
 
     // ---- Employee self-service ------------------------------------------------------------
@@ -130,7 +156,7 @@ public class TaxAllowanceDeclarationService {
 
         PayrollTaxAllowanceInput allowances = toAllowances(request);
         long id = repository.insert(employeeId, taxYear, effectiveMonth, allowances,
-            request.documentReference(), employeeId, false);
+            request.documentReference(), employeeId, false, request.lorYor01());
         TaxAllowanceDeclarationDto created = repository.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after insert"));
         auditService.record(actor, "SUBMIT_TAX_ALLOWANCE_DECLARATION", "tax_allowance_declaration", id, null, created);
@@ -189,7 +215,7 @@ public class TaxAllowanceDeclarationService {
 
         PayrollTaxAllowanceInput allowances = toAllowances(request);
         long id = repository.insert(employeeId, taxYear, effectiveMonth, allowances,
-            request.documentReference(), actor.employeeId(), true);
+            request.documentReference(), actor.employeeId(), true, request.lorYor01());
 
         // Auto-approve, same supersede-first ordering as #approve below.
         repository.supersedeApproved(employeeId, taxYear, id);
@@ -669,5 +695,59 @@ public class TaxAllowanceDeclarationService {
             allowances.disabilityCardHolder(), allowances.parentCareCount(),
             appliedEffectiveMonth, dto.documentReference()
         );
+    }
+
+    // ---- แบบ ล.ย.01 PDF -----------------------------------------------------------------------
+
+    /**
+     * The official ล.ย.01 for a SAVED declaration, as a flattened PDF. Owner or HR only — same gate
+     * as the evidence files, so a declaration's rendered form is never more widely readable than the
+     * documents behind it.
+     */
+    public byte[] renderLorYor01(long declarationId, UserPrincipal actor) {
+        TaxAllowanceDeclarationDto declaration = requireOwnerOrHr(declarationId, actor);
+        LocalDate declaredOn = declaration.submittedAt() == null
+            ? LocalDate.now(BUSINESS_ZONE)
+            : declaration.submittedAt().atZoneSameInstant(BUSINESS_ZONE).toLocalDate();
+        return render(declaration.employeeId(), declaration.taxYear(), declaration.allowances(),
+            declaration.lorYor01(), declaredOn);
+    }
+
+    /**
+     * The official ล.ย.01 for an UNSAVED draft.
+     *
+     * <p>This exists because of the order the paper process runs in: the employee has to sign the
+     * form before HR will accept it, so they need the filled PDF while the declaration is still
+     * being typed and has no id yet. Mirrors the {@code /declarations/me/estimate} idiom — a request
+     * body in, a result out, nothing persisted.
+     *
+     * <p>Always rendered for the ACTOR's own employee id, never a target in the body, so this cannot
+     * become a way to read someone else's ข้อ 13 figure.
+     */
+    public byte[] renderLorYor01Draft(TaxAllowanceDeclarationSubmitRequest request, UserPrincipal actor) {
+        requireEmployeeActor(actor);
+        long employeeId = actor.employeeId();
+        int taxYear = request.taxYear() == null ? LocalDate.now(BUSINESS_ZONE).getYear() : request.taxYear();
+        return render(employeeId, taxYear, toAllowances(request), request.lorYor01(),
+            LocalDate.now(BUSINESS_ZONE));
+    }
+
+    private byte[] render(long employeeId, int taxYear, PayrollTaxAllowanceInput allowances,
+                          LorYor01Details form, LocalDate declaredOn) {
+        // ข้อ 13 is derived from what payroll actually recorded, never from the request — see
+        // PayrollRepository#sumSocialSecurityForTaxYear.
+        BigDecimal socialSecurity = payrollRepository.sumSocialSecurityForTaxYear(employeeId, taxYear);
+        LorYor01FormData data = LorYor01FormAssembler.assemble(
+            allowances, form,
+            appProperties.getPayroll().getEmployer().getCompanyNameTh(),
+            socialSecurity, declaredOn);
+        try {
+            return lorYor01Renderer.render(data);
+        } catch (IOException e) {
+            // ApiException carries no cause; log the real one rather than swallowing the stack.
+            LOG.error("Failed to render ล.ย.01 for employee {} tax year {}", employeeId, taxYear, e);
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR,
+                "สร้างไฟล์ PDF แบบ ล.ย.01 ไม่สำเร็จ");
+        }
     }
 }

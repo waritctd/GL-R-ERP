@@ -9,6 +9,7 @@ import {
   formatShortDate,
   formatThaiMonthYearFromMonthInputValue,
   greetingName,
+  overtimeStatusLabel,
   pricingCostingStatusLabel,
   pricingDecisionStatusLabel,
   quotationStatusLabel,
@@ -246,6 +247,37 @@ describe('specialMoneyStatusLabel', () => {
     SPECIAL_MONEY_STATUSES.forEach((status) => {
       expect(specialMoneyStatusLabel(status).label).not.toBe(status);
     });
+  });
+});
+
+// A1 (OT UAT defect #1): unlike welfare above, overtime has TWO real approval routes per request
+// (see OvertimeRepository#resolvePendingApproverRole) -- SUBMITTED means "waiting for a division
+// manager" on most requests, but "waiting for the CEO directly" when the employee's ฝ่าย has no
+// manager or the requester IS one. A status-only map cannot tell the two apart, so it used to label
+// EVERY SUBMITTED row 'รอผู้จัดการ' even on the manager-less route -- the exact mislabel
+// specialMoneyStatusLabel already fixed for welfare, except welfare could use one static string
+// because ALL its requests are CEO-only, and overtime's route varies per row.
+describe('overtimeStatusLabel', () => {
+  it('reads รอผู้จัดการ for a SUBMITTED request with no role given, so existing 1-arg callers keep working', () => {
+    expect(overtimeStatusLabel('SUBMITTED').label).toBe('รอผู้จัดการ');
+  });
+
+  it('reads รอผู้จัดการ for a SUBMITTED request explicitly routed through a manager', () => {
+    expect(overtimeStatusLabel('SUBMITTED', 'manager').label).toBe('รอผู้จัดการ');
+  });
+
+  it('reads รอ CEO, not รอผู้จัดการ, for a SUBMITTED request with no manager stage', () => {
+    expect(overtimeStatusLabel('SUBMITTED', 'ceo').label).toBe('รอ CEO');
+    expect(overtimeStatusLabel('SUBMITTED', 'ceo').label).not.toContain('ผู้จัดการ');
+    // Same tone as MANAGER_APPROVED -- from the employee's point of view both states mean the CEO
+    // holds this now.
+    expect(overtimeStatusLabel('SUBMITTED', 'ceo').tone).toBe(overtimeStatusLabel('MANAGER_APPROVED').tone);
+  });
+
+  it('leaves every other status unaffected by pendingApproverRole', () => {
+    expect(overtimeStatusLabel('MANAGER_APPROVED', 'ceo')).toEqual(overtimeStatusLabel('MANAGER_APPROVED'));
+    expect(overtimeStatusLabel('APPROVED', 'ceo')).toEqual(overtimeStatusLabel('APPROVED'));
+    expect(overtimeStatusLabel('REJECTED', 'ceo')).toEqual(overtimeStatusLabel('REJECTED'));
   });
 });
 

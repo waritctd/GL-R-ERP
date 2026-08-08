@@ -15,7 +15,12 @@ import { formGridSpan2, Panel, PageStack, RowActions } from '../../components/co
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { UpcomingHolidays } from '../../components/common/UpcomingHolidays.jsx';
-import { overtimeStatusLabel as statusInfo, pendingApproverText } from '../../utils/format.js';
+import {
+  addDaysIso as addDaysToIso,
+  formatBangkokTime,
+  overtimeStatusLabel as statusInfo,
+  pendingApproverText,
+} from '../../utils/format.js';
 
 const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,0.75fr)] nav-drawer:min-w-[940px] reflow-cards';
 // FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
@@ -63,14 +68,18 @@ function defaultForm(employeeId = '') {
   return {
     employeeId: employeeId ? String(employeeId) : '',
     workDate: date,
-    plannedStartAt: `${date}T18:00`,
-    plannedEndAt: `${date}T20:00`,
+    startTime: '18:00',
+    endDate: date,
+    endTime: '20:00',
     dayType: 'WORKDAY',
     reason: '',
   };
 }
 
 const OT_TIME_RANGE_MESSAGE = 'เวลาสิ้นสุดต้องอยู่หลังเวลาเริ่ม';
+// A2: mirrors OvertimeService#validatePlannedWindow's ≤24h guard -- วันที่สิ้นสุด can only be
+// วันที่ทำ OT itself (same-day OT) or the very next day (an overnight window past midnight).
+const OT_END_DATE_RANGE_MESSAGE = 'วันที่สิ้นสุดต้องเป็นวันที่ทำ OT หรือวันถัดไปเท่านั้น';
 
 // Mirrors OvertimeService: advance notice was removed, so the only limits on a backdated request
 // are how far back it may reach and that the reason explains why it is late.
@@ -87,8 +96,9 @@ export function createOvertimeFormSchema({
   return z.object({
     employeeId: z.string(),
     workDate: z.string().min(1, 'กรุณาเลือกวันที่ทำ OT'),
-    plannedStartAt: z.string().min(1, 'กรุณาเลือกเวลาเริ่ม'),
-    plannedEndAt: z.string().min(1, 'กรุณาเลือกเวลาสิ้นสุด'),
+    startTime: z.string().min(1, 'กรุณาเลือกเวลาเริ่ม'),
+    endDate: z.string().min(1, 'กรุณาเลือกวันที่สิ้นสุด'),
+    endTime: z.string().min(1, 'กรุณาเลือกเวลาสิ้นสุด'),
     dayType: z.enum(['WORKDAY', 'HOLIDAY']),
     reason: z.string().min(1, 'กรุณาระบุเหตุผลความจำเป็น'),
   }).superRefine((data, context) => {
@@ -99,11 +109,25 @@ export function createOvertimeFormSchema({
         message: 'กรุณาเลือกพนักงาน',
       });
     }
-    if (data.plannedStartAt && data.plannedEndAt && data.plannedEndAt <= data.plannedStartAt) {
+    // Composed as plain "YYYY-MM-DDTHH:MM" strings -- comparable lexicographically the same way the
+    // old single datetime-local pair was, just built from four separate fields now.
+    const start = data.workDate && data.startTime ? `${data.workDate}T${data.startTime}` : '';
+    const end = data.endDate && data.endTime ? `${data.endDate}T${data.endTime}` : '';
+    if (start && end && end <= start) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['plannedEndAt'],
+        path: ['endTime'],
         message: OT_TIME_RANGE_MESSAGE,
+      });
+    }
+    // Mirrors OvertimeService#validatePlannedWindow's new ≤24h guard -- see
+    // OT_END_DATE_RANGE_MESSAGE above.
+    if (data.workDate && data.endDate
+      && (data.endDate < data.workDate || data.endDate > addDaysToIso(data.workDate, 1))) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['endDate'],
+        message: OT_END_DATE_RANGE_MESSAGE,
       });
     }
     if (data.workDate && data.workDate < todayIso()) {
@@ -158,6 +182,17 @@ function formatMinutes(value) {
   if (hours <= 0) return `${rest} นาที`;
   if (rest === 0) return `${hours} ชม.`;
   return `${hours} ชม. ${rest} นาที`;
+}
+
+// A2: true when a request's plannedEndAt falls on a different Bangkok-local calendar date than
+// workDate -- i.e. an overnight window (e.g. 22:00 -> next-day 02:00). Compares against the
+// request's OWN workDate rather than re-deriving "today", since this is about the window's shape,
+// not whether the request is backdated.
+function isOvernightWindow(request) {
+  if (!request.plannedEndAt || !request.workDate) return false;
+  const endDate = new Date(request.plannedEndAt);
+  if (Number.isNaN(endDate.getTime())) return false;
+  return dateIso(endDate) !== request.workDate;
 }
 
 // Matches OvertimeService#validateDayTypeClaim's ONE actively-disprovable-claim message (and its
@@ -257,15 +292,19 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
     mode: 'onChange',
     reValidateMode: 'onChange',
   });
-  const [plannedStartAt, plannedEndAt, selectedEmployeeId, selectedDayType, selectedWorkDate] = useWatch({
+  const [selectedWorkDate, startTime, selectedEndDate, endTime, selectedEmployeeId, selectedDayType] = useWatch({
     control,
-    name: ['plannedStartAt', 'plannedEndAt', 'employeeId', 'dayType', 'workDate'],
+    name: ['workDate', 'startTime', 'endDate', 'endTime', 'employeeId', 'dayType'],
   });
   const isBackdated = Boolean(selectedWorkDate) && selectedWorkDate < todayIso();
+  // Composed the same way submitOvertime composes the real payload -- comparing the two "date+time"
+  // strings lexicographically is equivalent to comparing them as instants, since both share the
+  // same fixed +07:00 offset (Thailand has no DST) and the same zero-padded width.
   const hasTimeRangeError = Boolean(
-    plannedStartAt && plannedEndAt && plannedEndAt <= plannedStartAt,
+    selectedWorkDate && startTime && selectedEndDate && endTime
+      && `${selectedEndDate}T${endTime}` <= `${selectedWorkDate}T${startTime}`,
   );
-  const plannedEndError = hasTimeRangeError ? OT_TIME_RANGE_MESSAGE : errors.plannedEndAt?.message;
+  const plannedEndError = hasTimeRangeError ? OT_TIME_RANGE_MESSAGE : errors.endTime?.message;
 
   // Holiday-verdict lookup for the currently selected วันที่ทำ OT (#ot-holiday-visibility, PR 2).
   // Debounced like LeaveRequestPage's own calendar-context read (same endpoint) so typing into
@@ -400,20 +439,26 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
   const saving = createMutation.isPending || approveMutation.isPending
     || rejectMutation.isPending || cancelMutation.isPending;
 
+  // Keeps วันที่สิ้นสุด inside the ≤24h window OvertimeService#validatePlannedWindow enforces (A2)
+  // as วันที่ทำ OT changes. Extends LeaveRequestPage's handleStartDateChange (:507-512) idea -- that
+  // version only ever needs to push endDate FORWARD, because leave's start/end pair has no upper
+  // bound; OT's window is capped at workDate+1, so moving วันที่ทำ OT BACKWARD needs the same
+  // treatment, or วันที่สิ้นสุด -- a field the employee never touched -- is left showing an error out
+  // of nowhere.
   function handleWorkDateChange(event) {
     const value = event.target.value;
-    const startTime = getValues('plannedStartAt').slice(11) || '18:00';
-    const endTime = getValues('plannedEndAt').slice(11) || '20:00';
-    setValue('plannedStartAt', `${value}T${startTime}`, { shouldDirty: true, shouldValidate: true });
-    setValue('plannedEndAt', `${value}T${endTime}`, { shouldDirty: true, shouldValidate: true });
+    const currentEndDate = getValues('endDate');
+    if (currentEndDate < value || currentEndDate > addDaysToIso(value, 1)) {
+      setValue('endDate', value, { shouldDirty: true, shouldValidate: true });
+    }
   }
 
   function submitOvertime(values) {
     createMutation.mutate({
       employeeId: values.employeeId ? Number(values.employeeId) : null,
       workDate: values.workDate,
-      plannedStartAt: apiDateTime(values.plannedStartAt),
-      plannedEndAt: apiDateTime(values.plannedEndAt),
+      plannedStartAt: apiDateTime(`${values.workDate}T${values.startTime}`),
+      plannedEndAt: apiDateTime(`${values.endDate}T${values.endTime}`),
       dayType: values.dayType,
       reason: values.reason.trim(),
     });
@@ -509,7 +554,10 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
       <CompactStatRow
         items={[
           { key: 'total', label: 'คำขอทั้งหมด', value: requests.length, helper: 'ในช่วงที่เลือก' },
-          { key: 'submitted', label: 'รอผู้จัดการ', value: totals.submitted, helper: 'Submitted' },
+          // A1: this bucket mixes BOTH routes (some SUBMITTED rows wait on a manager, some go
+          // straight to the CEO -- see overtimeStatusLabel's own comment), so it must not name
+          // only one of the two possible holders.
+          { key: 'submitted', label: 'รออนุมัติ', value: totals.submitted, helper: 'Submitted' },
           { key: 'managerApproved', label: 'รอ CEO', value: totals.managerApproved, helper: 'Manager approved' },
           { key: 'approved', label: 'อนุมัติแล้ว', value: totals.approved, helper: 'Approved' },
           { key: 'payable', label: 'ชั่วโมงจ่ายได้', value: formatMinutes(totals.payableMinutes), helper: 'Approved payable' },
@@ -529,7 +577,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           สถานะ
           <select value={filters.status} onChange={(event) => updateFilter('status', event.target.value)}>
             <option value="">ทุกสถานะ</option>
-            <option value="SUBMITTED">รอผู้จัดการ</option>
+            <option value="SUBMITTED">รออนุมัติ</option>
             <option value="MANAGER_APPROVED">รอ CEO</option>
             <option value="APPROVED">อนุมัติแล้ว</option>
             <option value="REJECTED">ปฏิเสธแล้ว</option>
@@ -664,30 +712,55 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
             </div>
           ) : null}
 
-          <FormField label="เริ่ม" htmlFor="ot-planned-start" error={errors.plannedStartAt?.message} required>
+          {/* A2: two dates + two times, mirroring LeaveRequestPage's own start/end fields --
+              never datetime-local. วันที่ทำ OT above already carries the date the employee is
+              filing for; these three fields answer "what time did it start" / "does it cross
+              midnight" / "what time did it end", without asking for the same date a third time. */}
+          <FormField label="เวลาเริ่ม" htmlFor="ot-start-time" error={errors.startTime?.message} required>
             <input
-              id="ot-planned-start"
-              type="datetime-local"
-              {...register('plannedStartAt')}
-              className={errors.plannedStartAt ? 'is-invalid' : ''}
-              aria-invalid={Boolean(errors.plannedStartAt)}
-              aria-describedby={errors.plannedStartAt ? fieldErrorId('ot-planned-start') : undefined}
+              id="ot-start-time"
+              type="time"
+              {...register('startTime')}
+              className={errors.startTime ? 'is-invalid' : ''}
+              aria-invalid={Boolean(errors.startTime)}
+              aria-describedby={errors.startTime ? fieldErrorId('ot-start-time') : undefined}
               required
             />
           </FormField>
           <FormField
-            label="สิ้นสุด"
-            htmlFor="ot-planned-end"
+            label="วันที่สิ้นสุด"
+            htmlFor="ot-end-date"
+            error={errors.endDate?.message}
+            required
+          >
+            <input
+              id="ot-end-date"
+              type="date"
+              min={selectedWorkDate}
+              // Mirrors the zod ≤24h check above in the native picker itself. Guarded: before the
+              // form settles (or if it's ever cleared) selectedWorkDate is '', and addDaysToIso('')
+              // would split into NaN/undefined date parts -- undefined here just means "no cap yet",
+              // never a broken one.
+              max={selectedWorkDate ? addDaysToIso(selectedWorkDate, 1) : undefined}
+              {...register('endDate')}
+              aria-invalid={Boolean(errors.endDate)}
+              aria-describedby={errors.endDate ? fieldErrorId('ot-end-date') : undefined}
+              required
+            />
+          </FormField>
+          <FormField
+            label="เวลาสิ้นสุด"
+            htmlFor="ot-end-time"
             error={plannedEndError}
             required
           >
             <input
-              id="ot-planned-end"
-              type="datetime-local"
-              {...register('plannedEndAt')}
+              id="ot-end-time"
+              type="time"
+              {...register('endTime')}
               className={plannedEndError ? 'is-invalid' : ''}
               aria-invalid={Boolean(plannedEndError)}
-              aria-describedby={plannedEndError ? fieldErrorId('ot-planned-end') : undefined}
+              aria-describedby={plannedEndError ? fieldErrorId('ot-end-time') : undefined}
               required
             />
           </FormField>
@@ -727,7 +800,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
         ) : requests.length === 0 ? (
           <EmptyState icon="clock" title="ยังไม่มีคำขอ OT" description="ลองเปลี่ยนช่วงวันที่หรือยื่นคำขอใหม่" />
         ) : requests.map((request) => {
-          const status = statusInfo(request.status);
+          const status = statusInfo(request.status, request.pendingApproverRole);
           const isPending = request.status === 'SUBMITTED' || request.status === 'MANAGER_APPROVED';
           const pendingApproverNote = isPending
             ? pendingApproverText(request.pendingApproverRole, request.pendingApproverName)
@@ -744,10 +817,17 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
                 <strong>{formatWorkDate(request.workDate)}</strong>
                 <small>{request.employeeName || request.employeeCode || request.employeeId}</small>
               </span>
+              {/* A2: times only -- the "วันที่ / พนักงาน" column to the left already prints
+                  วันที่ทำ OT once, so repeating it here would be the same date shown twice in one
+                  row. "(+1 วัน)" is the only date-shaped thing this column ever adds, and only for
+                  the overnight case where plannedEndAt genuinely lands on a different day. */}
               <span data-label="แผน OT" className="mobile:order-4">
-                <strong>{formatDateTime(request.plannedStartAt)}</strong>
+                <strong>
+                  {formatBangkokTime(request.plannedStartAt)}–{formatBangkokTime(request.plannedEndAt)} น.
+                  {isOvernightWindow(request) ? ' (+1 วัน)' : ''}
+                </strong>
                 <small>
-                  {formatDateTime(request.plannedEndAt)} · {formatMinutes(request.plannedMinutes)} · {request.dayType === 'HOLIDAY' ? '3x' : '1.5x'}
+                  {formatMinutes(request.plannedMinutes)} · {request.dayType === 'HOLIDAY' ? '3x' : '1.5x'}
                 </small>
               </span>
               <span data-label="เหตุผล" className="mobile:order-5">
@@ -767,7 +847,15 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
                     repeating it made this note a superset of the badge's own text, which broke an
                     e2e locator matching the badge's exact label (review #pending-approver-info). */}
                 {pendingApproverNote ? <small className="text-text-muted">{pendingApproverNote}</small> : null}
-                <small>ผู้จัดการ: {request.managerApprovedAt ? `${request.managerApprovedByName || '-'} · ${formatDateTime(request.managerApprovedAt)}` : '-'}</small>
+                {/* A1: only print the ผู้จัดการ audit line when this request actually HAS a
+                    manager stage (hasManagerStage mirrors OvertimeService.approve()'s own
+                    routing). On the manager-less route this slot could never fill -- it always
+                    read "-" -- which is exactly the contradiction the owner's screenshot showed:
+                    a badge naming CEO sitting next to an audit line naming a manager who never
+                    existed for this request. */}
+                {hasManagerStage(request) ? (
+                  <small>ผู้จัดการ: {request.managerApprovedAt ? `${request.managerApprovedByName || '-'} · ${formatDateTime(request.managerApprovedAt)}` : '-'}</small>
+                ) : null}
                 <small>CEO: {request.ceoApprovedAt ? `${request.ceoApprovedByName || '-'} · ${formatDateTime(request.ceoApprovedAt)}` : '-'}</small>
               </span>
               {/* Approve/reject visually differentiated per DESIGN.md (danger stays
@@ -830,7 +918,9 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           const isDirectCeoStep = isCeoStep && request.status === 'SUBMITTED';
           let nextStep;
           if (isDirectCeoStep) {
-            nextStep = `คำขอนี้ไม่มีขั้นอนุมัติของหัวหน้างาน สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว" และคำนวณชั่วโมงจ่ายได้ตามอัตรา ${rateLabel}`;
+            // A3: state only the outcome -- the employee-facing/CEO-facing notifications for this
+            // same route dropped the "no supervisor step" framing too (OvertimeService#notifySubmitted).
+            nextStep = `สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว" และคำนวณชั่วโมงจ่ายได้ตามอัตรา ${rateLabel}`;
           } else if (isCeoStep) {
             nextStep = 'สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว" พร้อมชั่วโมงจ่ายได้ที่คำนวณไว้';
           } else {
@@ -838,12 +928,20 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           }
           return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <p className="confirm-dialog-message" style={{ margin: 0 }}>
+              <p className="confirm-dialog-message text-text-secondary leading-normal" style={{ margin: 0 }}>
                 ตรวจสอบแผน OT ของ <strong>{request.employeeName || request.employeeCode || request.employeeId}</strong> ก่อนอนุมัติ
               </p>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid var(--color-border)', paddingTop: 8 }}>
                 <span style={{ color: 'var(--color-icon-muted)' }}>วันที่ / เวลา</span>
-                <span className="font-mono">{formatDateTime(request.plannedStartAt)}–{formatDateTime(request.plannedEndAt).slice(-5)}</span>
+                {/* A2: the date shows exactly ONCE here (nowhere else in this dialog prints it) --
+                    the old `.slice(-5)` hack existed only because plannedEndAt was being run
+                    through the full date+time formatter a second time just to throw the date part
+                    away. "(+1 วัน)" replaces that hack for the one case where the end genuinely
+                    lands on a different day. */}
+                <span className="font-mono">
+                  {formatWorkDate(request.workDate)} · {formatBangkokTime(request.plannedStartAt)}–{formatBangkokTime(request.plannedEndAt)} น.
+                  {isOvernightWindow(request) ? ' (+1 วัน)' : ''}
+                </span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700 }}>
                 <span>เวลาที่วางแผน</span>
