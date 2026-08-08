@@ -23,8 +23,11 @@ import { UserMenu } from './UserMenu.jsx';
 // arbitrary-property utilities.
 const CONTENT_SCROLL_CLASS = cn(
   // `content-scroll` carries no CSS of its own (the rule was deleted with the
-  // rest of the legacy shell) — kept only because e2e/shared-shell.spec.js's
-  // assertNoShellOverflow() selects it via `document.querySelector`.
+  // rest of the legacy shell) — it survives as a *selector* hook. The
+  // e2e/shared-shell.spec.js assertNoShellOverflow() this comment used to cite
+  // went with the mock e2e suite on 2026-08-08; the live consumer is
+  // TicketDetailPage.jsx's `chrome.closest('.content-scroll')`, which walks up
+  // to this element to read its scrollTop. Renaming the class breaks that.
   'content-scroll',
   'min-w-0 max-w-full flex-1 overflow-auto [scrollbar-gutter:stable]',
   '[--deal-scroll-pad-y:28px] [--deal-scroll-pad-x:max(32px,env(safe-area-inset-right))] [--deal-scroll-pad-left:max(32px,env(safe-area-inset-left))]',
@@ -44,8 +47,10 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const [isContentScrolled, setIsContentScrolled] = useState(false);
   const drawerRef = useRef(null);
   const menuButtonRef = useRef(null);
+  // One ref for one element: <main> IS the scroll container (it carries
+  // `.content-scroll`), so the skip link's focus target and the scrolled box
+  // are the same node — see the JSX comment on <main> below.
   const mainRef = useRef(null);
-  const contentScrollRef = useRef(null);
   const location = useLocation();
   const navigate = useNavigate();
   const drawerId = 'mobile-navigation-drawer';
@@ -55,22 +60,22 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   // should only announce itself once there is content scrolled underneath it
   // — a permanent 1px line reads as static decoration, an on-scroll one reads
   // as "there's more above". Tracks `.content-scroll`'s own scrollTop rather
-  // than the window's, since that inner div is the app's real scroll
-  // container (see its own comment below).
+  // than the window's, since that element — <main> — is the app's real scroll
+  // container (see its own comment below); the document never scrolls.
   const updateContentScrolled = useCallback(() => {
-    setIsContentScrolled((contentScrollRef.current?.scrollTop ?? 0) > 0);
+    setIsContentScrolled((mainRef.current?.scrollTop ?? 0) > 0);
   }, []);
 
   useEffect(() => {
-    const el = contentScrollRef.current;
+    const el = mainRef.current;
     if (!el) return undefined;
     updateContentScrolled();
     el.addEventListener('scroll', updateContentScrolled, { passive: true });
     return () => el.removeEventListener('scroll', updateContentScrolled);
   }, [updateContentScrolled]);
 
-  // A route change swaps `.content-scroll`'s children (this div itself never
-  // remounts), which does not reset scrollTop on its own — without this, a
+  // A route change swaps `.content-scroll`'s children (the element itself
+  // never remounts), which does not reset scrollTop on its own — without this, a
   // border "stuck on" from a long, scrolled page would wrongly persist onto
   // the next, shorter page until the user next scrolled.
   useEffect(() => {
@@ -298,18 +303,25 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
         onClick={closeDrawer}
         tabIndex={-1}
       />
-      {/* tabIndex={-1}: focusable via the skip link's .focus() call, but not
-          part of the normal Tab sequence. The global `:focus-visible`
-          outline rule in styles.css excludes `[tabindex="-1"]`, and an
-          outset outline would clip against this shell's `overflow-hidden`,
-          so an inset ring (reusing the same focus-ring token) is used here
-          to confirm the landing without changing layout. */}
-      <main
-        id={mainContentId}
-        ref={mainRef}
-        tabIndex={-1}
-        className="flex min-w-0 flex-1 flex-col outline-none focus-visible:shadow-[inset_0_0_0_3px_var(--color-indigo-ring)]"
-      >
+      {/* The topbar is a SIBLING of <main>, never a child — this wrapper, not
+          <main>, owns the header+content column. `<header>` scoped to <body>
+          maps to the `banner` landmark, and a banner nested inside `main` is
+          a structural a11y defect: screen-reader landmark navigation expects
+          the two beside each other, so a user jumping to "main" would land
+          with the topbar inside the region they just skipped past. It also
+          silently broke the `getByRole('main')` == "the page content" query
+          idiom — scoping there excluded nothing. Measured in real Chromium on
+          /leave/new: `getByRole('main').getByRole('button')` returned 9, being
+          the page's own 7 plus the notification bell and the account menu (the
+          hamburger is display:none at desktop, so it was not among them; below
+          1041px it is a tenth).
+          A plain <div> is the right wrapper: it is neither sectioning content
+          nor a sectioning root, so the header's landmark scope is still
+          <body> and it stays a `banner`. The flex math is unchanged from when
+          <main> carried these classes — same column with a flex-none header
+          and a flex-1 overflow-auto scroller — so the topbar stays pinned
+          above the scroll region at every breakpoint. */}
+      <div className="flex min-w-0 flex-1 flex-col">
         <header
           className={cn(
             // `topbar`/`topbar-title` below carry no CSS of their own — kept
@@ -362,10 +374,30 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
             />
           </div>
         </header>
-        <div ref={contentScrollRef} className={CONTENT_SCROLL_CLASS}>
+        {/* tabIndex={-1}: focusable via the skip link's .focus() call, but not
+            part of the normal Tab sequence. The global `:focus-visible`
+            outline rule in styles.css excludes `[tabindex="-1"]`, and an
+            outset outline would clip against this shell's `overflow-hidden`,
+            so an inset ring (reusing the same focus-ring token) is used here
+            to confirm the landing without changing layout.
+            <main> *is* the scroll container rather than wrapping one, which
+            keeps the landmark and the scrolled box the same node: `.content-scroll`
+            stays a direct parent of page content (LeaveSurfacePage.jsx's
+            positioning-context fix depends on that), and no extra flex level
+            is added that would need its own `min-h-0` to avoid an
+            automatic-minimum-size overflow. */}
+        <main
+          id={mainContentId}
+          ref={mainRef}
+          tabIndex={-1}
+          className={cn(
+            CONTENT_SCROLL_CLASS,
+            'outline-none focus-visible:shadow-[inset_0_0_0_3px_var(--color-indigo-ring)]',
+          )}
+        >
           <ErrorBoundary key={location.pathname}><Suspense fallback={<RouteFallback />}><Outlet /></Suspense></ErrorBoundary>
-        </div>
-      </main>
+        </main>
+      </div>
     </div>
   );
 }
