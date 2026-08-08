@@ -168,14 +168,25 @@ The frontend is migrating from the single global `frontend/src/styles.css` to a 
   a second or third `git fetch origin main && git merge/rebase` mid-flight has grown too large or sat
   open too long; both cost real agent time re-reading diffs and re-resolving conflicts. `feat/leave-rules-tab`
   synced `main` four times before merging — that pattern is the thing to avoid, not repeat.
-- **Use a PR stack instead of one long branch when a task naturally has sequential parts** (e.g. "add
-  the composer" → "wire it to the API" → "add the calendar admin UI"). Branch each step off the
-  previous step's branch (`git checkout -b feat/x-step2 feat/x-step1`) and open each as its own PR
-  targeting the previous branch, so each is small, reviewable, and only ever merges forward — never
-  re-synced against a moving `main` mid-task. If a stacking CLI (Graphite `gt`, `git-spice`) is
-  installed and configured for this repo, use it instead of hand-rolled stacked branches; check for
-  it (`which gt`, `which git-spice` / `gs`) before assuming plain git is the only option. Land and
-  merge the bottom of the stack first — don't let the whole stack sit unmerged waiting on the top PR.
+- **Stacked PRs: read [`STACKED-PRS.md`](STACKED-PRS.md) before creating any branch.** Many sessions
+  build here in parallel, so the base you pick matters as much as the diff. The short version:
+  - Branch off `main` with **`git town hack`** by default. Stack a child with **`git town append`**
+    *only* when the work genuinely cannot compile, pass tests, or be reviewed without unmerged work
+    from another branch. "Related" and "would conflict later" are **not** dependencies.
+  - Max stack depth **3**; one parent per branch; the smallest, least controversial piece goes at
+    the bottom.
+  - Never create a stacked branch with plain `git switch -c` — Git Town needs the recorded parent
+    (`git town set-parent` / `git town branch` to inspect).
+  - Resync the whole chain with **`git town sync --stack`** after `main` moves. `git town undo` backs
+    out any Git Town command. ⚠️ **`sync` is currently blocked repo-wide** by diverged release tags,
+    and it *pushes* — see the warning in `STACKED-PRS.md` §4 before running it.
+  - Merge **bottom-up on GitHub with a merge commit** — **squashing a PR that has children orphans
+    every branch above it.**
+  - A stacked PR body must open with a **Stack** block (base, position, what is above, "review only
+    the diff against the parent"), and still carries its own full evidence — it inherits none from
+    its parent.
+  - Config is checked in at [`git-town.toml`](git-town.toml); install the CLI with
+    `brew install git-town`. New branches are never auto-pushed or auto-proposed.
 - **Rework costs a full second pass — verify before handing off, not after review flags it.** Commits
   like `review fixes for V116` (a second pass on quota bookkeeping and probation resolution after
   review) are exactly the pattern to prevent: for business-logic-sensitive surfaces (leave/payroll
