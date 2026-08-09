@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
-import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
+import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -16,15 +16,10 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { attendanceCorrectionStatusLabel as statusInfo } from '../../utils/format.js';
 
 const CORRECTION_TABLE_GRID = 'grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,1.4fr)_minmax(0,0.9fr)_minmax(0,0.75fr)] nav-drawer:min-w-[860px] reflow-cards';
-// FilterBar (Layout.jsx) renders a <div>; the status-filter form needs native submit semantics
-// (Enter-to-submit) so this exact utility string is reproduced here the same way OvertimePanel.jsx
-// does for its own filter form.
-const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-end bg-surface border border-border rounded-md p-[14px]';
-
 const CORRECTION_TYPE_LABELS = {
-  CHECK_IN: 'เวลาเข้างาน',
-  CHECK_OUT: 'เวลาออกงาน',
-  BOTH: 'ทั้งเข้างานและออกงาน',
+  CHECK_IN: 'เวลาสแกนเข้างาน',
+  CHECK_OUT: 'เวลาสแกนออกงาน',
+  BOTH: 'เวลาสแกนเข้าและออกงาน',
 };
 
 function formatWorkDate(value) {
@@ -147,9 +142,11 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
     cancelMutation.mutate(confirmState.id);
   }
 
+  // Only `submitted` survives the density pass: it is the header badge's number, i.e. the one
+  // figure that says whether this collapsed section has work in it. `approved`/total went with the
+  // stat strip — see the note at the top of the return.
   const totals = useMemo(() => ({
     submitted: requests.filter((request) => request.status === 'SUBMITTED').length,
-    approved: requests.filter((request) => request.status === 'APPROVED').length,
   }), [requests]);
 
   return (
@@ -159,46 +156,66 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
     // up its 18px gap for free, with no extra wrapper and no risk of a nested grid's `gap`
     // stacking with its parent's. Same pattern MyLeaveTab.jsx/TeamLeaveTab.jsx already use for the
     // identical shape (a tab's content embedded in LeaveSurfacePage.jsx's own PageStack).
+    // Fragment: the CollapsibleSection holds the body, and the three ConfirmDialogs stay OUTSIDE
+    // it. A collapsed section unmounts its children, so a dialog left inside would vanish mid-
+    // confirmation if anything collapsed the section under it.
+    //
+    // Collapsed by default, for every role (owner, 2026-08-10). This is a correction workflow: an
+    // employee files one when a scan is wrong, which is rare, and the CEO reviews them in batches.
+    // Expanded it put a stat strip, a filter bar and a full table between the attendance table
+    // above and the bottom of the page, on a screen whose actual job is "show me the day".
+    //
+    // The header keeps the pending count so collapsing never hides WORK. That is the difference
+    // between progressive disclosure and burying something: a CEO with three requests waiting sees
+    // "3" without expanding, and the query runs whether or not the body is mounted (it lives above
+    // this return), so the count is live either way.
+    //
+    // CollapsibleSection also replaces the hand-rolled header this panel used to carry — same
+    // title, subtitle and refresh button, but as one titled surface instead of a bare heading
+    // followed by three sibling blocks. Its body unmounts when collapsed, which is safe here:
+    // every piece of state it renders (statusFilter, the query) lives above.
     <>
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          {/* This panel's own section heading, not a <PageHeader> -- it used to sit inside
-              RequestsPage, which owned the page's only h1, so it never needed one of its own.
-              Embedded on AttendancePage.jsx now, below that page's h1 and daily table, it needs
-              something identifying where this block starts. */}
-          <h2 className="m-0 min-w-0 text-lg break-words">คำขอแก้ไขเวลาเข้า-ออกงาน</h2>
-          <p className="m-0 mt-1 text-sm text-text-muted">
-            {isCeo
-              ? 'พิจารณาคำขอแก้ไขเวลาเข้า-ออกงานของพนักงาน'
-              : 'กดปุ่ม "ขอแก้ไขเวลา" ด้านบนเพื่อยื่นคำขอเมื่อลืมสแกนนิ้ว และดูประวัติคำขอของคุณได้ด้านล่าง'}
-          </p>
-        </div>
-        <Button
-          type="button"
-          variant="secondary"
-          onClick={() => requestsQuery.refetch()}
-          disabled={loading}
-          // Distinct from AttendancePage's own "รีเฟรช" (refetches the day table, not this list) --
-          // both buttons now live on the same page (fix/attendance-correction-on-attendance-page),
-          // and an identical accessible name is a real problem for anyone navigating by button
-          // list. Visible text stays "รีเฟรช" -- pattern matches AttendancePage.jsx's own
-          // scanDetail button: a short visible label paired with a fuller aria-label.
-          aria-label="รีเฟรชคำขอแก้ไขเวลา"
-        >
-          <Icon name="refresh" />
-          รีเฟรช
-        </Button>
-      </div>
+    <CollapsibleSection
+      title="คำขอแก้ไขเวลาเข้า-ออกงาน"
+      subtitle={isCeo
+        ? 'พิจารณาคำขอแก้ไขเวลาเข้า-ออกงานของพนักงาน'
+        : 'กดปุ่ม "ขอแก้ไขเวลา" ด้านบนเพื่อยื่นคำขอแก้ไขเวลาสแกนนิ้ว และดูประวัติคำขอของคุณได้ด้านล่าง'}
+      defaultOpen={false}
+      headerRight={(
+        <span className="flex items-center gap-2">
+          {totals.submitted > 0 ? (
+            <StatusBadge tone="warning">{`รอพิจารณา ${totals.submitted}`}</StatusBadge>
+          ) : null}
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => requestsQuery.refetch()}
+            disabled={loading}
+            // Distinct from AttendancePage's own "รีเฟรช" (refetches the day table, not this list) --
+            // both buttons now live on the same page (fix/attendance-correction-on-attendance-page),
+            // and an identical accessible name is a real problem for anyone navigating by button
+            // list. Visible text stays "รีเฟรช" -- pattern matches AttendancePage.jsx's own
+            // scanDetail button: a short visible label paired with a fuller aria-label.
+            aria-label="รีเฟรชคำขอแก้ไขเวลา"
+          >
+            <Icon name="refresh" />
+            รีเฟรช
+          </Button>
+        </span>
+      )}
+    >
+      {/*
+        The three-tile CompactStatRow that used to sit here is gone (density pass, 2026-08-10).
+        It repeated itself and its own header: the section header already shows "รอพิจารณา N", so
+        "รอ CEO 2" said the same number a second line later, and "คำขอทั้งหมด" / "อนุมัติแล้ว" are
+        derivable by looking at the five rows directly beneath them. At 768px the strip also
+        wrapped 2-then-1, leaving a half-empty tile block above a table that is the actual content.
+        For a secondary, collapsed-by-default section, one number in the header is the right budget.
 
-      <CompactStatRow
-        items={[
-          { key: 'total', label: 'คำขอทั้งหมด', value: requests.length, helper: 'ทั้งหมด' },
-          { key: 'submitted', label: 'รอ CEO', value: totals.submitted, helper: 'Submitted' },
-          { key: 'approved', label: 'อนุมัติแล้ว', value: totals.approved, helper: 'Approved' },
-        ]}
-      />
-
-      <SafeForm className={FILTER_BAR_CLASS} onSubmit={(event) => event.preventDefault()}>
+        The status filter keeps its own <form> (Enter-to-submit) but no longer sits in a bordered
+        card of its own — a single select framed as a panel was a card doing no grouping work.
+      */}
+      <SafeForm className="flex flex-wrap items-end gap-[10px]" onSubmit={(event) => event.preventDefault()}>
         <FilterField label="สถานะ">
           <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
             <option value="">ทุกสถานะ</option>
@@ -210,7 +227,20 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
         </FilterField>
       </SafeForm>
 
-      <Panel flush>
+      {/*
+        `overflow-x-auto`: CORRECTION_TABLE_GRID holds this table at `nav-drawer:min-w-[860px]`
+        across the whole 721-1040px band, and `<Panel flush>` is `overflow-hidden` (it must be — a
+        flush body runs edge to edge, so the card radius is what clips its corners). With no scroll
+        region between them the excess is not scrollable, it is gone: measured at 768px, an 860px
+        grid inside a 702px card, so ~158px — the สถานะ column and the row action — was unreachable
+        by any gesture.
+
+        This one only became visible once the section had rows to render at all; with the seed
+        empty it showed an EmptyState and there was nothing to clip. Fourth call site of the same
+        `min-w-* inside Panel flush` pairing (attendance, welfare and the OT history are the
+        others), which is why the durable fix belongs in the shared component rather than here.
+      */}
+      <Panel flush className="overflow-x-auto">
         <div className={`${CORRECTION_TABLE_GRID} table-head`}>
           <span>วันที่ / พนักงาน</span>
           <span>รายการที่แก้ไข</span>
@@ -249,11 +279,17 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
               </span>
               <span data-label="เหตุผล" className="mobile:order-5">
                 <strong>{request.reason}</strong>
-                <small>{request.reviewerNote || '-'}</small>
+                {/* Nothing, not "-". A SUBMITTED row has no reviewer note yet by definition, and
+                    a dash is a value: it reads as "there is a note and it is empty". Every pending
+                    row printed one here and another under สถานะ, so the two busiest columns each
+                    carried a meaningless character on exactly the rows a reviewer scans most. */}
+                {request.reviewerNote ? <small>{request.reviewerNote}</small> : null}
               </span>
               <span data-label="สถานะ" className="mobile:order-2">
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-                <small>{request.reviewedAt ? `${request.reviewedByName || '-'} · ${formatDateTime(request.reviewedAt)}` : '-'}</small>
+                {request.reviewedAt
+                  ? <small>{`${request.reviewedByName || '-'} · ${formatDateTime(request.reviewedAt)}`}</small>
+                  : null}
               </span>
               <RowActions className="mobile:order-3 mobile:flex-wrap">
                 {canReview ? (
@@ -292,6 +328,8 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
           );
         })}
       </Panel>
+      </CollapsibleSection>
+
 
       <ConfirmDialog
         open={confirmState?.kind === 'approve'}

@@ -645,8 +645,27 @@ export function AttendancePage({ user, showToast }) {
             the whole control in FilterField puts the label back on the bar's
             common left edge and lets the group shrink as one unit.
           */}
-          <FilterField label="วันที่" htmlFor="attendance-selected-date">
-            <div className="flex items-center gap-2">
+          {/*
+            This field holds THREE controls, so it needs both a wider basis than a plain field and
+            a shrinkable inner row. Regression fix (#638 introduced it, 2026-08-10):
+
+            FilterField gives every field a fixed `basis-[190px]`, which is right for one control.
+            Here the row is [prev 44px][date input][next 44px] plus two 8px gaps — 104px of
+            fixed-width furniture before the date is drawn at all. The inner row was a plain flex
+            container, i.e. a GRID ITEM at the default `min-width: auto`, so it could not shrink
+            below its own min-content and overflowed the field instead. Measured at 1440px: the
+            row rendered 250px inside a 190px field and the "วันถัดไป" button landed at x=521-565
+            while the field ended at 505 — 60px outside, painted on top of the ฝ่าย select beside
+            it. That is the overlapping arrow in the owner's screenshot.
+
+            `min-w-0` alone fixes the overlap (row 250 -> 190, escape 0) but squeezes the date
+            input to 86px, which Chromium renders without clipping and iOS Safari does not — the
+            same platform gap that caused the original bug. So both: `min-w-0` so the group can
+            never escape its field again, and a basis wide enough that it does not have to
+            (260px -> the input gets its natural 156px, measured).
+          */}
+          <FilterField label="วันที่" htmlFor="attendance-selected-date" className="basis-[260px]">
+            <div className="flex min-w-0 items-center gap-2">
               <Button
                 variant="secondary"
                 onClick={() => stepDay(-1)}
