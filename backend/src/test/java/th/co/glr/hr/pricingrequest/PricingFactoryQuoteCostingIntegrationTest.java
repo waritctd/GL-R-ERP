@@ -147,9 +147,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         salesRepId = createEmployee(employees, "พนักงานขาย ทดสอบ", "sales-step2@glr.co.th", "SALES", "แผนกขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า เอ", "import-a@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
         secondImportUserId = createEmployee(employees, "ฝ่ายนำเข้า บี", "import-b@glr.co.th", "OPS", "ฝ่ายปฏิบัติการ");
-        // กรรมการผู้จัดการ, not the generic "ผู้บริหาร" — see CustomerQuotationIntegrationTest for why:
-        // this test asserts CEO notification, which CeoApproverRule keys on position alone.
-        ceoUserId = createEmployee(employees, "ผู้บริหาร ทดสอบ", "ceo-step2@glr.co.th", "MD", "กรรมการผู้จัดการ");
+        ceoUserId = createManagingDirector(employees, "ผู้บริหาร ทดสอบ", "ceo-step2@glr.co.th");
         accountUserId = createEmployee(employees, "บัญชี ทดสอบ", "account-step2@glr.co.th", "ACCT", "ฝ่ายบัญชี");
         salesManagerUserId = createEmployee(employees, "ผู้จัดการฝ่ายขาย", "sales-manager-step2@glr.co.th", "SALES", "ฝ่ายขาย");
         salesActor = actor(salesRepId, "sales");
@@ -1766,6 +1764,18 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             null, null, nameTh, null, null, null, null, null, null, null,
             email, null, divisionSourceCode, divisionNameTh, divisionNameTh,
             null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
+    }
+
+    /** The CEO fixture -- needs a real position, see CustomerQuotationIntegrationTest for why:
+     *  CeoApproverRule keys the notified set on position กรรมการผู้จัดการ alone, and
+     *  {@link #createEmployee} leaves positionTh null. Division stays MD, so the `ceo` role and
+     *  every authz assertion here are unchanged. */
+    private long createManagingDirector(EmployeeRepository employees, String nameTh, String email) {
+        return employees.create(new UpsertEmployeeRequest(
+            null, null, nameTh, null, null, null, null, null, null, null,
+            email, null, "MD", "ผู้บริหาร", "ผู้บริหาร",
+            "กรรมการผู้จัดการ", null, null, "ACT", new BigDecimal("30000"),
+            null, null, null, null, null, null, null));
     }
 
     private UserPrincipal actor(long employeeId, String role) {

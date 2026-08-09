@@ -170,12 +170,14 @@ public class NotificationRepository {
 
     /**
      * Notify all employees whose division maps to the given sales role ({@code import}/{@code
-     * sales}), or -- for {@code ceo} -- who match {@link CeoApproverRule#SQL_PREDICATE} (division
-     * OR position, mirroring {@code DivisionAccessPolicy#roleFor} exactly rather than the plain
-     * division mapping the other two roles use).
+     * sales}), or -- for {@code ceo} -- who match {@link CeoApproverRule#SQL_PREDICATE}, which is
+     * a POSITION test (กรรมการผู้จัดการ) and ignores division entirely, unlike the plain division
+     * mapping the other two roles use. It is deliberately NARROWER than the {@code ceo} role and
+     * is <b>not</b> a mirror of {@code DivisionAccessPolicy#roleFor} -- see {@link CeoApproverRule}
+     * for the owner ruling and the empty-set consequence.
      *
-     * <p>The {@code hr.division} join is a {@code LEFT JOIN} (needed so a {@code ceo} match via
-     * position alone, with no division, is not silently dropped -- see {@link CeoApproverRule}).
+     * <p>The {@code hr.division} join is a {@code LEFT JOIN} so a {@code ceo} match with no
+     * division is not silently dropped -- the predicate no longer reads {@code d} at all.
      * This does not change {@code import}/{@code sales}: both predicates test {@code
      * d.source_code}, which is SQL {@code NULL} (never true) when {@code d} fails to match, exactly
      * as an absent INNER JOIN row would have excluded that employee -- confirmed by inspection, not
