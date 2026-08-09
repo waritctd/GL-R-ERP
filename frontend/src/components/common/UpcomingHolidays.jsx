@@ -98,7 +98,23 @@ export function UpcomingHolidays({ from, to, title = 'วันหยุดท�
               className="grid grid-cols-[7.5rem_1fr] items-baseline gap-x-3 rounded-md border border-border bg-surface px-3 py-2 mobile:grid-cols-1 mobile:items-start mobile:gap-y-0.5"
             >
               <strong className="text-sm tabular-nums text-text">{formatHolidayDate(holiday.holidayDate)}</strong>
-              <span className="truncate text-xs text-text-muted mobile:overflow-visible mobile:whitespace-normal mobile:[display:-webkit-box] mobile:[-webkit-box-orient:vertical] mobile:[-webkit-line-clamp:3]" title={holiday.nameTh}>
+              {/*
+                Clamped by LINES, not by `truncate`. `truncate` is
+                `white-space: nowrap` + ellipsis, so it can only ever show ONE line's worth
+                whatever room the column has — measured at 768px it showed 504px of a 551px name,
+                cutting the last 8%, which is "และวันแม่แห่งชาติ": the only part of that string a
+                reader recognises. Losing 8% is worse than losing 71%, not better, because it looks
+                complete.
+
+                A line clamp uses whatever width is there: at desktop the name column is wide
+                enough for one line and nothing changes, at tablet it takes the second line it
+                needs, and on mobile the row stacks (below) so the name gets the full card width
+                and three lines — enough for the 149-char worst case in production.
+              */}
+              <span
+                className="overflow-hidden text-xs text-text-muted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] mobile:[-webkit-line-clamp:3]"
+                title={holiday.nameTh}
+              >
                 {holiday.nameTh}
               </span>
             </li>
