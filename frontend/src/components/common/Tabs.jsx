@@ -21,8 +21,21 @@ import { Icon } from './Icon.jsx';
  * (its own empty state), it is never dimmed at the tab-bar level.
  *
  * Deliberately unstyled beyond layout + state so the caller owns density.
+ *
+ * `onSurface` — set it when the tablist sits on a `bg-surface` card rather than
+ * on the page background. It only affects the scroll-affordance gradients, and
+ * getting it wrong is visible: those overlays fade the scrolled-away tab text
+ * out by painting the BACKGROUND colour over it, so they have to be the colour
+ * that is actually behind the strip. They were hardcoded `from-surface`
+ * (`#fff`) while two of the three call sites — LeaveSurfacePage and
+ * AttendanceCalendarPage — mount the strip straight onto the page background
+ * (`--color-bg`, `#eef1f6`, measured: every ancestor up to <body> is
+ * transparent). On those pages the "fade" was a white smear over grey-blue with
+ * the tab label still legible underneath, which reads as the chevron sitting on
+ * top of the text rather than the text fading out. TicketDetailPage really is
+ * on a white card, hence the prop rather than just swapping the token.
  */
-export function Tabs({ items, value, onChange, ariaLabel, idPrefix }) {
+export function Tabs({ items, value, onChange, ariaLabel, idPrefix, onSurface = false }) {
   const listRef = useRef(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
@@ -96,7 +109,9 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix }) {
   }
 
   return (
-    <div className="relative min-w-0 -mx-4 sm:mx-0">
+    <div
+      className={`relative min-w-0 -mx-4 sm:mx-0 ${onSurface ? '[--tabs-fade-from:var(--color-surface)]' : '[--tabs-fade-from:var(--color-bg)]'}`}
+    >
       <div
         ref={listRef}
         role="tablist"
@@ -159,7 +174,7 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix }) {
         <span
           aria-hidden="true"
           data-testid="tabs-scroll-left-affordance"
-          className="pointer-events-none absolute inset-y-1 left-0 z-10 flex w-7 items-center bg-gradient-to-r from-surface to-transparent pl-1"
+          className="pointer-events-none absolute inset-y-1 left-0 z-10 flex w-7 items-center bg-gradient-to-r from-[var(--tabs-fade-from)] to-transparent pl-1"
         >
           <Icon name="chevronLeft" size={13} className="text-text-muted" />
         </span>
@@ -168,7 +183,7 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix }) {
         <span
           aria-hidden="true"
           data-testid="tabs-scroll-right-affordance"
-          className="pointer-events-none absolute inset-y-1 right-0 z-10 flex w-7 items-center justify-end bg-gradient-to-l from-surface to-transparent pr-1"
+          className="pointer-events-none absolute inset-y-1 right-0 z-10 flex w-7 items-center justify-end bg-gradient-to-l from-[var(--tabs-fade-from)] to-transparent pr-1"
         >
           <Icon name="chevronRight" size={13} className="text-text-muted" />
         </span>

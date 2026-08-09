@@ -83,7 +83,20 @@ export const LEAVE_SURFACE_TABS = [
     id: 'me',
     label: 'ของฉัน',
     helper: 'โควตาและคำขอลาของคุณ',
-    isVisible: () => true,
+    // Hidden for hr/ceo (owner ruling, 2026-08-10). This tab is entirely about the viewer's OWN
+    // leave -- their quota, their upcoming days, their history -- and hr/ceo do not file leave
+    // through this system at all: `canSubmitOwnLeave` already hid both "ยื่นคำขอลา" CTAs for them,
+    // and LeaveService#resolveTargetEmployee 403s a self-submission. What was left was a tab whose
+    // primary action is forbidden, showing a quota they cannot spend here.
+    //
+    // Reuses `canSubmitOwnLeave` rather than a second LEAVE_QUEUE_ONLY_ROLES check so the hr/ceo
+    // bucket has exactly one definition on this surface. (Referencing it above its own declaration
+    // is safe: `isVisible` is only ever CALLED from visibleLeaveSurfaceTabIds, long after module
+    // evaluation.)
+    //
+    // Presentation only -- like every other gate in this file. Hiding a tab is not an
+    // authorization decision; the server enforces the real rule.
+    isVisible: (user) => canSubmitOwnLeave(user),
   },
   {
     id: 'team',
@@ -99,10 +112,22 @@ export const LEAVE_SURFACE_TABS = [
     // manager (not hr/ceo) keeps the original label/helper above unchanged.
     labelFor: (user) => (hasPermission(user?.role, 'canViewAllLeave') ? 'พนักงานทั้งหมด' : 'ลูกทีม'),
     helperFor: (user) => (hasPermission(user?.role, 'canViewAllLeave') ? 'การลาของพนักงานทั้งหมด' : 'การลาของทีมคุณ'),
-    // See hasTeamMembers' own comment above for the full reasoning. Visible only to an
-    // actor who currently has at least one other person (a direct report, or -- for
-    // hr/ceo -- any active employee) in their api.leave.employees() list.
-    isVisible: (user, requests, canReviewAll, employeeOptions) => hasTeamMembers(employeeOptions),
+    // See hasTeamMembers' own comment above for the full reasoning. Visible to an actor who
+    // currently has at least one other person (a direct report) in their api.leave.employees()
+    // list -- OR unconditionally to hr/ceo, who can always view every employee's leave.
+    //
+    // The hr/ceo short-circuit is not just an optimisation, it is a BLANK-PAGE GUARD. `employeeOptions`
+    // is `[]` until that query lands, so a purely data-driven check hides this tab on first paint.
+    // That was survivable while "กฎการลา" existed (always visible, so the page always had at least
+    // one tab), but the 2026-08-10 restructure removed that tab AND hid "ของฉัน" for hr/ceo. A ceo
+    // is not in ROLE_PERMISSIONS.canReviewLeave either, so "รอพิจารณา" also needs loaded rows --
+    // leaving a ceo with ZERO visible tabs for the duration of the first load, i.e. a blank page.
+    // hr/ceo's own api.leave.employees() response is every active employee (VIEW_ALL_ROLES), so
+    // this tab is always genuinely available to them; asserting that from the role rather than
+    // waiting for the data to prove it removes both the flicker and the empty state.
+    isVisible: (user, requests, canReviewAll, employeeOptions) => (
+      hasPermission(user?.role, 'canViewAllLeave') || hasTeamMembers(employeeOptions)
+    ),
   },
   {
     id: 'review',
@@ -124,17 +149,14 @@ export const LEAVE_SURFACE_TABS = [
     // SUBMITTED/APPROVED requests) -- reusing the exact per-row predicates above.
     isVisible: (user, requests, canReviewAll) => canReviewAll || userMayActOnAnyRequest(requests, user, canReviewAll),
   },
-  {
-    id: 'rules',
-    label: 'กฎการลา',
-    helper: 'เงื่อนไขการลาแต่ละประเภท',
-    // TODO(A3): fill this tab with real rule disclosure (per-leave-type policy: quota,
-    // notice window, attachment requirement, etc). Phase A1 renders a placeholder only
-    // -- see LeaveSurfacePage.jsx's own TODO(A3) comment at the render site. Always
-    // visible (same as `me`): there is no role gate on reading the leave-rules copy
-    // itself, only on reviewing OTHER people's requests.
-    isVisible: () => true,
-  },
+  // The "กฎการลา" tab was REMOVED on 2026-08-10 (owner ruling). The §5 announcement it existed to
+  // surface is now a permanent reference bar above the tabs (LeavePolicyBar.jsx), matching the
+  // welfare page's own "ระเบียบสวัสดิการ (PDF)" bar -- reference material for every tab rather
+  // than a destination of its own. The in-app §5 clause breakdown (RulesTab.jsx,
+  // leavePolicySections.js) was dropped with it; the PDF is the authoritative text.
+  //
+  // ⚠️ It was also the ONLY unconditionally-visible tab, which several things quietly leaned on.
+  // See `team`'s isVisible above (blank-page guard) and resolveLeaveSurfaceTab's fallback below.
 ];
 
 /**
@@ -199,12 +221,20 @@ export function visibleLeaveSurfaceTabIds(user, requests = [], employeeOptions =
 }
 
 /**
- * `requestedId` if it is one of `visibleIds`, else `preferredDefaultId` if THAT is visible,
- * else `DEFAULT_LEAVE_SURFACE_TAB_ID` ("me", which is unconditionally visible to everyone --
- * see LEAVE_SURFACE_TABS's own `isVisible: () => true`, so this final fallback can never itself
- * resolve to a hidden tab). An absent, unknown, or currently-hidden `?tab=` value (a stale deep
- * link from before a role change, a typo, hand-editing the URL, or a link shared by someone who
- * *can* see `review`) never renders a blank/forbidden panel.
+ * `requestedId` if it is one of `visibleIds`, else `preferredDefaultId` if THAT is visible, else
+ * `DEFAULT_LEAVE_SURFACE_TAB_ID` if THAT is visible, else the first visible tab. An absent,
+ * unknown, or currently-hidden `?tab=` value (a stale deep link from before a role change, a typo,
+ * hand-editing the URL, or a link shared by someone who *can* see `review`) never renders a
+ * blank/forbidden panel.
+ *
+ * <p>⚠️ The last two steps used to be one: this returned `DEFAULT_LEAVE_SURFACE_TAB_ID` ("me")
+ * unconditionally, justified by "me is unconditionally visible to everyone … so this final
+ * fallback can never itself resolve to a hidden tab". **That invariant no longer holds** -- as of
+ * 2026-08-10 `me` is hidden for hr/ceo (see its `isVisible`), so for those two roles the old final
+ * fallback would have returned a tab that is not rendered, leaving the page with every panel
+ * inactive. `me` is still TRIED first among the fallbacks (it is the right default for everyone
+ * who can see it), but it is now checked against `visibleIds` like anything else, with the first
+ * visible tab as the genuine last resort.
  *
  * <p>`preferredDefaultId` defaults to `DEFAULT_LEAVE_SURFACE_TAB_ID` (unchanged pre-A1
  * behaviour for every existing caller) -- LeaveSurfacePage.jsx passes
@@ -218,5 +248,10 @@ export function visibleLeaveSurfaceTabIds(user, requests = [], employeeOptions =
 export function resolveLeaveSurfaceTab(requestedId, visibleIds, preferredDefaultId = DEFAULT_LEAVE_SURFACE_TAB_ID) {
   if (visibleIds.includes(requestedId)) return requestedId;
   if (visibleIds.includes(preferredDefaultId)) return preferredDefaultId;
-  return DEFAULT_LEAVE_SURFACE_TAB_ID;
+  if (visibleIds.includes(DEFAULT_LEAVE_SURFACE_TAB_ID)) return DEFAULT_LEAVE_SURFACE_TAB_ID;
+  // Last resort: the first visible tab. Returning DEFAULT_LEAVE_SURFACE_TAB_ID unconditionally
+  // (what this did before 2026-08-10) is no longer safe -- 'me' is hidden for hr/ceo, so that
+  // would name a tab with no rendered panel and blank the page. The old justification leaned on
+  // 'rules' being unconditionally visible; that tab no longer exists either.
+  return visibleIds[0] ?? DEFAULT_LEAVE_SURFACE_TAB_ID;
 }

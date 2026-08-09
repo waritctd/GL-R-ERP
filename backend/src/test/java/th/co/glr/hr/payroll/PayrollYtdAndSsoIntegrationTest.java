@@ -18,6 +18,7 @@ import th.co.glr.hr.commission.CommissionCalculator;
 import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.leave.LeaveRepository;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedUpsertRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
@@ -46,7 +47,7 @@ class PayrollYtdAndSsoIntegrationTest extends AbstractPostgresIntegrationTest {
             mock(AuditService.class),
             mock(NotificationService.class),
             mock(TicketRepository.class),
-            mock(AttachmentRepository.class));
+            mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
         // Leave -> payroll unpaid-day deduction (2026-07-23): mechanical constructor-arity fix --
         // PayrollService gained a LeaveRepository dependency for #suggestedInputs, unrelated to what
         // this test exercises.

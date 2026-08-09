@@ -70,12 +70,23 @@ public class NotificationRepository {
 
     /**
      * Resolves both the email address and display name in one query, so a rich notification email
-     * (greeting by name, portal link) doesn't need a second round-trip. Returns empty exactly when
-     * the previous email-only lookup did: no employee row, or a blank/NULL email - a caller with no
-     * usable address never sees a name either. {@code name} on its own may still be {@code null}
-     * (no first/last name on file); callers already fall back to a generic greeting for that.
+     * (greeting by name, portal link) doesn't need a second round-trip. Returns the recipient
+     * whenever the employee row exists - {@code email} may be {@code null} when the employee has no
+     * address on file (an empty-string address is normalised to {@code null} by
+     * {@code NULLIF(BTRIM(...), '')} below, same as a true SQL NULL). Returns empty only when there
+     * is no employee with that id.
+     *
+     * <p>The address used to be the gate here too (this method returned empty whenever it was
+     * missing, under the old name {@code findEmployeeEmail}). That is deliberately no longer the
+     * contract: {@code app.mail.override-to} must be able to rescue an addressless employee by
+     * redirecting the notification to a test inbox, and only {@link NotificationEmailService} - the
+     * sole owner of that config - knows whether an override is configured. Gating on the address
+     * here would make the override unreachable for exactly the employees it exists to rescue, so
+     * that decision now lives entirely in {@link NotificationEmailService#send}; this method's job is
+     * only to say whether the employee exists. {@code name} on its own may still be {@code null} (no
+     * first/last name on file); callers already fall back to a generic greeting for that.
      */
-    public Optional<EmailRecipient> findEmployeeEmail(long employeeId) {
+    public Optional<EmailRecipient> findEmployeeRecipient(long employeeId) {
         try {
             EmailRecipient recipient = jdbc.queryForObject("""
                 SELECT NULLIF(BTRIM(email), '') AS email,
@@ -84,7 +95,7 @@ public class NotificationRepository {
                  WHERE employee_id = :employeeId
                 """, Map.of("employeeId", employeeId),
                 (rs, rowNum) -> new EmailRecipient(rs.getString("email"), rs.getString("name")));
-            return recipient != null && recipient.email() != null ? Optional.of(recipient) : Optional.empty();
+            return Optional.ofNullable(recipient);
         } catch (EmptyResultDataAccessException exception) {
             return Optional.empty();
         }
@@ -158,8 +169,19 @@ public class NotificationRepository {
     }
 
     /**
-     * Notify all employees whose division maps to the given sales role.
-     * Division mapping mirrors DivisionAccessPolicy — extended for sales module roles.
+     * Notify all employees whose division maps to the given sales role ({@code import}/{@code
+     * sales}), or -- for {@code ceo} -- who match {@link CeoApproverRule#SQL_PREDICATE}, which is
+     * a POSITION test (กรรมการผู้จัดการ) and ignores division entirely, unlike the plain division
+     * mapping the other two roles use. It is deliberately NARROWER than the {@code ceo} role and
+     * is <b>not</b> a mirror of {@code DivisionAccessPolicy#roleFor} -- see {@link CeoApproverRule}
+     * for the owner ruling and the empty-set consequence.
+     *
+     * <p>The {@code hr.division} join is a {@code LEFT JOIN} so a {@code ceo} match with no
+     * division is not silently dropped -- the predicate no longer reads {@code d} at all.
+     * This does not change {@code import}/{@code sales}: both predicates test {@code
+     * d.source_code}, which is SQL {@code NULL} (never true) when {@code d} fails to match, exactly
+     * as an absent INNER JOIN row would have excluded that employee -- confirmed by inspection, not
+     * just assumed.
      */
     public void notifyByRole(String role, long ticketId, String type, String message) {
         notifyByRoleInternal(role, type, message, "/tickets/" + ticketId);
@@ -172,7 +194,7 @@ public class NotificationRepository {
     private void notifyByRoleInternal(String role, String type, String message, String link) {
         String divisionFilter = switch (role) {
             case "import" -> "d.source_code ILIKE 'PCIM%'";
-            case "ceo"    -> "d.source_code ILIKE 'MD%' OR d.source_code ILIKE 'MN%'";
+            case "ceo"    -> CeoApproverRule.SQL_PREDICATE;
             case "sales"  -> "d.source_code ILIKE 'SA%'";
             default -> null;
         };
@@ -182,7 +204,8 @@ public class NotificationRepository {
             INSERT INTO hr.notification (employee_id, type, title, message, link)
             SELECT e.employee_id, :type, :title, :message, :link
               FROM hr.employee e
-              JOIN hr.division d ON d.division_id = e.division_id
+              LEFT JOIN hr.division d ON d.division_id = e.division_id
+              LEFT JOIN hr.position p ON p.position_id = e.position_id
              WHERE (%s) AND e.is_active = TRUE
             """.formatted(divisionFilter),
             new MapSqlParameterSource()

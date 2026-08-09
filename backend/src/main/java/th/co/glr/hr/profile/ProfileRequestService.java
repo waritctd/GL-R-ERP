@@ -61,8 +61,8 @@ public class ProfileRequestService {
      * D2 (owner ruling): every active HR employee, resolved by {@link
      * EmployeeRepository#findHrEmployeeIds()} -- see that method's Javadoc for why this is now
      * feasible (division {@code source_code}, the same shape {@code
-     * OvertimeRepository#findCeoApproverEmployeeIds} already uses for the CEO role) and confirmed as
-     * this company's real HR division code, not guessed.
+     * th.co.glr.hr.notification.CeoApproverRepository#findEmployeeIds} uses for the CEO role) and
+     * confirmed as this company's real HR division code, not guessed.
      *
      * <p>Skips the requester when they themselves resolve to an HR employee id. {@code
      * ProfileRequestController#create} gates on role EXACTLY {@code "employee"} ({@code

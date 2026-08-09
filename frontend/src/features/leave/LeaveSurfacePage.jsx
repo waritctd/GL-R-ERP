@@ -9,13 +9,13 @@ import { PageStack } from '../../components/common/Layout.jsx';
 import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Tabs, TabPanel } from '../../components/common/Tabs.jsx';
+import { LeavePolicyBar } from './LeavePolicyBar.jsx';
 import {
   canSubmitOwnLeave, defaultLeaveSurfaceTabId, LEAVE_SURFACE_TABS, resolveLeaveSurfaceTab,
   resolveTabHelper, resolveTabLabel, visibleLeaveSurfaceTabIds,
 } from './leaveSurfaceTabs.js';
 import { MyLeaveTab } from './MyLeaveTab.jsx';
 import { ReviewQueueTab } from './ReviewQueueTab.jsx';
-import { RulesTab } from './RulesTab.jsx';
 import { TeamLeaveTab } from './TeamLeaveTab.jsx';
 
 const TAB_ID_PREFIX = 'leave-surface';
@@ -178,6 +178,12 @@ export function LeaveSurfacePage({ user, currentEmployee, showToast }) {
         />
       </div>
 
+      {/* Replaces the "กฎการลา" tab (2026-08-10 restructure, owner ruling) -- the source document
+          is reference material for every tab, not a destination of its own, so it sits once above
+          all of them rather than behind a fourth tab nobody opens mid-task. Same reference-bar
+          pattern as the welfare page's own "ระเบียบสวัสดิการ (PDF)" bar. */}
+      <LeavePolicyBar />
+
       <TabPanel id="me" idPrefix={TAB_ID_PREFIX} active={activeTab === 'me'}>
         <MyLeaveTab
           user={user}
@@ -192,10 +198,6 @@ export function LeaveSurfacePage({ user, currentEmployee, showToast }) {
 
       <TabPanel id="review" idPrefix={TAB_ID_PREFIX} active={activeTab === 'review'}>
         <ReviewQueueTab user={user} showToast={showToast} />
-      </TabPanel>
-
-      <TabPanel id="rules" idPrefix={TAB_ID_PREFIX} active={activeTab === 'rules'}>
-        <RulesTab />
       </TabPanel>
     </PageStack>
   );

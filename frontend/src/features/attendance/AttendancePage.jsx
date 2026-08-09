@@ -8,7 +8,7 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { PageStack } from '../../components/common/Layout.jsx';
+import { FilterField, PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
@@ -24,6 +24,8 @@ import {
   formatDuration,
   formatShortDate,
 } from '../../utils/format.js';
+import { AttendanceCorrectionPanel } from '../attendanceCorrection/AttendanceCorrectionPanel.jsx';
+import { AttendanceCorrectionRequestModal } from '../attendanceCorrection/AttendanceCorrectionRequestModal.jsx';
 
 // Reproduces `.filter-bar` for this page's native <form onSubmit> (Enter-to-submit
 // needed); Layout.jsx's FilterBar only renders a <div> — same pattern established in
@@ -74,6 +76,12 @@ export function AttendancePage({ user, showToast }) {
   // always reachable in 'company' mode — the roster it needs (employeeOptions) is already loaded
   // below.
   const canMarkPresent = hasPermission(user.role, 'canMarkAttendance');
+  const isCeo = user.role === 'ceo';
+  // Mirrors AttendanceCorrectionPanel's own (pre-existing) !isCeo gate on its submit form, plus
+  // the backend's requireEmployeeId(user) in AttendanceCorrectionService#submit -- a session with
+  // no employeeId would only reach a 400 there, so the button that opens the modal stays hidden
+  // rather than offering an action that can only fail.
+  const canRequestCorrection = !isCeo && !!user.employeeId;
   // Deliberately not memoized: `monthBounds()` is two Intl.DateTimeFormat calls, cheap enough to
   // recompute on every render, and memoizing it with an empty dep array froze "today" at mount --
   // a tab left open past Bangkok midnight would keep clamping the stepper/picker to the previous
@@ -99,6 +107,7 @@ export function AttendancePage({ user, showToast }) {
   const [recalculating, setRecalculating] = useState(false);
   const [markPresentOpen, setMarkPresentOpen] = useState(false);
   const [markingPresent, setMarkingPresent] = useState(false);
+  const [correctionOpen, setCorrectionOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [lastImport, setLastImport] = useState(null);
   const [devices, setDevices] = useState([]);
@@ -417,6 +426,18 @@ export function AttendancePage({ user, showToast }) {
 
   const unmappedTotal = unmapped.reduce((sum, badge) => sum + (badge.punch_count || 0), 0);
 
+  // Single element, reused at two possible positions below (never both at once) -- see the
+  // isCeo-conditional placement around <DataTable> for why the position itself depends on isCeo.
+  // Gate is deliberately broader than the ขอแก้ไขเวลา button above: a CEO has nothing to *submit*
+  // (canRequestCorrection is !isCeo) but still needs this section to *review* what everyone else
+  // submitted, and anyone with no employeeId has neither a request of their own to see nor a right
+  // to submit one. Moved here from RequestsPage.jsx's third tab
+  // (fix/attendance-correction-on-attendance-page) -- see that file's own header comment for where
+  // the tab used to be.
+  const correctionPanel = isCeo || !!user.employeeId
+    ? <AttendanceCorrectionPanel user={user} showToast={showToast} />
+    : null;
+
   return (
     <PageStack>
       <PageHeader
@@ -436,6 +457,19 @@ export function AttendancePage({ user, showToast }) {
               >
                 <Icon name="plus" />
                 ทำเครื่องหมายเข้างาน
+              </Button>
+            ) : null}
+            {canRequestCorrection ? (
+              // secondary, not primary: canMarkPresent (hr/ceo) and canRequestCorrection
+              // (!isCeo) overlap for HR, who would otherwise see two solid primary-colored
+              // buttons competing in the same row. For the far more common audience -- an
+              // ordinary employee, who never sees ทำเครื่องหมายเข้างาน at all -- this is still a
+              // clearly bordered, full-weight button, just not the loudest one on the page; the
+              // page's own purpose (reviewing your attendance) doesn't need a filled CTA, and
+              // filing a correction is an occasional exception, not the primary reason to be here.
+              <Button variant="secondary" onClick={() => setCorrectionOpen(true)}>
+                <Icon name="plus" />
+                ขอแก้ไขเวลา
               </Button>
             ) : null}
             <Button variant="secondary" onClick={() => daysQuery.refetch()} disabled={daysQuery.isLoading}>
@@ -589,39 +623,70 @@ export function AttendancePage({ user, showToast }) {
         />
       ) : null}
 
+      {correctionOpen ? (
+        // No `user` prop -- AttendanceCorrectionRequestModal.jsx deliberately doesn't take one;
+        // see its own doc comment for why (this button's own canRequestCorrection gate is the
+        // only role check this feature needs on the frontend).
+        <AttendanceCorrectionRequestModal
+          showToast={showToast}
+          onClose={() => setCorrectionOpen(false)}
+        />
+      ) : null}
+
       {!isSelfView ? (
         <div className={FILTER_BAR_CLASS}>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="secondary"
-              onClick={() => stepDay(-1)}
-              disabled={loading || selectedDate <= monthStart}
-              aria-label="วันก่อนหน้า"
-            >
-              <Icon name="chevronLeft" />
-            </Button>
-            <label className="m-0">
-              วันที่
+          {/*
+            The stepper is ONE field, not three items in a row. It used to be a
+            `flex items-center gap-2` of [prev][bare <label> + date][next], which
+            put the label text "วันที่" inside the flex row — so the label sat
+            above the input only, indented to the input's left edge, while the
+            ฝ่าย/พนักงาน labels below started at the bar's left edge. Two label
+            x-positions in one bar is the misalignment this reads as. Wrapping
+            the whole control in FilterField puts the label back on the bar's
+            common left edge and lets the group shrink as one unit.
+          */}
+          <FilterField label="วันที่" htmlFor="attendance-selected-date">
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => stepDay(-1)}
+                disabled={loading || selectedDate <= monthStart}
+                aria-label="วันก่อนหน้า"
+                // Square, and at the mobile touch floor. These were 36px wide
+                // against a 44px-tall input — under WCAG 2.2 SC 2.5.8's 24px
+                // minimum in one axis only by luck, and visibly lighter than
+                // every other tappable thing on the page. `shrink-0` keeps them
+                // at that size while the date input absorbs the shrinking.
+                className="h-11 w-11 shrink-0 px-0"
+              >
+                <Icon name="chevronLeft" />
+              </Button>
               <input
+                id="attendance-selected-date"
                 type="date"
+                // `min-w-0` for the same reason FilterField carries it: this is
+                // itself a flex item, and the native date control's intrinsic
+                // width is what would otherwise push the [next] button out of
+                // the bar on iOS.
+                className="min-w-0 flex-1"
                 value={selectedDate}
                 min={monthStart}
                 max={today}
                 onChange={(event) => setSelectedDate(event.target.value || today)}
               />
-            </label>
-            <Button
-              variant="secondary"
-              onClick={() => stepDay(1)}
-              disabled={loading || selectedDate >= today}
-              aria-label="วันถัดไป"
-            >
-              <Icon name="chevronRight" />
-            </Button>
-          </div>
+              <Button
+                variant="secondary"
+                onClick={() => stepDay(1)}
+                disabled={loading || selectedDate >= today}
+                aria-label="วันถัดไป"
+                className="h-11 w-11 shrink-0 px-0"
+              >
+                <Icon name="chevronRight" />
+              </Button>
+            </div>
+          </FilterField>
           {showDivisionFilter ? (
-            <label>
-              ฝ่าย
+            <FilterField label="ฝ่าย">
               <select
                 value={divisionId}
                 onChange={(event) => {
@@ -636,11 +701,10 @@ export function AttendancePage({ user, showToast }) {
                   <option key={division.id} value={division.id}>{division.name}</option>
                 ))}
               </select>
-            </label>
+            </FilterField>
           ) : null}
           {employeePickerOptions.length > 1 ? (
-            <label>
-              พนักงาน
+            <FilterField label="พนักงาน">
               <select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}>
                 <option value="">ทุกคน</option>
                 {employeePickerOptions.map((option) => (
@@ -649,15 +713,37 @@ export function AttendancePage({ user, showToast }) {
                   </option>
                 ))}
               </select>
-            </label>
+            </FilterField>
           ) : null}
         </div>
       ) : null}
+
+      {/* CEO: above the day table -- this section is actionable work (the review queue is why a
+          CEO comes to this page), so it should not sit below ~50 rows of company attendance
+          (adversarial review F2). Everyone else gets it below (see the placement after
+          </DataTable>) -- their own request history belongs after the attendance data it refers
+          to. */}
+      {isCeo ? correctionPanel : null}
 
       <DataTable
         columns={columns}
         rows={days}
         getRowKey={rowKey}
+        // The 840px floor below needs somewhere to scroll, or it is just clipped.
+        //
+        // `<Panel flush>` is `overflow-hidden` (it has to be — the flush body runs edge to edge, so
+        // the card's radius is what clips its corners). With the grid held at 840px inside a panel
+        // whose content box is narrower, the excess had no scroll region and simply vanished:
+        // measured at 768px, scrollWidth 840 vs clientWidth 702, with NO scrollable ancestor
+        // anywhere up the chain — 138px of table unreachable by any gesture.
+        //
+        // The casualty is the last column, which is the status column — i.e. exactly what the
+        // 840px floor was added to protect. The floor stopped the columns being *squeezed* and
+        // then the panel hid them anyway, so the badge was off-screen either way and the fix
+        // looked like it had worked. `panelClassName` exists for precisely this (see DataTable's
+        // own comment on the prop) and keeps the change on this page rather than altering the
+        // scroll model of every table in the app.
+        panelClassName="overflow-x-auto"
         // Status is the reason this page exists, so it gets the widest share and the time columns
         // are held narrow. Without this the status column was pushed off-screen at tablet width,
         // which hid every late/early/OT badge on the page.
@@ -691,6 +777,11 @@ export function AttendancePage({ user, showToast }) {
             : 'ลองเปลี่ยนวันที่ หรือนำเข้าไฟล์ .dat',
         }}
       />
+
+      {/* Everyone but the CEO: below the day table -- their own request history, which belongs
+          after the attendance data it refers to. See correctionPanel's own definition above for
+          the gate, and the comment before <DataTable> for the CEO's (opposite) placement. */}
+      {!isCeo ? correctionPanel : null}
     </PageStack>
   );
 }

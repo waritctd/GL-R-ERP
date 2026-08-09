@@ -42,11 +42,17 @@ public class NotificationService {
         NotificationDto created = notifications.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Notification was not saved"));
         if (sendEmail) {
-            notifications.findEmployeeEmail(employeeId)
+            // Deliberately NOT gated on the employee having an address: app.mail.override-to can
+            // still redirect this email to a test inbox even when there is no address on file, and
+            // only NotificationEmailService (which owns that config) knows whether an override is
+            // configured. Gating on the address here, the way findEmployeeEmail() used to, made the
+            // override unreachable for exactly the employees it exists to rescue - do not
+            // reintroduce that gate. The only thing checked here is whether the employee row exists.
+            notifications.findEmployeeRecipient(employeeId)
                 .ifPresentOrElse(
                     recipient -> sendEmailAfterCommit(
                         employeeId, recipient.email(), recipient.name(), subject.trim(), body.trim(), cleanLink),
-                    () -> log.info("Notification email skipped: employee={} has no email", employeeId));
+                    () -> log.info("Notification email skipped: employee={} not found", employeeId));
         }
         return created;
     }

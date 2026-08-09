@@ -21,6 +21,17 @@ vi.mock('../../api/index.js', () => ({
       recalculate: vi.fn(),
       markPresent: vi.fn(),
     },
+    // AttendanceCorrectionPanel.jsx now renders on this page (fix/attendance-correction-on-attendance-page)
+    // for anyone CEO or with an employeeId -- both hrUser and selfViewUser below qualify, so every
+    // existing test in this file mounts it too and needs this namespace mocked or it throws on
+    // mount, not just the tests that exercise it directly.
+    attendanceCorrection: {
+      list: vi.fn(),
+      create: vi.fn(),
+      approve: vi.fn(),
+      reject: vi.fn(),
+      cancel: vi.fn(),
+    },
   },
 }));
 
@@ -28,6 +39,12 @@ const hrUser = { role: 'hr', employeeId: 1 };
 // Not HR/CEO (no canViewAllAttendance) and not a manager -- attendanceMode() falls through to
 // 'employee', i.e. isSelfView.
 const selfViewUser = { role: 'employee', employeeId: 2, manager: false };
+const ceoUser = { role: 'ceo', employeeId: 3 };
+// F3 (adversarial review): a session not yet linked to an employee record -- e.g. a brand-new
+// account. No fixture in this file exercised a null employeeId before, which is exactly how
+// canRequestCorrection's `!!user.employeeId` conjunct and the panel's own `isCeo ||
+// !!user.employeeId` gate both went untested on that half of the check.
+const noEmployeeIdUser = { role: 'employee', employeeId: null, manager: false };
 
 function renderWithClient(ui) {
   const queryClient = new QueryClient({
@@ -111,6 +128,7 @@ describe('AttendancePage rendering (issue #422 B2)', () => {
     api.attendance.employees.mockResolvedValue({ employees: [] });
     api.attendance.devices.mockResolvedValue({ devices: [] });
     api.attendance.unmapped.mockResolvedValue({ badges: [] });
+    api.attendanceCorrection.list.mockResolvedValue({ requests: [] });
   });
 
   it('loads and renders the daily attendance table on mount', async () => {
@@ -137,7 +155,13 @@ describe('AttendancePage rendering (issue #422 B2)', () => {
   it('the รีเฟรช button refetches the daily attendance query', async () => {
     renderWithClient(<AttendancePage user={hrUser} showToast={vi.fn()} />);
 
-    const refreshButton = await screen.findByRole('button', { name: /รีเฟรช/ });
+    // Scoped to `.page-actions` (PageHeader.jsx's own actions row): AttendanceCorrectionPanel's
+    // own section (fix/attendance-correction-on-attendance-page) now ALSO renders a "รีเฟรช"
+    // button lower on the page (it refetches the correction list, not the daily table), so an
+    // unscoped query is ambiguous. Same disambiguation PageHeader.jsx's own comment cites
+    // e2e/hr.spec.js already using `.page-actions` for -- an identically-named EmptyState action.
+    const pageActions = document.querySelector('.page-actions');
+    const refreshButton = await within(pageActions).findByRole('button', { name: /รีเฟรช/ });
     // Wait for the FIRST fetch to actually resolve (the button is disabled while `isLoading`,
     // issue #422 P2 fix) before clicking, or the click is a no-op on a disabled button.
     await waitFor(() => expect(refreshButton.disabled).toBe(false));
@@ -202,6 +226,7 @@ describe('AttendancePage date stepper', () => {
     api.attendance.employees.mockResolvedValue({ employees: [] });
     api.attendance.devices.mockResolvedValue({ devices: [] });
     api.attendance.unmapped.mockResolvedValue({ badges: [] });
+    api.attendanceCorrection.list.mockResolvedValue({ requests: [] });
   });
 
   it('previous then next round-trips to the original date, one calendar day at a time', async () => {
@@ -247,6 +272,7 @@ describe('AttendancePage self-view fetch range', () => {
     api.attendance.employees.mockResolvedValue({ employees: [] });
     api.attendance.devices.mockResolvedValue({ devices: [] });
     api.attendance.unmapped.mockResolvedValue({ badges: [] });
+    api.attendanceCorrection.list.mockResolvedValue({ requests: [] });
 
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
@@ -262,5 +288,63 @@ describe('AttendancePage self-view fetch range', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// fix/attendance-correction-on-attendance-page: "ขอแก้ไขเวลา" (open AttendanceCorrectionRequestModal)
+// and the AttendanceCorrectionPanel review-queue section both moved onto this page from the old
+// third tab on RequestsPage (/employee-requests) -- see that file's own header comment.
+describe('AttendancePage attendance-correction button and section', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.attendance.daily.mockResolvedValue({ days: [] });
+    api.attendance.employees.mockResolvedValue({ employees: [] });
+    api.attendance.devices.mockResolvedValue({ devices: [] });
+    api.attendance.unmapped.mockResolvedValue({ badges: [] });
+    api.attendanceCorrection.list.mockResolvedValue({ requests: [] });
+  });
+
+  it('renders "ขอแก้ไขเวลา" for an employee and opens the request modal on click', async () => {
+    renderWithClient(<AttendancePage user={selfViewUser} showToast={vi.fn()} />);
+
+    const openButton = await screen.findByRole('button', { name: 'ขอแก้ไขเวลา' });
+    fireEvent.click(openButton);
+
+    // The modal is up once its own field is reachable by label -- this also proves the button
+    // opened AttendanceCorrectionRequestModal specifically, not some other dialog.
+    expect(await screen.findByLabelText(/วันที่ที่ลืมสแกน/)).not.toBeNull();
+  });
+
+  it('does not render "ขอแก้ไขเวลา" for a CEO', async () => {
+    renderWithClient(<AttendancePage user={ceoUser} showToast={vi.fn()} />);
+
+    // Wait for the page to actually settle before asserting an absence, or a false negative
+    // (button not rendered YET vs. never rendered) would pass for the wrong reason. Not a
+    // `findByRole('button', { name: /รีเฟรช/ })` here -- there are now two (this page's own, and
+    // AttendanceCorrectionPanel's), which is ambiguous; the daily-attendance fetch is a settle
+    // signal that stays unambiguous regardless of how many รีเฟรช buttons the page has.
+    await waitFor(() => expect(api.attendance.daily).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('button', { name: 'ขอแก้ไขเวลา' })).toBeNull();
+  });
+
+  it('renders the attendance-correction review section below the daily table', async () => {
+    renderWithClient(<AttendancePage user={selfViewUser} showToast={vi.fn()} />);
+
+    expect(await screen.findByRole('heading', { name: 'คำขอแก้ไขเวลาเข้า-ออกงาน' })).not.toBeNull();
+  });
+
+  // F3 (adversarial review): neither gate's `employeeId` conjunct had a fixture that could ever
+  // fail it -- every existing fixture is either CEO or already carries an employeeId. A session
+  // with neither should get neither the submit button (nothing to attach the request to) nor the
+  // review section (no history of its own, and canViewAll is role-only so this session gains
+  // nothing from viewing it either).
+  it('renders neither "ขอแก้ไขเวลา" nor the review section for a session with no employeeId', async () => {
+    renderWithClient(<AttendancePage user={noEmployeeIdUser} showToast={vi.fn()} />);
+
+    // Same settle signal as the CEO case above -- unambiguous regardless of how many รีเฟรช
+    // buttons the page ends up with.
+    await waitFor(() => expect(api.attendance.daily).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('button', { name: 'ขอแก้ไขเวลา' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'คำขอแก้ไขเวลาเข้า-ออกงาน' })).toBeNull();
   });
 });

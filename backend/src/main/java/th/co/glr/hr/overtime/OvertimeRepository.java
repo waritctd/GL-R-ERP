@@ -306,17 +306,6 @@ public class OvertimeRepository {
         return byEmployee;
     }
 
-    public List<Long> findCeoApproverEmployeeIds() {
-        return jdbc.query("""
-            SELECT e.employee_id
-              FROM hr.employee e
-              JOIN hr.division d ON d.division_id = e.division_id
-             WHERE e.is_active = TRUE
-               AND (d.source_code ILIKE 'MD%' OR d.source_code ILIKE 'MN%')
-             ORDER BY e.employee_id
-            """, Map.of(), (rs, rowNum) -> rs.getLong("employee_id"));
-    }
-
     /**
      * The salary an overtime request should be priced from, resolved as of the work date rather
      * than at approval or payroll time. Overtime is paid at the rate in force when the work was
