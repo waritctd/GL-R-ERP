@@ -639,6 +639,100 @@ public class EmployeeRepository {
             """, Map.of("employeeId", employeeId, "date", date, "salary", salary));
     }
 
+    // ---- ล.ย.01 master write-back (owner decision #4, 2026-08-08) ------------------------------
+    //
+    // Called ONLY from TaxAllowanceDeclarationService#approve, i.e. after HR has confirmed a
+    // declaration the employee signed. See that method for why approve and not apply.
+    //
+    // Every one of these preserves-on-null via COALESCE, matching #upsertCurrentAddress below: a
+    // blank box on the form means "not answered", never "erase what HR already has". The cost is
+    // that a genuine deletion (an employee who moved out of a named building) cannot be expressed
+    // through this path and has to be made in the employee editor -- deliberate, because silently
+    // destroying master data on a partially-filled form is the worse failure.
+
+    /**
+     * ที่อยู่ from an approved ล.ย.01 into the employee master, all 13 slots.
+     *
+     * <p>Targets {@code address_type = 'CURRENT'} because that is the row every reader already
+     * joins to -- {@code PayrollRepository#findExportRows} (the statutory KBank/PND1/SSO files),
+     * {@code EmployeeRepository#findById}, {@code LeaveRepository}. Writing 'REGISTERED' instead
+     * would leave the correction invisible to every one of them.
+     *
+     * <p>Widths are guaranteed by V138: building/soi/road were VARCHAR(120) against the
+     * declaration's VARCHAR(200) until then.
+     */
+    public void upsertCurrentAddressFromDeclaration(
+        long employeeId, String houseNo, String building, String roomNo, String floor, String village,
+        String moo, String soi, String junction, String road, String subDistrict, String district,
+        String province, String postalCode) {
+        jdbc.update("""
+            INSERT INTO hr.employee_address(
+                employee_id, address_type, house_no, building, room_no, floor, village, moo, soi,
+                junction, road, subdistrict, district, province, postal_code)
+            VALUES (:employeeId, 'CURRENT', :houseNo, :building, :roomNo, :floor, :village, :moo,
+                :soi, :junction, :road, :subDistrict, :district, :province, :postalCode)
+            ON CONFLICT (employee_id, address_type) DO UPDATE SET
+                house_no    = COALESCE(EXCLUDED.house_no,    hr.employee_address.house_no),
+                building    = COALESCE(EXCLUDED.building,    hr.employee_address.building),
+                room_no     = COALESCE(EXCLUDED.room_no,     hr.employee_address.room_no),
+                floor       = COALESCE(EXCLUDED.floor,       hr.employee_address.floor),
+                village     = COALESCE(EXCLUDED.village,     hr.employee_address.village),
+                moo         = COALESCE(EXCLUDED.moo,         hr.employee_address.moo),
+                soi         = COALESCE(EXCLUDED.soi,         hr.employee_address.soi),
+                junction    = COALESCE(EXCLUDED.junction,    hr.employee_address.junction),
+                road        = COALESCE(EXCLUDED.road,        hr.employee_address.road),
+                subdistrict = COALESCE(EXCLUDED.subdistrict, hr.employee_address.subdistrict),
+                district    = COALESCE(EXCLUDED.district,    hr.employee_address.district),
+                province    = COALESCE(EXCLUDED.province,    hr.employee_address.province),
+                postal_code = COALESCE(EXCLUDED.postal_code, hr.employee_address.postal_code)
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("houseNo", houseNo).addValue("building", building).addValue("roomNo", roomNo)
+            .addValue("floor", floor).addValue("village", village).addValue("moo", moo)
+            .addValue("soi", soi).addValue("junction", junction).addValue("road", road)
+            .addValue("subDistrict", subDistrict).addValue("district", district)
+            .addValue("province", province).addValue("postalCode", postalCode));
+    }
+
+    /**
+     * เลขประจำตัวผู้เสียภาษีอากร from an approved ล.ย.01.
+     *
+     * <p>⚠️ <b>This is the FIRST production write to {@code hr_restricted}.</b> Every other access
+     * to that schema in this codebase is a {@code LEFT JOIN} read
+     * ({@code PayrollRepository#findExportRows}, {@code EmployeeRepository#findById}). V1 sketched a
+     * separate {@code hr_app} role with no grant there, but those GRANT lines are COMMENTED OUT and
+     * no such role exists -- Flyway creates and alters {@code hr_restricted} tables using the same
+     * {@code spring.datasource} credentials the app runs under, so the app's role owns the schema.
+     *
+     * <p>An UPSERT, not an UPDATE: {@code employee_pii} has no row at all for many employees (it is
+     * populated only where PII was actually captured), so an UPDATE would silently affect zero rows
+     * and the tax ID would vanish with no error.
+     */
+    public void upsertTaxIdFromDeclaration(long employeeId, String taxId) {
+        if (taxId == null) {
+            return;
+        }
+        jdbc.update("""
+            INSERT INTO hr_restricted.employee_pii(employee_id, tax_id)
+            VALUES (:employeeId, :taxId)
+            ON CONFLICT (employee_id) DO UPDATE
+                SET tax_id = COALESCE(EXCLUDED.tax_id, hr_restricted.employee_pii.tax_id)
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("taxId", taxId));
+    }
+
+    /** สถานภาพ from an approved ล.ย.01. No-ops on null — see the mapping in the calling service. */
+    public void updateMaritalStatusFromDeclaration(long employeeId, String maritalStatus) {
+        if (maritalStatus == null) {
+            return;
+        }
+        jdbc.update("UPDATE hr.employee SET marital_status = :status WHERE employee_id = :employeeId",
+            new MapSqlParameterSource()
+                .addValue("employeeId", employeeId)
+                .addValue("status", maritalStatus));
+    }
+
     private void upsertCurrentAddress(long employeeId, String line1, String phone) {
         if (line1 == null && phone == null) {
             return;
