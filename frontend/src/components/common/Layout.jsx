@@ -224,6 +224,87 @@ export function FilterRow({ className, children, ...props }) {
 }
 
 /**
+ * FilterField — one labelled control inside a wrapping `FilterBar` / `FilterRow`.
+ *
+ * Replaces the bare `<label>ชื่อ<control/></label>` these bars were built from.
+ * That pattern relies on the global `label { display: grid }` base rule to stack
+ * the label text above the control, which works — but it leaves the field with
+ * flexbox's default `min-width: auto`, and that is the bug this component
+ * exists to remove.
+ *
+ * ── WHY `min-w-0` IS LOAD-BEARING ────────────────────────────────────────────
+ * A flex item's automatic minimum size is its content's *min-content* width, so
+ * a field can never shrink below the widest thing inside it — and a control it
+ * wraps is `width: 100%` (index.css `@layer base`), which resolves against a
+ * track the control itself is dictating. For a text input the min-content width
+ * is small and nothing shows. For `input[type="date"]` / `input[type="time"]` it
+ * is the width of the browser's NATIVE control, which differs per platform:
+ * Chromium renders a compact `10/08/2026`, and iOS Safari renders a much wider
+ * localized date. So the row fits on the machine it was built on and overflows
+ * on the phone it ships to — the field cannot shrink, and `flex-wrap` cannot
+ * help either, because wrapping an item that is already too wide for the line
+ * changes nothing.
+ *
+ * Measured on /attendance at 390px, modelling the native control's intrinsic
+ * width (the fix is the second column):
+ *
+ *   intrinsic width   bare <label>                       with min-w-0
+ *   260px             row 27px past the bar, 11px page   row 83px inside, 0
+ *   320px             row 87px past the bar, 71px page   row 83px inside, 0
+ *
+ * `min-w-0` lets the field shrink to its share of the line, and the `basis`
+ * below decides when it stops sharing and takes a line of its own instead.
+ *
+ * ── WHY THE BASIS IS FULL-WIDTH ON MOBILE ────────────────────────────────────
+ * Without an explicit basis every field sizes to its own content, so which
+ * fields end up sharing a line is decided by string lengths rather than by
+ * design. On /employee-requests at 390px that produced จากวันที่ alone on one
+ * row with dead space beside it, ถึงวันที่ + สถานะ sharing the next, and
+ * พนักงาน full width — three different control widths and two different label
+ * x-positions in one bar. `mobile:basis-full` makes it one field per line at
+ * ≤720px: every control the same width, every label on the same left edge.
+ * Above that the fields share lines from a common floor, so they still line up.
+ *
+ * ── AND WHY THERE IS NO `grow` ───────────────────────────────────────────────
+ * `grow` looks right until a line wraps. Measured on /employee-requests at
+ * 768px with `grow`: three fields sat at 218px on the first line and พนักงาน —
+ * alone on the second — stretched to 565px, because a flex item that owns its
+ * line absorbs all of it. That is the same raggedness this component exists to
+ * remove, just one breakpoint further out. A fixed basis keeps every field the
+ * same width on every line at every width, and the leftover space on the last
+ * line is where the submit button sits — which is what a filter bar wants.
+ *
+ * ── `htmlFor` IS REQUIRED WHEN THE FIELD HOLDS MORE THAN ONE CONTROL ─────────
+ * By default this renders a `<label>` that WRAPS its children, which implicitly
+ * associates it with the single control inside. That association is only valid
+ * for one control: a `<label>` containing several is ambiguous, and the browser
+ * (and `getByLabelText`) will not reliably resolve it to the one you meant.
+ * /attendance's date stepper is exactly that case — [prev] [date] [next] — and
+ * wrapping all three broke `findByLabelText('วันที่')`, which stopped resolving
+ * to the date input. Passing `htmlFor` switches the wrapper to a `<div>` and
+ * renders a real `<label htmlFor>` pointing at the one control that owns the
+ * name, leaving the buttons (which carry their own `aria-label`) outside it.
+ * Rule of thumb: one control, omit it; more than one, pass it.
+ */
+export function FilterField({ label, htmlFor, hint, className, labelClassName, children, ...props }) {
+  const Wrapper = htmlFor ? 'div' : 'label';
+  const LabelTag = htmlFor ? 'label' : 'span';
+  return (
+    <Wrapper className={cn('grid content-start gap-[7px] min-w-0 basis-[190px] mobile:basis-full', className)} {...props}>
+      {/*
+        One grid item, not two. Under the global `label { display: grid }` rule
+        every direct child becomes its own row, so a bare text node beside any
+        sibling would stack with a 7px gap instead of reading as one label —
+        the same trap FormField.jsx documents for its required marker.
+      */}
+      {label ? <LabelTag htmlFor={htmlFor} className={labelClassName}>{label}</LabelTag> : null}
+      {children}
+      {hint ? <span className="text-xs font-medium text-text-muted">{hint}</span> : null}
+    </Wrapper>
+  );
+}
+
+/**
  * RowActions — reproduces `.row-actions`:
  *   display: flex; justify-content: flex-end; gap: 8px;
  */

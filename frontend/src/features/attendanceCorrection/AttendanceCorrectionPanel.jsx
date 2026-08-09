@@ -11,7 +11,7 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { formGridSpan2, Panel, PageStack, RowActions } from '../../components/common/Layout.jsx';
+import { FilterField, formGridSpan2, Panel, PageStack, RowActions } from '../../components/common/Layout.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { attendanceCorrectionStatusLabel as statusInfo } from '../../utils/format.js';
@@ -337,8 +337,7 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
       ) : null}
 
       <SafeForm className={FILTER_BAR_CLASS} onSubmit={(event) => event.preventDefault()}>
-        <label>
-          สถานะ
+        <FilterField label="สถานะ">
           <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
             <option value="">ทุกสถานะ</option>
             <option value="SUBMITTED">รอ CEO</option>
@@ -346,7 +345,7 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
             <option value="REJECTED">ปฏิเสธแล้ว</option>
             <option value="CANCELLED">ยกเลิกแล้ว</option>
           </select>
-        </label>
+        </FilterField>
       </SafeForm>
 
       <Panel flush>

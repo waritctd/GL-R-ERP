@@ -8,7 +8,7 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { FileUploadField } from '../../components/common/FileUploadField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { PageStack } from '../../components/common/Layout.jsx';
+import { FilterField, PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
@@ -591,37 +591,58 @@ export function AttendancePage({ user, showToast }) {
 
       {!isSelfView ? (
         <div className={FILTER_BAR_CLASS}>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="secondary"
-              onClick={() => stepDay(-1)}
-              disabled={loading || selectedDate <= monthStart}
-              aria-label="วันก่อนหน้า"
-            >
-              <Icon name="chevronLeft" />
-            </Button>
-            <label className="m-0">
-              วันที่
+          {/*
+            The stepper is ONE field, not three items in a row. It used to be a
+            `flex items-center gap-2` of [prev][bare <label> + date][next], which
+            put the label text "วันที่" inside the flex row — so the label sat
+            above the input only, indented to the input's left edge, while the
+            ฝ่าย/พนักงาน labels below started at the bar's left edge. Two label
+            x-positions in one bar is the misalignment this reads as. Wrapping
+            the whole control in FilterField puts the label back on the bar's
+            common left edge and lets the group shrink as one unit.
+          */}
+          <FilterField label="วันที่" htmlFor="attendance-selected-date">
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => stepDay(-1)}
+                disabled={loading || selectedDate <= monthStart}
+                aria-label="วันก่อนหน้า"
+                // Square, and at the mobile touch floor. These were 36px wide
+                // against a 44px-tall input — under WCAG 2.2 SC 2.5.8's 24px
+                // minimum in one axis only by luck, and visibly lighter than
+                // every other tappable thing on the page. `shrink-0` keeps them
+                // at that size while the date input absorbs the shrinking.
+                className="h-11 w-11 shrink-0 px-0"
+              >
+                <Icon name="chevronLeft" />
+              </Button>
               <input
+                id="attendance-selected-date"
                 type="date"
+                // `min-w-0` for the same reason FilterField carries it: this is
+                // itself a flex item, and the native date control's intrinsic
+                // width is what would otherwise push the [next] button out of
+                // the bar on iOS.
+                className="min-w-0 flex-1"
                 value={selectedDate}
                 min={monthStart}
                 max={today}
                 onChange={(event) => setSelectedDate(event.target.value || today)}
               />
-            </label>
-            <Button
-              variant="secondary"
-              onClick={() => stepDay(1)}
-              disabled={loading || selectedDate >= today}
-              aria-label="วันถัดไป"
-            >
-              <Icon name="chevronRight" />
-            </Button>
-          </div>
+              <Button
+                variant="secondary"
+                onClick={() => stepDay(1)}
+                disabled={loading || selectedDate >= today}
+                aria-label="วันถัดไป"
+                className="h-11 w-11 shrink-0 px-0"
+              >
+                <Icon name="chevronRight" />
+              </Button>
+            </div>
+          </FilterField>
           {showDivisionFilter ? (
-            <label>
-              ฝ่าย
+            <FilterField label="ฝ่าย">
               <select
                 value={divisionId}
                 onChange={(event) => {
@@ -636,11 +657,10 @@ export function AttendancePage({ user, showToast }) {
                   <option key={division.id} value={division.id}>{division.name}</option>
                 ))}
               </select>
-            </label>
+            </FilterField>
           ) : null}
           {employeePickerOptions.length > 1 ? (
-            <label>
-              พนักงาน
+            <FilterField label="พนักงาน">
               <select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}>
                 <option value="">ทุกคน</option>
                 {employeePickerOptions.map((option) => (
@@ -649,7 +669,7 @@ export function AttendancePage({ user, showToast }) {
                   </option>
                 ))}
               </select>
-            </label>
+            </FilterField>
           ) : null}
         </div>
       ) : null}

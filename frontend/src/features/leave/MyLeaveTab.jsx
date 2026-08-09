@@ -11,7 +11,7 @@ import { DataTable, expandedRowRegionId } from '../../components/common/DataTabl
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FieldList } from '../../components/common/FieldList.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { Panel } from '../../components/common/Layout.jsx';
+import { FilterField, Panel } from '../../components/common/Layout.jsx';
 import { QuotaBar } from '../../components/common/QuotaBar.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
@@ -631,16 +631,13 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
       </Panel>
 
       <SafeForm className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
-        <label>
-          จากวันที่
+        <FilterField label="จากวันที่">
           <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
-        </label>
-        <label>
-          ถึงวันที่
+        </FilterField>
+        <FilterField label="ถึงวันที่">
           <input type="date" value={filters.to} onChange={(event) => updateFilter('to', event.target.value)} />
-        </label>
-        <label>
-          สถานะ
+        </FilterField>
+        <FilterField label="สถานะ">
           <select value={filters.status} onChange={(event) => updateFilter('status', event.target.value)}>
             <option value="">ทุกสถานะ</option>
             <option value="SUBMITTED">รออนุมัติ</option>
@@ -649,7 +646,7 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
             <option value="CANCELLED">ยกเลิกแล้ว</option>
             <option value="AUTO_REJECTED">โควตาไม่พอ</option>
           </select>
-        </label>
+        </FilterField>
         <Button type="submit" disabled={requestsQuery.isPending}>
           <Icon name="search" />
           ค้นหา
