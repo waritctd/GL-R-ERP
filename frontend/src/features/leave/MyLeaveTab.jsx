@@ -4,12 +4,10 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
-import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
 import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable, expandedRowRegionId } from '../../components/common/DataTable.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
-import { FieldList } from '../../components/common/FieldList.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { QuotaBar } from '../../components/common/QuotaBar.jsx';
@@ -170,10 +168,12 @@ function OwnRequestsSection({
     return (
       <>
         <div className="flex min-w-0 items-start justify-between gap-3">
-          <strong className="min-w-0 truncate text-sm font-extrabold text-text">
+          {/* Wraps, never truncates — see ReviewQueueTab.jsx's own comment: `truncate` cut the
+              Buddhist-era year off the end date at 390px, which reads as a complete date. */}
+          <strong className="min-w-0 text-sm font-extrabold text-text">
             {formatDateRange(request.startDate, request.endDate)}
           </strong>
-          <span className="flex items-center gap-1.5">
+          <span className="flex shrink-0 items-center gap-1.5">
             <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
             <Button
               type="button"
@@ -252,6 +252,17 @@ function OwnRequestsSection({
       rows={rows}
       getRowKey={leaveRequestRowKey}
       gridClassName={LEAVE_REQUEST_TABLE_GRID}
+      // DataTable brings its OWN `<Panel flush>` card, and this table is additionally wrapped in a
+      // titled `<Panel flush>` below, so the two 1px borders sat adjacent: a card inside a card.
+      // Every other DataTable caller in the app renders it bare; these two leave tabs keep the
+      // outer panel only for its section title, so the inner card's chrome is what has to go, not
+      // the heading.
+      //
+      // Scroll is deliberately NOT set here. The 980px grid floor inside an `overflow-hidden`
+      // flush Panel used to clip 229px of this table -- measured at 834px, unreachable by any
+      // gesture -- but #650 fixed that in Panel's own default and removed the three call-site
+      // patches that had each worked around it. See ReviewQueueTab.jsx's comment at the same spot.
+      panelClassName="rounded-none border-0"
       loading={loading}
       error={hasError}
       onRetry={() => requestsQuery.refetch()}
@@ -292,6 +303,32 @@ function OwnRequestsSection({
 const daysNumberFormat = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 });
 function formatDaysNumber(value) {
   return daysNumberFormat.format(Number(value) || 0);
+}
+
+/**
+ * The "ดูโควตา" select's own option text -- the type name, plus its remaining days for the three
+ * everyday types.
+ *
+ * This is what makes the removal of the old "โควตาการลาทั้งหมด" disclosure a simplification rather
+ * than a loss (owner ruling, 2026-08-11: "the manual selection already shows each type's remaining
+ * quota, so the collapsible is redundant"). It was only redundant once the select actually said so:
+ * before this it listed bare type names, and comparing two types meant opening the disclosure or
+ * cycling the select and re-reading the card each time. One open dropdown now answers "how much
+ * do I have left, of each kind" in a single glance, and the card below stays the one detailed view.
+ *
+ * Rare types (MATERNITY/MILITARY/ORDINATION) deliberately get NO figure -- the same
+ * everyday/rare split the balance card, the aggregate stat and the composer all apply, for the
+ * same reason: their annualQuotaDays is either a sentinel (MILITARY's 366, V120) or a
+ * per-occasion entitlement, so a "เหลือ N วัน" derived from it would be a number that means
+ * nothing. See rareLeaveConditionText's comment above.
+ *
+ * Also falls back to the bare name while balances are still loading -- `balance` is simply absent
+ * then, which is the same branch as a rare type.
+ */
+function balanceOptionLabel(leaveType, balance) {
+  const name = leaveType.nameTh || leaveType.nameEn;
+  if (!balance || !EVERYDAY_LEAVE_TYPE_CODES.has(leaveType.code)) return name;
+  return `${name} · เหลือ ${formatDays(balance.remainingDays)}`;
 }
 
 /**
@@ -588,23 +625,35 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
           "over-populated the page with cards" -- the fix is not fewer, smaller cards (that's
           "the same mistake wearing a coat"), it's exactly ONE balance at a time, picked via the
           plain "ดูโควตา" select in this panel's header (Phase A2: no longer tied to a submission
-          form's own type field, since that form moved to /leave/new). Everything else sits behind
-          one disclosure, rendered as compact FieldList rows (a `<dl>`), never a second grid of
-          cards. */}
+          form's own type field, since that form moved to /leave/new).
+
+          Round 3 (owner ruling, 2026-08-11) removed what round 2 left behind: everything else used
+          to sit under a "โควตาการลาทั้งหมด" CollapsibleSection here, repeating every balance as
+          FieldList rows. That disclosure is now gone -- it restated, in a second format, what the
+          select above it can say directly (see balanceOptionLabel), so the panel carried the same
+          numbers twice and a chevron nobody needed to press. `git show <this commit>^` has it. */}
       <Panel
         title="โควตาวันลา"
         actions={(
           // `whitespace-nowrap`: the Panel header is a flex row and this label was breaking
           // mid-word into "ดู" / "โควตา" stacked above each other next to the select.
-          <label className="flex items-center gap-2 whitespace-nowrap text-sm font-semibold text-text-muted">
+          <label className="flex min-w-0 items-center gap-2 whitespace-nowrap text-sm font-semibold text-text-muted">
             ดูโควตา
+            {/* Fixed width, not content width. The option labels grow by "· เหลือ N วัน" the
+                moment balancesQuery lands, and a content-sized select would jump wider on that
+                first paint -- a layout shift in the panel header, on data load, for no reason.
+                Sized for the longest label ("ลาป่วย · เหลือ 30 วัน"); `min-w-0` on the label lets
+                it shrink inside the flex header rather than push the title at 390px. */}
             <select
               aria-label="เลือกประเภทการลาที่ต้องการดูโควตา"
+              className="w-[13.5rem] min-w-0"
               value={previewTypeCode}
               onChange={(event) => setPreviewTypeCode(event.target.value)}
             >
               {leaveTypes.map((type) => (
-                <option key={type.code} value={type.code}>{type.nameTh || type.nameEn}</option>
+                <option key={type.code} value={type.code}>
+                  {balanceOptionLabel(type, balances.find((balance) => balance.leaveTypeCode === type.code))}
+                </option>
               ))}
             </select>
           </label>
@@ -616,29 +665,11 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
           leaveType={selectedLeaveType}
           isEveryday={EVERYDAY_LEAVE_TYPE_CODES.has(previewTypeCode)}
         />
-        <div className="mt-4">
-          <CollapsibleSection title="โควตาการลาทั้งหมด" subtitle="ทุกประเภท รวมเงื่อนไขพิเศษ" defaultOpen={false}>
-            {balances.length === 0 ? (
-              <EmptyState icon="calendar" title="ยังไม่มีข้อมูลโควตา" />
-            ) : (
-              <FieldList>
-                {balances.map((balance) => {
-                  const leaveType = leaveTypes.find((type) => type.code === balance.leaveTypeCode);
-                  const isEveryday = EVERYDAY_LEAVE_TYPE_CODES.has(balance.leaveTypeCode);
-                  return (
-                    <div key={balance.leaveTypeCode}>
-                      <dt>{balance.leaveTypeNameTh || balance.leaveTypeCode}</dt>
-                      {/* Rare rows deliberately never read balance.annualQuotaDays/remainingDays --
-                          see rareBalanceSummary's comment above (MILITARY's 366 sentinel). */}
-                      <dd>{isEveryday ? everydayBalanceSummary(balance) : rareBalanceSummary(balance, leaveType)}</dd>
-                    </div>
-                  );
-                })}
-              </FieldList>
-            )}
-          </CollapsibleSection>
-        </div>
-        <p className="mt-3 text-sm text-text-muted">
+        {/* Statutory floor, not GL&R's own quota -- a footnote to the figures above, so it is
+            separated by a hairline and kept to one paragraph. It stays here rather than moving to
+            LeavePolicyBar: that bar points at the COMPANY's §5 announcement, which is a different
+            document saying different numbers. */}
+        <p className="mt-4 border-t border-border-subtle pt-3 text-sm text-text-muted">
           อ้างอิง พ.ร.บ. คุ้มครองแรงงาน พ.ศ. 2541: ลากิจธุระจำเป็นไม่น้อยกว่า 3 วันต่อปี,
           ลาป่วยได้รับค่าจ้างไม่เกิน 30 วันทำงานต่อปี และลาพักร้อนไม่น้อยกว่า 6 วันต่อปีหลังทำงานครบ 1 ปี.
           <a href="https://www.mol.go.th/employee/สิทธิตามกฎหมายแรงงาน" target="_blank" rel="noreferrer"> กระทรวงแรงงาน</a>

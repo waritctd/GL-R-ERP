@@ -98,6 +98,11 @@ function TeamRequestsSection({
   const columns = useMemo(() => buildLeaveRequestColumns({
     expandedId,
     onToggleExpand,
+    // Approver-side surface: drop the "waiting on ผู้จัดการ (คุณนา)" note where it names the
+    // viewer. On a division manager's own team history that is most pending rows; for hr/ceo,
+    // whose rows route to other people's managers, the note still renders and still means
+    // something. See PendingApproverNote's own comment.
+    viewer: user,
     renderActions: (request) => {
       const isOwn = Number(request.employeeId) === Number(user.employeeId);
       const canCancel = isOwn && request.status === 'SUBMITTED';
@@ -124,7 +129,10 @@ function TeamRequestsSection({
         </span>
       );
     },
-  }), [expandedId, onToggleExpand, onCancel, user.employeeId, navigate]);
+    // `user`, not `user.employeeId`: the whole object is now read (as `viewer`, which also
+    // inspects `role`), so narrowing the dep to one field would keep a stale viewer after a
+    // role change.
+  }), [expandedId, onToggleExpand, onCancel, user, navigate]);
 
   function mobileCard(request) {
     const status = statusInfo(request.status);
@@ -135,10 +143,12 @@ function TeamRequestsSection({
     return (
       <>
         <div className="flex min-w-0 items-start justify-between gap-3">
-          <strong className="min-w-0 truncate text-sm font-extrabold text-text">
+          {/* Wraps, never truncates — see ReviewQueueTab.jsx's own comment: `truncate` cut the
+              Buddhist-era year off the end date at 390px, which reads as a complete date. */}
+          <strong className="min-w-0 text-sm font-extrabold text-text">
             {formatDateRange(request.startDate, request.endDate)}
           </strong>
-          <span className="flex items-center gap-1.5">
+          <span className="flex shrink-0 items-center gap-1.5">
             <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
             <Button
               type="button"
@@ -153,7 +163,7 @@ function TeamRequestsSection({
             </Button>
           </span>
         </div>
-        <PendingApproverNote request={request} />
+        <PendingApproverNote request={request} viewer={user} />
         <span className="min-w-0 truncate text-xs text-text-muted">
           {request.employeeName || request.employeeCode} · {request.leaveTypeNameTh || request.leaveTypeCode} · {formatDays(request.totalDays)}
         </span>
@@ -211,6 +221,10 @@ function TeamRequestsSection({
       rows={rows}
       getRowKey={leaveRequestRowKey}
       gridClassName={LEAVE_REQUEST_TABLE_GRID}
+      // Drops the inner card's chrome, since this table is wrapped in a titled `<Panel flush>`
+      // below. No scroll override -- #650 fixed that in Panel's default. See MyLeaveTab.jsx's
+      // own comment on this prop.
+      panelClassName="rounded-none border-0"
       loading={loading}
       error={hasError}
       onRetry={() => requestsQuery.refetch()}
