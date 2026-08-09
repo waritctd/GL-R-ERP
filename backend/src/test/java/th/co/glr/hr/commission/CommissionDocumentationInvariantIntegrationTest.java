@@ -17,6 +17,7 @@ import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -93,7 +94,7 @@ class CommissionDocumentationInvariantIntegrationTest extends AbstractPostgresIn
             org.mockito.Mockito.mock(AuditService.class),
             org.mockito.Mockito.mock(NotificationService.class),
             org.mockito.Mockito.mock(TicketRepository.class),
-            org.mockito.Mockito.mock(AttachmentRepository.class));
+            org.mockito.Mockito.mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
         managerEmployeeId = createEmployee("ผู้จัดการฝ่ายขาย เอกสาร", "sm-docinvariant@glr.co.th", "SA", "แผนกขาย");
         managerActor = actor(managerEmployeeId, "sales_manager");
         ceoEmployeeId = createEmployee("ผู้บริหาร เอกสาร", "ceo-docinvariant@glr.co.th", "MD", "ผู้บริหาร");

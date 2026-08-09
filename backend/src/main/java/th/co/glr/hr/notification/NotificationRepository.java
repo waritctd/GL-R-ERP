@@ -158,8 +158,17 @@ public class NotificationRepository {
     }
 
     /**
-     * Notify all employees whose division maps to the given sales role.
-     * Division mapping mirrors DivisionAccessPolicy — extended for sales module roles.
+     * Notify all employees whose division maps to the given sales role ({@code import}/{@code
+     * sales}), or -- for {@code ceo} -- who match {@link CeoApproverRule#SQL_PREDICATE} (division
+     * OR position, mirroring {@code DivisionAccessPolicy#roleFor} exactly rather than the plain
+     * division mapping the other two roles use).
+     *
+     * <p>The {@code hr.division} join is a {@code LEFT JOIN} (needed so a {@code ceo} match via
+     * position alone, with no division, is not silently dropped -- see {@link CeoApproverRule}).
+     * This does not change {@code import}/{@code sales}: both predicates test {@code
+     * d.source_code}, which is SQL {@code NULL} (never true) when {@code d} fails to match, exactly
+     * as an absent INNER JOIN row would have excluded that employee -- confirmed by inspection, not
+     * just assumed.
      */
     public void notifyByRole(String role, long ticketId, String type, String message) {
         notifyByRoleInternal(role, type, message, "/tickets/" + ticketId);
@@ -172,7 +181,7 @@ public class NotificationRepository {
     private void notifyByRoleInternal(String role, String type, String message, String link) {
         String divisionFilter = switch (role) {
             case "import" -> "d.source_code ILIKE 'PCIM%'";
-            case "ceo"    -> "d.source_code ILIKE 'MD%' OR d.source_code ILIKE 'MN%'";
+            case "ceo"    -> CeoApproverRule.SQL_PREDICATE;
             case "sales"  -> "d.source_code ILIKE 'SA%'";
             default -> null;
         };
@@ -182,7 +191,8 @@ public class NotificationRepository {
             INSERT INTO hr.notification (employee_id, type, title, message, link)
             SELECT e.employee_id, :type, :title, :message, :link
               FROM hr.employee e
-              JOIN hr.division d ON d.division_id = e.division_id
+              LEFT JOIN hr.division d ON d.division_id = e.division_id
+              LEFT JOIN hr.position p ON p.position_id = e.position_id
              WHERE (%s) AND e.is_active = TRUE
             """.formatted(divisionFilter),
             new MapSqlParameterSource()

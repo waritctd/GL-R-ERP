@@ -14,6 +14,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 
 /**
@@ -42,18 +43,21 @@ public class SpecialMoneyService {
     private final AuditService auditService;
     private final NotificationService notificationService;
     private final AppProperties appProperties;
+    private final CeoApproverRepository ceoApprovers;
 
     public SpecialMoneyService(
             SpecialMoneyRepository repository,
             SpecialMoneyPolicyEvaluator evaluator,
             AuditService auditService,
             NotificationService notificationService,
-            AppProperties appProperties) {
+            AppProperties appProperties,
+            CeoApproverRepository ceoApprovers) {
         this.repository = repository;
         this.evaluator = evaluator;
         this.auditService = auditService;
         this.notificationService = notificationService;
         this.appProperties = appProperties;
+        this.ceoApprovers = ceoApprovers;
     }
 
     public List<SpecialMoneyRequestDto> list(
@@ -343,7 +347,7 @@ public class SpecialMoneyService {
      * Notification coverage gap B: cancelling a request used to notify nobody, so a withdrawn item
      * sat in the CEO's queue forever. {@code cancel} is reachable ONLY from {@code SUBMITTED} (see
      * the status guard above) and welfare has exactly one reviewing stage -- the CEO (see the class
-     * Javadoc) -- so the pending party is always {@code repository.findCeoApproverEmployeeIds()},
+     * Javadoc) -- so the pending party is always {@code ceoApprovers.findEmployeeIds()},
      * the same resolution {@link #notifySubmitted} uses; there is no manager-stage/already-decided
      * branching to reason about here, unlike leave/overtime.
      *
@@ -376,7 +380,7 @@ public class SpecialMoneyService {
             "/employee-requests",
             true
         );
-        for (Long ceoEmployeeId : repository.findCeoApproverEmployeeIds()) {
+        for (Long ceoEmployeeId : ceoApprovers.findEmployeeIds()) {
             if (ceoEmployeeId == actorEmployeeId) {
                 continue;
             }
@@ -566,7 +570,7 @@ public class SpecialMoneyService {
         String title = "ส่งคำขอเงินสวัสดิการแล้ว";
         String message = "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ถูกส่งให้ CEO พิจารณาแล้ว";
         notificationService.notify(request.employeeId(), "SPECIAL_MONEY_SUBMITTED", title, message, "/employee-requests", true);
-        for (Long ceoEmployeeId : repository.findCeoApproverEmployeeIds()) {
+        for (Long ceoEmployeeId : ceoApprovers.findEmployeeIds()) {
             notificationService.notify(
                 ceoEmployeeId,
                 "SPECIAL_MONEY_PENDING_CEO",

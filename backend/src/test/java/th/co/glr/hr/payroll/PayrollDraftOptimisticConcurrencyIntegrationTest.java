@@ -39,6 +39,7 @@ import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.leave.LeaveRepository;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollRepository.DraftRowVersion;
 import th.co.glr.hr.payroll.obligation.DeductionObligationRepository;
@@ -82,7 +83,7 @@ class PayrollDraftOptimisticConcurrencyIntegrationTest extends AbstractPostgresI
             mock(AuditService.class),
             mock(NotificationService.class),
             mock(TicketRepository.class),
-            mock(AttachmentRepository.class));
+            mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
         payrollService = new PayrollService(
             payrollRepository,
             new PayrollCalculator(),
@@ -428,7 +429,7 @@ class PayrollDraftOptimisticConcurrencyIntegrationTest extends AbstractPostgresI
             mock(AuditService.class),
             mock(NotificationService.class),
             mock(TicketRepository.class),
-            mock(AttachmentRepository.class));
+            mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
         return new PayrollService(
             repository,
             new PayrollCalculator(),

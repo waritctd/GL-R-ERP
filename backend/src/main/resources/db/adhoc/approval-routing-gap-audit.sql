@@ -106,7 +106,9 @@ SELECT e.employee_id, e.employee_code,
   LEFT JOIN hr.division d ON d.division_id = e.division_id
  WHERE e.is_active
    AND regexp_replace(COALESCE(p.name_th, ''), '\s+', '', 'g') LIKE '%ผู้จัดการ%'
-   AND (d.source_code ILIKE 'MD%' OR d.source_code ILIKE 'MN%'
+   -- Narrowed 2026-08-10 to match CeoApproverRule.SQL_PREDICATE exactly (division code EXACTLY
+   -- 'md', not the old 'MD%'/'MN%' prefix match) -- see notification/CeoApproverRule.java.
+   AND (LOWER(BTRIM(d.source_code)) = 'md'
         OR regexp_replace(COALESCE(p.name_th, ''), '\s+', '', 'g') LIKE '%กรรมการ%')
  ORDER BY e.employee_code;
 

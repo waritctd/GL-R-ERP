@@ -22,6 +22,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.employee.ManagerApproverRepository;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 
 @Service
@@ -65,6 +66,7 @@ public class OvertimeService {
     private final AttendanceDailyService attendanceDailyService;
     private final HolidayCalendar holidayCalendar;
     private final WorkScheduleResolver scheduleResolver;
+    private final CeoApproverRepository ceoApprovers;
 
     public OvertimeService(
             OvertimeRepository overtimeRepository,
@@ -74,7 +76,8 @@ public class OvertimeService {
             AppProperties appProperties,
             AttendanceDailyService attendanceDailyService,
             HolidayCalendar holidayCalendar,
-            WorkScheduleResolver scheduleResolver) {
+            WorkScheduleResolver scheduleResolver,
+            CeoApproverRepository ceoApprovers) {
         this.overtimeRepository = overtimeRepository;
         this.managerApproverRepository = managerApproverRepository;
         this.auditService = auditService;
@@ -83,6 +86,7 @@ public class OvertimeService {
         this.attendanceDailyService = attendanceDailyService;
         this.holidayCalendar = holidayCalendar;
         this.scheduleResolver = scheduleResolver;
+        this.ceoApprovers = ceoApprovers;
     }
 
     public List<OvertimeRequestDto> list(
@@ -449,7 +453,7 @@ public class OvertimeService {
      * just wrote), plus whoever the request was actually pending with, resolved from the SAME source
      * {@link #notifySubmitted}/{@link #notifyManagerApproved} use for each stage -- see {@link
      * #notifySubmitted}'s Javadoc for why this must be {@code ManagerApproverRepository}/{@code
-     * findCeoApproverEmployeeIds}, never {@code reports_to_employee_id}.
+     * CeoApproverRepository}, never {@code reports_to_employee_id}.
      *
      * <p>{@code before.status()} (the PRE-cancel status) decides which stage was pending:
      * {@code SUBMITTED} -> the manager(s) if a manager stage exists, else the CEO(s) (mirrors {@link
@@ -463,9 +467,11 @@ public class OvertimeService {
      * that branch is simply skipped).
      *
      * <p><b>S-2/S-7 (review, second pass):</b> the {@code APPROVED} branch used to notify {@code
-     * before.managerApprovedBy()} and then separately loop the WHOLE CEO approver set ({@code
-     * findCeoApproverEmployeeIds()} -- every active employee in division {@code MD%}/{@code MN%}),
-     * with no de-duplication between the two. A กรรมการผู้จัดการ (position contains ผู้จัดการ,
+     * before.managerApprovedBy()} and then separately loop the WHOLE CEO approver set (at the time,
+     * {@code findCeoApproverEmployeeIds()} -- every active employee in division {@code MD%}/{@code
+     * MN%}; that lookup is now {@code CeoApproverRepository#findEmployeeIds()}, narrowed to match
+     * the {@code ceo} role exactly -- see {@code CeoApproverRule}), with no de-duplication between
+     * the two. A กรรมการผู้จัดการ (position contains ผู้จัดการ,
      * division {@code MD}) is a manager AND a member of that broadcast CEO set, so approving as the
      * manager stage and then being looped again as "a CEO" produced two notification rows and two
      * emails for one cancellation. S-7 replaces the broadcast with the single approving CEO, read
@@ -510,7 +516,7 @@ public class OvertimeService {
             List<Long> managerApprovers =
                 managerApproverRepository.findManagerApproverEmployeeIds(before.employeeId());
             if (managerApprovers.isEmpty()) {
-                for (Long ceoEmployeeId : overtimeRepository.findCeoApproverEmployeeIds()) {
+                for (Long ceoEmployeeId : ceoApprovers.findEmployeeIds()) {
                     if (ceoEmployeeId == actorEmployeeId) {
                         continue;
                     }
@@ -539,7 +545,7 @@ public class OvertimeService {
                 }
             }
         } else if ("MANAGER_APPROVED".equals(before.status())) {
-            for (Long ceoEmployeeId : overtimeRepository.findCeoApproverEmployeeIds()) {
+            for (Long ceoEmployeeId : ceoApprovers.findEmployeeIds()) {
                 if (ceoEmployeeId == actorEmployeeId) {
                     continue;
                 }
@@ -1097,7 +1103,7 @@ public class OvertimeService {
         notificationService.notify(request.employeeId(), "OVERTIME_SUBMITTED", title, message, "/overtime", true);
 
         if (goesToCeo) {
-            for (Long ceoEmployeeId : overtimeRepository.findCeoApproverEmployeeIds()) {
+            for (Long ceoEmployeeId : ceoApprovers.findEmployeeIds()) {
                 notificationService.notify(
                     ceoEmployeeId,
                     "OVERTIME_PENDING_CEO",
@@ -1130,7 +1136,7 @@ public class OvertimeService {
             "/overtime",
             true
         );
-        for (Long ceoEmployeeId : overtimeRepository.findCeoApproverEmployeeIds()) {
+        for (Long ceoEmployeeId : ceoApprovers.findEmployeeIds()) {
             notificationService.notify(
                 ceoEmployeeId,
                 "OVERTIME_PENDING_CEO",
