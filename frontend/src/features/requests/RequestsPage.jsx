@@ -48,7 +48,13 @@ export function RequestsPage({ user, currentEmployee, showToast }) {
 
   return (
     <PageStack>
-      <PageHeader title="คำขอ" subtitle="ล่วงเวลา และสวัสดิการ/เงินพิเศษ ในที่เดียว" />
+      {/* Renamed from "คำขอ" (owner, 2026-08-10). Both tabs are claims for extra pay — OT hours
+          and welfare/special money — so the bare "คำขอ" said nothing that distinguished this page
+          from /leave or the ขอแก้ไขเวลา flow, which are also คำขอ. The subtitle no longer has to
+          carry the whole meaning, so it drops "ในที่เดียว": with the correction tab gone to
+          /attendance (#643) there are only two tabs left, and "in one place" was describing a
+          three-tab page that no longer exists. */}
+      <PageHeader title="คำขอเงินพิเศษ" subtitle="ค่าล่วงเวลา และสวัสดิการ/เงินพิเศษ" />
 
       <div role="tablist" aria-label="ประเภทคำขอ" className="flex gap-2 border-b border-border">
         {TABS.map((tab) => (

@@ -75,7 +75,14 @@ export function TypePicker({ groups, value, onSelect, className }) {
               // `min-h-10` + `px-3` match the select's 40px height / 12px horizontal padding
               // rhythm (styles.css: `height: 40px; padding: 0 12px`) for the same reason as the
               // border/radius/background above -- one visual family, same disclosure behavior.
-              className="flex min-h-10 w-full items-center justify-between gap-2 bg-surface px-3 py-2.5 text-left text-sm font-bold text-text hover:bg-surface-subtle"
+              // `appearance-none border-0`: this project ships NO Tailwind preflight, so a bare
+              // <button> keeps the UA's own button chrome. Measured here before the fix:
+              // `border: 2px outset rgb(0, 0, 0)` — an actual black bevel around every group
+              // header, which is what made this control read as foreign to every other surface.
+              // Nothing in the class list below sets a border, so there was nothing to override
+              // it. Same defect and same fix Tabs.jsx documents for its own tablist buttons; the
+              // rounded/1.5px border of the group *container* above is the intended edge.
+              className="flex min-h-10 w-full appearance-none items-center justify-between gap-2 border-0 bg-surface px-3 py-2.5 text-left text-sm font-bold text-text hover:bg-surface-subtle"
               aria-expanded={isOpen}
               aria-controls={panelId}
               onClick={() => toggleGroup(group.key)}
