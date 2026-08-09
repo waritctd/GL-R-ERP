@@ -1,4 +1,5 @@
 import {
+  buildDemoAttendanceCorrectionRequests,
   buildDemoLeaveRequests, buildDemoOvertimeRequests, buildDemoSpecialMoneyRequests,
   buildDemoProfileRequests, buildDemoNotifications,
 } from './demoHr.js';
@@ -617,6 +618,9 @@ export function createDemoDatabase() {
   const leaveRequests = buildDemoLeaveRequests(employees);
   const overtimeRequests = buildDemoOvertimeRequests(employees);
   const specialMoneyRequests = buildDemoSpecialMoneyRequests(employees);
+  // Previously seeded `|| []` in mockApi.js, i.e. never — every role saw the empty state,
+  // so nothing about /attendance's correction section could be judged. See demoHr.js.
+  const attendanceCorrectionRequests = buildDemoAttendanceCorrectionRequests(employees);
 
   // ════════════════════════════════════════════════════════════════════════════════
   // Attendance: Daily punch records (for multiple employees over several days)
@@ -775,7 +779,7 @@ export function createDemoDatabase() {
 
   return {
     employees, users, profileRequests, tickets, notifications,
-    leaveRequests, overtimeRequests, specialMoneyRequests, attendanceRecords,
+    leaveRequests, overtimeRequests, specialMoneyRequests, attendanceCorrectionRequests, attendanceRecords,
     projects, customers, products,
     // Sales-chain seed rows for mockApi.js's own module-level stores (mockPricingRequests
     // etc. aren't part of `db` — see mockApi.js's wiring near those declarations).

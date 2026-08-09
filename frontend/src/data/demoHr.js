@@ -502,3 +502,124 @@ export function buildDemoNotifications() {
     { id: 8, userId: 12, ticketId: 16, ticketCode: 'PR-2026-0016', type: 'PRICING_REQUEST_SUBMITTED', message: 'คำขอราคาของคุณถูกส่งเข้าคิวฝ่ายนำเข้าแล้ว', read: false, createdAt: '2026-07-28T10:00:00Z' },
   ];
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Attendance-correction requests — mirrors AttendanceCorrectionService and the
+// mock's own create/approve/reject/cancel handlers (mockApi.js), so a seeded row
+// carries exactly the fields those handlers write.
+//
+// WHY THIS BUILDER EXISTS. `db.attendanceCorrectionRequests` was seeded `|| []`
+// — an empty array, for every persona. So /attendance's correction section
+// rendered its empty state for HR, CEO, the division manager and the employee
+// alike, and nothing about that surface could be judged: not the table, not the
+// status badges, not the review affordances, not how the columns behave when a
+// reason is long. A UI sweep over it was measuring an empty state and reporting
+// "clean". This is the state matrix the enums actually allow.
+//
+// The full grid is AttendanceCorrectionStatus (SUBMITTED / APPROVED / REJECTED /
+// CANCELLED) x AttendanceCorrectionType (CHECK_IN / CHECK_OUT / BOTH), read from
+// the Java enums, not invented. Rows are spread across employees so each persona
+// has something to look at:
+//   employees[8]  the plain employee quick-login  — his own history, all 4 statuses
+//   employees[5]  the WHL division manager        — a report's row plus one of his own
+//   employees[20] HR                              — sees everything; no rows of her own
+// The CEO reviews rather than files, so nothing is assigned to employees[0] as a
+// requester; what the CEO needs is SUBMITTED rows from other people, which the
+// employee's and the manager's rows supply.
+//
+// `canReview` is NOT set here: buildAttendanceCorrectionRecord() in mockApi.js
+// derives it per-caller from the session (CEO + status SUBMITTED), which is the
+// same shape the backend uses. Baking it into the seed would make every viewer
+// see the same buttons and quietly defeat the gate.
+// ─────────────────────────────────────────────────────────────────────────────
+export function buildDemoAttendanceCorrectionRequests(employees) {
+  const at = (offsetDays, time = '09:00') => {
+    const d = new Date('2026-08-10T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + offsetDays);
+    return `${d.toISOString().slice(0, 10)}T${time}:00+07:00`;
+  };
+  const day = (offsetDays) => {
+    const d = new Date('2026-08-10T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + offsetDays);
+    return d.toISOString().slice(0, 10);
+  };
+  const row = (overrides) => ({
+    requestedCheckIn: null,
+    requestedCheckOut: null,
+    reviewedById: null,
+    reviewedAt: null,
+    reviewerNote: null,
+    cancelledAt: null,
+    createdAt: at(-20),
+    updatedAt: at(-20),
+    ...overrides,
+  });
+
+  const employee = employees[8];
+  const manager = employees[5];
+  const ceo = employees[0];
+
+  return [
+    // ── SUBMITTED (the CEO's actual review queue) ──────────────────────────
+    row({
+      id: 1, employeeId: employee.id, workDate: day(-1), correctionType: 'CHECK_IN',
+      requestedCheckIn: at(-1, '08:25'),
+      reason: 'เครื่องสแกนนิ้วที่ประตูคลังไม่อ่านลายนิ้วมือตอนเช้า แจ้ง รปภ. ไว้แล้ว',
+      status: 'SUBMITTED', requestedById: employee.id, requestedAt: at(-1, '17:40'),
+    }),
+    row({
+      id: 2, employeeId: manager.id, workDate: day(-2), correctionType: 'CHECK_OUT',
+      requestedCheckOut: at(-2, '19:15'),
+      reason: 'ออกงานหลังปิดคลัง ลืมสแกนออก',
+      status: 'SUBMITTED', requestedById: manager.id, requestedAt: at(-2, '19:30'),
+    }),
+    // BOTH + a deliberately long reason: the longest realistic free-text this
+    // table has to lay out, and the row that shows whether the เหตุผล column
+    // wraps or clips at tablet.
+    row({
+      id: 3, employeeId: employee.id, workDate: day(-3), correctionType: 'BOTH',
+      requestedCheckIn: at(-3, '08:30'), requestedCheckOut: at(-3, '17:30'),
+      reason: 'ไปส่งของที่โรงงานลูกค้าตั้งแต่เช้าและกลับเข้าบริษัทหลังเวลาปิดทำการ '
+        + 'จึงไม่ได้สแกนทั้งขาเข้าและขาออก มีใบส่งของและลายเซ็นผู้รับเป็นหลักฐานแนบกับฝ่ายบุคคลแล้ว',
+      status: 'SUBMITTED', requestedById: employee.id, requestedAt: at(-3, '18:05'),
+    }),
+
+    // ── APPROVED ───────────────────────────────────────────────────────────
+    row({
+      id: 4, employeeId: employee.id, workDate: day(-9), correctionType: 'CHECK_IN',
+      requestedCheckIn: at(-9, '08:15'),
+      reason: 'สแกนนิ้วไม่ติดตอนเข้างาน',
+      status: 'APPROVED', requestedById: employee.id, requestedAt: at(-9, '16:00'),
+      reviewedById: ceo.id, reviewedAt: at(-8, '09:20'), reviewerNote: 'ตรวจสอบกับกล้องวงจรปิดแล้ว',
+      updatedAt: at(-8, '09:20'),
+    }),
+    row({
+      id: 5, employeeId: manager.id, workDate: day(-12), correctionType: 'BOTH',
+      requestedCheckIn: at(-12, '07:55'), requestedCheckOut: at(-12, '18:40'),
+      reason: 'ไฟดับทั้งอาคาร เครื่องสแกนไม่ทำงานทั้งวัน',
+      status: 'APPROVED', requestedById: manager.id, requestedAt: at(-12, '19:00'),
+      reviewedById: ceo.id, reviewedAt: at(-11, '10:05'), reviewerNote: null,
+      updatedAt: at(-11, '10:05'),
+    }),
+
+    // ── REJECTED (reviewerNote is required on this path) ───────────────────
+    row({
+      id: 6, employeeId: employee.id, workDate: day(-16), correctionType: 'CHECK_OUT',
+      requestedCheckOut: at(-16, '20:00'),
+      reason: 'ลืมสแกนออก',
+      status: 'REJECTED', requestedById: employee.id, requestedAt: at(-16, '20:10'),
+      reviewedById: ceo.id, reviewedAt: at(-15, '11:00'),
+      reviewerNote: 'เวลาที่ขอไม่ตรงกับบันทึกของหัวหน้างาน กรุณายื่นใหม่พร้อมระบุเวลาที่ถูกต้อง',
+      updatedAt: at(-15, '11:00'),
+    }),
+
+    // ── CANCELLED (withdrawn by the requester, never reviewed) ─────────────
+    row({
+      id: 7, employeeId: employee.id, workDate: day(-22), correctionType: 'CHECK_IN',
+      requestedCheckIn: at(-22, '08:40'),
+      reason: 'เข้าใจผิดเรื่องกะการทำงาน',
+      status: 'CANCELLED', requestedById: employee.id, requestedAt: at(-22, '12:00'),
+      cancelledAt: at(-21, '08:10'), updatedAt: at(-21, '08:10'),
+    }),
+  ];
+}

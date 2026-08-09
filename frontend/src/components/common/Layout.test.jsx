@@ -155,3 +155,37 @@ describe('FilterField', () => {
     expect(screen.getByRole('button', { name: 'วันถัดไป' })).toBeTruthy();
   });
 });
+
+// A flush Panel is what DataTable renders every table into, and those tables carry a
+// `nav-drawer:min-w-[Npx]` floor. A minimum wider than the card, inside a box that clips both axes
+// and scrolls neither, does not overflow — it disappears, with no scrollbar and no page overflow to
+// hint anything is missing. Measured on main at 768px: /leave lost 280px, /employee-requests 238px,
+// /profile 198px, /attendance 158px, all unreachable by any gesture, and the columns that vanish
+// are the rightmost — where these tables put status and row actions.
+//
+// jsdom cannot see any of that (no layout engine), so this pins the contract that produces it.
+describe('Panel flush overflow', () => {
+  it('scrolls horizontally instead of clipping, while still clipping vertically for the card radius', () => {
+    render(<Panel flush data-testid="p"><div>ตาราง</div></Panel>);
+    const panel = screen.getByTestId('p');
+    const classes = panel.className.split(/\s+/);
+
+    // The whole point: a table wider than the card must be reachable.
+    expect(classes).toContain('overflow-x-auto');
+    // ...and `overflow-hidden` must NOT come back. It is the exact regression this replaces, and
+    // it reads as harmless.
+    expect(classes).not.toContain('overflow-hidden');
+    // Vertical stays clipped — that is what makes the corners follow the radius, and keeping it
+    // means this change is strictly a widening: nothing visible before becomes clipped now.
+    expect(classes).toContain('overflow-y-hidden');
+  });
+
+  it('leaves a non-flush Panel padded and unclipped', () => {
+    render(<Panel data-testid="p"><div>เนื้อหา</div></Panel>);
+    const classes = screen.getByTestId('p').className.split(/\s+/);
+
+    expect(classes).toContain('p-5');
+    expect(classes).not.toContain('overflow-x-auto');
+    expect(classes).not.toContain('overflow-y-hidden');
+  });
+});
