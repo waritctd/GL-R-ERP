@@ -35,7 +35,24 @@ const LEAVE_PURPOSE_LABEL_BY_CODE = new Map(LEAVE_PURPOSE_OPTIONS.map((option) =
 // note, actions. Reflows to cards below 721px via each tab's own `mobileCard` -- this
 // grid only governs the >=721px table layout, same convention as the pre-A1
 // LEAVE_TABLE_GRID it replaces.
-export const LEAVE_REQUEST_TABLE_GRID = 'grid-cols-[minmax(0,2.25rem)_minmax(0,1.3fr)_minmax(0,1.05fr)_minmax(0,1.5fr)_minmax(0,0.95fr)_minmax(0,1.3fr)_minmax(0,1fr)] nav-drawer:min-w-[980px] reflow-cards';
+// The สถานะ column takes a MIN-WIDTH FLOOR (6.75rem), not `minmax(0,…)` like its siblings.
+//
+// Its content is a StatusBadge pill, and a pill cannot shrink: the badge carries `max-width: 100%`
+// (styles.css `.data-row > td > .status-badge`) so it stops at the track edge, but its TEXT still
+// needs min-content, so the cell clips instead of reflowing. At 0.95fr the longest leave status,
+// "โควตาไม่พอ" (AUTO_REJECTED), needed 82px in a 74px track and lost its last character.
+//
+// Found only at 1041px. `nav-drawer`/`tablet` are max-width variants capped at 1040 and `lg:` goes
+// live at 1041, so 1041 is the FIRST width where the desktop column widths apply — and the clip is
+// 8px, which reads as a complete row. A sweep of 1440/900/390 steps straight over it: 900 and 390
+// are below the boundary, 1440 is wide enough to fit. Credit to the parallel self-service session
+// for flagging the band; see [[tablet-lg-breakpoint-overlap-1024-1040]].
+//
+// A floor rather than a bigger `fr`: `fr` is proportional, so it would still collapse under 82px at
+// some narrower width and the bug would just move. The floor is what actually guarantees the pill
+// fits. Safe below the floor's own cost because this grid only applies at >=721px (`reflow-cards`
+// switches to mobile cards under that) and already carries `nav-drawer:min-w-[980px]`.
+export const LEAVE_REQUEST_TABLE_GRID = 'grid-cols-[minmax(0,2.25rem)_minmax(0,1.3fr)_minmax(0,1.05fr)_minmax(0,1.5fr)_minmax(6.75rem,0.95fr)_minmax(0,1.3fr)_minmax(0,1fr)] nav-drawer:min-w-[980px] reflow-cards';
 
 export function leaveRequestRowKey(request) {
   return request.id;
@@ -89,7 +106,17 @@ export function renderLeaveRequestExpanded(request) {
           <span>{request.systemNote}</span>
         </div>
       ) : null}
+      {/* The FULL reason, first and full-width (2026-08-10). The collapsed row's own "เหตุผล /
+          เอกสาร" cell is width-constrained and long reasons are cut there; before this the
+          expanded row did not repeat `reason` AT ALL, so the complete text was unreachable from
+          the UI -- expanding the row, the one affordance that should reveal it, showed paid-days,
+          quota, emergency flag and reviewedAt but never the reason itself. Spans the full grid
+          (`col-span-full`) rather than sitting in a 1/3 column: a sentence needs the width, and
+          this is the field a reviewer is most often opening the row to read. */}
       <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
+        <div className="col-span-full min-w-0">
+          <DetailField label="เหตุผล" value={request.reason} />
+        </div>
         <DetailField
           label="วันลาที่รับค่าจ้าง / ไม่รับค่าจ้าง"
           value={`${formatDaysOrDash(request.paidDays)} / ${formatDaysOrDash(request.unpaidDays)}`}

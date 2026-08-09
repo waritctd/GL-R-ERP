@@ -155,16 +155,31 @@ describe('TeamLeaveTab', () => {
     expect(screen.queryByLabelText('พนักงาน')).toBeNull();
   });
 
-  it('the team calendar ("ปฏิทินวันลา") lists SUBMITTED/APPROVED requests across the team, not just the actor\'s own', async () => {
-    api.leave.list.mockResolvedValue({
-      requests: [ownRequestUnderManager, directReportRequest],
-    });
+  // Renamed from "ปฏิทินวันลา" and re-scoped to a forward window by the 2026-08-10 IA restructure
+  // -- see UpcomingLeaveList.jsx (defect D1). Unlike the old test, the fixtures here are dated
+  // AFTER today and the mock honours the requested window, so the panel's forward query is
+  // actually exercised rather than being handed rows it would never have received.
+  it('"วันลาที่กำลังจะถึงของทีม" lists upcoming SUBMITTED/APPROVED requests across the team, not just the actor\'s own', async () => {
+    const daysFromToday = (offset) => {
+      const date = new Date();
+      date.setDate(date.getDate() + offset);
+      return date.toISOString().slice(0, 10);
+    };
+    const upcomingOwn = { ...ownRequestUnderManager, startDate: daysFromToday(10), endDate: daysFromToday(10) };
+    const upcomingReport = { ...directReportRequest, startDate: daysFromToday(11), endDate: daysFromToday(11) };
+    api.leave.list.mockImplementation((params = {}) => Promise.resolve({
+      requests: [upcomingOwn, upcomingReport].filter((request) => {
+        if (params.from && request.endDate < params.from) return false;
+        if (params.to && request.startDate > params.to) return false;
+        return true;
+      }),
+    }));
     renderTeamLeaveTab();
 
-    const calendarHeading = await screen.findByRole('heading', { name: 'ปฏิทินวันลา' });
+    const calendarHeading = await screen.findByRole('heading', { name: 'วันลาที่กำลังจะถึงของทีม' });
     // The heading's own immediate ancestor is only PanelHeader's wrapper `<div>` (the header
-    // row) -- the calendar-list content is a SIBLING of that div, both inside the Panel's
-    // `<section>`. Must walk up to `section` specifically, not the nearer `div`.
+    // row) -- the list content is a SIBLING of that div, both inside the Panel's `<section>`.
+    // Must walk up to `section` specifically, not the nearer `div`.
     const calendarPanel = calendarHeading.closest('section');
     await waitFor(() => expect(calendarPanel.textContent).toMatch(/ลูกทีม หนึ่ง/));
     expect(calendarPanel.textContent).toMatch(/หัวหน้างาน/);
@@ -236,12 +251,12 @@ describe('TeamLeaveTab', () => {
   describe('role-aware copy for hr/ceo (canViewAllLeave) vs a real division manager', () => {
     const hr = { employeeId: 99, name: 'ฝ่ายบุคคล', role: 'hr' };
 
-    it('Panel title reads "คำขอลาพนักงานทั้งหมด" for hr, not "คำขอลาของทีม"', async () => {
+    it('Panel title reads "ประวัติการลาพนักงานทั้งหมด" for hr, not "ประวัติการลาของทีม"', async () => {
       api.leave.list.mockResolvedValue({ requests: [ownRequestUnderManager] });
       renderTeamLeaveTab(hr);
 
-      expect(await screen.findByRole('heading', { name: 'คำขอลาพนักงานทั้งหมด' })).not.toBeNull();
-      expect(screen.queryByRole('heading', { name: 'คำขอลาของทีม' })).toBeNull();
+      expect(await screen.findByRole('heading', { name: 'ประวัติการลาพนักงานทั้งหมด' })).not.toBeNull();
+      expect(screen.queryByRole('heading', { name: 'ประวัติการลาของทีม' })).toBeNull();
     });
 
     it('empty-state copy for hr drops the "...ที่รายงานตรงต่อคุณ" clause', async () => {
@@ -253,12 +268,12 @@ describe('TeamLeaveTab', () => {
       expect(screen.queryByText(/ที่รายงานตรงต่อคุณ/)).toBeNull();
     });
 
-    it('a real division manager (non-hr/ceo) keeps the original "คำขอลาของทีม" copy unchanged', async () => {
+    it('a real division manager (non-hr/ceo) keeps the team-scoped "ประวัติการลาของทีม" copy', async () => {
       api.leave.list.mockResolvedValue({ requests: [ownRequestUnderManager] });
       renderTeamLeaveTab(manager);
 
-      expect(await screen.findByRole('heading', { name: 'คำขอลาของทีม' })).not.toBeNull();
-      expect(screen.queryByRole('heading', { name: 'คำขอลาพนักงานทั้งหมด' })).toBeNull();
+      expect(await screen.findByRole('heading', { name: 'ประวัติการลาของทีม' })).not.toBeNull();
+      expect(screen.queryByRole('heading', { name: 'ประวัติการลาพนักงานทั้งหมด' })).toBeNull();
     });
 
     it('a real division manager still sees the original empty-state copy, including "...ที่รายงานตรงต่อคุณ"', async () => {

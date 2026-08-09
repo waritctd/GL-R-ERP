@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   allLawReferencedEntries,
   AUTO_GRANTED_ROWS,
+  defaultAllowanceValues,
   LAW_REF_EXEMPTIONS,
   LAW_SOURCES,
+  LOR_YOR_01_ADDRESS_KEYS,
   LOR_YOR_01_SECTIONS,
+  LOR_YOR_01_TICK_KEYS,
 } from './taxAllowanceSchema.js';
 
 // Guards the ล.ย.01 form's legal citations at the data layer (feat/tax-allowance-law-references).
@@ -141,6 +144,111 @@ describe('taxAllowanceSchema — every allowance field cites a law source', () =
       if (!field.hint) continue;
       expect(field.hint, `${field.key}'s hint must not hardcode a baht cap`)
         .not.toMatch(/[\d,]{4,}\s*บาท/);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Header prefill (owner decision #4, the read half).
+//
+// The rule under test is a single one, and getting it backwards is silent: a prefill must fill
+// only the slots the employee left blank. If the master won instead, a correction the employee is
+// halfway through making would be reverted under them on every re-render — the exact opposite of
+// decision #4, where corrections flow employee -> master on HR approval and never back.
+// ---------------------------------------------------------------------------------------------
+
+const prefill = (overrides = {}) => ({
+  taxpayerId: '1103700000011',
+  firstNameTh: 'สมชาย',
+  lastNameTh: 'ใจดี',
+  maritalState: 'SINGLE',
+  address: {
+    building: 'อาคารเอ', roomNo: '1201', floor: '12', village: 'หมู่บ้านสวนหลวง',
+    houseNo: '123/45', moo: '4', soi: 'ซอย 7', junction: 'แยกรัชดา', road: 'ถนนพระราม 9',
+    subDistrict: 'ห้วยขวาง', district: 'ห้วยขวาง', province: 'กรุงเทพมหานคร', postalCode: '10310',
+  },
+  ...overrides,
+});
+
+describe('defaultAllowanceValues — ล.ย.01 header prefill', () => {
+  it('seeds every one of the 13 address slots plus the 4 identity slots on a fresh form', () => {
+    const values = defaultAllowanceValues(null, prefill());
+
+    expect(values.lorYor01.taxpayerId).toBe('1103700000011');
+    expect(values.lorYor01.firstNameTh).toBe('สมชาย');
+    expect(values.lorYor01.lastNameTh).toBe('ใจดี');
+    expect(values.lorYor01.maritalState).toBe('SINGLE');
+    for (const key of LOR_YOR_01_ADDRESS_KEYS) {
+      expect(values.lorYor01.address[key], `address.${key} was not prefilled`)
+        .toBe(prefill().address[key]);
+    }
+  });
+
+  it('never overwrites a value the declaration already carries', () => {
+    const declaration = {
+      lorYor01: {
+        taxpayerId: '9999999999999',
+        firstNameTh: 'ชื่อที่พนักงานแก้เอง',
+        address: { houseNo: '77/7', province: 'เชียงใหม่' },
+      },
+    };
+
+    const values = defaultAllowanceValues(declaration, prefill());
+
+    expect(values.lorYor01.taxpayerId).toBe('9999999999999');
+    expect(values.lorYor01.firstNameTh).toBe('ชื่อที่พนักงานแก้เอง');
+    expect(values.lorYor01.address.houseNo).toBe('77/7');
+    expect(values.lorYor01.address.province).toBe('เชียงใหม่');
+    // ...and the slots the declaration left blank still get seeded, in the same object.
+    expect(values.lorYor01.lastNameTh).toBe('ใจดี');
+    expect(values.lorYor01.address.district).toBe('ห้วยขวาง');
+  });
+
+  it('treats an empty or whitespace-only declared value as blank, not as an answer', () => {
+    // The declaration's own columns come back as '' rather than null for a slot the employee
+    // cleared, so a plain `??` would read "" as an answer and suppress the prefill forever.
+    const values = defaultAllowanceValues(
+      { lorYor01: { taxpayerId: '', firstNameTh: '   ', address: { houseNo: '' } } },
+      prefill(),
+    );
+
+    expect(values.lorYor01.taxpayerId).toBe('1103700000011');
+    expect(values.lorYor01.firstNameTh).toBe('สมชาย');
+    expect(values.lorYor01.address.houseNo).toBe('123/45');
+  });
+
+  it('prefills nothing at all when the page withholds the prefill (read-only / past year)', () => {
+    const values = defaultAllowanceValues(null, null);
+
+    expect(values.lorYor01.taxpayerId).toBe('');
+    expect(values.lorYor01.maritalState).toBe('');
+    for (const key of LOR_YOR_01_ADDRESS_KEYS) {
+      expect(values.lorYor01.address[key], `address.${key} leaked into a withheld prefill`).toBe('');
+    }
+  });
+
+  it('leaves ข้อ 2 and every declared amount untouched — no HR record can answer those', () => {
+    // A prefill that reached spousalStatus/spouseHasIncome would be the app answering a question
+    // about the tax year on the employee's behalf. Guarded here because the prefillable set is a
+    // hand-maintained list and widening it is a one-word change.
+    const values = defaultAllowanceValues(null, prefill({
+      spousalStatus: 'MARRIED_WHOLE_YEAR',
+      spouseHasIncome: true,
+      childrenTotal: 3,
+      rmfSellerName: 'บลจ. ทดสอบ',
+    }));
+
+    expect(values.lorYor01.spousalStatus).toBe('');
+    expect(values.lorYor01.spouseHasIncome).toBe('');
+    expect(values.lorYor01.childrenTotal).toBe('');
+    expect(values.lorYor01.rmfSellerName).toBe('');
+  });
+
+  it('keeps the 8 ข้อ 4/6 ticks boolean — a prefilled string there fails validation silently', () => {
+    const values = defaultAllowanceValues(null, prefill({ ownFatherSupported: 'yes' }));
+
+    for (const key of LOR_YOR_01_TICK_KEYS) {
+      expect(values.lorYor01[key], `${key} must stay a boolean`).toBe(false);
     }
   });
 });

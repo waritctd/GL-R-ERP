@@ -714,6 +714,86 @@ public class EmployeeRepository {
             """, Map.of("employeeId", employeeId, "date", date, "salary", salary));
     }
 
+    // ---- ล.ย.01 header PREFILL (owner decision #4, the read half) -------------------------------
+
+    /**
+     * What the ล.ย.01 header block is seeded with, straight out of the employee master.
+     *
+     * <p>Deliberately a flat carrier rather than {@link EmployeeDto}: that record is a 45-component
+     * screen model whose {@code AddressDto} holds only four of the thirteen slots this form prints
+     * ({@code line1} is a CONCAT of house_no/building/soi/road and cannot be taken apart again), and
+     * whose {@code sensitive} block carries national ID, social-security number, bank details and
+     * salary — none of which belong anywhere near this path. Selecting exactly the sixteen values
+     * the form asks for is what keeps the blast radius equal to the feature.
+     */
+    public record LorYor01HeaderSource(
+        String taxId, String firstNameTh, String lastNameTh, String maritalStatus,
+        String building, String roomNo, String floor, String village, String houseNo, String moo,
+        String soi, String junction, String road, String subDistrict, String district,
+        String province, String postalCode
+    ) {}
+
+    /**
+     * The identity block for ONE employee's own ล.ย.01, so they do not retype a 13-digit tax ID and
+     * a thirteen-part address on every filing.
+     *
+     * <p>⚠️ <b>This is the only self-service read of {@code hr_restricted.employee_pii} in the
+     * codebase.</b> Everywhere else that schema is reached, the caller is HR/CEO —
+     * {@code EmployeeService#get} joins it only when {@code canSeeSensitiveEmployeeFields}, and
+     * strips the whole {@code sensitive} block via {@code withoutSensitiveSelfServiceFields()} when
+     * an employee looks at their own row. So an employee cannot read their own tax ID through
+     * {@code GET /api/employees/{id}} today, and this method is a deliberate, narrow exception to
+     * that: the data subject reading the single restricted field they are required to write onto
+     * their own tax form. It selects {@code tax_id} and nothing else out of {@code employee_pii} —
+     * national ID, social-security number, ss_hospital and provident_fund_no stay unreachable.
+     *
+     * <p><b>Scoping is the caller's job and the caller has exactly one option.</b> The only caller is
+     * {@code TaxAllowanceDeclarationService#getOwn}, which passes {@code actor.employeeId()} — there
+     * is no employeeId anywhere in that endpoint's request. The {@code WHERE} clause below is what
+     * turns that into an enforced filter, and
+     * {@code TaxAllowanceDeclarationScopeIntegrationTest#employeeCannotObtainAnotherEmployeesTaxIdThroughTheHeaderPrefill}
+     * is what proves it against real Postgres rather than a mock.
+     *
+     * <p>Everything except {@code tax_id} here (names, สถานภาพ, the address) is already readable by
+     * the employee about themselves through {@code GET /api/employees/{id}} — {@code
+     * withoutSensitiveSelfServiceFields()} keeps {@code currentAddress} and {@code maritalStatus}.
+     * Only the tax ID is a new access path.
+     *
+     * <p>The address row is {@code address_type = 'CURRENT'}, matching what the write-back half
+     * ({@link #upsertCurrentAddressFromDeclaration}) targets — read and write must agree or an
+     * approved correction would not come back on the next filing.
+     *
+     * @return empty when the employee row does not exist; a record with null fields when it exists
+     *         but has no PII row and/or no CURRENT address (both are common — {@code employee_pii}
+     *         is populated only where PII was actually captured).
+     */
+    public Optional<LorYor01HeaderSource> findLorYor01HeaderSource(long employeeId) {
+        List<LorYor01HeaderSource> rows = jdbc.query("""
+            SELECT pii.tax_id,
+                   e.first_name_th,
+                   e.last_name_th,
+                   e.marital_status,
+                   addr.building, addr.room_no, addr.floor, addr.village, addr.house_no, addr.moo,
+                   addr.soi, addr.junction, addr.road, addr.subdistrict, addr.district,
+                   addr.province, addr.postal_code
+              FROM hr.employee e
+              LEFT JOIN hr_restricted.employee_pii pii ON pii.employee_id = e.employee_id
+              LEFT JOIN hr.employee_address addr
+                     ON addr.employee_id = e.employee_id AND addr.address_type = 'CURRENT'
+             WHERE e.employee_id = :employeeId
+            """,
+            new MapSqlParameterSource("employeeId", employeeId),
+            (rs, rowNum) -> new LorYor01HeaderSource(
+                rs.getString("tax_id"), rs.getString("first_name_th"), rs.getString("last_name_th"),
+                rs.getString("marital_status"),
+                rs.getString("building"), rs.getString("room_no"), rs.getString("floor"),
+                rs.getString("village"), rs.getString("house_no"), rs.getString("moo"),
+                rs.getString("soi"), rs.getString("junction"), rs.getString("road"),
+                rs.getString("subdistrict"), rs.getString("district"), rs.getString("province"),
+                rs.getString("postal_code")));
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
+    }
+
     // ---- ล.ย.01 master write-back (owner decision #4, 2026-08-08) ------------------------------
     //
     // Called ONLY from TaxAllowanceDeclarationService#approve, i.e. after HR has confirmed a

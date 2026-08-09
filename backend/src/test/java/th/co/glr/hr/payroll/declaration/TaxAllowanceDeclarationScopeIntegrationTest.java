@@ -64,8 +64,13 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
         service = new TaxAllowanceDeclarationService(
             repository,
             payrollRepository,
-            // createOnBehalf (the only method that calls EmployeeRepository) is not exercised by
-            // this scope test — a mock is enough here.
+            // A mock is enough for what THIS class asserts. Two methods now reach EmployeeRepository
+            // -- createOnBehalf, and getOwn's ล.ย.01 header prefill -- and neither is exercised
+            // here: a Mockito mock answers Optional.empty() for the prefill, so every getOwn call
+            // below sees an empty header block, which is exactly the state these declaration-scoping
+            // assertions want. The prefill's own scoping cannot be tested through a mock at all
+            // (CLAUDE.md: a mocked repository passes while the SQL does something else), so it has
+            // its own class against real Postgres -- TaxAllowanceHeaderPrefillIntegrationTest.
             mock(EmployeeRepository.class),
             new TaxAllowanceCapCatalog(),
             mock(AuditService.class),

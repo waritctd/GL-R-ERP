@@ -29,6 +29,39 @@ const CONTENT_SCROLL_CLASS = cn(
   // TicketDetailPage.jsx's `chrome.closest('.content-scroll')`, which walks up
   // to this element to read its scrollTop. Renaming the class breaks that.
   'content-scroll',
+  // `relative` is load-bearing, not cosmetic: it makes the scroll container its
+  // own subtree's containing block. Without it this element is
+  // `position: static`, so any `position: absolute` descendant with no other
+  // positioned ancestor resolves its containing block to the *initial*
+  // containing block — the document — and is laid out at its static position in
+  // document coordinates. Because the app's content scrolls inside THIS box, a
+  // static position far down a long page lands hundreds or thousands of px
+  // below the viewport, and `<html>` gains exactly that much scrollable
+  // overflow. The result is a second, outer scrollbar over a shell that is
+  // supposed to be exactly viewport-height: the page scrolls past its own
+  // content into empty space, and the sticky topbar/sidebar get dragged along.
+  // Note the two ancestor walks differ — "nearest positioned ancestor"
+  // (containing block) is not "nearest `overflow: auto` ancestor" (scroll
+  // container) — so `overflow-auto` here never made this element a candidate.
+  // Tailwind's `sr-only` is `position: absolute`, which is what makes this bite
+  // in practice, on elements that are invisible but still count toward
+  // scrollable overflow (clip-rect, not `display: none`):
+  //   - `/employee-requests?tab=welfare` — FileUploadField's hidden
+  //     `<input type="file">` sat at y=1442, doc scrollHeight 1443 vs
+  //     clientHeight 900 → 543px of phantom scroll.
+  //   - `/tax-allowance` — six `<span class="sr-only">(เปิดในแท็บใหม่)</span>`
+  //     link suffixes at y≈2629-2895 → 1994px of phantom scroll.
+  // Both went to 0 with this one declaration, with every element still at the
+  // same in-page position — just clipped and scrolled by this box instead of
+  // the document. Fixing it here rather than per page is deliberate: this is a
+  // property of the scroll container, and the leak is not specific to file
+  // inputs — LeaveSurfacePage.jsx carried a page-local `relative` for its own
+  // instance of this in 2026-08, and DataTable's `sr-only` live region and
+  // `<caption class="sr-only">` are one long page away from the same bug.
+  // `z-index` stays `auto`, so this creates no stacking context and nothing
+  // repaints in a different order; portalled/`fixed` chrome (Modal, Toast,
+  // OverflowMenu) is unaffected by a `relative` ancestor by definition.
+  'relative',
   'min-w-0 max-w-full flex-1 overflow-auto [scrollbar-gutter:stable]',
   '[--deal-scroll-pad-y:28px] [--deal-scroll-pad-x:max(32px,env(safe-area-inset-right))] [--deal-scroll-pad-left:max(32px,env(safe-area-inset-left))]',
   'pt-[var(--deal-scroll-pad-y)] pr-[var(--deal-scroll-pad-x)] pb-[42px] pl-[var(--deal-scroll-pad-left)]',

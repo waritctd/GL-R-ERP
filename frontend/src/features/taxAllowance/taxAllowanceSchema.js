@@ -416,9 +416,44 @@ export function sectionDeclaredTotal(section, values) {
     .reduce((sum, field) => sum + Number(readFieldValue(values, field.key) || 0), 0);
 }
 
-export function defaultAllowanceValues(declaration) {
+/**
+ * The header slots `GET /declarations/me`'s `headerPrefill` can seed — owner decision #4's read
+ * half. Deliberately NOT the whole detail block: ข้อ 2 (`spousalStatus`, `spouseHasIncome`) is a
+ * statement about the tax year that no HR record can answer, and every ticked box and baht figure
+ * below it is the employee's own declaration. Only identity is knowable in advance.
+ *
+ * `maritalState` is here because the master genuinely holds it; the backend maps
+ * `hr.employee.marital_status` into ข้อ 1's own vocabulary so this stays a straight slot-for-slot
+ * copy (see `TaxAllowanceDeclarationService#maritalStateFromMaster`).
+ */
+export const LOR_YOR_01_PREFILLABLE_DETAIL_KEYS = [
+  'taxpayerId', 'firstNameTh', 'lastNameTh', 'maritalState',
+];
+
+/** Empty string, whitespace and null are all "the employee has not answered this". */
+const isBlank = (value) => value == null || String(value).trim() === '';
+
+/**
+ * ONE rule, applied to every prefillable slot: what the employee already put there wins.
+ *
+ * A declaration being re-prepared after rejection carries the header the employee typed and
+ * possibly corrected; the master carries whatever HR last confirmed. Letting the master win would
+ * silently revert a correction the employee is in the middle of making — the exact opposite of
+ * decision #4, where corrections flow employee → master on approval, never back.
+ */
+const seeded = (declared, offered) => (isBlank(declared) ? (offered ?? '') : declared);
+
+/**
+ * @param declaration   the declaration being restored, or null for a fresh form
+ * @param headerPrefill `GET /declarations/me`'s `headerPrefill`, or null to seed nothing. The PAGE
+ *                      decides whether to pass it — it must not reach a read-only or past-year
+ *                      view, where the current master address would be shown against a historical
+ *                      filing that never contained it. See `TaxAllowancePage`'s `canStartEdit` gate.
+ */
+export function defaultAllowanceValues(declaration, headerPrefill = null) {
   const source = declaration?.allowances || {};
   const detail = declaration?.lorYor01 || {};
+  const prefill = headerPrefill || {};
   const values = {};
   for (const key of ALLOWANCE_MONEY_KEYS) values[key] = Number(source[key] || 0);
   for (const key of ALLOWANCE_COUNT_KEYS) values[key] = Number(source[key] || 0);
@@ -429,13 +464,17 @@ export function defaultAllowanceValues(declaration) {
   values.effectiveMonth = declaration?.effectiveMonth ?? '';
   values.lorYor01 = {};
   for (const key of LOR_YOR_01_DETAIL_KEYS) {
-    values.lorYor01[key] = LOR_YOR_01_TICK_KEYS.includes(key)
-      ? Boolean(detail[key])
-      : detail[key] ?? '';
+    if (LOR_YOR_01_TICK_KEYS.includes(key)) {
+      values.lorYor01[key] = Boolean(detail[key]);
+    } else if (LOR_YOR_01_PREFILLABLE_DETAIL_KEYS.includes(key)) {
+      values.lorYor01[key] = seeded(detail[key], prefill[key]);
+    } else {
+      values.lorYor01[key] = detail[key] ?? '';
+    }
   }
   values.lorYor01.address = {};
   for (const key of LOR_YOR_01_ADDRESS_KEYS) {
-    values.lorYor01.address[key] = detail.address?.[key] ?? '';
+    values.lorYor01.address[key] = seeded(detail.address?.[key], prefill.address?.[key]);
   }
   return values;
 }
