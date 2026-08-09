@@ -268,10 +268,18 @@ describe('canReviewRequest / canManagerCancelRequest (ported from LeavePage.jsx)
     expect(canReviewRequest({ ...submittedRequestUnderSomeoneElse, status: 'APPROVED' }, hr, true)).toBe(false);
   });
 
-  it('canManagerCancelRequest also allows an already-APPROVED request', () => {
+  it('canManagerCancelRequest allows an already-APPROVED request', () => {
     const approvedUnderManager = { id: 505, status: 'APPROVED', managerEmployeeId: 5 };
     expect(canManagerCancelRequest(approvedUnderManager, nonHrManager, false)).toBe(true);
     expect(canManagerCancelRequest({ ...approvedUnderManager, status: 'CANCELLED' }, nonHrManager, false)).toBe(false);
+  });
+
+  // Owner ruling, 2026-08-11: a pending row carries exactly two decisions (อนุมัติ / ปฏิเสธ).
+  // This is the wrong-way-round case for that rule -- assert the third button is NOT offered,
+  // for a manager AND for a canReviewAll actor, since the old predicate allowed both.
+  it('canManagerCancelRequest refuses a still-SUBMITTED request', () => {
+    expect(canManagerCancelRequest(submittedRequestUnderNonHrManager, nonHrManager, false)).toBe(false);
+    expect(canManagerCancelRequest(submittedRequestUnderSomeoneElse, hr, true)).toBe(false);
   });
 
   it('canReviewRequest prefers a present request.canReview over the client-side fallback', () => {

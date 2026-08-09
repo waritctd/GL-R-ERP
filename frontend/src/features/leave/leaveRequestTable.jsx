@@ -1,3 +1,4 @@
+import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
 import { expandedRowRegionId } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -59,6 +60,30 @@ export function leaveRequestRowKey(request) {
 }
 
 /**
+ * True when `viewer` IS the person this row is waiting on -- so the note below would spend a line
+ * telling them their own name.
+ *
+ * Two ways to be that person, matching the two branches of the mock/Java
+ * `resolvePendingApproverRole`: the row routes to a named direct manager and that manager is the
+ * viewer, or it routes to the generic "hr" bucket and the viewer is in it (canReviewLeave is the
+ * role-level hr permission -- see leaveSurfaceTabs.js's `review` tab comment for why that constant
+ * is the coarse role signal and never the per-row gate).
+ *
+ * NOT simply "the viewer may act on this row": an hr actor may decide a request that is genuinely
+ * waiting on someone else's division manager, and for them the note is the whole point -- it says
+ * whose decision this normally is. Only the self-referential case is suppressed.
+ */
+function pendingOnViewer(request, viewer) {
+  if (!viewer) return false;
+  if (request.pendingApproverRole === 'manager') {
+    return request.managerEmployeeId != null
+      && Number(request.managerEmployeeId) === Number(viewer.employeeId);
+  }
+  if (request.pendingApproverRole === 'hr') return hasPermission(viewer.role, 'canReviewLeave');
+  return false;
+}
+
+/**
  * "Who this is waiting on" -- rendered beside a SUBMITTED status badge, in the shared table column
  * below and in each tab's own mobileCard/calendar-list render (MyLeaveTab.jsx, TeamLeaveTab.jsx,
  * ReviewQueueTab.jsx -- none of those funnel their StatusBadge through this module, so they each
@@ -69,9 +94,16 @@ export function leaveRequestRowKey(request) {
  * repeating it made this note's text a superset of the badge's own, which broke e2e locators that
  * matched on the badge's exact label (review #pending-approver-info). Bare "CEO (คุณราม)" reads
  * fine right next to a "รออนุมัติ" badge, and matches the format requested.
+ *
+ * `viewer` (optional) suppresses the note when it would name the person reading it -- see
+ * pendingOnViewer above. Passed by the two APPROVER-side surfaces (ReviewQueueTab, TeamLeaveTab),
+ * where a manager's own queue otherwise repeated "ผู้จัดการ (คุณนา)" on every single pending row;
+ * deliberately NOT passed by MyLeaveTab, where "who is this sitting with" is the one thing the
+ * requester most wants to know and can never be about themselves.
  */
-export function PendingApproverNote({ request }) {
+export function PendingApproverNote({ request, viewer }) {
   if (request.status !== 'SUBMITTED') return null;
+  if (pendingOnViewer(request, viewer)) return null;
   const text = pendingApproverText(request.pendingApproverRole, request.pendingApproverName);
   if (!text) return null;
   return <small className="text-text-muted">{text}</small>;
@@ -148,7 +180,9 @@ export function renderLeaveRequestExpanded(request) {
  * actions -- MyLeaveTab only ever shows a self-cancel button, ReviewQueueTab shows
  * approve/reject/cancel -- without this module needing to know which.
  */
-export function buildLeaveRequestColumns({ expandedId, onToggleExpand, renderActions, actionsHeader = '' }) {
+export function buildLeaveRequestColumns({
+  expandedId, onToggleExpand, renderActions, actionsHeader = '', viewer,
+}) {
   return [
     {
       key: 'expand',
@@ -218,7 +252,7 @@ export function buildLeaveRequestColumns({ expandedId, onToggleExpand, renderAct
         return (
           <span className="flex flex-col items-start gap-1">
             <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-            <PendingApproverNote request={request} />
+            <PendingApproverNote request={request} viewer={viewer} />
             {hasUnpaidDays ? (
               <StatusBadge tone="warning">ไม่รับค่าจ้าง {formatDays(request.unpaidDays)}</StatusBadge>
             ) : null}

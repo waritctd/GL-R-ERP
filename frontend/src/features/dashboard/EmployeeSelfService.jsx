@@ -1,11 +1,11 @@
 import { useMemo } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { StatCard, STAT_ICON_TILE_CLASSES, STAT_TONE_CLASSES } from '../../components/common/StatCard.jsx';
+import { STAT_ICON_TILE_CLASSES, STAT_TONE_CLASSES } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
@@ -23,25 +23,12 @@ import {
 } from '../../utils/format.js';
 
 // Three-tile grid: no shared primitive has this exact ratio (StatGrid is
-// 4-col). Mirrors LeavePage's LEAVE_BALANCE_GRID pattern (3-col, 1-col
-// ≤720px) — see that file for the precedent.
-const TILE_GRID = 'grid grid-cols-3 gap-3 nav-drawer:grid-cols-1 mobile:grid-cols-1';
-
 // Terminal negative states: a stepper implies "still progressing", which is
 // wrong once a request has been stopped. Rejected/cancelled rows show only
 // the status badge, never the chain.
 // EXPIRED joins these for ล.ย.01: an expired declaration has stopped progressing, so a stepper
 // implying "still on its way" would be wrong in exactly the way this set exists to prevent.
 const TERMINAL_NEGATIVE = new Set(['REJECTED', 'CANCELLED', 'AUTO_REJECTED', 'rejected', 'EXPIRED']);
-
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
 
 // ส่งแล้ว → หัวหน้าฝ่าย → CEO for OT (mirrors OvertimePanel's
 // SUBMITTED -> MANAGER_APPROVED -> APPROVED chain); ส่งแล้ว → อนุมัติ for leave
@@ -108,7 +95,7 @@ function MyRequestRow({ row }) {
   );
 }
 
-export function EmployeeSelfService({ user, employee, profileRequests = [], dashboardSummary, taxAllowanceSummary, showToast }) {
+export function EmployeeSelfService({ user, employee, profileRequests = [], taxAllowanceSummary }) {
   const navigate = useNavigate();
 
   // Omitting from/to gives the current calendar month (mirrors
@@ -122,17 +109,6 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], dash
   const attendanceDays = attendanceQuery.data ?? [];
   const todayIso = bangkokTodayIso();
   const today = attendanceDays.find((day) => day.work_date === todayIso) ?? null;
-  const daysPresent = attendanceDays.filter((day) => day.check_in).length;
-  const lateDays = attendanceDays.filter((day) => Number(day.late_minutes) > 0).length;
-
-  // Own balances only — omitting employeeId defaults to the caller
-  // (api.leave.balances mirrors this: `params.employeeId ? ... : user.employeeId`).
-  const leaveBalancesQuery = useQuery({
-    queryKey: queryKeys.leaveBalances(user?.employeeId, new Date().getFullYear()),
-    queryFn: () => api.leave.balances({}).then((response) => response.balances || []),
-  });
-  const leaveBalances = leaveBalancesQuery.data ?? [];
-  const totalRemainingLeave = leaveBalances.reduce((sum, balance) => sum + Number(balance.remainingDays || 0), 0);
 
   // No from/to filter — both endpoints scope to the caller automatically for a
   // plain employee (leave.list/overtime.list: `list.filter(item =>
@@ -199,20 +175,6 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], dash
       .slice(0, 8);
   }, [ownLeaveQuery.data, ownOvertimeQuery.data, profileRequests, taxAllowanceSummary]);
 
-  const latestPayrollPeriodId = dashboardSummary?.latestPayrollPeriodId;
-  const ownPayslipMutation = useMutation({
-    mutationFn: (periodId) => api.payroll.downloadOwnPayslip(periodId),
-    onSuccess: (blob) => {
-      downloadBlob(blob, `glr-my-payslip-${latestPayrollPeriodId}.pdf`);
-      showToast?.('success', 'ดาวน์โหลดสลิปเงินเดือนแล้ว');
-    },
-    onError: (error) => showToast?.('error', error.message || 'ดาวน์โหลดสลิปเงินเดือนไม่สำเร็จ'),
-  });
-
-  function downloadMyPayslip() {
-    if (!latestPayrollPeriodId) return;
-    ownPayslipMutation.mutate(latestPayrollPeriodId);
-  }
 
   const hasCheckedIn = Boolean(today?.check_in);
   const firstName = employee?.nickName || employee?.nameTh || user?.name || '';
@@ -259,38 +221,18 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], dash
           attendance card above the tiles because it is an action, not a metric. */}
       <TaxAllowanceActionRow summary={taxAllowanceSummary} />
 
-      <div className={TILE_GRID}>
-        <StatCard
-          icon="calendar"
-          label="เวลาทำงานเดือนนี้"
-          value={`${daysPresent} วัน`}
-          helper={lateDays > 0 ? `มาสาย ${lateDays} วัน` : 'ไม่มีวันมาสาย'}
-          tone={lateDays > 0 ? 'amber' : 'teal'}
-          onClick={() => navigate('/attendance')}
-        />
-        <StatCard
-          icon="clipboard"
-          label="วันลาคงเหลือ"
-          value={`${totalRemainingLeave.toLocaleString('th-TH', { maximumFractionDigits: 2 })} วัน`}
-          helper={leaveBalances.length > 0
-            ? leaveBalances.map((balance) => `${balance.leaveTypeNameTh || balance.leaveTypeCode} ${balance.remainingDays}`).join(' · ')
-            : 'ยังไม่มีข้อมูลโควตา'}
-          tone="blue"
-          onClick={() => navigate('/leave')}
-        />
-        <StatCard
-          icon="badgeDollar"
-          label="สลิปเงินเดือน"
-          value={latestPayrollPeriodId ? `งวด ${latestPayrollPeriodId}` : '-'}
-          // KNOWN GAP (mock only): mockApi's dashboard.summary() hardcodes
-          // latestPayrollPeriodId: null, so this tile always renders the
-          // "no data yet" state under VITE_USE_MOCKS=true — that reflects the
-          // mock's real (empty) value, not an invented number.
-          helper={latestPayrollPeriodId ? 'ดาวน์โหลดสลิปเงินเดือน' : 'ยังไม่มีข้อมูลงวดล่าสุด'}
-          tone="indigo"
-          onClick={latestPayrollPeriodId ? downloadMyPayslip : undefined}
-        />
-      </div>
+      {/* The three stat tiles that used to sit here (เวลาทำงานเดือนนี้ / วันลาคงเหลือ /
+          สลิปเงินเดือน) were removed on 2026-08-10, owner call: they did not earn the space.
+          Each was a number this page could not act on — the sidebar already reaches
+          /attendance, /leave and the payslip, and the คำขอของฉัน panel below is what the
+          employee actually came to do.
+
+          The leave tile was worse than merely redundant. It summed every leave type's
+          remaining days into one headline, and MILITARY's annualQuotaDays is 366 — a
+          deliberate sentinel, not a policy number (see mockApi.js's db.leaveTypes comment, and
+          MyLeaveTab.jsx, which excludes it from its own quota display for exactly this reason).
+          So the card read "564 วัน" (7+30+3+98+366+60): a total nobody has, presented as the
+          most prominent figure on the employee's home screen. */}
 
       <Panel
         title="คำขอของฉัน"

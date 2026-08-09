@@ -148,10 +148,21 @@ export function AttendanceCorrectionRequestModal({ showToast, onClose }) {
     });
   }
 
+  // Wording (owner, 2026-08-10): "ลืมสแกน" → "เวลาสแกน" throughout this modal and the panel's
+  // CORRECTION_TYPE_LABELS. The old copy named the employee's mistake ("when you FORGOT to
+  // scan"), but a scan can also be missing because the reader failed, the shift changed, or WFH
+  // was marked after the fact — in those cases the form was accusing the person filing it. Naming
+  // the DATA being corrected (the scan time) covers every reason and reads as a correction rather
+  // than a confession. The type options are now the SAME strings the history table renders, so the
+  // list and the form agree instead of describing the same three values two different ways.
+  //
+  // One deviation, deliberate: the date field became "วันที่ที่ต้องการแก้ไข", not
+  // "วันที่ที่เวลาสแกน" — the literal substitution is not grammatical Thai, and this phrasing
+  // matches the "รายการที่ต้องแก้ไข" field directly beneath it.
   return (
     <Modal
       title="ขอแก้ไขเวลาเข้า-ออกงาน"
-      subtitle="ยื่นคำขอเมื่อลืมสแกนนิ้ว — คำขอจะส่งให้ CEO พิจารณา"
+      subtitle="ยื่นคำขอแก้ไขเวลาสแกนนิ้ว — คำขอจะส่งให้ CEO พิจารณา"
       onClose={saving ? undefined : onClose}
       footer={(
         <>
@@ -166,7 +177,7 @@ export function AttendanceCorrectionRequestModal({ showToast, onClose }) {
       )}
     >
       <SafeForm id="attendance-correction-form" className={FORM_GRID_CLASS} onSubmit={handleSubmit(submitCorrection)} noValidate>
-        <FormField label="วันที่ที่ลืมสแกน" htmlFor="ac-work-date" error={errors.workDate?.message} required>
+        <FormField label="วันที่ที่ต้องการแก้ไข" htmlFor="ac-work-date" error={errors.workDate?.message} required>
           <input
             id="ac-work-date"
             type="date"
@@ -185,9 +196,9 @@ export function AttendanceCorrectionRequestModal({ showToast, onClose }) {
             aria-invalid={Boolean(errors.correctionType)}
             aria-describedby={errors.correctionType ? fieldErrorId('ac-type') : undefined}
           >
-            <option value="CHECK_IN">ลืมสแกนตอนเข้างาน</option>
-            <option value="CHECK_OUT">ลืมสแกนตอนออกงาน</option>
-            <option value="BOTH">ลืมสแกนทั้งเข้าและออกงาน</option>
+            <option value="CHECK_IN">เวลาสแกนเข้างาน</option>
+            <option value="CHECK_OUT">เวลาสแกนออกงาน</option>
+            <option value="BOTH">เวลาสแกนเข้าและออกงาน</option>
           </select>
         </FormField>
         {showCheckIn ? (

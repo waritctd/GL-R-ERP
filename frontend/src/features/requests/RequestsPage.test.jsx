@@ -92,7 +92,11 @@ describe('RequestsPage tab bar', () => {
     expect(screen.getByRole('tab', { name: 'สวัสดิการ / เงินพิเศษ' }).getAttribute('aria-selected')).toBe('false');
     // The OT panel deliberately has no page heading of its own — RequestsPage owns the only one,
     // otherwise the tab renders two stacked headers. Identify the panel by its form instead.
-    expect(screen.getAllByRole('heading', { name: 'คำขอ' })).toHaveLength(1);
+    // Exactly one — the assertion is about there being a SINGLE page heading, not about the
+    // wording. Renamed คำขอ -> คำขอเงินพิเศษ (owner, 2026-08-10); an exact name match keeps this
+    // checking what it was written to check, where a regex could start matching a panel heading
+    // and quietly stop detecting the stacked-header regression.
+    expect(screen.getAllByRole('heading', { name: 'คำขอเงินพิเศษ' })).toHaveLength(1);
     expect(await screen.findByLabelText(/วันที่ทำ OT/)).not.toBeNull();
   });
 

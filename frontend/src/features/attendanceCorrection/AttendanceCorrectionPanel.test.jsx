@@ -57,6 +57,19 @@ const submittedRequest = {
   status: 'SUBMITTED',
 };
 
+
+// The section is collapsed by default for every role (owner, 2026-08-10) — it is a correction
+// workflow, rare for an employee and batched for the CEO, and expanded it put a stat strip, a
+// filter bar and a full table between the attendance table and the bottom of the page.
+// CollapsibleSection UNMOUNTS its body when collapsed, so every assertion about the list below
+// has to open it first. This helper is the disclosure click, not a workaround: if the default
+// ever flips back to open, `findByRole` here still resolves and nothing silently rots.
+async function expandSection() {
+  const header = await screen.findByRole('button', { name: /คำขอแก้ไขเวลาเข้า-ออกงาน/ });
+  if (header.getAttribute('aria-expanded') === 'false') fireEvent.click(header);
+  return header;
+}
+
 describe('AttendanceCorrectionPanel — own request list', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -68,10 +81,13 @@ describe('AttendanceCorrectionPanel — own request list', () => {
     });
 
     renderPanel(employeeUser);
+    await expandSection();
 
     expect(await screen.findByText('ลืมสแกนนิ้ว')).not.toBeNull();
-    // "รอ CEO" also appears as a status-filter <option>; scope to the status badge itself.
-    expect(document.querySelector('.status-badge')?.textContent).toBe('รอ CEO');
+    // "รอ CEO" also appears as a status-filter <option>, AND the collapsed-section header now
+    // carries its own pending-count StatusBadge ("รอพิจารณา N") — so a document-wide
+    // `.status-badge` lookup returns the header's, not this row's. Scope to the row.
+    expect(document.querySelector('.data-row .status-badge')?.textContent).toBe('รอ CEO');
   });
 });
 
@@ -84,13 +100,14 @@ describe('AttendanceCorrectionPanel — CEO review affordance', () => {
   // Split from the former "does not render the submit form for the CEO" (submit-flow) test --
   // the submit FORM moved to AttendanceCorrectionRequestModal.jsx
   // (fix/attendance-correction-on-attendance-page), so this panel never renders one for ANY
-  // role any more. That made the old queryByLabelText(/วันที่ที่ลืมสแกน/) assertion pass
+  // role any more. That made the old queryByLabelText(/วันที่ที่ต้องการแก้ไข/) assertion pass
   // regardless of who was signed in -- a tautology, unable to fail (adversarial review N1) --
   // so it was dropped along with the rename. What this test actually proves: the review queue
   // (its own empty state) renders for the CEO.
   it('renders the review queue (empty state) for the CEO', async () => {
     api.attendanceCorrection.list.mockResolvedValue({ requests: [] });
     renderPanel(ceoUser);
+    await expandSection();
 
     await screen.findByText('ยังไม่มีคำขอแก้ไขเวลา');
   });
@@ -101,6 +118,7 @@ describe('AttendanceCorrectionPanel — CEO review affordance', () => {
     });
 
     renderPanel(ceoUser);
+    await expandSection();
 
     const approveButton = await screen.findByRole('button', { name: 'CEO อนุมัติ' });
     fireEvent.click(approveButton);
@@ -128,6 +146,7 @@ describe('AttendanceCorrectionPanel — CEO review affordance', () => {
         <AttendanceCorrectionPanel user={ceoUser} showToast={vi.fn()} />
       </QueryClientProvider>,
     );
+    await expandSection();
 
     const approveButton = await screen.findByRole('button', { name: 'CEO อนุมัติ' });
     fireEvent.click(approveButton);
