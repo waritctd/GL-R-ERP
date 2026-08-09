@@ -140,4 +140,28 @@ public enum SpecialMoneyType {
     public EligibilityRule eligibilityRule() {
         return eligibilityRule;
     }
+
+    /**
+     * Resolves the stored {@code request_type} string (e.g. {@code "TRAVEL_PER_DIEM"}, written by
+     * {@code SpecialMoneyRepository#create} as {@code type.name()}) to its Thai label (e.g.
+     * {@code "เบี้ยเลี้ยงเดินทาง"}), for notification-email copy that must read as Thai, not as a raw
+     * enum constant.
+     *
+     * <p>Falls back to the raw value for an unknown/legacy code rather than throwing -- unlike {@link
+     * #valueOf(String)}, which throws {@link IllegalArgumentException} on anything it does not
+     * recognise. A notification is a side effect of an already-committed business action (see {@code
+     * SpecialMoneyService}'s submit/approve/reject/cancel, all of which call this only AFTER their own
+     * write succeeded); a bad or since-retired {@code request_type} value must not turn a successful
+     * submission into a failed one just because the email could not be worded perfectly.
+     */
+    public static String thaiLabelOf(String storedName) {
+        if (storedName == null) {
+            return null;
+        }
+        try {
+            return SpecialMoneyType.valueOf(storedName).thaiLabel();
+        } catch (IllegalArgumentException exception) {
+            return storedName;
+        }
+    }
 }

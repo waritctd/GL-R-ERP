@@ -79,8 +79,11 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(salesRows.get(0).title()).isEqualTo("คำขอราคาถูกรับเรื่องแล้ว");
     }
 
+    // mail-copy wording fix: name is now FIRST NAME ONLY (was CONCAT_WS(first, last) before this
+    // change) -- it feeds only the "เรียน คุณ<name>," greeting, and a Thai greeting addresses someone
+    // by first name after คุณ, not by full name. See EmailRecipient's Javadoc.
     @Test
-    void findEmployeeRecipientResolvesBothTheAddressAndTheThaiDisplayName() {
+    void findEmployeeRecipientResolvesTheAddressAndTheFirstNameOnlyForTheGreeting() {
         long divisionId = insertDivision("SA", "Sales2");
         long employeeId = insertEmployeeWithNameAndEmail("EMP-400", divisionId, "สมชาย", "ใจดี",
             "somchai@glr.co.th");
@@ -89,7 +92,7 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
 
         assertThat(recipient).isPresent();
         assertThat(recipient.get().email()).isEqualTo("somchai@glr.co.th");
-        assertThat(recipient.get().name()).isEqualTo("สมชาย ใจดี");
+        assertThat(recipient.get().name()).isEqualTo("สมชาย");
     }
 
     // Flipped from the old findEmployeeEmailIsEmptyWhenTheEmployeeHasAnEmptyStringEmailOnFile, which
@@ -107,7 +110,7 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
 
         assertThat(recipient).isPresent();
         assertThat(recipient.get().email()).isNull();
-        assertThat(recipient.get().name()).isEqualTo("สมหญิง ดีใจ");
+        assertThat(recipient.get().name()).isEqualTo("สมหญิง");
     }
 
     // hr.employee.email is a nullable VARCHAR(255) - a real SQL NULL (as opposed to an empty
@@ -131,7 +134,7 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
 
         assertThat(recipient).isPresent();
         assertThat(recipient.get().email()).isNull();
-        assertThat(recipient.get().name()).isEqualTo("สมหญิง ดีใจ");
+        assertThat(recipient.get().name()).isEqualTo("สมหญิง");
     }
 
     // The only case left that returns empty under the new contract: no employee row at all. Had no

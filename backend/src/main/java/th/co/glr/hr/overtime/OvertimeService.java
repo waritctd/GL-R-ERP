@@ -20,6 +20,7 @@ import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.ThaiText;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.employee.ManagerApproverRepository;
 import th.co.glr.hr.notification.CeoApproverRepository;
@@ -498,18 +499,26 @@ public class OvertimeService {
      * every approver loop skips {@code actorEmployeeId} -- nobody is ever notified about their own
      * action.
      */
+    // mail-copy wording fix: bodies below follow the plan's "<ACT> ยกเลิกคำขอ OT วันที่ <D>" + "ไม่
+    // ต้องพิจารณารายการนี้แล้ว" template for the four APPROVER-facing branches (each keeping its own
+    // pre-existing distinguishing clause -- "ที่ผู้จัดการอนุมัติแล้ว" / "ที่อนุมัติครบถ้วนแล้ว" -- as
+    // part of line 1). The REQUESTER-facing branch is not one of those four -- it is not "someone
+    // who had this in their queue to review", so its pre-existing self-vs-by-reviewer distinguishing
+    // structure is kept unchanged; only the date formatting moves to ThaiText.
     private void notifyCancelled(
             OvertimeRequestDto before, OvertimeRequestDto after, long actorEmployeeId, String actorName) {
         String actorLabel = actorName == null || actorName.isBlank() ? "ผู้จัดการหรือ HR" : actorName;
         boolean cancelledByReviewer = after.reviewedById() != null;
+        String afterDate = ThaiText.date(after.workDate());
+        String beforeDate = ThaiText.date(before.workDate());
         notificationService.notify(
             after.employeeId(),
             "OVERTIME_CANCELLED",
             "คำขอ OT ถูกยกเลิก",
             cancelledByReviewer
-                ? "คำขอ OT วันที่ " + after.workDate() + " ถูกยกเลิกโดย "
+                ? "คำขอ OT วันที่ " + afterDate + " ถูกยกเลิกโดย "
                     + (after.reviewedByName() == null ? "ผู้จัดการหรือ HR" : after.reviewedByName())
-                : "คำขอ OT วันที่ " + after.workDate() + " ถูกยกเลิกเรียบร้อยแล้ว",
+                : "คำขอ OT วันที่ " + afterDate + " ถูกยกเลิกเรียบร้อยแล้ว",
             "/overtime",
             true
         );
@@ -525,7 +534,7 @@ public class OvertimeService {
                         ceoEmployeeId,
                         "OVERTIME_CANCELLED",
                         "คำขอ OT ที่รอ CEO อนุมัติถูกยกเลิก",
-                        actorLabel + " ยกเลิกคำขอ OT วันที่ " + before.workDate(),
+                        actorLabel + " ยกเลิกคำขอ OT วันที่ " + beforeDate + "\nไม่ต้องพิจารณารายการนี้แล้ว",
                         "/overtime",
                         true
                     );
@@ -539,7 +548,7 @@ public class OvertimeService {
                         managerEmployeeId,
                         "OVERTIME_CANCELLED",
                         "คำขอ OT ที่รออนุมัติถูกยกเลิก",
-                        actorLabel + " ยกเลิกคำขอ OT วันที่ " + before.workDate(),
+                        actorLabel + " ยกเลิกคำขอ OT วันที่ " + beforeDate + "\nไม่ต้องพิจารณารายการนี้แล้ว",
                         "/overtime",
                         true
                     );
@@ -554,7 +563,8 @@ public class OvertimeService {
                     ceoEmployeeId,
                     "OVERTIME_CANCELLED",
                     "คำขอ OT ที่รอ CEO อนุมัติถูกยกเลิก",
-                    actorLabel + " ยกเลิกคำขอ OT วันที่ " + before.workDate() + " ที่ผู้จัดการอนุมัติแล้ว",
+                    actorLabel + " ยกเลิกคำขอ OT วันที่ " + beforeDate + " ที่ผู้จัดการอนุมัติแล้ว"
+                        + "\nไม่ต้องพิจารณารายการนี้แล้ว",
                     "/overtime",
                     true
                 );
@@ -578,7 +588,8 @@ public class OvertimeService {
                     recipientId,
                     "OVERTIME_CANCELLED",
                     "คำขอ OT ที่อนุมัติแล้วถูกยกเลิก",
-                    actorLabel + " ยกเลิกคำขอ OT วันที่ " + before.workDate() + " ที่อนุมัติครบถ้วนแล้ว",
+                    actorLabel + " ยกเลิกคำขอ OT วันที่ " + beforeDate + " ที่อนุมัติครบถ้วนแล้ว"
+                        + "\nไม่ต้องพิจารณารายการนี้แล้ว",
                     "/overtime",
                     true
                 );
@@ -1093,14 +1104,16 @@ public class OvertimeService {
         List<Long> managerApprovers =
             managerApproverRepository.findManagerApproverEmployeeIds(request.employeeId());
         boolean goesToCeo = managerApprovers.isEmpty();
+        String date = ThaiText.date(request.workDate());
+        String hours = ThaiText.hours(request.plannedMinutes());
 
         // A3 (OT UAT defect #4): neither message names the missing manager stage anymore -- the
         // employee/CEO need to know who holds the request, not that a stage is absent. The title
-        // on the CEO notification below already says "รอ CEO อนุมัติ", so the body needs nothing
-        // extra to make that point.
-        String title = "ส่งคำขอ OT แล้ว";
-        String message = "คำขอ OT วันที่ " + request.workDate()
-            + (goesToCeo ? " ถูกส่งให้ CEO พิจารณาแล้ว" : " ถูกส่งให้ผู้จัดการตรวจสอบแล้ว");
+        // on the CEO notification below already says "รออนุมัติ", so the body needs nothing extra
+        // to make that point.
+        String title = "ส่งคำขอทำงานล่วงเวลาแล้ว";
+        String message = "ส่งคำขอทำงานล่วงเวลา วันที่ " + date + " (" + hours + ") แล้ว"
+            + (goesToCeo ? "\nอยู่ระหว่างรอ CEO ตรวจสอบ" : "\nอยู่ระหว่างรอผู้จัดการตรวจสอบ");
         notificationService.notify(request.employeeId(), "OVERTIME_SUBMITTED", title, message, "/overtime", true);
 
         if (goesToCeo) {
@@ -1108,8 +1121,9 @@ public class OvertimeService {
                 notificationService.notify(
                     ceoEmployeeId,
                     "OVERTIME_PENDING_CEO",
-                    "มีคำขอ OT รอ CEO อนุมัติ",
-                    request.employeeName() + " ส่งคำขอ OT วันที่ " + request.workDate(),
+                    "รออนุมัติ: OT — " + request.employeeName(),
+                    request.employeeName() + " ขอทำงานล่วงเวลา วันที่ " + date + " (" + hours + ")"
+                        + "\nรออนุมัติขั้นสุดท้ายจากคุณ",
                     "/overtime",
                     true
                 );
@@ -1120,8 +1134,9 @@ public class OvertimeService {
             notificationService.notify(
                 managerEmployeeId,
                 "OVERTIME_PENDING_MANAGER",
-                "มีคำขอ OT รออนุมัติ",
-                request.employeeName() + " ส่งคำขอ OT วันที่ " + request.workDate(),
+                "รออนุมัติ: OT — " + request.employeeName(),
+                request.employeeName() + " ขอทำงานล่วงเวลา วันที่ " + date + " (" + hours + ")"
+                    + "\nกรุณาพิจารณาอนุมัติหรือปฏิเสธในระบบ",
                 "/overtime",
                 true
             );
@@ -1129,11 +1144,14 @@ public class OvertimeService {
     }
 
     private void notifyManagerApproved(OvertimeRequestDto request) {
+        String date = ThaiText.date(request.workDate());
+        String hours = ThaiText.hours(request.plannedMinutes());
         notificationService.notify(
             request.employeeId(),
             "OVERTIME_MANAGER_APPROVED",
-            "ผู้จัดการอนุมัติคำขอ OT แล้ว",
-            "คำขอ OT วันที่ " + request.workDate() + " ผ่านผู้จัดการแล้ว และรอ CEO อนุมัติขั้นสุดท้าย",
+            "ผู้จัดการอนุมัติ OT แล้ว",
+            "ผู้จัดการอนุมัติ OT วันที่ " + date + " แล้ว"
+                + "\nขั้นตอนถัดไป: รอ CEO อนุมัติขั้นสุดท้าย",
             "/overtime",
             true
         );
@@ -1141,8 +1159,9 @@ public class OvertimeService {
             notificationService.notify(
                 ceoEmployeeId,
                 "OVERTIME_PENDING_CEO",
-                "มีคำขอ OT รอ CEO อนุมัติ",
-                request.employeeName() + " มีคำขอ OT วันที่ " + request.workDate() + " ที่ผู้จัดการอนุมัติแล้ว",
+                "รออนุมัติ: OT — " + request.employeeName(),
+                request.employeeName() + " ขอทำงานล่วงเวลา วันที่ " + date + " (" + hours + ") — ผู้จัดการอนุมัติแล้ว"
+                    + "\nรออนุมัติขั้นสุดท้ายจากคุณ",
                 "/overtime",
                 true
             );
@@ -1150,11 +1169,14 @@ public class OvertimeService {
     }
 
     private void notifyCeoApproved(OvertimeRequestDto request) {
+        String date = ThaiText.date(request.workDate());
+        String hours = ThaiText.hours(request.payableMinutes());
         notificationService.notify(
             request.employeeId(),
             "OVERTIME_APPROVED",
-            "CEO อนุมัติคำขอ OT แล้ว",
-            "คำขอ OT วันที่ " + request.workDate() + " อนุมัติครบถ้วนแล้ว",
+            "อนุมัติ OT แล้ว",
+            "อนุมัติ OT วันที่ " + date + " (" + hours + ") ครบถ้วนแล้ว"
+                + "\nชั่วโมงนี้จะรวมในเงินเดือนงวดถัดไป",
             "/overtime",
             true
         );
@@ -1162,8 +1184,8 @@ public class OvertimeService {
             notificationService.notify(
                 request.managerApprovedBy(),
                 "OVERTIME_APPROVED",
-                "CEO อนุมัติคำขอ OT แล้ว",
-                request.employeeName() + " ได้รับการอนุมัติ OT วันที่ " + request.workDate() + " ครบถ้วนแล้ว",
+                "อนุมัติ OT ของ " + request.employeeName() + " แล้ว",
+                "CEO อนุมัติ OT ของ " + request.employeeName() + " วันที่ " + date + " (" + hours + ") ครบถ้วนแล้ว",
                 "/overtime",
                 true
             );
@@ -1196,13 +1218,14 @@ public class OvertimeService {
      * {@link #ceoDirectReject} it.
      */
     private void notifyRejected(OvertimeRequestDto request, long actorEmployeeId) {
+        String date = ThaiText.date(request.workDate());
         if (request.employeeId() != actorEmployeeId) {
             notificationService.notify(
                 request.employeeId(),
                 "OVERTIME_REJECTED",
-                "คำขอ OT ถูกปฏิเสธ",
-                "คำขอ OT วันที่ " + request.workDate() + " ถูกปฏิเสธ: "
-                    + (request.reviewerNote() == null ? "กรุณาติดต่อผู้จัดการหรือ HR" : request.reviewerNote()),
+                "ไม่อนุมัติ OT",
+                "ไม่อนุมัติ OT วันที่ " + date
+                    + "\nเหตุผล: " + (request.reviewerNote() == null ? "กรุณาติดต่อผู้จัดการหรือ HR" : request.reviewerNote()),
                 "/overtime",
                 true
             );
@@ -1211,10 +1234,9 @@ public class OvertimeService {
             notificationService.notify(
                 request.managerApprovedBy(),
                 "OVERTIME_REJECTED",
-                "CEO ปฏิเสธคำขอ OT ที่ผู้จัดการอนุมัติแล้ว",
-                request.employeeName() + " มีคำขอ OT วันที่ " + request.workDate()
-                    + " ที่ผู้จัดการอนุมัติแล้ว แต่ถูก CEO ปฏิเสธ: "
-                    + (request.reviewerNote() == null ? "กรุณาติดต่อ HR" : request.reviewerNote()),
+                "ไม่อนุมัติ OT ของ " + request.employeeName(),
+                "ไม่อนุมัติ OT วันที่ " + date
+                    + "\nเหตุผล: " + (request.reviewerNote() == null ? "กรุณาติดต่อ HR" : request.reviewerNote()),
                 "/overtime",
                 true
             );

@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.ThaiText;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
@@ -367,16 +368,18 @@ public class SpecialMoneyService {
     private void notifyCancelled(
             SpecialMoneyRequestDto request, boolean cancelledBySelf, long actorEmployeeId, String actorName) {
         String actorLabel = actorName == null || actorName.isBlank() ? "ผู้ยื่นคำขอ" : actorName;
+        String type = SpecialMoneyType.thaiLabelOf(request.requestType());
+        String date = ThaiText.date(request.eventDate());
         notificationService.notify(
             request.employeeId(),
             "SPECIAL_MONEY_CANCELLED",
-            "คำขอเงินสวัสดิการถูกยกเลิก",
+            "ยกเลิกคำขอ" + type + "แล้ว",
             cancelledBySelf
-                ? "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ถูกยกเลิกเรียบร้อยแล้ว"
+                ? "ยกเลิกคำขอ" + type + " วันที่ " + date + " เรียบร้อยแล้ว"
                 // Nit fix (review, second pass): this used to omit WHO cancelled it on the employee's
                 // behalf ("...แทนคุณ" with no name), unlike the Leave/OT counterparts, which both name
                 // the actor -- now consistent with actorLabel.
-                : "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ถูกยกเลิกโดย " + actorLabel + " แทนคุณ",
+                : actorLabel + " ยกเลิกคำขอ" + type + " วันที่ " + date + " แทนคุณ",
             "/employee-requests",
             true
         );
@@ -387,8 +390,9 @@ public class SpecialMoneyService {
             notificationService.notify(
                 ceoEmployeeId,
                 "SPECIAL_MONEY_CANCELLED",
-                "คำขอเงินสวัสดิการที่รออนุมัติถูกยกเลิก",
-                actorLabel + " ยกเลิกคำขอ " + request.requestType() + " วันที่ " + request.eventDate(),
+                "ยกเลิกคำขอ" + type + "ที่รออนุมัติ",
+                actorLabel + " ยกเลิกคำขอ" + type + "ของ " + request.employeeName() + " วันที่ " + date
+                    + "\nไม่ต้องพิจารณารายการนี้แล้ว",
                 "/employee-requests",
                 true
             );
@@ -567,15 +571,20 @@ public class SpecialMoneyService {
      * only possible response is to wait for someone else.
      */
     private void notifySubmitted(SpecialMoneyRequestDto request) {
-        String title = "ส่งคำขอเงินสวัสดิการแล้ว";
-        String message = "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ถูกส่งให้ CEO พิจารณาแล้ว";
+        String type = SpecialMoneyType.thaiLabelOf(request.requestType());
+        String date = ThaiText.date(request.eventDate());
+        String amount = ThaiText.money(amountOf(request));
+        String title = "ส่งคำขอ" + type + "แล้ว";
+        String message = "เราได้รับคำขอ" + type + " วันที่ " + date + " จำนวน " + amount + " บาท แล้ว"
+            + "\nขณะนี้อยู่ระหว่างรอ CEO พิจารณา คุณไม่ต้องดำเนินการใดเพิ่มเติม ระบบจะแจ้งผลให้ทราบทางอีเมล";
         notificationService.notify(request.employeeId(), "SPECIAL_MONEY_SUBMITTED", title, message, "/employee-requests", true);
         for (Long ceoEmployeeId : ceoApprovers.findEmployeeIds()) {
             notificationService.notify(
                 ceoEmployeeId,
                 "SPECIAL_MONEY_PENDING_CEO",
-                "มีคำขอเงินสวัสดิการรอ CEO อนุมัติ",
-                request.employeeName() + " ส่งคำขอ " + request.requestType() + " วันที่ " + request.eventDate(),
+                "รออนุมัติ: " + type + " — " + request.employeeName(),
+                request.employeeName() + " ขอเบิก" + type + " วันที่ " + date + " จำนวน " + amount + " บาท"
+                    + "\nกรุณาพิจารณาอนุมัติหรือปฏิเสธในระบบ",
                 "/employee-requests",
                 true
             );
@@ -583,11 +592,15 @@ public class SpecialMoneyService {
     }
 
     private void notifyCeoApproved(SpecialMoneyRequestDto request) {
+        String type = SpecialMoneyType.thaiLabelOf(request.requestType());
+        String date = ThaiText.date(request.eventDate());
+        String amount = ThaiText.money(amountOf(request));
         notificationService.notify(
             request.employeeId(),
             "SPECIAL_MONEY_APPROVED",
-            "CEO อนุมัติคำขอเงินสวัสดิการแล้ว",
-            "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " อนุมัติครบถ้วนแล้ว",
+            "อนุมัติคำขอ" + type + "แล้ว",
+            "CEO อนุมัติคำขอ" + type + " วันที่ " + date + " จำนวน " + amount + " บาท แล้ว"
+                + "\nยอดนี้จะจ่ายพร้อมเงินเดือนงวดถัดไป",
             "/employee-requests",
             true
         );
@@ -595,8 +608,9 @@ public class SpecialMoneyService {
             notificationService.notify(
                 request.managerApprovedBy(),
                 "SPECIAL_MONEY_APPROVED",
-                "CEO อนุมัติคำขอเงินสวัสดิการแล้ว",
-                request.employeeName() + " ได้รับการอนุมัติคำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ครบถ้วนแล้ว",
+                "อนุมัติคำขอ" + type + "ของ " + request.employeeName() + " แล้ว",
+                "CEO อนุมัติคำขอ" + type + "ของ " + request.employeeName() + " วันที่ " + date
+                    + " จำนวน " + amount + " บาท แล้ว",
                 "/employee-requests",
                 true
             );
@@ -621,13 +635,16 @@ public class SpecialMoneyService {
      * and both recipients are skipped when they are the actor.
      */
     private void notifyRejected(SpecialMoneyRequestDto request, long actorEmployeeId) {
+        String type = SpecialMoneyType.thaiLabelOf(request.requestType());
+        String date = ThaiText.date(request.eventDate());
         if (request.employeeId() != actorEmployeeId) {
             notificationService.notify(
                 request.employeeId(),
                 "SPECIAL_MONEY_REJECTED",
-                "คำขอเงินสวัสดิการถูกปฏิเสธ",
-                "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ถูกปฏิเสธ: "
-                    + (request.reviewerNote() == null ? "กรุณาติดต่อผู้จัดการหรือ HR" : request.reviewerNote()),
+                "ไม่อนุมัติคำขอ" + type,
+                "CEO ไม่อนุมัติคำขอ" + type + " วันที่ " + date
+                    + "\nเหตุผล: " + (request.reviewerNote() == null ? "กรุณาติดต่อผู้จัดการหรือ HR" : request.reviewerNote())
+                    + "\nหากต้องการยื่นใหม่ กรุณาแก้ไขตามเหตุผลข้างต้นแล้วส่งอีกครั้ง",
                 "/employee-requests",
                 true
             );
@@ -636,10 +653,9 @@ public class SpecialMoneyService {
             notificationService.notify(
                 request.managerApprovedBy(),
                 "SPECIAL_MONEY_REJECTED",
-                "CEO ปฏิเสธคำขอเงินสวัสดิการที่ผู้จัดการอนุมัติแล้ว",
-                request.employeeName() + " มีคำขอ " + request.requestType() + " วันที่ " + request.eventDate()
-                    + " ที่ผู้จัดการอนุมัติแล้ว แต่ถูก CEO ปฏิเสธ: "
-                    + (request.reviewerNote() == null ? "กรุณาติดต่อ HR" : request.reviewerNote()),
+                "ไม่อนุมัติคำขอ" + type + "ของ " + request.employeeName(),
+                "CEO ไม่อนุมัติคำขอ" + type + "ของ " + request.employeeName() + " ที่คุณอนุมัติไว้"
+                    + "\nเหตุผล: " + (request.reviewerNote() == null ? "กรุณาติดต่อ HR" : request.reviewerNote()),
                 "/employee-requests",
                 true
             );
@@ -725,6 +741,16 @@ public class SpecialMoneyService {
         return request == null || request.reviewerNote() == null || request.reviewerNote().isBlank()
             ? null
             : request.reviewerNote().trim();
+    }
+
+    /**
+     * The amount notification copy quotes (mail-copy wording fix): {@code approvedAmount()} once the
+     * CEO has set one, else {@code requestedAmount()} -- the only figure that exists before approval.
+     * Not a new derived value: both fields are already on {@link SpecialMoneyRequestDto}, this only
+     * picks which one is display-ready for a given request's current stage.
+     */
+    private BigDecimal amountOf(SpecialMoneyRequestDto request) {
+        return request.approvedAmount() != null ? request.approvedAmount() : request.requestedAmount();
     }
 
     private String blankToNull(String value) {
