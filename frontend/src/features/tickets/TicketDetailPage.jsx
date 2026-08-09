@@ -1340,7 +1340,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             condensed={ticketChromeCondensed}
           />
           <div className="border-t border-border bg-surface px-4 sm:px-5">
+            {/* onSurface: this strip is on a white card, unlike the two
+                page-background call sites — see Tabs.jsx. */}
             <Tabs
+              onSurface
               items={visibleTabItems}
               value={visibleActiveTab}
               onChange={setActiveTab}

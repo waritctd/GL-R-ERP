@@ -9,7 +9,7 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable, expandedRowRegionId } from '../../components/common/DataTable.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { Panel } from '../../components/common/Layout.jsx';
+import { FilterField, Panel } from '../../components/common/Layout.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -346,16 +346,13 @@ export function TeamLeaveTab({ user, showToast }) {
   return (
     <>
       <SafeForm className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
-        <label>
-          จากวันที่
+        <FilterField label="จากวันที่">
           <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
-        </label>
-        <label>
-          ถึงวันที่
+        </FilterField>
+        <FilterField label="ถึงวันที่">
           <input type="date" value={filters.to} onChange={(event) => updateFilter('to', event.target.value)} />
-        </label>
-        <label>
-          สถานะ
+        </FilterField>
+        <FilterField label="สถานะ">
           <select value={filters.status} onChange={(event) => updateFilter('status', event.target.value)}>
             <option value="">ทุกสถานะ</option>
             <option value="SUBMITTED">รออนุมัติ</option>
@@ -364,17 +361,16 @@ export function TeamLeaveTab({ user, showToast }) {
             <option value="CANCELLED">ยกเลิกแล้ว</option>
             <option value="AUTO_REJECTED">โควตาไม่พอ</option>
           </select>
-        </label>
+        </FilterField>
         {hasMultipleEmployeeOptions ? (
-          <label>
-            พนักงาน
+          <FilterField label="พนักงาน">
             <select value={filters.employeeId} onChange={(event) => updateFilter('employeeId', event.target.value)}>
               <option value="">ทุกคน</option>
               {employeeOptions.map((employee) => (
                 <option key={employee.employeeId} value={employee.employeeId}>{employee.employeeName} · {employee.employeeCode}</option>
               ))}
             </select>
-          </label>
+          </FilterField>
         ) : null}
         <Button type="submit" disabled={requestsQuery.isPending}>
           <Icon name="search" />

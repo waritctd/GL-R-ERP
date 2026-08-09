@@ -11,7 +11,7 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { formGridSpan2, Panel, PageStack, RowActions } from '../../components/common/Layout.jsx';
+import { FilterField, formGridSpan2, Panel, PageStack, RowActions } from '../../components/common/Layout.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { UpcomingHolidays } from '../../components/common/UpcomingHolidays.jsx';
@@ -595,16 +595,13 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
       />
 
       <SafeForm className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
-        <label>
-          จากวันที่
+        <FilterField label="จากวันที่">
           <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
-        </label>
-        <label>
-          ถึงวันที่
+        </FilterField>
+        <FilterField label="ถึงวันที่">
           <input type="date" value={filters.to} onChange={(event) => updateFilter('to', event.target.value)} />
-        </label>
-        <label>
-          สถานะ
+        </FilterField>
+        <FilterField label="สถานะ">
           <select value={filters.status} onChange={(event) => updateFilter('status', event.target.value)}>
             <option value="">ทุกสถานะ</option>
             <option value="SUBMITTED">รออนุมัติ</option>
@@ -613,17 +610,16 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
             <option value="REJECTED">ปฏิเสธแล้ว</option>
             <option value="CANCELLED">ยกเลิกแล้ว</option>
           </select>
-        </label>
+        </FilterField>
         {hasMultipleEmployeeOptions ? (
-          <label>
-            พนักงาน
+          <FilterField label="พนักงาน">
             <select value={filters.employeeId} onChange={(event) => updateFilter('employeeId', event.target.value)}>
               <option value="">ทุกคน</option>
               {employeeOptions.map((employee) => (
                 <option key={employee.employeeId} value={employee.employeeId}>{employee.employeeName} · {employee.employeeCode}</option>
               ))}
             </select>
-          </label>
+          </FilterField>
         ) : null}
         <Button type="submit" disabled={loading}>
           <Icon name="search" />
