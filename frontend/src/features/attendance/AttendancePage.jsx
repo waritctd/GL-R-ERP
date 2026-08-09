@@ -678,6 +678,21 @@ export function AttendancePage({ user, showToast }) {
         columns={columns}
         rows={days}
         getRowKey={rowKey}
+        // The 840px floor below needs somewhere to scroll, or it is just clipped.
+        //
+        // `<Panel flush>` is `overflow-hidden` (it has to be — the flush body runs edge to edge, so
+        // the card's radius is what clips its corners). With the grid held at 840px inside a panel
+        // whose content box is narrower, the excess had no scroll region and simply vanished:
+        // measured at 768px, scrollWidth 840 vs clientWidth 702, with NO scrollable ancestor
+        // anywhere up the chain — 138px of table unreachable by any gesture.
+        //
+        // The casualty is the last column, which is the status column — i.e. exactly what the
+        // 840px floor was added to protect. The floor stopped the columns being *squeezed* and
+        // then the panel hid them anyway, so the badge was off-screen either way and the fix
+        // looked like it had worked. `panelClassName` exists for precisely this (see DataTable's
+        // own comment on the prop) and keeps the change on this page rather than altering the
+        // scroll model of every table in the app.
+        panelClassName="overflow-x-auto"
         // Status is the reason this page exists, so it gets the widest share and the time columns
         // are held narrow. Without this the status column was pushed off-screen at tablet width,
         // which hid every late/early/OT badge on the page.

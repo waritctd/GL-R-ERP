@@ -40,18 +40,32 @@ describe('UpcomingHolidays', () => {
   // can catch that alignment regressing. Same shape as jsdom being unable to see implicit form
   // submission. What IS testable, and what these tests pin, is the part that would silently lose
   // data: truncation must be presentational only, never a substring of the stored value.
-  it('truncates for display but keeps the FULL official name reachable in the title attribute', async () => {
+  it('clamps for display but keeps the FULL official name in the DOM and the title attribute', async () => {
     api.leave.calendarContext.mockResolvedValue({
       calendarContext: { holidays: [{ holidayDate: '2026-08-12', nameTh: REAL_LONG_NAME }] },
     });
     renderPanel();
 
     const name = await screen.findByText(REAL_LONG_NAME);
-    // The rendered text is the whole value -- the clamp is CSS (`truncate`), not a JS slice. If
-    // someone "fixes" this by cutting the string, this fails and the data loss is caught.
+    // The rendered text is the whole value -- the clamp is CSS, not a JS slice. If someone
+    // "fixes" this by cutting the string, this fails and the data loss is caught. This is the
+    // assertion that actually matters and it is unchanged.
     expect(name.textContent).toBe(REAL_LONG_NAME);
     expect(name.getAttribute('title')).toBe(REAL_LONG_NAME);
-    expect(name.className).toContain('truncate');
+
+    // The clamp is now by LINE, not by `truncate` (2026-08-10). `truncate` is
+    // `white-space: nowrap` + ellipsis, so it can only ever render ONE line whatever room the
+    // column has: measured at 768px it showed 504px of this 551px name, cutting the last 8% --
+    // "และวันแม่แห่งชาติ", the only part a reader recognises -- while looking complete. At 390px it
+    // showed 158px of 551px, i.e. the generic royal-birthday opening that every such holiday
+    // shares, so two different holidays rendered as the same string. A line clamp uses whatever
+    // width is available instead, and the row stacks below 720px so the name gets the full card.
+    //
+    // Asserting the mechanism, not just "some clamp": a bare `overflow-hidden` would pass a
+    // looser check while silently reverting to one-line behaviour.
+    expect(name.className).toContain('[-webkit-line-clamp:2]');
+    expect(name.className).toContain('mobile:[-webkit-line-clamp:3]');
+    expect(name.className.split(/\s+/)).not.toContain('truncate');
   });
 
   it('does not repeat a "วันหยุดบริษัท" badge on every row -- the panel title already says so', async () => {
