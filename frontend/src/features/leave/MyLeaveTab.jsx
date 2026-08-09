@@ -252,19 +252,17 @@ function OwnRequestsSection({
       rows={rows}
       getRowKey={leaveRequestRowKey}
       gridClassName={LEAVE_REQUEST_TABLE_GRID}
-      // Two fixes in one prop (2026-08-11), both measured at 834px:
+      // DataTable brings its OWN `<Panel flush>` card, and this table is additionally wrapped in a
+      // titled `<Panel flush>` below, so the two 1px borders sat adjacent: a card inside a card.
+      // Every other DataTable caller in the app renders it bare; these two leave tabs keep the
+      // outer panel only for its section title, so the inner card's chrome is what has to go, not
+      // the heading.
       //
-      // `overflow-x-auto` — the 980px grid floor (LEAVE_REQUEST_TABLE_GRID) inside `<Panel flush>`,
-      // which is `overflow-hidden`, had scrollWidth 980 vs clientWidth 751 and NO scrollable
-      // ancestor: 229px of table silently clipped for the whole 721-1040px band. Same failure and
-      // same fix as /attendance (#639).
-      //
-      // `rounded-none border-0` — DataTable brings its OWN `<Panel flush>` card, and this table is
-      // additionally wrapped in a titled `<Panel flush>` below, so the two borders sat 1px apart:
-      // a card inside a card. Every other DataTable caller in the app renders it bare; these two
-      // leave tabs keep the outer panel only for its section title, so the inner card's chrome is
-      // what has to go, not the heading.
-      panelClassName="overflow-x-auto rounded-none border-0"
+      // Scroll is deliberately NOT set here. The 980px grid floor inside an `overflow-hidden`
+      // flush Panel used to clip 229px of this table -- measured at 834px, unreachable by any
+      // gesture -- but #650 fixed that in Panel's own default and removed the three call-site
+      // patches that had each worked around it. See ReviewQueueTab.jsx's comment at the same spot.
+      panelClassName="rounded-none border-0"
       loading={loading}
       error={hasError}
       onRetry={() => requestsQuery.refetch()}

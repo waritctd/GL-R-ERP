@@ -413,17 +413,14 @@ export function ReviewQueueTab({ user, showToast }) {
           rows={actionableRequests}
           getRowKey={leaveRequestRowKey}
           gridClassName={LEAVE_REQUEST_TABLE_GRID}
-          // LEAVE_REQUEST_TABLE_GRID holds this table at `nav-drawer:min-w-[980px]` for the whole
-          // 721-1040px band, and DataTable renders it inside `<Panel flush>`, which is
-          // `overflow-hidden`. Measured at 834px BEFORE this prop: scrollWidth 980 vs clientWidth
-          // 753, with no scrollable ancestor anywhere up the chain -- 227px of table unreachable by
-          // any gesture, and the casualty was the LAST column, i.e. อนุมัติ/ปฏิเสธ. A reviewer on a
-          // tablet could see the queue and could not act on it.
-          //
-          // Same failure and same fix as /attendance (#639) -- see AttendancePage's own comment on
-          // this prop. Kept on the caller rather than changed inside DataTable so the scroll model
-          // of every other table in the app is untouched.
-          panelClassName="overflow-x-auto"
+          // No `panelClassName="overflow-x-auto"` here, deliberately. This branch carried one --
+          // LEAVE_REQUEST_TABLE_GRID's `nav-drawer:min-w-[980px]` floor inside an
+          // `overflow-hidden` flush Panel put 227px of table, including อนุมัติ/ปฏิเสธ, beyond
+          // reach of any gesture at 834px. #650 then fixed that DEFAULT in Panel itself
+          // (`flush` is `overflow-x-auto overflow-y-hidden` now) precisely because three call
+          // sites had each patched it locally, and deleted all three. Re-adding a fourth would
+          // be the pattern that commit exists to end. Verified against the merged default rather
+          // than assumed -- see the PR body.
           loading={loading}
           error={hasError}
           onRetry={() => requestsQuery.refetch()}

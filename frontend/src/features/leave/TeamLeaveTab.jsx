@@ -221,10 +221,10 @@ function TeamRequestsSection({
       rows={rows}
       getRowKey={leaveRequestRowKey}
       gridClassName={LEAVE_REQUEST_TABLE_GRID}
-      // Scroll region for the 980px grid floor + drops the inner card's chrome, since this table
-      // is wrapped in a titled `<Panel flush>` below. See MyLeaveTab.jsx's own comment on this
-      // prop for the measurements.
-      panelClassName="overflow-x-auto rounded-none border-0"
+      // Drops the inner card's chrome, since this table is wrapped in a titled `<Panel flush>`
+      // below. No scroll override -- #650 fixed that in Panel's default. See MyLeaveTab.jsx's
+      // own comment on this prop.
+      panelClassName="rounded-none border-0"
       loading={loading}
       error={hasError}
       onRetry={() => requestsQuery.refetch()}
