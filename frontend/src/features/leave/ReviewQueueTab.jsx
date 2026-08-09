@@ -79,11 +79,25 @@ export function ReviewQueueTab({ user, showToast }) {
     refetchOnWindowFocus: true,
   });
   const allRequests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
-  const actionableRequests = useMemo(
-    () => allRequests.filter((request) => canReviewRequest(request, user, canReviewAll)
-      || canManagerCancelRequest(request, user, canReviewAll)),
-    [allRequests, user, canReviewAll],
-  );
+  // Decisions first, then the already-approved rows this user may only void (2026-08-11).
+  //
+  // `list()` returns one stream ordered by start_date DESC (LeaveRepository#findRequests), and
+  // this tab shows two DIFFERENT kinds of row: requests waiting on a decision, and APPROVED leave
+  // that could still be cancelled. Left interleaved by date, a queue headed "รอคุณพิจารณา 4" opened
+  // on an approved row, and the four rows the count refers to were scattered among rows that need
+  // nothing -- on the seeded SAL team, two of the first three rows were already decided. Since this
+  // tab paginates, the interleave could also push a real decision onto page 2 behind rows that are
+  // just sitting there.
+  //
+  // A STABLE partition, not a re-sort: within each group the API's own date order is preserved
+  // (`filter` twice, no comparator), so nothing about the ordering the backend chose is second-
+  // guessed here -- the two groups are simply not shuffled together.
+  const actionableRequests = useMemo(() => {
+    const reviewable = allRequests.filter((request) => canReviewRequest(request, user, canReviewAll));
+    const cancellableOnly = allRequests.filter((request) => !canReviewRequest(request, user, canReviewAll)
+      && canManagerCancelRequest(request, user, canReviewAll));
+    return [...reviewable, ...cancellableOnly];
+  }, [allRequests, user, canReviewAll]);
   const loading = requestsQuery.isPending;
   const denied = requestsQuery.isError && isPermissionError(requestsQuery.error);
   const hasError = requestsQuery.isError && !denied;
@@ -236,6 +250,9 @@ export function ReviewQueueTab({ user, showToast }) {
   const columns = useMemo(() => buildLeaveRequestColumns({
     expandedId,
     onToggleExpand: toggleExpand,
+    // Suppresses the "waiting on ผู้จัดการ (คุณนา)" note on rows waiting on THIS user -- which, on
+    // a division manager's own queue, is every pending row. See PendingApproverNote's own comment.
+    viewer: user,
     renderActions: (request) => {
       const reviewable = canReviewRequest(request, user, canReviewAll);
       const cancellable = canManagerCancelRequest(request, user, canReviewAll);
@@ -292,10 +309,15 @@ export function ReviewQueueTab({ user, showToast }) {
     return (
       <>
         <div className="flex min-w-0 items-start justify-between gap-3">
-          <strong className="min-w-0 truncate text-sm font-extrabold text-text">
+          {/* Wraps, never truncates (2026-08-11). A two-date range is the card's headline and the
+              one thing that must be read exactly; `truncate` is single-line-or-ellipsis, so at
+              390px it rendered "7 ก.ย. 2569 - 11 ก.ย. 25…" — cutting the Buddhist-era YEAR off the
+              end date, which looks like a complete date and is not one. The string is short and
+              space-separated, so wrapping costs at most one extra line. */}
+          <strong className="min-w-0 text-sm font-extrabold text-text">
             {formatDateRange(request.startDate, request.endDate)}
           </strong>
-          <span className="flex items-center gap-1.5">
+          <span className="flex shrink-0 items-center gap-1.5">
             <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
             <Button
               variant="icon"
@@ -309,7 +331,7 @@ export function ReviewQueueTab({ user, showToast }) {
             </Button>
           </span>
         </div>
-        <PendingApproverNote request={request} />
+        <PendingApproverNote request={request} viewer={user} />
         <span className="min-w-0 truncate text-xs text-text-muted">
           {request.employeeName || request.employeeCode} · {request.leaveTypeNameTh || request.leaveTypeCode} · {formatDays(request.totalDays)}
         </span>
@@ -342,9 +364,11 @@ export function ReviewQueueTab({ user, showToast }) {
                 </Button>
               </>
             ) : null}
+            {/* `ban`, matching the desktop icon column -- see its own comment. The two glyphs
+                used to differ here only because this card was written before that fix. */}
             {cancellable ? (
               <Button type="button" variant="secondary" className="min-h-11 flex-1" disabled={rowSaving} onClick={() => requestCancel(request.id)}>
-                <Icon name="close" size={14} />
+                <Icon name="ban" size={14} />
                 ยกเลิก
               </Button>
             ) : null}
@@ -389,6 +413,17 @@ export function ReviewQueueTab({ user, showToast }) {
           rows={actionableRequests}
           getRowKey={leaveRequestRowKey}
           gridClassName={LEAVE_REQUEST_TABLE_GRID}
+          // LEAVE_REQUEST_TABLE_GRID holds this table at `nav-drawer:min-w-[980px]` for the whole
+          // 721-1040px band, and DataTable renders it inside `<Panel flush>`, which is
+          // `overflow-hidden`. Measured at 834px BEFORE this prop: scrollWidth 980 vs clientWidth
+          // 753, with no scrollable ancestor anywhere up the chain -- 227px of table unreachable by
+          // any gesture, and the casualty was the LAST column, i.e. อนุมัติ/ปฏิเสธ. A reviewer on a
+          // tablet could see the queue and could not act on it.
+          //
+          // Same failure and same fix as /attendance (#639) -- see AttendancePage's own comment on
+          // this prop. Kept on the caller rather than changed inside DataTable so the scroll model
+          // of every other table in the app is untouched.
+          panelClassName="overflow-x-auto"
           loading={loading}
           error={hasError}
           onRetry={() => requestsQuery.refetch()}
