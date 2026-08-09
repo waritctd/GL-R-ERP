@@ -117,17 +117,17 @@ export function HrDashboard({ employee, employees, profileRequests, dashboardSum
           title="จำนวนพนักงานตามฝ่าย"
           actions={<Button type="button" variant="text" onClick={() => navigate('/employees')}>ดูรายชื่อ</Button>}
         >
-          <div className="bar-list">
+          <div className="grid gap-2.5">
             {dashboardStats.divisionRows.map(({ division, count }) => {
               const widthPct = Math.max(8, Math.round((count / dashboardStats.maxHeadcount) * 100));
               return (
-                <div className="bar-row" key={division.id}>
+                <div className="grid grid-cols-[minmax(160px,1fr)_2fr_34px] gap-3 items-center" key={division.id}>
                   <span>
                     <strong>{division.th}</strong>
                     <small>{division.en}</small>
                   </span>
-                  <div className="bar-track">
-                    <i className="w-[var(--bar-width)]" style={{ '--bar-width': `${widthPct}%` }} />
+                  <div className="h-[9px] bg-surface-subtle rounded-pill overflow-hidden">
+                    <i className="block h-full rounded-[inherit] bg-accent w-[var(--bar-width)]" style={{ '--bar-width': `${widthPct}%` }} />
                   </div>
                   <b>{count}</b>
                 </div>
@@ -140,11 +140,11 @@ export function HrDashboard({ employee, employees, profileRequests, dashboardSum
           title="คำขอล่าสุด"
           actions={<Button type="button" variant="text" onClick={() => navigate('/requests')}>ดูทั้งหมด</Button>}
         >
-          <div className="request-feed">
+          <div className="request-feed grid gap-2.5">
             {profileRequests.slice(0, 5).map((request) => {
               const status = requestStatus(request.status);
               return (
-                <div className="request-feed-item" key={request.id}>
+                <div className="request-feed-item flex items-center gap-3 min-w-0 py-2.5 border-b border-surface-subtle" key={request.id}>
                   <Avatar employee={request.employee} size="sm" />
                   <span>
                     <strong>{request.employee?.nameTh}</strong>

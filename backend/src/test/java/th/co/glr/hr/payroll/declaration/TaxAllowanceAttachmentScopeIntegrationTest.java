@@ -169,13 +169,13 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
     @Test
     void aValidSectionKeyIsAcceptedAndReturned() {
         long declarationId = submit(employeeA);
-        TaxAllowanceAttachmentDto uploaded = uploadPdf(declarationId, "insurance", employeeActor(employeeA));
+        TaxAllowanceAttachmentDto uploaded = uploadPdf(declarationId, "item7", employeeActor(employeeA));
 
-        assertThat(uploaded.sectionKey()).isEqualTo("insurance");
+        assertThat(uploaded.sectionKey()).isEqualTo("item7");
         // Persisted, not just echoed back -- re-fetching through a fresh query proves the column
         // round-trips through hr.file_attachment, not just through the in-memory DTO this call returned.
         assertThat(repository.findAttachment(uploaded.attachmentId()).orElseThrow().sectionKey())
-            .isEqualTo("insurance");
+            .isEqualTo("item7");
     }
 
     @Test

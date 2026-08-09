@@ -1,11 +1,17 @@
 name: E2E (Playwright, real backend)
 
 # Browser + API e2e against the REAL stack — Vite dev server → Spring Boot → Postgres.
-# The sibling `e2e-ci.yml` runs the same tool against the MOCK frontend; both are kept because
-# they answer different questions (see frontend/e2e-real/README.md).
+# This is the only suite that asks the real Java services anything, so it is the only one whose
+# result is evidence about permissions (see frontend/e2e-real/README.md).
 #
-# NON-GATING, like e2e-ci.yml: intentionally not a required check yet. Promote once proven
-# stable across a few PR cycles.
+# The `e2e-ci.yml` this comment used to name was DELETED by #592, along with the whole mock e2e
+# suite. Its replacement is not a like-for-like: `visual-ci.yml` drives the mock frontend purely
+# to pixel-diff the rendered output, and asserts nothing about behaviour or authorization.
+# The two answer different questions — "does the real backend still honour this?" versus "did
+# the pixels move?" — and neither substitutes for the other.
+#
+# NON-GATING: intentionally not a required check yet. Promote once proven stable across a few
+# PR cycles.
 #
 # Triggered by backend changes too, not just frontend ones — unlike the mock suite, this one
 # can actually break when a Java role gate or a migration moves, which is the point of it.

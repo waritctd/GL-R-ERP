@@ -316,9 +316,16 @@ export function DivisionManagerOverview({ user, employee, dashboardSummary, show
           </Panel>
 
           <Panel title="ของฉัน (self-service)">
-            <div className="action-list">
+            <div className="grid gap-2.5">
               {quickActions.map(([path, label]) => (
-                <button type="button" key={path} onClick={() => navigate(path)}>{label}</button>
+                <button
+                  type="button"
+                  key={path}
+                  onClick={() => navigate(path)}
+                  className="min-h-[46px] border border-border rounded-md bg-surface-muted text-text font-bold"
+                >
+                  {label}
+                </button>
               ))}
             </div>
           </Panel>

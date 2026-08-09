@@ -8,6 +8,7 @@ import {
   logout,
   userMenu,
 } from './helpers/auth.js';
+import { captureJson } from './helpers/network.js';
 
 // Real auth lifecycle in a real browser against the real Spring backend and a real Postgres
 // session store. Nothing here is stubbed: each login is a BCrypt check in AuthService against
@@ -25,16 +26,20 @@ test.describe('this suite is actually talking to the backend', () => {
     await page.getByTestId('login-email').fill(PERSONAS.hr.email);
     await page.getByTestId('login-password').fill(DEMO_PASSWORD);
 
-    const [response] = await Promise.all([
-      page.waitForResponse((r) => r.url().includes('/api/auth/login') && r.request().method() === 'POST'),
+    // captureJson rather than waitForResponse + a later .json(). Nothing navigates here today —
+    // App.jsx's handleLogin is a setState, so the document that made this request survives — but
+    // this is the identical shape that flaked in smoke.spec.js, and it would start losing the
+    // same race the day login gains a redirect. Buffering eagerly costs nothing and removes the
+    // dependency on that implementation detail; see helpers/network.js.
+    const [{ status, json }] = await Promise.all([
+      captureJson(page, (r) => r.url().includes('/api/auth/login') && r.request().method() === 'POST'),
       page.getByTestId('login-submit').click(),
     ]);
 
     // mockApi.js resolves in-process and never touches the network, so reaching this line at
     // all is the proof. The body check pins it to the real AuthResponse from the Java service.
-    expect(response.status()).toBe(200);
-    const { user } = await response.json();
-    expect(user.email).toBe(PERSONAS.hr.email);
+    expect(status).toBe(200);
+    expect(json.user.email).toBe(PERSONAS.hr.email);
     await expectAuthenticated(page);
   });
 

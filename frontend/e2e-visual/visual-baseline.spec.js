@@ -21,6 +21,24 @@
 //      Any output is a real difference — read the *-diff.png under
 //      test-results/ before assuming it is noise.
 //
+// ── CAPTURE THE BASELINE AND THE DIFF ON THE SAME DAY ────────────────────────
+// These screenshots contain today's date: the dashboard greeting ("8 ส.ค. 2569"),
+// request rows, and the attendance grid all render it. A baseline taken before
+// midnight and diffed after produces a wall of red — 12 of 15 surfaces on
+// 2026-08-08/09 — that is entirely one changed digit per screenshot. It reads
+// exactly like a catastrophic regression and is not one.
+//
+// The tell: `import` is the only role whose dashboard renders no date, so a pure
+// rollover shows up as "everything failed except import". If you see that shape,
+// re-capture the baseline and re-run before investigating anything else. Always
+// open a *-diff.png — the pass/fail count alone cannot distinguish a rollover
+// from a real defect, and this harness's whole value is that a human looks.
+//
+// (Freezing the clock would remove the hazard, but the app reads Bangkok "today"
+// in several places — useIsMobile-style hooks, attendance's day grid, leave
+// balances — so a frozen date changes which rows render and would need its own
+// verification. Same-day capture is the cheaper correct answer.)
+//
 // PW_CHROMIUM overrides the browser binary for sandboxes whose preinstalled
 // Chromium does not match the pinned @playwright/test revision.
 import { test, expect } from '@playwright/test';
@@ -30,6 +48,35 @@ test.skip(!process.env.VISUAL_BASELINE, 'set VISUAL_BASELINE=1 to run the visual
 
 if (process.env.PW_CHROMIUM) {
   test.use({ launchOptions: { executablePath: process.env.PW_CHROMIUM } });
+}
+
+// ── WHY THE POINTER HAS TO BE PARKED BEFORE EVERY CAPTURE ────────────────────
+// Playwright's mouse does not move on its own, and `spaGoto` navigates via
+// history.pushState rather than a click -- so the pointer stays wherever
+// `loginAs` last clicked, for the whole test, across every route. Whatever
+// element happens to land under that stale coordinate on each new page renders
+// `:hover`, and the screenshot bakes it in.
+//
+// That is not stable across runs. StatCard renders a real <button> with a
+// hover affordance whenever it has an onClick (see StatCard.jsx), and
+// /ticket-overview is a grid of them, so a few pixels of layout or scroll
+// difference between two runs moves the highlight to a DIFFERENT tile and the
+// diff reports a change nobody made. Observed for real on PR #615 run
+// 31270806243: `mobile-ceo-ticket-overview` failed at 797 pixels / ratio 0.01
+// on the first attempt and passed on retry, with the expected image showing
+// "ยกเลิกเดือนนี้" shaded and the actual showing the tile BELOW it shaded
+// instead -- the hover had simply moved down one tile. Reproduced locally at
+// 527 pixels / ratio 0.01 by parking the pointer over a tile on purpose.
+//
+// It is a required check with maxDiffPixelRatio: 0, so an intermittent false
+// diff blocks unrelated PRs at random -- worse than no check at all.
+//
+// (0, 0) does NOT fix it: measured, the topbar still matches `:hover` there.
+// A negative coordinate is outside the content area entirely and leaves
+// `document.querySelectorAll(':hover')` empty -- also measured. Do not
+// "simplify" this to (0, 0).
+async function parkPointer(page) {
+  await page.mouse.move(-20, -20);
 }
 
 const VIEWPORTS = [
@@ -63,6 +110,7 @@ for (const { name: vpName, width, height } of VIEWPORTS) {
         await spaGoto(page, route);
         // let react-query settle + any layout observers run
         await page.waitForTimeout(900);
+        await parkPointer(page);
         const slug = route === '/' ? 'home' : route.replace(/\//g, '-').replace(/^-/, '');
         await expect(page).toHaveScreenshot(`${vpName}-${role}-${slug}.png`, {
           fullPage: true,

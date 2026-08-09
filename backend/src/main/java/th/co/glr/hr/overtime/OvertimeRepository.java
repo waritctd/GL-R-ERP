@@ -5,6 +5,7 @@ import java.sql.SQLException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -241,6 +242,68 @@ public class OvertimeRepository {
             .stream()
             .filter(bounds -> bounds != null)
             .findFirst();
+    }
+
+    /**
+     * The employee's division, needed to resolve their {@code WorkSchedule} for {@code
+     * OvertimeService#suggestDayType}. Single-row twin of {@link #findDivisionIdsByEmployee} for
+     * the submit/approve paths, which act on exactly one employee at a time -- mirrors {@code
+     * AttendanceDailyRepository#findDivisionId}, do not reimplement the query differently here.
+     */
+    public Long findDivisionId(long employeeId) {
+        List<Long> found = jdbc.query(
+            "SELECT division_id FROM hr.employee WHERE employee_id = :employeeId",
+            new MapSqlParameterSource("employeeId", employeeId),
+            (rs, rowNum) -> nullableLong(rs, "division_id"));
+        return found.isEmpty() ? null : found.get(0);
+    }
+
+    /**
+     * The employee's department, needed alongside division to resolve their {@code WorkSchedule}.
+     * Mirrors {@code AttendanceDailyRepository#findDepartmentId} -- see {@link #findDivisionId}'s
+     * Javadoc for why this is a separate single-row method rather than folded into one query.
+     */
+    public Long findDepartmentId(long employeeId) {
+        List<Long> found = jdbc.query(
+            "SELECT department_id FROM hr.employee WHERE employee_id = :employeeId",
+            new MapSqlParameterSource("employeeId", employeeId),
+            (rs, rowNum) -> nullableLong(rs, "department_id"));
+        return found.isEmpty() ? null : found.get(0);
+    }
+
+    /**
+     * Division per employee, in ONE query -- {@code OvertimeService#list}'s suggestion needs it for
+     * every row, and a per-row {@link #findDivisionId} call there would be an N+1 (see that
+     * method's own comment). Mirrors {@code AttendanceDailyRepository#findDivisionIdsByEmployee}
+     * exactly; do not diverge the SQL between the two twins.
+     */
+    public Map<Long, Long> findDivisionIdsByEmployee() {
+        Map<Long, Long> byEmployee = new HashMap<>();
+        // Block-statement lambda, not an expression lambda -- Map.put's return value would
+        // otherwise make this ambiguous between NamedParameterJdbcTemplate's
+        // RowCallbackHandler and ResultSetExtractor<T> overloads (both accept a
+        // SqlParameterSource + a lambda; only the void/statement shape picks RowCallbackHandler
+        // unambiguously). Same shape AttendanceDailyRepository's twin already uses.
+        jdbc.query(
+            "SELECT employee_id, division_id FROM hr.employee",
+            new MapSqlParameterSource(),
+            rs -> { byEmployee.put(rs.getLong("employee_id"), nullableLong(rs, "division_id")); });
+        return byEmployee;
+    }
+
+    /**
+     * Department per employee, in ONE query -- the bulk twin of {@link #findDepartmentId}, same
+     * reasoning and same SQL shape as {@link #findDivisionIdsByEmployee}. Mirrors {@code
+     * AttendanceDailyRepository#findDepartmentIdsByEmployee}.
+     */
+    public Map<Long, Long> findDepartmentIdsByEmployee() {
+        Map<Long, Long> byEmployee = new HashMap<>();
+        // See findDivisionIdsByEmployee's comment on why this must stay a block-statement lambda.
+        jdbc.query(
+            "SELECT employee_id, department_id FROM hr.employee",
+            new MapSqlParameterSource(),
+            rs -> { byEmployee.put(rs.getLong("employee_id"), nullableLong(rs, "department_id")); });
+        return byEmployee;
     }
 
     public List<Long> findCeoApproverEmployeeIds() {
@@ -556,7 +619,15 @@ public class OvertimeRepository {
             rs.getObject("created_at", OffsetDateTime.class),
             rs.getObject("updated_at", OffsetDateTime.class),
             resolvePendingApproverRole(rs),
-            resolvePendingApproverName(rs)
+            resolvePendingApproverName(rs),
+            // feat/ot-nonworkday-rate-suggestion: NOT computed here on purpose. This is a plain SQL
+            // row mapper with no WorkScheduleResolver, and the suggestion needs one (see
+            // OvertimeService#suggestDayType). OvertimeService reconstructs every DTO this
+            // repository returns with the real value attached before it reaches a controller --
+            // see OvertimeService#withSuggestedDayType / #requireRequest / #attachSuggestions. A
+            // caller reading this field directly off a bare OvertimeRepository result (bypassing
+            // OvertimeService) would see null, never a wrong answer.
+            null
         );
     }
 

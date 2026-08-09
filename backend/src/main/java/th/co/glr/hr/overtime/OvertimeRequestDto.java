@@ -57,6 +57,23 @@ public record OvertimeRequestDto(
     // candidate (multiple division-manager peers, or multiple active ceo-role employees) -- see
     // OvertimeRepository#resolvePendingApprover's Javadoc.
     String pendingApproverRole,
-    String pendingApproverName
+    String pendingApproverName,
+    /**
+     * feat/ot-nonworkday-rate-suggestion: the system's SUGGESTION for {@code dayType} -- {@code
+     * "WORKDAY"} or {@code "HOLIDAY"} -- computed by {@code OvertimeService#suggestDayType} at READ
+     * time from {@code hr.holiday} OR the employee's resolved {@code WorkSchedule} non-workday,
+     * whichever fires. Deliberately NOT persisted: {@code OvertimeService} attaches it fresh to
+     * every DTO this class's methods return (see {@code requireRequest}/{@code list}), so a
+     * schedule correction or a holiday added after the fact changes the suggestion on the very next
+     * read, with no migration or backfill.
+     *
+     * <p><b>Never a pay input by itself.</b> It is what the submit form pre-fills and what the
+     * approve dialog defaults its selector to -- see {@code ApproveOvertimeRequest.dayType} for the
+     * one field that actually may become {@code pay_rate_multiplier}. This field, {@link #dayType},
+     * and the employee's original claim (never persisted as its own column -- see {@code
+     * OvertimeService#resolveDayTypeSubmitNote}) are three distinct values on purpose; do not
+     * conflate them.
+     */
+    String suggestedDayType
 ) {
 }

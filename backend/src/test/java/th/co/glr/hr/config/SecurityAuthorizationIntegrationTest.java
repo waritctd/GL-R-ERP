@@ -585,14 +585,32 @@ class SecurityAuthorizationIntegrationTest {
         return session;
     }
 
+    /**
+     * A PENDING declaration that HR could actually approve — which since the signed-form guard
+     * means one with its signed ล.ย.01 already attached.
+     *
+     * <p>Every caller here is testing an authorization boundary, not the signature requirement, so
+     * they all want a declaration whose only remaining obstacle is who is asking. Leaving the
+     * attachment out would make the approve cases fail with 409 "no signed form" and quietly stop
+     * exercising the role checks they exist for — a green-looking suite that had stopped testing
+     * authorization at all. The signature guard has its own wrong-way-round test in
+     * TaxAllowanceDeclarationScopeIntegrationTest.
+     */
     private long seedPendingDeclaration(long employeeId, int taxYear) {
-        return jdbc.queryForObject("""
+        long declarationId = jdbc.queryForObject("""
             INSERT INTO hr.tax_allowance_declaration
                 (employee_id, tax_year, effective_month, spouse_allowance, submitted_by_id)
             VALUES (:employeeId, :taxYear, 1, 60000, :employeeId)
             RETURNING declaration_id
             """,
             Map.of("employeeId", employeeId, "taxYear", taxYear), Long.class);
+        jdbc.update("""
+            INSERT INTO hr.file_attachment
+                (domain, owner_id, file_name, file_path, mime_type, file_size, section_key, storage_state)
+            VALUES ('tax_allowance_declaration', :ownerId, 'signed-loryor01.pdf', 'test://signed-form',
+                    'application/pdf', 2048, 'signed_form', 'DATABASE')
+            """, Map.of("ownerId", declarationId));
+        return declarationId;
     }
 
     private String declarationStatus(long declarationId) {

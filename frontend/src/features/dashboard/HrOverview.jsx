@@ -254,17 +254,17 @@ export function HrOverview({ employees, dashboardSummary }) {
         title="จำนวนพนักงานตามฝ่าย"
         actions={<Button type="button" variant="text" onClick={() => navigate('/employees')}>ดูรายชื่อ</Button>}
       >
-        <div className="bar-list">
+        <div className="grid gap-2.5">
           {stats.divisionRows.map(({ division, count }) => {
             const widthPct = Math.max(8, Math.round((count / stats.maxHeadcount) * 100));
             return (
-              <div className="bar-row" key={division.id}>
+              <div className="grid grid-cols-[minmax(160px,1fr)_2fr_34px] gap-3 items-center" key={division.id}>
                 <span>
                   <strong>{division.th}</strong>
                   <small>{division.en}</small>
                 </span>
-                <div className="bar-track">
-                  <i className="w-[var(--bar-width)]" style={{ '--bar-width': `${widthPct}%` }} />
+                <div className="h-[9px] bg-surface-subtle rounded-pill overflow-hidden">
+                  <i className="block h-full rounded-[inherit] bg-accent w-[var(--bar-width)]" style={{ '--bar-width': `${widthPct}%` }} />
                 </div>
                 <b>{count}</b>
               </div>
