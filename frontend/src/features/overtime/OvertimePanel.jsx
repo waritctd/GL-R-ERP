@@ -876,7 +876,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
         employee's own history never fills those columns. Nothing found it until the division
         manager became loggable-in.
       */}
-      <Panel flush className="overflow-x-auto">
+      <Panel flush>
         <div className={`${OVERTIME_TABLE_GRID} table-head`}>
           <span>วันที่ / พนักงาน</span>
           <span>แผน OT</span>

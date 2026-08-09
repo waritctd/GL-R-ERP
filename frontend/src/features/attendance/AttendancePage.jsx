@@ -762,7 +762,6 @@ export function AttendancePage({ user, showToast }) {
         // looked like it had worked. `panelClassName` exists for precisely this (see DataTable's
         // own comment on the prop) and keeps the change on this page rather than altering the
         // scroll model of every table in the app.
-        panelClassName="overflow-x-auto"
         // Status is the reason this page exists, so it gets the widest share and the time columns
         // are held narrow. Without this the status column was pushed off-screen at tablet width,
         // which hid every late/early/OT badge on the page.
