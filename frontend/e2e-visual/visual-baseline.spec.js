@@ -41,8 +41,11 @@
 //
 // PW_CHROMIUM overrides the browser binary for sandboxes whose preinstalled
 // Chromium does not match the pinned @playwright/test revision.
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 import { loginAs, spaGoto } from './helpers/auth.js';
+import { loadAcceptedChanges } from './helpers/accepted-changes.js';
 
 test.skip(!process.env.VISUAL_BASELINE, 'set VISUAL_BASELINE=1 to run the visual-regression harness');
 
@@ -94,6 +97,44 @@ const SURFACES = [
   ['import', ['/', '/procurement']],
 ];
 
+const snapshotName = (vpName, role, route) =>
+  `${vpName}-${role}-${route === '/' ? 'home' : route.replace(/\//g, '-').replace(/^-/, '')}`;
+
+// ── ACCEPTING AN INTENDED PIXEL CHANGE ───────────────────────────────────────
+// The gate runs at maxDiffPixelRatio: 0 against a baseline taken from the merge
+// base, so a PR that deliberately changes the UI fails by construction. That is
+// correct for a CSS port -- which is supposed to change nothing -- but wrong for
+// a feature. PR #615 is the real case: it added a suggested-rate row to
+// OvertimePanel, and `desktop-hr-employee-requests` and
+// `desktop-employee-employee-requests` failed on the attempt AND the retry,
+// because the change was genuine. It was merged with the check red.
+//
+// Merging red is the thing to avoid. It trains reviewers to override a required
+// gate, and that is how a real regression eventually goes through. So: name the
+// snapshot in accepted-changes.txt, against your PR number, with a reason.
+//
+// An accepted snapshot is STILL captured and STILL compared -- the run just does
+// not fail on it, and the -diff.png is still uploaded (the workflow's upload step
+// is `if: always()` for exactly this). You accept a change after reading the
+// image, not instead of reading it.
+//
+// Nothing needs updating afterwards: the baseline comes from the merge base, so
+// once the PR merges its pixels ARE the baseline. Accepted once, then simply true.
+const PR_NUMBER = process.env.VISUAL_PR_NUMBER;
+const ALL_SNAPSHOTS = new Set(
+  VIEWPORTS.flatMap(({ name }) => SURFACES.flatMap(([role, routes]) => routes.map((r) => snapshotName(name, role, r)))),
+);
+// Throws on a malformed line, or on an entry for THIS PR naming a snapshot that
+// does not exist -- loud at load time beats a typo silently meaning "not accepted".
+const ACCEPTED = loadAcceptedChanges(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), 'accepted-changes.txt'),
+  PR_NUMBER,
+  ALL_SNAPSHOTS,
+);
+if (ACCEPTED.size) {
+  console.log(`[visual] ${ACCEPTED.size} accepted change(s) declared for PR #${PR_NUMBER}: ${[...ACCEPTED.keys()].join(', ')}`);
+}
+
 for (const { name: vpName, width, height } of VIEWPORTS) {
   for (const [role, routes] of SURFACES) {
     test(`${vpName}-${role}`, async ({ page }) => {
@@ -111,13 +152,35 @@ for (const { name: vpName, width, height } of VIEWPORTS) {
         // let react-query settle + any layout observers run
         await page.waitForTimeout(900);
         await parkPointer(page);
-        const slug = route === '/' ? 'home' : route.replace(/\//g, '-').replace(/^-/, '');
-        await expect(page).toHaveScreenshot(`${vpName}-${role}-${slug}.png`, {
-          fullPage: true,
-          animations: 'disabled',
-          maxDiffPixelRatio: 0,
-          timeout: 30_000,
-        });
+        const name = snapshotName(vpName, role, route);
+        const reason = ACCEPTED.get(name);
+        try {
+          await expect(page).toHaveScreenshot(`${name}.png`, {
+            fullPage: true,
+            animations: 'disabled',
+            maxDiffPixelRatio: 0,
+            timeout: 30_000,
+          });
+          if (reason) {
+            // Not a failure: a change can legitimately show at one viewport and not
+            // another. But an entry that never fires is usually a typo or a leftover,
+            // so say so rather than letting it sit there looking load-bearing.
+            console.log(`[visual] NOTE ${name} is listed in accepted-changes.txt for PR #${PR_NUMBER} but did not differ — stale entry?`);
+          }
+        } catch (err) {
+          if (!reason) throw err;
+          // Playwright has already written -expected/-actual/-diff into test-results
+          // and attached them to the report by the time it throws, so swallowing the
+          // error here keeps the evidence and only drops the failure.
+          console.log(`[visual] ACCEPTED ${name} (PR #${PR_NUMBER}) — ${reason}`);
+          console.log(
+            String(err.message)
+              .split('\n')
+              .filter((l) => /pixels|ratio/.test(l))
+              .slice(0, 1)
+              .join('') || '  (see the uploaded -diff.png)',
+          );
+        }
       }
     });
   }

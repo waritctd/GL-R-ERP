@@ -183,6 +183,48 @@ class TaxAllowanceCapCatalogTest extends AbstractPostgresIntegrationTest {
         assertThat(deltaOverFloor(pensionOnly)).isEqualByComparingTo(entry("pension").ownCap());
     }
 
+    /**
+     * ข้อ 9 ล.ย.01 (V137): the catalogue's ฿30,000 must be what the real calculator actually grants.
+     * That figure is กอช.'s -- the tightest of the four funds the single box covers -- and NOT the
+     * provident fund's own 15%-of-wages-to-฿500,000, so this test is the guard against someone
+     * "correcting" the catalogue to the more familiar PVD number. rd.go.th ปีภาษี 2568 allowance
+     * table (https://www.rd.go.th/65908.html) is the source; see
+     * {@code PayrollCalculator#retirementAllowance} for why the tightest is the right one.
+     */
+    @Test
+    void providentFundCapMatchesTheCatalogueAndIsTheThirtyThousandNotFiveHundredThousand() {
+        TaxAllowanceCapEntry providentFund = entry("provident_fund");
+        assertThat(providentFund.ownCap())
+            .as("ข้อ 9 takes กอช.'s 30,000, not the provident fund's 500,000")
+            .isEqualByComparingTo(new BigDecimal("30000.00"));
+        assertThat(providentFund.incomeRate())
+            .as("กอช.'s limit is a flat baht figure -- no percent-of-income component")
+            .isNull();
+
+        long employeeId = seedEmployee("CAP-PVD");
+        seed(employeeId, "provident_fund_allowance", ABSURD, Map.of());
+        assertThat(deltaOverFloor(employeeId))
+            .as("catalogue ownCap must match what the real calculator actually grants")
+            .isEqualByComparingTo(providentFund.ownCap());
+    }
+
+    /**
+     * ข้อ 9 shares the ฿500,000 retirement cluster rather than sitting outside it -- the wrong-way-
+     * round case, because a term added to the wrong group would still look correct on its own.
+     */
+    @Test
+    void providentFundSharesTheRetirementClusterRatherThanAddingOnTopOfIt() {
+        TaxAllowanceCapEntry providentFund = entry("provident_fund");
+        assertThat(providentFund.groupId()).isEqualTo("retirement");
+        assertThat(providentFund.groupCap()).isEqualByComparingTo(new BigDecimal("500000.00"));
+
+        long employeeId = seedEmployee("CAP-PVD-RMF");
+        seed(employeeId, "provident_fund_allowance", ABSURD, Map.of(), "rmf_allowance", ABSURD);
+        assertThat(deltaOverFloor(employeeId))
+            .as("ข้อ 9 + RMF must clamp to the shared 500,000, not reach 530,000")
+            .isEqualByComparingTo(providentFund.groupCap());
+    }
+
     /** SSF is ฿0 from tax year 2025 onward (sunset) — this repo's calculator year is always >= 2025. */
     @Test
     void ssfAloneContributesNothingBecauseTaxYear2026IsPastTheSunset() {

@@ -23,6 +23,7 @@ import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsert
 import java.io.IOException;
 import java.math.BigDecimal;
 import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.LorYor01AddressPayload;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.LorYor01Details;
 import th.co.glr.hr.payroll.declaration.loryor01.LorYor01FormAssembler;
 import th.co.glr.hr.payroll.declaration.loryor01.LorYor01FormData;
@@ -267,6 +268,8 @@ public class TaxAllowanceDeclarationService {
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ได้รับการพิจารณาไปแล้ว");
         }
+        promoteHeaderToEmployeeMaster(existing, actor);
+
         TaxAllowanceDeclarationDto updated = repository.findById(declarationId)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after approve"));
         auditService.record(actor, "APPROVE_TAX_ALLOWANCE_DECLARATION", "tax_allowance_declaration",
@@ -275,6 +278,93 @@ public class TaxAllowanceDeclarationService {
             "แบบแจ้ง ล.ย.01 ได้รับการอนุมัติ",
             "ฝ่ายบุคคลอนุมัติแบบแจ้งค่าลดหย่อนภาษีปี " + existing.taxYear() + " แล้ว");
         return updated;
+    }
+
+    /**
+     * Owner decision #4: the ล.ย.01 header prefills from HR records and is editable, and the
+     * employee's corrections reach the master DB <b>only after HR confirms</b>. This is that write.
+     *
+     * <p><b>Why {@code approve} and not {@code apply}</b> (the plan doc suggested apply; this is a
+     * deliberate departure, stated for review):
+     * <ol>
+     *   <li>"After HR confirms" IS {@code approve}. {@code apply} is a later, separate step about
+     *       payroll <i>effective dating</i>.</li>
+     *   <li>{@code apply} refuses with 409 when the target month is already {@code PROCESSED}. That
+     *       is the right answer for allowance amounts and the wrong one for an address: a
+     *       master-data correction has nothing to do with which payroll month is open.</li>
+     *   <li>{@code apply} may never happen. A declaration can be approved and then superseded before
+     *       anyone applies it, and the confirmed header would be lost.</li>
+     *   <li>{@code approve} already calls {@link #requireSignedForm}, so this only ever promotes a
+     *       header the employee physically signed. {@code apply} adds no such attestation.</li>
+     * </ol>
+     *
+     * <p>Runs inside {@code approve}'s transaction: the approval and the master write land together
+     * or not at all.
+     *
+     * <p><b>Scope is address + สถานภาพ + tax ID — never the legal name.</b> {@code declaredFirstName}
+     * / {@code declaredLastName} are printed on the form and stored on the declaration, but a tax
+     * form is not a name-change instrument; renaming an employee stays a deliberate HR action.
+     *
+     * <p>The write targets {@code existing.employeeId()} — the declaration's OWNER — never anything
+     * the caller supplies, so an HR actor cannot redirect it at a third party or at themselves.
+     */
+    private void promoteHeaderToEmployeeMaster(TaxAllowanceDeclarationDto existing, UserPrincipal actor) {
+        LorYor01Details header = existing.lorYor01();
+        if (header == null) {
+            return;
+        }
+        long employeeId = existing.employeeId();
+
+        LorYor01AddressPayload address = header.address();
+        if (address != null) {
+            employeeRepository.upsertCurrentAddressFromDeclaration(
+                employeeId,
+                blankToNull(address.houseNo()), blankToNull(address.building()),
+                blankToNull(address.roomNo()), blankToNull(address.floor()),
+                blankToNull(address.village()), blankToNull(address.moo()),
+                blankToNull(address.soi()), blankToNull(address.junction()),
+                blankToNull(address.road()), blankToNull(address.subDistrict()),
+                blankToNull(address.district()), blankToNull(address.province()),
+                blankToNull(address.postalCode()));
+        }
+        employeeRepository.upsertTaxIdFromDeclaration(employeeId, blankToNull(header.taxpayerId()));
+        employeeRepository.updateMaritalStatusFromDeclaration(
+            employeeId, maritalStatusForMaster(header.maritalState()));
+
+        auditService.record(actor, "WRITE_BACK_TAX_ALLOWANCE_HEADER", "employee", employeeId,
+            null, header);
+    }
+
+    /**
+     * ข้อ 1's enum -> the vocabulary {@code hr.employee.marital_status} actually holds.
+     *
+     * <p>That column is {@code VARCHAR(30)} with <b>no CHECK constraint and no enum anywhere in the
+     * backend</b>; the only values attested in this repository are the Thai words its fixtures use
+     * ({@code โสด} / {@code สมรส} in {@code demoData.js}, {@code mockApi.js},
+     * {@code EmployeeDetailPage.test.jsx}). Writing the declaration's {@code SINGLE} /
+     * {@code MARRIED} token straight through would introduce a second vocabulary into a column
+     * nothing validates, and the employee screens would start showing English next to everyone
+     * else's Thai.
+     *
+     * <p><b>Only the two unambiguous states are mapped.</b> {@code WIDOWED} and
+     * {@code DIED_DURING_YEAR} return null — the master is left alone — for two reasons: the Thai
+     * word for widowed appears nowhere in this repository, so any value chosen here would be
+     * invented rather than matched; and {@code DIED_DURING_YEAR}
+     * ("คู่สมรสถึงแก่ความตายระหว่างปีภาษี") is a statement about the tax year, not a standing HR
+     * marital status. HR sets those by hand in the employee editor.
+     *
+     * <p>Re-check this mapping against what production's {@code marital_status} column really holds
+     * before extending it; it could not be queried when this was written.
+     */
+    private String maritalStatusForMaster(String maritalState) {
+        if (maritalState == null) {
+            return null;
+        }
+        return switch (maritalState) {
+            case "SINGLE" -> "โสด";
+            case "MARRIED" -> "สมรส";
+            default -> null;
+        };
     }
 
     /** PENDING -> REJECTED. A reason is mandatory (decision #6 / {@code chk_tad_rejected_has_reason}). */
@@ -701,7 +791,11 @@ public class TaxAllowanceDeclarationService {
             zero(request.politicalDonation()),
             zeroInt(request.childCount()), zeroInt(request.childCountDouble()), zeroInt(request.disabledCareCount()),
             Boolean.TRUE.equals(request.disabilityCardHolder()),
-            request.parentCareCount() == null ? 0 : request.parentCareCount()
+            request.parentCareCount() == null ? 0 : request.parentCareCount(),
+            // ข้อ 9 lives on the ล.ย.01 sub-payload, not at the top level of the request, because it
+            // is a form item rather than one of the pre-V137 allowance fields. Pulled across here so
+            // the /estimate preview withholds on the same figure the applied declaration will.
+            lorYor01Zero(request.lorYor01())
         );
     }
 
@@ -715,12 +809,18 @@ public class TaxAllowanceDeclarationService {
             zero(request.politicalDonation()),
             zeroInt(request.childCount()), zeroInt(request.childCountDouble()), zeroInt(request.disabledCareCount()),
             Boolean.TRUE.equals(request.disabilityCardHolder()),
-            request.parentCareCount() == null ? 0 : request.parentCareCount()
+            request.parentCareCount() == null ? 0 : request.parentCareCount(),
+            lorYor01Zero(request.lorYor01())
         );
     }
 
     private java.math.BigDecimal zero(java.math.BigDecimal value) {
         return value == null ? java.math.BigDecimal.ZERO : value;
+    }
+
+    /** ข้อ 9 off the ล.ย.01 sub-payload; the whole sub-payload is optional, hence the null guard. */
+    private java.math.BigDecimal lorYor01Zero(LorYor01Details lorYor01) {
+        return lorYor01 == null ? java.math.BigDecimal.ZERO : zero(lorYor01.providentFundAllowance());
     }
 
     private int zeroInt(Integer value) {
@@ -740,7 +840,10 @@ public class TaxAllowanceDeclarationService {
             allowances.politicalDonation(),
             allowances.childCount(), allowances.childCountDouble(), allowances.disabledCareCount(),
             allowances.disabilityCardHolder(), allowances.parentCareCount(),
-            appliedEffectiveMonth, dto.documentReference()
+            appliedEffectiveMonth, dto.documentReference(),
+            // ข้อ 9 (V137): promoted from the declaration into employee_tax_allowance, which is what
+            // PayrollRepository#findTaxAllowancesByEmployee reads on every run.
+            allowances.providentFundAllowance()
         );
     }
 
