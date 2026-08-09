@@ -79,6 +79,30 @@ export function PageStack({ className, children, ...props }) {
  * The corner radius still clips (verified: `border-radius` unchanged at 8px,
  * `unreachable` 2 -> 0 on /profile, page overflow still 0).
  *
+ * ── WHY `overflow-y: hidden` IS THE LOAD-BEARING HALF ───────────────────────
+ * An element whose overflow is not `visible` becomes a SCROLL CONTAINER, and a
+ * `position: sticky` descendant sticks within its nearest scroll container. So
+ * the risk in this change was never the horizontal axis — it was accidentally
+ * giving these cards a VERTICAL scrollport and re-anchoring every sticky child
+ * inside them. Keeping `overflow-y: hidden` is what prevents that: no flush
+ * Panel gains a vertical scrollport, so no sticky descendant changes behaviour.
+ *
+ * State it that way round, not as "no caller has a sticky descendant" — that
+ * would be false. `PayrollPage` has three, and it is also the one caller that
+ * overrides this line, passing
+ * `panelClassName="max-h-[min(68vh,760px)] overflow-auto"` for its own scroll
+ * region (it is the only user of `DataTable`'s `stickyHeader`). It survives
+ * because `Panel` merges through `cn()` = `twMerge(clsx(...))`, and
+ * tailwind-merge treats `overflow-auto` as conflicting with BOTH longhands:
+ *
+ *   twMerge('... overflow-x-auto overflow-y-hidden max-h-[...] overflow-auto')
+ *     -> '... max-h-[...] overflow-auto'      // both longhands dropped
+ *
+ * Verified in node, and behaviourally on the page: payroll's table panel
+ * computes `overflow-x: auto`, `overflow-y: auto`, `max-height: 612px` — i.e.
+ * untouched. **If `Panel` is ever "simplified" to string concatenation instead
+ * of `cn`, payroll silently loses vertical scrolling and no test will fail.**
+ *
  * It replaces a regex that sniffed `p-0` out of `className` to infer the same
  * thing. That inference was invisible at the call site — nine callers spelled
  * it `className="!p-0 overflow-hidden"` and nothing said why, and any caller
