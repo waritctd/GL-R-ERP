@@ -307,22 +307,12 @@ export function TaxAllowanceForm({
       defaultOpen={!sectioned || section.kind === 'identity'}
       headerRight={sectionState(section)}
     >
-      <div className="grid gap-4">
-        {sectionBody(section)}
-        {evidenceMode && section.fields.length > 0 ? (
-          <TaxAllowanceEvidencePanel
-            mode={evidenceMode}
-            declarationId={evidenceDeclarationId}
-            sectionKey={section.key}
-            showUncategorized={false}
-            staged={stagedEvidenceBySection?.[section.key] ?? []}
-            onStageFile={onStageEvidence ? (file) => onStageEvidence(section.key, file) : undefined}
-            onUnstageFile={onUnstageEvidence ? (tempId) => onUnstageEvidence(section.key, tempId) : undefined}
-            showToast={showToast}
-            title={`หลักฐานแสดงสิทธิ — ข้อ ${section.no}`}
-          />
-        ) : null}
-      </div>
+      {/* No per-ข้อ หลักฐานแสดงสิทธิ panel. Owner ruling 2026-08-09: the ERP is not the system of
+          record for the supporting documents (receipts, certificates, บัตรคนพิการ) — HR handles
+          those on paper, as the form's own หมายเหตุ (2) contemplates. The ONE attachment this page
+          still takes is the signed ล.ย.01 itself, in the sign-off panel below; that is not
+          evidence, and the server-side approve guard depends on it. */}
+      <div className="grid gap-4">{sectionBody(section)}</div>
     </CollapsibleSection>
   ));
 

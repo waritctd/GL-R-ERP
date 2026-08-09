@@ -262,43 +262,26 @@ describe('TaxAllowancePage', () => {
 
       renderPage();
 
-      fireEvent.click(await screen.findByRole('button', { name: /ข้อ 7/ }));
-
-      const file = new File(['x'], 'cert.pdf', { type: 'application/pdf' });
-      fireEvent.change(await findPicker(), { target: { files: [file] } });
-
-      // Attached immediately, during fill-in -- no round trip needed to SEE it.
-      expect(await screen.findByText('cert.pdf')).not.toBeNull();
-      expect(screen.getByText('รอส่ง')).not.toBeNull();
-      // But genuinely not sent yet -- there is no declarationId for a brand-new declaration.
-      expect(api.payroll.uploadTaxAllowanceAttachment).not.toHaveBeenCalled();
-
-      // Submitting is blocked until the signed form is back (owner decision #3), so the flow has
-      // to go through that panel — which is the point: evidence staged mid-fill-in has to survive
-      // the extra step, not just an immediate submit.
-      expect(screen.getByRole('button', { name: 'ยื่นแบบแจ้ง' }).disabled).toBe(true);
-
-      fireEvent.click(screen.getByRole('button', { name: /ตรวจทาน ลงนาม และยื่น/ }));
+      // Only one bucket survives the per-ข้อ evidence removal: the signed form itself. The staging
+      // behaviour still matters — a file picked while the declaration has no id yet must reach the
+      // server, tagged, once submit creates one.
+      fireEvent.click(await screen.findByRole('button', { name: /ตรวจทาน ลงนาม และยื่น/ }));
       const signed = new File(['y'], 'signed.pdf', { type: 'application/pdf' });
-      fireEvent.change(await findPicker({ last: true }), { target: { files: [signed] } });
+      fireEvent.change(await findPicker(), { target: { files: [signed] } });
       await screen.findByText('signed.pdf');
+
+      // Held client-side: there is no declarationId to upload against yet.
+      expect(api.payroll.uploadTaxAllowanceAttachment).not.toHaveBeenCalled();
 
       const submit = screen.getByRole('button', { name: 'ยื่นแบบแจ้ง' });
       await waitFor(() => expect(submit.disabled).toBe(false));
       fireEvent.click(submit);
-
-      // Submitting now opens a confirmation first (owner ruling 2026-08-09) — the button no longer
-      // files anything on its own. Scoped to the dialog: the page's own submit button carries the
-      // same label, and picking "the last match" instead would silently re-click the wrong one.
       const dialog = await screen.findByRole('dialog');
       fireEvent.click(within(dialog).getByRole('button', { name: 'ยื่นแบบแจ้ง' }));
 
       await waitFor(() => expect(api.payroll.submitMyTaxAllowanceDeclaration).toHaveBeenCalled());
-      // Flushed against the REAL declarationId the submit just returned, tagged with the ข้อ it was
-      // picked under while filling in -- proves this is not "attach after a first submit", it is
-      // the SAME pick from mid-fill-in finally reaching the server.
-      await waitFor(() => expect(api.payroll.uploadTaxAllowanceAttachment).toHaveBeenCalledWith(77, file, 'item7'));
-      expect(api.payroll.uploadTaxAllowanceAttachment).toHaveBeenCalledWith(77, signed, 'signed_form');
+      await waitFor(() => expect(api.payroll.uploadTaxAllowanceAttachment)
+        .toHaveBeenCalledWith(77, signed, 'signed_form'));
     });
   });
 
@@ -355,10 +338,13 @@ describe('TaxAllowancePage', () => {
       api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [] });
       renderPage();
 
-      fireEvent.click(await screen.findByRole('button', { name: /ข้อ 7/ }));
-      const file = new File(['x'], 'cert.pdf', { type: 'application/pdf' });
+      // Staged through the signed-form panel — the only attachment bucket left after the per-ข้อ
+      // หลักฐานแสดงสิทธิ panels were removed. What this test guards is unchanged: a year switch must
+      // not silently discard a file the employee has picked but not yet sent.
+      fireEvent.click(await screen.findByRole('button', { name: /ตรวจทาน ลงนาม และยื่น/ }));
+      const file = new File(['x'], 'signed.pdf', { type: 'application/pdf' });
       fireEvent.change(await findPicker(), { target: { files: [file] } });
-      await screen.findByText('cert.pdf');
+      await screen.findByText('signed.pdf');
 
       fireEvent.change(screen.getByLabelText('ปีภาษี'), { target: { value: String(currentYear - 1) } });
 

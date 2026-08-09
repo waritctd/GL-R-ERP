@@ -71,26 +71,21 @@ public class TaxAllowanceDeclarationService {
     private static final Set<String> EVIDENCE_MIME_TYPES =
         Set.of("application/pdf", "image/jpeg", "image/png");
 
-    // V135 (feat/tax-allowance-sections): mirrors TAX_ALLOWANCE_GROUPS' five `key`s in
-    // frontend/src/features/taxAllowance/taxAllowanceSchema.js. No shared enum exists between the
-    // frontend and backend for this grouping -- unlike TaxAllowanceCapEntry's `category` strings,
-    // which TaxAllowanceCapCatalog owns authoritatively, the five-section grouping is a UI
-    // information-architecture concept with no backend equivalent to reuse. Keep both lists in sync
-    // by hand if a section is ever added, renamed, or removed.
-    /**
-     * One key per ข้อ of แบบ ล.ย.01, plus {@code signed_form} for the signed scan the employee
-     * returns before HR will accept the filing.
-     *
-     * <p>Replaces the five invented category keys (family/insurance/savings/housing/donation) that
-     * predate the form restructure. Mirrored BY HAND in {@code mockApi.js}'s
-     * {@code TAX_ALLOWANCE_SECTION_KEYS} and in {@code LOR_YOR_01_SECTIONS} — nothing enforces the
-     * three stay in step, so a key added to the form and not here uploads cleanly under mocks and
-     * 400s against this service. ข้อ 11 and ข้อ 13 are absent deliberately: neither is fillable, so
-     * neither can carry evidence.
-     */
     /** The bucket holding the signed, scanned form — the one attachment approval depends on. */
     static final String SIGNED_FORM_SECTION_KEY = "signed_form";
 
+    /**
+     * {@code signed_form} is the only key any UI can still produce.
+     *
+     * <p>The per-ข้อ item keys are RETAINED, not dead weight: declarations filed before the per-ข้อ
+     * หลักฐานแสดงสิทธิ panels were removed (owner ruling 2026-08-09 — the ERP is not the system of
+     * record for supporting documents; HR keeps those on paper) still have attachments stored under
+     * them, and HR must be able to list and download those. Narrowing this set would not break those
+     * reads — it only gates uploads — but leaving them documents why rows with those keys exist.
+     *
+     * <p>Do not add a new item key here without a UI that produces it; and do not remove these
+     * without checking `hr.file_attachment` for rows still carrying them.
+     */
     private static final Set<String> EVIDENCE_SECTION_KEYS =
         Set.of("item3", "item4", "item5", "item6", "item7", "item8", "item9", "item10",
             "item12", "item14", "item15", "signed_form");
