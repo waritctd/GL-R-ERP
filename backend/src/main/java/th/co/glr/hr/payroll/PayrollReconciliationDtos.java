@@ -62,9 +62,8 @@ public final class PayrollReconciliationDtos {
         // ล.ย.01 completeness (V93): the per-head counts behind the บุตร and อุปการะคนพิการ caps, and
         // the บัตรประจำตัวคนพิการ declaration behind the 190,000 ยกเว้นเงินได้.
         //
-        // กองทุนสำรองเลี้ยงชีพ REMOVED (owner decision, 2026-07-29, handoff section 4 / V99): GL&R
-        // operates no provident fund. See PayrollTaxAllowanceInput's field-removal comment for the
-        // full reasoning; do not resurrect this field.
+        // กองทุนสำรองเลี้ยงชีพ (ข้อ 9) is NOT here -- it is appended LAST, below, because V137
+        // restored it after V99 had dropped it. See providentFundAllowance at the end of this record.
         @PositiveOrZero Integer childCount,
         @PositiveOrZero Integer childCountDouble,
         @PositiveOrZero Integer disabledCareCount,
@@ -80,7 +79,13 @@ public final class PayrollReconciliationDtos {
         // which is how every pre-V93 declaration was already being applied.
         @jakarta.validation.constraints.Min(1) @jakarta.validation.constraints.Max(12) Integer effectiveMonth,
         // Evidence the employee attached to the ล.ย.01 (receipt/certificate reference).
-        String documentReference
+        String documentReference,
+        // ข้อ 9 ล.ย.01 (V137, 2026-08-08) -- เงินสะสมกองทุนสำรองเลี้ยงชีพ/กบข./กอช./ครูโรงเรียนเอกชน.
+        // Appended LAST, after the dating metadata, purely to keep every legacy constructor below
+        // working unchanged; the odd reading order is the cost of that discipline. Restored after
+        // V99 removed it -- see PayrollTaxAllowanceInput's providentFundAllowance for why ข้อ 9 has
+        // to exist even though GL&R runs no employer provident fund.
+        @PositiveOrZero BigDecimal providentFundAllowance
     ) {
         /**
          * Legacy 16-arg constructor: the declaration shape before the ล.ย.01 completeness/dating
@@ -121,7 +126,7 @@ public final class PayrollReconciliationDtos {
                 // allowance. The doubled 60,000 rate is not assumed -- deriving stays on the plain
                 // 30,000 rate and under-claims rather than over-claims.
                 headCount(childAllowance, "30000"), 0, headCount(disabledCareAllowance, "60000"),
-                false, 0, 1, null);
+                false, 0, 1, null, BigDecimal.ZERO);
         }
 
         /**
@@ -158,7 +163,7 @@ public final class PayrollReconciliationDtos {
                 thaiEsgAllowance, homeLoanInterestAllowance, educationDonation, generalDonation,
                 politicalDonation,
                 headCount(childAllowance, "30000"), 0, headCount(disabledCareAllowance, "60000"),
-                false, parentCareCount, 1, null);
+                false, parentCareCount, 1, null, BigDecimal.ZERO);
         }
 
         /** Smallest head count that would permit the declared amount -- see the legacy constructor. */
