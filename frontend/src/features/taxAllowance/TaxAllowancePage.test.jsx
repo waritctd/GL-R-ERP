@@ -144,6 +144,37 @@ describe('TaxAllowancePage', () => {
   // null and `defaultAllowanceValues(null)` fed the form nothing but zeros. `selectResumableDeclaration`
   // now seeds the form from the newest WITHDRAWN row when there is no current declaration -- but must
   // NOT make a withdrawn declaration look filed (the badge stays ยังไม่ได้ยื่น).
+  //
+  // ⚠️ DO NOT BARRIER THESE TESTS ON THE STATUS BADGE. Every test below asserts on what the FORM
+  // holds, and the badge does not gate that. Both badge barriers this block used to open its tests
+  // with were satisfied by the FIRST PAINT, while the declarations query was still in flight -- so
+  // the fixture had not reached the form at all and everything after them raced the query. Measured
+  // on the render, not inferred:
+  //
+  //   `findByText('ยังไม่ได้ยื่น')` -- `current` is null while loading, so `taxAllowanceStatusInfo(null)`
+  //       renders exactly that badge before any response exists. Satisfied on paint 1, every time.
+  //
+  //   `findByText(/อนุมัติแล้ว/)`  -- worse, because it never matched the badge at all. On paint 1 the
+  //       regex has exactly ONE match and it is TaxAllowanceForm's static identity-section hint
+  //       ("...จะบันทึกกลับเข้าทะเบียนก็ต่อเมื่อฝ่ายบุคคลอนุมัติแล้วเท่านั้น"), which renders immediately
+  //       because the identity ข้อ is `defaultOpen`. Once the query settles there are TWO matches, so
+  //       had the badge ever been the only candidate this would have thrown "found multiple elements"
+  //       instead -- the ambiguity is precisely what let it resolve against static copy.
+  //
+  // Underneath that, form values arrive strictly later than any paint anyway: TaxAllowancePage
+  // recomputes `defaultValues` and commits, and only then does TaxAllowanceForm's
+  // `useEffect(() => reset(defaultValues))` -- a PASSIVE effect, one Scheduler macrotask after the
+  // commit -- push them into react-hook-form. Clicking a ข้อ open before that flush mounts its input
+  // against `defaultAllowanceValues(null)`, i.e. '0'.
+  //
+  // Both gaps were absorbed by the incidental await-room in the following `findByLabelText`, which is
+  // the only reason these ever passed. On a loaded CI box the room runs out: PR #640 -- a leave-surface
+  // change touching no tax-allowance file -- failed here with `expected '0' to be '60000'`, passed on a
+  // re-run with zero code changes, 26/26 locally, 127s in CI against ~22s locally.
+  //
+  // So: barrier on something the FORM produces (a ข้อ's own `useWatch`-driven subtotal, or an
+  // `editing`-gated control that the settle effect creates), never on a status badge. Assert the badge
+  // afterwards, synchronously, where it is a real assertion rather than a race.
   describe('withdrawal preserves values for resume (#387 regression)', () => {
     it('pre-fills the form from the most recently withdrawn declaration when there is no current one', async () => {
       api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({
@@ -157,17 +188,22 @@ describe('TaxAllowancePage', () => {
       });
       renderPage();
 
-      // Status still reads "not yet filed", exactly as before this fix -- a withdrawn declaration is
-      // not current standing, only its VALUES are offered back for editing.
-      expect(await screen.findByText('ยังไม่ได้ยื่น')).not.toBeNull();
-
-      // ข้อ 7's own collapsed row shows the withdrawn declaration's figure, not ฿0.00. Waiting on
-      // this is also what proves the declarations query has actually settled and fed `resumable`
-      // through to `defaultValues`, rather than the synchronous first paint (null either way).
+      // THE barrier. ข้อ 7's own collapsed row shows the withdrawn declaration's figure, not ฿0.00 --
+      // and it is rendered from `useWatch`, i.e. from react-hook-form's state, so it cannot appear
+      // until `reset(defaultValues)` has actually run. That is what makes it a barrier and the badge
+      // not one (see this block's header): it proves the declarations query settled AND fed
+      // `resumable` through to the form, rather than proving only that something painted.
       //
       // ฿25,000 not ฿85,000: the withdrawn row's spouseAllowance is deliberately NOT shown, because
       // ล.ย.01 has no spouse amount box — HR sets that figure at review.
       expect(await screen.findByText('฿25,000.00')).not.toBeNull();
+
+      // Status still reads "not yet filed", exactly as before this fix -- a withdrawn declaration is
+      // not current standing, only its VALUES are offered back for editing. Deliberately asserted
+      // AFTER the barrier above and with a synchronous `getByText`: as a leading `findByText` this
+      // matched the in-flight paint (`current` is null while loading, which renders this same badge),
+      // so it passed before the fixture had been applied and said nothing about the settled state.
+      expect(screen.getByText('ยังไม่ได้ยื่น')).not.toBeNull();
 
       // And the actual field value survived into the reopened section, not just the total shown on
       // the hub -- matches the real-backend repro's own `#ta-spouseAllowance` check.
@@ -182,15 +218,42 @@ describe('TaxAllowancePage', () => {
           declaration({
             status: 'SUPERSEDED',
             submittedAt: `${currentYear}-02-01T00:00:00.000Z`,
-            allowances: { spouseAllowance: 60000 },
+            // Same allowances as the WITHDRAWN fixture in the test above, so status is the only thing
+            // that differs between the two and the assertion below isolates exactly that.
+            //
+            // `lifeInsuranceAllowance` is the load-bearing half. This fixture used to carry
+            // `spouseAllowance` alone -- the one declared value ล.ย.01 has no amount box for (see the
+            // test above), so it can never reach ข้อ 7's field. The assertion therefore read '0'
+            // whatever `selectResumableDeclaration` did, and mutation-checking proved it: teaching
+            // that function to accept SUPERSEDED left this test GREEN. It was not weakly covering the
+            // guard, it was incapable of failing on it.
+            allowances: { spouseAllowance: 60000, lifeInsuranceAllowance: 25000 },
           }),
         ],
       });
       renderPage();
 
-      expect(await screen.findByText('ยังไม่ได้ยื่น')).not.toBeNull();
+      // A test whose expected outcome is "nothing was prefilled" cannot barrier on a value appearing,
+      // so it barriers on the page having SETTLED instead. The sign-off panel is `readOnly ? null :
+      // ...`, and `readOnly` is `!editing` -- while `editing` is only ever set by the effect that
+      // opens with `if (declarationsQuery.isLoading) return`. So this control existing means the query
+      // resolved and the page acted on it.
+      //
+      // It is also strictly LATER than any prefill would be: React runs child effects before parent
+      // effects, so TaxAllowanceForm's `reset(defaultValues)` has already run by the time
+      // TaxAllowancePage's `setEditing` re-render puts this control on screen. A regression that made
+      // SUPERSEDED resumable has therefore already landed in the field when this resolves -- which is
+      // what makes the '0' below decide on BEHAVIOUR rather than on timing.
+      //
+      // The previous barrier, `findByText('ยังไม่ได้ยื่น')`, gave no such ordering: it is what an
+      // IN-FLIGHT query renders too, so it was satisfied on the first paint and whether the fixture
+      // had reached the form by the time '0' was read came down to whether a pending flush happened
+      // to land. On a negative assertion that is the dangerous direction -- it fails SILENTLY, by
+      // passing. Same defect as the #640 flake below, mirrored.
+      await screen.findByRole('button', { name: /ตรวจทาน ลงนาม และยื่น/ });
+      expect(screen.getByText('ยังไม่ได้ยื่น')).not.toBeNull();
 
-      fireEvent.click(await screen.findByRole('button', { name: /ข้อ 7/ }));
+      fireEvent.click(screen.getByRole('button', { name: /ข้อ 7/ }));
       expect(await screen.findByLabelText('จำนวนเงิน')).not.toBeNull();
       expect(screen.getByLabelText('จำนวนเงิน').value).toBe('0');
     });
@@ -215,7 +278,18 @@ describe('TaxAllowancePage', () => {
       });
       renderPage();
 
-      await screen.findByText(/อนุมัติแล้ว/);
+      // THE barrier -- and the #640 flake fix. This used to await `/อนุมัติแล้ว/`, which resolved on
+      // the first paint against a static hint paragraph rather than the badge (see this block's
+      // header), so the click below opened ข้อ 7 on a form the response had never reached and the
+      // assertion read '0'.
+      //
+      // ข้อ 7's collapsed row renders `formatMoney` over `useWatch`'s values, so it carries what the
+      // FORM holds. ฿60,000.00 here means `current` (the APPROVED row) won and is in form state --
+      // the exact precondition the assertion below depends on.
+      expect(await screen.findByText('฿60,000.00')).not.toBeNull();
+      // Now a real assertion rather than a race. The exact badge label, not `/อนุมัติแล้ว/`: that
+      // regex also matches the identity ข้อ's static hint, which is what made it useless as a barrier.
+      expect(screen.getByText('อนุมัติแล้ว — ยังไม่ใช้กับเงินเดือน')).not.toBeNull();
 
       fireEvent.click(screen.getByRole('button', { name: /ข้อ 7/ }));
       expect(await screen.findByLabelText('จำนวนเงิน')).not.toBeNull();
