@@ -21,6 +21,20 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege, stated rather than inherited. The repo default is already read-only, but a
+# default is a setting someone can change from a web UI; this pins it in the file. Nothing in
+# this workflow writes to the repo.
+permissions:
+  contents: read
+
+# A newer push to the same PR makes an in-flight run pointless — it is validating a commit
+# nobody will merge. Cancel superseded PR runs; do NOT cancel pushes to main, because a
+# cancelled run leaves that commit on main with no verdict at all, which is the opposite of
+# what these checks are for.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # ── THE AUDIT IS ITS OWN JOB, AND IT IS NOT GATED ON THE DIFF ────────────────────────────
   # It used to be the FIRST step of lint-and-build, ahead of lint/test/build in the same job.
@@ -46,10 +60,10 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node.js 22
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           cache: npm
@@ -72,7 +86,7 @@ jobs:
         working-directory: frontend
     steps:
       # fetch-depth: 0 so the base commit is present for the diff below.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -124,7 +138,7 @@ jobs:
 
       - name: Set up Node.js 22
         if: steps.changes.outputs.frontend == 'true'
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           cache: npm

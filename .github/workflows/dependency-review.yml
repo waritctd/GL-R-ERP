@@ -19,23 +19,28 @@ on:
 permissions:
   contents: read
 
+# See the note in backend-ci.yml: cancel superseded PR runs, never cancel a push to main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   dependency-review:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # push's before/after SHAs must be reachable locally for the diff -- the default
           # shallow checkout (depth 1) would not have `before` available.
           fetch-depth: 0
       - name: Dependency Review (pull request)
         if: github.event_name == 'pull_request'
-        uses: actions/dependency-review-action@v5
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
       - name: Dependency Review (push to main)
         if: github.event_name == 'push'
-        uses: actions/dependency-review-action@v5
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
           base-ref: ${{ github.event.before }}
