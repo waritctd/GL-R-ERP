@@ -61,11 +61,34 @@ export function CollapsibleSection({
 
   return (
     <section className="collapsible-section border border-border rounded-md bg-surface [&+&]:mt-4">
-      <div className="collapsible-header flex items-center justify-between gap-3">
+      {/*
+        `mobile:flex-wrap` — at ≤720px the title and `headerRight` stop competing for one row.
+        Measured at 390px with a badge + a refresh button in headerRight: the disclosure button was
+        squeezed to ~200px, which wrapped "คำขอแก้ไขเวลาเข้า-ออกงาน" onto three lines and its
+        subtitle onto eight — a wall of text where a section heading should be. Wrapping gives the
+        heading the full width and drops the controls onto their own row beneath it.
+      */}
+      <div className="collapsible-header flex items-center justify-between gap-3 mobile:flex-wrap mobile:gap-0">
+        {/*
+          The button is WRAPPED IN A HEADING, per the ARIA APG accordion pattern
+          (`<h3><button aria-expanded>`). Without it this variant rendered its title inside a bare
+          <button> and the section vanished from the page's heading outline — while the
+          `collapsible={false}` variant twenty lines above used a real <h2> for the same title.
+          So making a section collapsible silently cost a heading, which is backwards: the more
+          content a section hides, the more its title matters for navigating by heading.
+
+          Caught by AttendancePage.test.jsx's `getByRole('heading', { name: ... })` when the
+          attendance-correction section became collapsible — the test was right and the component
+          was wrong.
+
+          `flex-1` moves to the heading (the flex child now) and the button takes `w-full`, so the
+          rendered layout is unchanged for every existing caller.
+        */}
+        <h2 id={`${headerId}-heading`} className="collapsible-title-heading m-0 min-w-0 flex-1 text-[length:var(--text-lg)] font-bold mobile:basis-full">
         <button
           type="button"
           id={headerId}
-          className="collapsible-header-button flex-1 flex items-center gap-2 bg-transparent border-0 text-left p-4 text-text rounded-md hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
+          className="collapsible-header-button w-full flex items-center gap-2 bg-transparent border-0 text-left p-4 text-text rounded-md hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
           aria-expanded={open}
           aria-controls={bodyId}
           onClick={() => setOpen((value) => !value)}
@@ -79,12 +102,13 @@ export function CollapsibleSection({
               open && 'is-open',
             )}
           />
-          <span className="collapsible-title-group flex flex-col gap-0.5">
+          <span className="collapsible-title-group flex min-w-0 flex-col gap-0.5">
             <span className="collapsible-title text-[length:var(--text-lg)] font-bold text-text">{title}</span>
             {subtitle ? <span className="collapsible-subtitle text-[length:var(--text-xs)] font-medium text-text-muted">{subtitle}</span> : null}
           </span>
         </button>
-        {headerRight ? <div className="collapsible-header-right pr-4">{headerRight}</div> : null}
+        </h2>
+        {headerRight ? <div className="collapsible-header-right pr-4 mobile:basis-full mobile:pb-4 mobile:pl-4">{headerRight}</div> : null}
       </div>
       {open ? (
         <div id={bodyId} role="region" aria-labelledby={headerId} className="collapsible-body pt-0 px-4 pb-4">

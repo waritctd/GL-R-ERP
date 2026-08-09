@@ -312,7 +312,7 @@ describe('AttendancePage attendance-correction button and section', () => {
 
     // The modal is up once its own field is reachable by label -- this also proves the button
     // opened AttendanceCorrectionRequestModal specifically, not some other dialog.
-    expect(await screen.findByLabelText(/วันที่ที่ลืมสแกน/)).not.toBeNull();
+    expect(await screen.findByLabelText(/วันที่ที่ต้องการแก้ไข/)).not.toBeNull();
   });
 
   it('does not render "ขอแก้ไขเวลา" for a CEO', async () => {
@@ -330,7 +330,12 @@ describe('AttendancePage attendance-correction button and section', () => {
   it('renders the attendance-correction review section below the daily table', async () => {
     renderWithClient(<AttendancePage user={selfViewUser} showToast={vi.fn()} />);
 
-    expect(await screen.findByRole('heading', { name: 'คำขอแก้ไขเวลาเข้า-ออกงาน' })).not.toBeNull();
+    // Substring, not an exact name: the section is collapsible now, and CollapsibleSection puts
+    // the title AND the subtitle inside the disclosure button that its <h2> wraps (ARIA APG
+    // accordion pattern), so the heading's accessible name is "<title> <subtitle>". That is the
+    // right announcement — a screen-reader user gets the context with the heading — but it means
+    // an exact match no longer identifies it.
+    expect(await screen.findByRole('heading', { name: /คำขอแก้ไขเวลาเข้า-ออกงาน/ })).not.toBeNull();
   });
 
   // F3 (adversarial review): neither gate's `employeeId` conjunct had a fixture that could ever
@@ -345,6 +350,6 @@ describe('AttendancePage attendance-correction button and section', () => {
     // buttons the page ends up with.
     await waitFor(() => expect(api.attendance.daily).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole('button', { name: 'ขอแก้ไขเวลา' })).toBeNull();
-    expect(screen.queryByRole('heading', { name: 'คำขอแก้ไขเวลาเข้า-ออกงาน' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: /คำขอแก้ไขเวลาเข้า-ออกงาน/ })).toBeNull();
   });
 });
