@@ -469,8 +469,9 @@ public class OvertimeService {
      * <p><b>S-2/S-7 (review, second pass):</b> the {@code APPROVED} branch used to notify {@code
      * before.managerApprovedBy()} and then separately loop the WHOLE CEO approver set (at the time,
      * {@code findCeoApproverEmployeeIds()} -- every active employee in division {@code MD%}/{@code
-     * MN%}; that lookup is now {@code CeoApproverRepository#findEmployeeIds()}, narrowed to match
-     * the {@code ceo} role exactly -- see {@code CeoApproverRule}), with no de-duplication between
+     * MN%}; that lookup is now {@code CeoApproverRepository#findEmployeeIds()}, narrowed to the
+     * กรรมการผู้จัดการ alone -- NARROWER than the {@code ceo} role, see {@code CeoApproverRule}),
+     * with no de-duplication between
      * the two. A กรรมการผู้จัดการ (position contains ผู้จัดการ,
      * division {@code MD}) is a manager AND a member of that broadcast CEO set, so approving as the
      * manager stage and then being looped again as "a CEO" produced two notification rows and two

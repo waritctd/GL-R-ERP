@@ -30,7 +30,6 @@ public class CeoApproverRepository {
         return jdbc.query("""
             SELECT e.employee_id
               FROM hr.employee e
-              LEFT JOIN hr.division d ON d.division_id = e.division_id
               LEFT JOIN hr.position p ON p.position_id = e.position_id
              WHERE e.is_active = TRUE
                AND %s

@@ -160,7 +160,12 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         salesRepId = createEmployee(employees, "พนักงานขาย สี่", "sales-step4@glr.co.th", "SALES", "แผนกขาย");
         otherSalesId = createEmployee(employees, "พนักงานขาย อื่นสี่", "sales-step4-other@glr.co.th", "SALES", "แผนกขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า สี่", "import-step4@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
-        ceoUserId = createEmployee(employees, "ผู้บริหาร สี่", "ceo-step4@glr.co.th", "MD", "ผู้บริหาร");
+        // Position must be กรรมการผู้จัดการ, not the generic "ผู้บริหาร" the other CEO fixtures use:
+        // this test asserts the CEO is in the NOTIFIED set, and CeoApproverRule keys that on the
+        // position alone. "ผู้บริหาร" is not a real position in this company's data (prod has only
+        // กรรมการ, กรรมการผู้จัดการ and ประธานกรรมการ), and it never matched the notification rule --
+        // it only used to pass because the superseded rule keyed on the MD division instead.
+        ceoUserId = createEmployee(employees, "ผู้บริหาร สี่", "ceo-step4@glr.co.th", "MD", "กรรมการผู้จัดการ");
         accountUserId = createEmployee(employees, "บัญชี สี่", "account-step4@glr.co.th", "ACCT", "ฝ่ายบัญชี");
         salesManagerUserId = createEmployee(employees, "ผู้จัดการฝ่ายขาย สี่", "sales-manager-step4@glr.co.th", "SALES", "ฝ่ายขาย");
         salesActor = actor(salesRepId, "sales");

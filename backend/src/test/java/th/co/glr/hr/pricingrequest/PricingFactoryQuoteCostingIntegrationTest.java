@@ -147,7 +147,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         salesRepId = createEmployee(employees, "พนักงานขาย ทดสอบ", "sales-step2@glr.co.th", "SALES", "แผนกขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า เอ", "import-a@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
         secondImportUserId = createEmployee(employees, "ฝ่ายนำเข้า บี", "import-b@glr.co.th", "OPS", "ฝ่ายปฏิบัติการ");
-        ceoUserId = createEmployee(employees, "ผู้บริหาร ทดสอบ", "ceo-step2@glr.co.th", "MD", "ผู้บริหาร");
+        // กรรมการผู้จัดการ, not the generic "ผู้บริหาร" — see CustomerQuotationIntegrationTest for why:
+        // this test asserts CEO notification, which CeoApproverRule keys on position alone.
+        ceoUserId = createEmployee(employees, "ผู้บริหาร ทดสอบ", "ceo-step2@glr.co.th", "MD", "กรรมการผู้จัดการ");
         accountUserId = createEmployee(employees, "บัญชี ทดสอบ", "account-step2@glr.co.th", "ACCT", "ฝ่ายบัญชี");
         salesManagerUserId = createEmployee(employees, "ผู้จัดการฝ่ายขาย", "sales-manager-step2@glr.co.th", "SALES", "ฝ่ายขาย");
         salesActor = actor(salesRepId, "sales");
