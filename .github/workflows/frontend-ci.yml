@@ -1,18 +1,46 @@
 name: Frontend CI
 
+# ── WHY THERE IS NO `paths:` FILTER ON THE TRIGGERS ──────────────────────────────────────
+# There used to be one, on `frontend/**`. A trigger-level filter makes `lint-and-build`
+# ABSENT — not skipped, absent — on any PR that misses those paths, and GitHub waits forever
+# on a required check that never reports. Proof from this repo: PR #617 was workflow-only,
+# and `lint-and-build` and `e2e-real` never reported at all, while `build-and-test`,
+# `dependency-review` and `visual` did. Requiring this job as it stood would have deadlocked
+# every backend-only, docs-only and workflow-only PR.
+#
+# The filter therefore lives INSIDE the job now, the same shape `backend-ci.yml` uses for
+# #435 and `visual-ci.yml` uses for its own required check: the job always reports, and the
+# expensive steps are gated on whether the diff actually touched the frontend. Do not "tidy
+# this up" by reintroducing a `paths:` key.
+#
+# Neither job here is a required check yet — that is a branch-protection setting, left to the
+# owner. This workflow is merely structurally ready for the promotion.
+
 on:
   push:
     branches: [main]
-    paths:
-      - 'frontend/**'
-      - '.github/workflows/frontend-ci.yml'
   pull_request:
-    paths:
-      - 'frontend/**'
-      - '.github/workflows/frontend-ci.yml'
 
 jobs:
-  lint-and-build:
+  # ── THE AUDIT IS ITS OWN JOB, AND IT IS NOT GATED ON THE DIFF ────────────────────────────
+  # It used to be the FIRST step of lint-and-build, ahead of lint/test/build in the same job.
+  # That made a red audit mean the suite NEVER RAN — no lint, no vitest, no build — while the
+  # check reported a single generic red. Combined with lint-and-build not being a required
+  # check, a PR could merge having run neither the audit nor a single test. Splitting them
+  # means an advisory can never again suppress the test suite, and the two produce distinct,
+  # separately promotable checks that run in parallel.
+  #
+  # Deliberately NOT gated on "did the frontend change": an advisory's range is published
+  # UPSTREAM and mutable, so the dependency tree can start failing on a day nobody touched
+  # frontend/. Gating it on the diff would mean a newly-published advisory lies undetected
+  # until the next frontend PR. `dependency-review` is already un-gated for the same reason;
+  # note the two are complementary, not redundant — that one inspects deps the PR's diff
+  # ADDS, this one re-audits the whole installed tree.
+  #
+  # ⚠️ Consequence to be aware of: a frontend advisory can now turn a backend-only or
+  # docs-only PR red. That is intended — it is a real problem with the repo either way — but
+  # it is a behaviour change from the path-filtered version.
+  audit:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -37,11 +65,83 @@ jobs:
       - name: Audit dependencies
         run: npm run audit
 
+  lint-and-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      # fetch-depth: 0 so the base commit is present for the diff below.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Replaces the old trigger-level `paths:` filter. Fails SAFE: if the base commit cannot
+      # be resolved (force-push, new branch, shallow history) we run the full suite rather
+      # than report a green check we have not earned.
+      - name: Detect frontend changes
+        id: changes
+        # Pinned to the repo root, overriding this job's `working-directory: frontend`. git
+        # prints repo-relative paths regardless of cwd today, but if that ever changed the
+        # `^frontend/` match would silently stop matching — i.e. it would fail GREEN. Pin it.
+        working-directory: ${{ github.workspace }}
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE="$PR_BASE_SHA"
+          else
+            BASE="$PUSH_BEFORE_SHA"
+          fi
+
+          if [ -z "$BASE" ] \
+            || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "Base commit unresolvable ('$BASE') — running the full frontend suite."
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Two-dot: on a pull_request HEAD is the merge commit, so `BASE HEAD` is exactly the
+          # PR's net effect on the base branch. On a push it is the pushed range.
+          CHANGED="$(git diff --name-only "$BASE" HEAD)"
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          if echo "$CHANGED" | grep -qE '^(frontend/|\.github/workflows/frontend-ci\.yml$)'; then
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "frontend=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: No frontend changes — nothing to lint or build
+        if: steps.changes.outputs.frontend != 'true'
+        run: echo "::notice::No frontend/** changes in this diff; skipping lint, tests and build."
+
+      - name: Set up Node.js 22
+        if: steps.changes.outputs.frontend == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        if: steps.changes.outputs.frontend == 'true'
+        run: npm ci
+
       - name: Lint (ESLint + jsx-a11y)
+        if: steps.changes.outputs.frontend == 'true'
         run: npm run lint
 
       - name: Test (Vitest)
+        if: steps.changes.outputs.frontend == 'true'
         run: npm test
 
       - name: Build
+        if: steps.changes.outputs.frontend == 'true'
         run: npm run build

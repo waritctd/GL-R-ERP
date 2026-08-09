@@ -76,7 +76,16 @@ public class TaxAllowanceCapCatalog {
             new TaxAllowanceCapEntry("parent_health_insurance", TaxAllowanceCapKind.FLAT, null,
                 new BigDecimal("15000.00"), null, null, null, null, true),
 
-            // ---- การออม/ลงทุน: RMF -> SSF -> pension share one 500,000 cluster, consumed in that order ----
+            // ---- การออม/ลงทุน: ข้อ 9 -> RMF -> SSF -> pension share one 500,000 cluster ----
+            // ข้อ 9 ล.ย.01 (V137): one box for กองทุนสำรองเลี้ยงชีพ / กบข. / กองทุนสงเคราะห์
+            // ครูโรงเรียนเอกชน / กอช., consumed FIRST. Its ฿30,000 is กอช.'s -- the tightest of the
+            // four, chosen because the form cannot say which fund the figure came from and กอช. is
+            // the only one reachable by a GL&R employee. NO percent-of-income rate: กอช.'s limit is
+            // a flat baht figure (PVD's, which the engine deliberately does not use, is the one with
+            // the 15%-of-wages component). Mirrors PayrollCalculator#PROVIDENT_FUND_ALLOWANCE_CAP;
+            // see #retirementAllowance there for the source and the revisit condition.
+            new TaxAllowanceCapEntry("provident_fund", TaxAllowanceCapKind.FLAT, "retirement",
+                THIRTY_THOUSAND, new BigDecimal("500000.00"), null, null, null, true),
             new TaxAllowanceCapEntry("rmf", TaxAllowanceCapKind.PERCENT_OF_INCOME, "retirement",
                 new BigDecimal("500000.00"), new BigDecimal("500000.00"), null, new BigDecimal("0.30"), null, true),
             new TaxAllowanceCapEntry("ssf", TaxAllowanceCapKind.PERCENT_OF_INCOME, "retirement",
