@@ -43,4 +43,18 @@
 # always fully strict. To rehearse one:
 #   VISUAL_BASELINE=1 VISUAL_PR_NUMBER=615 npx playwright test --config playwright.visual.config.js
 #
-# ── ENTRIES (none right now) ─────────────────────────────────────────────────
+# ── ENTRIES ──────────────────────────────────────────────────────────────────
+
+628  desktop-hr-tax-allowance  — ล.ย.01 header now prefills from the employee master (owner decision #4)
+628  tablet-hr-tax-allowance   — same block, tablet layout
+#
+# Both diffs were read before these lines were written (rule 2), from run 31319699996's
+# visual-diff-628 artifact. Every changed pixel is inside the "ข้อมูลผู้มีเงินได้" block and is one
+# of the four values the prefill is supposed to seed — เลขประจำตัวผู้เสียภาษีอากร, ผู้มีเงินได้ชื่อ,
+# ชื่อสกุล and เลขที่ — rendered where those inputs were previously blank. Nothing reflowed: no
+# element moved, no height changed, and every other surface in the sweep is untouched. That is the
+# feature, and the diff is also the clearest evidence it reaches the DOM.
+#
+# `mobile-hr-tax-allowance` is deliberately NOT listed: it did not differ in that run, and the
+# harness flags a listed-but-unchanged snapshot as a possible stale entry. If it turns up on a
+# later run, add it rather than assuming this omission was wrong.

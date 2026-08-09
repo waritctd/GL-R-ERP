@@ -377,6 +377,102 @@ describe('TaxAllowancePage', () => {
     });
   });
 
+  // -------------------------------------------------------------------------------------------
+  // Header prefill (owner decision #4, the read half). The write-back shipped in #621; until this
+  // landed the identity fields opened empty and every employee retyped a 13-digit tax ID and a
+  // 13-part address on every filing.
+  //
+  // The gate is `canStartEdit`, so the interesting assertions are the NEGATIVE ones: a prefill
+  // must not appear on a declaration that has already been filed, because those fields would then
+  // show today's master record against a document HR already accepted.
+  // -------------------------------------------------------------------------------------------
+  describe('ล.ย.01 header prefill', () => {
+    const headerPrefill = {
+      taxpayerId: '1103700000011',
+      firstNameTh: 'สมชาย',
+      lastNameTh: 'ใจดี',
+      maritalState: 'SINGLE',
+      address: {
+        building: 'อาคารเอ', roomNo: '1201', floor: '12', village: 'หมู่บ้านสวนหลวง',
+        houseNo: '123/45', moo: '4', soi: 'ซอย 7', junction: 'แยกรัชดา', road: 'ถนนพระราม 9',
+        subDistrict: 'ห้วยขวาง', district: 'ห้วยขวาง', province: 'กรุงเทพมหานคร', postalCode: '10310',
+      },
+    };
+
+    it('seeds the identity block on a year that has never been filed', async () => {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [], headerPrefill });
+      renderPage();
+
+      expect(await screen.findByText('ยังไม่ได้ยื่น')).not.toBeNull();
+      await waitFor(() => {
+        expect(document.getElementById('ta-taxpayer-id').value).toBe('1103700000011');
+      });
+      expect(document.getElementById('ta-first-name').value).toBe('สมชาย');
+      expect(document.getElementById('ta-last-name').value).toBe('ใจดี');
+      expect(document.getElementById('ta-addr-houseNo').value).toBe('123/45');
+      expect(document.getElementById('ta-addr-moo').value).toBe('4');
+      expect(document.getElementById('ta-addr-postalCode').value).toBe('10310');
+    });
+
+    it('does NOT seed a PENDING declaration — that view shows what was actually filed', async () => {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({
+        items: [declaration({ status: 'PENDING' })],
+        headerPrefill,
+      });
+      renderPage();
+
+      expect(await screen.findByRole('button', { name: 'ยกเลิกการยื่น' })).not.toBeNull();
+      expect(document.getElementById('ta-taxpayer-id').value).toBe('');
+      expect(document.getElementById('ta-addr-houseNo').value).toBe('');
+    });
+
+    it('does NOT seed a past tax year, even though that year is read-only anyway', async () => {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [], headerPrefill });
+      renderPage({ entry: `/tax-allowance?year=${currentYear - 1}` });
+
+      await waitFor(() => {
+        expect(api.payroll.getMyTaxAllowanceDeclarations).toHaveBeenCalledWith(currentYear - 1);
+      });
+      await waitFor(() => {
+        expect(document.getElementById('ta-taxpayer-id')).not.toBeNull();
+      });
+      expect(document.getElementById('ta-taxpayer-id').value).toBe('');
+      expect(document.getElementById('ta-addr-province').value).toBe('');
+    });
+
+    it('lets a REJECTED declaration\'s own header win over the master', async () => {
+      // The employee is re-preparing a filing they already corrected once. Seeding the master over
+      // the top would revert that correction under them.
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({
+        items: [declaration({
+          status: 'REJECTED',
+          reviewerNote: 'เลขประจำตัวไม่ตรง',
+          lorYor01: { taxpayerId: '9999999999999', address: { houseNo: '77/7' } },
+        })],
+        headerPrefill,
+      });
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'แก้ไข / ยื่นฉบับใหม่' }));
+
+      await waitFor(() => {
+        expect(document.getElementById('ta-taxpayer-id').value).toBe('9999999999999');
+      });
+      expect(document.getElementById('ta-addr-houseNo').value).toBe('77/7');
+      // ...while the slots that declaration left blank still come from the master.
+      expect(document.getElementById('ta-addr-province').value).toBe('กรุงเทพมหานคร');
+    });
+
+    it('survives a response with no headerPrefill at all — the form still opens', async () => {
+      // The pre-#627 wire shape, and also what an older cached response looks like. A crash here
+      // would take the whole page down for a field that is only ever a convenience.
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [] });
+      renderPage();
+
+      expect(await screen.findByText('ยังไม่ได้ยื่น')).not.toBeNull();
+      expect(document.getElementById('ta-taxpayer-id').value).toBe('');
+    });
+  });
   /**
    * showToast's real signature is `showToast(kind, message)` (hooks/useToast.js). Getting the two
    * the wrong way round is silent: `sanitizeToastMessage` returns `message` untouched whenever

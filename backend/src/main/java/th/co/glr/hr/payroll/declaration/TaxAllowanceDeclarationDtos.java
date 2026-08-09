@@ -200,7 +200,47 @@ public final class TaxAllowanceDeclarationDtos {
      */
     public record TaxAllowanceApplyRequest(Integer effectiveMonth) {}
 
-    public record MyTaxAllowanceDeclarationsResponse(int taxYear, List<TaxAllowanceDeclarationDto> items) {}
+    /**
+     * What the ล.ย.01 header block is SEEDED with when the employee opens a fillable form — owner
+     * decision #4's read half, the counterpart to the write-back {@code approve} performs.
+     *
+     * <p>Same field names as {@link LorYor01Details}'s own header components on purpose, so the
+     * client seeds slot-for-slot with no translation table to get wrong.
+     *
+     * <p><b>It rides on the {@code /me} envelope and NEVER on {@link TaxAllowanceDeclarationDto}.</b>
+     * That is a security boundary, not a layout choice: the DTO is what {@code
+     * GET /declarations} hands HR and CEO for every employee in the register, so a header block
+     * hanging off it would turn one self-service prefill into a bulk tax-ID export. The envelope is
+     * only ever built by {@code getOwn}, for {@code actor.employeeId()}.
+     *
+     * <p>{@code maritalState} is ข้อ 1's own vocabulary ({@code SINGLE}/{@code MARRIED}), not the
+     * Thai word {@code hr.employee.marital_status} stores — see
+     * {@code TaxAllowanceDeclarationService#maritalStateFromMaster}, the inverse of the mapping the
+     * write-back uses.
+     */
+    public record LorYor01HeaderPrefill(
+        String taxpayerId,
+        String firstNameTh,
+        String lastNameTh,
+        String maritalState,
+        LorYor01AddressPayload address
+    ) {
+        public static LorYor01HeaderPrefill empty() {
+            return new LorYor01HeaderPrefill(null, null, null, null,
+                new LorYor01AddressPayload(null, null, null, null, null, null, null, null, null,
+                    null, null, null, null));
+        }
+    }
+
+    /**
+     * {@code headerPrefill} is never null — {@link LorYor01HeaderPrefill#empty()} when the employee
+     * has no master data to offer, so the client never has to branch on its absence.
+     */
+    public record MyTaxAllowanceDeclarationsResponse(
+        int taxYear,
+        List<TaxAllowanceDeclarationDto> items,
+        LorYor01HeaderPrefill headerPrefill
+    ) {}
 
     public record TaxAllowanceDeclarationRegisterResponse(List<TaxAllowanceDeclarationDto> items) {}
 

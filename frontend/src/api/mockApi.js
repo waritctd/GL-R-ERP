@@ -1506,6 +1506,56 @@ function taxAllowanceDeclarationPublic(row) {
 }
 
 /**
+ * ล.ย.01 header prefill. Mirrors TaxAllowanceDeclarationService#headerPrefill +
+ * EmployeeRepository#findLorYor01HeaderSource.
+ *
+ * ⚠️ SHAPE ONLY — this is not evidence about the real prefill, and three things differ:
+ *
+ *  - **The real read is scoped by SQL** (`WHERE e.employee_id = :employeeId` against
+ *    `hr_restricted.employee_pii`). CLAUDE.md is explicit that this mock's authorization is not
+ *    authoritative; `TaxAllowanceHeaderPrefillIntegrationTest` is where the scoping is proven,
+ *    wrong-way-round, against real Postgres.
+ *  - **`hr_restricted` has no analogue here.** The mock employee's `sensitive` block is `{}`, so a
+ *    faithful mirror would return a null `taxpayerId` and mock-mode click-through would show the
+ *    one field this feature exists for as permanently empty — indistinguishable from the bug.
+ *    A fabricated, obviously-fake demo tax ID is returned instead, and it is fake on purpose.
+ *  - **`employee_address` has thirteen columns here and four.** The real query selects all
+ *    thirteen; the mock employee record can only hold `line1`/`district`/`province`/`postalCode`,
+ *    and `line1` is itself a CONCAT of four of them on the real side. Mapping it onto `houseNo` is
+ *    the closest honest approximation; the remaining eight slots are null, not invented.
+ */
+function lorYor01HeaderPrefillFor(employeeId) {
+  const employee = db.employees.find((item) => item.id === employeeId);
+  const emptyAddress = {
+    building: null, roomNo: null, floor: null, village: null, houseNo: null, moo: null,
+    soi: null, junction: null, road: null, subDistrict: null, district: null, province: null,
+    postalCode: null,
+  };
+  if (!employee) {
+    return { taxpayerId: null, firstNameTh: null, lastNameTh: null, maritalState: null, address: emptyAddress };
+  }
+  // The backend splits stored first/last name columns; this mock only has the joined `nameTh`.
+  const [firstNameTh, ...rest] = String(employee.nameTh ?? '').trim().split(/\s+/);
+  const address = employee.currentAddress ?? {};
+  const blank = (value) => (value == null || String(value).trim() === '' || value === '-' ? null : value);
+  return {
+    taxpayerId: '1100000000001',
+    firstNameTh: blank(firstNameTh),
+    lastNameTh: blank(rest.join(' ')),
+    // Mirrors maritalStateFromMaster: only the two values the write-back can produce are mapped,
+    // and anything else leaves ข้อ 1 un-ticked rather than guessing a legal status.
+    maritalState: { 'โสด': 'SINGLE', 'สมรส': 'MARRIED' }[String(employee.maritalStatus ?? '').trim()] ?? null,
+    address: {
+      ...emptyAddress,
+      houseNo: blank(address.line1),
+      district: blank(address.district),
+      province: blank(address.province),
+      postalCode: blank(address.postalCode),
+    },
+  };
+}
+
+/**
  * Deduction obligation tracking (issue #373). Mirrors DeductionObligationRepository#insert +
  * mapRow's column set exactly, so a DTO round-tripped through this mock has the same shape the
  * real backend returns.
@@ -6331,7 +6381,10 @@ export const api = {
         .filter((row) => row.employeeId === user.employeeId && row.taxYear === taxYear)
         .sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt))
         .map(taxAllowanceDeclarationPublic);
-      return delay({ taxYear, items });
+      // `headerPrefill` rides on this envelope and NOT on the declaration DTO, matching the real
+      // response — see MyTaxAllowanceDeclarationsResponse. getTaxAllowanceDeclarations (HR's
+      // register, below) must therefore NEVER grow one: that would be a bulk tax-ID export.
+      return delay({ taxYear, items, headerPrefill: lorYor01HeaderPrefillFor(user.employeeId) });
     },
     async submitMyTaxAllowanceDeclaration(body = {}) {
       const user = requireSession();

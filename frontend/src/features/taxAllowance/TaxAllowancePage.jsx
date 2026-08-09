@@ -156,17 +156,26 @@ export function TaxAllowancePage({ user, showToast }) {
   });
   const caps = capsQuery.data ?? [];
 
+  // Keeps the WHOLE envelope rather than mapping straight to `.items`: the same response now
+  // carries `headerPrefill` (owner decision #4's read half). Riding on this one query is
+  // deliberate — a second, independently-timed request would land after the form had mounted and
+  // change `defaultValues`' identity mid-typing, and TaxAllowanceForm's `reset(defaultValues)`
+  // effect would wipe whatever the employee had entered. React Query's structural sharing keeps
+  // this object's identity stable across refetches that return the same JSON, which is what stops
+  // a background refocus from doing the same thing.
   const declarationsQuery = useQuery({
     queryKey: queryKeys.taxAllowanceDeclarationsMe(taxYear),
-    queryFn: () => api.payroll.getMyTaxAllowanceDeclarations(taxYear).then((response) => response.items || []),
+    queryFn: () => api.payroll.getMyTaxAllowanceDeclarations(taxYear),
     enabled: !!user?.employeeId,
   });
-  const current = useMemo(() => selectCurrentDeclaration(declarationsQuery.data ?? []), [declarationsQuery.data]);
+  const declarations = useMemo(() => declarationsQuery.data?.items ?? [], [declarationsQuery.data]);
+  const headerPrefill = declarationsQuery.data?.headerPrefill ?? null;
+  const current = useMemo(() => selectCurrentDeclaration(declarations), [declarations]);
   // Feeds ONLY the form's prefill (`defaultValues` below) when there is no current declaration for
   // this tax year -- see selectResumableDeclaration's own doc comment for why WITHDRAWN specifically
   // and why this must never feed statusInfo/canStartEdit/evidenceMode, all of which stay keyed on
   // `current` alone below.
-  const resumable = useMemo(() => selectResumableDeclaration(declarationsQuery.data ?? []), [declarationsQuery.data]);
+  const resumable = useMemo(() => selectResumableDeclaration(declarations), [declarations]);
   const statusInfo = useMemo(() => taxAllowanceStatusInfo(current), [current]);
   const canStartEdit = EDITABLE_STATUS_KEYS.has(statusInfo.key) && isCurrentYear;
 
@@ -215,8 +224,27 @@ export function TaxAllowancePage({ user, showToast }) {
   // The disable is load-bearing, not noise-suppression: exhaustive-deps calls `taxYear` "unnecessary"
   // because the memo body never reads it, which is exactly the point -- it is a cache-busting key, not
   // an input. Taking the rule's advice and deleting it silently restores the bug described above.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const defaultValues = useMemo(() => defaultAllowanceValues(current ?? resumable), [current, resumable, taxYear]);
+  // `headerPrefill` is gated on `canStartEdit`, NOT on `editing` (owner decision #4). Two reasons,
+  // and the distinction matters:
+  //
+  //   - It must not reach a READ-ONLY view. A PENDING or APPROVED declaration shows what was
+  //     actually filed; seeding its blank header slots from today's master record would show the
+  //     employee an address they never declared, on a document HR has already accepted. Past tax
+  //     years are the same defect with more distance. `canStartEdit` is false for both.
+  //   - Gating on `editing` instead would make the memo recompute the moment "แก้ไข / ยื่นฉบับใหม่"
+  //     is pressed, firing TaxAllowanceForm's `reset(defaultValues)` on a click that is supposed to
+  //     do nothing but unlock the fields. `canStartEdit` is derived from the declaration's status
+  //     and the year, so it does not move when the button is pressed.
+  //
+  // `defaultAllowanceValues` composes them per slot: anything the declaration already holds wins,
+  // and the prefill only reaches slots the employee left blank.
+  // The disable below has to sit immediately above the DEPENDENCY ARRAY, not above the `useMemo`
+  // call: exhaustive-deps reports on the array's own line, and this call no longer fits on one.
+  const defaultValues = useMemo(
+    () => defaultAllowanceValues(current ?? resumable, canStartEdit ? headerPrefill : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [current, resumable, taxYear, canStartEdit, headerPrefill],
+  );
 
   /**
    * Owner decision #3: the signed scan gates submit.
