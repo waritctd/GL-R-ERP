@@ -188,4 +188,44 @@ describe('Panel flush overflow', () => {
     expect(classes).not.toContain('overflow-x-auto');
     expect(classes).not.toContain('overflow-y-hidden');
   });
+
+  // ── THE ONE CALLER THAT OVERRIDES THIS, AND WHY IT SURVIVES ────────────────
+  // PayrollPage passes `panelClassName="max-h-[min(68vh,760px)] overflow-auto"` and is the only
+  // user of DataTable's `stickyHeader`. Its panel therefore needs a real VERTICAL scrollport —
+  // exactly what the flush default now declines to give.
+  //
+  // It works because `Panel` merges through `cn()` (twMerge ∘ clsx), and tailwind-merge treats the
+  // `overflow-auto` shorthand as conflicting with both longhands, so they are dropped:
+  //
+  //   cn(base, 'overflow-x-auto overflow-y-hidden', 'max-h-[…] overflow-auto')
+  //     -> 'base max-h-[…] overflow-auto'
+  //
+  // Verified in the browser on /payroll: the rendered class list carries neither longhand, and the
+  // panel computes overflow-x auto / overflow-y auto / max-height 612px with sticky descendants
+  // present and working.
+  //
+  // THE FRAGILITY THIS TEST EXISTS FOR: if anyone "simplifies" Panel to string concatenation
+  // instead of `cn`, both longhands stay in the list, `overflow-y-hidden` can win by emission
+  // order, and payroll silently loses vertical scrolling and its sticky header. Nothing else in
+  // the suite would notice — which is precisely why it is asserted here.
+  //
+  // (Credit: the sticky reasoning came from a parallel session. Their first version of it said no
+  // flush-Panel caller has a sticky descendant; that is false — PayrollPage has them. The reason
+  // this change is safe is not "no sticky children exist", it is that `overflow-y: hidden` gives
+  // a flush Panel no vertical scrollport, so no sticky child's nearest scroll container moves.)
+  it('lets a caller override the flush overflow wholesale, so PayrollPage keeps its scrollport', () => {
+    render(
+      <Panel flush data-testid="p" className="max-h-[min(68vh,760px)] overflow-auto">
+        <div>ตาราง</div>
+      </Panel>,
+    );
+    const classes = screen.getByTestId('p').className.split(/\s+/);
+
+    expect(classes).toContain('overflow-auto');
+    expect(classes).toContain('max-h-[min(68vh,760px)]');
+    // Wrong-way-round on purpose: the failure is the longhand SURVIVING the merge and clamping
+    // the vertical axis back shut.
+    expect(classes).not.toContain('overflow-y-hidden');
+    expect(classes).not.toContain('overflow-x-auto');
+  });
 });
