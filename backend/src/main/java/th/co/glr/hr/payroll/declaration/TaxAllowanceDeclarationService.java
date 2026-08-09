@@ -16,6 +16,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
+import th.co.glr.hr.employee.EmployeeRepository.LorYor01HeaderSource;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.payroll.PayrollAllowanceEstimateResult;
 import th.co.glr.hr.payroll.PayrollPeriodDto;
@@ -25,6 +26,7 @@ import java.math.BigDecimal;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.LorYor01AddressPayload;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.LorYor01Details;
+import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.LorYor01HeaderPrefill;
 import th.co.glr.hr.payroll.declaration.loryor01.LorYor01FormAssembler;
 import th.co.glr.hr.payroll.declaration.loryor01.LorYor01FormData;
 import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
@@ -109,6 +111,14 @@ public class TaxAllowanceDeclarationService {
      */
     private static final Logger LOG = LoggerFactory.getLogger(TaxAllowanceDeclarationService.class);
 
+    /**
+     * The shared {@code hr.audit} sink, same logger name {@code EmployeeService} writes its own
+     * {@code sensitive_data_access} lines to — one stream to grep for every read of
+     * {@code hr_restricted}, rather than one per feature. Distinct from {@code auditService}, which
+     * writes structured business events to the database; this is the PII-access trail.
+     */
+    private static final Logger AUDIT = LoggerFactory.getLogger("th.co.glr.hr.audit");
+
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
 
     private final AppProperties appProperties;
@@ -145,7 +155,78 @@ public class TaxAllowanceDeclarationService {
         List<TaxAllowanceDeclarationDto> items = repository.findForEmployee(actor.employeeId(), taxYear);
         auditService.record(actor, "VIEW_OWN_TAX_ALLOWANCE_DECLARATIONS", "tax_allowance_declaration", null,
             null, java.util.Map.of("taxYear", taxYear, "count", items.size()));
-        return new MyTaxAllowanceDeclarationsResponse(taxYear, items);
+        return new MyTaxAllowanceDeclarationsResponse(taxYear, items, headerPrefill(actor));
+    }
+
+    /**
+     * Owner decision #4's read half: seed the ล.ย.01 header from the employee master so nobody
+     * retypes a 13-digit tax ID and a thirteen-part address on every filing.
+     *
+     * <p><b>The employee is {@code actor.employeeId()} and there is no other way to name one.</b>
+     * {@code GET /declarations/me} takes a {@code year} and nothing else, so there is no
+     * caller-supplied id for a forged request to smuggle — the same discipline as
+     * {@link #renderLorYor01Draft}. {@link EmployeeRepository#findLorYor01HeaderSource}'s own
+     * {@code WHERE} clause is what enforces it in SQL.
+     *
+     * <p>The tax ID is a restricted-schema read, so it gets the same {@code sensitive_data_access}
+     * audit line {@code EmployeeService#get} emits for HR's read of the same column — a
+     * self-service path is not a reason to make an access to {@code hr_restricted} invisible. Logged
+     * only when a value was actually returned: an audit trail that records reads which disclosed
+     * nothing trains its readers to skim it.
+     *
+     * <p>Never throws. A prefill is a convenience, and an employee whose master row is incomplete
+     * (or missing entirely — an account not yet linked to an employee is already refused above by
+     * {@code requireEmployeeActor}) must still be able to open the form and type the header by hand.
+     */
+    private LorYor01HeaderPrefill headerPrefill(UserPrincipal actor) {
+        LorYor01HeaderSource source = employeeRepository
+            .findLorYor01HeaderSource(actor.employeeId())
+            .orElse(null);
+        if (source == null) {
+            return LorYor01HeaderPrefill.empty();
+        }
+        if (source.taxId() != null && !source.taxId().isBlank()) {
+            AUDIT.info(
+                "sensitive_data_access action=PREFILL_OWN_LOR_YOR_01_HEADER actorId={} actorEmail=\"{}\""
+                    + " targetEmployeeId={} fields=\"restricted_pii.tax_id\"",
+                actor.id(), actor.email(), actor.employeeId());
+        }
+        return new LorYor01HeaderPrefill(
+            blankToNull(source.taxId()),
+            blankToNull(source.firstNameTh()),
+            blankToNull(source.lastNameTh()),
+            maritalStateFromMaster(source.maritalStatus()),
+            new LorYor01AddressPayload(
+                blankToNull(source.building()), blankToNull(source.roomNo()),
+                blankToNull(source.floor()), blankToNull(source.village()),
+                blankToNull(source.houseNo()), blankToNull(source.moo()),
+                blankToNull(source.soi()), blankToNull(source.junction()),
+                blankToNull(source.road()), blankToNull(source.subDistrict()),
+                blankToNull(source.district()), blankToNull(source.province()),
+                blankToNull(source.postalCode())));
+    }
+
+    /**
+     * {@code hr.employee.marital_status} -> ข้อ 1's enum. The exact inverse of
+     * {@link #maritalStatusForMaster}, and it must stay that way: prefill then approve then prefill
+     * again has to be a fixed point, or every re-filing would silently flip the employee's สถานภาพ.
+     *
+     * <p>Only the two values that mapping can produce are recognised. That column is
+     * {@code VARCHAR(30)} with no CHECK constraint, so it can hold anything a decade of HR data
+     * entry put there; an unrecognised value leaves ข้อ 1 un-ticked for the employee to answer
+     * rather than guessing a legal status on their behalf. {@code WIDOWED} and
+     * {@code DIED_DURING_YEAR} are unmapped in BOTH directions — see {@link #maritalStatusForMaster}
+     * for why.
+     */
+    private String maritalStateFromMaster(String maritalStatus) {
+        if (maritalStatus == null) {
+            return null;
+        }
+        return switch (maritalStatus.trim()) {
+            case "โสด" -> "SINGLE";
+            case "สมรส" -> "MARRIED";
+            default -> null;
+        };
     }
 
     /**
