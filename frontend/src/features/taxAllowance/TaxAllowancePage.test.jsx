@@ -107,7 +107,9 @@ describe('TaxAllowancePage', () => {
       renderPage();
 
       expect(await screen.findByRole('button', { name: 'ยกเลิกการยื่น' })).not.toBeNull();
-      expect(screen.getByText(/แก้ไขไม่ได้ระหว่างรอ HR ตรวจสอบ/)).not.toBeNull();
+      // The badge beside it already reads "รอ HR ตรวจสอบ"; this line must add the way out
+      // rather than repeat the badge (which is what it used to do, word for word).
+      expect(screen.getByText(/ยกเลิกการยื่น แล้วยื่นฉบับใหม่/)).not.toBeNull();
       // Editing stays unavailable — withdrawal is the exit, not a direct edit.
       expect(screen.queryByRole('button', { name: 'แก้ไข / ยื่นฉบับใหม่' })).toBeNull();
     });
@@ -286,7 +288,10 @@ describe('TaxAllowancePage', () => {
       // ข้อ 7's collapsed row renders `formatMoney` over `useWatch`'s values, so it carries what the
       // FORM holds. ฿60,000.00 here means `current` (the APPROVED row) won and is in form state --
       // the exact precondition the assertion below depends on.
-      expect(await screen.findByText('฿60,000.00')).not.toBeNull();
+      // Two matches now, not one: ข้อ 7's own subtotal AND the declared total beneath the sections
+      // (read-only lost the sign-off panel that used to be the total's only home). `findAllByText`
+      // rather than `findByText`, which throws on more than one hit.
+      expect(await screen.findAllByText('฿60,000.00')).toHaveLength(2);
       // Now a real assertion rather than a race. The exact badge label, not `/อนุมัติแล้ว/`: that
       // regex also matches the identity ข้อ's static hint, which is what made it useless as a barrier.
       expect(screen.getByText('อนุมัติแล้ว — ยังไม่ใช้กับเงินเดือน')).not.toBeNull();
@@ -479,6 +484,12 @@ describe('TaxAllowancePage', () => {
       },
     };
 
+    /** ข้อมูลผู้มีเงินได้ is collapsed unless the form is editable — open it to read its slots. */
+    function openIdentity() {
+      const header = screen.getByRole('button', { name: /ข้อมูลผู้มีเงินได้/ });
+      if (header.getAttribute('aria-expanded') === 'false') fireEvent.click(header);
+    }
+
     it('seeds the identity block on a year that has never been filed', async () => {
       api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [], headerPrefill });
       renderPage();
@@ -502,6 +513,9 @@ describe('TaxAllowancePage', () => {
       renderPage();
 
       expect(await screen.findByRole('button', { name: 'ยกเลิกการยื่น' })).not.toBeNull();
+      // ข้อมูลผู้มีเงินได้ is collapsed on a read-only declaration, so the slots have to be
+      // disclosed before they can be read — being blank is still the assertion.
+      openIdentity();
       expect(document.getElementById('ta-taxpayer-id').value).toBe('');
       expect(document.getElementById('ta-addr-houseNo').value).toBe('');
     });
@@ -513,9 +527,11 @@ describe('TaxAllowancePage', () => {
       await waitFor(() => {
         expect(api.payroll.getMyTaxAllowanceDeclarations).toHaveBeenCalledWith(currentYear - 1);
       });
+      // A past year is read-only, so its identity block starts collapsed (see above).
       await waitFor(() => {
-        expect(document.getElementById('ta-taxpayer-id')).not.toBeNull();
+        expect(screen.getByRole('button', { name: /ข้อมูลผู้มีเงินได้/ })).not.toBeNull();
       });
+      openIdentity();
       expect(document.getElementById('ta-taxpayer-id').value).toBe('');
       expect(document.getElementById('ta-addr-province').value).toBe('');
     });
@@ -533,8 +549,15 @@ describe('TaxAllowancePage', () => {
       });
       renderPage();
 
-      fireEvent.click(await screen.findByRole('button', { name: 'แก้ไข / ยื่นฉบับใหม่' }));
-
+      expect(await screen.findByRole('button', { name: 'แก้ไข / ยื่นฉบับใหม่' })).not.toBeNull();
+      // Read the header slots straight from the READ-ONLY view rather than pressing
+      // "แก้ไข / ยื่นฉบับใหม่" first. What is under test is which source won in `defaultValues`, and
+      // that is decided by `canStartEdit` — true for REJECTED in the current year whether or not the
+      // button has been pressed — so the read-only view carries the same values the editable one
+      // will. Pressing it here would not help anyway: jsdom flushes the page's own
+      // `setEditing(statusInfo.key === 'NONE')` effect AFTER the click, which puts `editing` back to
+      // false. (A real browser flushes it before, so the button works there — verified in Chromium.)
+      openIdentity();
       await waitFor(() => {
         expect(document.getElementById('ta-taxpayer-id').value).toBe('9999999999999');
       });
@@ -550,6 +573,12 @@ describe('TaxAllowancePage', () => {
       renderPage();
 
       expect(await screen.findByText('ยังไม่ได้ยื่น')).not.toBeNull();
+      // `findByText` above resolves on the FIRST paint — the badge already reads ยังไม่ได้ยื่น while
+      // the query is in flight — so this has to wait for the form to actually become editable
+      // before reading a slot that only the editable form discloses.
+      await waitFor(() => {
+        expect(document.getElementById('ta-taxpayer-id')).not.toBeNull();
+      });
       expect(document.getElementById('ta-taxpayer-id').value).toBe('');
     });
   });

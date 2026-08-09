@@ -148,8 +148,20 @@ export function TaxAllowanceForm({
   showToast,
 }) {
   const schema = useMemo(() => lorYor01Schema(), []);
-  const { register, handleSubmit, reset, control, formState: { errors, isDirty } } = useForm({
+  /**
+   * `mode: 'onTouched'` — validate a field the first time it is left, then on every change.
+   *
+   * react-hook-form's default is `onSubmit`, and on THIS form that meant the validation messages
+   * could not be reached at all: submission is gated behind the signed scan (`canSubmit` below), so
+   * the resolver never ran until the employee had already generated the PDF, printed it, signed it
+   * and attached the scan. A 3-digit เลขประจำตัวผู้เสียภาษีอากร or a 2-digit รหัสไปรษณีย์ was
+   * accepted in silence right up to that point — and the PDF button hands `watchedValues` straight
+   * to the renderer, so the malformed value went onto the government form they signed. The per-field
+   * error wiring already existed (`FormField error=…`); only the trigger was missing.
+   */
+  const { register, handleSubmit, reset, control, trigger, formState: { errors, isDirty } } = useForm({
     resolver: zodResolver(schema),
+    mode: 'onTouched',
     defaultValues,
   });
 
@@ -161,6 +173,21 @@ export function TaxAllowanceForm({
 
   function submit(values) {
     onSubmit?.(values);
+  }
+
+  /**
+   * The ล.ย.01 the employee is about to print and SIGN is rendered from whatever is typed right now,
+   * so it gets the same validation the submit path gets — otherwise a malformed tax ID or postcode
+   * is discovered only after a signature is on the paper. Invalid fields are revealed inline by
+   * `trigger()` itself; the toast exists because some of them are inside collapsed ข้อ, where an
+   * inline message alone would leave a button that silently did nothing.
+   */
+  async function generatePdf() {
+    if (!(await trigger())) {
+      showToast?.('error', 'ยังสร้างไฟล์ไม่ได้ — มีช่องที่กรอกไม่ถูกต้อง กรุณาตรวจสอบและแก้ไขก่อน');
+      return;
+    }
+    onGeneratePdf?.(watchedValues);
   }
 
   const renderField = (field) => {
@@ -300,11 +327,28 @@ export function TaxAllowanceForm({
 
   const sections = LOR_YOR_01_SECTIONS.map((section) => (
     <CollapsibleSection
-      key={section.key}
+      /*
+       * ข้อมูลผู้มีเงินได้ opens only while the form is EDITABLE, where it is genuinely step 1 —
+       * sixteen mostly-blank header slots the employee has to check before anything else. On a
+       * READ-ONLY declaration it is the least interesting block on the screen (a prefilled name and
+       * address, already accepted) and it was pushing all fifteen ข้อ — the actual content — about
+       * 600px below the fold. Everything else on this page is collapsed by default; this makes the
+       * one exception conditional on it still being an exception.
+       *
+       * ⚠️ The KEY has to move with it. `defaultOpen` is an INITIAL value — CollapsibleSection seeds
+       * `useState` from it and never reads it again — and TaxAllowancePage starts every render pass
+       * read-only (`editing` is false until an effect settles the declarations query). So a plain
+       * `defaultOpen={!readOnly}` evaluates false on the first mount and the section stays shut
+       * after the form becomes editable. Varying the key remounts THIS section, and only this one,
+       * at the moment its default should change; the other fourteen keep whatever the reader
+       * toggled. Remounting is safe here for the same reason collapsing is (see the class javadoc):
+       * react-hook-form's `shouldUnregister: false` keeps the values.
+       */
+      key={section.kind === 'identity' ? `${section.key}-${readOnly ? 'ro' : 'rw'}` : section.key}
       id={`ta-section-${section.key}`}
       title={section.no ? `ข้อ ${section.no} · ${section.title}` : section.title}
       subtitle={section.subtitle}
-      defaultOpen={!sectioned || section.kind === 'identity'}
+      defaultOpen={!sectioned || (section.kind === 'identity' && !readOnly)}
       headerRight={sectionState(section)}
     >
       <div className="grid gap-4">
@@ -326,35 +370,61 @@ export function TaxAllowanceForm({
     </CollapsibleSection>
   ));
 
+  /**
+   * One line, not a card. There is exactly one auto-granted row today (ส่วนตัว) and it carried no
+   * amount, so the previous bordered box rendered as an eyebrow above a single word — a card that
+   * looked like it had failed to load. The figure comes from the caps endpoint like every other
+   * number on this page; it is never hardcoded here.
+   */
   const autoGranted = (
-    <div className="grid gap-1 rounded-md border border-border-subtle bg-surface-subtle p-3">
-      <p className="m-0 text-2xs font-extrabold uppercase tracking-wide text-text-muted">หักให้อัตโนมัติ</p>
-      {AUTO_GRANTED_ROWS.map((row) => (
-        <p key={row.key} className="m-0 text-xs text-text-muted">
-          {row.label}{row.note ? ` — ${row.note}` : ''}
-        </p>
-      ))}
+    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-md border border-border-subtle bg-surface-subtle px-3 py-2">
+      <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">หักให้อัตโนมัติ</span>
+      {AUTO_GRANTED_ROWS.map((row) => {
+        const caption = row.capCategory ? fieldCapCaption(capMap.get(row.capCategory)) : null;
+        return (
+          <span key={row.key} className="text-xs text-text-muted">
+            {row.label}{caption ? ` · ${caption}` : ''}{row.note ? ` — ${row.note}` : ''}
+          </span>
+        );
+      })}
     </div>
   );
 
+  /**
+   * Reference material, not part of filling the form — so it is COLLAPSED by default.
+   *
+   * <p>Expanded it is six citations with a vintage line and a caveat paragraph each: measured at
+   * ~900px tall on desktop and taller still on mobile, i.e. a full screen of prose sitting under
+   * the submit button that nobody needs in order to declare an allowance. It is genuinely useful
+   * (the caveats say which rd.go.th numbers are stale), so it stays on the page — behind the same
+   * disclosure every other section on this screen already uses, rather than as a wall of text.
+   */
+  const lawSources = Object.values(LAW_SOURCES);
   const lawReferences = (
-    <div className="grid gap-3 rounded-md border border-border-subtle p-3">
-      <p className="m-0 text-2xs font-extrabold uppercase tracking-wide text-text-muted">แหล่งอ้างอิงทางกฎหมาย</p>
-      {Object.values(LAW_SOURCES).map((source) => (
-        <div key={source.url} className="grid gap-0.5">
-          <a href={source.url} target="_blank" rel="noopener noreferrer"
-            className="inline-flex w-fit items-center gap-1 text-xs font-bold text-primary hover:underline">
-            {source.label} — กรมสรรพากร
-            <Icon name="externalLink" size={11} />
-            <span className="sr-only"> (เปิดในแท็บใหม่)</span>
-          </a>
-          {source.vintage ? <p className="m-0 text-2xs font-bold text-text-muted">{source.vintage}</p> : null}
-          <p className="m-0 text-2xs text-text-muted">
-            {source.what}{source.caveat ? ` — ${source.caveat}` : ''}
-          </p>
-        </div>
-      ))}
-    </div>
+    <CollapsibleSection
+      id="ta-section-law-sources"
+      title="แหล่งอ้างอิงทางกฎหมาย"
+      subtitle="ลิงก์ไปหน้าต้นทางของกรมสรรพากร พร้อมข้อควรระวังของแต่ละแหล่ง"
+      defaultOpen={false}
+      headerRight={<span className="text-xs text-text-muted">{lawSources.length} แหล่ง</span>}
+    >
+      <div className="grid gap-3">
+        {lawSources.map((source) => (
+          <div key={source.url} className="grid gap-0.5">
+            <a href={source.url} target="_blank" rel="noopener noreferrer"
+              className="inline-flex w-fit items-center gap-1 text-xs font-bold text-primary hover:underline">
+              {source.label} — กรมสรรพากร
+              <Icon name="externalLink" size={11} />
+              <span className="sr-only"> (เปิดในแท็บใหม่)</span>
+            </a>
+            {source.vintage ? <p className="m-0 text-2xs font-bold text-text-muted">{source.vintage}</p> : null}
+            <p className="m-0 text-2xs text-text-muted">
+              {source.what}{source.caveat ? ` — ${source.caveat}` : ''}
+            </p>
+          </div>
+        ))}
+      </div>
+    </CollapsibleSection>
   );
 
   const declaredTotal = formatMoney(declaredAllowanceTotalFromValues(watchedValues));
@@ -372,6 +442,14 @@ export function TaxAllowanceForm({
    */
   const canSubmit = !readOnly && signedFormAttached;
 
+  /** Displayed in both the read-only view and the sign-off panel — one markup, one figure. */
+  const declaredTotalRow = (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border-subtle bg-surface-subtle p-3">
+      <span className="text-sm font-bold text-text">รวมค่าลดหย่อนที่ประกาศ</span>
+      <strong className="font-mono text-base text-text">{declaredTotal}</strong>
+    </div>
+  );
+
   const signOffPanel = readOnly ? null : (
     <CollapsibleSection id="ta-section-sign" title="ตรวจทาน ลงนาม และยื่น" defaultOpen={false}
       headerRight={signedFormAttached
@@ -384,13 +462,10 @@ export function TaxAllowanceForm({
           <li>สแกนหรือถ่ายรูปแบบที่ลงนามแล้ว และแนบกลับที่ด้านล่าง</li>
           <li>กด “{submitLabel}” เพื่อส่งให้ฝ่ายบุคคลตรวจสอบ</li>
         </ol>
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border-subtle bg-surface-subtle p-3">
-          <span className="text-sm font-bold text-text">รวมค่าลดหย่อนที่ประกาศ</span>
-          <strong className="font-mono text-base text-text">{declaredTotal}</strong>
-        </div>
+        {declaredTotalRow}
         <div>
           <Button type="button" variant="secondary" loading={generatingPdf} disabled={generatingPdf}
-            onClick={() => onGeneratePdf?.(watchedValues)}>
+            onClick={generatePdf}>
             สร้างไฟล์ PDF แบบ ล.ย.01
           </Button>
         </div>
@@ -408,15 +483,29 @@ export function TaxAllowanceForm({
             emptyLabel="ต้องแนบแบบที่ลงนามแล้วก่อนจึงจะยื่นได้"
           />
         ) : null}
-        {!signedFormAttached ? (
-          <p className="m-0 text-xs text-text-muted">ยังยื่นไม่ได้ — ต้องแนบแบบ ล.ย.01 ที่ลงนามแล้วก่อน</p>
-        ) : null}
       </div>
     </CollapsibleSection>
   );
 
+  /**
+   * Why the disabled submit button states its own reason.
+   *
+   * The gate ("attach the signed scan first") used to be explained ONLY inside the sign-off section,
+   * which is collapsed by default — so the normal state of this page was a greyed-out primary button
+   * with no visible explanation anywhere on screen, and the answer one disclosure away. The same
+   * sentence used to sit a third time at the bottom of that section, next to the evidence panel's
+   * own "ต้องแนบแบบที่ลงนามแล้วก่อนจึงจะยื่นได้" empty state; that copy is gone and this is the one
+   * place it lives now.
+   */
+  const submitBlockedReason = !readOnly && !signedFormAttached
+    ? 'ยังยื่นไม่ได้ — เปิดหัวข้อ “ตรวจทาน ลงนาม และยื่น” เพื่อแนบแบบ ล.ย.01 ที่ลงนามแล้ว'
+    : null;
+
   const submitFooter = footer ?? (readOnly ? null : (
-    <div className="flex justify-end">
+    <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+      {submitBlockedReason ? (
+        <p className="m-0 mr-auto text-xs text-text-muted">{submitBlockedReason}</p>
+      ) : null}
       <Button type="submit" variant="primary" loading={submitting} disabled={submitting || !canSubmit}>
         {submitLabel}
       </Button>
@@ -432,7 +521,10 @@ export function TaxAllowanceForm({
       </div>
       {autoGranted}
       <div className="grid gap-2">{sections}</div>
-      {signOffPanel}
+      {/* Read-only loses the sign-off panel, and with it the only place the grand total appeared —
+          so a filed declaration showed fifteen per-ข้อ subtotals and no total. It shows here instead,
+          in the slot the panel would occupy. */}
+      {readOnly ? declaredTotalRow : signOffPanel}
       {submitFooter}
       {lawReferences}
     </SafeForm>
