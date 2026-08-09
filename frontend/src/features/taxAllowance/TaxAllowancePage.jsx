@@ -272,9 +272,9 @@ export function TaxAllowancePage({ user, showToast }) {
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-      showToast?.('สร้างไฟล์ PDF แล้ว — พิมพ์ ลงนาม แล้วแนบกลับเพื่อยื่น', 'success');
+      showToast?.('success', 'สร้างไฟล์ PDF แล้ว — พิมพ์ ลงนาม แล้วแนบกลับเพื่อยื่น');
     },
-    onError: (error) => showToast?.(error?.message || 'สร้างไฟล์ PDF ไม่สำเร็จ', 'error'),
+    onError: (error) => showToast?.('error', error?.message || 'สร้างไฟล์ PDF ไม่สำเร็จ'),
   });
 
   function handleGeneratePdf(values) {
