@@ -6373,10 +6373,18 @@ export const api = {
     // Tax-allowance DECLARATION workflow (PR A, 2026-08-01) -- see db.taxAllowanceDeclarations'
     // own comment above for why this can be a genuine in-memory implementation (unlike
     // getTaxAllowances/saveTaxAllowances above), except applyTaxAllowanceDeclaration.
-    async getMyTaxAllowanceDeclarations(params = {}) {
+    // Takes a plain `year`, mirroring hrApi's `getMyTaxAllowanceDeclarations(year)` — NOT a params
+    // bag. It read `params.year` until 2026-08-10, which meant the number both real callers pass
+    // (TaxAllowancePage and useHrData) had no `.year`, so every request silently collapsed to the
+    // current year and the tax-year selector did nothing under mocks.
+    //
+    // contract.test.js could not catch it: the arity check compares parameter COUNTS, and (params)
+    // and (year) are both 1. This is the "mock drops an argument the real API honours" shape
+    // CLAUDE.md documents — the same mechanism as the `limit` defect in #434.
+    async getMyTaxAllowanceDeclarations(year) {
       const user = requireSession();
       if (!user.employeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
-      const taxYear = params.year ? Number(params.year) : new Date().getFullYear();
+      const taxYear = year ? Number(year) : new Date().getFullYear();
       const items = db.taxAllowanceDeclarations
         .filter((row) => row.employeeId === user.employeeId && row.taxYear === taxYear)
         .sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt))

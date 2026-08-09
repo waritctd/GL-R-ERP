@@ -22,7 +22,7 @@ describe('mock getMyTaxAllowanceDeclarations — headerPrefill', () => {
   });
 
   it('rides on the /me envelope, not on the declaration DTO', async () => {
-    const response = await api.payroll.getMyTaxAllowanceDeclarations({ year: 2026 });
+    const response = await api.payroll.getMyTaxAllowanceDeclarations(2026);
 
     expect(response.headerPrefill, 'the envelope must carry the prefill').toBeTruthy();
     for (const item of response.items) {
@@ -45,7 +45,7 @@ describe('mock getMyTaxAllowanceDeclarations — headerPrefill', () => {
   });
 
   it('declares all four identity slots and all thirteen address slots', async () => {
-    const { headerPrefill } = await api.payroll.getMyTaxAllowanceDeclarations({ year: 2026 });
+    const { headerPrefill } = await api.payroll.getMyTaxAllowanceDeclarations(2026);
 
     // Present-as-a-key, not merely truthy: null is a legitimate value ("the master holds nothing
     // here") and must be distinguishable from the field having been dropped.
@@ -64,7 +64,7 @@ describe('mock getMyTaxAllowanceDeclarations — headerPrefill', () => {
     // Mirrors TaxAllowanceDeclarationService#maritalStateFromMaster. Shipping 'โสด' straight
     // through would leave every ข้อ 1 radio un-selected, because the radios' values are the enum
     // tokens — a failure that looks exactly like "the master has no marital status".
-    const { headerPrefill } = await api.payroll.getMyTaxAllowanceDeclarations({ year: 2026 });
+    const { headerPrefill } = await api.payroll.getMyTaxAllowanceDeclarations(2026);
 
     expect(['SINGLE', 'MARRIED', null]).toContain(headerPrefill.maritalState);
   });
@@ -74,7 +74,7 @@ describe('mock getMyTaxAllowanceDeclarations — headerPrefill', () => {
     // On the prefill side an '' would be offered as a real value and would seed an empty box over
     // nothing, which is harmless — but a '-' (the mock employee's placeholder address) would seed a
     // literal dash into the employee's tax form. Hence the blank() filter this pins.
-    const { headerPrefill } = await api.payroll.getMyTaxAllowanceDeclarations({ year: 2026 });
+    const { headerPrefill } = await api.payroll.getMyTaxAllowanceDeclarations(2026);
 
     const values = [
       headerPrefill.taxpayerId, headerPrefill.firstNameTh, headerPrefill.lastNameTh,
