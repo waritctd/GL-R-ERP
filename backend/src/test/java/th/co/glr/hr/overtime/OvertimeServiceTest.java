@@ -652,6 +652,39 @@ class OvertimeServiceTest {
         assertThat(ceoBody.getValue()).doesNotContain("ขั้นอนุมัติของหัวหน้างาน");
     }
 
+    /**
+     * mail-copy wording fix, defect 2: dates used to be a raw {@code LocalDate} concatenated into
+     * text (e.g. "2026-07-15"), which a Thai reader does not expect. Same fixture/setup as {@link
+     * #managerApprovalTransitionsSubmittedToManagerApprovedAndCalculatesPayableMinutes} (kept
+     * separate so a mutation to the date formatting fails only this test).
+     */
+    @Test
+    void managerApprovedCeoNotificationRendersTheThaiDateNotTheIsoDate() {
+        OvertimeRequestDto submitted = requestDto(77L, 10L, "SUBMITTED");
+        OvertimeRequestDto managerApproved = requestDto(77L, 10L, "MANAGER_APPROVED");
+        when(overtimeRepository.findById(77L))
+            .thenReturn(Optional.of(submitted))
+            .thenReturn(Optional.of(managerApproved));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
+        when(overtimeRepository.findAttendanceBounds(eq(10L), any(OffsetDateTime.class), any(OffsetDateTime.class)))
+            .thenReturn(Optional.of(new OvertimeAttendanceBounds(
+                OffsetDateTime.parse("2026-07-15T08:05:00+07:00"),
+                OffsetDateTime.parse("2026-07-15T19:40:00+07:00")
+            )));
+        when(overtimeRepository.findSalaryBasisAsOf(10L, LocalDate.parse("2026-07-15")))
+            .thenReturn(new BigDecimal("30000.00"));
+        when(overtimeRepository.managerApprove(
+                eq(77L), eq(99L), any(OvertimeCalculation.class), eq(new BigDecimal("30000.00")), eq("ok")))
+            .thenReturn(1);
+        when(ceoApprovers.findEmployeeIds()).thenReturn(List.of(500L));
+
+        overtimeService.approve(77L, new ApproveOvertimeRequest("ok", null), manager(99L, 5L));
+
+        ArgumentCaptor<String> ceoBody = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(eq(500L), eq("OVERTIME_PENDING_CEO"), anyString(), ceoBody.capture(), eq("/overtime"), eq(true));
+        assertThat(ceoBody.getValue()).contains("กรกฎาคม 2569").doesNotContain("2026-07-");
+    }
+
     @Test
     void ceoApprovalTransitionsManagerApprovedToApproved() {
         OvertimeRequestDto managerApproved = requestDto(77L, 10L, "MANAGER_APPROVED");

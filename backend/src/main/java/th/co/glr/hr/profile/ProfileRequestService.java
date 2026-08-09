@@ -154,7 +154,8 @@ public class ProfileRequestService {
             "PROFILE_REQUEST_SUBMITTED",
             "ส่งคำขอแก้ไขข้อมูลส่วนตัวแล้ว",
             "คำขอแก้ไข " + request.fieldLabel() + " จาก \"" + displayValue(request.oldValue()) + "\" เป็น \""
-                + displayValue(request.newValue()) + "\" ถูกส่งให้ฝ่ายบุคคลพิจารณาแล้ว",
+                + displayValue(request.newValue()) + "\" ถูกส่งให้ฝ่ายบุคคลพิจารณาแล้ว"
+                + "\nอยู่ระหว่างรอฝ่ายบุคคลพิจารณา ระบบจะแจ้งผลให้ทราบ",
             "/profile",
             true
         );
@@ -164,7 +165,8 @@ public class ProfileRequestService {
                 hrEmployeeId,
                 "PROFILE_REQUEST_PENDING_HR",
                 "มีคำขอแก้ไขข้อมูลส่วนตัวรอพิจารณา",
-                requesterName + " ขอแก้ไข " + request.fieldLabel() + " เป็น \"" + displayValue(request.newValue()) + "\"",
+                requesterName + " ขอแก้ไข " + request.fieldLabel() + " เป็น \"" + displayValue(request.newValue()) + "\""
+                    + "\nกรุณาพิจารณาอนุมัติหรือปฏิเสธในระบบ",
                 "/requests",
                 true
             );

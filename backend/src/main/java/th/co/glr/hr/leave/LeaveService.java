@@ -26,6 +26,7 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.ThaiText;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.specialmoney.SpecialMoneyPolicyEvaluator;
@@ -537,9 +538,9 @@ public class LeaveService {
         notificationService.notify(
             after.employeeId(),
             "LEAVE_APPROVED",
-            "คำขอลาได้รับการอนุมัติ",
-            "คำขอลา " + after.leaveTypeNameTh() + " วันที่ " + after.startDate() + " ถึง " + after.endDate()
-                + " ได้รับการอนุมัติแล้ว เหลือโควตา " + formatDays(after.quotaRemainingAfter()) + " วัน",
+            "อนุมัติ" + after.leaveTypeNameTh() + "แล้ว",
+            "อนุมัติ" + after.leaveTypeNameTh() + " " + ThaiText.dateRange(after.startDate(), after.endDate()) + " แล้ว"
+                + "\nโควตาคงเหลือ " + formatDays(after.quotaRemainingAfter()) + " วัน",
             "/leave",
             true);
         return withCanReviewFlag(after, user);
@@ -560,9 +561,10 @@ public class LeaveService {
         notificationService.notify(
             after.employeeId(),
             "LEAVE_REJECTED",
-            "คำขอลาถูกปฏิเสธ",
-            "คำขอลา " + after.leaveTypeNameTh() + " วันที่ " + after.startDate() + " ถึง " + after.endDate()
-                + " ถูกปฏิเสธ: " + (after.reviewerNote() == null ? "กรุณาติดต่อ HR" : after.reviewerNote()),
+            "ไม่อนุมัติ" + after.leaveTypeNameTh(),
+            "ไม่อนุมัติ" + after.leaveTypeNameTh() + " " + ThaiText.dateRange(after.startDate(), after.endDate())
+                + "\nเหตุผล: " + (after.reviewerNote() == null ? "กรุณาติดต่อ HR" : after.reviewerNote())
+                + "\nหากต้องการยื่นใหม่ กรุณาส่งคำขออีกครั้งในระบบ",
             "/leave",
             true);
         return withCanReviewFlag(after, user);
@@ -641,14 +643,22 @@ public class LeaveService {
     private void notifyCancelled(LeaveRequestDto before, LeaveRequestDto after, long actorEmployeeId, String actorName) {
         String actorLabel = actorName == null || actorName.isBlank() ? "หัวหน้างานหรือ HR" : actorName;
         boolean cancelledByReviewer = actorEmployeeId != after.employeeId();
-        String period = after.startDate() + " ถึง " + after.endDate();
+        String type = after.leaveTypeNameTh();
+        String period = ThaiText.dateRange(before.startDate(), before.endDate());
+        // Every branch below appends "โควตาถูกคืนเข้าระบบแล้ว" -- verified true, not just claimed:
+        // #remainingDays/#balanceFor sum ONLY ACTIVE_QUOTA_STATUSES (SUBMITTED/APPROVED -- see
+        // LeaveRepository#sumUsedDays), and #cancel always moves the row OUT of that set (to
+        // CANCELLED, from either SUBMITTED or APPROVED -- see LeaveRepository#cancel's WHERE
+        // clause), so a cancelled request's days stop counting as "used" for every future quota
+        // read, for both the pending-cancel and the approved-cancel path alike.
         notificationService.notify(
             after.employeeId(),
             "LEAVE_CANCELLED",
-            "คำขอลาถูกยกเลิก",
-            cancelledByReviewer
-                ? "คำขอลา " + after.leaveTypeNameTh() + " วันที่ " + period + " ถูกยกเลิกโดย " + actorLabel
-                : "คำขอลา " + after.leaveTypeNameTh() + " วันที่ " + period + " ถูกยกเลิกเรียบร้อยแล้ว",
+            "ยกเลิก" + type + "แล้ว",
+            (cancelledByReviewer
+                ? actorLabel + " ยกเลิก" + type + " " + period
+                : "ยกเลิก" + type + " " + period + " เรียบร้อยแล้ว")
+                + "\nโควตาถูกคืนเข้าระบบแล้ว",
             "/leave",
             true);
         if ("SUBMITTED".equals(before.status())
@@ -656,8 +666,8 @@ public class LeaveService {
             notificationService.notify(
                 before.managerEmployeeId(),
                 "LEAVE_CANCELLED",
-                "คำขอลาที่รอพิจารณาถูกยกเลิก",
-                actorLabel + " ยกเลิกคำขอลา " + before.leaveTypeNameTh() + " วันที่ " + period,
+                "ยกเลิก" + type + "ที่รอพิจารณา",
+                actorLabel + " ยกเลิก" + type + " " + period + "\nโควตาถูกคืนเข้าระบบแล้ว",
                 "/leave",
                 true);
         } else if ("APPROVED".equals(before.status())
@@ -665,8 +675,8 @@ public class LeaveService {
             notificationService.notify(
                 before.reviewedById(),
                 "LEAVE_CANCELLED",
-                "คำขอลาที่อนุมัติแล้วถูกยกเลิก",
-                actorLabel + " ยกเลิกคำขอลา " + before.leaveTypeNameTh() + " วันที่ " + period + " ที่อนุมัติแล้ว",
+                "ยกเลิก" + type + "ที่อนุมัติแล้ว",
+                actorLabel + " ยกเลิก" + type + " " + period + "\nโควตาถูกคืนเข้าระบบแล้ว",
                 "/leave",
                 true);
         }
@@ -1878,7 +1888,9 @@ public class LeaveService {
             request.employeeId(),
             "LEAVE_AUTO_REJECTED",
             "คำขอลาไม่ผ่านเงื่อนไข",
-            request.systemNote() == null ? "คำขอลาไม่ผ่านเงื่อนไข กรุณาติดต่อ HR" : request.systemNote(),
+            "คำขอลาไม่ผ่านเงื่อนไขอัตโนมัติ"
+                + "\nสาเหตุ: " + (request.systemNote() == null ? "คำขอลาไม่ผ่านเงื่อนไข กรุณาติดต่อ HR" : request.systemNote())
+                + "\nหากไม่ถูกต้อง กรุณาติดต่อฝ่ายบุคคล",
             "/leave",
             true);
     }
@@ -1926,29 +1938,40 @@ public class LeaveService {
      * the backstop if the filing manager never returns to it.
      */
     private void notifyPendingApproval(LeaveRequestDto request, long actorEmployeeId) {
-        notificationService.notify(
-            request.employeeId(),
-            "LEAVE_SUBMITTED",
-            "ส่งคำขอลาแล้ว",
-            "คำขอลา " + request.leaveTypeNameTh() + " วันที่ " + request.startDate() + " ถึง "
-                + request.endDate() + " ถูกส่งเรียบร้อยแล้ว รอการอนุมัติ",
-            "/leave",
-            true);
+        String type = request.leaveTypeNameTh();
+        String period = ThaiText.dateRange(request.startDate(), request.endDate());
+        String days = formatDays(request.totalDays());
 
+        // Resolve the routing BEFORE wording the employee's message, so the message names the stage
+        // the request actually goes to. Saying "รอผู้จัดการอนุมัติ" unconditionally would be false
+        // for exactly the employees with no manager of record -- their request falls back to HR (see
+        // the branch below and this method's Javadoc), so they would be told to wait on an approver
+        // who does not exist. Same shape as OvertimeService#notifySubmitted's goesToCeo branch.
         Set<Long> approvers = new LinkedHashSet<>();
-        if (request.managerEmployeeId() != null) {
+        boolean goesToHr = request.managerEmployeeId() == null;
+        if (!goesToHr) {
             approvers.add(request.managerEmployeeId());
         } else {
             approvers.addAll(employeeRepository.findHrEmployeeIds());
         }
+
+        notificationService.notify(
+            request.employeeId(),
+            "LEAVE_SUBMITTED",
+            "ส่งคำขอ" + type + "แล้ว",
+            "ส่งคำขอ" + type + " " + period + " (" + days + " วัน) แล้ว"
+                + "\nอยู่ระหว่างรอ" + (goesToHr ? "ฝ่ายบุคคล" : "ผู้จัดการ") + "อนุมัติ ระบบจะแจ้งผลให้ทราบ",
+            "/leave",
+            true);
+
         approvers.remove(actorEmployeeId);
         for (Long approverId : approvers) {
             notificationService.notify(
                 approverId,
                 "LEAVE_PENDING_APPROVAL",
-                "มีคำขอลารออนุมัติ",
-                request.employeeName() + " ส่งคำขอลา " + request.leaveTypeNameTh() + " วันที่ "
-                    + request.startDate() + " ถึง " + request.endDate(),
+                "รออนุมัติ: " + type + " — " + request.employeeName(),
+                request.employeeName() + " ขอ" + type + " " + period + " (" + days + " วัน)"
+                    + "\nกรุณาพิจารณาอนุมัติหรือปฏิเสธในระบบ",
                 "/leave",
                 true);
         }

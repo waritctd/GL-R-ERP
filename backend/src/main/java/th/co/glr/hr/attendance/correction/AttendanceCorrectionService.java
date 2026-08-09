@@ -13,6 +13,7 @@ import th.co.glr.hr.attendance.daily.EmployeeDay;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.ThaiText;
 import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 
@@ -116,8 +117,9 @@ public class AttendanceCorrectionService {
         notificationService.notify(
             after.employeeId(),
             "ATTENDANCE_CORRECTION_APPROVED",
-            "คำขอแก้ไขเวลาเข้า-ออกงานได้รับการอนุมัติ",
-            "คำขอแก้ไขเวลาเข้า-ออกงานวันที่ " + after.workDate() + " ได้รับการอนุมัติแล้ว",
+            "อนุมัติการแก้ไขเวลาเข้า-ออกงานแล้ว",
+            "อนุมัติการแก้ไขเวลาเข้า-ออกงาน วันที่ " + ThaiText.date(after.workDate()) + " แล้ว"
+                + "\nเวลาที่แก้ไขถูกบันทึกเข้าระบบเรียบร้อย",
             "/attendance",
             true);
         return withCanReviewFlag(after, user);
@@ -161,9 +163,9 @@ public class AttendanceCorrectionService {
         notificationService.notify(
             after.employeeId(),
             "ATTENDANCE_CORRECTION_REJECTED",
-            "คำขอแก้ไขเวลาเข้า-ออกงานถูกปฏิเสธ",
-            "คำขอแก้ไขเวลาเข้า-ออกงานวันที่ " + after.workDate() + " ถูกปฏิเสธ: "
-                + (after.reviewerNote() == null ? "กรุณาติดต่อฝ่ายบุคคล" : after.reviewerNote()),
+            "ไม่อนุมัติการแก้ไขเวลาเข้า-ออกงาน",
+            "ไม่อนุมัติการแก้ไขเวลาเข้า-ออกงาน วันที่ " + ThaiText.date(after.workDate())
+                + "\nเหตุผล: " + (after.reviewerNote() == null ? "กรุณาติดต่อฝ่ายบุคคล" : after.reviewerNote()),
             "/attendance",
             true);
         return withCanReviewFlag(after, user);
@@ -329,8 +331,9 @@ public class AttendanceCorrectionService {
             notificationService.notify(
                 ceoEmployeeId,
                 "ATTENDANCE_CORRECTION_SUBMITTED",
-                "มีคำขอแก้ไขเวลาเข้า-ออกงานใหม่",
-                created.employeeName() + " ยื่นคำขอแก้ไขเวลาเข้า-ออกงานวันที่ " + created.workDate(),
+                "รออนุมัติ: แก้ไขเวลาเข้า-ออกงาน — " + created.employeeName(),
+                created.employeeName() + " ขอแก้ไขเวลาเข้า-ออกงาน วันที่ " + ThaiText.date(created.workDate())
+                    + "\nกรุณาพิจารณาอนุมัติหรือปฏิเสธในระบบ",
                 "/attendance",
                 true);
         }
