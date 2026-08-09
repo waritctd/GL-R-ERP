@@ -58,11 +58,14 @@ spring:
 # repo-wide default in application.yml is `log`, so a dashboard value that is deleted or mistyped
 # would silently downgrade UAT to sending nothing while every log line still reads "email sent".
 #
-# ⚠️ app.mail.from is deliberately NOT set here. Resend's account is not domain-verified, so it can
-# only send as its sandbox sender (application.yml's onboarding@resend.dev default) and only TO the
-# Resend account's own address — which is why APP_MAIL_OVERRIDE_TO must stay pointed at that
-# address. Setting APP_MAIL_FROM to anything else returns 403 domain-not-verified, and
-# NotificationEmailService swallows send failures, so it fails SILENTLY.
+# app.mail.from is set via APP_MAIL_FROM on the Render dashboard (see render.yaml's gl-r-erp-uat
+# service - sync:false, so it is a dashboard secret, not provisioned by that file), NOT here.
+# glr-trial.lat is verified in Resend and the live From: header uses an address on that domain
+# (confirmed against a real received email, 2026-08-08) - the domain was registered 2026-08-05,
+# three days before that confirmation. If APP_MAIL_FROM is ever unset on the dashboard,
+# application.yml's onboarding@resend.dev sandbox-sender default applies instead; that fallback can
+# only send TO the Resend account's own address, which is why APP_MAIL_OVERRIDE_TO below exists as
+# a safety net regardless of which From is active.
 #
 # ⚠️ APP_MAIL_OVERRIDE_TO redirects NOTIFICATION mail to one test inbox, but FactoryEmailService
 # does NOT honour it — factory-quote mail goes to sales.factory_config.email as stored. V911 seeds
@@ -70,19 +73,13 @@ spring:
 app:
   mail:
     provider: ${APP_MAIL_PROVIDER:resend}
-    # Marks every UAT-sent subject so a real inbox (APP_MAIL_OVERRIDE_TO) never confuses a test email
-    # for a real one. Trailing space is deliberate - YAML-quoted so it survives (an unquoted flow
-    # scalar trims trailing whitespace), giving "[TEST] Subject" rather than "[TEST]Subject".
-    subject-prefix: "${APP_MAIL_SUBJECT_PREFIX:[TEST] }"
+    # Appended (not prepended) to every UAT-sent subject so a real inbox (APP_MAIL_OVERRIDE_TO)
+    # never confuses a test email for a real one, without putting a bracketed keyword at the FRONT
+    # of the subject - a leading "[TEST]"-shaped token is a classic spam-filter trigger, and this
+    # domain has no sending reputation to spend on avoidable ones. Leading space is deliberate -
+    # YAML-quoted so it survives (an unquoted flow scalar trims leading/trailing whitespace), giving
+    # "Subject (UAT)" rather than "Subject(UAT)".
+    subject-suffix: "${APP_MAIL_SUBJECT_SUFFIX: (UAT)}"
     # Same UAT frontend URL NotificationEmailService already defaults to - set explicitly here so a
     # UAT deploy doesn't rely on that Java-side default matching. Used for portal CTA links only.
     app-base-url: ${APP_MAIL_APP_BASE_URL:https://demo-glr-git-uat-waritctds-projects.vercel.app}
-    # Deliberately a DIFFERENT host from app-base-url above: this is the emailed logo's URL only.
-    # app-base-url is a Vercel branch preview, and if Vercel Deployment Protection is ever enabled
-    # on it, Gmail's image proxy (no cookies/session, can't complete a login flow) hits an auth wall
-    # and the logo silently breaks in every email - a human clicking the CTA link doesn't have that
-    # problem because they can log in. Pointing the logo at this service's own Render origin instead
-    # sidesteps Vercel entirely; vercel.json's /api/:path* rewrite means the two origins serve the
-    # same bytes anyway, so nothing else changes. Set explicitly here for the same reason as
-    # app-base-url - don't rely on the Java-side default matching this deployment.
-    asset-base-url: ${APP_MAIL_ASSET_BASE_URL:https://gl-r-erp-uat.onrender.com}

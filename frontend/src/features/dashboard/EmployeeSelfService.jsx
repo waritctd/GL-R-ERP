@@ -5,11 +5,12 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { StatCard } from '../../components/common/StatCard.jsx';
+import { StatCard, STAT_ICON_TILE_CLASSES, STAT_TONE_CLASSES } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { TaxAllowanceActionRow } from '../taxAllowance/TaxAllowanceActionRow.jsx';
+import { cn } from '../../utils/cn.js';
 import {
   bangkokTodayIso,
   formatBangkokTime,
@@ -96,7 +97,7 @@ function ApprovalChain({ steps }) {
 function MyRequestRow({ row }) {
   const showChain = !TERMINAL_NEGATIVE.has(row.status);
   return (
-    <div className="request-feed-item compact">
+    <div className="request-feed-item flex items-center justify-between gap-3 min-w-0 py-2.5 border-b border-surface-subtle">
       <span>
         <strong>{row.title}</strong>
         <small>{row.dateLabel}</small>
@@ -165,7 +166,10 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], dash
       dateLabel: formatShortDate(request.workDate),
       requestedAt: request.requestedAt || request.workDate,
       status: request.status,
-      statusInfo: overtimeStatusLabel(request.status),
+      // A1: pass pendingApproverRole through -- a status-only call mislabels every SUBMITTED
+      // request 'รอผู้จัดการ' on this dashboard too, including the ones OvertimeService routes
+      // straight to the CEO.
+      statusInfo: overtimeStatusLabel(request.status, request.pendingApproverRole),
       chain: chainForRequest('ot', request),
     }));
     const profileRows = profileRequests.map((request) => ({
@@ -231,7 +235,7 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], dash
         className="bg-surface border border-border rounded-md p-5 w-full text-left cursor-pointer flex items-center justify-between gap-4 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] focus-visible:border-primary-hover mobile:flex-col mobile:items-start mobile:gap-3"
       >
         <span className="flex items-center gap-3 min-w-0">
-          <span className={`stat-icon !mb-0 stat-${hasCheckedIn ? 'teal' : 'amber'}`}>
+          <span className={cn(STAT_ICON_TILE_CLASSES, '!mb-0', STAT_TONE_CLASSES[hasCheckedIn ? 'teal' : 'amber'])}>
             <Icon name="badgeCheck" size={21} />
           </span>
           <span className="min-w-0">
@@ -303,9 +307,9 @@ export function EmployeeSelfService({ user, employee, profileRequests = [], dash
           </span>
         )}
       >
-        <div className="request-feed">
+        <div className="request-feed grid gap-2.5">
           {myRequests.length === 0 ? (
-            <div className="empty-state">ยังไม่มีคำขอล่าสุด</div>
+            <div className="grid min-h-[220px] place-items-center content-center gap-2 text-center text-text-muted">ยังไม่มีคำขอล่าสุด</div>
           ) : myRequests.map((row) => <MyRequestRow key={row.id} row={row} />)}
         </div>
       </Panel>

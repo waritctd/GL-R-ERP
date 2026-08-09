@@ -140,21 +140,25 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
   }
 
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={forced ? undefined : onClose}>
+    <div
+      className="modal-backdrop fixed inset-0 z-50 grid place-items-center p-5 bg-overlay"
+      role="presentation"
+      onMouseDown={forced ? undefined : onClose}
+    >
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- dialog only stops backdrop click-through; it is not an interactive control */}
       <section
         ref={panelRef}
-        className="modal-panel"
+        className="modal-panel flex flex-col overflow-hidden rounded-md bg-surface shadow-[var(--shadow-lg-heavy)] w-[min(720px,100%)] max-h-[min(760px,calc(100dvh-40px))]"
         role="dialog"
         aria-modal="true"
         aria-label="เปลี่ยนรหัสผ่าน"
         tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header className="modal-header">
+        <header className="modal-header flex items-center justify-between gap-4 px-5 py-[18px] border-b border-border">
           <div>
-            <h2>เปลี่ยนรหัสผ่าน</h2>
-            <p>{forced ? 'กรุณาตั้งรหัสผ่านใหม่เพื่อความปลอดภัยก่อนเริ่มใช้งาน' : 'อัปเดตรหัสผ่านของคุณ'}</p>
+            <h2 className="m-0">เปลี่ยนรหัสผ่าน</h2>
+            <p className="m-0 text-text-muted text-[length:var(--text-sm)]">{forced ? 'กรุณาตั้งรหัสผ่านใหม่เพื่อความปลอดภัยก่อนเริ่มใช้งาน' : 'อัปเดตรหัสผ่านของคุณ'}</p>
           </div>
           {!forced && onClose ? (
             <Button type="button" variant="icon" onClick={onClose} title="ปิด" aria-label="ปิด">
@@ -162,7 +166,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
             </Button>
           ) : null}
         </header>
-        <div className="modal-body">
+        <div className="modal-body overflow-auto p-5">
           <SafeForm id="change-password-form" onSubmit={handleSubmit(submitPassword)} noValidate>
             <FormGrid single>
               <FormField
@@ -176,7 +180,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
                   type="password"
                   {...register('currentPassword')}
                   autoComplete="current-password"
-                  className={errors.currentPassword ? 'is-invalid' : ''}
+                  className={errors.currentPassword ? 'border-danger focus:border-danger focus:[box-shadow:0_0_0_3px_var(--color-danger-bg)]' : ''}
                   aria-invalid={Boolean(errors.currentPassword)}
                   aria-describedby={errors.currentPassword ? fieldErrorId('change-password-current') : undefined}
                   required
@@ -194,7 +198,7 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
                   {...register('newPassword')}
                   autoComplete="new-password"
                   minLength={8}
-                  className={newPasswordTooShort ? 'is-invalid' : ''}
+                  className={newPasswordTooShort ? 'border-danger focus:border-danger focus:[box-shadow:0_0_0_3px_var(--color-danger-bg)]' : ''}
                   aria-invalid={newPasswordTooShort}
                   aria-describedby={newPasswordTooShort ? fieldErrorId('change-password-new') : undefined}
                   required
@@ -211,17 +215,17 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
                   type="password"
                   {...register('confirmPassword')}
                   autoComplete="new-password"
-                  className={confirmPasswordFieldError ? 'is-invalid' : ''}
+                  className={confirmPasswordFieldError ? 'border-danger focus:border-danger focus:[box-shadow:0_0_0_3px_var(--color-danger-bg)]' : ''}
                   aria-invalid={Boolean(confirmPasswordFieldError)}
                   aria-describedby={confirmPasswordFieldError ? fieldErrorId('change-password-confirm') : undefined}
                   required
                 />
               </FormField>
-              {(formError || submitError) ? <div className="form-error" role="alert">{formError || submitError}</div> : null}
+              {(formError || submitError) ? <div className="py-2.5 px-3 rounded-md bg-danger-bg text-danger-dark font-bold text-[length:var(--text-sm)]" role="alert">{formError || submitError}</div> : null}
             </FormGrid>
           </SafeForm>
         </div>
-        <footer className="modal-footer">
+        <footer className="modal-footer flex items-center justify-end gap-4 px-5 py-[18px] border-t border-border">
           {forced ? (
             <Button type="button" variant="secondary" onClick={onLogout}>ออกจากระบบ</Button>
           ) : (

@@ -28,6 +28,11 @@ const CHROMIUM_EXECUTABLE = process.env.E2E_CHROMIUM_EXECUTABLE || undefined;
 
 export default defineConfig({
   testDir: './e2e-real',
+  // Inert today — e2e-real/ contains no *.test.js — but Playwright's default testMatch
+  // claims `*.test.js` as well as `*.spec.js`, so the first vitest-style file added here
+  // would be collected by Playwright and fail the suite at load time. That is exactly what
+  // happened in e2e-visual/. Pinning the extension now costs nothing and disarms it.
+  testMatch: '**/*.spec.js',
   globalSetup: './e2e-real/global-setup.js',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,

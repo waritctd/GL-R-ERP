@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { formatMoney, formatShortDate } from '../../utils/format.js';
-import { AUTO_GRANTED_ROWS, TAX_ALLOWANCE_GROUPS, declaredAllowanceTotal } from './taxAllowanceSchema.js';
+import { AUTO_GRANTED_ROWS, LOR_YOR_01_SECTIONS, declaredAllowanceTotal, readFieldValue } from './taxAllowanceSchema.js';
 import { capMapFrom, fieldCapCaption } from './taxAllowanceCaps.js';
 import { hasAllowanceDisagreement, payrollVerificationInfo } from './taxAllowanceStatus.js';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -31,10 +31,14 @@ export function TaxAllowanceBreakdown({ declaration, caps = [], payrollAllowance
   const declaredRows = useMemo(() => {
     const allowances = declaration?.allowances || {};
     const rows = [];
-    for (const group of TAX_ALLOWANCE_GROUPS) {
+    // Reads through `readFieldValue` because three ล.ย.01 amounts live under the nested
+    // `lorYor01` payload (ข้อ 3's second tier, ข้อ 4's spouse row, ข้อ 9) rather than in the flat
+    // allowance bag — a plain `allowances[field.key]` would silently show them as zero.
+    const source = { ...allowances, lorYor01: declaration?.lorYor01 || {} };
+    for (const group of LOR_YOR_01_SECTIONS) {
       for (const field of group.fields) {
-        if (field.kind === 'checkbox') continue;
-        const amount = Number(allowances[field.key] || 0);
+        if (field.kind === 'checkbox' || field.kind === 'text') continue;
+        const amount = Number(readFieldValue(source, field.key) || 0);
         if (field.kind === 'money' && amount > 0) {
           rows.push({
             key: field.key,

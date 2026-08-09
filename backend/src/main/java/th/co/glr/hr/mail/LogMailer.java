@@ -22,11 +22,12 @@ public class LogMailer implements Mailer {
     }
 
     @Override
-    public void sendHtml(String to, String subject, String htmlBody, String textBody) {
+    public void sendHtml(String to, String subject, String htmlBody, String textBody, List<InlineImage> inlineImages) {
         // Log the text alternative, not the HTML - readable in a log line, and it's the same content
-        // the HTML renders (just without markup).
-        log.info("[LogMailer] HTML email NOT sent (provider=log). to={} subject={} textBody={}",
-            to, subject, textBody);
+        // the HTML renders (just without markup). Inline images are logged as a count only - the
+        // bytes aren't log-line material and there is no transport here to embed them into.
+        log.info("[LogMailer] HTML email NOT sent (provider=log). to={} subject={} textBody={} inlineImages={}",
+            to, subject, textBody, inlineImages.size());
     }
 
     @Override

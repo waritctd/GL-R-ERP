@@ -15,8 +15,12 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,6 +29,8 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
 import th.co.glr.hr.attendance.schedule.HolidayCalendar;
+import th.co.glr.hr.attendance.schedule.WorkSchedule;
+import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.employee.ManagerApproverRepository;
 import th.co.glr.hr.auth.UserPrincipal;
@@ -33,6 +39,20 @@ import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.notification.NotificationService;
 
 class OvertimeServiceTest {
+    private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
+    /** See {@link #scheduleResolver}'s field comment and {@link #assumeEveryDayIsAScheduledWorkday}. */
+    private static final WorkSchedule EVERY_DAY_IS_A_WORKDAY = new WorkSchedule(
+        BANGKOK, LocalTime.of(8, 30), LocalTime.of(17, 30), 15, EnumSet.allOf(DayOfWeek.class));
+    /** A real Mon-Fri schedule, for the tests that specifically exercise the weekend-suggests-HOLIDAY rule. */
+    private static final WorkSchedule MON_FRI_SCHEDULE = new WorkSchedule(
+        BANGKOK, LocalTime.of(8, 30), LocalTime.of(17, 30), 15,
+        EnumSet.of(DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY, DayOfWeek.THURSDAY, DayOfWeek.FRIDAY));
+    /** OPS_6D: Mon-Sat, only Sunday off -- the case a naive day-of-week check gets wrong. */
+    private static final WorkSchedule OPS_6D_SCHEDULE = new WorkSchedule(
+        BANGKOK, LocalTime.of(8, 30), LocalTime.of(17, 30), 5,
+        EnumSet.of(DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY, DayOfWeek.THURSDAY,
+            DayOfWeek.FRIDAY, DayOfWeek.SATURDAY));
+
     private final OvertimeRepository overtimeRepository = mock(OvertimeRepository.class);
     private final AuditService auditService = mock(AuditService.class);
     private final NotificationService notificationService = mock(NotificationService.class);
@@ -45,6 +65,13 @@ class OvertimeServiceTest {
     // stubs a specific date -- i.e. every case in this class gets WORKDAY/1.50x unless it opts in.
     // Year coverage is handled separately by assumeTheHolidayCalendarIsLoadedForTheYear below.
     private final HolidayCalendar holidayCalendar = mock(HolidayCalendar.class);
+    // feat/ot-nonworkday-rate-suggestion: a Mockito object-return stub defaults to null, which
+    // would NPE the instant suggestDayType calls schedule.isWorkday(...). Stubbed below
+    // (assumeEveryDayIsAScheduledWorkday) to an every-day-is-a-workday schedule, mirroring how
+    // holidayCalendar above defaults to "never a holiday" -- every test in this class written
+    // before this feature existed keeps behaving as though only hr.holiday can make a day
+    // non-standard, unless it opts in to a specific schedule stub.
+    private final WorkScheduleResolver scheduleResolver = mock(WorkScheduleResolver.class);
     private final OvertimeService overtimeService = new OvertimeService(
         overtimeRepository,
         managerApproverRepository,
@@ -52,7 +79,8 @@ class OvertimeServiceTest {
         notificationService,
         appProperties,
         attendanceDailyService,
-        holidayCalendar
+        holidayCalendar,
+        scheduleResolver
     );
 
     /**
@@ -81,6 +109,19 @@ class OvertimeServiceTest {
     @BeforeEach
     void assumeTheHolidayCalendarIsLoadedForTheYear() {
         when(holidayCalendar.hasHolidaysForYear(anyInt())).thenReturn(true);
+    }
+
+    /**
+     * feat/ot-nonworkday-rate-suggestion: see {@link #scheduleResolver}'s field comment. Every day
+     * of the week is a workday in this default schedule, so {@code suggestDayType} in this class
+     * resolves purely on {@link #holidayCalendar} unless a test stubs {@link #scheduleResolver}
+     * itself to model a real Mon-Fri or six-day (OPS_6D) schedule -- see the {@code *NonWorkday*}
+     * tests below for that.
+     */
+    @BeforeEach
+    void assumeEveryDayIsAScheduledWorkday() {
+        when(scheduleResolver.resolve(anyLong(), any(), any(), any(LocalDate.class)))
+            .thenReturn(EVERY_DAY_IS_A_WORKDAY);
     }
 
     @Test
@@ -120,8 +161,18 @@ class OvertimeServiceTest {
         // The failure this guards against is silent: a request routed to the CEO while only a
         // manager -- who cannot clear it -- is told about it, so it sits unreviewed with everyone
         // believing someone else has it.
-        verify(notificationService).notify(eq(500L), eq("OVERTIME_PENDING_CEO"), anyString(), anyString(), eq("/overtime"), eq(true));
+        ArgumentCaptor<String> employeeBody = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> ceoBody = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(eq(10L), eq("OVERTIME_SUBMITTED"), anyString(), employeeBody.capture(), eq("/overtime"), eq(true));
+        verify(notificationService).notify(eq(500L), eq("OVERTIME_PENDING_CEO"), anyString(), ceoBody.capture(), eq("/overtime"), eq(true));
         verify(notificationService, never()).notify(anyLong(), eq("OVERTIME_PENDING_MANAGER"), anyString(), anyString(), anyString(), anyBoolean());
+        // A3 (OT UAT defect #4): both bodies used to say a stage is MISSING ("... (ไม่มีขั้นอนุมัติ
+        // ของหัวหน้างาน)" / "... ซึ่งไม่มีขั้นอนุมัติของหัวหน้างาน"). The anyString() calls above
+        // would not catch a regression back to that framing -- these pin the actual text, matching
+        // the owner's ruling that the reader needs to be told who holds the request, not that a
+        // stage is absent.
+        assertThat(employeeBody.getValue()).doesNotContain("ขั้นอนุมัติของหัวหน้างาน");
+        assertThat(ceoBody.getValue()).doesNotContain("ขั้นอนุมัติของหัวหน้างาน");
     }
 
     @Test
@@ -229,18 +280,18 @@ class OvertimeServiceTest {
     }
 
     /**
-     * Divergence from the ported branch: this repo KEEPS SubmitOvertimeRequest.dayType as a claim to
-     * validate (see its Javadoc), rather than deleting the field. A HOLIDAY claim the calendar can
-     * actively disprove (loaded for the year, date not in it) must be refused outright -- the exact
-     * P0 shape (self-declaring HOLIDAY on an ordinary day) but caught before create() is ever called.
+     * A2 (OT UAT defect #3): the redesigned two-date-picker submit form (วันที่ทำ OT / วันที่สิ้นสุด)
+     * can express at most a next-day window, so the API must refuse anything longer -- a caller
+     * bypassing the form could otherwise still submit a multi-day window the UI can never produce.
      */
     @Test
-    void holidayClaimContradictedByTheCalendarIsRejectedAndNeverReachesCreate() {
+    void plannedWindowLongerThanOneDayIsRejected() {
         LocalDate workDate = LocalDate.now().plusDays(4);
-        SubmitOvertimeRequest request = claimSubmit(workDate, "HOLIDAY");
+        OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
+        // Ends TWO days after workDate.
+        SubmitOvertimeRequest request = new SubmitOvertimeRequest(
+            null, workDate, startAt, startAt.plusDays(2), "WORKDAY", "Urgent delivery");
         when(overtimeRepository.employeeExists(10L)).thenReturn(true);
-        when(holidayCalendar.hasHolidaysForYear(workDate.getYear())).thenReturn(true);
-        when(holidayCalendar.isHoliday(workDate)).thenReturn(false);
 
         assertThatThrownBy(() -> overtimeService.submit(request, user("employee", 10L)))
             .isInstanceOf(ApiException.class)
@@ -248,7 +299,55 @@ class OvertimeServiceTest {
             .isEqualTo(HttpStatus.BAD_REQUEST);
 
         verify(overtimeRepository, never()).create(
-            anyLong(), any(), any(), anyInt(), any(OvertimeDayType.class), any(), any());
+            anyLong(), anyLong(), any(SubmitOvertimeRequest.class), anyInt(), any(OvertimeDayType.class), any(LocalDate.class), any());
+    }
+
+    /** The boundary case the guard above must still ACCEPT: the overnight window the redesigned form is meant to keep supporting. */
+    @Test
+    void plannedWindowEndingExactlyOneDayAfterWorkDateIsAccepted() {
+        LocalDate workDate = LocalDate.now().plusDays(4);
+        // 22:00 -> next-day 02:00.
+        OffsetDateTime startAt = workDate.atTime(22, 0).atOffset(java.time.ZoneOffset.ofHours(7));
+        OffsetDateTime endAt = startAt.plusHours(4);
+        SubmitOvertimeRequest request = new SubmitOvertimeRequest(
+            null, workDate, startAt, endAt, "WORKDAY", "Overnight shift coverage");
+        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
+        when(overtimeRepository.create(eq(10L), eq(10L), eq(request), eq(240), eq(OvertimeDayType.WORKDAY), eq(workDate.withDayOfMonth(1)), isNull()))
+            .thenReturn(64L);
+        when(overtimeRepository.findById(64L)).thenReturn(Optional.of(requestDto(64L, 10L, "SUBMITTED")));
+
+        assertThat(overtimeService.submit(request, user("employee", 10L)).id()).isEqualTo(64L);
+    }
+
+    /**
+     * feat/ot-nonworkday-rate-suggestion: THE row this branch changes at the unit level. This test
+     * used to be {@code holidayClaimContradictedByTheCalendarIsRejectedAndNeverReachesCreate},
+     * asserting a 400 and that {@code create()} was never called -- see git history. Owner ruling
+     * 2026-08-08: the employee may submit a claim that disagrees with the suggestion (here,
+     * WORKDAY -- not a holiday, and this class's default schedule stub says every day is a
+     * workday) and still have it accepted; the disagreement is flagged in {@code
+     * calculation_note} for the approver instead of refused. The real-DB wrong-way-round proof,
+     * carried all the way through to a completed approval, lives in {@code
+     * OvertimeDayTypeDerivedFromCalendarIntegrationTest#holidayClaimContradictedByTheCalendarIsAcceptedAndFlaggedNotRejected}.
+     */
+    @Test
+    void holidayClaimContradictedByTheCalendarIsAcceptedAndFlaggedNotRejected() {
+        LocalDate workDate = LocalDate.now().plusDays(4);
+        SubmitOvertimeRequest request = claimSubmit(workDate, "HOLIDAY");
+        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
+        when(holidayCalendar.hasHolidaysForYear(workDate.getYear())).thenReturn(true);
+        when(holidayCalendar.isHoliday(workDate)).thenReturn(false);
+        when(overtimeRepository.create(
+                eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY),
+                eq(workDate.withDayOfMonth(1)), anyString()))
+            .thenReturn(65L);
+        when(overtimeRepository.findById(65L)).thenReturn(Optional.of(requestDto(65L, 10L, "SUBMITTED")));
+
+        overtimeService.submit(request, user("employee", 10L));
+
+        verify(overtimeRepository).create(
+            eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY),
+            eq(workDate.withDayOfMonth(1)), anyString());
     }
 
     /**
@@ -431,7 +530,7 @@ class OvertimeServiceTest {
         when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
         when(overtimeRepository.payrollMonthProcessed(submitted.workDate().withDayOfMonth(1))).thenReturn(true);
 
-        assertThatThrownBy(() -> overtimeService.approve(78L, new ReviewOvertimeRequest("ok"), manager(99L, 5L)))
+        assertThatThrownBy(() -> overtimeService.approve(78L, new ApproveOvertimeRequest("ok", null), manager(99L, 5L)))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.CONFLICT);
@@ -445,7 +544,7 @@ class OvertimeServiceTest {
         when(overtimeRepository.findById(79L)).thenReturn(Optional.of(managerApproved));
         when(overtimeRepository.payrollMonthProcessed(managerApproved.workDate().withDayOfMonth(1))).thenReturn(true);
 
-        assertThatThrownBy(() -> overtimeService.approve(79L, new ReviewOvertimeRequest("ok"), user("ceo", 500L)))
+        assertThatThrownBy(() -> overtimeService.approve(79L, new ApproveOvertimeRequest("ok", null), user("ceo", 500L)))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.CONFLICT);
@@ -486,7 +585,7 @@ class OvertimeServiceTest {
         when(overtimeRepository.payrollMonthProcessed(submitted.workDate().withDayOfMonth(1))).thenReturn(false);
         when(overtimeRepository.payrollMonthSeedCovered(submitted.workDate().withDayOfMonth(1))).thenReturn(true);
 
-        assertThatThrownBy(() -> overtimeService.approve(78L, new ReviewOvertimeRequest("ok"), manager(99L, 5L)))
+        assertThatThrownBy(() -> overtimeService.approve(78L, new ApproveOvertimeRequest("ok", null), manager(99L, 5L)))
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("จ่ายนอกระบบ")
             .satisfies(exception -> assertThat(((ApiException) exception).getStatus())
@@ -500,7 +599,7 @@ class OvertimeServiceTest {
         when(overtimeRepository.payrollMonthProcessed(managerApproved.workDate().withDayOfMonth(1))).thenReturn(false);
         when(overtimeRepository.payrollMonthSeedCovered(managerApproved.workDate().withDayOfMonth(1))).thenReturn(true);
 
-        assertThatThrownBy(() -> overtimeService.approve(79L, new ReviewOvertimeRequest("ok"), user("ceo", 500L)))
+        assertThatThrownBy(() -> overtimeService.approve(79L, new ApproveOvertimeRequest("ok", null), user("ceo", 500L)))
             .isInstanceOf(ApiException.class)
             .hasMessageContaining("จ่ายนอกระบบ")
             .satisfies(exception -> assertThat(((ApiException) exception).getStatus())
@@ -528,7 +627,7 @@ class OvertimeServiceTest {
         when(overtimeRepository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
         UserPrincipal actor = manager(99L, 5L);
 
-        OvertimeRequestDto result = overtimeService.approve(77L, new ReviewOvertimeRequest("ok"), actor);
+        OvertimeRequestDto result = overtimeService.approve(77L, new ApproveOvertimeRequest("ok", null), actor);
 
         ArgumentCaptor<OvertimeCalculation> captor = ArgumentCaptor.forClass(OvertimeCalculation.class);
         verify(overtimeRepository).managerApprove(
@@ -541,7 +640,13 @@ class OvertimeServiceTest {
         assertThat(calculation.payableMinutes()).isEqualTo(100);
         verify(auditService).record(eq(actor), eq("MANAGER_APPROVE_OVERTIME_REQUEST"), eq("overtime_request"), eq(77L), eq(submitted), any(OvertimeRequestDto.class));
         verify(notificationService).notify(eq(10L), eq("OVERTIME_MANAGER_APPROVED"), anyString(), anyString(), eq("/overtime"), eq(true));
-        verify(notificationService).notify(eq(500L), eq("OVERTIME_PENDING_CEO"), anyString(), anyString(), eq("/overtime"), eq(true));
+        ArgumentCaptor<String> ceoBody = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(eq(500L), eq("OVERTIME_PENDING_CEO"), anyString(), ceoBody.capture(), eq("/overtime"), eq(true));
+        // A3: this is a DIFFERENT "OVERTIME_PENDING_CEO" body than the manager-less route's
+        // (notifyManagerApproved's, not notifySubmitted's) and never carried the retired framing --
+        // pinned anyway so a future edit that unifies the two CEO notification bodies cannot
+        // reintroduce it here either.
+        assertThat(ceoBody.getValue()).doesNotContain("ขั้นอนุมัติของหัวหน้างาน");
     }
 
     @Test
@@ -554,7 +659,7 @@ class OvertimeServiceTest {
         when(overtimeRepository.ceoApprove(77L, 500L, "ok")).thenReturn(1);
         UserPrincipal ceo = user("ceo", 500L);
 
-        OvertimeRequestDto result = overtimeService.approve(77L, new ReviewOvertimeRequest("ok"), ceo);
+        OvertimeRequestDto result = overtimeService.approve(77L, new ApproveOvertimeRequest("ok", null), ceo);
 
         assertThat(result.status()).isEqualTo("APPROVED");
         verify(overtimeRepository).ceoApprove(77L, 500L, "ok");
@@ -668,7 +773,7 @@ class OvertimeServiceTest {
         when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "SUBMITTED")));
         when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
 
-        assertThatThrownBy(() -> overtimeService.approve(77L, new ReviewOvertimeRequest(null), user("employee", 10L)))
+        assertThatThrownBy(() -> overtimeService.approve(77L, new ApproveOvertimeRequest(null, null), user("employee", 10L)))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.FORBIDDEN);
@@ -692,7 +797,7 @@ class OvertimeServiceTest {
             .thenReturn(1);
         when(overtimeRepository.findCeoApproverEmployeeIds()).thenReturn(List.of());
 
-        OvertimeRequestDto result = overtimeService.approve(77L, new ReviewOvertimeRequest("ok"), manager(88L, 5L));
+        OvertimeRequestDto result = overtimeService.approve(77L, new ApproveOvertimeRequest("ok", null), manager(88L, 5L));
 
         assertThat(result.status()).isEqualTo("MANAGER_APPROVED");
         verify(overtimeRepository).managerApprove(
@@ -703,7 +808,7 @@ class OvertimeServiceTest {
     void managerCannotCeoApproveManagerApprovedOvertime() {
         when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "MANAGER_APPROVED")));
 
-        assertThatThrownBy(() -> overtimeService.approve(77L, new ReviewOvertimeRequest(null), manager(88L, 5L)))
+        assertThatThrownBy(() -> overtimeService.approve(77L, new ApproveOvertimeRequest(null, null), manager(88L, 5L)))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.FORBIDDEN);
@@ -714,7 +819,7 @@ class OvertimeServiceTest {
         when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "SUBMITTED")));
         when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, null, 7L, true)));
 
-        assertThatThrownBy(() -> overtimeService.approve(77L, new ReviewOvertimeRequest(null), manager(88L, 5L)))
+        assertThatThrownBy(() -> overtimeService.approve(77L, new ApproveOvertimeRequest(null, null), manager(88L, 5L)))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.FORBIDDEN);
@@ -936,6 +1041,141 @@ class OvertimeServiceTest {
             .isEqualTo(HttpStatus.NOT_FOUND);
     }
 
+    // -------------------------------------------------------------------------------------------
+    // feat/ot-nonworkday-rate-suggestion: fast, mock-level companions to
+    // OvertimeDayTypeDerivedFromCalendarIntegrationTest's real-DB proof (Cases 6-9 there). These
+    // stub scheduleResolver directly rather than exercising a real TieredWorkScheduleResolver, so
+    // they prove OvertimeService's OWN logic (suggestDayType's fallback, calculate's override
+    // precedence, ceoApprove's freeze point) in isolation from the schedule-resolution SQL -- the
+    // real-DB tests are what prove the SQL/tiering itself.
+    // -------------------------------------------------------------------------------------------
+
+    /** A Saturday, far enough out to never be treated as backdated. */
+    private LocalDate aSaturday() {
+        LocalDate date = LocalDate.now().plusDays(4);
+        while (date.getDayOfWeek() != DayOfWeek.SATURDAY) {
+            date = date.plusDays(1);
+        }
+        return date;
+    }
+
+    @Test
+    void saturdaySuggestsHolidayForAMonFriEmployee() {
+        LocalDate saturday = aSaturday();
+        OffsetDateTime startAt = saturday.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
+        SubmitOvertimeRequest request = new SubmitOvertimeRequest(
+            null, saturday, startAt, startAt.plusHours(2), null, "Weekend delivery");
+        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
+        when(scheduleResolver.resolve(anyLong(), any(), any(), any(LocalDate.class))).thenReturn(MON_FRI_SCHEDULE);
+        when(overtimeRepository.create(
+                eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.HOLIDAY),
+                eq(saturday.withDayOfMonth(1)), isNull()))
+            .thenReturn(70L);
+        when(overtimeRepository.findById(70L)).thenReturn(Optional.of(requestDto(70L, 10L, "SUBMITTED")));
+
+        overtimeService.submit(request, user("employee", 10L));
+
+        verify(overtimeRepository).create(
+            eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.HOLIDAY),
+            eq(saturday.withDayOfMonth(1)), isNull());
+    }
+
+    /** THE case a naive day-of-week fix gets wrong -- Saturday is an ordinary working day under a six-day schedule. */
+    @Test
+    void saturdayIsSuggestedWorkdayForAnOps6dEmployeeUnlikeANaiveDayOfWeekCheck() {
+        LocalDate saturday = aSaturday();
+        OffsetDateTime startAt = saturday.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
+        SubmitOvertimeRequest request = new SubmitOvertimeRequest(
+            null, saturday, startAt, startAt.plusHours(2), null, "Weekend delivery");
+        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
+        when(scheduleResolver.resolve(anyLong(), any(), any(), any(LocalDate.class))).thenReturn(OPS_6D_SCHEDULE);
+        when(overtimeRepository.create(
+                eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY),
+                eq(saturday.withDayOfMonth(1)), isNull()))
+            .thenReturn(71L);
+        when(overtimeRepository.findById(71L)).thenReturn(Optional.of(requestDto(71L, 10L, "SUBMITTED")));
+
+        overtimeService.submit(request, user("employee", 10L));
+
+        verify(overtimeRepository).create(
+            eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY),
+            eq(saturday.withDayOfMonth(1)), isNull());
+        verify(overtimeRepository, never()).create(
+            anyLong(), anyLong(), any(), anyInt(), eq(OvertimeDayType.HOLIDAY), any(), any());
+    }
+
+    /**
+     * The approver's DECISION wins over the suggestion. This fixture's default stubs (every day a
+     * workday, not a holiday) suggest WORKDAY for {@code requestDto}'s fixed 2026-07-15 workDate --
+     * the explicit "HOLIDAY" override must still be what freezes into the calculation.
+     */
+    @Test
+    void managerApproveHonoursAnExplicitDayTypeOverride() {
+        OvertimeRequestDto submitted = requestDto(77L, 10L, "SUBMITTED");
+        OvertimeRequestDto managerApproved = requestDto(77L, 10L, "MANAGER_APPROVED");
+        when(overtimeRepository.findById(77L))
+            .thenReturn(Optional.of(submitted))
+            .thenReturn(Optional.of(managerApproved));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
+        when(overtimeRepository.findAttendanceBounds(eq(10L), any(OffsetDateTime.class), any(OffsetDateTime.class)))
+            .thenReturn(Optional.empty());
+        when(overtimeRepository.findSalaryBasisAsOf(10L, LocalDate.parse("2026-07-15")))
+            .thenReturn(new BigDecimal("30000.00"));
+        when(overtimeRepository.managerApprove(
+                eq(77L), eq(99L), any(OvertimeCalculation.class), any(BigDecimal.class), eq("override, data was wrong")))
+            .thenReturn(1);
+
+        overtimeService.approve(77L, new ApproveOvertimeRequest("override, data was wrong", "HOLIDAY"), manager(99L, 5L));
+
+        ArgumentCaptor<OvertimeCalculation> captor = ArgumentCaptor.forClass(OvertimeCalculation.class);
+        verify(overtimeRepository).managerApprove(
+            eq(77L), eq(99L), captor.capture(), any(BigDecimal.class), eq("override, data was wrong"));
+        assertThat(captor.getValue().dayType())
+            .as("the approver's explicit override must win over the suggestion (this fixture's default: WORKDAY)")
+            .isEqualTo(OvertimeDayType.HOLIDAY);
+    }
+
+    /** A malformed (non-blank, non-WORKDAY/HOLIDAY) approver dayType is a 400 about syntax, same as a malformed claim -- never silently swallowed. */
+    @Test
+    void managerApprovalWithAMalformedDayTypeOverrideIsRejected() {
+        OvertimeRequestDto submitted = requestDto(77L, 10L, "SUBMITTED");
+        when(overtimeRepository.findById(77L)).thenReturn(Optional.of(submitted));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
+
+        assertThatThrownBy(() -> overtimeService.approve(
+                77L, new ApproveOvertimeRequest("ok", "TUESDAY"), manager(99L, 5L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.BAD_REQUEST);
+
+        verify(overtimeRepository, never()).managerApprove(
+            anyLong(), anyLong(), any(OvertimeCalculation.class), any(BigDecimal.class), anyString());
+    }
+
+    /**
+     * The freeze point does not move: the CEO's final sign-off (MANAGER_APPROVED -> APPROVED) must
+     * silently ignore an ApproveOvertimeRequest.dayType -- OvertimeRepository#ceoApprove's own
+     * signature has no such parameter at all, so this call succeeding at all is the proof nothing
+     * routes the field anywhere that could move pay_rate_multiplier at this stage. See
+     * OvertimeDayTypeDerivedFromCalendarIntegrationTest#theCeosFinalSignOffCannotOverrideWhatTheManagerAlreadyFroze
+     * for the real-DB, money-level proof.
+     */
+    @Test
+    void ceoApproveIgnoresAnExplicitDayTypeOverrideAtTheFinalSignOff() {
+        OvertimeRequestDto managerApproved = requestDto(77L, 10L, "MANAGER_APPROVED");
+        OvertimeRequestDto approved = requestDto(77L, 10L, "APPROVED");
+        when(overtimeRepository.findById(77L))
+            .thenReturn(Optional.of(managerApproved))
+            .thenReturn(Optional.of(approved));
+        when(overtimeRepository.ceoApprove(77L, 500L, "ok")).thenReturn(1);
+
+        OvertimeRequestDto result = overtimeService.approve(
+            77L, new ApproveOvertimeRequest("ok", "WORKDAY"), user("ceo", 500L));
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+        verify(overtimeRepository).ceoApprove(77L, 500L, "ok");
+    }
+
     private SubmitOvertimeRequest validSubmit(Long employeeId) {
         LocalDate workDate = LocalDate.now().plusDays(4);
         OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
@@ -1014,7 +1254,17 @@ class OvertimeServiceTest {
             // mapper this Mockito-level class never exercises), so no test in this class asserts on
             // them via the helper.
             null,
-            null
+            null,
+            // feat/ot-nonworkday-rate-suggestion: this value is DISCARDED and recomputed the moment
+            // this fixture round-trips through OvertimeService#requireRequest (every approve/
+            // reject/cancel path does), via OvertimeService#withSuggestedDayType -- see that
+            // method's Javadoc. "WORKDAY" is not an arbitrary placeholder: it is what the actual
+            // recomputation produces for THIS fixture's fixed 2026-07-15 workDate under this
+            // class's default stubs (holidayCalendar -> not a holiday, scheduleResolver -> every
+            // day is a workday) -- see assumeEveryDayIsAScheduledWorkday. It must match, or
+            // eq(existingFixture) assertions on auditService.record(...) fail comparing this
+            // fixture against the service's actually-decorated DTO.
+            "WORKDAY"
         );
     }
 
@@ -1047,7 +1297,18 @@ class OvertimeServiceTest {
             true,
             timestamp, timestamp,
             // feat/pending-approver-info: no test using this fixture asserts on these.
-            null, null
+            null, null,
+            // Merge resolution (main -> uat): OvertimeRequestDto gained suggestedDayType on main in
+            // feat/ot-nonworkday-rate-suggestion, while these cancel fixtures live only on uat, so
+            // neither branch saw the other and git merged both cleanly into code that would not
+            // compile. Same value and same reason as main's own requestDto fixture: the field is
+            // DISCARDED and recomputed by OvertimeService#withSuggestedDayType the moment this
+            // fixture round-trips through requireRequest (every cancel path does). "WORKDAY" is not
+            // arbitrary -- it is what that recomputation produces for this fixture's fixed
+            // 2026-07-15 workDate under this class's default stubs (holidayCalendar -> not a
+            // holiday, scheduleResolver -> every day is a workday). It must match, or eq(...)
+            // assertions comparing this fixture against the service's decorated DTO fail.
+            "WORKDAY"
         );
     }
 
@@ -1079,7 +1340,18 @@ class OvertimeServiceTest {
             true,
             timestamp, timestamp,
             // feat/pending-approver-info: no test using this fixture asserts on these.
-            null, null
+            null, null,
+            // Merge resolution (main -> uat): OvertimeRequestDto gained suggestedDayType on main in
+            // feat/ot-nonworkday-rate-suggestion, while these cancel fixtures live only on uat, so
+            // neither branch saw the other and git merged both cleanly into code that would not
+            // compile. Same value and same reason as main's own requestDto fixture: the field is
+            // DISCARDED and recomputed by OvertimeService#withSuggestedDayType the moment this
+            // fixture round-trips through requireRequest (every cancel path does). "WORKDAY" is not
+            // arbitrary -- it is what that recomputation produces for this fixture's fixed
+            // 2026-07-15 workDate under this class's default stubs (holidayCalendar -> not a
+            // holiday, scheduleResolver -> every day is a workday). It must match, or eq(...)
+            // assertions comparing this fixture against the service's decorated DTO fail.
+            "WORKDAY"
         );
     }
 
@@ -1109,7 +1381,18 @@ class OvertimeServiceTest {
             true,
             timestamp, timestamp,
             // feat/pending-approver-info: no test using this fixture asserts on these.
-            null, null
+            null, null,
+            // Merge resolution (main -> uat): OvertimeRequestDto gained suggestedDayType on main in
+            // feat/ot-nonworkday-rate-suggestion, while these cancel fixtures live only on uat, so
+            // neither branch saw the other and git merged both cleanly into code that would not
+            // compile. Same value and same reason as main's own requestDto fixture: the field is
+            // DISCARDED and recomputed by OvertimeService#withSuggestedDayType the moment this
+            // fixture round-trips through requireRequest (every cancel path does). "WORKDAY" is not
+            // arbitrary -- it is what that recomputation produces for this fixture's fixed
+            // 2026-07-15 workDate under this class's default stubs (holidayCalendar -> not a
+            // holiday, scheduleResolver -> every day is a workday). It must match, or eq(...)
+            // assertions comparing this fixture against the service's decorated DTO fail.
+            "WORKDAY"
         );
     }
 

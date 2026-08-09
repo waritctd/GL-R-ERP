@@ -43,6 +43,10 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * the second property, and this class's own javadoc mutation-check note in the PR body for how
  * that pin was verified to actually fail if the short-circuit is reintroduced.
  */
+import th.co.glr.hr.config.AppProperties;
+
+import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
+
 class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegrationTest {
     private TaxAllowanceDeclarationRepository repository;
     private TaxAllowanceDeclarationService service;
@@ -67,7 +71,8 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
             fileStorage,
             // The estimate endpoint is not exercised by this class — a mock is enough.
             mock(PayrollService.class),
-            new NotificationRepository(jdbc));
+            new NotificationRepository(jdbc),
+            new AppProperties(), new LorYor01Renderer());
 
         employeeA = seedEmployee("TAA-A");
         employeeB = seedEmployee("TAA-B");
@@ -164,13 +169,13 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
     @Test
     void aValidSectionKeyIsAcceptedAndReturned() {
         long declarationId = submit(employeeA);
-        TaxAllowanceAttachmentDto uploaded = uploadPdf(declarationId, "insurance", employeeActor(employeeA));
+        TaxAllowanceAttachmentDto uploaded = uploadPdf(declarationId, "item7", employeeActor(employeeA));
 
-        assertThat(uploaded.sectionKey()).isEqualTo("insurance");
+        assertThat(uploaded.sectionKey()).isEqualTo("item7");
         // Persisted, not just echoed back -- re-fetching through a fresh query proves the column
         // round-trips through hr.file_attachment, not just through the in-memory DTO this call returned.
         assertThat(repository.findAttachment(uploaded.attachmentId()).orElseThrow().sectionKey())
-            .isEqualTo("insurance");
+            .isEqualTo("item7");
     }
 
     @Test
@@ -211,7 +216,8 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
             null, null, null,         // childCount, childCountDouble, disabledCareCount
             null,                     // disabilityCardHolder
             null,                     // parentCareCount
-            null);                    // documentReference
+            null,                    // documentReference
+            null);                   // lorYor01 — no ล.ย.01 form detail in this fixture
         return service.submitOwn(request, employeeActor(employeeId)).declarationId();
     }
 

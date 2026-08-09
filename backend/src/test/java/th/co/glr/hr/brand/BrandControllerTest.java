@@ -10,9 +10,10 @@ import org.springframework.http.ResponseEntity;
 // SecurityConfig permits GET /api/public/brand/** unauthenticated (see SecurityConfig) - not
 // re-asserted here via a MockMvc/security slice, since that would just restate the permitAll
 // matcher rather than exercise a decision. This is a plain unit test of the controller's own
-// logic. See BrandAssetSecurityIntegrationTest for the real-SecurityFilterChain coverage.
+// logic (the classpath read itself is BrandAssets's job - see BrandAssetsTest). See
+// BrandAssetSecurityIntegrationTest for the real-SecurityFilterChain coverage.
 class BrandControllerTest {
-    private final BrandController controller = new BrandController();
+    private final BrandController controller = new BrandController(new BrandAssets());
 
     @Test
     void returnsThePngWhenTheResourceExists() {

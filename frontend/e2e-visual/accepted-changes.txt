@@ -1,0 +1,46 @@
+# Snapshots whose pixel change is INTENDED and REVIEWED, for one specific PR.
+#
+# The visual job runs at maxDiffPixelRatio: 0 and captures its baseline from the
+# merge base, so a PR that deliberately changes the UI fails by construction.
+# This file is how you say "yes, I looked at that diff, and it is the point of
+# the change" WITHOUT dropping the gate for everything else in the PR.
+#
+# ── FORMAT ───────────────────────────────────────────────────────────────────
+#   <PR number>  <snapshot name>  — why the change is intended
+#
+# The snapshot name is what CI reports, with no `.png` and no `-chromium-linux`
+# suffix: `desktop-hr-employee-requests`, `mobile-ceo-ticket-overview`. A reason
+# is required.
+#
+# Worked example — PR #615 added a suggested-rate row to OvertimePanel, which
+# legitimately moved the pixels on the two surfaces that panel renders:
+#
+#   615  desktop-hr-employee-requests        — OT panel gains the suggested-rate row
+#   615  desktop-employee-employee-requests  — same panel, employee view
+#
+# ── RULES ────────────────────────────────────────────────────────────────────
+# 1. AN ENTRY ONLY APPLIES TO THE PR IT NAMES. Entries for any other PR are
+#    ignored, so a line left behind after a merge cannot exempt a future PR.
+#    That is enforced in helpers/accepted-changes.js, not by anyone remembering.
+#
+# 2. YOU STILL HAVE TO LOOK. An accepted snapshot is still captured and still
+#    compared, and its -diff.png is still uploaded as a CI artifact — the run
+#    simply does not fail on it. Accept a change AFTER reading the image, never
+#    instead of reading it. The job prints every acceptance it honoured.
+#
+# 3. THIS IS NOT A TOLERANCE. Everything not named here stays at exactly zero
+#    differing pixels. Never widen maxDiffPixelRatio to dodge adding a line.
+#
+# 4. YOU DO NOT NEED TO UPDATE A BASELINE AFTERWARDS. The baseline comes from
+#    the merge base, so once the PR merges its new pixels ARE the baseline for
+#    every later PR. An intended change is accepted exactly once, here, and then
+#    it is simply the truth.
+#
+# 5. PRUNE MERGED ENTRIES when you are next in this file. They are already inert
+#    (rule 1), so this is tidiness rather than safety.
+#
+# Locally: acceptances are OFF unless you set VISUAL_PR_NUMBER, so a local run is
+# always fully strict. To rehearse one:
+#   VISUAL_BASELINE=1 VISUAL_PR_NUMBER=615 npx playwright test --config playwright.visual.config.js
+#
+# ── ENTRIES (none right now) ─────────────────────────────────────────────────

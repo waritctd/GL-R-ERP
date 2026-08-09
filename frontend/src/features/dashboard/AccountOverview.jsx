@@ -8,8 +8,10 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Panel, PageStack } from '../../components/common/Layout.jsx';
 import { SkeletonCard, SkeletonText } from '../../components/common/Skeleton.jsx';
+import { STAT_ICON_TILE_CLASSES, STAT_TONE_CLASSES } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
+import { cn } from '../../utils/cn.js';
 import { formatMoney, formatThaiDate, greetingName, ticketStatusLabel } from '../../utils/format.js';
 import { accountMoneyBucket, nextAccountAction } from '../tickets/accountActions.js';
 
@@ -195,18 +197,28 @@ export function AccountOverview({ user, employee, showToast }) {
               {MONEY_BUCKETS.map((b) => {
                 const bucket = buckets[b.key];
                 return (
-                  <div key={b.key} className={`stat-card ${b.tone === 'rose' && bucket.count > 0 ? '!border-danger-border' : ''}`}>
-                    <div className={`stat-icon stat-${b.tone}`}>
+                  <div
+                    key={b.key}
+                    className={cn(
+                      'bg-surface border border-border rounded-md p-4 mobile:p-3',
+                      b.tone === 'rose' && bucket.count > 0 && '!border-danger-border',
+                    )}
+                  >
+                    <div className={cn(STAT_ICON_TILE_CLASSES, 'mb-3.5 mobile:mb-2', STAT_TONE_CLASSES[b.tone])}>
                       <Icon name={b.icon} size={21} />
                     </div>
-                    <div className="stat-value tabular-nums">{formatMoney(bucket.amount)}</div>
-                    <div className="stat-label flex items-center gap-1.5">
+                    <div className="text-[length:var(--text-3xl)] font-extrabold leading-[1.1] text-text mobile:text-[length:var(--text-xl)] tabular-nums">
+                      {formatMoney(bucket.amount)}
+                    </div>
+                    <div className="mt-[5px] flex items-center gap-1.5 font-bold mobile:mt-[3px] mobile:text-[length:var(--text-xs)]">
                       {b.label}
                       {/* DESIGN.md "Rationed Teal Rule": teal marks what is live — here,
                           the one bucket in active money-motion right now. */}
                       {b.live ? <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden="true" /> : null}
                     </div>
-                    <div className="stat-helper">{bucket.count} ดีล</div>
+                    <div className="block text-[length:var(--text-xs)] font-medium text-text-muted mobile:mt-px mobile:truncate">
+                      {bucket.count} ดีล
+                    </div>
                   </div>
                 );
               })}
@@ -283,7 +295,7 @@ export function AccountOverview({ user, employee, showToast }) {
                 className="bg-surface border border-border rounded-md p-4 w-full text-left cursor-pointer flex items-center justify-between gap-3 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
               >
                 <span className="flex items-center gap-3">
-                  <span className="stat-icon !mb-0 stat-indigo">
+                  <span className={cn(STAT_ICON_TILE_CLASSES, '!mb-0', STAT_TONE_CLASSES.indigo)}>
                     <Icon name="badgeDollar" size={19} />
                   </span>
                   <span>

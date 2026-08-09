@@ -257,7 +257,22 @@ export function commissionStatusLabel(status) {
 
 // Overtime approval status -> StatusBadge tone. Canonical source; do not
 // re-add a page-local `statusInfo`/map for overtime status elsewhere.
-export function overtimeStatusLabel(status) {
+//
+// `pendingApproverRole` is an OPTIONAL second argument, so every existing 1-arg call site keeps
+// working. Every SUBMITTED row used to read 'รอผู้จัดการ', even the ones OvertimeService routes
+// straight to the CEO (a manager-less ฝ่าย, or the requester IS a ผู้จัดการ) -- the row then also
+// printed a `ผู้จัดการ: -` audit line that could never fill on that route, so the badge and the
+// audit line named two different, contradictory approvers on the same request.
+// specialMoneyStatusLabel below fixed this identical mislabel for welfare with a single STATIC
+// string, because every welfare request is CEO-only in one stage -- overtime has two real routes
+// PER REQUEST (see OvertimeRepository#resolvePendingApproverRole), so the caller must say which
+// route THIS row took rather than assuming one shape for the whole domain.
+export function overtimeStatusLabel(status, pendingApproverRole) {
+  if (status === 'SUBMITTED' && pendingApproverRole === 'ceo') {
+    // Same label/tone the MANAGER_APPROVED entry below already uses -- from the employee's point
+    // of view both states mean the same thing: the CEO holds this now.
+    return { label: 'รอ CEO', tone: 'info' };
+  }
   const map = {
     SUBMITTED: { label: 'รอผู้จัดการ', tone: 'warning' },
     MANAGER_APPROVED: { label: 'รอ CEO', tone: 'info' },

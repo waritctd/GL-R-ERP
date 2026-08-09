@@ -1,6 +1,9 @@
 package th.co.glr.hr.payroll.declaration;
 
 import java.time.LocalDate;
+import java.time.ZoneId;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -17,6 +20,14 @@ import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.payroll.PayrollAllowanceEstimateResult;
 import th.co.glr.hr.payroll.PayrollPeriodDto;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
+import java.io.IOException;
+import java.math.BigDecimal;
+import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.LorYor01AddressPayload;
+import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.LorYor01Details;
+import th.co.glr.hr.payroll.declaration.loryor01.LorYor01FormAssembler;
+import th.co.glr.hr.payroll.declaration.loryor01.LorYor01FormData;
+import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
 import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.payroll.PayrollService;
 import th.co.glr.hr.payroll.PayrollTaxAllowanceInput;
@@ -64,8 +75,23 @@ public class TaxAllowanceDeclarationService {
     // which TaxAllowanceCapCatalog owns authoritatively, the five-section grouping is a UI
     // information-architecture concept with no backend equivalent to reuse. Keep both lists in sync
     // by hand if a section is ever added, renamed, or removed.
+    /**
+     * One key per ข้อ of แบบ ล.ย.01, plus {@code signed_form} for the signed scan the employee
+     * returns before HR will accept the filing.
+     *
+     * <p>Replaces the five invented category keys (family/insurance/savings/housing/donation) that
+     * predate the form restructure. Mirrored BY HAND in {@code mockApi.js}'s
+     * {@code TAX_ALLOWANCE_SECTION_KEYS} and in {@code LOR_YOR_01_SECTIONS} — nothing enforces the
+     * three stay in step, so a key added to the form and not here uploads cleanly under mocks and
+     * 400s against this service. ข้อ 11 and ข้อ 13 are absent deliberately: neither is fillable, so
+     * neither can carry evidence.
+     */
+    /** The bucket holding the signed, scanned form — the one attachment approval depends on. */
+    static final String SIGNED_FORM_SECTION_KEY = "signed_form";
+
     private static final Set<String> EVIDENCE_SECTION_KEYS =
-        Set.of("family", "insurance", "savings", "housing", "donation");
+        Set.of("item3", "item4", "item5", "item6", "item7", "item8", "item9", "item10",
+            "item12", "item14", "item15", "signed_form");
 
     private final TaxAllowanceDeclarationRepository repository;
     private final PayrollRepository payrollRepository;
@@ -75,6 +101,18 @@ public class TaxAllowanceDeclarationService {
     private final FileStorageService fileStorage;
     private final PayrollService payrollService;
     private final NotificationRepository notifications;
+    /**
+     * วัน/เดือน/ปี ที่แจ้งรายการ is a Thai calendar date on a Thai tax form, so it must be derived in
+     * Bangkok. Bare {@code LocalDate.now()} (as used elsewhere in this class) reads the JVM default,
+     * which on a UTC CI box is the PREVIOUS day between 17:00 and 23:59 Bangkok — a filing dated a
+     * day early. Same constant and same reasoning as OvertimeService.
+     */
+    private static final Logger LOG = LoggerFactory.getLogger(TaxAllowanceDeclarationService.class);
+
+    private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
+
+    private final AppProperties appProperties;
+    private final LorYor01Renderer lorYor01Renderer;
 
     public TaxAllowanceDeclarationService(
         TaxAllowanceDeclarationRepository repository,
@@ -84,7 +122,9 @@ public class TaxAllowanceDeclarationService {
         AuditService auditService,
         FileStorageService fileStorage,
         PayrollService payrollService,
-        NotificationRepository notifications
+        NotificationRepository notifications,
+        AppProperties appProperties,
+        LorYor01Renderer lorYor01Renderer
     ) {
         this.repository = repository;
         this.payrollRepository = payrollRepository;
@@ -94,6 +134,8 @@ public class TaxAllowanceDeclarationService {
         this.fileStorage = fileStorage;
         this.payrollService = payrollService;
         this.notifications = notifications;
+        this.appProperties = appProperties;
+        this.lorYor01Renderer = lorYor01Renderer;
     }
 
     // ---- Employee self-service ------------------------------------------------------------
@@ -130,7 +172,7 @@ public class TaxAllowanceDeclarationService {
 
         PayrollTaxAllowanceInput allowances = toAllowances(request);
         long id = repository.insert(employeeId, taxYear, effectiveMonth, allowances,
-            request.documentReference(), employeeId, false);
+            request.documentReference(), employeeId, false, request.lorYor01());
         TaxAllowanceDeclarationDto created = repository.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after insert"));
         auditService.record(actor, "SUBMIT_TAX_ALLOWANCE_DECLARATION", "tax_allowance_declaration", id, null, created);
@@ -189,7 +231,7 @@ public class TaxAllowanceDeclarationService {
 
         PayrollTaxAllowanceInput allowances = toAllowances(request);
         long id = repository.insert(employeeId, taxYear, effectiveMonth, allowances,
-            request.documentReference(), actor.employeeId(), true);
+            request.documentReference(), actor.employeeId(), true, request.lorYor01());
 
         // Auto-approve, same supersede-first ordering as #approve below.
         repository.supersedeApproved(employeeId, taxYear, id);
@@ -219,12 +261,15 @@ public class TaxAllowanceDeclarationService {
         if (existing.status() != TaxAllowanceDeclarationStatus.PENDING) {
             throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ได้รับการพิจารณาไปแล้ว");
         }
+        requireSignedForm(declarationId);
         repository.supersedeApproved(existing.employeeId(), existing.taxYear(), declarationId);
         String reviewerNote = request == null ? null : blankToNull(request.reviewerNote());
         int rows = repository.approve(declarationId, actor.employeeId(), reviewerNote);
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ได้รับการพิจารณาไปแล้ว");
         }
+        promoteHeaderToEmployeeMaster(existing, actor);
+
         TaxAllowanceDeclarationDto updated = repository.findById(declarationId)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after approve"));
         auditService.record(actor, "APPROVE_TAX_ALLOWANCE_DECLARATION", "tax_allowance_declaration",
@@ -233,6 +278,93 @@ public class TaxAllowanceDeclarationService {
             "แบบแจ้ง ล.ย.01 ได้รับการอนุมัติ",
             "ฝ่ายบุคคลอนุมัติแบบแจ้งค่าลดหย่อนภาษีปี " + existing.taxYear() + " แล้ว");
         return updated;
+    }
+
+    /**
+     * Owner decision #4: the ล.ย.01 header prefills from HR records and is editable, and the
+     * employee's corrections reach the master DB <b>only after HR confirms</b>. This is that write.
+     *
+     * <p><b>Why {@code approve} and not {@code apply}</b> (the plan doc suggested apply; this is a
+     * deliberate departure, stated for review):
+     * <ol>
+     *   <li>"After HR confirms" IS {@code approve}. {@code apply} is a later, separate step about
+     *       payroll <i>effective dating</i>.</li>
+     *   <li>{@code apply} refuses with 409 when the target month is already {@code PROCESSED}. That
+     *       is the right answer for allowance amounts and the wrong one for an address: a
+     *       master-data correction has nothing to do with which payroll month is open.</li>
+     *   <li>{@code apply} may never happen. A declaration can be approved and then superseded before
+     *       anyone applies it, and the confirmed header would be lost.</li>
+     *   <li>{@code approve} already calls {@link #requireSignedForm}, so this only ever promotes a
+     *       header the employee physically signed. {@code apply} adds no such attestation.</li>
+     * </ol>
+     *
+     * <p>Runs inside {@code approve}'s transaction: the approval and the master write land together
+     * or not at all.
+     *
+     * <p><b>Scope is address + สถานภาพ + tax ID — never the legal name.</b> {@code declaredFirstName}
+     * / {@code declaredLastName} are printed on the form and stored on the declaration, but a tax
+     * form is not a name-change instrument; renaming an employee stays a deliberate HR action.
+     *
+     * <p>The write targets {@code existing.employeeId()} — the declaration's OWNER — never anything
+     * the caller supplies, so an HR actor cannot redirect it at a third party or at themselves.
+     */
+    private void promoteHeaderToEmployeeMaster(TaxAllowanceDeclarationDto existing, UserPrincipal actor) {
+        LorYor01Details header = existing.lorYor01();
+        if (header == null) {
+            return;
+        }
+        long employeeId = existing.employeeId();
+
+        LorYor01AddressPayload address = header.address();
+        if (address != null) {
+            employeeRepository.upsertCurrentAddressFromDeclaration(
+                employeeId,
+                blankToNull(address.houseNo()), blankToNull(address.building()),
+                blankToNull(address.roomNo()), blankToNull(address.floor()),
+                blankToNull(address.village()), blankToNull(address.moo()),
+                blankToNull(address.soi()), blankToNull(address.junction()),
+                blankToNull(address.road()), blankToNull(address.subDistrict()),
+                blankToNull(address.district()), blankToNull(address.province()),
+                blankToNull(address.postalCode()));
+        }
+        employeeRepository.upsertTaxIdFromDeclaration(employeeId, blankToNull(header.taxpayerId()));
+        employeeRepository.updateMaritalStatusFromDeclaration(
+            employeeId, maritalStatusForMaster(header.maritalState()));
+
+        auditService.record(actor, "WRITE_BACK_TAX_ALLOWANCE_HEADER", "employee", employeeId,
+            null, header);
+    }
+
+    /**
+     * ข้อ 1's enum -> the vocabulary {@code hr.employee.marital_status} actually holds.
+     *
+     * <p>That column is {@code VARCHAR(30)} with <b>no CHECK constraint and no enum anywhere in the
+     * backend</b>; the only values attested in this repository are the Thai words its fixtures use
+     * ({@code โสด} / {@code สมรส} in {@code demoData.js}, {@code mockApi.js},
+     * {@code EmployeeDetailPage.test.jsx}). Writing the declaration's {@code SINGLE} /
+     * {@code MARRIED} token straight through would introduce a second vocabulary into a column
+     * nothing validates, and the employee screens would start showing English next to everyone
+     * else's Thai.
+     *
+     * <p><b>Only the two unambiguous states are mapped.</b> {@code WIDOWED} and
+     * {@code DIED_DURING_YEAR} return null — the master is left alone — for two reasons: the Thai
+     * word for widowed appears nowhere in this repository, so any value chosen here would be
+     * invented rather than matched; and {@code DIED_DURING_YEAR}
+     * ("คู่สมรสถึงแก่ความตายระหว่างปีภาษี") is a statement about the tax year, not a standing HR
+     * marital status. HR sets those by hand in the employee editor.
+     *
+     * <p>Re-check this mapping against what production's {@code marital_status} column really holds
+     * before extending it; it could not be queried when this was written.
+     */
+    private String maritalStatusForMaster(String maritalState) {
+        if (maritalState == null) {
+            return null;
+        }
+        return switch (maritalState) {
+            case "SINGLE" -> "โสด";
+            case "MARRIED" -> "สมรส";
+            default -> null;
+        };
     }
 
     /** PENDING -> REJECTED. A reason is mandatory (decision #6 / {@code chk_tad_rejected_has_reason}). */
@@ -596,6 +728,37 @@ public class TaxAllowanceDeclarationService {
         }
     }
 
+    /**
+     * แบบ ล.ย.01 must be signed before HR can approve it (owner decision #3, 2026-08-08).
+     *
+     * <p>The printed form ends in "ลงชื่อ...ผู้มีเงินได้", and that signature is what makes the
+     * declaration a statement the employee is accountable for. Approving an unsigned one records HR
+     * as having accepted a filing nobody attested to.
+     *
+     * <p>The employee-facing page already refuses to submit without the scan, but that is a
+     * courtesy and not a control: the submit endpoint takes JSON and cannot see whether a file
+     * exists, and a caller bypassing the UI is not hypothetical. This is where it holds.
+     *
+     * <p><b>Checked at APPROVE, not at submit — and it has to be.</b> The attachment is uploaded
+     * against a declarationId, which does not exist until the submit has already succeeded, so a
+     * submit-time gate would be unsatisfiable by construction.
+     *
+     * <p>Ordered AFTER the role and status checks so those keep their existing failure modes: a
+     * non-HR caller still gets 403 and an already-decided declaration still gets its own conflict,
+     * rather than either being masked by a complaint about a missing file.
+     *
+     * <p>Deleted attachments do not count — {@code findAttachments} excludes tombstoned rows — so
+     * withdrawing the signed scan withdraws the basis for approving.
+     */
+    private void requireSignedForm(long declarationId) {
+        boolean signed = repository.findAttachments(declarationId).stream()
+            .anyMatch(attachment -> SIGNED_FORM_SECTION_KEY.equals(attachment.sectionKey()));
+        if (!signed) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ยังอนุมัติไม่ได้ — ต้องมีแบบ ล.ย.01 ที่ผู้มีเงินได้ลงนามแล้วแนบไว้ก่อน");
+        }
+    }
+
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
         if (actor == null || !allowed.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
@@ -628,7 +791,11 @@ public class TaxAllowanceDeclarationService {
             zero(request.politicalDonation()),
             zeroInt(request.childCount()), zeroInt(request.childCountDouble()), zeroInt(request.disabledCareCount()),
             Boolean.TRUE.equals(request.disabilityCardHolder()),
-            request.parentCareCount() == null ? 0 : request.parentCareCount()
+            request.parentCareCount() == null ? 0 : request.parentCareCount(),
+            // ข้อ 9 lives on the ล.ย.01 sub-payload, not at the top level of the request, because it
+            // is a form item rather than one of the pre-V137 allowance fields. Pulled across here so
+            // the /estimate preview withholds on the same figure the applied declaration will.
+            lorYor01Zero(request.lorYor01())
         );
     }
 
@@ -642,12 +809,18 @@ public class TaxAllowanceDeclarationService {
             zero(request.politicalDonation()),
             zeroInt(request.childCount()), zeroInt(request.childCountDouble()), zeroInt(request.disabledCareCount()),
             Boolean.TRUE.equals(request.disabilityCardHolder()),
-            request.parentCareCount() == null ? 0 : request.parentCareCount()
+            request.parentCareCount() == null ? 0 : request.parentCareCount(),
+            lorYor01Zero(request.lorYor01())
         );
     }
 
     private java.math.BigDecimal zero(java.math.BigDecimal value) {
         return value == null ? java.math.BigDecimal.ZERO : value;
+    }
+
+    /** ข้อ 9 off the ล.ย.01 sub-payload; the whole sub-payload is optional, hence the null guard. */
+    private java.math.BigDecimal lorYor01Zero(LorYor01Details lorYor01) {
+        return lorYor01 == null ? java.math.BigDecimal.ZERO : zero(lorYor01.providentFundAllowance());
     }
 
     private int zeroInt(Integer value) {
@@ -667,7 +840,64 @@ public class TaxAllowanceDeclarationService {
             allowances.politicalDonation(),
             allowances.childCount(), allowances.childCountDouble(), allowances.disabledCareCount(),
             allowances.disabilityCardHolder(), allowances.parentCareCount(),
-            appliedEffectiveMonth, dto.documentReference()
+            appliedEffectiveMonth, dto.documentReference(),
+            // ข้อ 9 (V137): promoted from the declaration into employee_tax_allowance, which is what
+            // PayrollRepository#findTaxAllowancesByEmployee reads on every run.
+            allowances.providentFundAllowance()
         );
+    }
+
+    // ---- แบบ ล.ย.01 PDF -----------------------------------------------------------------------
+
+    /**
+     * The official ล.ย.01 for a SAVED declaration, as a flattened PDF. Owner or HR only — same gate
+     * as the evidence files, so a declaration's rendered form is never more widely readable than the
+     * documents behind it.
+     */
+    public byte[] renderLorYor01(long declarationId, UserPrincipal actor) {
+        TaxAllowanceDeclarationDto declaration = requireOwnerOrHr(declarationId, actor);
+        LocalDate declaredOn = declaration.submittedAt() == null
+            ? LocalDate.now(BUSINESS_ZONE)
+            : declaration.submittedAt().atZoneSameInstant(BUSINESS_ZONE).toLocalDate();
+        return render(declaration.employeeId(), declaration.taxYear(), declaration.allowances(),
+            declaration.lorYor01(), declaredOn);
+    }
+
+    /**
+     * The official ล.ย.01 for an UNSAVED draft.
+     *
+     * <p>This exists because of the order the paper process runs in: the employee has to sign the
+     * form before HR will accept it, so they need the filled PDF while the declaration is still
+     * being typed and has no id yet. Mirrors the {@code /declarations/me/estimate} idiom — a request
+     * body in, a result out, nothing persisted.
+     *
+     * <p>Always rendered for the ACTOR's own employee id, never a target in the body, so this cannot
+     * become a way to read someone else's ข้อ 13 figure.
+     */
+    public byte[] renderLorYor01Draft(TaxAllowanceDeclarationSubmitRequest request, UserPrincipal actor) {
+        requireEmployeeActor(actor);
+        long employeeId = actor.employeeId();
+        int taxYear = request.taxYear() == null ? LocalDate.now(BUSINESS_ZONE).getYear() : request.taxYear();
+        return render(employeeId, taxYear, toAllowances(request), request.lorYor01(),
+            LocalDate.now(BUSINESS_ZONE));
+    }
+
+    private byte[] render(long employeeId, int taxYear, PayrollTaxAllowanceInput allowances,
+                          LorYor01Details form, LocalDate declaredOn) {
+        // ข้อ 13 is derived from what payroll actually recorded, never from the request — see
+        // PayrollRepository#sumSocialSecurityForTaxYear.
+        BigDecimal socialSecurity = payrollRepository.sumSocialSecurityForTaxYear(employeeId, taxYear);
+        LorYor01FormData data = LorYor01FormAssembler.assemble(
+            allowances, form,
+            appProperties.getPayroll().getEmployer().getCompanyNameTh(),
+            socialSecurity, declaredOn);
+        try {
+            return lorYor01Renderer.render(data);
+        } catch (IOException e) {
+            // ApiException carries no cause; log the real one rather than swallowing the stack.
+            LOG.error("Failed to render ล.ย.01 for employee {} tax year {}", employeeId, taxYear, e);
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR,
+                "สร้างไฟล์ PDF แบบ ล.ย.01 ไม่สำเร็จ");
+        }
     }
 }

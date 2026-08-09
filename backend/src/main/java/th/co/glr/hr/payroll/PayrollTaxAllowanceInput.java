@@ -22,12 +22,6 @@ public record PayrollTaxAllowanceInput(
     // ล.ย.01 completeness (2026-07-28, V93). Appended last so every 16-arg positional call site keeps
     // compiling via the legacy constructor below.
     //
-    // กองทุนสำรองเลี้ยงชีพ REMOVED (owner decision, 2026-07-29, handoff section 4 / V99): GL&R
-    // operates no provident fund -- the field existed because hr_restricted.employee_pii carries a
-    // provident_fund_no column, but verified against production, zero employees have one populated.
-    // Do not resurrect this field on the strength of that PII column existing again; see V99's
-    // migration comment and PayrollCalculator#retirementAllowance for the full reasoning.
-    //
     // Per-head counts, which is what แบบ ล.ย.01 actually asks for. The engine caps the declared baht
     // amounts against these rather than trusting a free-typed figure: 30,000 per child, 60,000 for the
     // second and later child born from พ.ศ. 2561, 60,000 per disabled person cared for.
@@ -43,7 +37,19 @@ public record PayrollTaxAllowanceInput(
     // treatment of parentCareAllowance in that case (see that class for the reconciliation rule
     // between this and the pre-existing baht-typed parentCareAllowance field above -- V95 known risk
     // 2, "two sources of truth for one allowance", resolved there).
-    Integer parentCareCount
+    Integer parentCareCount,
+    // ข้อ 9 ล.ย.01 (2026-08-08, V137). RESTORED after V99 dropped it -- appended LAST, per this
+    // record's append-last discipline, so every pre-V137 positional call site keeps compiling via a
+    // legacy constructor below.
+    //
+    // V99's finding was correct and still stands: GL&R operates no employer provident fund, verified
+    // in production (zero employees hold a provident_fund_no). What V99 missed is that ข้อ 9 is ONE
+    // box covering FOUR funds -- กองทุนสำรองเลี้ยงชีพ, กบข., กองทุนสงเคราะห์ครูโรงเรียนเอกชน and
+    // กองทุนการออมแห่งชาติ (กอช.). กอช. is an INDIVIDUAL membership an employee may hold whatever
+    // their employer does, so the box has to be fillable regardless of the employer-fund finding.
+    // See V137's migration comment and PayrollCalculator#retirementAllowance for the cap and the
+    // ordering that follow from this.
+    BigDecimal providentFundAllowance
 ) {
     public static PayrollTaxAllowanceInput empty() {
         return new PayrollTaxAllowanceInput(
@@ -67,7 +73,8 @@ public record PayrollTaxAllowanceInput(
             0,
             0,
             false,
-            0
+            0,
+            BigDecimal.ZERO
         );
     }
 
@@ -119,7 +126,8 @@ public record PayrollTaxAllowanceInput(
             0,
             headCount(disabledCareAllowance, "60000"),
             false,
-            0
+            0,
+            BigDecimal.ZERO
         );
     }
 
@@ -164,7 +172,7 @@ public record PayrollTaxAllowanceInput(
             parentHealthInsuranceAllowance, rmfAllowance, ssfAllowance, pensionInsuranceAllowance,
             thaiEsgAllowance, homeLoanInterestAllowance, educationDonation, generalDonation,
             politicalDonation, childCount, childCountDouble,
-            disabledCareCount, disabilityCardHolder, 0
+            disabledCareCount, disabilityCardHolder, 0, BigDecimal.ZERO
         );
     }
 
@@ -205,7 +213,8 @@ public record PayrollTaxAllowanceInput(
             0,
             headCount(disabledCareAllowance, "60000"),
             false,
-            parentCareCount
+            parentCareCount,
+            BigDecimal.ZERO
         );
     }
 

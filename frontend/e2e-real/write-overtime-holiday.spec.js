@@ -2,49 +2,74 @@ import { test, expect } from '@playwright/test';
 import { apiSessionFor, apiWrite, disposeSessions } from './helpers/api.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// day_type / pay_rate_multiplier ALWAYS derive from hr.holiday (V115) -- never from the client's
-// SubmitOvertimeRequest.dayType claim. That is OvertimeService#deriveDayType and
-// #resolveDayTypeSubmitNote (PRs #586/#587), and it has ZERO coverage anywhere in this suite
-// before this file: write-overtime.spec.js drives the approval CHAIN end to end, but every one
-// of its submits leaves dayType unclaimed and never touches hr.holiday at all -- grep this
-// directory for "dayType", "holiday", "multiplier", "3.00" or "1.50" before this file and none
-// of them exist outside a handful of unrelated hits. This file closes that gap.
+// feat/ot-nonworkday-rate-suggestion (branch B of the OT UAT defect #2 fix) rewrote the decision
+// table this file pins. THREE distinct values now exist where there used to be one:
 //
-// The decision table under test (OvertimeService#resolveDayTypeSubmitNote's own Javadoc has the
-// authoritative version; OvertimeDayTypeDerivedFromCalendarIntegrationTest is the Java-level
-// proof this file mirrors at the HTTP layer, through the real HolidayController CRUD instead of
-// a direct INSERT/DELETE):
+//   suggested day type | system: hr.holiday OR the caller's resolved WorkSchedule non-workday | never pay
+//   requested day type | the employee's own claim -- pre-filled from the suggestion, freely     | never pay
+//                       | editable, accepted EITHER way (see the removed-refusal note below)    |
+//   approved day type  | the approver's decision (ApproveOvertimeRequest.dayType), defaulted to | BECOMES PAY
+//                       | the suggestion when absent                                            |
+//
+// Old decision table (pre-branch, what this file used to pin -- see git history):
 //
 //   calendar loaded     | claim        | outcome
 //   ------------------- | ------------ | ------------------------------------------------------
-//   yes (>=1 row/year)  | HOLIDAY      | date IS a holiday  -> accept, HOLIDAY / 3.00      (Case 2)
-//   yes                 | HOLIDAY      | date is NOT one    -> 400, NO row created          (Case 1)
-//   yes                 | WORKDAY      | date IS a holiday  -> accept, HOLIDAY / 3.00       (Case 3)
-//                        |              |   (the claim cannot suppress real holiday pay)
-//   yes                 | WORKDAY/none | ordinary day       -> accept, WORKDAY / 1.50, no flag (Case 4)
+//   yes (>=1 row/year)  | HOLIDAY      | date IS a holiday  -> accept, HOLIDAY / 3.00
+//   yes                 | HOLIDAY      | date is NOT one    -> 400, NO row created   <- REMOVED
+//   yes                 | WORKDAY      | date IS a holiday  -> accept, HOLIDAY / 3.00
+//   yes                 | WORKDAY/none | ordinary day       -> accept, WORKDAY / 1.50, no flag
 //   zero rows for year  | (any)        | --                 -> accept + "[รอตรวจสอบ]" flag
 //
+// What changed, on explicit owner ruling (2026-08-08):
+//   - The "claim contradicted -> 400" row is GONE. A HOLIDAY claim the calendar can actively
+//     disprove is now ACCEPTED and FLAGGED ("[ไม่ตรงกับที่ระบบแนะนำ]"), never refused -- the
+//     employee's field is a REQUEST, not a pay input, so there is nothing for it to get away
+//     with by disagreeing.
+//   - A weekend (or any other day the caller's OWN resolved WorkSchedule marks as a non-workday)
+//     now ALSO suggests HOLIDAY, with no hr.holiday row needed at all -- this is new territory
+//     this file's PREDECESSOR never exercised (grep this directory for "dayType", "holiday",
+//     "multiplier", "3.00" or "1.50" before this file existed and none of them touch weekends).
+//   - The "[รอตรวจสอบ]" calendar-unverified flag is NARROWED: it now fires only when the
+//     SUGGESTION is WORKDAY (schedule says ordinary workday) and the calendar year has zero
+//     rows -- a weekend's HOLIDAY suggestion no longer needs the calendar to be certain.
+//   - What actually becomes pay at approval is the APPROVER's decision
+//     (ApproveOvertimeRequest.dayType), defaulted to the suggestion -- see Cases 6-7 below.
+//
+// The Java-level proof (including its own mutation-check) lives in
+// OvertimeDayTypeDerivedFromCalendarIntegrationTest; this file's job is proving the same
+// properties survive the real HTTP layer (JSON serialization of the new `suggestedDayType`
+// field, the real HolidayController CRUD, the real OvertimeController approve endpoint), not
+// re-deriving the whole Java-level proof a second time.
+//
 // day_type is re-derived and FROZEN at managerApprove/ceoDirectApprove (Case 5 below); ceoApprove
-// deliberately does NOT re-derive a second time. That last half is already proven at the Java
-// level (OvertimeDayTypeDerivedFromCalendarIntegrationTest
-// #aCalendarChangeAfterManagerApprovalIsNotPickedUpByTheFinalCeoSignOff) and is not repeated
-// here -- this file's job is proving the derivation and the freeze survive the real
-// HolidayController CRUD + real OvertimeController approve endpoint, not re-deriving the whole
-// Java-level proof a second time.
+// deliberately does NOT re-derive, and the SECOND approve call (the final CEO sign-off on the
+// two-stage route) deliberately never honours an ApproveOvertimeRequest.dayType either -- both
+// already proven at the Java level
+// (OvertimeDayTypeDerivedFromCalendarIntegrationTest#aCalendarChangeAfterManagerApprovalIsNotPickedUpByTheFinalCeoSignOff
+// / #theCeosFinalSignOffCannotOverrideWhatTheManagerAlreadyFroze) and not repeated here.
 //
 // THE PRECONDITION THIS FILE LIVES OR DIES ON: hr.holiday SHIPS EMPTY (V115's own Javadoc -- HR
 // populates it once the BOT list is available, or manually through this same CRUD). If the
 // calendar genuinely has zero rows for the work date's year, HolidayCalendar#hasHolidaysForYear
-// is false and the "claim contradicted -> 400" branch above can never fire -- submission falls
-// through to "accept + flag" instead, silently. A test asserting 400 would then fail for the
-// WRONG reason (not "the claim was refused" but "the endpoint answered 200"), and a test
-// asserting acceptance would pass VACUOUSLY (right answer, wrong branch, for a reason unrelated
-// to what it claims to prove). So every case below that needs "the calendar is loaded for this
-// year" creates a real row through the real HolidayController first and reads it back through a
-// SEPARATE GET before relying on it -- never trusts its own create response, same discipline
-// write-overtime.spec.js applies to readOvertime. If that read-back ever came up empty, the
-// precondition assertion fails loudly right there, at setup, instead of the real assertion later
-// failing for a reason that looks unrelated to the actual defect.
+// is false and the calendar-unverified flag fires instead of a clean "no flag" answer. So every
+// case below that needs "the calendar is loaded for this year" creates a real row through the
+// real HolidayController first and reads it back through a SEPARATE GET before relying on it --
+// never trusts its own create response, same discipline write-overtime.spec.js applies to
+// readOvertime. If that read-back ever came up empty, the precondition assertion fails loudly
+// right there, at setup, instead of the real assertion later failing for a reason that looks
+// unrelated to the actual defect.
+//
+// SECOND PRECONDITION, NEW IN THIS BRANCH: demo.sales's division (ฝ่ายขาย) is OFFICE_5D (V115
+// seed) -- an ordinary Mon-Fri schedule, no weekend assignment. That means whether "today" reads
+// as an ordinary workday or a weekend-suggested-HOLIDAY now depends on which day of the week the
+// suite happens to run on, which this file's own "always use today" design (below) cannot avoid.
+// isWeekendInBangkok/expectedSuggestionFor compute the RIGHT answer for whichever day it is,
+// rather than assuming one -- see their own comments. Two cases (the over-claim-disagreement case
+// and the "frozen at approval" case) instead need a genuinely ORDINARY day to isolate what they
+// are testing from the weekend rule; those use nearestWeekdayOnOrBefore, documented at its
+// definition, which accepts a small, LOUD (409, never silent) residual risk of crossing a
+// payroll-month boundary rather than adding more complexity to dodge it entirely.
 //
 // SAFETY / RE-RUNNABILITY, same rules as write-overtime.spec.js (this file mutates a real,
 // possibly shared database too):
@@ -55,11 +80,12 @@ import { apiSessionFor, apiWrite, disposeSessions } from './helpers/api.js';
 //   • a best-effort delete of that exact date runs BEFORE each create too, so a stray row left by
 //     a previous run of these same tests that crashed mid-test (create succeeded, cleanup never
 //     ran) cannot 409 a later run -- it never deletes a date this file did not choose itself;
-//   • the work date is always TODAY in the payroll timezone, for the same reason
-//     write-overtime.spec.js gives: approval is gated on the payroll month still being open, and
-//     a hardcoded date passes until that month is processed and then fails for a reason that has
-//     nothing to do with the code under test. Where a case needs a HOLIDAY date, the holiday is
-//     created ON today rather than picked from the real Thai calendar, for the same reason.
+//   • the work date is TODAY (or the nearest ordinary day on/before it) in the payroll timezone,
+//     for the same reason write-overtime.spec.js gives: approval is gated on the payroll month
+//     still being open, and a hardcoded date passes until that month is processed and then fails
+//     for a reason that has nothing to do with the code under test. Where a case needs a HOLIDAY
+//     date, the holiday is created ON that date rather than picked from the real Thai calendar,
+//     for the same reason.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Same pairing as write-overtime.spec.js, and for the same reason: demo.sales sits in a division
@@ -79,6 +105,65 @@ function todayInBangkok() {
 }
 
 /**
+ * True when `dateIso` (a Bangkok CALENDAR date, e.g. "2026-08-08") falls on a Saturday or Sunday.
+ * Built by constructing the instant of NOON Bangkok time on that date (`T12:00:00+07:00`, an
+ * explicit offset, never a bare/UTC parse) and reading the weekday back out formatted in the SAME
+ * timezone -- so the answer is correct regardless of what timezone the machine running this suite
+ * happens to be in. This is the exact class of bug `frontend/src/api/mockApi.js`'s own comments
+ * warn about for the identical problem (bangkokTodayIso): a naive `new Date(dateIso).getDay()`
+ * parses the bare string as UTC midnight, which is the PREVIOUS Bangkok-local day whenever the
+ * runner's zone is west of UTC+0 for part of the day -- silently computing the wrong weekday.
+ */
+function isWeekendInBangkok(dateIso) {
+  const weekday = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Bangkok', weekday: 'short' })
+    .format(new Date(`${dateIso}T12:00:00+07:00`));
+  return weekday === 'Sat' || weekday === 'Sun';
+}
+
+/** Shifts a Bangkok calendar date by `days` (may be negative), in pure calendar arithmetic (no timezone involved). */
+function shiftDateIso(dateIso, days) {
+  const date = new Date(`${dateIso}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+/**
+ * demo.sales's division (ฝ่ายขาย) is OFFICE_5D (V115 seed) -- Mon-Fri, no weekend assignment --
+ * so this is the suggestion OvertimeService#suggestDayType actually produces for this persona
+ * on an ordinary day with no hr.holiday row: WORKDAY on a weekday, HOLIDAY on a weekend.
+ */
+function expectedSuggestionFor(workDate) {
+  return isWeekendInBangkok(workDate) ? 'HOLIDAY' : 'WORKDAY';
+}
+
+function expectedMultiplierFor(workDate) {
+  return isWeekendInBangkok(workDate) ? 3 : 1.5;
+}
+
+/**
+ * The nearest date on/before `dateIso` that is NOT a Saturday/Sunday -- nudges back at most 2
+ * days. Used ONLY by the two cases below that specifically need a genuinely ORDINARY (non-
+ * weekend) day to isolate what they are testing (a claim disagreeing with the suggestion; a
+ * calendar change picked up between submit and approval) from the weekend-suggests-HOLIDAY rule
+ * feat/ot-nonworkday-rate-suggestion adds -- every other case in this file uses todayInBangkok()
+ * unmodified, per this file's header ("always use today", the payroll-month-open reason). Nudging
+ * BACKWARD, not forward, keeps the date retroactive rather than risking one that has not arrived
+ * yet; capping at 2 days means this only risks crossing a payroll-month boundary when the 1st or
+ * 2nd of a month lands on a Saturday/Sunday -- a rare combination this file accepts as a residual,
+ * LOUD (409 "already processed", never a silent wrong answer) risk rather than a reason to add
+ * more machinery here.
+ */
+function nearestWeekdayOnOrBefore(dateIso) {
+  let candidate = dateIso;
+  let guard = 0;
+  while (isWeekendInBangkok(candidate) && guard < 2) {
+    candidate = shiftDateIso(candidate, -1);
+    guard += 1;
+  }
+  return candidate;
+}
+
+/**
  * A date in the SAME calendar year as `date` that is never equal to `date` itself -- used to make
  * HolidayCalendar#hasHolidaysForYear true (the year is "loaded") without making `date` itself a
  * holiday. Mirrors OvertimeDayTypeDerivedFromCalendarIntegrationTest's own sentinel fixture,
@@ -91,8 +176,7 @@ function sentinelDateInSameYear(date) {
   return date === `${year}-01-01` ? `${year}-01-02` : `${year}-01-01`;
 }
 
-function overtimePayload(reason, dayType) {
-  const workDate = todayInBangkok();
+function overtimePayload(reason, dayType, workDate = todayInBangkok()) {
   return {
     workDate,
     // An evening window on the work date, same shape as write-overtime.spec.js.
@@ -106,7 +190,7 @@ function overtimePayload(reason, dayType) {
   };
 }
 
-test.describe('overtime day type derives from hr.holiday, never the client claim (real OvertimeService + HolidayCalendar)', () => {
+test.describe('overtime day type: system suggestion, employee request, approver decision (real OvertimeService + HolidayCalendar + WorkScheduleResolver)', () => {
   /** @type {Record<string, import('@playwright/test').APIRequestContext>} */
   let sessions;
 
@@ -131,7 +215,7 @@ test.describe('overtime day type derives from hr.holiday, never the client claim
     return requests.find((row) => row.id === id) ?? null;
   }
 
-  /** Own-requests count, for the wrong-way-round "no row was created" assertion in Case 1. */
+  /** Own-requests count, for the wrong-way-round "no row was created" assertion where still relevant. */
   async function countOwnOvertime() {
     const response = await sessions[OWNER].get('/api/overtime');
     expect(response.status()).toBe(200);
@@ -145,6 +229,11 @@ test.describe('overtime day type derives from hr.holiday, never the client claim
    */
   async function cancelOvertime(id) {
     await apiWrite(sessions[MANAGER], 'POST', `/api/overtime/${id}/cancel`, {});
+  }
+
+  /** Approves with an explicit approver decision -- {@code ApproveOvertimeRequest}'s shape. `dayType` omitted means "use the suggestion". */
+  async function approve(session, id, dayType) {
+    return apiWrite(session, 'POST', `/api/overtime/${id}/approve`, dayType ? { dayType } : {});
   }
 
   // ── holiday helpers, through the real HolidayController CRUD (HR/CEO-gated) ────────────────
@@ -196,23 +285,27 @@ test.describe('overtime day type derives from hr.holiday, never the client claim
   }
 
   // -------------------------------------------------------------------------------------------
-  // Case 1 (decision table row 2): the claim IS actively disprovable -- the calendar is loaded
-  // for the year (a sentinel row elsewhere in the same year proves it) but today specifically is
-  // not in it. Wrong-way-round: asserts not just the 400, but that NO row was created at all.
+  // Case 1: THE row this branch changes. A HOLIDAY claim the calendar can actively disprove --
+  // the year is loaded (a sentinel proves it) but the work date specifically is not in it, AND
+  // the work date is an ordinary weekday (nearestWeekdayOnOrBefore, so the weekend rule cannot
+  // also explain a HOLIDAY suggestion here) -- used to be refused outright (400, no row). Owner
+  // ruling 2026-08-08: accepted and flagged instead. Wrong-way-round through to a full approval
+  // with NO override: the claimed 3.00 must never reach pay_rate_multiplier.
   // -------------------------------------------------------------------------------------------
-  test('a HOLIDAY claim on an ordinary day is refused, and creates no row', async () => {
-    const workDate = todayInBangkok();
+  test('a HOLIDAY claim contradicted by the calendar is accepted, flagged, and never becomes pay', async () => {
+    const workDate = nearestWeekdayOnOrBefore(todayInBangkok());
     const sentinelDate = sentinelDateInSameYear(workDate);
+    let created = null;
 
     await deleteHolidayBestEffort(sentinelDate);
     await createHoliday(sentinelDate, 'e2e: sentinel holiday, loads the calendar year');
     try {
       // Precondition #1: the year is genuinely loaded (>=1 row) -- read back independently, per
-      // this file's header. If this silently failed, the 400 below would degrade into a 200
-      // accept-and-flag instead, and this assertion is what catches that HERE, not there.
+      // this file's header. If this silently failed, the derivation below would carry the
+      // calendar-unverified flag instead of the claim-disagreement flag this test is about.
       await assertHolidayPersisted(sentinelDate);
-      // Precondition #2: today itself genuinely is NOT a holiday, or a 400 below would prove
-      // nothing about the claim being disprovABLE -- only that something else was wrong.
+      // Precondition #2: the work date genuinely is NOT a holiday, or this proves nothing about
+      // a disagreeing claim -- only that something else was wrong.
       await assertNotHoliday(workDate);
 
       const before = await countOwnOvertime();
@@ -221,30 +314,50 @@ test.describe('overtime day type derives from hr.holiday, never the client claim
         sessions[OWNER],
         'POST',
         '/api/overtime',
-        overtimePayload('e2e: HOLIDAY claim on an ordinary day, must be refused', 'HOLIDAY')
+        overtimePayload('e2e: HOLIDAY claim contradicted by the calendar, must be accepted and flagged', 'HOLIDAY', workDate)
       );
-      const responseText = await response.text();
 
-      // THE assertion this test exists for: the calendar can actively disprove the claim, so the
-      // request is refused outright, naming the date -- OvertimeService#resolveDayTypeSubmitNote.
-      expect(response.status(), responseText).toBe(400);
-      expect(responseText).toContain(workDate);
+      // THE assertion this test exists for: accepted, not refused.
+      expect(response.status(), await response.text()).toBe(200);
+      ({ request: created } = await response.json());
 
-      // And -- the half that a status check alone would miss, and the one the task brief calls
-      // out as easy to omit -- the refusal created NOTHING. overtimeRepository.create() sits
-      // AFTER resolveDayTypeSubmitNote() in OvertimeService#submit, so a 400 here should mean the
-      // repository call was never reached, not merely that some row was rolled back afterwards.
+      // A row WAS created (contrast with the old 400 behaviour this replaces).
       const after = await countOwnOvertime();
-      expect(after, 'a refused submit must create NO row at all').toBe(before);
+      expect(after, 'the claim is accepted -- exactly one new row').toBe(before + 1);
+
+      expect(created.suggestedDayType, 'the suggestion is WORKDAY -- an ordinary weekday, no holiday').toBe('WORKDAY');
+      expect(created.dayType, 'the stored day_type is the SUGGESTION, never the claim').toBe('WORKDAY');
+      expect(created.payRateMultiplier).toBe(1.5);
+      expect(created.calculationNote, 'the disagreement is flagged for the approver').toContain('ไม่ตรงกับที่ระบบแนะนำ');
+
+      // Wrong-way-round: approve with NO override (the approver's default is the suggestion) and
+      // confirm the claimed 3.00 never reaches pay. Stopping at MANAGER_APPROVED is sufficient --
+      // that IS the freeze point (OvertimeService#managerApprove/#calculate); the final CEO
+      // sign-off deliberately never re-derives (proved separately, see this file's header), so it
+      // could not change this answer either way.
+      const approveResponse = await approve(sessions[MANAGER], created.id);
+      expect(approveResponse.status(), await approveResponse.text()).toBe(200);
+      const { request: approved } = await approveResponse.json();
+
+      expect(approved.status).toBe('MANAGER_APPROVED');
+      expect(approved.dayType, 'still WORKDAY after manager approval -- the claim never won').toBe('WORKDAY');
+      expect(approved.payRateMultiplier).toBe(1.5);
+
+      const persisted = await readOvertime(created.id);
+      expect(persisted.dayType).toBe('WORKDAY');
+      expect(persisted.payRateMultiplier).toBe(1.5);
     } finally {
+      if (created) {
+        await cancelOvertime(created.id);
+      }
       await deleteHolidayBestEffort(sentinelDate);
     }
   });
 
   // -------------------------------------------------------------------------------------------
-  // Case 2 (decision table row 1): the claim IS corroborated by the calendar -- accepted at the
-  // real holiday rate, with no flag (contrast with Case 1's contradiction, and the "zero rows"
-  // flag that Case 4 below is careful to rule out).
+  // Case 2: the claim IS corroborated by the calendar -- accepted at the real holiday rate, with
+  // no flag. A recorded holiday always wins regardless of day-of-week, so this needs no weekday
+  // isolation -- todayInBangkok() is fine whatever day it happens to be.
   // -------------------------------------------------------------------------------------------
   test('a HOLIDAY claim on a genuine holiday is accepted at the 3.00 holiday rate', async () => {
     const workDate = todayInBangkok();
@@ -259,11 +372,12 @@ test.describe('overtime day type derives from hr.holiday, never the client claim
         sessions[OWNER],
         'POST',
         '/api/overtime',
-        overtimePayload('e2e: HOLIDAY claim corroborated by the calendar', 'HOLIDAY')
+        overtimePayload('e2e: HOLIDAY claim corroborated by the calendar', 'HOLIDAY', workDate)
       );
       expect(response.status(), await response.text()).toBe(200);
       ({ request: created } = await response.json());
 
+      expect(created.suggestedDayType).toBe('HOLIDAY');
       expect(created.dayType).toBe('HOLIDAY');
       expect(created.payRateMultiplier).toBe(3);
       expect(created.calculationNote, 'a corroborated claim needs no flag').toBeNull();
@@ -281,9 +395,9 @@ test.describe('overtime day type derives from hr.holiday, never the client claim
   });
 
   // -------------------------------------------------------------------------------------------
-  // Case 3 (decision table row 3): the claim UNDER-states the true day type -- deriveDayType
-  // corrects it upward regardless. The claim can never suppress real holiday pay, only
-  // (harmlessly) fail to inflate it -- see SubmitOvertimeRequest's Javadoc.
+  // Case 3: the claim UNDER-states the true day type -- suggestDayType corrects it upward
+  // regardless. The claim can never suppress real holiday pay, only (harmlessly) fail to inflate
+  // it -- see SubmitOvertimeRequest's Javadoc. Same day-of-week independence as Case 2.
   // -------------------------------------------------------------------------------------------
   test('a WORKDAY claim on a genuine holiday is still stored as HOLIDAY/3.00', async () => {
     const workDate = todayInBangkok();
@@ -298,7 +412,7 @@ test.describe('overtime day type derives from hr.holiday, never the client claim
         sessions[OWNER],
         'POST',
         '/api/overtime',
-        overtimePayload('e2e: WORKDAY claim on a genuine holiday, must not suppress pay', 'WORKDAY')
+        overtimePayload('e2e: WORKDAY claim on a genuine holiday, must not suppress pay', 'WORKDAY', workDate)
       );
       expect(response.status(), await response.text()).toBe(200);
       ({ request: created } = await response.json());
@@ -318,15 +432,15 @@ test.describe('overtime day type derives from hr.holiday, never the client claim
   });
 
   // -------------------------------------------------------------------------------------------
-  // Case 4 (decision table row 4): the base case -- an ordinary day, no claim at all, with the
-  // calendar genuinely LOADED for the year (a sentinel, same technique as Case 1). That last part
-  // is what makes this provably the "yes / ordinary day" row and not a false-positive from the
-  // "zero rows -> flagged" row: both resolve to WORKDAY/1.50, but only one of them leaves
-  // calculation_note null. Asserting the note too is what tells the two branches apart --
-  // asserting only the multiplier would still pass even if hasHolidaysForYear silently regressed
-  // to always-false.
+  // Case 4: the base case -- no claim at all, calendar genuinely LOADED for the year (a sentinel,
+  // same technique as Case 1). Asserts the SCHEDULE-AWARE suggestion for whichever day today
+  // happens to be, rather than assuming a weekday -- expectedSuggestionFor/expectedMultiplierFor
+  // compute the answer demo.sales's real OFFICE_5D schedule actually produces. Asserting the note
+  // too (not just the multiplier) is what tells "genuinely unflagged" apart from "the flag
+  // silently regressed to always-false" -- and, on a weekday specifically, from "the calendar-
+  // unverified flag silently regressed to always-true".
   // -------------------------------------------------------------------------------------------
-  test('an ordinary day with no claim stores WORKDAY/1.50, unflagged', async () => {
+  test('a day with no claim stores the schedule-derived suggestion, unflagged when the calendar is loaded', async () => {
     const workDate = todayInBangkok();
     const sentinelDate = sentinelDateInSameYear(workDate);
     let created = null;
@@ -341,16 +455,18 @@ test.describe('overtime day type derives from hr.holiday, never the client claim
         sessions[OWNER],
         'POST',
         '/api/overtime',
-        overtimePayload('e2e: ordinary day, no day-type claim at all')
+        overtimePayload('e2e: no day-type claim at all', undefined, workDate)
       );
       expect(response.status(), await response.text()).toBe(200);
       ({ request: created } = await response.json());
 
-      expect(created.dayType).toBe('WORKDAY');
-      expect(created.payRateMultiplier).toBe(1.5);
+      const expectedDayType = expectedSuggestionFor(workDate);
+      expect(created.suggestedDayType).toBe(expectedDayType);
+      expect(created.dayType).toBe(expectedDayType);
+      expect(created.payRateMultiplier).toBe(expectedMultiplierFor(workDate));
       expect(
         created.calculationNote,
-        'the year IS loaded (sentinel above), so this must NOT carry the "calendar unverified" flag'
+        'the year IS loaded (sentinel above): a WORKDAY suggestion must not carry the calendar-unverified flag, and a schedule-derived HOLIDAY suggestion never needs the calendar at all'
       ).toBeNull();
     } finally {
       if (created) {
@@ -363,14 +479,14 @@ test.describe('overtime day type derives from hr.holiday, never the client claim
   // -------------------------------------------------------------------------------------------
   // Case 5: day_type is re-derived and FROZEN at the approval stage that first leaves SUBMITTED
   // (OvertimeService#calculate, called from managerApprove) -- never trusted from whatever was
-  // stored at submit. Submits while the date is ordinary, then HR adds a holiday for that SAME
-  // date before anyone approves, then asserts the manager-approval response itself re-derived
-  // HOLIDAY/3.00. Mirrors
+  // stored at submit. Needs a genuinely ORDINARY (non-weekend) work date to isolate "a holiday
+  // added after submit" from the weekend rule -- nearestWeekdayOnOrBefore, see its own comment.
+  // Mirrors
   // OvertimeDayTypeDerivedFromCalendarIntegrationTest#aHolidayAddedToTheCalendarAfterSubmitIsPickedUpAndFrozenAtManagerApproval
   // at the HTTP layer, through the real HolidayController instead of a direct INSERT.
   // -------------------------------------------------------------------------------------------
   test('day_type is frozen at approval: a holiday HR adds after submit is picked up at manager approval', async () => {
-    const workDate = todayInBangkok();
+    const workDate = nearestWeekdayOnOrBefore(todayInBangkok());
     let created = null;
 
     await deleteHolidayBestEffort(workDate);
@@ -381,11 +497,12 @@ test.describe('overtime day type derives from hr.holiday, never the client claim
         sessions[OWNER],
         'POST',
         '/api/overtime',
-        overtimePayload('e2e: submitted before any holiday existed for this date')
+        overtimePayload('e2e: submitted before any holiday existed for this date', undefined, workDate)
       );
       expect(submitResponse.status(), await submitResponse.text()).toBe(200);
       ({ request: created } = await submitResponse.json());
-      expect(created.dayType, 'must start out WORKDAY -- no holiday exists yet at submit time').toBe('WORKDAY');
+      expect(created.dayType, 'must start out WORKDAY -- an ordinary weekday, no holiday exists yet at submit time').toBe('WORKDAY');
+      expect(created.suggestedDayType).toBe('WORKDAY');
       // hasManagerApprover is what routes this to managerApprove (rather than ceoDirectApprove),
       // which is the stage this case needs -- see write-overtime.spec.js for why this OWNER/
       // MANAGER pairing guarantees a manager stage exists for demo.sales.
@@ -395,19 +512,14 @@ test.describe('overtime day type derives from hr.holiday, never the client claim
       await createHoliday(workDate, 'e2e: added after submit, before approval');
       await assertHolidayPersisted(workDate);
 
-      const approveResponse = await apiWrite(
-        sessions[MANAGER],
-        'POST',
-        `/api/overtime/${created.id}/approve`,
-        {}
-      );
+      const approveResponse = await approve(sessions[MANAGER], created.id);
       expect(approveResponse.status(), await approveResponse.text()).toBe(200);
       const { request: approved } = await approveResponse.json();
 
       expect(approved.status).toBe('MANAGER_APPROVED');
       expect(
         approved.dayType,
-        'deriveDayType must re-run at manager approval, not trust the submit-time WORKDAY value'
+        'suggestDayType must re-run at manager approval, not trust the submit-time WORKDAY value'
       ).toBe('HOLIDAY');
       expect(approved.payRateMultiplier).toBe(3);
 
@@ -415,6 +527,81 @@ test.describe('overtime day type derives from hr.holiday, never the client claim
       const persisted = await readOvertime(created.id);
       expect(persisted.dayType).toBe('HOLIDAY');
       expect(persisted.payRateMultiplier).toBe(3);
+    } finally {
+      if (created) {
+        await cancelOvertime(created.id);
+      }
+      await deleteHolidayBestEffort(workDate);
+    }
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // Case 6 (feat/ot-nonworkday-rate-suggestion, NEW): the approver's explicit decision wins over
+  // the suggestion, in whichever direction actually differs from it -- proved generically so it
+  // holds regardless of which day of the week the suite runs on.
+  // -------------------------------------------------------------------------------------------
+  test("the approver's explicit dayType overrides the suggestion", async () => {
+    const workDate = todayInBangkok();
+    const suggested = expectedSuggestionFor(workDate);
+    const override = suggested === 'HOLIDAY' ? 'WORKDAY' : 'HOLIDAY';
+    let created = null;
+
+    await deleteHolidayBestEffort(workDate);
+    try {
+      const submitResponse = await apiWrite(
+        sessions[OWNER],
+        'POST',
+        '/api/overtime',
+        overtimePayload('e2e: approver overrides the suggestion', undefined, workDate)
+      );
+      expect(submitResponse.status(), await submitResponse.text()).toBe(200);
+      ({ request: created } = await submitResponse.json());
+      expect(created.suggestedDayType).toBe(suggested);
+
+      const approveResponse = await approve(sessions[MANAGER], created.id, override);
+      expect(approveResponse.status(), await approveResponse.text()).toBe(200);
+      const { request: approved } = await approveResponse.json();
+
+      expect(approved.dayType, "the approver's explicit choice must win over the suggestion").toBe(override);
+      expect(approved.payRateMultiplier).toBe(override === 'HOLIDAY' ? 3 : 1.5);
+    } finally {
+      if (created) {
+        await cancelOvertime(created.id);
+      }
+      await deleteHolidayBestEffort(workDate);
+    }
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // Case 7 (feat/ot-nonworkday-rate-suggestion, NEW): an actor forbidden from approving this
+  // request cannot move money through the new dayType field either -- wrong-way-round. The
+  // submitter attempting to approve their OWN request must be refused before dayType is ever
+  // read, leaving the row completely untouched.
+  // -------------------------------------------------------------------------------------------
+  test('the submitter cannot move their own money through the new approver dayType field', async () => {
+    const workDate = todayInBangkok();
+    let created = null;
+
+    await deleteHolidayBestEffort(workDate);
+    try {
+      const submitResponse = await apiWrite(
+        sessions[OWNER],
+        'POST',
+        '/api/overtime',
+        overtimePayload('e2e: self-approve attempt with a dayType override', undefined, workDate)
+      );
+      expect(submitResponse.status(), await submitResponse.text()).toBe(200);
+      ({ request: created } = await submitResponse.json());
+      const suggested = created.dayType;
+
+      // The exact P0 shape this suite exists to close, replayed through the NEW field: the
+      // submitter tries to approve their OWN request, forcing HOLIDAY to inflate their own pay.
+      const selfApproveResponse = await approve(sessions[OWNER], created.id, 'HOLIDAY');
+      expect(selfApproveResponse.status(), await selfApproveResponse.text()).toBe(403);
+
+      const persisted = await readOvertime(created.id);
+      expect(persisted.status, 'a rejected self-approve attempt must not move the request at all').toBe('SUBMITTED');
+      expect(persisted.dayType, 'the HOLIDAY override never took effect').toBe(suggested);
     } finally {
       if (created) {
         await cancelOvertime(created.id);

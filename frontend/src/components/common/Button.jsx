@@ -124,7 +124,12 @@ export const Button = forwardRef(function Button({
       <span className={cn('inline-flex items-center justify-center gap-[7px]', loading && 'opacity-0')}>
         {children}
       </span>
-      {loading ? <span className="button-loading-spinner" aria-hidden="true" /> : null}
+      {loading ? (
+        <span
+          className="button-loading-spinner absolute w-4 h-4 border-2 border-t-current border-r-transparent border-b-current border-l-current rounded-pill animate-[button-loading-spin_700ms_linear_infinite] motion-reduce:animate-none"
+          aria-hidden="true"
+        />
+      ) : null}
     </button>
   );
 });

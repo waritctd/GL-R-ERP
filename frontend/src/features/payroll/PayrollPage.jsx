@@ -1644,7 +1644,7 @@ export function PayrollPage({ user, showToast }) {
         title="ประมวลผลเงินเดือน"
         subtitle="Payroll Processing"
         actions={(
-          <div className="toolbar-actions mobile:w-full mobile:items-stretch mobile:gap-2">
+          <div className="flex flex-wrap gap-2.5 items-center mobile:w-full mobile:items-stretch mobile:gap-2">
             {/* Read-only oversight indicator (issue #390): the backend deliberately grants CEO a
                 read of everything on this page (PayrollController: every GET plus the
                 non-persisting preview endpoints are hasAnyRole('HR','CEO')) while every write
@@ -1653,14 +1653,16 @@ export function PayrollPage({ user, showToast }) {
             {!canManage && (
               <StatusBadge tone="info">มุมมองสำหรับผู้บริหาร — อ่านอย่างเดียว</StatusBadge>
             )}
-            <label>
+            <label className="inline-flex items-center gap-2 m-0 text-[length:var(--text-sm)] font-extrabold">
               รอบเดือน
-              <input
-                type="month"
-                value={month}
-                onChange={(event) => setMonth(event.target.value)}
-                className="mobile:min-h-[44px]"
-              />
+              <span className="w-[150px]">
+                <input
+                  type="month"
+                  value={month}
+                  onChange={(event) => setMonth(event.target.value)}
+                  className="mobile:min-h-[44px]"
+                />
+              </span>
               {/* The native <input type="month"> always renders Gregorian and cannot show Buddhist
                   era; this is a read-only display of the same value, not a second control. */}
               <small className="font-normal text-text-muted">({formatThaiMonthYearFromMonthInputValue(month)})</small>
@@ -2390,14 +2392,14 @@ export function PayrollPage({ user, showToast }) {
         title="ประมวลผลเงินเดือน"
         message={(
           <div>
-            <p className="confirm-dialog-message">
+            <p className="confirm-dialog-message text-text-secondary leading-normal">
               ยืนยันประมวลผลเงินเดือนรอบ {formatThaiMonthYearFromMonthInputValue(month)} สำหรับพนักงาน {period?.lineCount || 0} คน?
               การดำเนินการนี้ไม่สามารถย้อนกลับได้
             </p>
-            <p className="confirm-dialog-message">
+            <p className="confirm-dialog-message text-text-secondary leading-normal">
               หลังยืนยัน การอนุมัติ OT ของเดือนนี้จะปิดทันที และไม่มีทางยกเลิกการประมวลผล
             </p>
-            <p className="confirm-dialog-message">
+            <p className="confirm-dialog-message text-text-secondary leading-normal">
               รายได้รวม {formatMoney(period?.totalGross)} · เงินหักรวม {formatMoney(period?.totalDeductions)} · ยอดโอนสุทธิ {formatMoney(period?.totalNet)}
             </p>
           </div>
@@ -2605,9 +2607,9 @@ function TaxTreatmentMatrixSection({ payrollMonth, showToast, canManage }) {
 
 function MiniMetric({ label, value }) {
   return (
-    <div className="mini-metric">
-      <small>{label}</small>
-      <strong>{value}</strong>
+    <div className="grid gap-1 min-w-0 p-3 border border-border rounded-md bg-surface-muted">
+      <small className="text-text-muted text-[length:var(--text-2xs)] font-extrabold">{label}</small>
+      <strong className="min-w-0 overflow-hidden text-text text-[length:var(--text-lg)] text-ellipsis whitespace-nowrap">{value}</strong>
     </div>
   );
 }
@@ -2623,8 +2625,8 @@ function MoneyInput({ id, value, onChange, disabled = false }) {
   }
 
   return (
-    <span className="currency-input">
-      <span className="currency-input-symbol" aria-hidden="true">฿</span>
+    <span className="relative block">
+      <span className="currency-input-symbol absolute left-3 top-1/2 z-[1] text-text-muted font-black leading-none pointer-events-none -translate-y-1/2" aria-hidden="true">฿</span>
       <input
         id={id}
         type="number"
@@ -2635,6 +2637,7 @@ function MoneyInput({ id, value, onChange, disabled = false }) {
         value={value ?? ''}
         onChange={handleChange}
         disabled={disabled}
+        className="pl-[34px]"
       />
     </span>
   );

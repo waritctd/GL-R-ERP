@@ -44,6 +44,10 @@ import th.co.glr.hr.ticket.TicketRepository;
  * task spec calls out explicitly: idempotency, and never retro-altering an already-processed
  * month's persisted {@code hr.payroll_line} row.
  */
+import th.co.glr.hr.config.AppProperties;
+
+import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
+
 class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest {
     private TaxAllowanceDeclarationRepository declarationRepository;
     private TaxAllowanceDeclarationService service;
@@ -92,7 +96,8 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
             mock(AuditService.class),
             mock(FileStorageService.class),
             payrollService,
-            new NotificationRepository(jdbc));
+            new NotificationRepository(jdbc),
+            new AppProperties(), new LorYor01Renderer());
 
         hrEmployeeId = seedEmployee("EXP-HR", new BigDecimal("50000.00"));
     }
@@ -186,9 +191,10 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
             null, null, null,
             null,
             null,
-            null);
+            null,
+            null);                   // lorYor01 — no ล.ย.01 form detail in this fixture
         TaxAllowanceDeclarationDto declaration = service.submitOwn(request, employeeActor(employeeId));
-        service.approve(declaration.declarationId(), null, hrActor());
+        approveSigned(declaration.declarationId());
         service.apply(declaration.declarationId(), null, hrActor());
         return declaration.declarationId();
     }
@@ -216,5 +222,15 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
 
     private UserPrincipal hrActor() {
         return new UserPrincipal(hrEmployeeId, "hr@glr.co.th", "HR", "hr", hrEmployeeId, true, LocalDate.now(), false, null, false);
+    }
+
+    /**
+     * Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3).
+     * The failure cases below deliberately do NOT use this — they assert on the role and status
+     * checks, which both run before the signed-form check and so are unaffected by it.
+     */
+    private void approveSigned(long declarationId) {
+        TaxAllowanceTestSupport.attachSignedForm(jdbc, declarationId);
+        service.approve(declarationId, null, hrActor());
     }
 }
