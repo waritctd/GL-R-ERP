@@ -1488,7 +1488,60 @@ function taxAllowanceAllowancesFromBody(body = {}) {
   };
 }
 
-function newTaxAllowanceDeclarationRow({ employeeId, taxYear, effectiveMonth, allowances, documentReference, status, submittedById, onBehalf }) {
+/**
+ * The non-amount half of แบบ ล.ย.01 — mirrors {@code TaxAllowanceDeclarationDtos.LorYor01Details},
+ * whose javadoc says it is "never null on a read — empty() when the row predates the form".
+ *
+ * ⚠️ This exists because the mock used to DROP the whole block. `newTaxAllowanceDeclarationRow`
+ * never copied `body.lorYor01`, and the seeded rows carried no `lorYor01` at all, so under
+ * `VITE_USE_MOCKS=true` every filed declaration read back with a blank header, no ข้อ 1/2/4/6 ticks
+ * and three sub-amounts (childExtra / spouseParentCare / providentFund) silently zeroed — including
+ * one the employee had just typed and submitted in the same session. That is the third failure
+ * shape in CLAUDE.md's table ("mock OMITS a field the feature keys on"): the read-only view of a
+ * filed ล.ย.01 could never show what was filed, and no mock-driven test noticed because the fixture
+ * never had the field either.
+ *
+ * Nulls mean "not answered", exactly as the Java record documents — a blank box and a ticked "no"
+ * are different statements, so nothing here defaults an unanswered question to false.
+ */
+function taxAllowanceLorYor01FromBody(body = {}) {
+  const detail = body.lorYor01 ?? {};
+  const address = detail.address ?? {};
+  const text = (value) => (value == null || String(value).trim() === '' ? null : String(value).trim());
+  const num = (value) => (value == null || value === '' ? null : Number(value));
+  const tick = (value) => (value == null ? null : Boolean(value));
+  return {
+    taxpayerId: text(detail.taxpayerId),
+    firstNameTh: text(detail.firstNameTh),
+    lastNameTh: text(detail.lastNameTh),
+    address: {
+      building: text(address.building), roomNo: text(address.roomNo), floor: text(address.floor),
+      village: text(address.village), houseNo: text(address.houseNo), moo: text(address.moo),
+      soi: text(address.soi), junction: text(address.junction), road: text(address.road),
+      subDistrict: text(address.subDistrict), district: text(address.district),
+      province: text(address.province), postalCode: text(address.postalCode),
+    },
+    maritalState: text(detail.maritalState),
+    spousalStatus: text(detail.spousalStatus),
+    spouseHasIncome: detail.spouseHasIncome == null ? null : Boolean(detail.spouseHasIncome),
+    childrenTotal: num(detail.childrenTotal),
+    childExtraAllowance: num(detail.childExtraAllowance) ?? 0,
+    ownFatherSupported: tick(detail.ownFatherSupported),
+    ownMotherSupported: tick(detail.ownMotherSupported),
+    spouseFatherSupported: tick(detail.spouseFatherSupported),
+    spouseMotherSupported: tick(detail.spouseMotherSupported),
+    spouseParentCareAllowance: num(detail.spouseParentCareAllowance) ?? 0,
+    ownFatherHealthInsured: tick(detail.ownFatherHealthInsured),
+    ownMotherHealthInsured: tick(detail.ownMotherHealthInsured),
+    spouseFatherHealthInsured: tick(detail.spouseFatherHealthInsured),
+    spouseMotherHealthInsured: tick(detail.spouseMotherHealthInsured),
+    providentFundAllowance: num(detail.providentFundAllowance) ?? 0,
+    rmfSellerName: text(detail.rmfSellerName),
+    otherDonationNote: text(detail.otherDonationNote),
+  };
+}
+
+function newTaxAllowanceDeclarationRow({ employeeId, taxYear, effectiveMonth, allowances, lorYor01, documentReference, status, submittedById, onBehalf }) {
   const declarationId = Math.max(0, ...db.taxAllowanceDeclarations.map((row) => row.declarationId)) + 1;
   return {
     declarationId,
@@ -1496,6 +1549,7 @@ function newTaxAllowanceDeclarationRow({ employeeId, taxYear, effectiveMonth, al
     taxYear,
     effectiveMonth,
     allowances,
+    lorYor01: lorYor01 ?? taxAllowanceLorYor01FromBody(),
     documentReference,
     status,
     submittedById,
@@ -6466,6 +6520,7 @@ export const api = {
         taxYear,
         effectiveMonth: body.effectiveMonth ?? 1,
         allowances: taxAllowanceAllowancesFromBody(body),
+        lorYor01: taxAllowanceLorYor01FromBody(body),
         documentReference: body.documentReference ?? null,
         status: 'PENDING',
         submittedById: user.employeeId,
@@ -6530,6 +6585,7 @@ export const api = {
         taxYear,
         effectiveMonth: body.effectiveMonth ?? 1,
         allowances: taxAllowanceAllowancesFromBody(body),
+        lorYor01: taxAllowanceLorYor01FromBody(body),
         documentReference: body.documentReference ?? null,
         status: 'PENDING',
         submittedById: user.employeeId,
