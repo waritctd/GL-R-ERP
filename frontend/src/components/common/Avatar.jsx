@@ -20,8 +20,23 @@ const AVATAR_SIZE_CLASSES = {
   xl: 'h-[78px] w-[78px] text-[length:var(--text-3xl)]',
 };
 
+// The backend's own "no value" placeholder, which reaches us as a real string and therefore
+// survives `||`. EmployeeRepository#fullName returns "-" when an employee has no English first or
+// last name, and #initials feeds that same string into its English branch: `hasText("-")` is true,
+// so it takes the first character and returns "-" without ever reaching the Thai fallback below it.
+// Nobody in the UAT seed has an English name, so EVERY avatar in the app — topbar, employee list,
+// profile, approval queues — rendered a dash for every user, on every page.
+//
+// Treated here rather than in Java on purpose: the value is display-only, the field already exists
+// and keeps its type, and the frontend deploys on its own. Fixing #initials in the backend is still
+// the root fix (it should not accept its sibling's placeholder as a name) but that ships with the
+// Render service, not with this branch.
+const NO_VALUE = '-';
+
 export function Avatar({ employee, name, size = 'md' }) {
-  const label = employee?.initials || initialsFromName(name || employee?.nameTh);
+  const supplied = employee?.initials;
+  const label = (supplied && supplied !== NO_VALUE ? supplied : null)
+    || initialsFromName(name || employee?.nameTh);
   return (
     <div
       className={cn('grid flex-none place-items-center rounded-md font-extrabold', AVATAR_SIZE_CLASSES[size])}
