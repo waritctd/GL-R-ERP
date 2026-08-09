@@ -45,16 +45,38 @@
 #
 # ── ENTRIES ──────────────────────────────────────────────────────────────────
 
-628  desktop-hr-tax-allowance  — ล.ย.01 header now prefills from the employee master (owner decision #4)
-628  tablet-hr-tax-allowance   — same block, tablet layout
+# (PR #628's two entries were pruned here per rule 5 — merged, therefore already inert.)
+
+633  desktop-hr-tax-allowance    — page no longer scrolls past its own content; fullPage capture loses the dead area
+633  tablet-hr-tax-allowance     — same page, tablet layout
+633  mobile-hr-payroll           — same fix, /payroll at 375px
+633  mobile-import-procurement   — same fix, /procurement at 375px
 #
-# Both diffs were read before these lines were written (rule 2), from run 31319699996's
-# visual-diff-628 artifact. Every changed pixel is inside the "ข้อมูลผู้มีเงินได้" block and is one
-# of the four values the prefill is supposed to seed — เลขประจำตัวผู้เสียภาษีอากร, ผู้มีเงินได้ชื่อ,
-# ชื่อสกุล and เลขที่ — rendered where those inputs were previously blank. Nothing reflowed: no
-# element moved, no height changed, and every other surface in the sweep is untouched. That is the
-# feature, and the diff is also the clearest evidence it reaches the DOM.
+# All four diffs were read before these lines were written (rule 2), from run 31325774140's
+# visual-diff-633 artifact. These are the ONLY four surfaces in the sweep that changed.
 #
-# `mobile-hr-tax-allowance` is deliberately NOT listed: it did not differ in that run, and the
-# harness flags a listed-but-unchanged snapshot as a possible stale entry. If it turns up on a
-# later run, add it rather than assuming this omission was wrong.
+# What changed is the image HEIGHT, not the app. `<main class="content-scroll">` was
+# `position: static`, so `sr-only` elements (Tailwind makes those `position: absolute`) with no
+# other positioned ancestor resolved their containing block to the document and leaked their
+# static offset into `<html>`'s scrollable overflow. `toHaveScreenshot({fullPage: true})` captures
+# the whole document, so every one of those baselines had the app rendered in the top viewport-height
+# and then a tall band of empty background below it:
+#
+#   desktop-hr-tax-allowance    1440x2950 -> 1440x1000   (1950px of dead space)
+#   tablet-hr-tax-allowance      768x3010 ->  768x1000   (2010px)
+#   mobile-hr-payroll            375x884  ->  375x800    ( 84px)
+#   mobile-import-procurement    375x981  ->  375x800    (181px)
+#
+# Every "after" height is exactly the viewport height — the document no longer scrolls at all.
+# Comparing expected vs actual on desktop-hr-tax-allowance: the app region is pixel-identical
+# (same sidebar, same header, same 16 form fields, same values); the only difference is that the
+# ~1950px of blank white below it is gone. The reported 230 differing pixels (ratio 0.01) are in
+# the overlapping region only, and are the scrollbar gutter no longer being drawn.
+#
+# So the baselines encoded the bug: they are pictures of a page over-scrolling into emptiness.
+# This is the one case where a red visual gate IS the evidence the fix landed.
+#
+# Not listed, deliberately: the other 11 snapshots did not differ. Notably `mobile-hr-payroll` and
+# `mobile-import-procurement` are surfaces I had NOT found in my own manual sweep (I measured as
+# ceo/employee at 1440x900) — the harness found two more instances of the same leak at a viewport
+# and role I never checked. Do not read the manual sweep's route list as exhaustive.
