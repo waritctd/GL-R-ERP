@@ -672,3 +672,75 @@ describe('OvertimePage approve dialog day-type override', () => {
     await waitFor(() => expect(api.overtime.approve).toHaveBeenCalledWith(903, {}));
   });
 });
+
+// Whose task is this page for? The two roles open the OT tab to do opposite things, and the page
+// order should follow that rather than one order serving both.
+//
+// This asserts DOM ORDER, which jsdom genuinely can do (unlike geometry — every rect here is 0×0).
+// The measurement that motivated it can only come from a browser: at 390px the "ยื่นคำขอ OT"
+// heading sat 1,180px down a 2,301px page, i.e. off-screen on arrival, behind a five-tile strip
+// reading 0/0/0/0 and a four-field date-range filter for a table the user had not reached. After:
+// y=594, on-screen.
+describe('OvertimePanel section order follows the role', () => {
+  function orderOf(...nodes) {
+    // DOCUMENT_POSITION_FOLLOWING (4) === b comes after a.
+    return nodes.every((node, i) => i === 0
+      || (nodes[i - 1].compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.overtime.employees.mockResolvedValue({ employees: [] });
+    api.overtime.list.mockResolvedValue({ requests: [] });
+    // Same default every other describe here sets — see the #ot-holiday-visibility note on the
+    // api mock above: UpcomingHolidays and the verdict badge both read leave.calendarContext.
+    api.leave.calendarContext.mockResolvedValue({ holidays: [], workingDays: [] });
+  });
+
+  it('puts the submit form ABOVE the history stats/filter for a self-service employee', async () => {
+    renderOvertimePage();
+
+    const form = await screen.findByRole('heading', { name: 'ยื่นคำขอ OT' });
+    const holidays = screen.getByRole('heading', { name: 'วันหยุดที่จะถึง' });
+    const searchButton = screen.getByRole('button', { name: /ค้นหา/ });
+
+    // Holidays still precede the form — #ot-holiday-visibility requires the holiday answer to
+    // arrive before the claim is made, and this reorder must not quietly undo that.
+    expect(orderOf(holidays, form)).toBe(true);
+    // ...and the range filter now follows the form instead of burying it.
+    expect(orderOf(form, searchButton)).toBe(true);
+  });
+
+  it('keeps the history stats/filter ABOVE the form for a manager, whose task is triage', async () => {
+    // `canSubmitForTeam` is derived from the EMPLOYEES payload — `submitEmployeeOptions.some(e =>
+    // e.directReport)` (OvertimePanel.jsx) — not from `user.manager`. Mocking an empty list here
+    // renders the self-service order and the test passes for the wrong reason; a direct report is
+    // what actually constructs the manager state this case is about.
+    api.overtime.employees.mockResolvedValue({
+      employees: [
+        { employeeId: 99, employeeName: 'ผู้จัดการ ทดสอบ', employeeCode: 'MGR-001', self: true, directReport: false },
+        { employeeId: 10, employeeName: 'ลูกทีม ทดสอบ', employeeCode: 'EMP-010', self: false, directReport: true },
+      ],
+    });
+    const managerUser = { employeeId: 99, name: 'ผู้จัดการ ทดสอบ', role: 'employee', manager: true, divisionId: 5 };
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <OvertimePage user={managerUser} currentEmployee={{ id: 99, nameTh: managerUser.name }} showToast={vi.fn()} />
+      </QueryClientProvider>,
+    );
+
+    // Await the TEAM sub-header first: it is rendered from the same  flag the
+    // ordering keys off, so this fails loudly if the fixture did not actually construct the
+    // manager state, instead of silently asserting the self-service order.
+    await screen.findByText(/ยื่นคำขอแทนทีม/);
+    const searchButton = screen.getByRole('button', { name: /ค้นหา/ });
+    const form = screen.getByRole('heading', { name: 'ยื่นคำขอ OT' });
+
+    // Wrong-way-round on purpose: the risk of this change is that it reorders BOTH views, which
+    // would push a manager's queue controls below a form they rarely use.
+    expect(orderOf(searchButton, form)).toBe(true);
+  });
+});

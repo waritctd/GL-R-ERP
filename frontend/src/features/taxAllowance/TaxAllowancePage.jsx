@@ -93,6 +93,11 @@ export function TaxAllowancePage({ user, showToast }) {
   // pending. Kept separate from `taxYear` itself so the <select> (`value={taxYear}`) keeps showing
   // the OLD year until the switch is actually confirmed — that "don't commit yet" is the point.
   const [pendingYearChange, setPendingYearChange] = useState(null);
+  // The values a submit event asked to file, held while the employee confirms; null means no
+  // confirmation is open. Holding the VALUES rather than a bare boolean is what makes the dialog a
+  // gate instead of a decoration — there is nothing to file until this is set, so a submit that
+  // never reaches the confirm button cannot reach the API either. See `handleSubmit` below.
+  const [pendingSubmitValues, setPendingSubmitValues] = useState(null);
 
   // Staged (not-yet-uploaded) evidence, keyed by TAX_ALLOWANCE_GROUPS' `key` -- the null key holds
   // the hub's "general/uncategorized" bucket. See TaxAllowanceEvidencePanel's own javadoc for why
@@ -156,17 +161,26 @@ export function TaxAllowancePage({ user, showToast }) {
   });
   const caps = capsQuery.data ?? [];
 
+  // Keeps the WHOLE envelope rather than mapping straight to `.items`: the same response now
+  // carries `headerPrefill` (owner decision #4's read half). Riding on this one query is
+  // deliberate — a second, independently-timed request would land after the form had mounted and
+  // change `defaultValues`' identity mid-typing, and TaxAllowanceForm's `reset(defaultValues)`
+  // effect would wipe whatever the employee had entered. React Query's structural sharing keeps
+  // this object's identity stable across refetches that return the same JSON, which is what stops
+  // a background refocus from doing the same thing.
   const declarationsQuery = useQuery({
     queryKey: queryKeys.taxAllowanceDeclarationsMe(taxYear),
-    queryFn: () => api.payroll.getMyTaxAllowanceDeclarations(taxYear).then((response) => response.items || []),
+    queryFn: () => api.payroll.getMyTaxAllowanceDeclarations(taxYear),
     enabled: !!user?.employeeId,
   });
-  const current = useMemo(() => selectCurrentDeclaration(declarationsQuery.data ?? []), [declarationsQuery.data]);
+  const declarations = useMemo(() => declarationsQuery.data?.items ?? [], [declarationsQuery.data]);
+  const headerPrefill = declarationsQuery.data?.headerPrefill ?? null;
+  const current = useMemo(() => selectCurrentDeclaration(declarations), [declarations]);
   // Feeds ONLY the form's prefill (`defaultValues` below) when there is no current declaration for
   // this tax year -- see selectResumableDeclaration's own doc comment for why WITHDRAWN specifically
   // and why this must never feed statusInfo/canStartEdit/evidenceMode, all of which stay keyed on
   // `current` alone below.
-  const resumable = useMemo(() => selectResumableDeclaration(declarationsQuery.data ?? []), [declarationsQuery.data]);
+  const resumable = useMemo(() => selectResumableDeclaration(declarations), [declarations]);
   const statusInfo = useMemo(() => taxAllowanceStatusInfo(current), [current]);
   const canStartEdit = EDITABLE_STATUS_KEYS.has(statusInfo.key) && isCurrentYear;
 
@@ -215,8 +229,27 @@ export function TaxAllowancePage({ user, showToast }) {
   // The disable is load-bearing, not noise-suppression: exhaustive-deps calls `taxYear` "unnecessary"
   // because the memo body never reads it, which is exactly the point -- it is a cache-busting key, not
   // an input. Taking the rule's advice and deleting it silently restores the bug described above.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const defaultValues = useMemo(() => defaultAllowanceValues(current ?? resumable), [current, resumable, taxYear]);
+  // `headerPrefill` is gated on `canStartEdit`, NOT on `editing` (owner decision #4). Two reasons,
+  // and the distinction matters:
+  //
+  //   - It must not reach a READ-ONLY view. A PENDING or APPROVED declaration shows what was
+  //     actually filed; seeding its blank header slots from today's master record would show the
+  //     employee an address they never declared, on a document HR has already accepted. Past tax
+  //     years are the same defect with more distance. `canStartEdit` is false for both.
+  //   - Gating on `editing` instead would make the memo recompute the moment "แก้ไข / ยื่นฉบับใหม่"
+  //     is pressed, firing TaxAllowanceForm's `reset(defaultValues)` on a click that is supposed to
+  //     do nothing but unlock the fields. `canStartEdit` is derived from the declaration's status
+  //     and the year, so it does not move when the button is pressed.
+  //
+  // `defaultAllowanceValues` composes them per slot: anything the declaration already holds wins,
+  // and the prefill only reaches slots the employee left blank.
+  // The disable below has to sit immediately above the DEPENDENCY ARRAY, not above the `useMemo`
+  // call: exhaustive-deps reports on the array's own line, and this call no longer fits on one.
+  const defaultValues = useMemo(
+    () => defaultAllowanceValues(current ?? resumable, canStartEdit ? headerPrefill : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [current, resumable, taxYear, canStartEdit, headerPrefill],
+  );
 
   /**
    * Owner decision #3: the signed scan gates submit.
@@ -244,9 +277,9 @@ export function TaxAllowancePage({ user, showToast }) {
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-      showToast?.('สร้างไฟล์ PDF แล้ว — พิมพ์ ลงนาม แล้วแนบกลับเพื่อยื่น', 'success');
+      showToast?.('success', 'สร้างไฟล์ PDF แล้ว — พิมพ์ ลงนาม แล้วแนบกลับเพื่อยื่น');
     },
-    onError: (error) => showToast?.(error?.message || 'สร้างไฟล์ PDF ไม่สำเร็จ', 'error'),
+    onError: (error) => showToast?.('error', error?.message || 'สร้างไฟล์ PDF ไม่สำเร็จ'),
   });
 
   function handleGeneratePdf(values) {
@@ -263,13 +296,22 @@ export function TaxAllowancePage({ user, showToast }) {
     onSuccess: async (created) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.taxAllowanceDeclarationsMe(taxYear) });
       showToast?.('success', 'ยื่นแบบแจ้งเรียบร้อย รอ HR ตรวจสอบ');
+      // Closes the confirmation. Deliberately here and in onError rather than immediately after
+      // `mutate`, so the dialog stays up showing its busy state for the whole round trip — that is
+      // also what stops a second confirm click firing a duplicate filing.
+      setPendingSubmitValues(null);
       setEditing(false);
       // Land back on the hub -- REVIEW's own submit button is about to disappear under the
       // now-PENDING declaration's `readOnly`, and leaving the employee stranded there with the
       // control they just used suddenly gone would read as broken, not successful.
       await flushStagedEvidence(created.declarationId);
     },
-    onError: (error) => showToast?.('error', error.message || 'ยื่นแบบแจ้งไม่สำเร็จ'),
+    onError: (error) => {
+      // The dialog closes on failure too, and the form stays editable underneath with everything
+      // still typed — the employee can fix whatever the server objected to and file again.
+      setPendingSubmitValues(null);
+      showToast?.('error', error.message || 'ยื่นแบบแจ้งไม่สำเร็จ');
+    },
   });
 
   // Sends every staged file (see the `stagedEvidence` state's own comment above) against the
@@ -320,10 +362,40 @@ export function TaxAllowancePage({ user, showToast }) {
     },
   });
 
+  /**
+   * The submit event does NOT file anything. It opens the confirmation (owner ruling 2026-08-09).
+   *
+   * <p>The gap this closes was measured in a real browser, not theorised: once the signed scan is
+   * staged the submit button is enabled, and HTML's implicit submission then gives Enter in any of
+   * the form's ~dozen text inputs a real `event.submitter`. `SafeForm`'s two guards both pass in
+   * that state by design — a submitter exists, and `canSubmit` is true — so Enter filed the
+   * declaration outright, with no confirmation, from a field the employee was still editing.
+   *
+   * The ruling was explicitly NOT to add an Enter-specific guard. The hazard is "files with no
+   * confirmation", and an Enter-only fix would leave a stray click on the enabled button exactly as
+   * exposed. Putting the dialog between the submit EVENT and the mutation covers every trigger —
+   * Enter, click, and anything added later — because they all arrive through this one function.
+   *
+   * It also closes an inconsistency rather than inventing a pattern: this page already confirms
+   * before withdrawing a declaration and before a year switch that would discard a draft. Filing —
+   * the most consequential action on the screen, and the only one that cannot be undone without
+   * HR — was the one action that did not ask.
+   *
+   * `SafeForm`'s own guards are deliberately untouched. They still cover the disabled-submit state,
+   * which is where the two historical incidents actually happened.
+   */
   function handleSubmit(values) {
+    setPendingSubmitValues(values);
+  }
+
+  function confirmSubmit() {
+    if (!pendingSubmitValues) return;
     // No `employeeId` field, ever — the server resolves the caller from the session (decision
     // in issue #387's endpoint table: "no employeeId field exists on the body").
-    const body = buildAllowanceSubmitBody(values, { taxYear, effectiveMonth: values.effectiveMonth });
+    const body = buildAllowanceSubmitBody(pendingSubmitValues, {
+      taxYear,
+      effectiveMonth: pendingSubmitValues.effectiveMonth,
+    });
     submitMutation.mutate(body);
   }
 
@@ -336,6 +408,10 @@ export function TaxAllowancePage({ user, showToast }) {
   const statusExplanation = !isCurrentYear
     ? `กำลังดูข้อมูลย้อนหลังของปีภาษี ${taxYear} — ยื่นหรือแก้ไขได้เฉพาะปีภาษี ${currentYear}`
     : STATUS_EXPLANATIONS[statusInfo.key] ?? null;
+
+  // One string for the form's submit button AND the confirmation's confirm button. Extracted so the
+  // dialog cannot end up promising a different action from the control that opened it.
+  const submitLabel = statusInfo.key === 'NONE' ? 'ยื่นแบบแจ้ง' : 'ยื่นฉบับใหม่';
 
   const statusAction = statusInfo.key === 'PENDING' && isCurrentYear
     ? { label: 'ยกเลิกการยื่น', variant: 'danger', onClick: () => setWithdrawing(true) }
@@ -397,7 +473,7 @@ export function TaxAllowancePage({ user, showToast }) {
           defaultValues={defaultValues}
           readOnly={!editing}
           submitting={submitMutation.isPending}
-          submitLabel={statusInfo.key === 'NONE' ? 'ยื่นแบบแจ้ง' : 'ยื่นฉบับใหม่'}
+          submitLabel={submitLabel}
           onSubmit={handleSubmit}
           onDirtyChange={setFormDirty}
           onGeneratePdf={handleGeneratePdf}
@@ -411,6 +487,21 @@ export function TaxAllowancePage({ user, showToast }) {
           showToast={showToast}
         />
       </Panel>
+
+      {/* Filing is the one action on this page that HR has to undo for you. It now asks first,
+          exactly as withdrawing and discarding a draft already did. The copy states the two
+          consequences plainly rather than asking "are you sure": the declaration goes to HR, and
+          the form locks until it is withdrawn. */}
+      <ConfirmDialog
+        open={pendingSubmitValues != null}
+        title="ยื่นแบบแจ้ง ล.ย.01"
+        message="แบบแจ้งฉบับนี้จะถูกส่งให้ฝ่ายบุคคลตรวจสอบ และแบบฟอร์มจะถูกล็อกไม่ให้แก้ไขจนกว่าจะยกเลิกการยื่น ต้องการยื่นหรือไม่"
+        confirmLabel={submitLabel}
+        cancelLabel="ตรวจทานอีกครั้ง"
+        busy={submitMutation.isPending}
+        onConfirm={confirmSubmit}
+        onCancel={() => setPendingSubmitValues(null)}
+      />
 
       <ConfirmDialog
         open={withdrawing}

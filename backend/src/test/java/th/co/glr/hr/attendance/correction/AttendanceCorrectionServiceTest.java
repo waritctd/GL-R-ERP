@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -13,6 +14,7 @@ import static org.mockito.Mockito.when;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -197,6 +199,61 @@ class AttendanceCorrectionServiceTest {
         verify(repository, never()).cancel(anyLong());
     }
 
+    // --- notification deep links (adversarial review F1) ------------------------------------------
+    // notificationService was already mocked above (line ~32) but no test here ever verified a
+    // single notify() call -- exactly how all three call sites drifted to the pre-move
+    // "/employee-requests" link after the feature's review UI moved onto /attendance. Assertion
+    // style copied from SpecialMoneyServiceTest, which already pins its own equivalent link:
+    // backend/src/test/java/th/co/glr/hr/specialmoney/SpecialMoneyServiceTest.java:82.
+
+    @Test
+    void approvingNotifiesTheEmployeeAtTheAttendancePageLink() {
+        when(repository.findById(55L))
+            .thenReturn(Optional.of(dto(55L, 10L, "SUBMITTED")))
+            .thenReturn(Optional.of(dto(55L, 10L, "APPROVED")));
+        when(repository.resolveSiteCode(10L, PAST_DATE)).thenReturn("SHOWROOM");
+        when(repository.resolveBadgeCode(10L)).thenReturn("MANUAL-10");
+        when(repository.approve(eq(55L), eq(500L), any())).thenReturn(1);
+
+        service.approve(55L, null, ceo(500L));
+
+        verify(notificationService).notify(
+            eq(10L), eq("ATTENDANCE_CORRECTION_APPROVED"), anyString(), anyString(), eq("/attendance"), eq(true));
+    }
+
+    @Test
+    void rejectingNotifiesTheEmployeeAtTheAttendancePageLink() {
+        when(repository.findById(55L))
+            .thenReturn(Optional.of(dto(55L, 10L, "SUBMITTED")))
+            .thenReturn(Optional.of(dto(55L, 10L, "REJECTED")));
+        when(repository.reject(eq(55L), eq(500L), any())).thenReturn(1);
+
+        service.reject(55L, new ReviewAttendanceCorrectionRequest("กรุณาแนบหลักฐาน"), ceo(500L));
+
+        verify(notificationService).notify(
+            eq(10L), eq("ATTENDANCE_CORRECTION_REJECTED"), anyString(), anyString(), eq("/attendance"), eq(true));
+    }
+
+    @Test
+    void submittingNotifiesEveryCeoApproverAtTheAttendancePageLink() {
+        when(repository.employeeExists(10L)).thenReturn(true);
+        when(repository.hasOpenRequest(10L, PAST_DATE)).thenReturn(false);
+        when(repository.create(eq(10L), eq(10L), any())).thenReturn(55L);
+        when(repository.findById(55L)).thenReturn(Optional.of(dto(55L, 10L, "SUBMITTED")));
+        // uat's #635/#642 centralized the CEO-recipient rule into CeoApproverRepository and deleted
+        // the per-repository findCeoApproverEmployeeIds this test was written against on main. The
+        // assertion below is unchanged -- it still pins the fan-out (every returned approver is
+        // notified at /attendance), only the lookup it stubs moved.
+        when(ceoApprovers.findEmployeeIds()).thenReturn(List.of(500L, 501L));
+
+        service.submit(checkInRequest(), employee(10L));
+
+        verify(notificationService).notify(
+            eq(500L), eq("ATTENDANCE_CORRECTION_SUBMITTED"), anyString(), anyString(), eq("/attendance"), eq(true));
+        verify(notificationService).notify(
+            eq(501L), eq("ATTENDANCE_CORRECTION_SUBMITTED"), anyString(), anyString(), eq("/attendance"), eq(true));
+    }
+
     // --- helpers ------------------------------------------------------------
 
     private SubmitAttendanceCorrectionRequest checkInRequest() {
@@ -208,6 +265,11 @@ class AttendanceCorrectionServiceTest {
     private UserPrincipal employee(Long employeeId) {
         return new UserPrincipal(3L, "emp@glr.co.th", "emp", "employee", employeeId, true,
             LocalDate.now(), false, 1L, false);
+    }
+
+    private UserPrincipal ceo(Long employeeId) {
+        return new UserPrincipal(500L, "ceo@glr.co.th", "ceo", "ceo", employeeId, true,
+            LocalDate.now(), false, null, false);
     }
 
     private AttendanceCorrectionRequestDto dto(long id, long employeeId, String status) {

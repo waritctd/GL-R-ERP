@@ -506,6 +506,48 @@ class LeaveServiceTest {
         ));
     }
 
+    // Leave-surface IA restructure (2026-08-10). The null-date default was previously UNTESTED --
+    // both #list tests above pass explicit dates -- while five call sites (ReviewQueueTab,
+    // LeaveSurfacePage's tab-visibility signal, CeoOverview, DivisionManagerOverview,
+    // EmployeeSelfService) rely on it exclusively. It is pinned here because it is now the thing
+    // standing between an approver and a pending request that would otherwise age out of their
+    // queue: findRequests matches on OVERLAP, so the old [month-start, +1mo] window silently
+    // dropped a still-SUBMITTED request whose leave ended last month, and a vacation booked more
+    // than a month out. Asserting the exact bounds (not `any()`) is the point -- this test's job is
+    // to go red if the window ever narrows again.
+    @Test
+    void listDefaultsToASymmetricTwelveMonthWindowWhenNoDatesAreGiven() {
+        when(leaveRepository.findRequests(any(LeaveFilter.class))).thenReturn(List.of());
+
+        leaveService.list(user("hr", 20L), null, null, null, null);
+
+        // Clock is fixed at 2026-07-01 (FIXED_NOW), so the window is [2025-07-01, 2027-07-01].
+        verify(leaveRepository).findRequests(new LeaveFilter(
+            null,
+            null,
+            LocalDate.parse("2025-07-01"),
+            LocalDate.parse("2027-07-01"),
+            null
+        ));
+    }
+
+    // Each bound defaults INDEPENDENTLY -- a caller that narrows one edge must not silently lose
+    // the widened default on the other. MyLeaveTab's filter bar can submit either date alone.
+    @Test
+    void listDefaultsEachDateBoundIndependently() {
+        when(leaveRepository.findRequests(any(LeaveFilter.class))).thenReturn(List.of());
+
+        leaveService.list(user("hr", 20L), LocalDate.parse("2026-06-01"), null, null, null);
+
+        verify(leaveRepository).findRequests(new LeaveFilter(
+            null,
+            null,
+            LocalDate.parse("2026-06-01"),
+            LocalDate.parse("2027-07-01"),
+            null
+        ));
+    }
+
     @Test
     void hrCanApproveLeave() {
         LeaveRequestDto submitted = requestDto(77L, 10L, "SUBMITTED", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), "2.00", "0.00");

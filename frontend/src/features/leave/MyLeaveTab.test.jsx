@@ -244,15 +244,24 @@ describe('MyLeaveTab own-request table: the three state-defect fixes (Phase A1)'
 
   it('DEFECT 1: a background refetch (isFetching, not isPending) never blanks already-loaded rows into an empty state', async () => {
     let resolveSecondFetch;
-    api.leave.list
-      .mockResolvedValueOnce({ requests: [ownRow] })
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecondFetch = resolve; }));
+    let historyCalls = 0;
+    // Param-aware rather than a mockResolvedValueOnce chain: as of the 2026-08-10 restructure this
+    // tab issues TWO leave.list calls, and a positional chain would hand this test's fixtures to
+    // whichever query happened to fire first. The forward-window query behind
+    // "วันลาที่กำลังจะถึง" always sends explicit dates; the history query this test is about sends
+    // none by default (empty filters -> hrApi drops them -> backend applies its own window).
+    api.leave.list.mockImplementation((params = {}) => {
+      if (params.from) return Promise.resolve({ requests: [] });
+      historyCalls += 1;
+      if (historyCalls === 1) return Promise.resolve({ requests: [ownRow] });
+      return new Promise((resolve) => { resolveSecondFetch = resolve; });
+    });
 
     const queryClient = renderMyLeaveTab();
     await screen.findByText('พักผ่อนประจำปี');
 
     queryClient.refetchQueries({ queryKey: ['leave', 'list'] });
-    await waitFor(() => expect(api.leave.list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(historyCalls).toBe(2));
     // The row is STILL on screen while the second fetch is in flight -- the pre-A1 bug replaced
     // it with an EmptyState on every 60s poll / window-focus refetch.
     expect(screen.getByText('พักผ่อนประจำปี')).not.toBeNull();
@@ -518,62 +527,114 @@ describe('MyLeaveTab bugfix (2026-08): "ของฉัน" always scopes to the
     await waitFor(() => expect(api.leave.list).toHaveBeenCalledWith(expect.objectContaining({ employeeId: 5 })));
   });
 
-  // Review fix (2026-08): restores "ปฏิทินวันลา", which this branch's original cut had moved
-  // into TeamLeaveTab.jsx (gated on hasTeamMembers) -- leaving every employee with no direct
-  // reports (the majority of the workforce) with no leave calendar anywhere on the page.
-  describe('review fix: "ปฏิทินวันลา" is restored here, self-scoped', () => {
-    it('renders for a plain employee with no direct reports, showing their own leave days', async () => {
-      const plainEmployee = { employeeId: 1, name: 'พนักงาน ทดสอบ', role: 'employee', manager: false };
-      const plainEmployeeCurrent = { id: 1, nameTh: 'พนักงาน ทดสอบ' };
-      const ownDay = {
+  // Was "ปฏิทินวันลา" (restored here by a 2026-08 review fix so that employees with no direct
+  // reports kept a leave list at all). Renamed to "วันลาที่กำลังจะถึง" and re-scoped to a FORWARD
+  // window by the 2026-08-10 IA restructure -- see UpcomingLeaveList.jsx for why the old name
+  // described an intention the data could not deliver (defect D1).
+  describe('"วันลาที่กำลังจะถึง" is self-scoped and genuinely forward-looking', () => {
+    // Relative to the real clock, deliberately: the panel derives its window from `todayIso()` at
+    // render, so a hardcoded fixture date would quietly stop being "upcoming" as time passed and
+    // the test would start proving nothing. +/-10 days is far enough from midnight that a
+    // UTC-vs-Bangkok day slip cannot flip which side of "today" a fixture falls on.
+    function isoDaysFromToday(offset) {
+      const date = new Date();
+      date.setDate(date.getDate() + offset);
+      return date.toISOString().slice(0, 10);
+    }
+
+    const plainEmployee = { employeeId: 1, name: 'พนักงาน ทดสอบ', role: 'employee', manager: false };
+    const plainEmployeeCurrent = { id: 1, nameTh: 'พนักงาน ทดสอบ' };
+
+    function futureOwnDay(overrides = {}) {
+      return {
         id: 5001,
         employeeId: 1,
         employeeName: 'พนักงาน ทดสอบ',
         employeeCode: 'GLR-001',
         leaveTypeCode: 'VACATION',
         leaveTypeNameTh: 'ลาพักร้อน',
-        startDate: '2026-08-04',
-        endDate: '2026-08-04',
+        startDate: isoDaysFromToday(10),
+        endDate: isoDaysFromToday(10),
         totalDays: 1,
         quotaRemainingAfter: 5,
         status: 'APPROVED',
         reason: 'พักผ่อนของตัวเอง',
+        ...overrides,
       };
-      api.leave.list.mockResolvedValue({ requests: [ownDay] });
+    }
 
+    // Honours the date window the caller actually asks for, the way LeaveRepository#findRequests
+    // does (OVERLAP: `start_date <= :toDate AND end_date >= :fromDate`). Without this the mock
+    // would hand every row to both queries and the forward window would never be exercised at all
+    // -- the panel would "pass" while showing rows the real backend would have excluded.
+    function mockListHonouringWindow(rows) {
+      api.leave.list.mockImplementation((params = {}) => Promise.resolve({
+        requests: rows.filter((request) => {
+          if (params.employeeId && Number(request.employeeId) !== Number(params.employeeId)) return false;
+          if (params.from && request.endDate < params.from) return false;
+          if (params.to && request.startDate > params.to) return false;
+          return true;
+        }),
+      }));
+    }
+
+    function renderFor(renderUser, renderEmployee) {
       render(
         <MemoryRouter>
           <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-            <MyLeaveTab user={plainEmployee} currentEmployee={plainEmployeeCurrent} showToast={vi.fn()} />
+            <MyLeaveTab user={renderUser} currentEmployee={renderEmployee} showToast={vi.fn()} />
           </QueryClientProvider>
         </MemoryRouter>,
       );
-
-      const calendarHeading = await screen.findByRole('heading', { name: 'ปฏิทินวันลา' });
-      // Same closest('section') pattern TeamLeaveTab.test.jsx's own calendar test uses -- the
-      // heading's immediate ancestor is only PanelHeader's wrapper `<div>`, so the calendar-list
+      // The heading's immediate ancestor is only PanelHeader's wrapper `<div>`, so the list
       // content (a sibling of that div) requires walking up to the Panel's `<section>`.
-      const calendarPanel = calendarHeading.closest('section');
-      await waitFor(() => expect(calendarPanel.textContent).toMatch(/ลาพักร้อน/));
-      expect(calendarPanel.textContent).toMatch(/พนักงาน ทดสอบ/);
+      return screen.findByRole('heading', { name: 'วันลาที่กำลังจะถึง' })
+        .then((heading) => heading.closest('section'));
+    }
+
+    it('renders for a plain employee with no direct reports, showing their own leave days', async () => {
+      mockListHonouringWindow([futureOwnDay()]);
+
+      const panel = await renderFor(plainEmployee, plainEmployeeCurrent);
+      await waitFor(() => expect(panel.textContent).toMatch(/ลาพักร้อน/));
     });
 
-    it("REGRESSION: a manager's own calendar does NOT include a direct report's day", async () => {
-      render(
-        <MemoryRouter>
-          <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-            <MyLeaveTab user={managerUser} currentEmployee={managerCurrentEmployee} showToast={vi.fn()} />
-          </QueryClientProvider>
-        </MemoryRouter>,
-      );
+    // THE regression test for defect D1. Before the restructure this panel derived from the
+    // history query, whose filter defaulted to `to: todayIso()`; LeaveRepository#findRequests
+    // matches `start_date <= :toDate`, so leave starting after today was filtered out server-side
+    // and a panel titled "ปฏิทินวันลา" could never show a single upcoming day. The panel now runs
+    // its own forward query, and the window-honouring mock above is what makes this test able to
+    // fail: point the panel back at a today-bounded window and this row disappears.
+    it('D1: shows leave that STARTS AFTER TODAY -- the case the old today-bounded panel could never show', async () => {
+      mockListHonouringWindow([futureOwnDay({ reason: 'ลาพักร้อนอนาคต' })]);
 
-      const calendarHeading = await screen.findByRole('heading', { name: 'ปฏิทินวันลา' });
-      const calendarPanel = calendarHeading.closest('section');
-      await waitFor(() => expect(calendarPanel.textContent).toMatch(/หัวหน้างาน/));
-      // The direct report's name/status never appears in the actor's OWN calendar -- the
-      // beforeEach's api.leave.list mock (self-OR-report semantics) would have returned both
-      // rows here before this branch's own employeeId-scoping fix.
-      expect(calendarPanel.textContent).not.toMatch(/ลูกทีม ทดสอบ/);
+      const panel = await renderFor(plainEmployee, plainEmployeeCurrent);
+      await waitFor(() => expect(panel.textContent).toMatch(/ลาพักร้อน/));
+    });
+
+    // Rejected/cancelled leave is not "upcoming" in any useful sense -- only SUBMITTED/APPROVED.
+    it('excludes a future-dated REJECTED request', async () => {
+      mockListHonouringWindow([
+        futureOwnDay({ id: 5002, status: 'REJECTED', leaveTypeNameTh: 'ลากิจถูกปฏิเสธ' }),
+      ]);
+
+      const panel = await renderFor(plainEmployee, plainEmployeeCurrent);
+      await waitFor(() => expect(panel.textContent).toMatch(/ยังไม่มีวันลาที่กำลังจะถึง/));
+      expect(panel.textContent).not.toMatch(/ลากิจถูกปฏิเสธ/);
+    });
+
+    it("REGRESSION: a manager's own upcoming list does NOT include a direct report's day", async () => {
+      mockListHonouringWindow([
+        { ...ownRequest, startDate: isoDaysFromToday(10), endDate: isoDaysFromToday(10) },
+        { ...directReportRequest, startDate: isoDaysFromToday(11), endDate: isoDaysFromToday(11) },
+      ]);
+
+      const panel = await renderFor(managerUser, managerCurrentEmployee);
+      await waitFor(() => expect(panel.textContent).toMatch(/ลาพักร้อน/));
+      // The direct report never appears in the actor's OWN panel -- LeaveService#list's default
+      // scoping for an actor with reports is "self OR reports_to = actor", which is why this query
+      // must always pass an explicit employeeId.
+      expect(panel.textContent).not.toMatch(/ลูกทีม ทดสอบ/);
     });
   });
 });
@@ -590,7 +651,7 @@ describe('MyLeaveTab holiday visibility (#leave-holiday-visibility, PR 3)', () =
     api.leave.list.mockResolvedValue({ requests: [] });
   });
 
-  it('shows the วันหยุดที่จะถึง panel alongside "ปฏิทินวันลา", without disturbing it', async () => {
+  it('shows the วันหยุดที่จะถึง panel alongside "วันลาที่กำลังจะถึง", without disturbing it', async () => {
     api.leave.calendarContext.mockResolvedValue({
       calendarContext: {
         holidays: [{ holidayDate: '2026-08-15', nameTh: 'วันหยุดทดสอบ' }],
@@ -606,9 +667,11 @@ describe('MyLeaveTab holiday visibility (#leave-holiday-visibility, PR 3)', () =
     // result it depends on is not -- waitFor lets the loading EmptyState resolve before asserting.
     await waitFor(() => expect(holidayPanel.textContent).toMatch(/วันหยุดทดสอบ/));
 
-    // "ปฏิทินวันลา" still renders too -- the new panel sits ALONGSIDE it, never in place of it.
-    const calendarHeading = await screen.findByRole('heading', { name: 'ปฏิทินวันลา' });
-    expect(calendarHeading.closest('section')).not.toBeNull();
+    // The personal leave panel still renders too -- the two "what's coming up" panels sit
+    // ALONGSIDE each other, never one in place of the other. (Renamed from "ปฏิทินวันลา" by the
+    // 2026-08-10 restructure.)
+    const upcomingLeaveHeading = await screen.findByRole('heading', { name: 'วันลาที่กำลังจะถึง' });
+    expect(upcomingLeaveHeading.closest('section')).not.toBeNull();
   });
 
   // Real วันหยุดบริษัท names run up to 149 chars (MOCK_HOLIDAY_DATES in mockApi.js is a verbatim

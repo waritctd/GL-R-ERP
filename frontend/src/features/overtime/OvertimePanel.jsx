@@ -11,7 +11,7 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { formGridSpan2, Panel, PageStack, RowActions } from '../../components/common/Layout.jsx';
+import { FilterField, formGridSpan2, Panel, PageStack, RowActions } from '../../components/common/Layout.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { UpcomingHolidays } from '../../components/common/UpcomingHolidays.jsx';
@@ -565,6 +565,60 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
   const holidayWindowFrom = todayIso();
   const holidayWindowTo = addDaysIso(90);
 
+  // The stat strip and the filter bar are both ABOUT the history table at the bottom of this
+  // panel: the strip counts the rows in the selected range, the bar chooses that range. They are
+  // rendered as one unit here so the two views below can place them where each one's primary task
+  // actually is, rather than one order having to serve both.
+  const historyControls = (
+    <>
+      <CompactStatRow
+        items={[
+          { key: 'total', label: 'คำขอทั้งหมด', value: requests.length, helper: 'ในช่วงที่เลือก' },
+          // A1: this bucket mixes BOTH routes (some SUBMITTED rows wait on a manager, some go
+          // straight to the CEO -- see overtimeStatusLabel's own comment), so it must not name
+          // only one of the two possible holders.
+          { key: 'submitted', label: 'รออนุมัติ', value: totals.submitted, helper: 'Submitted' },
+          { key: 'managerApproved', label: 'รอ CEO', value: totals.managerApproved, helper: 'Manager approved' },
+          { key: 'approved', label: 'อนุมัติแล้ว', value: totals.approved, helper: 'Approved' },
+          { key: 'payable', label: 'ชั่วโมงจ่ายได้', value: formatMinutes(totals.payableMinutes), helper: 'Approved payable' },
+        ]}
+      />
+
+      <SafeForm className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
+        <FilterField label="จากวันที่">
+          <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
+        </FilterField>
+        <FilterField label="ถึงวันที่">
+          <input type="date" value={filters.to} onChange={(event) => updateFilter('to', event.target.value)} />
+        </FilterField>
+        <FilterField label="สถานะ">
+          <select value={filters.status} onChange={(event) => updateFilter('status', event.target.value)}>
+            <option value="">ทุกสถานะ</option>
+            <option value="SUBMITTED">รออนุมัติ</option>
+            <option value="MANAGER_APPROVED">รอ CEO</option>
+            <option value="APPROVED">อนุมัติแล้ว</option>
+            <option value="REJECTED">ปฏิเสธแล้ว</option>
+            <option value="CANCELLED">ยกเลิกแล้ว</option>
+          </select>
+        </FilterField>
+        {hasMultipleEmployeeOptions ? (
+          <FilterField label="พนักงาน">
+            <select value={filters.employeeId} onChange={(event) => updateFilter('employeeId', event.target.value)}>
+              <option value="">ทุกคน</option>
+              {employeeOptions.map((employee) => (
+                <option key={employee.employeeId} value={employee.employeeId}>{employee.employeeName} · {employee.employeeCode}</option>
+              ))}
+            </select>
+          </FilterField>
+        ) : null}
+        <Button type="submit" disabled={loading}>
+          <Icon name="search" />
+          ค้นหา
+        </Button>
+      </SafeForm>
+    </>
+  );
+
   return (
     <PageStack>
       {/*
@@ -581,55 +635,28 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
         </Button>
       </div>
 
-      <CompactStatRow
-        items={[
-          { key: 'total', label: 'คำขอทั้งหมด', value: requests.length, helper: 'ในช่วงที่เลือก' },
-          // A1: this bucket mixes BOTH routes (some SUBMITTED rows wait on a manager, some go
-          // straight to the CEO -- see overtimeStatusLabel's own comment), so it must not name
-          // only one of the two possible holders.
-          { key: 'submitted', label: 'รออนุมัติ', value: totals.submitted, helper: 'Submitted' },
-          { key: 'managerApproved', label: 'รอ CEO', value: totals.managerApproved, helper: 'Manager approved' },
-          { key: 'approved', label: 'อนุมัติแล้ว', value: totals.approved, helper: 'Approved' },
-          { key: 'payable', label: 'ชั่วโมงจ่ายได้', value: formatMinutes(totals.payableMinutes), helper: 'Approved payable' },
-        ]}
-      />
+      {/*
+        Order follows whose task the view is for, because the two roles open this tab to do
+        opposite things.
 
-      <SafeForm className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
-        <label>
-          จากวันที่
-          <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
-        </label>
-        <label>
-          ถึงวันที่
-          <input type="date" value={filters.to} onChange={(event) => updateFilter('to', event.target.value)} />
-        </label>
-        <label>
-          สถานะ
-          <select value={filters.status} onChange={(event) => updateFilter('status', event.target.value)}>
-            <option value="">ทุกสถานะ</option>
-            <option value="SUBMITTED">รออนุมัติ</option>
-            <option value="MANAGER_APPROVED">รอ CEO</option>
-            <option value="APPROVED">อนุมัติแล้ว</option>
-            <option value="REJECTED">ปฏิเสธแล้ว</option>
-            <option value="CANCELLED">ยกเลิกแล้ว</option>
-          </select>
-        </label>
-        {hasMultipleEmployeeOptions ? (
-          <label>
-            พนักงาน
-            <select value={filters.employeeId} onChange={(event) => updateFilter('employeeId', event.target.value)}>
-              <option value="">ทุกคน</option>
-              {employeeOptions.map((employee) => (
-                <option key={employee.employeeId} value={employee.employeeId}>{employee.employeeName} · {employee.employeeCode}</option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-        <Button type="submit" disabled={loading}>
-          <Icon name="search" />
-          ค้นหา
-        </Button>
-      </SafeForm>
+        A manager/HR (`canSubmitForTeam`) comes here to TRIAGE: the counts and the range filter are
+        the first thing they need, and their queue is the table below. That is the order this panel
+        has always had, and it stays.
+
+        An employee comes here to FILE ONE REQUEST. For them the same order buried the form under
+        ~2 screens of reporting chrome — a five-tile strip that reads 0/0/0/0 for anyone with no
+        history, and a four-field date-range filter for a table they have not scrolled to yet.
+        Measured at 390px: the "ยื่นคำขอ OT" heading sat 1,180px down a 2,301px page, so the one
+        control the page exists to offer was off-screen on arrival. The form now comes first and
+        the stats/filter travel down to sit directly above the history they describe — which also
+        fixes a smaller oddity, that the filter bar was separated from the table it filters by the
+        holidays panel AND the entire submit form.
+
+        The holidays panel stays ABOVE the form in both views: #ot-holiday-visibility is explicit
+        that the holiday answer has to arrive before the claim is made, and the equivalent
+        placement on the leave side is pinned by a test.
+      */}
+      {canSubmitForTeam ? historyControls : null}
 
       {/* Holiday answer arrives BEFORE the claim is made (#ot-holiday-visibility): this panel sits
           above the whole submit form, not just above the day-type select, so an employee can see
@@ -832,6 +859,10 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           </RowActions>
         </SafeForm>
       </Panel>
+
+      {/* Self-service view: the counts and the range filter arrive here, immediately above the
+          history table they describe — see the ordering note near the top of this return. */}
+      {canSubmitForTeam ? null : historyControls}
 
       <Panel flush>
         <div className={`${OVERTIME_TABLE_GRID} table-head`}>

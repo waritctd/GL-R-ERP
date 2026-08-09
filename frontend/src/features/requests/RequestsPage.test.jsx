@@ -18,13 +18,6 @@ vi.mock('../../api/index.js', () => ({
       reject: vi.fn(),
       cancel: vi.fn(),
     },
-    attendanceCorrection: {
-      list: vi.fn(),
-      create: vi.fn(),
-      approve: vi.fn(),
-      reject: vi.fn(),
-      cancel: vi.fn(),
-    },
     specialMoney: {
       employees: vi.fn(),
       types: vi.fn(),
@@ -75,7 +68,6 @@ describe('RequestsPage tab bar', () => {
     vi.clearAllMocks();
     api.overtime.employees.mockResolvedValue({ employees: [] });
     api.overtime.list.mockResolvedValue({ requests: [] });
-    api.attendanceCorrection.list.mockResolvedValue({ requests: [] });
     api.specialMoney.employees.mockResolvedValue({ employees: [] });
     api.specialMoney.types.mockResolvedValue({ types: [] });
     api.specialMoney.list.mockResolvedValue({ requests: [] });
@@ -91,14 +83,13 @@ describe('RequestsPage tab bar', () => {
     api.specialMoney.attachments.mockResolvedValue({ attachments: [] });
   });
 
-  it('renders all three tabs and defaults to the overtime tab', async () => {
+  it('renders both tabs and defaults to the overtime tab', async () => {
     renderRequestsPage('/employee-requests');
 
     const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(3);
+    expect(tabs).toHaveLength(2);
     expect(screen.getByRole('tab', { name: 'ล่วงเวลา' }).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('tab', { name: 'สวัสดิการ / เงินพิเศษ' }).getAttribute('aria-selected')).toBe('false');
-    expect(screen.getByRole('tab', { name: 'ขอแก้ไขเวลาเข้า-ออกงาน' }).getAttribute('aria-selected')).toBe('false');
     // The OT panel deliberately has no page heading of its own — RequestsPage owns the only one,
     // otherwise the tab renders two stacked headers. Identify the panel by its form instead.
     expect(screen.getAllByRole('heading', { name: 'คำขอ' })).toHaveLength(1);
@@ -112,10 +103,18 @@ describe('RequestsPage tab bar', () => {
     expect(await screen.findByRole('heading', { name: 'ยื่นคำขอเงินสวัสดิการ' })).not.toBeNull();
   });
 
-  it('selects the attendance-correction panel when ?tab=attendance-correction is in the query string', async () => {
+  // Deliberate graceful degradation (fix/attendance-correction-on-attendance-page): the
+  // attendance-correction tab moved to /attendance (button + modal, see AttendancePage.jsx), so
+  // it no longer has a tab here at all. An old bookmark or notification link still carrying
+  // ?tab=attendance-correction must not error or render a blank tab -- it falls back to the
+  // default 'ot' tab, exactly like any other unrecognised ?tab value.
+  it('falls back to the overtime tab for a stale ?tab=attendance-correction bookmark', async () => {
     renderRequestsPage('/employee-requests?tab=attendance-correction');
 
-    expect(screen.getByRole('tab', { name: 'ขอแก้ไขเวลาเข้า-ออกงาน' }).getAttribute('aria-selected')).toBe('true');
-    expect(await screen.findByLabelText(/วันที่ที่ลืมสแกน/)).not.toBeNull();
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs).toHaveLength(2);
+    expect(screen.getByRole('tab', { name: 'ล่วงเวลา' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tab', { name: 'สวัสดิการ / เงินพิเศษ' }).getAttribute('aria-selected')).toBe('false');
+    expect(await screen.findByLabelText(/วันที่ทำ OT/)).not.toBeNull();
   });
 });

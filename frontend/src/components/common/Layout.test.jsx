@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { Panel, PageStack, StatGrid } from './Layout.jsx';
+import { FilterField, Panel, PageStack, StatGrid } from './Layout.jsx';
 
 globalThis.React = React;
 
@@ -101,5 +101,57 @@ describe('StatGrid', () => {
     // forcing users to scroll past several screens of stat tiles before
     // reaching real content.
     expect(grid.className).toContain('mobile:grid-cols-2');
+  });
+});
+
+// jsdom has no layout engine, so none of this can assert the geometry the
+// component exists to produce — every rect is 0×0 here. What it CAN pin is the
+// contract that produces it: the classes are on the rendered element, and the
+// label association is the right one. The measured geometry these classes
+// produce is recorded in Layout.jsx's own comment.
+describe('FilterField', () => {
+  it('can shrink below its content and takes a full line on mobile', () => {
+    render(<FilterField label="จากวันที่" data-testid="f"><input type="date" readOnly value="2026-08-10" /></FilterField>);
+    const field = screen.getByTestId('f');
+
+    // The bug this component exists to remove: a flex item's automatic minimum
+    // size is its content's min-content width, so a field wrapping a native
+    // date control could not shrink and pushed the row out of the bar on iOS.
+    expect(field.className).toContain('min-w-0');
+    // One field per line at ≤720px — equal widths, one label x-position.
+    expect(field.className).toContain('mobile:basis-full');
+    // A shared floor above mobile, and deliberately NO `grow`: a lone wrapped
+    // field would otherwise absorb its whole line (measured 565px beside 218px
+    // siblings at 768px), which is the raggedness this replaces.
+    expect(field.className).toContain('basis-[190px]');
+    expect(field.className.split(/\s+/)).not.toContain('grow');
+  });
+
+  it('wraps its control in the <label> when the field holds exactly one control', () => {
+    render(<FilterField label="สถานะ"><select><option>ทุกสถานะ</option></select></FilterField>);
+    // Implicit association: the <label> is the wrapper.
+    expect(screen.getByLabelText('สถานะ').tagName).toBe('SELECT');
+  });
+
+  it('associates the label with the named control only, when the field holds several', () => {
+    render(
+      <FilterField label="วันที่" htmlFor="d">
+        <div>
+          <button type="button" aria-label="วันก่อนหน้า">‹</button>
+          <input id="d" type="date" readOnly value="2026-08-10" />
+          <button type="button" aria-label="วันถัดไป">›</button>
+        </div>
+      </FilterField>,
+    );
+
+    // Wrong-way-round on purpose: the risk is the name landing on a BUTTON, or
+    // on nothing, because a <label> wrapping three controls is ambiguous. That
+    // is what broke AttendancePage's findByLabelText('วันที่').
+    const named = screen.getByLabelText('วันที่');
+    expect(named.tagName).toBe('INPUT');
+    expect(named.getAttribute('type')).toBe('date');
+    // ...and the buttons keep their own names rather than inheriting the field's.
+    expect(screen.getByRole('button', { name: 'วันก่อนหน้า' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'วันถัดไป' })).toBeTruthy();
   });
 });
