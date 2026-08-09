@@ -1110,6 +1110,11 @@ public class PayrollCalculator {
         // percentage -- that is the form being stale, exactly as it is for ข้อ 7's ฿10,000; the
         // rd.go.th table above is the current figure and the one to follow.
         BigDecimal providentFund = min(money(input.providentFundAllowance()), PROVIDENT_FUND_ALLOWANCE_CAP);
+        // Defensive, and currently DEAD: this term is taken first, so remainingCluster is still the
+        // full ฿500,000 here and the ฿30,000 sub-cap above has already bound. Deleting this line
+        // turns no test red (mutation-checked 2026-08-08) -- it is kept for symmetry with the terms
+        // below and to stay correct if the order or the sub-cap ever changes. Do not read its
+        // presence as evidence that anything exercises it.
         providentFund = min(providentFund, remainingCluster);
         remainingCluster = remainingCluster.subtract(providentFund);
 
