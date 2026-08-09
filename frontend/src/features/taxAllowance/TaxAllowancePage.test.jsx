@@ -17,6 +17,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         getTaxAllowanceCaps: vi.fn(),
         getMyTaxAllowanceDeclarations: vi.fn(),
         submitMyTaxAllowanceDeclaration: vi.fn(),
+        renderMyTaxAllowanceForm: vi.fn(),
         withdrawMyTaxAllowanceDeclaration: vi.fn(),
         estimateMyTaxAllowanceDeclaration: vi.fn(),
         listTaxAllowanceAttachments: vi.fn(),
@@ -61,14 +62,14 @@ function LocationProbe() {
   );
 }
 
-function renderPage({ entry = '/tax-allowance' } = {}) {
+function renderPage({ entry = '/tax-allowance', showToast = vi.fn() } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[entry]}>
-        <TaxAllowancePage user={user} showToast={vi.fn()} />
+        <TaxAllowancePage user={user} showToast={showToast} />
         <LocationProbe />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -375,4 +376,47 @@ describe('TaxAllowancePage', () => {
       });
     });
   });
+
+  /**
+   * showToast's real signature is `showToast(kind, message)` (hooks/useToast.js). Getting the two
+   * the wrong way round is silent: `sanitizeToastMessage` returns `message` untouched whenever
+   * `kind !== 'error'`, so a reversed call renders the literal string "success" as the toast body
+   * and hands the Thai sentence to Toast.jsx as the styling kind. Nothing throws.
+   *
+   * ⚠️ The page is handed `showToast` as a prop and every other test passes a bare `vi.fn()` that
+   * nothing asserts on — which is why the suite happily shipped this reversed for two PRs. A spy
+   * accepts any argument order. Assert the ARGUMENTS, not just that it was called.
+   */
+  describe('toast argument order (kind first, message second)', () => {
+    it('reports a generated PDF as a success toast, not a toast whose body is the word "success"', async () => {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [] });
+      api.payroll.renderMyTaxAllowanceForm.mockResolvedValue(new Blob(['pdf']));
+      const showToast = vi.fn();
+      renderPage({ showToast });
+
+      fireEvent.click(await screen.findByRole('button', { name: /ตรวจทาน ลงนาม และยื่น/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'สร้างไฟล์ PDF แบบ ล.ย.01' }));
+
+      await waitFor(() => expect(showToast).toHaveBeenCalled());
+      const [kind, message] = showToast.mock.calls.at(-1);
+      expect(kind).toBe('success');
+      expect(message).toMatch(/ลงนาม/);
+    });
+
+    it('reports a failed PDF as an error toast carrying the real reason', async () => {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [] });
+      api.payroll.renderMyTaxAllowanceForm.mockRejectedValue(new Error('boom'));
+      const showToast = vi.fn();
+      renderPage({ showToast });
+
+      fireEvent.click(await screen.findByRole('button', { name: /ตรวจทาน ลงนาม และยื่น/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'สร้างไฟล์ PDF แบบ ล.ย.01' }));
+
+      await waitFor(() => expect(showToast).toHaveBeenCalled());
+      const [kind, message] = showToast.mock.calls.at(-1);
+      expect(kind).toBe('error');
+      expect(message).toBe('boom');
+    });
+  });
+
 });
