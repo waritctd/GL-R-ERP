@@ -142,21 +142,66 @@ jobs:
       #
       # Detached checkout of source only. node_modules and the Playwright browser cache are
       # gitignored, so they survive both checkouts and are installed exactly once above.
+      #
+      # ── THE HARNESS IS THE MEASURING INSTRUMENT, SO IT IS PINNED TO THE PR HEAD ───────
+      # The two runs below exist to answer exactly one question: did the APPLICATION's pixels
+      # move? That only means anything if everything else is held still. But `git checkout
+      # --detach $BASE` rewinds the WHOLE tree, e2e-visual/ included — so a PR that edits the
+      # spec measures the base with the old instrument and the head with the new one, and
+      # every pixel the harness change is itself responsible for gets reported as an
+      # application regression.
+      #
+      # PR #619 is the worked example. It adds `parkPointer()` so a stale mouse position
+      # cannot bake a `:hover` state into a capture; it touches one file, entirely inside
+      # e2e-visual/, and no application code whatsoever. The baseline was captured without it
+      # (hover highlights present), the head with it (highlights gone), and the job reported
+      # five regressions across three viewports and three roles — every one of them the fix
+      # working, and every one reproducible on the retry. No threshold can separate that from
+      # a real defect, because it is not noise: both captures are faithful pictures of two
+      # different harnesses.
+      #
+      # So the baseline runs the merge base's APPLICATION code through the PR's OWN harness.
+      # When the harness is untouched — overwhelmingly the common case — the restore is a
+      # no-op. When it is touched, the comparison stays honest instead of indicting the fix.
+      #
+      # What this gives up is narrow, and was never reliable. A harness change that moves
+      # pixels was already indistinguishable from a harness FIX that moves pixels, so the old
+      # behaviour was uninterpretable noise rather than signal; and a PR that DELETES an
+      # assertion escaped either way, since the head run is what decides which snapshots get
+      # compared at all. The one genuine loss: a PR that changes app code AND masks the very
+      # thing it broke is now hidden in both captures — though unpinned that surfaced only as
+      # one more red nobody could read. What guards the harness in either case is reviewing
+      # the e2e-visual/ diff: a small JS file, not a wall of PNGs.
+      #
+      # Known edge: a PR that adds a new route to the spec AND the page behind it will have
+      # the baseline visit that route on a tree where it does not exist yet, and diff loudly.
+      # Such a PR genuinely has no baseline to compare against — read the diff images.
+      #
+      # If the harness moves or is renamed, update the pathspec: `set -e` then fails the step
+      # loudly, rather than silently baselining with the wrong instrument.
       - name: Capture baseline at the merge base
         if: steps.harness.outputs.present == 'true'
         working-directory: frontend
         run: |
           set -euo pipefail
           git checkout --detach ${{ steps.base.outputs.sha }}
+          git checkout ${{ github.event.pull_request.head.sha }} -- e2e-visual playwright.visual.config.js
+          if ! git diff --quiet ${{ steps.base.outputs.sha }} ${{ github.event.pull_request.head.sha }} \
+               -- e2e-visual playwright.visual.config.js; then
+            echo "::notice::This PR changes the visual harness. The baseline was captured with the PR's own harness against the merge base's application code, so the diff isolates application pixels."
+          fi
           rm -rf e2e-visual/visual-baseline.spec.js-snapshots
           VISUAL_BASELINE=1 npx playwright test --config playwright.visual.config.js --update-snapshots
 
+      # --force because the step above deliberately left the harness paths ahead of $BASE.
+      # It discards tracked-file changes only; the freshly captured baselines are gitignored,
+      # so they survive into the comparison exactly as node_modules does.
       - name: Diff the PR head against it
         if: steps.harness.outputs.present == 'true'
         working-directory: frontend
         run: |
           set -euo pipefail
-          git checkout --detach ${{ github.event.pull_request.head.sha }}
+          git checkout --force --detach ${{ github.event.pull_request.head.sha }}
           VISUAL_BASELINE=1 npx playwright test --config playwright.visual.config.js
 
       # The diff PNGs are the whole point — a pass/fail count cannot distinguish a real
