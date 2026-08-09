@@ -198,16 +198,132 @@ function blankAllowances(overrides = {}) {
   };
 }
 
+/**
+ * The non-amount half of แบบ ล.ย.01 — mirrors {@code TaxAllowanceDeclarationDtos.LorYor01Details},
+ * which the DTO documents as "never null on a read". Every row below therefore carries one.
+ *
+ * Seeding it is not decoration. `defaultAllowanceValues` reads `declaration.lorYor01` for the whole
+ * header block, ข้อ 1/2 สถานภาพ, the eight ข้อ 4/ข้อ 6 ticks and three sub-amounts; with the field
+ * absent — as it was until 2026-08-10 — every filed declaration rendered read-only with a blank
+ * header and no ticks under `VITE_USE_MOCKS=true`, which is indistinguishable from the feature being
+ * broken. See mockApi.js's `taxAllowanceLorYor01FromBody` for the write half of the same gap.
+ *
+ * `null` means "not answered" here exactly as it does on the wire: a blank box is not a ticked "no".
+ */
+function blankLorYor01(overrides = {}) {
+  const { address, ...rest } = overrides;
+  return {
+    taxpayerId: null, firstNameTh: null, lastNameTh: null,
+    address: {
+      building: null, roomNo: null, floor: null, village: null, houseNo: null, moo: null,
+      soi: null, junction: null, road: null, subDistrict: null, district: null, province: null,
+      postalCode: null,
+      ...address,
+    },
+    maritalState: null, spousalStatus: null, spouseHasIncome: null,
+    childrenTotal: null, childExtraAllowance: 0,
+    ownFatherSupported: null, ownMotherSupported: null,
+    spouseFatherSupported: null, spouseMotherSupported: null, spouseParentCareAllowance: 0,
+    ownFatherHealthInsured: null, ownMotherHealthInsured: null,
+    spouseFatherHealthInsured: null, spouseMotherHealthInsured: null,
+    providentFundAllowance: 0, rmfSellerName: null, otherDonationNote: null,
+    ...rest,
+  };
+}
+
 export function buildDemoTaxAllowanceDeclarations(employees) {
   const now = new Date().toISOString();
+  // The self-service page (/tax-allowance) only ever shows the SIGNED-IN employee's own rows, and
+  // in mock mode that is always employees[8] (users.js: employee@glr.co.th). Rows 1/7/8 below are
+  // therefore the only ones that screen can reach — one per selectable tax year (2026/2025/2024),
+  // so every state the year picker can land on has something in it. Everything else here belongs to
+  // other employees and is only visible from HR's register.
+  const self = employees[8];
+  const hr = employees[20];
+  // นายภาคภูมิ ศรีสุข's own ล.ย.01 header, consistent with his employee record (demoData.js).
+  const selfHeader = {
+    taxpayerId: '1100000000001',
+    firstNameTh: 'ภาคภูมิ',
+    lastNameTh: 'ศรีสุข',
+    address: {
+      houseNo: '18/9', soi: 'ซอย 9', road: 'ถ.สุขุมวิท',
+      subDistrict: 'บางนาเหนือ', district: 'บางนา', province: 'กรุงเทพมหานคร', postalCode: '10888',
+    },
+  };
   return [
     {
-      declarationId: 1, employeeId: employees[8].id, employeeCode: employees[8].code, employeeName: employees[8].nameTh,
+      declarationId: 1, employeeId: self.id, employeeCode: self.code, employeeName: self.nameTh,
       taxYear: 2026, effectiveMonth: 8,
-      allowances: blankAllowances({ spouseAllowance: 60000, lifeInsuranceAllowance: 30000 }),
+      // Deliberately spans ข้อ 3-15 rather than the two amounts it used to carry: the section rows
+      // on /tax-allowance show a per-ข้อ subtotal, so a sparse declaration leaves eleven of them
+      // reading "ไม่ได้ประกาศ" and the collapsed page can't be judged against a real one.
+      allowances: blankAllowances({
+        spouseAllowance: 60000,
+        childAllowance: 30000, childCount: 1, childCountDouble: 1,
+        parentCareAllowance: 60000, parentCareCount: 2,
+        disabledCareAllowance: 60000, disabledCareCount: 1, disabilityCardHolder: true,
+        parentHealthInsuranceAllowance: 15000,
+        lifeInsuranceAllowance: 100000, healthInsuranceAllowance: 25000,
+        rmfAllowance: 50000.5, homeLoanInterestAllowance: 75000.25,
+        educationDonation: 12000, generalDonation: 8000,
+      }),
+      lorYor01: blankLorYor01({
+        ...selfHeader,
+        maritalState: 'MARRIED', spousalStatus: 'MARRIED_WHOLE_YEAR', spouseHasIncome: false,
+        childrenTotal: 2, childExtraAllowance: 60000,
+        ownFatherSupported: true, ownMotherSupported: true,
+        spouseFatherSupported: false, spouseMotherSupported: true, spouseParentCareAllowance: 30000,
+        ownFatherHealthInsured: true, ownMotherHealthInsured: false,
+        spouseFatherHealthInsured: false, spouseMotherHealthInsured: true,
+        providentFundAllowance: 45000,
+        rmfSellerName: 'บลจ. กรุงไทย จำกัด (มหาชน)',
+        otherDonationNote: 'บริจาคทั่วไป มูลนิธิรามาธิบดี',
+      }),
       documentReference: 'ล.ย.01-2026-0009', status: 'PENDING',
-      submittedById: employees[8].id, submittedAt: now, onBehalf: false,
+      submittedById: self.id, submittedAt: now, onBehalf: false,
       reviewedById: null, reviewedAt: null, reviewerNote: null,
+      appliedAt: null, appliedById: null, appliedEffectiveMonth: null,
+      expiresOn: null, expiredAt: null, reverifiedAt: null, reverifiedById: null,
+      supersededById: null,
+    },
+    // ── Prior years for the same employee, so the ปีภาษี picker is not two empty options. ──
+    {
+      declarationId: 7, employeeId: self.id, employeeCode: self.code, employeeName: self.nameTh,
+      taxYear: 2025, effectiveMonth: 1,
+      allowances: blankAllowances({
+        spouseAllowance: 60000, childAllowance: 30000, childCount: 1,
+        parentCareAllowance: 30000, parentCareCount: 1,
+        lifeInsuranceAllowance: 80000, rmfAllowance: 40000,
+        homeLoanInterestAllowance: 60000, generalDonation: 5000,
+      }),
+      lorYor01: blankLorYor01({
+        ...selfHeader,
+        maritalState: 'MARRIED', spousalStatus: 'MARRIED_WHOLE_YEAR', spouseHasIncome: false,
+        childrenTotal: 1,
+        ownFatherSupported: true, ownMotherSupported: false,
+        spouseFatherSupported: false, spouseMotherSupported: false,
+        providentFundAllowance: 36000,
+        rmfSellerName: 'บลจ. กรุงไทย จำกัด (มหาชน)',
+      }),
+      documentReference: 'ล.ย.01-2025-0004', status: 'APPROVED',
+      submittedById: self.id, submittedAt: '2025-01-14T03:20:00.000Z', onBehalf: false,
+      reviewedById: hr.id, reviewedAt: '2025-01-17T07:05:00.000Z', reviewerNote: null,
+      appliedAt: '2025-01-20T02:10:00.000Z', appliedById: hr.id, appliedEffectiveMonth: 1,
+      expiresOn: '2025-12-31', expiredAt: '2026-01-01T00:00:00.000Z',
+      reverifiedAt: null, reverifiedById: null, supersededById: null,
+    },
+    {
+      declarationId: 8, employeeId: self.id, employeeCode: self.code, employeeName: self.nameTh,
+      taxYear: 2024, effectiveMonth: 3,
+      allowances: blankAllowances({ lifeInsuranceAllowance: 60000, generalDonation: 3000 }),
+      lorYor01: blankLorYor01({
+        ...selfHeader,
+        maritalState: 'SINGLE', spouseHasIncome: null, childrenTotal: null,
+      }),
+      documentReference: 'ล.ย.01-2024-0031', status: 'REJECTED',
+      submittedById: self.id, submittedAt: '2024-03-04T04:00:00.000Z', onBehalf: false,
+      reviewedById: hr.id, reviewedAt: '2024-03-08T06:30:00.000Z',
+      reviewerNote: 'เบี้ยประกันชีวิตเกินวงเงิน 100,000 บาท และยังไม่ได้แนบหนังสือรับรองการชำระเบี้ยประกันจากบริษัทประกัน',
       appliedAt: null, appliedById: null, appliedEffectiveMonth: null,
       expiresOn: null, expiredAt: null, reverifiedAt: null, reverifiedById: null,
       supersededById: null,
@@ -216,6 +332,10 @@ export function buildDemoTaxAllowanceDeclarations(employees) {
       declarationId: 2, employeeId: employees[12].id, employeeCode: employees[12].code, employeeName: employees[12].nameTh,
       taxYear: 2026, effectiveMonth: 7,
       allowances: blankAllowances({ childAllowance: 30000, childCount: 1, rmfAllowance: 50000 }),
+      lorYor01: blankLorYor01({
+        maritalState: 'SINGLE', childrenTotal: 1,
+        rmfSellerName: 'บลจ. ไทยพาณิชย์ จำกัด',
+      }),
       documentReference: 'ล.ย.01-2026-0010', status: 'APPROVED',
       submittedById: employees[12].id, submittedAt: now, onBehalf: false,
       reviewedById: employees[20].id, reviewedAt: now, reviewerNote: null,
@@ -227,6 +347,7 @@ export function buildDemoTaxAllowanceDeclarations(employees) {
       declarationId: 3, employeeId: employees[2].id, employeeCode: employees[2].code, employeeName: employees[2].nameTh,
       taxYear: 2026, effectiveMonth: 7,
       allowances: blankAllowances({ homeLoanInterestAllowance: 40000 }),
+      lorYor01: blankLorYor01({ maritalState: 'SINGLE' }),
       documentReference: 'ล.ย.01-2026-0011', status: 'REJECTED',
       submittedById: employees[2].id, submittedAt: now, onBehalf: false,
       reviewedById: employees[20].id, reviewedAt: now,
@@ -239,6 +360,10 @@ export function buildDemoTaxAllowanceDeclarations(employees) {
       declarationId: 4, employeeId: employees[19].id, employeeCode: employees[19].code, employeeName: employees[19].nameTh,
       taxYear: 2026, effectiveMonth: 1,
       allowances: blankAllowances({ spouseAllowance: 60000, parentCareAllowance: 30000, parentCareCount: 1 }),
+      lorYor01: blankLorYor01({
+        maritalState: 'MARRIED', spousalStatus: 'MARRIED_WHOLE_YEAR', spouseHasIncome: false,
+        ownMotherSupported: true,
+      }),
       documentReference: 'ล.ย.01-2026-0002', status: 'SUPERSEDED',
       submittedById: employees[19].id, submittedAt: now, onBehalf: false,
       reviewedById: employees[20].id, reviewedAt: now, reviewerNote: null,
@@ -250,6 +375,10 @@ export function buildDemoTaxAllowanceDeclarations(employees) {
       declarationId: 5, employeeId: employees[19].id, employeeCode: employees[19].code, employeeName: employees[19].nameTh,
       taxYear: 2026, effectiveMonth: 8,
       allowances: blankAllowances({ spouseAllowance: 60000, parentCareAllowance: 60000, parentCareCount: 2 }),
+      lorYor01: blankLorYor01({
+        maritalState: 'MARRIED', spousalStatus: 'MARRIED_WHOLE_YEAR', spouseHasIncome: false,
+        ownFatherSupported: true, ownMotherSupported: true,
+      }),
       documentReference: 'ล.ย.01-2026-0012', status: 'APPROVED',
       submittedById: employees[19].id, submittedAt: now, onBehalf: false,
       reviewedById: employees[20].id, reviewedAt: now, reviewerNote: null,
@@ -261,6 +390,7 @@ export function buildDemoTaxAllowanceDeclarations(employees) {
       declarationId: 6, employeeId: employees[15].id, employeeCode: employees[15].code, employeeName: employees[15].nameTh,
       taxYear: 2026, effectiveMonth: 6,
       allowances: blankAllowances({ ssfAllowance: 20000 }),
+      lorYor01: blankLorYor01({ maritalState: 'SINGLE' }),
       documentReference: 'ล.ย.01-2026-0007', status: 'WITHDRAWN',
       submittedById: employees[15].id, submittedAt: now, onBehalf: false,
       reviewedById: null, reviewedAt: null, reviewerNote: null,
@@ -271,12 +401,43 @@ export function buildDemoTaxAllowanceDeclarations(employees) {
   ];
 }
 
+/**
+ * Evidence files. `sectionKey` is the field that matters and every row below carries one now:
+ * /tax-allowance renders ONE evidence panel per ข้อ, each filtered to its own key
+ * (`TaxAllowanceEvidencePanel`, `showUncategorized={false}`), so a row with `sectionKey: null` —
+ * which is what all three of these were — is invisible on that screen no matter how many there are.
+ * Valid keys are `TaxAllowanceDeclarationService#EVIDENCE_SECTION_KEYS`: item3/4/5/6/7/8/9/10/12/
+ * 14/15 and signed_form.
+ */
 export function buildDemoTaxAllowanceAttachments() {
   const now = new Date().toISOString();
+  const file = (attachmentId, declarationId, fileName, sectionKey, fileSize, uploadedBy) => ({
+    attachmentId, declarationId, fileName, sectionKey, fileSize, uploadedBy,
+    mimeType: fileName.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg',
+    uploadedAt: now, deletedAt: null, deletedBy: null, deleteReason: null,
+  });
   return [
-    { attachmentId: 1, declarationId: 1, fileName: 'life-insurance-policy.pdf', mimeType: 'application/pdf', fileSize: 184320, uploadedBy: 9, uploadedAt: now, deletedAt: null, deletedBy: null, deleteReason: null },
-    { attachmentId: 2, declarationId: 2, fileName: 'birth-certificate-child1.pdf', mimeType: 'application/pdf', fileSize: 95210, uploadedBy: 13, uploadedAt: now, deletedAt: null, deletedBy: null, deleteReason: null },
-    { attachmentId: 3, declarationId: 2, fileName: 'rmf-purchase-receipt.pdf', mimeType: 'application/pdf', fileSize: 61200, uploadedBy: 13, uploadedAt: now, deletedAt: null, deletedBy: null, deleteReason: null },
+    // Declaration 1 — the signed-in mock employee's PENDING 2026 filing, evidenced across the ข้อ
+    // it actually declares, so the per-section panels are not all empty on the page that owns them.
+    file(1, 1, 'life-insurance-policy.pdf', 'item7', 184320, 9),
+    file(4, 1, 'สูติบัตร-บุตรคนที่-1.pdf', 'item3', 128440, 9),
+    file(5, 1, 'ทะเบียนบ้าน-บิดามารดา.pdf', 'item4', 210880, 9),
+    file(6, 1, 'บัตรประจำตัวคนพิการ.jpg', 'item5', 742400, 9),
+    file(7, 1, 'ใบเสร็จเบี้ยประกันสุขภาพบิดา.pdf', 'item6', 88300, 9),
+    file(8, 1, 'health-insurance-receipt-2026.pdf', 'item8', 91750, 9),
+    file(9, 1, 'หนังสือรับรองกองทุนสำรองเลี้ยงชีพ.pdf', 'item9', 76800, 9),
+    file(10, 1, 'rmf-statement-2026.pdf', 'item10', 143360, 9),
+    file(11, 1, 'หนังสือรับรองดอกเบี้ยเงินกู้ยืมเพื่อที่อยู่อาศัย-ธนาคารกรุงเทพ.pdf', 'item12', 165890, 9),
+    file(12, 1, 'ใบเสร็จบริจาคเพื่อการศึกษา.pdf', 'item14', 54200, 9),
+    file(13, 1, 'ใบเสร็จบริจาค-มูลนิธิรามาธิบดี.pdf', 'item15', 48900, 9),
+    file(14, 1, 'ลย01-2026-ลงนามแล้ว-สแกน.pdf', 'signed_form', 1258291, 9),
+    // Prior years for the same employee.
+    file(15, 7, 'ลย01-2025-ลงนามแล้ว-สแกน.pdf', 'signed_form', 1198372, 9),
+    file(16, 7, 'life-insurance-policy-2025.pdf', 'item7', 176128, 9),
+    file(17, 8, 'ลย01-2024-ลงนามแล้ว-สแกน.pdf', 'signed_form', 1102848, 9),
+    // Other employees' declarations — only reachable from HR's register.
+    file(2, 2, 'birth-certificate-child1.pdf', 'item3', 95210, 13),
+    file(3, 2, 'rmf-purchase-receipt.pdf', 'item10', 61200, 13),
   ];
 }
 

@@ -21,8 +21,6 @@ vi.mock('../../api/index.js', () => ({
       reject: vi.fn(),
       cancel: vi.fn(),
       reviewSummary: vi.fn(),
-      // Phase A3: RulesTab (rendered by the "กฎการลา" tab, mounted below) probes this on load.
-      policyDocumentAvailable: vi.fn(),
     },
   },
 }));
@@ -63,7 +61,6 @@ describe('LeaveSurfacePage', () => {
     api.leave.balances.mockResolvedValue({ balances: [] });
     api.leave.contactDefaults.mockResolvedValue({ contactDefaults: {} });
     api.leave.reviewSummary.mockResolvedValue({ pendingCount: 0, requests: [] });
-    api.leave.policyDocumentAvailable.mockResolvedValue(false);
   });
 
   it('defaults to the "ของฉัน" tab and hides "รอพิจารณา"/"ลูกทีม" for a plain employee with no reports', async () => {
