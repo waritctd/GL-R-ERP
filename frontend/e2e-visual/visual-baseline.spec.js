@@ -1,5 +1,30 @@
 // Opt-in full-page visual-regression harness for the styles.css retirement.
 //
+// ── NO LONGER RUNS IN CI (owner decision, 2026-08-10) ────────────────────────
+// `.github/workflows/visual-ci.yml` was deleted and `visual` was removed from
+// main's required status checks. The harness itself — this spec, its helpers,
+// accepted-changes.txt, playwright.visual.config.js and the `test:visual` npm
+// script — is deliberately KEPT and still works; only the automatic PR run is
+// gone. Run it by hand:
+//
+//   cd frontend && VISUAL_BASELINE=1 npm run test:visual
+//
+// Why it went: the gate compares at maxDiffPixelRatio 0 against the merge base,
+// which is right for a CSS port (must change nothing) and wrong for deliberate
+// redesign work. The self-service responsive overhaul changes pixels on every
+// surface at every band on purpose, so the gate would have needed an
+// accepted-changes entry per surface per viewport — the accept mechanism turned
+// into a rubber stamp, which is worse than no gate.
+//
+// What is now unguarded: the four CSS-port failure modes the deleted workflow's
+// header documented (a ported rule gaining priority, an element losing a rule it
+// still needs, a deleted rule whose replacement is never applied, a merge
+// reuniting new markup with a deleted class). `npm run lint`, `npm test` and
+// `npm run build` were green for every one of them, and jsdom has no layout
+// engine — so nothing automated catches them today. Run this harness by hand
+// around any future CSS-port slice, and consider restoring the workflow (it is
+// in git history) once the redesign settles.
+//
 // A CSS→Tailwind port is supposed to change nothing on screen, and neither
 // Vitest (jsdom has no layout engine) nor the behavioural e2e specs can prove
 // that. This does: it captures every main surface at the app's three responsive
