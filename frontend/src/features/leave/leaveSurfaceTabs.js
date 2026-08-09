@@ -42,8 +42,21 @@ export function canReviewRequest(request, user, canReviewAll) {
     && (canReviewAll || (request?.managerEmployeeId && Number(request.managerEmployeeId) === Number(user?.employeeId)));
 }
 
+// APPROVED only (owner ruling, 2026-08-11) -- this used to be
+// `['SUBMITTED', 'APPROVED'].includes(status)`, which put THREE buttons on every pending row:
+// อนุมัติ / ปฏิเสธ / ยกเลิก. Two of those decide the same thing. On a still-pending request the
+// reviewer's decision is approve-or-reject; "ยกเลิก" is the different action of voiding leave that
+// was ALREADY granted, and offering it alongside ปฏิเสธ made the reviewer pick between two
+// negative-looking buttons whose difference is only visible in the resulting status string.
+// A pending row now carries exactly the two decisions it actually has, and ยกเลิก appears only
+// where it means something -- on an APPROVED row.
+//
+// Narrowing what the CLIENT renders, not what the server allows: LeaveService#cancel still accepts
+// a SUBMITTED request (and the requester's own self-cancel on MyLeaveTab.jsx, which is a different
+// affordance for a different person, is untouched). Hiding a button is never the authorization
+// rule -- see canReviewRequest's comment above.
 export function canManagerCancelRequest(request, user, canReviewAll) {
-  return ['SUBMITTED', 'APPROVED'].includes(request?.status)
+  return request?.status === 'APPROVED'
     && (canReviewAll || (request?.managerEmployeeId && Number(request.managerEmployeeId) === Number(user?.employeeId)));
 }
 

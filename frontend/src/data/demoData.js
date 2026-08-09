@@ -1,4 +1,5 @@
 import {
+  buildDemoAttendanceCorrectionRequests,
   buildDemoLeaveRequests, buildDemoOvertimeRequests, buildDemoSpecialMoneyRequests,
   buildDemoProfileRequests, buildDemoNotifications,
 } from './demoHr.js';
@@ -235,7 +236,26 @@ export function createDemoDatabase() {
     { id: 6, email: 'sales@glr.co.th', password: 'demo1234', name: 'คุณสมหมาย ขายดี', role: 'sales', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
     { id: 7, email: 'import@glr.co.th', password: 'demo1234', name: 'คุณนำเข้า พานิช', role: 'import', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
     { id: 8, email: 'ceo@glr.co.th', password: 'demo1234', name: 'คุณวิชัย ธนาคาร', role: 'ceo', employeeId: employees[0].id, active: true, createdAt: iso(2025, 6, 1) },
-    { id: 9, email: 'sales.manager@glr.co.th', password: 'demo1234', name: 'คุณมณี ผู้จัดการฝ่ายขาย', role: 'sales_manager', employeeId: employees[1].id, active: true, createdAt: iso(2025, 6, 1) },
+    // employees[0], the SAL ผู้จัดการฝ่าย — NOT employees[1], which is where this persona used to
+    // point (2026-08-11 fix). employees[1] is an ordinary พนักงานขาย whose own managerId is
+    // employees[0], so the persona literally named "ผู้จัดการฝ่ายขาย" had ZERO direct reports:
+    // api.leave.employees() returned only themselves, and /leave rendered a single "ของฉัน" tab
+    // with no "ลูกทีม" and no "รอพิจารณา" — reported from a screenshot as "the division manager
+    // has no tab for the team leave they approve". Same hole on every other team-scoped
+    // self-service surface, since they all key off reports_to_employee_id.
+    //
+    // demoHr.js already assumed this binding (`const salManager = { id: employees[0].id, ... }`,
+    // the recorded stage-1 OT approver for the SAL rows) — the users table was the one place that
+    // disagreed. `name` follows the employee row for the same reason every other employee-bound
+    // persona here does: the topbar shows `user.name` while the tables show `employee.nameTh`, and
+    // two names for one person reads as two people. Historical approver-name snapshots in
+    // demoPayroll.js keep saying "คุณมณี ผู้จัดการฝ่ายขาย" on purpose — a recorded approval is a
+    // point-in-time fact, not a live join.
+    //
+    // Deliberately NOT a change to the org chart: re-pointing one demo user leaves every
+    // reports_to FK — and therefore every OT chain, attendance scope and dashboard count — exactly
+    // as it was.
+    { id: 9, email: 'sales.manager@glr.co.th', password: 'demo1234', name: employees[0].nameTh, role: 'sales_manager', employeeId: employees[0].id, active: true, createdAt: iso(2025, 6, 1) },
     // ฝ่ายบัญชี — confirms money receipts (รับยอดมัดจำ / รับชำระเต็มจำนวน) on
     // sales tickets. Real role derivation: division AC-ฝ่ายบัญชี → 'account'
     // (DivisionAccessPolicy), gates mirror TicketService.ACCOUNT_ROLES.
@@ -617,6 +637,9 @@ export function createDemoDatabase() {
   const leaveRequests = buildDemoLeaveRequests(employees);
   const overtimeRequests = buildDemoOvertimeRequests(employees);
   const specialMoneyRequests = buildDemoSpecialMoneyRequests(employees);
+  // Previously seeded `|| []` in mockApi.js, i.e. never — every role saw the empty state,
+  // so nothing about /attendance's correction section could be judged. See demoHr.js.
+  const attendanceCorrectionRequests = buildDemoAttendanceCorrectionRequests(employees);
 
   // ════════════════════════════════════════════════════════════════════════════════
   // Attendance: Daily punch records (for multiple employees over several days)
@@ -775,7 +798,7 @@ export function createDemoDatabase() {
 
   return {
     employees, users, profileRequests, tickets, notifications,
-    leaveRequests, overtimeRequests, specialMoneyRequests, attendanceRecords,
+    leaveRequests, overtimeRequests, specialMoneyRequests, attendanceCorrectionRequests, attendanceRecords,
     projects, customers, products,
     // Sales-chain seed rows for mockApi.js's own module-level stores (mockPricingRequests
     // etc. aren't part of `db` — see mockApi.js's wiring near those declarations).

@@ -92,13 +92,15 @@ const submittedWithCertificate = {
   attachmentFileName: 'ใบรับรองแพทย์.pdf',
 };
 
-function renderReviewQueueTab(showToast = vi.fn()) {
+// `actingUser` overrides the default division-manager persona -- only the pending-approver-note
+// tests need it (an hr actor sees a different note than the manager the row is waiting on).
+function renderReviewQueueTab(actingUser = manager, showToast = vi.fn()) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <ReviewQueueTab user={manager} showToast={showToast} />
+      <ReviewQueueTab user={actingUser} showToast={showToast} />
     </QueryClientProvider>,
   );
   return queryClient;
@@ -124,7 +126,7 @@ describe('ReviewQueueTab', () => {
     const showToast = vi.fn();
     api.leave.list.mockResolvedValue({ requests: [submittedUnderManager] });
     api.leave.approve.mockResolvedValue({ request: { ...submittedUnderManager, status: 'APPROVED' } });
-    renderReviewQueueTab(showToast);
+    renderReviewQueueTab(manager, showToast);
 
     await screen.findByText('พักผ่อน');
     fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
@@ -154,6 +156,23 @@ describe('ReviewQueueTab', () => {
     await waitFor(() => expect(api.leave.reject).toHaveBeenCalledWith(701, { reviewerNote: 'เอกสารไม่ครบ' }));
   });
 
+  it('puts rows awaiting a decision above the already-approved ones this user may only void', async () => {
+    api.leave.list.mockResolvedValue({
+      // LeaveRepository#findRequests orders by start_date DESC, so an approved row dated further
+      // out legitimately arrives FIRST -- the interleave that used to open a queue headed
+      // "รอคุณพิจารณา 1" on a row needing nothing, and could push a real decision onto page 2.
+      requests: [
+        { ...approvedUnderManager, startDate: '2026-09-20', endDate: '2026-09-20' },
+        submittedUnderManager,
+      ],
+    });
+    renderReviewQueueTab();
+
+    await screen.findByText('พักผ่อน');
+    const body = document.querySelector('tbody').textContent;
+    expect(body.indexOf('พักผ่อน')).toBeLessThan(body.indexOf('ไม่สบาย'));
+  });
+
   it('cancel is offered for an already-APPROVED report even though approve/reject are not', async () => {
     api.leave.list.mockResolvedValue({ requests: [approvedUnderManager] });
     api.leave.cancel.mockResolvedValue({ request: { ...approvedUnderManager, status: 'CANCELLED' } });
@@ -167,9 +186,12 @@ describe('ReviewQueueTab', () => {
     await waitFor(() => expect(api.leave.cancel).toHaveBeenCalledWith(702, { reviewerNote: null }));
   });
 
-  // feat/pending-approver-info: "who this is waiting on" beside the รออนุมัติ badge.
-  it('renders the pending-approver note beside a SUBMITTED request, and omits it for an APPROVED one', async () => {
+  // feat/pending-approver-info: "who this is waiting on" beside the รออนุมัติ badge — narrowed on
+  // 2026-08-11 so it never names the person reading it (PendingApproverNote's `viewer`).
+  it('omits the pending-approver note on a row that is waiting on the viewer themselves', async () => {
     api.leave.list.mockResolvedValue({
+      // managerEmployeeId 5 === the acting manager's own employeeId, so "ผู้จัดการ (คุณเอ็ม)"
+      // would be this user telling themselves their own name — on EVERY pending row in their queue.
       requests: [
         { ...submittedUnderManager, pendingApproverRole: 'manager', pendingApproverName: 'เอ็ม' },
         { ...approvedUnderManager, pendingApproverRole: null, pendingApproverName: null },
@@ -178,12 +200,27 @@ describe('ReviewQueueTab', () => {
     renderReviewQueueTab();
 
     await screen.findByText('พักผ่อน');
-    expect(await screen.findByText('ผู้จัดการ (คุณเอ็ม)')).not.toBeNull();
-
-    // The APPROVED row (pendingApproverRole: null) must not render a note at all -- exactly one
-    // "ผู้จัดการ (คุณเอ็ม)" in the whole document, not one per row.
     await screen.findByText('ไม่สบาย');
-    expect(screen.getAllByText('ผู้จัดการ (คุณเอ็ม)')).toHaveLength(1);
+    expect(screen.queryByText('ผู้จัดการ (คุณเอ็ม)')).toBeNull();
+  });
+
+  it('keeps the note when the row is waiting on SOMEONE ELSE, even though this viewer may act on it', async () => {
+    // An hr actor may decide any request (canReviewAll), including ones that normally sit with a
+    // division manager — and for them the note is the whole point. Suppression is only ever about
+    // the self-referential case, never about "can this user act on it".
+    api.leave.list.mockResolvedValue({
+      requests: [{
+        ...submittedUnderManager,
+        managerEmployeeId: 999,
+        pendingApproverRole: 'manager',
+        pendingApproverName: 'เอ็ม',
+        canReview: true,
+      }],
+    });
+    renderReviewQueueTab({ employeeId: 5, name: 'ฝ่ายบุคคล', role: 'hr' });
+
+    await screen.findByText('พักผ่อน');
+    expect(await screen.findByText('ผู้จัดการ (คุณเอ็ม)')).not.toBeNull();
   });
 
   // Role-only fallback: the backend omits pendingApproverName when the role's candidate set is
@@ -208,7 +245,7 @@ describe('ReviewQueueTab', () => {
   it('DEFECT (state split): a 403 renders the denied StatePanel, and no toast fires for the load failure', async () => {
     const showToast = vi.fn();
     api.leave.list.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 }));
-    renderReviewQueueTab(showToast);
+    renderReviewQueueTab(manager, showToast);
 
     expect(await screen.findByText('ยังเปิดหน้านี้ไม่ได้')).not.toBeNull();
     expect(showToast).not.toHaveBeenCalled();
@@ -240,7 +277,7 @@ describe('ReviewQueueTab', () => {
       const showToast = vi.fn();
       api.leave.list.mockResolvedValue({ requests: [submittedWithCertificate] });
       api.leave.downloadAttachment.mockRejectedValue(new Error('ไม่พบเอกสารนี้'));
-      renderReviewQueueTab(showToast);
+      renderReviewQueueTab(manager, showToast);
 
       fireEvent.click(await screen.findByRole('button', { name: /ดูรายละเอียดคำขอลาของ/ }));
       fireEvent.click(await screen.findByRole('button', { name: 'ดาวน์โหลด' }));
@@ -257,7 +294,7 @@ describe('ReviewQueueTab', () => {
         .mockResolvedValueOnce({ requests: [submittedUnderManager] })
         .mockResolvedValueOnce({ requests: [{ ...submittedUnderManager, status: 'APPROVED' }] });
       api.leave.approve.mockRejectedValue(Object.assign(new Error('คำขอลานี้ได้รับการพิจารณาไปแล้ว'), { status: 409 }));
-      renderReviewQueueTab(showToast);
+      renderReviewQueueTab(manager, showToast);
 
       await screen.findByText('พักผ่อน');
       fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));

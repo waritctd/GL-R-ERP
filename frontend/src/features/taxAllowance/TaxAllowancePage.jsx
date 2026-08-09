@@ -29,9 +29,14 @@ const EDITABLE_STATUS_KEYS = new Set(['NONE', 'REJECTED', 'EXPIRED']);
 // for APPROVED_UNAPPLIED/APPLIED: `taxAllowanceStatusInfo`'s own badge label is already a complete
 // sentence for those two ("อนุมัติแล้ว — ยังไม่ใช้กับเงินเดือน" / "ใช้กับเงินเดือนแล้ว ตั้งแต่เดือน N"),
 // so a second line here would just echo the badge back at the reader.
+//
+// Each line must say something the BADGE BESIDE IT does not. NONE's badge already reads
+// "ยังไม่ได้ยื่น" and PENDING's already reads "รอ HR ตรวจสอบ", and both explanations used to open by
+// repeating exactly that back — so the region's two halves said one thing twice and the reader got
+// no more from the sentence than from the chip. These now carry only the next action.
 const STATUS_EXPLANATIONS = {
-  NONE: 'ยังไม่ได้ยื่นแบบแจ้ง ล.ย.01 สำหรับปีภาษีนี้ — กรอกแบบฟอร์มด้านล่างแล้วยื่นได้ทันที',
-  PENDING: 'แก้ไขไม่ได้ระหว่างรอ HR ตรวจสอบ — ยกเลิกการยื่นเพื่อแก้ไขแล้วยื่นใหม่',
+  NONE: 'กรอกแบบฟอร์มด้านล่าง สร้างไฟล์ ล.ย.01 ออกมาลงนาม แล้วแนบกลับเพื่อยื่นให้ฝ่ายบุคคล',
+  PENDING: 'แก้ไขไม่ได้ระหว่างนี้ — ต้องการแก้ไขให้ยกเลิกการยื่น แล้วยื่นฉบับใหม่',
   REJECTED: 'แก้ไขแล้วยื่นใหม่ได้ทันที',
   // Points at the button, not "กรอกแบบฟอร์มด้านล่าง": unlike NONE, `editing` does NOT start true for
   // EXPIRED (only `statusInfo.key === 'NONE'` does, see the effect below) -- every field below stays

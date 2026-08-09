@@ -63,7 +63,7 @@ function renderSelfService({ user = employeeUser, dashboardSummary, profileReque
 }
 
 describe('EmployeeSelfService — self-service landing', () => {
-  it('renders the clock card, the three tiles, and the own-requests panel', async () => {
+  it('renders the clock card and the own-requests panel', async () => {
     setupMocks({
       days: [{ work_date: today, check_in: `${today}T08:55:00+07:00`, check_out: null, late_minutes: 0 }],
       balances: [
@@ -76,10 +76,39 @@ describe('EmployeeSelfService — self-service landing', () => {
 
     expect(screen.getByText('สวัสดี คุณเอ')).not.toBeNull();
     await waitFor(() => expect(screen.getByText('เข้างานแล้ว')).not.toBeNull());
-    expect(screen.getByText('เวลาทำงานเดือนนี้')).not.toBeNull();
-    expect(screen.getByText('วันลาคงเหลือ')).not.toBeNull();
-    expect(screen.getByText('สลิปเงินเดือน')).not.toBeNull();
     expect(screen.getByText('คำขอของฉัน')).not.toBeNull();
+  });
+
+  // The three stat tiles were removed on 2026-08-10 (owner call): each was a number this page
+  // could not act on, and the sidebar already reaches /attendance, /leave and the payslip.
+  //
+  // Asserted wrong-way-round on purpose. The leave tile is the reason this is a test and not just
+  // a deletion: it summed EVERY leave type's remaining days into one headline, and MILITARY's
+  // annualQuotaDays is 366 — a deliberate sentinel, not a policy number (mockApi.js's
+  // db.leaveTypes; MyLeaveTab.jsx excludes it from its own quota display for the same reason).
+  // With the real seed that rendered "564 วัน" (7+30+3+98+366+60): a total no employee has,
+  // as the most prominent figure on their home screen. If anyone reinstates these tiles, this
+  // fails and they have to re-decide that rather than re-inherit it.
+  it('does not render the removed stat tiles', async () => {
+    setupMocks({
+      days: [{ work_date: today, check_in: `${today}T08:55:00+07:00`, check_out: null, late_minutes: 0 }],
+      balances: [
+        { leaveTypeCode: 'VACATION', leaveTypeNameTh: 'ลาพักร้อน', remainingDays: 4 },
+        // The sentinel, at the value that produced the nonsense total.
+        { leaveTypeCode: 'MILITARY', leaveTypeNameTh: 'ลารับราชการทหาร', remainingDays: 366 },
+      ],
+    });
+    renderSelfService();
+
+    // Settle on something that DOES render, so the absences below cannot pass merely because
+    // the page had not finished loading.
+    await waitFor(() => expect(screen.getByText('เข้างานแล้ว')).not.toBeNull());
+
+    expect(screen.queryByText('เวลาทำงานเดือนนี้')).toBeNull();
+    expect(screen.queryByText('วันลาคงเหลือ')).toBeNull();
+    expect(screen.queryByText('สลิปเงินเดือน')).toBeNull();
+    // ...and specifically not the summed sentinel.
+    expect(screen.queryByText(/370 วัน|366/)).toBeNull();
   });
 
   it('shows the employee\'s own attendance for today (not a hardcoded value)', async () => {
