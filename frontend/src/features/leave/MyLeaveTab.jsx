@@ -11,36 +11,29 @@ import { DataTable, expandedRowRegionId } from '../../components/common/DataTabl
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { FieldList } from '../../components/common/FieldList.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { FilterField, Panel } from '../../components/common/Layout.jsx';
+import { Panel } from '../../components/common/Layout.jsx';
 import { QuotaBar } from '../../components/common/QuotaBar.jsx';
-import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { UpcomingHolidays } from '../../components/common/UpcomingHolidays.jsx';
 import { downloadBlob } from '../../utils/download.js';
 import { addDaysIso, leaveStatusLabel as statusInfo } from '../../utils/format.js';
+import { LeaveFilterBar } from './LeaveFilterBar.jsx';
 import {
-  formatDateRange, formatDays, monthStartIso, todayIso, yearFrom,
+  formatDateRange, formatDays, todayIso, yearFrom,
 } from './leaveFormatting.js';
 import { canSubmitOwnLeave } from './leaveSurfaceTabs.js';
 import {
   buildLeaveRequestColumns, LEAVE_REQUEST_TABLE_GRID, leaveRequestRowKey,
   PendingApproverNote, renderLeaveRequestExpanded,
 } from './leaveRequestTable.jsx';
+import { UpcomingLeaveList } from './UpcomingLeaveList.jsx';
 
-// FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
-// (Enter-to-submit on the search button), so its exact utility string is reproduced
-// here rather than wrapping a <form> inside a non-form primitive.
-//
-// `items-end`, not `items-center`. Every field in this row is a bare `<label>`
-// stack (label text above a control), except the trailing "ค้นหา" Button, which
-// has no label above it. Centring the row centres each LABELLED STACK, not its
-// control, so the unlabelled Button — the shortest single-height item — landed
-// visibly above the bottom edge of the date/status controls beside it (measured
-// button top=740 vs input top=751 at 1440px, an 11px stagger). Same defect class
-// as #530 (TaxAllowanceReviewPage's filter row); it just hadn't reached this file.
-const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-end bg-surface border border-border rounded-md p-[14px]';
+// How far ahead "วันลาที่กำลังจะถึง" looks. Same ~90-day forward window UpcomingHolidays renders
+// with directly above it -- the two panels answer the same shape of question ("what is coming up")
+// and would read as inconsistent if one looked 90 days ahead and the other some other distance.
+const UPCOMING_LEAVE_WINDOW_DAYS = 90;
 
 // Leave-surface IA rebuild Phase A1 (later narrowed by owner feedback, "one primary card, not
 // every quota card at once"): the everyday-vs-rare balance split. SICK/PERSONAL/VACATION are what
@@ -160,7 +153,7 @@ function OwnRequestsSection({
           ) : null}
           {canCancel ? (
             <Button type="button" variant="icon" title="ยกเลิก" aria-label="ยกเลิก" onClick={() => onCancel(request.id)}>
-              <Icon name="close" size={14} />
+              <Icon name="ban" size={14} />
             </Button>
           ) : null}
         </span>
@@ -213,7 +206,7 @@ function OwnRequestsSection({
         ) : null}
         {canCancel ? (
           <Button type="button" variant="secondary" className="mt-1 min-h-11" onClick={() => onCancel(request.id)}>
-            <Icon name="close" size={14} />
+            <Icon name="ban" size={14} />
             ยกเลิกคำขอ
           </Button>
         ) : null}
@@ -377,9 +370,22 @@ function PrimaryLeaveBalanceCard({ loading, balance, leaveType, isEveryday }) {
 
 export function MyLeaveTab({ user, currentEmployee, showToast }) {
   const queryClient = useQueryClient();
+  // Empty by default (2026-08-10 restructure), NOT monthStartIso()/todayIso(). Two separate
+  // problems came from pre-filling these:
+  //
+  //  1. `to: todayIso()` made it impossible for this tab to show the employee's own FUTURE leave
+  //     at all -- findRequests matches `start_date <= :toDate`, so tomorrow's approved vacation was
+  //     filtered out server-side. That is defect D1, and it is why the panel titled "ปฏิทินวันลา"
+  //     only ever listed leave that had already started.
+  //  2. `from: monthStartIso()` meant arriving at this tab on the 1st of a month showed an empty
+  //     history, and last month's leave required manually widening a filter the employee never set.
+  //
+  // Empty strings are dropped by hrApi.js's `withQuery` (hrApi.js:7), so no date parameter is sent
+  // and LeaveService#list applies its own +/-12-month default -- "recent" with nothing typed in.
+  // `status` stays '' for the same reason (all statuses).
   const initialFilters = {
-    from: monthStartIso(),
-    to: todayIso(),
+    from: '',
+    to: '',
     status: '',
   };
   const [filters, setFilters] = useState(initialFilters);
@@ -478,23 +484,38 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
     return { submitted, approved: approved.length, approvedDays, remainingDays };
   }, [requests, everydayBalances]);
 
-  // Restored (review fix, 2026-08): this "ปฏิทินวันลา" panel lived here pre-branch and was
-  // visible to EVERY employee. This branch's original cut moved it into TeamLeaveTab.jsx, which
-  // is gated on hasTeamMembers -- so any employee with no direct reports (the majority of the
-  // workforce) lost their leave calendar entirely. Restored here, deliberately DIFFERENT from
-  // the pre-branch version in one respect: `requests` above is now always scoped to this file's
-  // own `ownEmployeeId` (this branch's own fix), so this calendar shows only the actor's own
-  // leave days -- it never leaks a direct report's days the way the pre-branch "ของฉัน" tab's
-  // calendar silently did (the same class of bug, second symptom). The team-wide calendar lives
-  // in TeamLeaveTab.jsx, correctly scoped and labelled.
-  const activeCalendarItems = useMemo(
-    () => requests
-      .filter((request) => ['SUBMITTED', 'APPROVED'].includes(request.status))
-      .slice()
-      .sort((first, second) => first.startDate.localeCompare(second.startDate))
-      .slice(0, 8),
-    [requests],
-  );
+  // The forward window shared by BOTH "what's coming up" panels below -- company holidays
+  // (UpcomingHolidays) and the employee's own leave (UpcomingLeaveList). Computed once so the two
+  // can never drift to different horizons; they sit adjacent and would read as inconsistent.
+  // Same ~90-day convention OvertimePanel.jsx's own UpcomingHolidays call uses.
+  const upcomingFrom = todayIso();
+  const upcomingTo = addDaysIso(upcomingFrom, UPCOMING_LEAVE_WINDOW_DAYS);
+
+  // "วันลาที่กำลังจะถึง" reads its OWN forward window instead of deriving from `requestsQuery`
+  // above -- the fix for defect D1, and the reason this is a second request rather than a
+  // `.filter()`.
+  //
+  // Deriving it from the history query (what the old "ปฏิทินวันลา" did) coupled a
+  // forward-looking panel to a backward-looking filter, with two consequences: the panel could
+  // never show anything past `to`, and the moment an employee narrowed the filter to a past range
+  // the "upcoming" panel would empty out even though their upcoming leave had not changed. A
+  // dedicated query costs one request and makes the panel's contents independent of whatever the
+  // employee is browsing below it.
+  //
+  // Scoped to `ownEmployeeId` for the same reason requestsQuery is: LeaveService#list's default
+  // scoping for an actor with direct reports is "self OR reports_to = actor", which would put a
+  // report's leave into a panel on the employee's OWN tab. The team-wide equivalent lives in
+  // TeamLeaveTab.jsx, correctly labelled.
+  const upcomingQuery = useQuery({
+    queryKey: queryKeys.leaveRequests({ from: upcomingFrom, to: upcomingTo, employeeId: ownEmployeeId }),
+    queryFn: () => api.leave.list({
+      from: upcomingFrom,
+      to: upcomingTo,
+      employeeId: ownEmployeeId,
+    }).then((response) => response.requests || []),
+    enabled: !!ownEmployeeId,
+  });
+  const upcomingRequests = useMemo(() => upcomingQuery.data ?? [], [upcomingQuery.data]);
 
   // Seed the balance-preview select once leave types load (preserves the pre-A2 behavior: default
   // to the first everyday type, falling back to whatever the API returns first).
@@ -552,14 +573,6 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
     cancelMutation.mutate({ id, reviewerNote });
   }
 
-  // Upcoming-holidays panel: a fixed ~90-day forward window from today, same convention
-  // OvertimePanel.jsx's own call and the leave composer's step 2 both use, so "what's coming up"
-  // reads identically everywhere it appears. Distinct from "ปฏิทินวันลา" below, which lists the
-  // ACTOR'S OWN leave days (requests), not company holidays -- see UpcomingHolidays.jsx's own
-  // doc comment on why it stays feature-agnostic rather than growing a second copy here.
-  const holidayWindowFrom = todayIso();
-  const holidayWindowTo = addDaysIso(holidayWindowFrom, 90);
-
   return (
     <>
       <CompactStatRow
@@ -581,7 +594,9 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
       <Panel
         title="โควตาวันลา"
         actions={(
-          <label className="flex items-center gap-2 text-sm font-semibold text-text-muted">
+          // `whitespace-nowrap`: the Panel header is a flex row and this label was breaking
+          // mid-word into "ดู" / "โควตา" stacked above each other next to the select.
+          <label className="flex items-center gap-2 whitespace-nowrap text-sm font-semibold text-text-muted">
             ดูโควตา
             <select
               aria-label="เลือกประเภทการลาที่ต้องการดูโควตา"
@@ -630,64 +645,36 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
         </p>
       </Panel>
 
-      <SafeForm className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
-        <FilterField label="จากวันที่">
-          <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
-        </FilterField>
-        <FilterField label="ถึงวันที่">
-          <input type="date" value={filters.to} onChange={(event) => updateFilter('to', event.target.value)} />
-        </FilterField>
-        <FilterField label="สถานะ">
-          <select value={filters.status} onChange={(event) => updateFilter('status', event.target.value)}>
-            <option value="">ทุกสถานะ</option>
-            <option value="SUBMITTED">รออนุมัติ</option>
-            <option value="APPROVED">อนุมัติแล้ว</option>
-            <option value="REJECTED">ปฏิเสธแล้ว</option>
-            <option value="CANCELLED">ยกเลิกแล้ว</option>
-            <option value="AUTO_REJECTED">โควตาไม่พอ</option>
-          </select>
-        </FilterField>
-        <Button type="submit" disabled={requestsQuery.isPending}>
-          <Icon name="search" />
-          ค้นหา
-        </Button>
-        {refreshing ? (
-          <span className="inline-flex items-center gap-1 text-xs text-text-muted" aria-live="polite">
-            <Icon name="refresh" size={12} />
-            กำลังอัปเดต…
-          </span>
-        ) : null}
-      </SafeForm>
+      {/* The two "what is coming up" panels, adjacent and on the SAME forward window: company
+          holidays first (the shared calendar everyone is subject to), then this employee's own
+          approved/pending leave. Both sit ABOVE the filter bar, because neither is affected by it
+          -- the pre-restructure layout put the filter above the holidays panel it had no effect
+          on, which is defect D4.
 
-      {/* Holidays visible up front, not just after picking dates in the composer (this PR's own
-          goal) -- alongside "ปฏิทินวันลา" below rather than replacing or disturbing it: that panel
-          is the actor's OWN leave days, this one is company holidays, and both are "what's coming
-          up at a glance" panels that belong next to each other. */}
-      <UpcomingHolidays from={holidayWindowFrom} to={holidayWindowTo} />
+          Rebase note (#638): main's version of this file had just converted the INLINE filter bar
+          here to FilterField. That inline bar no longer exists on either tab -- it is now the
+          shared LeaveFilterBar below, which carries the FilterField conversion once instead of
+          twice. Nothing from #638 is lost; see LeaveFilterBar.jsx. */}
+      <UpcomingHolidays from={upcomingFrom} to={upcomingTo} />
 
-      <Panel title="ปฏิทินวันลา">
-        <div className="grid gap-2.5">
-          {activeCalendarItems.length === 0 ? (
-            <EmptyState icon="calendar" title="ยังไม่มีรายการวันลาในช่วงนี้" />
-          ) : activeCalendarItems.map((request) => {
-            const status = statusInfo(request.status);
-            return (
-              <div className="leave-calendar-item flex items-center justify-between gap-[14px] min-w-0 border-b border-surface-subtle py-2.5" key={request.id}>
-                <span className="min-w-0">
-                  <strong>{formatDateRange(request.startDate, request.endDate)}</strong>
-                  <small>{request.employeeName || request.employeeCode} · {request.leaveTypeNameTh}</small>
-                </span>
-                <span className="flex flex-col items-end gap-1 min-w-0">
-                  <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-                  <PendingApproverNote request={request} />
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </Panel>
+      <UpcomingLeaveList
+        title="วันลาที่กำลังจะถึง"
+        requests={upcomingRequests}
+        loading={!ownEmployeeId || upcomingQuery.isPending}
+        emptyTitle="ยังไม่มีวันลาที่กำลังจะถึง"
+        emptyDescription="วันลาที่อนุมัติแล้วหรือรออนุมัติในช่วง 90 วันข้างหน้าจะแสดงที่นี่"
+      />
 
-      <Panel title="คำขอลาของฉัน" flush>
+      {/* Directly above "ประวัติการลา" -- the one section it governs. */}
+      <LeaveFilterBar
+        values={filters}
+        onChange={updateFilter}
+        onSubmit={submitFilters}
+        submitDisabled={requestsQuery.isPending}
+        refreshing={refreshing}
+      />
+
+      <Panel title="ประวัติการลา" flush>
         <OwnRequestsSection
           requestsQuery={requestsQuery}
           rows={requests}

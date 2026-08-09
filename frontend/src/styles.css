@@ -104,6 +104,63 @@
   display: block;
 }
 
+/* The SECONDARY sub-line wraps instead of truncating (2026-08-10).
+ *
+ * Every `.data-row` cell in this app renders as at most two lines: a `<strong>` identity line and
+ * a `<small>` detail line beneath it. Both used to be `white-space: nowrap; text-overflow:
+ * ellipsis`, and on the narrower grid tracks the detail line lost real information with no way to
+ * recover it -- there is no tooltip, no title attribute, and the value is often not repeated in
+ * the expanded row. Two examples from the leave table alone, both reported: "0.25 วัน · เหลือ
+ * 6.75" cut at "เหลือ 6.7", and the reviewer note "บันทึกย้อนหลังจากใบลากระดาษ" cut mid-word.
+ *
+ * ── The clip is on the WRAPPER, which is why the obvious fix does nothing ──
+ *
+ * Two wrong cuts of this went in before measurement corrected them. Both read as correct from the
+ * markup, which is exactly why they are recorded here:
+ *
+ *   1. "Wrap `<small>`, keep `<strong>` on one line", on the theory that the primary line is short
+ *      scannable identity. It is not: the leave table's `<strong>` is a DATE RANGE, and
+ *      "10 ส.ค. 2569 - 12 ส.ค. 2569" rendered as "10 ส.ค. 2569 - 12 ส.ค. …" — ellipsing away the
+ *      END DATE. Truncating the primary line is worse than truncating the detail line.
+ *   2. Targeting `.data-row > td > strong` / `> small` at all. **Those two selectors match nothing
+ *      in any real table here.** Every caller (leaveRequestTable.jsx and friends) emits
+ *      `<td><span><strong/><small/></span></td>`, so the text nodes are GRANDCHILDREN of the cell
+ *      and a child combinator never reaches them. The rule was inert and the bug survived it.
+ *
+ * What actually clips is the wrapper `<span>`. It carried `white-space: nowrap` +
+ * `text-overflow: ellipsis` + `overflow: clip`, and because `white-space` INHERITS, both text lines
+ * inside were held on one line and cut at the span's box. Measured, not inferred: that span
+ * reported `scrollWidth 194 > clientWidth 172` with computed `white-space: nowrap`, while the
+ * `<strong>` inside it reported no overflow of its own.
+ *
+ * So the wrapper is what has to wrap, and the whole group is set together to keep them consistent.
+ * `overflow: clip` stays — once content wraps there is no horizontal overflow to clip, and the clip
+ * box is still wanted as a backstop and for the focus-ring behaviour the FIX F4 note below
+ * describes. `text-overflow` is dropped because it is meaningless without `nowrap`.
+ *
+ * Badges are unaffected: `.data-row > td > .status-badge` / `> span > .status-badge` below are
+ * class selectors (0,2,2) and still beat these element selectors (0,1,2), so pills keep their
+ * `display: flex; width: fit-content`.
+ *
+ * This generalises what `.payroll-table`'s money cells already did locally (`overflow: visible;
+ * white-space: normal; text-overflow: clip`, a few hundred lines down) — that override exists
+ * because this rule was wrong for them too.
+ *
+ * `overflow-wrap: break-word` is a safety net for one unbroken token wider than its track. Thai is
+ * space-less and relies on the browser's dictionary segmentation for line breaks, so
+ * `white-space: normal` alone does not quite guarantee no horizontal overflow.
+ *
+ * Row heights become variable where a line is long. That is the intended trade, and it is why this
+ * shipped on measured scrollWidth/clientWidth across pages and viewports rather than on reasoning —
+ * reasoning produced both wrong cuts above.
+ *
+ * FIX F4 (review-remediation), retained from the rule this replaces: the wrapper is the direct
+ * ancestor of the identity-column `<Link>` (TicketListPage's `customer` column), so a plain
+ * `overflow: hidden` clipped that link's focus ring. The two `overflow` declarations MUST stay in
+ * this order — a UA that does not recognise `clip` drops that declaration, and without the
+ * preceding `hidden` the property would fall back to `visible`. `overflow-clip-margin` has no
+ * WebKit implementation, so on Safari/iOS the focus ring stays clipped at the box edge — accepted,
+ * not fixed. */
 .data-row > span > strong,
 .data-row > span > small,
 .data-row > span > span,
@@ -111,22 +168,12 @@
 .data-row > td > small,
 .data-row > td > span {
   display: block;
-  /* FIX F4 (review-remediation): same reasoning as `.data-row > *` above —
-     this is the direct ancestor wrapping the identity-column `<Link>`
-     (TicketListPage's `customer` column), so its `overflow: hidden` clipped
-     that link's focus ring on the left/right/top. Fallback declaration
-     first, same as above: an unknown `clip` keyword drops the whole
-     declaration in older UAs, leaving no `overflow` at all (initial value
-     `visible`) rather than the intended clip — which would also break
-     `text-overflow: ellipsis` here since it needs a non-`visible` overflow.
-     `overflow-clip-margin` has no WebKit support at all, so on Safari/iOS
-     the focus ring on this link remains clipped at the box edge — accepted,
-     not fixed. */
+  min-width: 0;
   overflow: hidden;
   overflow: clip;
   overflow-clip-margin: 4px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 
 .data-row > .status-badge,
@@ -786,13 +833,11 @@
   font-size: var(--text-sm);
 }
 
-.leave-calendar-item strong,
-.leave-calendar-item small {
-  display: block;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
+/* `.leave-calendar-item` retired 2026-08-10 (leave-surface IA restructure). Its only markup --
+   the two byte-identical "ปฏิทินวันลา" panels in MyLeaveTab.jsx and TeamLeaveTab.jsx -- became the
+   shared UpcomingLeaveList.jsx component, which sets `display: block` on its own strong/small as
+   Tailwind utilities and deliberately does NOT reproduce the truncation this rule applied. See
+   that component's own comment. */
 
 .commission-row-wrap {
   border-bottom: 1px solid var(--color-surface-subtle);
