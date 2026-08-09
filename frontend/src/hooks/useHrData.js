@@ -54,13 +54,24 @@ export function useHrData({ user, showToast }) {
   // Tax-allowance profile summary (issue #387 screen 4) — fetched once here and passed down as a
   // prop, matching `profileRequests`'s own pattern, rather than ProfilePage fetching it itself.
   const currentTaxYear = new Date().getFullYear();
+  // ⚠️ Caches the WHOLE `/declarations/me` envelope, not `.items`. `TaxAllowancePage` registers a
+  // query under this SAME key, and React Query keeps one cache entry per key — whichever queryFn
+  // resolves first is the shape BOTH consumers then read. This hook mounts at the shell, so it wins
+  // the race on every visit to /tax-allowance. Returning a bare array here while that page expected
+  // `{ items, headerPrefill }` made the page read `undefined.items`, conclude the year had never
+  // been filed, and offer an employee with a live declaration a second filing that 409s.
+  //
+  // This is the same defect the `taxAllowanceEvidenceQuery` comment below already records, in the
+  // same file, one query later. Two queryFns under one key must return the same shape — and the
+  // shape is now the envelope, because `headerPrefill` rides on it (owner decision #4).
+  // `useHrData.test.js` pins the agreement.
   const taxAllowanceDeclarationsQuery = useQuery({
     queryKey: queryKeys.taxAllowanceDeclarationsMe(currentTaxYear),
-    queryFn: () => api.payroll.getMyTaxAllowanceDeclarations(currentTaxYear).then((response) => response.items || []),
+    queryFn: () => api.payroll.getMyTaxAllowanceDeclarations(currentTaxYear),
     enabled: !!user?.employeeId,
   });
   const currentTaxAllowanceDeclaration = useMemo(
-    () => selectCurrentDeclaration(taxAllowanceDeclarationsQuery.data ?? []),
+    () => selectCurrentDeclaration(taxAllowanceDeclarationsQuery.data?.items ?? []),
     [taxAllowanceDeclarationsQuery.data],
   );
   // Same queryKey/queryFn shape (an array of attachment rows) as TaxAllowanceEvidencePanel.jsx's

@@ -238,9 +238,11 @@ export function TaxAllowancePage({ user, showToast }) {
   //
   // `defaultAllowanceValues` composes them per slot: anything the declaration already holds wins,
   // and the prefill only reaches slots the employee left blank.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // The disable below has to sit immediately above the DEPENDENCY ARRAY, not above the `useMemo`
+  // call: exhaustive-deps reports on the array's own line, and this call no longer fits on one.
   const defaultValues = useMemo(
     () => defaultAllowanceValues(current ?? resumable, canStartEdit ? headerPrefill : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [current, resumable, taxYear, canStartEdit, headerPrefill],
   );
 
