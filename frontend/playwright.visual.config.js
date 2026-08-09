@@ -15,13 +15,24 @@ import { defineConfig, devices } from '@playwright/test';
 // spins its own dedicated mock instance on a free port (reuseExistingServer:
 // false — never silently reuses a non-mock server on another port).
 //
-// Deliberately NOT wired into any CI workflow, and it must stay that way.
-// PR #592 deleted the old mock e2e suite and its e2e-ci.yml specifically to
-// get to "one e2e job per PR instead of two" (owner ruling) — frontend/e2e-real/
-// is that one job, via `npm run test:e2e`. This config is for local, opt-in
-// use only (VISUAL_BASELINE=1), invoked directly or via `npm run test:visual`;
-// do not add a workflow that runs it in CI — that would recreate the exact
-// two-job situation #592 removed.
+// ── THIS CONFIG RUNS IN CI, AS A REQUIRED CHECK ──────────────────────────────
+// #616 wired it up as `.github/workflows/visual-ci.yml` and #617 made that job
+// required, with no `paths:` filter. Read that workflow's header before changing
+// anything here — especially before concluding the job should not exist.
+//
+// It used to say the opposite, and the reasoning is worth keeping straight: PR
+// #592 did delete the old mock e2e suite and its e2e-ci.yml to get to "one e2e
+// job per PR instead of two" (owner ruling). Reinstating a second e2e-shaped job
+// was then a later, explicit owner decision, taken on the evidence of four
+// CSS-port regressions that `npm run lint`, `npm test` and `npm run build` all
+// passed — jsdom has no layout engine, so nothing else could catch them. The two
+// jobs answer different questions: e2e-real asks "does the real backend still
+// honour this?", this one asks "did the pixels move?".
+//
+// Still opt-in LOCALLY: the spec is skipped unless VISUAL_BASELINE=1, so a bare
+// `npm test` / `npx playwright test` never picks it up. Run it by hand with
+// `npm run test:visual`, or directly — see the spec header for the
+// capture-baseline-then-diff sequence and its same-day rule.
 export default defineConfig({
   testDir: './e2e-visual',
   fullyParallel: false,
