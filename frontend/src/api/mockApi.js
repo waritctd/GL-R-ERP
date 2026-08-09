@@ -1635,6 +1635,11 @@ function taxAllowanceCapsFor(taxYear) {
     { category: 'life_insurance', kind: 'SHARED_GROUP', groupId: 'life_health', ownCap: 100000, groupCap: 100000, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
     { category: 'health_insurance', kind: 'SHARED_GROUP', groupId: 'life_health', ownCap: 25000, groupCap: 100000, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
     { category: 'parent_health_insurance', kind: 'FLAT', groupId: null, ownCap: 15000, groupCap: null, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
+    // ข้อ 9 ล.ย.01 (V137). ownCap is กอช.'s 30,000, NOT the provident fund's 15%-of-wages-to-500,000
+    // -- the box covers four funds and the engine takes the tightest, see
+    // PayrollCalculator#retirementAllowance. Mirrors TaxAllowanceCapCatalog; contract.test.js checks
+    // method surface and arity only, so nothing guards these VALUES -- change both together by hand.
+    { category: 'provident_fund', kind: 'FLAT', groupId: 'retirement', ownCap: 30000, groupCap: 500000, maxTotal: null, incomeRate: null, multiplier: null, declarable: true },
     { category: 'rmf', kind: 'PERCENT_OF_INCOME', groupId: 'retirement', ownCap: 500000, groupCap: 500000, maxTotal: null, incomeRate: 0.30, multiplier: null, declarable: true },
     { category: 'ssf', kind: 'PERCENT_OF_INCOME', groupId: 'retirement', ownCap: ssfDeductible ? 200000 : 0, groupCap: 500000, maxTotal: null, incomeRate: ssfDeductible ? 0.30 : 0, multiplier: null, declarable: true },
     { category: 'pension', kind: 'PERCENT_OF_INCOME', groupId: 'retirement', ownCap: 200000, groupCap: 500000, maxTotal: null, incomeRate: 0.15, multiplier: null, declarable: true },

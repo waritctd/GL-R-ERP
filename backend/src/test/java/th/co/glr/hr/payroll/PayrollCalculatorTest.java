@@ -91,13 +91,11 @@ class PayrollCalculatorTest {
             null, taxYear, 0, age));
     }
 
-    // กองทุนสำรองเลี้ยงชีพ REMOVED (owner decision, 2026-07-29, handoff section 4 / V99): GL&R
-    // operates no provident fund -- verified against production, zero employees hold a
-    // provident_fund_no. The three dedicated PVD tests that used to live here
-    // (providentFundContributionsReduceTheTaxableAnnualIncome,
-    // theProvidentFundDeductionIsCappedAtFifteenPercentOfPay,
-    // theProvidentFundTakesTheRetirementClusterAheadOfRmf) are deleted along with the field they
-    // exercised; see PayrollCalculator#retirementAllowance for the removal.
+    // ข้อ 9 ล.ย.01 / กองทุนสำรองเลี้ยงชีพ: RESTORED 2026-08-08 (V137), reversing V99. V99 had
+    // deleted three PVD tests from here along with the field. Their replacements are the
+    // providentFund* tests below -- deliberately NOT the originals reinstated, because the sub-cap
+    // is no longer PVD's 15%-of-pay: the engine now applies กอช.'s ฿30,000, the tightest of the four
+    // funds ข้อ 9 covers. See PayrollCalculator#retirementAllowance.
     private PayrollTaxAllowanceInput declaration(
         String childAllowance, String disabledCareAllowance, String rmf, String ssf,
         int childCount, int childCountDouble, int disabledCareCount,
@@ -755,6 +753,117 @@ class PayrollCalculatorTest {
         assertThat(result.annualTax()).isEqualByComparingTo(new BigDecimal("177375.00"));
         assertThat(result.withholdingTax()).isEqualByComparingTo(new BigDecimal("14781.25"));
         assertThat(result.netPay()).isEqualByComparingTo(new BigDecimal("144343.75"));
+    }
+
+    // ---- ข้อ 9 ล.ย.01: กองทุนสำรองเลี้ยงชีพ / กบข. / กอช. / ครูโรงเรียนเอกชน (V137) --------------
+
+    /**
+     * Owner decision #5 is that ข้อ 9 is fillable AND feeds withholding. Asserted as a RELATIONSHIP
+     * -- the same employee, identical in every respect except the declared ข้อ 9 figure, must have
+     * strictly less tax withheld -- rather than against a hardcoded baht figure. A total-only
+     * assertion would still pass if the term reached {@code taxAllowanceTotal} but never reached the
+     * tax computation, which is precisely the "feeds withholding" half of the decision.
+     */
+    @Test
+    void providentFundContributionsReduceWithholdingNotJustTheAllowanceTotal() {
+        PayrollCalculation without = calculateWithProvidentFund(BigDecimal.ZERO, BigDecimal.ZERO);
+        PayrollCalculation with = calculateWithProvidentFund(new BigDecimal("30000.00"), BigDecimal.ZERO);
+
+        assertThat(with.taxAllowanceTotal())
+            .as("personal 60,000 + projected SSO 10,500 + ข้อ 9 30,000")
+            .isEqualByComparingTo(new BigDecimal("100500.00"));
+        assertThat(with.taxAllowanceTotal().subtract(without.taxAllowanceTotal()))
+            .isEqualByComparingTo(new BigDecimal("30000.00"));
+        assertThat(with.withholdingTax())
+            .as("a ข้อ 9 contribution must actually move the tax, not just the allowance total")
+            .isLessThan(without.withholdingTax());
+    }
+
+    /**
+     * ข้อ 9's sub-cap is ฿30,000 -- กอช.'s, the tightest of the four funds the single box covers,
+     * NOT the provident fund's 15%-of-wages-to-฿500,000. Declaring far more must grant exactly the
+     * sub-cap. Source for the figure: rd.go.th's ปีภาษี 2568 allowance table
+     * (https://www.rd.go.th/65908.html); the reasoning for taking the tightest is in
+     * {@code PayrollCalculator#retirementAllowance}.
+     */
+    @Test
+    void providentFundAloneIsCappedAtItsThirtyThousandSubCap() {
+        PayrollCalculation result = calculateWithProvidentFund(new BigDecimal("500000.00"), BigDecimal.ZERO);
+
+        assertThat(result.taxAllowanceTotal())
+            .as("a declared 500,000 must be clamped to the 30,000 sub-cap, not granted in full")
+            .isEqualByComparingTo(new BigDecimal("100500.00"));
+    }
+
+    /**
+     * The ฿500,000 cluster is shared, so ข้อ 9 and RMF together stop at exactly ฿500,000 rather than
+     * summing to ฿530,000. This is the "exactly at the ceiling" case.
+     */
+    @Test
+    void providentFundAndRmfTogetherStopAtExactlyTheFiveHundredThousandCeiling() {
+        PayrollCalculation result = calculateWithProvidentFund(
+            new BigDecimal("30000.00"), new BigDecimal("500000.00"));
+
+        assertThat(result.taxAllowanceTotal())
+            .as("personal 60,000 + SSO 10,500 + cluster capped at 500,000 -- NOT 530,000")
+            .isEqualByComparingTo(new BigDecimal("570500.00"));
+    }
+
+    /**
+     * ⚠️ Documents a REAL LIMIT of this suite, and is written as a property rather than as an
+     * ordering assertion on purpose.
+     *
+     * <p>{@code PayrollCalculator#retirementAllowance} takes ข้อ 9 before RMF, on V93's rationale
+     * that a contribution taken at source cannot be stopped by the employee. That ordering is
+     * currently <b>unobservable in the result</b>: every term is capped independently and then
+     * clamped to the remaining budget, and greedy fill of a fixed bucket totals
+     * min(sum of own-caps, 500,000) whichever order the terms are taken in. Swapping the ข้อ 9 and
+     * RMF blocks in the calculator therefore turns NO test red -- verified by mutation, 2026-08-08.
+     *
+     * <p>So rather than pretend an ordering test exists, this pins the invariant that makes the
+     * ordering moot. If a future change ever makes order matter -- a per-item breakdown, a sub-cap
+     * that depends on the remaining cluster -- this test starts failing and whoever wrote that change
+     * has to decide the ordering deliberately.
+     */
+    @Test
+    void theRetirementClusterTotalIsInvariantToTheOrderItsTermsAreTaken() {
+        BigDecimal pvdFirstShape = calculateWithProvidentFund(
+            new BigDecimal("30000.00"), new BigDecimal("490000.00")).taxAllowanceTotal();
+        BigDecimal rmfDominantShape = calculateWithProvidentFund(
+            new BigDecimal("30000.00"), new BigDecimal("500000.00")).taxAllowanceTotal();
+
+        assertThat(pvdFirstShape)
+            .as("30,000 + 490,000 = 520,000 of own-caps, clamped to the 500,000 cluster")
+            .isEqualByComparingTo(new BigDecimal("570500.00"));
+        assertThat(rmfDominantShape)
+            .as("adding a further 10,000 of RMF own-cap cannot move a total already at the ceiling")
+            .isEqualByComparingTo(pvdFirstShape);
+    }
+
+    /** ฿160,000/month, every allowance zero except ข้อ 9 and RMF — mirrors the RMF cluster test above. */
+    private PayrollCalculation calculateWithProvidentFund(BigDecimal providentFund, BigDecimal rmf) {
+        return calculator.calculate(new PayrollCalculationInput(
+            new BigDecimal("160000.00"),
+            List.of(),
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            new PayrollTaxAllowanceInput(
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                rmf,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO,
+                0, 0, 0, false, 0,
+                providentFund
+            ),
+            PayrollYearToDate.empty(),
+            1
+        ));
     }
 
     @Test
