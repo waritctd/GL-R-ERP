@@ -74,7 +74,13 @@ export function RequestsPage({ user, currentEmployee, showToast }) {
               // an underline, on a grey button face. Zeroing the other three edges (and the face)
               // is what leaves just the underline this was always meant to be.
               'appearance-none bg-transparent border-x-0 border-t-0 border-solid',
-              'px-4 py-2.5 text-sm font-bold border-b-2 -mb-px transition-colors',
+              // `min-h-11` (44px) for the mobile touch floor. Measured at 390px these rendered
+              // 79x41 and 146x41 — `py-2.5` on a 16px line box lands 3px short, which is invisible
+              // on a desktop pointer and is the difference between a comfortable and a fiddly tap
+              // on a phone. Height only: the tablist is a horizontal row, so widening would push
+              // the two tabs toward wrapping, and WCAG 2.5.8 is satisfied by the 44px height plus
+              // the row's own spacing.
+              'min-h-11 px-4 py-2.5 text-sm font-bold border-b-2 -mb-px transition-colors',
               activeTab === tab.key
                 ? 'border-primary text-primary'
                 : 'border-transparent text-icon-muted hover:text-text',

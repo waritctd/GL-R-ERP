@@ -937,7 +937,15 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
             {submitViolations.length > 0 ? (
               <div className={formGridSpan2}>
                 <div className="rounded-md border border-danger-border bg-danger-bg p-3" role="alert">
-                  <p className="m-0 text-xs font-bold text-danger">ส่งคำขอไม่สำเร็จ:</p>
+                  {/* text-danger-DARK, not text-danger. `--color-danger` (#dc2626) on
+                      `--color-danger-bg` (#fee2e2) measures 3.95:1 and fails WCAG AA's 4.5:1 —
+                      12px bold is below the large-text threshold (>=18.66px bold), so it gets no
+                      relief there. `--color-danger-dark` (#b91c1c) measures 5.30:1 on the same
+                      tint and is the app's established danger-on-danger-bg pairing, asserted in
+                      designTokens.test.js and already applied on the sales side by
+                      fix/ui-contrast-tokens (see TicketCreateModal.jsx:300). These two callouts
+                      were the remaining self-service stragglers. */}
+                  <p className="m-0 text-xs font-bold text-danger-dark">ส่งคำขอไม่สำเร็จ:</p>
                   <ul className="m-0 mt-1.5 list-disc pl-4 text-sm text-text">
                     {/* Keyed by index, not by the string: the evaluator can emit the same violation
                         twice (e.g. one per uniform piece type), and duplicate keys would collide. */}
@@ -1098,9 +1106,10 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
                 <div style={{ gridColumn: '1 / -1' }} className="mt-1 flex flex-col gap-2.5 border-t border-border-subtle pt-3">
                   {request.reviewerNote ? (
                     <div className="flex items-start gap-2.5 rounded-md border border-danger-border bg-danger-bg p-3" role="alert">
-                      <Icon name="triangleAlert" size={16} className="mt-0.5 shrink-0 text-danger" />
+                      {/* Same danger-on-danger-bg contrast fix as the callout above. */}
+                      <Icon name="triangleAlert" size={16} className="mt-0.5 shrink-0 text-danger-dark" />
                       <div className="min-w-0">
-                        <div className="text-xs font-bold text-danger">เหตุผลที่ CEO ปฏิเสธ</div>
+                        <div className="text-xs font-bold text-danger-dark">เหตุผลที่ CEO ปฏิเสธ</div>
                         <p className="m-0 mt-0.5 text-sm text-text">{request.reviewerNote}</p>
                       </div>
                     </div>
