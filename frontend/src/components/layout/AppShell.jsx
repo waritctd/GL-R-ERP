@@ -223,7 +223,10 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // the /overtime redirect alias, mirroring the /tickets pattern above.
     {
       path: '/employee-requests',
-      label: 'คำขอ',
+      // Matches the page's own <PageHeader> title (RequestsPage.jsx). A nav item that says one
+      // thing and lands on a page titled another is the "navigation shows current location"
+      // check failing — so this moved with it rather than being left behind.
+      label: 'คำขอเงินพิเศษ',
       helper: 'Requests (overtime / welfare)',
       icon: 'clock',
       group: 'self',

@@ -42,10 +42,42 @@ export function PageStack({ className, children, ...props }) {
  * also exported for callers that need custom header content.
  *
  * `flush` is the Tailwind equivalent of the legacy `.table-panel` class: no
- * body inset, so a table runs edge to edge, plus `overflow-hidden` so its
+ * body inset, so a table runs edge to edge, plus clipped overflow so its
  * corners follow the card radius. The header then takes its own inset and a
  * rule beneath it, because without the card's padding a bare heading would sit
  * flat against the border.
+ *
+ * ── WHY THE CLIP IS `overflow-x: auto`, NOT `overflow: hidden` ──────────────
+ * This used to be a plain `overflow-hidden`, and that quietly deleted data.
+ *
+ * A flush panel is what `DataTable` renders every table into, and those tables
+ * carry a `nav-drawer:min-w-[Npx]` floor so their columns are not squeezed
+ * unreadable in the 721-1040px band. A minimum wider than the card, inside a
+ * box that clips both axes and scrolls neither, does not overflow — it
+ * disappears, with no scrollbar and no page overflow to hint that anything is
+ * missing. Measured at 768px on main (e43cce56), all unreachable by ANY
+ * gesture:
+ *
+ *   /leave                     980px grid in a 700px card   280px gone
+ *   /employee-requests?tab=ot  940px grid in a 702px card   238px gone
+ *   /profile                   900px grid in a 702px card   198px gone
+ *   /attendance                860px grid in a 702px card   158px gone
+ *
+ * The columns that vanish are the rightmost ones, which is where these tables
+ * put status and row actions — so on /attendance the late/early/OT badge was
+ * off-screen at exactly the width the min-width floor was added to protect it
+ * at. The floor stopped the squeeze and the panel hid the result, so the
+ * earlier fix looked like it had worked.
+ *
+ * Three separate call sites had already patched this individually by passing
+ * `overflow-x-auto` down (`DataTable`'s `panelClassName`, and two hand-rolled
+ * tables), and #643 reintroduced it on a brand-new panel within hours. That is
+ * the signature of a default that is wrong, not of three careless call sites.
+ *
+ * `overflow-y` stays `hidden`, so this is strictly a widening: the vertical
+ * clip is unchanged, and nothing that was visible before becomes clipped now.
+ * The corner radius still clips (verified: `border-radius` unchanged at 8px,
+ * `unreachable` 2 -> 0 on /profile, page overflow still 0).
  *
  * It replaces a regex that sniffed `p-0` out of `className` to infer the same
  * thing. That inference was invisible at the call site — nine callers spelled
@@ -59,7 +91,7 @@ export function Panel({ title, actions, flush = false, className, children, ...p
     <section
       className={cn(
         'bg-surface border border-border rounded-md',
-        flush ? 'overflow-hidden' : 'p-5',
+        flush ? 'overflow-x-auto overflow-y-hidden' : 'p-5',
         className,
       )}
       {...props}

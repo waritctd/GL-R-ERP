@@ -114,7 +114,7 @@ public class AttendanceCorrectionService {
             "ATTENDANCE_CORRECTION_APPROVED",
             "คำขอแก้ไขเวลาเข้า-ออกงานได้รับการอนุมัติ",
             "คำขอแก้ไขเวลาเข้า-ออกงานวันที่ " + after.workDate() + " ได้รับการอนุมัติแล้ว",
-            "/employee-requests",
+            "/attendance",
             true);
         return withCanReviewFlag(after, user);
     }
@@ -160,7 +160,7 @@ public class AttendanceCorrectionService {
             "คำขอแก้ไขเวลาเข้า-ออกงานถูกปฏิเสธ",
             "คำขอแก้ไขเวลาเข้า-ออกงานวันที่ " + after.workDate() + " ถูกปฏิเสธ: "
                 + (after.reviewerNote() == null ? "กรุณาติดต่อฝ่ายบุคคล" : after.reviewerNote()),
-            "/employee-requests",
+            "/attendance",
             true);
         return withCanReviewFlag(after, user);
     }
@@ -310,6 +310,16 @@ public class AttendanceCorrectionService {
         return request == null ? null : request.reviewerNote();
     }
 
+    /**
+     * The notification link tracks where this feature's review UI actually lives, not a fixed API
+     * route -- it moved from {@code /employee-requests} (the old third tab on the combined requests
+     * page) to {@code /attendance} (fix/attendance-correction-on-attendance-page), matching the
+     * frontend move of both {@code AttendanceCorrectionPanel} and the submit modal onto that page.
+     * Same link is used by {@link #approve}/{@link #reject}'s own notifications to the employee.
+     * The next person who relocates this UI again must update this literal (all three call sites)
+     * to match, or every notification/deep-link into this feature silently 404s-by-content (lands
+     * on a page with nothing about attendance correction on it) instead of erroring.
+     */
     private void notifyCeoOfSubmission(AttendanceCorrectionRequestDto created) {
         for (long ceoEmployeeId : repository.findCeoApproverEmployeeIds()) {
             notificationService.notify(
@@ -317,7 +327,7 @@ public class AttendanceCorrectionService {
                 "ATTENDANCE_CORRECTION_SUBMITTED",
                 "มีคำขอแก้ไขเวลาเข้า-ออกงานใหม่",
                 created.employeeName() + " ยื่นคำขอแก้ไขเวลาเข้า-ออกงานวันที่ " + created.workDate(),
-                "/employee-requests",
+                "/attendance",
                 true);
         }
     }

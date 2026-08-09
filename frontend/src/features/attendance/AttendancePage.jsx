@@ -24,6 +24,8 @@ import {
   formatDuration,
   formatShortDate,
 } from '../../utils/format.js';
+import { AttendanceCorrectionPanel } from '../attendanceCorrection/AttendanceCorrectionPanel.jsx';
+import { AttendanceCorrectionRequestModal } from '../attendanceCorrection/AttendanceCorrectionRequestModal.jsx';
 
 // Reproduces `.filter-bar` for this page's native <form onSubmit> (Enter-to-submit
 // needed); Layout.jsx's FilterBar only renders a <div> — same pattern established in
@@ -74,6 +76,12 @@ export function AttendancePage({ user, showToast }) {
   // always reachable in 'company' mode — the roster it needs (employeeOptions) is already loaded
   // below.
   const canMarkPresent = hasPermission(user.role, 'canMarkAttendance');
+  const isCeo = user.role === 'ceo';
+  // Mirrors AttendanceCorrectionPanel's own (pre-existing) !isCeo gate on its submit form, plus
+  // the backend's requireEmployeeId(user) in AttendanceCorrectionService#submit -- a session with
+  // no employeeId would only reach a 400 there, so the button that opens the modal stays hidden
+  // rather than offering an action that can only fail.
+  const canRequestCorrection = !isCeo && !!user.employeeId;
   // Deliberately not memoized: `monthBounds()` is two Intl.DateTimeFormat calls, cheap enough to
   // recompute on every render, and memoizing it with an empty dep array froze "today" at mount --
   // a tab left open past Bangkok midnight would keep clamping the stepper/picker to the previous
@@ -99,6 +107,7 @@ export function AttendancePage({ user, showToast }) {
   const [recalculating, setRecalculating] = useState(false);
   const [markPresentOpen, setMarkPresentOpen] = useState(false);
   const [markingPresent, setMarkingPresent] = useState(false);
+  const [correctionOpen, setCorrectionOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [lastImport, setLastImport] = useState(null);
   const [devices, setDevices] = useState([]);
@@ -417,6 +426,18 @@ export function AttendancePage({ user, showToast }) {
 
   const unmappedTotal = unmapped.reduce((sum, badge) => sum + (badge.punch_count || 0), 0);
 
+  // Single element, reused at two possible positions below (never both at once) -- see the
+  // isCeo-conditional placement around <DataTable> for why the position itself depends on isCeo.
+  // Gate is deliberately broader than the ขอแก้ไขเวลา button above: a CEO has nothing to *submit*
+  // (canRequestCorrection is !isCeo) but still needs this section to *review* what everyone else
+  // submitted, and anyone with no employeeId has neither a request of their own to see nor a right
+  // to submit one. Moved here from RequestsPage.jsx's third tab
+  // (fix/attendance-correction-on-attendance-page) -- see that file's own header comment for where
+  // the tab used to be.
+  const correctionPanel = isCeo || !!user.employeeId
+    ? <AttendanceCorrectionPanel user={user} showToast={showToast} />
+    : null;
+
   return (
     <PageStack>
       <PageHeader
@@ -436,6 +457,19 @@ export function AttendancePage({ user, showToast }) {
               >
                 <Icon name="plus" />
                 ทำเครื่องหมายเข้างาน
+              </Button>
+            ) : null}
+            {canRequestCorrection ? (
+              // secondary, not primary: canMarkPresent (hr/ceo) and canRequestCorrection
+              // (!isCeo) overlap for HR, who would otherwise see two solid primary-colored
+              // buttons competing in the same row. For the far more common audience -- an
+              // ordinary employee, who never sees ทำเครื่องหมายเข้างาน at all -- this is still a
+              // clearly bordered, full-weight button, just not the loudest one on the page; the
+              // page's own purpose (reviewing your attendance) doesn't need a filled CTA, and
+              // filing a correction is an occasional exception, not the primary reason to be here.
+              <Button variant="secondary" onClick={() => setCorrectionOpen(true)}>
+                <Icon name="plus" />
+                ขอแก้ไขเวลา
               </Button>
             ) : null}
             <Button variant="secondary" onClick={() => daysQuery.refetch()} disabled={daysQuery.isLoading}>
@@ -589,6 +623,16 @@ export function AttendancePage({ user, showToast }) {
         />
       ) : null}
 
+      {correctionOpen ? (
+        // No `user` prop -- AttendanceCorrectionRequestModal.jsx deliberately doesn't take one;
+        // see its own doc comment for why (this button's own canRequestCorrection gate is the
+        // only role check this feature needs on the frontend).
+        <AttendanceCorrectionRequestModal
+          showToast={showToast}
+          onClose={() => setCorrectionOpen(false)}
+        />
+      ) : null}
+
       {!isSelfView ? (
         <div className={FILTER_BAR_CLASS}>
           {/*
@@ -601,8 +645,27 @@ export function AttendancePage({ user, showToast }) {
             the whole control in FilterField puts the label back on the bar's
             common left edge and lets the group shrink as one unit.
           */}
-          <FilterField label="วันที่" htmlFor="attendance-selected-date">
-            <div className="flex items-center gap-2">
+          {/*
+            This field holds THREE controls, so it needs both a wider basis than a plain field and
+            a shrinkable inner row. Regression fix (#638 introduced it, 2026-08-10):
+
+            FilterField gives every field a fixed `basis-[190px]`, which is right for one control.
+            Here the row is [prev 44px][date input][next 44px] plus two 8px gaps — 104px of
+            fixed-width furniture before the date is drawn at all. The inner row was a plain flex
+            container, i.e. a GRID ITEM at the default `min-width: auto`, so it could not shrink
+            below its own min-content and overflowed the field instead. Measured at 1440px: the
+            row rendered 250px inside a 190px field and the "วันถัดไป" button landed at x=521-565
+            while the field ended at 505 — 60px outside, painted on top of the ฝ่าย select beside
+            it. That is the overlapping arrow in the owner's screenshot.
+
+            `min-w-0` alone fixes the overlap (row 250 -> 190, escape 0) but squeezes the date
+            input to 86px, which Chromium renders without clipping and iOS Safari does not — the
+            same platform gap that caused the original bug. So both: `min-w-0` so the group can
+            never escape its field again, and a basis wide enough that it does not have to
+            (260px -> the input gets its natural 156px, measured).
+          */}
+          <FilterField label="วันที่" htmlFor="attendance-selected-date" className="basis-[260px]">
+            <div className="flex min-w-0 items-center gap-2">
               <Button
                 variant="secondary"
                 onClick={() => stepDay(-1)}
@@ -674,6 +737,13 @@ export function AttendancePage({ user, showToast }) {
         </div>
       ) : null}
 
+      {/* CEO: above the day table -- this section is actionable work (the review queue is why a
+          CEO comes to this page), so it should not sit below ~50 rows of company attendance
+          (adversarial review F2). Everyone else gets it below (see the placement after
+          </DataTable>) -- their own request history belongs after the attendance data it refers
+          to. */}
+      {isCeo ? correctionPanel : null}
+
       <DataTable
         columns={columns}
         rows={days}
@@ -726,6 +796,11 @@ export function AttendancePage({ user, showToast }) {
             : 'ลองเปลี่ยนวันที่ หรือนำเข้าไฟล์ .dat',
         }}
       />
+
+      {/* Everyone but the CEO: below the day table -- their own request history, which belongs
+          after the attendance data it refers to. See correctionPanel's own definition above for
+          the gate, and the comment before <DataTable> for the CEO's (opposite) placement. */}
+      {!isCeo ? correctionPanel : null}
     </PageStack>
   );
 }

@@ -33,16 +33,6 @@ const ceoUser = {
   manager: false,
 };
 
-function todayIso() {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Bangkok',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(new Date()).map((part) => [part.type, part.value]));
-  return `${parts.year}-${parts.month}-${parts.day}`;
-}
-
 function renderPanel(user) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -54,60 +44,31 @@ function renderPanel(user) {
   );
 }
 
-describe('AttendanceCorrectionPanel — employee submit flow', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.attendanceCorrection.list.mockResolvedValue({ requests: [] });
-    api.attendanceCorrection.create.mockResolvedValue({ request: { id: 1 } });
-  });
+const submittedRequest = {
+  id: 5,
+  employeeId: 1,
+  employeeCode: 'GLR-001',
+  employeeName: 'พนักงาน ทดสอบ',
+  workDate: '2026-07-01',
+  correctionType: 'CHECK_IN',
+  requestedCheckIn: '2026-07-01T01:20:00Z',
+  requestedCheckOut: null,
+  reason: 'ลืมสแกนนิ้ว',
+  status: 'SUBMITTED',
+};
 
-  it('renders the submit form defaulted to today and CHECK_IN', async () => {
-    renderPanel(employeeUser);
 
-    const dateInput = await screen.findByLabelText(/วันที่ที่ลืมสแกน/);
-    expect(dateInput.value).toBe(todayIso());
-    expect(screen.getByLabelText(/เวลาเข้างานที่ถูกต้อง/)).not.toBeNull();
-    expect(screen.queryByLabelText(/เวลาออกงานที่ถูกต้อง/)).toBeNull();
-  });
-
-  it('submits a CHECK_IN correction with the expected payload shape', async () => {
-    renderPanel(employeeUser);
-    const workDate = todayIso();
-
-    fireEvent.change(await screen.findByLabelText(/วันที่ที่ลืมสแกน/), { target: { value: workDate } });
-    fireEvent.change(screen.getByLabelText(/เวลาเข้างานที่ถูกต้อง/), { target: { value: `${workDate}T08:20` } });
-    fireEvent.change(screen.getByLabelText(/เหตุผล/), { target: { value: 'ลืมสแกนนิ้วตอนเข้างาน' } });
-    fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
-
-    await waitFor(() => expect(api.attendanceCorrection.create).toHaveBeenCalledTimes(1));
-    expect(api.attendanceCorrection.create).toHaveBeenCalledWith({
-      workDate,
-      correctionType: 'CHECK_IN',
-      requestedCheckIn: `${workDate}T08:20:00+07:00`,
-      requestedCheckOut: null,
-      reason: 'ลืมสแกนนิ้วตอนเข้างาน',
-    });
-  });
-
-  it('switching to BOTH shows both time fields and requires both', async () => {
-    renderPanel(employeeUser);
-
-    fireEvent.change(await screen.findByLabelText(/รายการที่ต้องแก้ไข/), { target: { value: 'BOTH' } });
-
-    expect(await screen.findByLabelText(/เวลาเข้างานที่ถูกต้อง/)).not.toBeNull();
-    expect(screen.getByLabelText(/เวลาออกงานที่ถูกต้อง/)).not.toBeNull();
-  });
-
-  it('blocks submit when the reason is too short', async () => {
-    renderPanel(employeeUser);
-
-    fireEvent.change(await screen.findByLabelText(/เหตุผล/), { target: { value: 'ok' } });
-    fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
-
-    await waitFor(() => expect(screen.getByText(/กรุณาระบุเหตุผลให้ชัดเจน/)).not.toBeNull());
-    expect(api.attendanceCorrection.create).not.toHaveBeenCalled();
-  });
-});
+// The section is collapsed by default for every role (owner, 2026-08-10) — it is a correction
+// workflow, rare for an employee and batched for the CEO, and expanded it put a stat strip, a
+// filter bar and a full table between the attendance table and the bottom of the page.
+// CollapsibleSection UNMOUNTS its body when collapsed, so every assertion about the list below
+// has to open it first. This helper is the disclosure click, not a workaround: if the default
+// ever flips back to open, `findByRole` here still resolves and nothing silently rots.
+async function expandSection() {
+  const header = await screen.findByRole('button', { name: /คำขอแก้ไขเวลาเข้า-ออกงาน/ });
+  if (header.getAttribute('aria-expanded') === 'false') fireEvent.click(header);
+  return header;
+}
 
 describe('AttendanceCorrectionPanel — own request list', () => {
   beforeEach(() => {
@@ -116,26 +77,17 @@ describe('AttendanceCorrectionPanel — own request list', () => {
 
   it("lists the employee's own past requests with status", async () => {
     api.attendanceCorrection.list.mockResolvedValue({
-      requests: [{
-        id: 5,
-        employeeId: 1,
-        employeeCode: 'GLR-001',
-        employeeName: 'พนักงาน ทดสอบ',
-        workDate: '2026-07-01',
-        correctionType: 'CHECK_IN',
-        requestedCheckIn: '2026-07-01T01:20:00Z',
-        requestedCheckOut: null,
-        reason: 'ลืมสแกนนิ้ว',
-        status: 'SUBMITTED',
-        canReview: false,
-      }],
+      requests: [{ ...submittedRequest, canReview: false }],
     });
 
     renderPanel(employeeUser);
+    await expandSection();
 
     expect(await screen.findByText('ลืมสแกนนิ้ว')).not.toBeNull();
-    // "รอ CEO" also appears as a status-filter <option>; scope to the status badge itself.
-    expect(document.querySelector('.status-badge')?.textContent).toBe('รอ CEO');
+    // "รอ CEO" also appears as a status-filter <option>, AND the collapsed-section header now
+    // carries its own pending-count StatusBadge ("รอพิจารณา N") — so a document-wide
+    // `.status-badge` lookup returns the header's, not this row's. Scope to the row.
+    expect(document.querySelector('.data-row .status-badge')?.textContent).toBe('รอ CEO');
   });
 });
 
@@ -145,37 +97,63 @@ describe('AttendanceCorrectionPanel — CEO review affordance', () => {
     api.attendanceCorrection.approve.mockResolvedValue({ request: { id: 5, status: 'APPROVED' } });
   });
 
-  it('does not render the submit form for the CEO', async () => {
+  // Split from the former "does not render the submit form for the CEO" (submit-flow) test --
+  // the submit FORM moved to AttendanceCorrectionRequestModal.jsx
+  // (fix/attendance-correction-on-attendance-page), so this panel never renders one for ANY
+  // role any more. That made the old queryByLabelText(/วันที่ที่ต้องการแก้ไข/) assertion pass
+  // regardless of who was signed in -- a tautology, unable to fail (adversarial review N1) --
+  // so it was dropped along with the rename. What this test actually proves: the review queue
+  // (its own empty state) renders for the CEO.
+  it('renders the review queue (empty state) for the CEO', async () => {
     api.attendanceCorrection.list.mockResolvedValue({ requests: [] });
     renderPanel(ceoUser);
+    await expandSection();
 
     await screen.findByText('ยังไม่มีคำขอแก้ไขเวลา');
-    expect(screen.queryByLabelText(/วันที่ที่ลืมสแกน/)).toBeNull();
   });
 
   it('shows approve/reject for a SUBMITTED request and approves on confirm', async () => {
     api.attendanceCorrection.list.mockResolvedValue({
-      requests: [{
-        id: 5,
-        employeeId: 1,
-        employeeCode: 'GLR-001',
-        employeeName: 'พนักงาน ทดสอบ',
-        workDate: '2026-07-01',
-        correctionType: 'CHECK_IN',
-        requestedCheckIn: '2026-07-01T01:20:00Z',
-        requestedCheckOut: null,
-        reason: 'ลืมสแกนนิ้ว',
-        status: 'SUBMITTED',
-        canReview: true,
-      }],
+      requests: [{ ...submittedRequest, canReview: true }],
     });
 
     renderPanel(ceoUser);
+    await expandSection();
 
     const approveButton = await screen.findByRole('button', { name: 'CEO อนุมัติ' });
     fireEvent.click(approveButton);
     fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
 
     await waitFor(() => expect(api.attendanceCorrection.approve).toHaveBeenCalledWith(5, { reviewerNote: null }));
+  });
+
+  // Regression coverage for the deliberate invalidation change this branch makes
+  // (fix/attendance-correction-on-attendance-page): approving now writes a real punch
+  // (AttendanceCorrectionService#approve -> AttendanceDailyService#applyManualCorrection,
+  // backend), and this list sits on the same page as the attendance day table now, so an
+  // approval must invalidate BOTH query prefixes or the table above keeps showing stale data.
+  it('invalidates both attendanceCorrection and attendance on approve', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    api.attendanceCorrection.list.mockResolvedValue({
+      requests: [{ ...submittedRequest, canReview: true }],
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AttendanceCorrectionPanel user={ceoUser} showToast={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    await expandSection();
+
+    const approveButton = await screen.findByRole('button', { name: 'CEO อนุมัติ' });
+    fireEvent.click(approveButton);
+    fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
+
+    await waitFor(() => expect(api.attendanceCorrection.approve).toHaveBeenCalledTimes(1));
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['attendanceCorrection'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['attendance'] });
   });
 });
