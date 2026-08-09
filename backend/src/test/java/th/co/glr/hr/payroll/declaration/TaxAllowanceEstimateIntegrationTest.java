@@ -42,6 +42,10 @@ import th.co.glr.hr.ticket.TicketRepository;
  * against a REAL {@link PayrollService#preview} run for the same employee/month, never a
  * hand-computed expectation.
  */
+import th.co.glr.hr.config.AppProperties;
+
+import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
+
 class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTest {
     private TaxAllowanceDeclarationRepository declarationRepository;
     private TaxAllowanceDeclarationService service;
@@ -90,7 +94,8 @@ class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTes
             mock(AuditService.class),
             mock(FileStorageService.class),
             payrollService,
-            new NotificationRepository(jdbc));
+            new NotificationRepository(jdbc),
+            new AppProperties(), new LorYor01Renderer());
 
         hrEmployeeId = seedEmployee("EST-HR", new BigDecimal("50000.00"), "M");
     }
@@ -155,7 +160,7 @@ class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTes
 
         TaxAllowanceDeclarationDto declaration =
             service.submitOwn(submitRequest(spouseAllowance), employeeActor(employeeId));
-        service.approve(declaration.declarationId(), null, hrActor());
+        approveSigned(declaration.declarationId());
         service.apply(declaration.declarationId(), null, hrActor());
 
         PayrollPeriodDto realPeriod = payrollService.preview(
@@ -189,7 +194,8 @@ class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTes
             null, null, null,         // childCount, childCountDouble, disabledCareCount
             null,                     // disabilityCardHolder
             null,                     // parentCareCount
-            null);                    // documentReference
+            null,                    // documentReference
+            null);                   // lorYor01 — no ล.ย.01 form detail in this fixture
     }
 
     private long seedEmployee(String code, BigDecimal salary, String payType) {
@@ -212,5 +218,15 @@ class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTes
 
     private UserPrincipal hrActor() {
         return new UserPrincipal(hrEmployeeId, "hr@glr.co.th", "HR", "hr", hrEmployeeId, true, LocalDate.now(), false, null, false);
+    }
+
+    /**
+     * Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3).
+     * The failure cases below deliberately do NOT use this — they assert on the role and status
+     * checks, which both run before the signed-form check and so are unaffected by it.
+     */
+    private void approveSigned(long declarationId) {
+        TaxAllowanceTestSupport.attachSignedForm(jdbc, declarationId);
+        service.approve(declarationId, null, hrActor());
     }
 }

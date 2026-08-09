@@ -19,6 +19,7 @@ import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.core.task.SyncTaskExecutor;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.brand.BrandAssets;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.mail.Mailer;
 
@@ -70,7 +71,10 @@ class NotificationServiceTest {
         // The dead-code defect this locks in: NotificationService used to call the email service's
         // 4-arg overload, so recipientName/link never reached the email (always the generic greeting,
         // never a portal link) even though notify() receives both. Assert BOTH the name-driven
-        // greeting AND the link actually reach the mailer - either dropped is the regression.
+        // greeting AND the link actually reach the mailer - either dropped is the regression. The
+        // 5th argument (inline images) is always the GL&R logo - see NotificationEmailServiceTest for
+        // the dedicated coverage of that; here it's just asserted present so this call keeps matching
+        // the real 5-arg Mailer.sendHtml signature.
         verify(mailer).sendHtml(
             eq("employee@glr.co.th"),
             eq("[GL&R HR] Leave submitted"),
@@ -81,7 +85,8 @@ class NotificationServiceTest {
             argThat(text -> text.contains("เรียน คุณสมชาย ใจดี,")
                 && text.contains("Your leave request was submitted.")
                 && text.contains("https://portal.example/leave/1")
-                && text.contains("ระบบบริหารงานบุคคล GL&R")));
+                && text.contains("ระบบบริหารงานบุคคล GL&R")),
+            argThat(images -> images.size() == 1 && "glr-logo".equals(images.get(0).contentId())));
     }
 
     @Test
@@ -135,8 +140,13 @@ class NotificationServiceTest {
         }
 
         @Bean
-        NotificationEmailService notificationEmailService(Mailer mailer) {
-            return new NotificationEmailService(mailer, "", "", "https://portal.example", "https://assets.example");
+        NotificationEmailService notificationEmailService(Mailer mailer, BrandAssets brandAssets) {
+            return new NotificationEmailService(mailer, brandAssets, "", "", "https://portal.example");
+        }
+
+        @Bean
+        BrandAssets brandAssets() {
+            return new BrandAssets();
         }
 
         @Bean

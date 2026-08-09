@@ -104,7 +104,7 @@ export function AccessDeniedPage() {
           </h1>
         </div>
       </div>
-      <Panel className="empty-state">
+      <Panel className="grid min-h-[220px] place-items-center content-center gap-2 text-center text-text-muted">
         <Icon name="lock" size={34} />
         <p>
           บัญชีของคุณไม่มีสิทธิ์เข้าถึงหน้า

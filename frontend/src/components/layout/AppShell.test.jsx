@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AppShell } from './AppShell.jsx';
 
@@ -239,6 +239,60 @@ describe('AppShell skip link (WCAG 2.2 §2.4.1 Bypass Blocks)', () => {
 
     expect(document.querySelectorAll('main')).toHaveLength(1);
     expect(document.getElementById('main-content')?.tagName).toBe('MAIN');
+  });
+});
+
+// Landmark structure: the topbar <header> must be a SIBLING of <main>, never a
+// descendant. It was a descendant until this guard was added — caught in real
+// Chromium on /leave/new, where `bell.closest('main')` was truthy and
+// `getByRole('main').getByRole('button')` returned 9 — the page's own 7 plus
+// the notification bell and the account menu, both counted as page content.
+//
+// Two independent costs, so two tests. (1) Screen-reader landmark navigation
+// expects banner beside main; jumping to "main" landed the user with the
+// topbar *inside* the region they had just skipped past. (2) Every
+// `getByRole('main')`-scoped query silently stopped excluding chrome — the
+// failure mode is a passing assertion, which is why this is pinned here rather
+// than left to review.
+describe('AppShell landmark structure', () => {
+  it('keeps the topbar <header> outside — and ahead of — the <main> landmark', async () => {
+    renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
+    await screen.findByText('เนื้อหา');
+
+    const main = document.querySelector('main');
+    const header = document.querySelector('header');
+    expect(header).not.toBeNull();
+    expect(main).not.toBeNull();
+    expect(main.contains(header)).toBe(false);
+
+    // A <header> is only exposed as the `banner` landmark while its landmark
+    // scope is <body>; the plain <div> column wrapper it now sits in keeps that
+    // scope, where the old <main> parent did not.
+    expect(screen.getByRole('banner')).toBe(header);
+
+    // DOCUMENT_POSITION_FOLLOWING (4): main comes after the header, so the
+    // reading order is still banner → main.
+    expect(header.compareDocumentPosition(main) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('excludes every topbar control from a getByRole("main")-scoped query', async () => {
+    renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
+    await screen.findByText('เนื้อหา');
+
+    const main = screen.getByRole('main');
+
+    // Wrong-way-round on purpose: asserting the chrome is ABSENT from main is
+    // the assertion that can actually fail. "Page content is present" passed
+    // happily throughout the whole period the nesting was broken.
+    expect(within(main).queryByRole('button', { name: 'เปิดเมนูนำทาง' })).toBeNull();
+    expect(within(main).queryByRole('button', { name: 'เมนูผู้ใช้' })).toBeNull();
+    expect(within(main).queryByRole('button', { name: /การแจ้งเตือน/ })).toBeNull();
+    expect(within(main).queryAllByRole('button')).toHaveLength(0);
+
+    // ...and the same controls really are reachable from the document, so the
+    // assertions above cannot pass by the buttons simply not having rendered.
+    expect(screen.getByRole('button', { name: 'เมนูผู้ใช้' })).not.toBeNull();
+    expect(screen.getByRole('button', { name: /การแจ้งเตือน/ })).not.toBeNull();
   });
 });
 

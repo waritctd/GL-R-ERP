@@ -1427,7 +1427,13 @@ public class PayrollService {
             base.childCountDouble(),
             headCountFor(base.disabledCareCount(), input.disabledCareAllowance(), "60000"),
             base.disabilityCardHolder(),
-            input.parentCareCount() != null ? input.parentCareCount() : (base.parentCareCount() == null ? 0 : base.parentCareCount())
+            input.parentCareCount() != null ? input.parentCareCount() : (base.parentCareCount() == null ? 0 : base.parentCareCount()),
+            // ข้อ 9 (V137) comes from the STORED declaration only -- PayrollEmployeeInputRequest
+            // carries no providentFundAllowance field, so there is deliberately no in-run override
+            // for it. Adding one would widen the payroll-run API contract (and mockApi's mirror of
+            // it) for a figure HR can already correct through the tax-allowance editor, which writes
+            // employee_tax_allowance directly. Known limitation, not an oversight.
+            base.providentFundAllowance()
         );
     }
 

@@ -2331,7 +2331,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           const hasOutstanding = outstanding > 0;
           return (
             <div className="flex flex-col gap-2">
-              <p className="confirm-dialog-message m-0">
+              <p className="confirm-dialog-message text-text-secondary leading-normal m-0">
                 {hasOutstanding
                   ? 'ระบบจะบันทึกรับชำระส่วนที่เหลือเต็มจำนวนเป็นรายการ BALANCE แล้วทำเครื่องหมายดีลนี้ว่าชำระครบแล้ว'
                   : 'ยอดคงเหลือเป็นศูนย์อยู่แล้ว ระบบจะทำเครื่องหมายดีลนี้ว่าชำระครบแล้วโดยไม่บันทึกรายการรับชำระใหม่'}

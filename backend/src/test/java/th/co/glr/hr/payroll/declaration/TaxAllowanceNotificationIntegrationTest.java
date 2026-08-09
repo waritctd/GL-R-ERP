@@ -36,6 +36,10 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * <p>Goes through the real service and a real {@link NotificationRepository} against real Postgres
  * — a mocked repository would "pass" while the INSERT wrote a different employee_id.
  */
+import th.co.glr.hr.config.AppProperties;
+
+import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
+
 class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegrationTest {
     private TaxAllowanceDeclarationRepository repository;
     private TaxAllowanceDeclarationService service;
@@ -56,7 +60,8 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
             mock(FileStorageService.class),
             mock(PayrollService.class),
             // Real, not mocked: the whole point is which employee_id reaches the INSERT.
-            new NotificationRepository(jdbc));
+            new NotificationRepository(jdbc),
+            new AppProperties(), new LorYor01Renderer());
 
         employeeA = seedEmployee("TAN-A");
         employeeB = seedEmployee("TAN-B");
@@ -67,7 +72,7 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
     void approvalNotifiesTheOwnerAndNobodyElse() {
         TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026);
 
-        service.approve(declaration.declarationId(), null, hrActor());
+        approveSigned(declaration.declarationId());
 
         assertThat(notificationTypesFor(employeeA)).containsExactly("TAX_ALLOWANCE_APPROVED");
         // The reviewing HR user must not be notified about someone else's tax affairs.
@@ -103,7 +108,7 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
         TaxAllowanceDeclarationDto declarationA = submit(employeeA, 2026);
         TaxAllowanceDeclarationDto declarationB = submit(employeeB, 2026);
 
-        service.approve(declarationA.declarationId(), null, hrActor());
+        approveSigned(declarationA.declarationId());
         service.reject(declarationB.declarationId(), new TaxAllowanceReviewRequest("ไม่ผ่าน"), hrActor());
 
         // Each employee sees exactly their own outcome — never the other's.
@@ -114,7 +119,7 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
     @Test
     void theExpirySweepNotifiesEachOwnerExactlyOnce() {
         TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026);
-        service.approve(declaration.declarationId(), null, hrActor());
+        approveSigned(declaration.declarationId());
         service.apply(declaration.declarationId(), new TaxAllowanceApplyRequest(1), hrActor());
         // Backdate the deadline so the sweep considers this row overdue.
         jdbc.update("UPDATE hr.tax_allowance_declaration SET expires_on = :past WHERE declaration_id = :id",
@@ -161,7 +166,8 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
             null, null, null,        // childCount, childCountDouble, disabledCareCount
             null,                    // disabilityCardHolder
             null,                    // parentCareCount
-            null);                   // documentReference
+            null,                   // documentReference
+            null);                   // lorYor01 — no ล.ย.01 form detail in this fixture
         return service.submitOwn(request, employeeActor(employeeId));
     }
 
@@ -179,5 +185,15 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
     private UserPrincipal hrActor() {
         return new UserPrincipal(hrEmployeeId, "hr@glr.co.th", "HR", "hr", hrEmployeeId, true,
             LocalDate.now(), false, null, false);
+    }
+
+    /**
+     * Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3).
+     * The failure cases below deliberately do NOT use this — they assert on the role and status
+     * checks, which both run before the signed-form check and so are unaffected by it.
+     */
+    private void approveSigned(long declarationId) {
+        TaxAllowanceTestSupport.attachSignedForm(jdbc, declarationId);
+        service.approve(declarationId, null, hrActor());
     }
 }

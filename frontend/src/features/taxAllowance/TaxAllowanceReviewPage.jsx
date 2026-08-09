@@ -76,7 +76,7 @@ function ApplyDialog({ row, onClose, onConfirm, busy }) {
         </>
       )}
     >
-      <p className="confirm-dialog-message">
+      <p className="confirm-dialog-message text-text-secondary leading-normal">
         จะเริ่มลดภาษีของ <strong>{row.employeeName}</strong> ตั้งแต่งวดเดือน {month}
       </p>
       <FormField label="งวดเดือนที่มีผล" htmlFor="apply-effective-month">

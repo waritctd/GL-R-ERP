@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm, useWatch } from 'react-hook-form';
@@ -15,7 +15,12 @@ import { formGridSpan2, Panel, PageStack, RowActions } from '../../components/co
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { UpcomingHolidays } from '../../components/common/UpcomingHolidays.jsx';
-import { overtimeStatusLabel as statusInfo, pendingApproverText } from '../../utils/format.js';
+import {
+  addDaysIso as addDaysToIso,
+  formatBangkokTime,
+  overtimeStatusLabel as statusInfo,
+  pendingApproverText,
+} from '../../utils/format.js';
 
 const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,0.75fr)] nav-drawer:min-w-[940px] reflow-cards';
 // FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
@@ -63,14 +68,18 @@ function defaultForm(employeeId = '') {
   return {
     employeeId: employeeId ? String(employeeId) : '',
     workDate: date,
-    plannedStartAt: `${date}T18:00`,
-    plannedEndAt: `${date}T20:00`,
+    startTime: '18:00',
+    endDate: date,
+    endTime: '20:00',
     dayType: 'WORKDAY',
     reason: '',
   };
 }
 
 const OT_TIME_RANGE_MESSAGE = 'เวลาสิ้นสุดต้องอยู่หลังเวลาเริ่ม';
+// A2: mirrors OvertimeService#validatePlannedWindow's ≤24h guard -- วันที่สิ้นสุด can only be
+// วันที่ทำ OT itself (same-day OT) or the very next day (an overnight window past midnight).
+const OT_END_DATE_RANGE_MESSAGE = 'วันที่สิ้นสุดต้องเป็นวันที่ทำ OT หรือวันถัดไปเท่านั้น';
 
 // Mirrors OvertimeService: advance notice was removed, so the only limits on a backdated request
 // are how far back it may reach and that the reason explains why it is late.
@@ -87,8 +96,9 @@ export function createOvertimeFormSchema({
   return z.object({
     employeeId: z.string(),
     workDate: z.string().min(1, 'กรุณาเลือกวันที่ทำ OT'),
-    plannedStartAt: z.string().min(1, 'กรุณาเลือกเวลาเริ่ม'),
-    plannedEndAt: z.string().min(1, 'กรุณาเลือกเวลาสิ้นสุด'),
+    startTime: z.string().min(1, 'กรุณาเลือกเวลาเริ่ม'),
+    endDate: z.string().min(1, 'กรุณาเลือกวันที่สิ้นสุด'),
+    endTime: z.string().min(1, 'กรุณาเลือกเวลาสิ้นสุด'),
     dayType: z.enum(['WORKDAY', 'HOLIDAY']),
     reason: z.string().min(1, 'กรุณาระบุเหตุผลความจำเป็น'),
   }).superRefine((data, context) => {
@@ -99,11 +109,25 @@ export function createOvertimeFormSchema({
         message: 'กรุณาเลือกพนักงาน',
       });
     }
-    if (data.plannedStartAt && data.plannedEndAt && data.plannedEndAt <= data.plannedStartAt) {
+    // Composed as plain "YYYY-MM-DDTHH:MM" strings -- comparable lexicographically the same way the
+    // old single datetime-local pair was, just built from four separate fields now.
+    const start = data.workDate && data.startTime ? `${data.workDate}T${data.startTime}` : '';
+    const end = data.endDate && data.endTime ? `${data.endDate}T${data.endTime}` : '';
+    if (start && end && end <= start) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['plannedEndAt'],
+        path: ['endTime'],
         message: OT_TIME_RANGE_MESSAGE,
+      });
+    }
+    // Mirrors OvertimeService#validatePlannedWindow's new ≤24h guard -- see
+    // OT_END_DATE_RANGE_MESSAGE above.
+    if (data.workDate && data.endDate
+      && (data.endDate < data.workDate || data.endDate > addDaysToIso(data.workDate, 1))) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['endDate'],
+        message: OT_END_DATE_RANGE_MESSAGE,
       });
     }
     if (data.workDate && data.workDate < todayIso()) {
@@ -160,18 +184,27 @@ function formatMinutes(value) {
   return `${hours} ชม. ${rest} นาที`;
 }
 
-// Matches OvertimeService#validateDayTypeClaim's ONE actively-disprovable-claim message (and its
-// mock mirror, byte-for-byte the same string) -- see that method's decision table. A malformed
-// dayType value ("ประเภทวันทำงานล่วงเวลาไม่ถูกต้อง") can't reach here: the <select> below only ever
-// submits WORKDAY or HOLIDAY. Every OTHER create() 400 (planned-window order, backdated-window/
-// reason-length) is already blocked client-side by createOvertimeFormSchema's own zod checks, so
-// a 400 that reaches this far and carries this exact substring is the day-type claim, not a
-// coincidence.
-function isDayTypeClaimError(error) {
-  return Boolean(error)
-    && error.status === 400
-    && typeof error.message === 'string'
-    && error.message.includes('ไม่สามารถแจ้งว่าเป็นวันหยุด');
+// A2: true when a request's plannedEndAt falls on a different Bangkok-local calendar date than
+// workDate -- i.e. an overnight window (e.g. 22:00 -> next-day 02:00). Compares against the
+// request's OWN workDate rather than re-deriving "today", since this is about the window's shape,
+// not whether the request is backdated.
+function isOvernightWindow(request) {
+  if (!request.plannedEndAt || !request.workDate) return false;
+  const endDate = new Date(request.plannedEndAt);
+  if (Number.isNaN(endDate.getTime())) return false;
+  return dateIso(endDate) !== request.workDate;
+}
+
+// feat/ot-nonworkday-rate-suggestion: request.calculationNote carries either the
+// calendar-unverified flag or the claim-disagreement flag as a bracketed prefix (see
+// OvertimeService#resolveDayTypeSubmitNote) -- once approved, that flag is PREPENDED to the
+// approval-time note (preserveDayTypeClaimFlag), so this still detects it post-approval. Also
+// true when the CURRENT (read-time) suggestion has since drifted from what is stored -- e.g. HR
+// corrected the calendar/schedule after submission. Checked as a prefix, not an exact string
+// match: the exact Thai text is not a stable contract.
+function hasDayTypeFlag(request) {
+  return (Boolean(request.calculationNote) && request.calculationNote.trimStart().startsWith('['))
+    || (Boolean(request.suggestedDayType) && request.suggestedDayType !== request.dayType);
 }
 
 // Debounces `value` by `delayMs` -- mirrors LeaveRequestPage's identically-named private helper
@@ -257,17 +290,28 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
     mode: 'onChange',
     reValidateMode: 'onChange',
   });
-  const [plannedStartAt, plannedEndAt, selectedEmployeeId, selectedDayType, selectedWorkDate] = useWatch({
+  const [selectedWorkDate, startTime, selectedEndDate, endTime, selectedEmployeeId, selectedDayType] = useWatch({
     control,
-    name: ['plannedStartAt', 'plannedEndAt', 'employeeId', 'dayType', 'workDate'],
+    name: ['workDate', 'startTime', 'endDate', 'endTime', 'employeeId', 'dayType'],
   });
   const isBackdated = Boolean(selectedWorkDate) && selectedWorkDate < todayIso();
+  // Composed the same way submitOvertime composes the real payload -- comparing the two "date+time"
+  // strings lexicographically is equivalent to comparing them as instants, since both share the
+  // same fixed +07:00 offset (Thailand has no DST) and the same zero-padded width.
   const hasTimeRangeError = Boolean(
-    plannedStartAt && plannedEndAt && plannedEndAt <= plannedStartAt,
+    selectedWorkDate && startTime && selectedEndDate && endTime
+      && `${selectedEndDate}T${endTime}` <= `${selectedWorkDate}T${startTime}`,
   );
-  const plannedEndError = hasTimeRangeError ? OT_TIME_RANGE_MESSAGE : errors.plannedEndAt?.message;
+  const plannedEndError = hasTimeRangeError ? OT_TIME_RANGE_MESSAGE : errors.endTime?.message;
 
-  // Holiday-verdict lookup for the currently selected วันที่ทำ OT (#ot-holiday-visibility, PR 2).
+  // feat/ot-nonworkday-rate-suggestion: filing on someone else's behalf must not preview using
+  // the ACTOR's own schedule -- /api/leave/calendar-context is self-scoped
+  // (LeaveCalendarContextService.java:42-45), so a manager filing for a subordinate would
+  // otherwise get back their own resolved schedule, not the subordinate's. '' (not yet resolved)
+  // defaults to "self", matching this form's own default filing target.
+  const isFilingForSelf = !selectedEmployeeId || Number(selectedEmployeeId) === Number(user.employeeId);
+
+  // Suggestion-verdict lookup for the currently selected วันที่ทำ OT (#ot-holiday-visibility, PR 2).
   // Debounced like LeaveRequestPage's own calendar-context read (same endpoint) so typing into
   // the date field doesn't fire one request per keystroke. Scoped to the single selected date,
   // NOT the ~90-day-forward window UpcomingHolidays shows above -- a backdated work date (up to
@@ -278,23 +322,44 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
     queryKey: queryKeys.leaveCalendarContext(debouncedVerdictWorkDate, debouncedVerdictWorkDate),
     queryFn: () => api.leave.calendarContext({ from: debouncedVerdictWorkDate, to: debouncedVerdictWorkDate })
       .then((response) => response.calendarContext),
-    enabled: Boolean(debouncedVerdictWorkDate),
+    enabled: Boolean(debouncedVerdictWorkDate) && isFilingForSelf,
   });
-  const verdictHoliday = dayTypeVerdictQuery.data?.holidays?.[0] ?? null;
-  const verdictResolved = Boolean(debouncedVerdictWorkDate) && dayTypeVerdictQuery.isSuccess;
-  const verdictIsHoliday = verdictResolved && Boolean(verdictHoliday);
+  // nonWorkingDates, not holidays[0] -- the schedule-aware answer (a holiday OR the caller's own
+  // resolved non-workday), mirroring OvertimeService#suggestDayType's exact predicate
+  // (LeaveCalendarContextDto.java:20-25). holidays is still read, but only to show the specific
+  // hr.holiday NAME when one exists for this date -- it is no longer what decides the verdict.
+  const verdictNonWorkingDates = dayTypeVerdictQuery.data?.nonWorkingDates ?? [];
+  const verdictHolidayMatch = (dayTypeVerdictQuery.data?.holidays ?? [])
+    .find((holiday) => holiday.holidayDate === debouncedVerdictWorkDate) ?? null;
+  const verdictResolved = Boolean(debouncedVerdictWorkDate) && isFilingForSelf && dayTypeVerdictQuery.isSuccess;
+  const verdictIsNonWorkday = verdictResolved && verdictNonWorkingDates.includes(debouncedVerdictWorkDate);
 
-  // Pre-flight ONLY -- a prediction of OvertimeService#validateDayTypeClaim's decision table
-  // (backend) and its mock mirror, never a substitute for it; the real gate still runs at submit.
-  // A WORKDAY claim on a genuine holiday is never refused server-side (deriveDayType corrects it
-  // upward silently), so 'under-claim' is informational, not a warning that submit will fail --
-  // 'over-claim' is the one that WILL 400 (see the pre-flight note's own copy below).
+  // Pre-flight ONLY -- a prediction of OvertimeService#suggestDayType (backend) and its mock
+  // mirror, never a substitute for it. Owner ruling 2026-08-08: NEITHER direction is refused
+  // anymore -- the employee's field is a REQUEST, pre-filled with the suggestion but freely
+  // editable, and the approver (not this badge) decides what becomes pay. Both directions are
+  // therefore informational, not a warning that submit will fail.
   const dayTypeMismatch = !verdictResolved ? null
-    : verdictIsHoliday && selectedDayType === 'WORKDAY'
-      ? { kind: 'under-claim', nameTh: verdictHoliday.nameTh }
-      : !verdictIsHoliday && selectedDayType === 'HOLIDAY'
+    : verdictIsNonWorkday && selectedDayType === 'WORKDAY'
+      ? { kind: 'under-claim', nameTh: verdictHolidayMatch?.nameTh }
+      : !verdictIsNonWorkday && selectedDayType === 'HOLIDAY'
         ? { kind: 'over-claim' }
         : null;
+
+  // feat/ot-nonworkday-rate-suggestion: ประเภท OT pre-fills the suggestion once it resolves for
+  // the current วันที่ทำ OT/employee, mirroring what the approve dialog defaults its own selector
+  // to. Auto-fills ONLY while the field is still PRISTINE for this (date, employee) pair --
+  // "dirtied" tracks whether the employee has already made their own choice, which is a REQUEST
+  // that may deliberately disagree with the suggestion (owner ruling 2026-08-08) and must never be
+  // silently overwritten out from under them once made.
+  const dayTypeDirtyRef = useRef(false);
+  useEffect(() => {
+    dayTypeDirtyRef.current = false;
+  }, [selectedWorkDate, selectedEmployeeId]);
+  useEffect(() => {
+    if (!verdictResolved || dayTypeDirtyRef.current) return;
+    setValue('dayType', verdictIsNonWorkday ? 'HOLIDAY' : 'WORKDAY');
+  }, [verdictResolved, verdictIsNonWorkday, setValue]);
 
   const totals = useMemo(() => {
     const submitted = requests.filter((request) => request.status === 'SUBMITTED').length;
@@ -351,22 +416,14 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
     },
     onError: (error) => showToast('error', error.message || 'ส่งคำขอ OT ไม่สำเร็จ'),
   });
-  // Inline surfacing alongside the toast above (#ot-holiday-visibility) -- a contradicted HOLIDAY
-  // claim (OvertimeService#validateDayTypeClaim's 400) is a FIELD-shaped error, not just a
-  // transient one a toast alone adequately explains; the "ประเภท OT" FormField below reads this.
-  const dayTypeSubmitError = isDayTypeClaimError(createMutation.error) ? createMutation.error.message : null;
-  // Live-verified rough edge: without this, a FAILED contradicted-claim submit left its 400
-  // (naming the OLD workDate) showing after the employee fixed the mismatch by changing either
-  // field -- a stale rejection about a request they no longer intend to send. Clears the instant
-  // either contributing field changes, not on every render (mutate() itself already clears it
-  // the moment a NEW submit starts, same as any TanStack Query mutation).
-  useEffect(() => {
-    createMutation.reset();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedWorkDate, selectedDayType]);
+  // feat/ot-nonworkday-rate-suggestion: the day-type claim can no longer 400 at submit (owner
+  // ruling 2026-08-08 -- a disagreeing claim is accepted and flagged, never refused), so the
+  // inline field-level surfacing this used to need (isDayTypeClaimError and the createMutation
+  // .reset() effect keyed on selectedWorkDate/selectedDayType) is dead code and was removed. The
+  // toast in onError above already covers every submit failure that remains possible.
 
   const approveMutation = useMutation({
-    mutationFn: (id) => api.overtime.approve(id, {}).then((response) => response.request),
+    mutationFn: ({ id, dayType }) => api.overtime.approve(id, dayType ? { dayType } : {}).then((response) => response.request),
     onSuccess: () => {
       showToast('success', 'อนุมัติ OT แล้ว');
       setConfirmState(null);
@@ -400,20 +457,26 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
   const saving = createMutation.isPending || approveMutation.isPending
     || rejectMutation.isPending || cancelMutation.isPending;
 
+  // Keeps วันที่สิ้นสุด inside the ≤24h window OvertimeService#validatePlannedWindow enforces (A2)
+  // as วันที่ทำ OT changes. Extends LeaveRequestPage's handleStartDateChange (:507-512) idea -- that
+  // version only ever needs to push endDate FORWARD, because leave's start/end pair has no upper
+  // bound; OT's window is capped at workDate+1, so moving วันที่ทำ OT BACKWARD needs the same
+  // treatment, or วันที่สิ้นสุด -- a field the employee never touched -- is left showing an error out
+  // of nowhere.
   function handleWorkDateChange(event) {
     const value = event.target.value;
-    const startTime = getValues('plannedStartAt').slice(11) || '18:00';
-    const endTime = getValues('plannedEndAt').slice(11) || '20:00';
-    setValue('plannedStartAt', `${value}T${startTime}`, { shouldDirty: true, shouldValidate: true });
-    setValue('plannedEndAt', `${value}T${endTime}`, { shouldDirty: true, shouldValidate: true });
+    const currentEndDate = getValues('endDate');
+    if (currentEndDate < value || currentEndDate > addDaysToIso(value, 1)) {
+      setValue('endDate', value, { shouldDirty: true, shouldValidate: true });
+    }
   }
 
   function submitOvertime(values) {
     createMutation.mutate({
       employeeId: values.employeeId ? Number(values.employeeId) : null,
       workDate: values.workDate,
-      plannedStartAt: apiDateTime(values.plannedStartAt),
-      plannedEndAt: apiDateTime(values.plannedEndAt),
+      plannedStartAt: apiDateTime(`${values.workDate}T${values.startTime}`),
+      plannedEndAt: apiDateTime(`${values.endDate}T${values.endTime}`),
       dayType: values.dayType,
       reason: values.reason.trim(),
     });
@@ -422,12 +485,24 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
   // Approve now goes through a confirmation step (matches the reference
   // CommissionPage/TicketDetailPage pattern) instead of firing immediately,
   // so the reviewer sees what they're approving before committing to it.
+  //
+  // feat/ot-nonworkday-rate-suggestion: seeds confirmState.dayType with the suggestion ONLY when
+  // there is something worth the approver's active attention -- a non-workday suggestion (3x,
+  // real money) or an explicit flag note -- and ONLY on the first approval stage (SUBMITTED);
+  // the second-stage CEO sign-off (MANAGER_APPROVED) can never override, matching the server's
+  // freeze point (OvertimeService#ceoApprove never reads dayType). null means "no override to
+  // offer" -- the dialog shows no selector and approveMutation sends no dayType, so the server
+  // falls back to its own fresh suggestion.
   function approve(id) {
-    setConfirmState({ kind: 'approve', id });
+    const request = requests.find((item) => item.id === id);
+    const canOverrideDayType = request?.status === 'SUBMITTED';
+    const flagged = canOverrideDayType
+      && (request.suggestedDayType === 'HOLIDAY' || hasDayTypeFlag(request));
+    setConfirmState({ kind: 'approve', id, dayType: flagged ? (request.suggestedDayType || 'WORKDAY') : null });
   }
 
   function confirmApprove() {
-    approveMutation.mutate(confirmState.id);
+    approveMutation.mutate({ id: confirmState.id, dayType: confirmState.dayType });
   }
 
   function reject(id) {
@@ -509,7 +584,10 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
       <CompactStatRow
         items={[
           { key: 'total', label: 'คำขอทั้งหมด', value: requests.length, helper: 'ในช่วงที่เลือก' },
-          { key: 'submitted', label: 'รอผู้จัดการ', value: totals.submitted, helper: 'Submitted' },
+          // A1: this bucket mixes BOTH routes (some SUBMITTED rows wait on a manager, some go
+          // straight to the CEO -- see overtimeStatusLabel's own comment), so it must not name
+          // only one of the two possible holders.
+          { key: 'submitted', label: 'รออนุมัติ', value: totals.submitted, helper: 'Submitted' },
           { key: 'managerApproved', label: 'รอ CEO', value: totals.managerApproved, helper: 'Manager approved' },
           { key: 'approved', label: 'อนุมัติแล้ว', value: totals.approved, helper: 'Approved' },
           { key: 'payable', label: 'ชั่วโมงจ่ายได้', value: formatMinutes(totals.payableMinutes), helper: 'Approved payable' },
@@ -529,7 +607,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           สถานะ
           <select value={filters.status} onChange={(event) => updateFilter('status', event.target.value)}>
             <option value="">ทุกสถานะ</option>
-            <option value="SUBMITTED">รอผู้จัดการ</option>
+            <option value="SUBMITTED">รออนุมัติ</option>
             <option value="MANAGER_APPROVED">รอ CEO</option>
             <option value="APPROVED">อนุมัติแล้ว</option>
             <option value="REJECTED">ปฏิเสธแล้ว</option>
@@ -601,14 +679,23 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
             />
           </FormField>
 
-          {/* Verdict badge (#ot-holiday-visibility): resolves the SAME holiday calendar
-              OvertimeService#validateDayTypeClaim checks server-side, for the currently selected
-              วันที่ทำ OT above -- so the answer is in front of the employee BEFORE they touch
-              ประเภท OT below, not only after a 400 tells them they guessed wrong. aria-live
-              announces it updating as the date field changes, matching LeaveRequestPage's
-              identical convention for its own dynamic calendar-context note. */}
+          {/* Verdict badge (#ot-holiday-visibility): resolves the SAME schedule/holiday predicate
+              OvertimeService#suggestDayType uses server-side (feat/ot-nonworkday-rate-suggestion:
+              a non-workday per the caller's OWN resolved schedule, not just a recorded holiday),
+              for the currently selected วันที่ทำ OT above -- so the answer is in front of the
+              employee before they touch ประเภท OT below. This is a SUGGESTION only -- the
+              approver's decision is what becomes pay. aria-live announces it updating as the date
+              field changes, matching LeaveRequestPage's identical convention for its own dynamic
+              calendar-context note. */}
           <div className={formGridSpan2} aria-live="polite" aria-busy={dayTypeVerdictQuery.isFetching}>
-            {verdictIsHoliday ? (
+            {!isFilingForSelf ? (
+              // /api/leave/calendar-context is self-scoped -- filing for someone else previews
+              // nothing rather than the wrong employee's schedule (see isFilingForSelf's comment).
+              <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-dashed border-border-muted bg-surface px-3 py-1.5 text-xs font-medium text-text-muted">
+                <Icon name="info" size={13} />
+                ระบบจะเสนออัตราให้เมื่อส่งคำขอ
+              </span>
+            ) : verdictIsNonWorkday ? (
               // The name is deliberately OUTSIDE the pill. `hr.holiday.name_th` is not a short
               // label: production's 19 BANK rows average 35 chars and reach **149**
               // ("ชดเชยวันคล้ายวันพระบรมราชสมภพ ... (วันเสาร์ที่ 5 ธันวาคม 2569)"), which is why V129
@@ -616,13 +703,16 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               // either stretched it off-grid or wrapped inside a `rounded-full`, which reads as
               // broken -- a pill shape asserts "one short line" and a 149-char label breaks that
               // promise. Pill keeps the fixed verdict + rate; the variable-length name sits beside
-              // it as ordinary text that is allowed to wrap.
+              // it as ordinary text that is allowed to wrap. No hr.holiday row explains a
+              // schedule-only non-workday (a weekend), so the name is omitted then.
               <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <span className="inline-flex w-fit shrink-0 items-center gap-1.5 rounded-full border border-warning-border bg-warning-bg-soft px-3 py-1.5 text-xs font-bold text-warning-dark">
                   <Icon name="triangleAlert" size={13} />
-                  วันหยุดบริษัท · 3x
+                  {verdictHolidayMatch ? 'วันหยุดบริษัท · 3x' : 'วันหยุดประจำสัปดาห์ · 3x'}
                 </span>
-                <span className="min-w-0 text-xs text-text-muted">{verdictHoliday.nameTh}</span>
+                {verdictHolidayMatch ? (
+                  <span className="min-w-0 text-xs text-text-muted">{verdictHolidayMatch.nameTh}</span>
+                ) : null}
               </span>
             ) : verdictResolved ? (
               <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-border bg-surface-subtle px-3 py-1.5 text-xs font-bold text-text-muted">
@@ -637,12 +727,17 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
             )}
           </div>
 
-          <FormField label="ประเภท OT" htmlFor="ot-day-type" error={errors.dayType?.message || dayTypeSubmitError} required>
+          <FormField label="ประเภท OT" htmlFor="ot-day-type" error={errors.dayType?.message} required>
             <select
               id="ot-day-type"
               {...register('dayType')}
               value={selectedDayType ?? ''}
-              onChange={(event) => setValue('dayType', event.target.value, { shouldDirty: true, shouldValidate: true })}
+              onChange={(event) => {
+                // The employee is making their OWN choice from here on -- see dayTypeDirtyRef's
+                // comment: the suggestion-fill effect must not overwrite it again for this date.
+                dayTypeDirtyRef.current = true;
+                setValue('dayType', event.target.value, { shouldDirty: true, shouldValidate: true });
+              }}
               aria-invalid={Boolean(errors.dayType)}
               aria-describedby={errors.dayType ? fieldErrorId('ot-day-type') : undefined}
             >
@@ -651,43 +746,68 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
             </select>
           </FormField>
 
-          {/* Pre-flight ONLY -- see dayTypeMismatch's own comment above. 'over-claim' predicts the
-              exact 400 OvertimeService#validateDayTypeClaim throws on submit; 'under-claim' is
-              informational (deriveDayType pays 3x regardless of what stays selected here). */}
+          {/* Pre-flight ONLY -- see dayTypeMismatch's own comment above. Neither direction is
+              refused anymore (owner ruling 2026-08-08): both are flagged for the approver to
+              review, and the request is always accepted. */}
           {dayTypeMismatch ? (
             <div className={formGridSpan2}>
               <p className="m-0 rounded-lg border border-warning-border bg-warning-bg-soft px-3 py-2 text-xs text-warning-dark">
                 {dayTypeMismatch.kind === 'over-claim'
-                  ? 'วันที่เลือกไม่ใช่วันหยุดตามปฏิทินบริษัท — หากส่งคำขอโดยระบุ "วันหยุด/วันหยุดนักขัตฤกษ์" ระบบจะปฏิเสธคำขอนี้ กรุณาเลือก "วันทำงานปกติ"'
-                  : `วันที่เลือกเป็นวันหยุดบริษัท (${dayTypeMismatch.nameTh}) ระบบจะคำนวณอัตรา 3x ให้โดยอัตโนมัติ แม้เลือก "วันทำงานปกติ" ไว้`}
+                  ? 'วันที่เลือกไม่ใช่วันหยุดตามปฏิทินหรือตารางเวลาทำงานของคุณ — ระบบจะแนะนำผู้อนุมัติให้ใช้อัตรา 1.5x แม้เลือก "วันหยุด/วันหยุดนักขัตฤกษ์" ไว้ ผู้อนุมัติเป็นผู้ตัดสินใจอัตราสุดท้าย'
+                  : `วันที่เลือกเป็นวันหยุด${dayTypeMismatch.nameTh ? ` (${dayTypeMismatch.nameTh})` : 'ตามตารางเวลาทำงานของคุณ'} — ระบบจะแนะนำผู้อนุมัติให้ใช้อัตรา 3x แม้เลือก "วันทำงานปกติ" ไว้ ผู้อนุมัติเป็นผู้ตัดสินใจอัตราสุดท้าย`}
               </p>
             </div>
           ) : null}
 
-          <FormField label="เริ่ม" htmlFor="ot-planned-start" error={errors.plannedStartAt?.message} required>
+          {/* A2: two dates + two times, mirroring LeaveRequestPage's own start/end fields --
+              never datetime-local. วันที่ทำ OT above already carries the date the employee is
+              filing for; these three fields answer "what time did it start" / "does it cross
+              midnight" / "what time did it end", without asking for the same date a third time. */}
+          <FormField label="เวลาเริ่ม" htmlFor="ot-start-time" error={errors.startTime?.message} required>
             <input
-              id="ot-planned-start"
-              type="datetime-local"
-              {...register('plannedStartAt')}
-              className={errors.plannedStartAt ? 'is-invalid' : ''}
-              aria-invalid={Boolean(errors.plannedStartAt)}
-              aria-describedby={errors.plannedStartAt ? fieldErrorId('ot-planned-start') : undefined}
+              id="ot-start-time"
+              type="time"
+              {...register('startTime')}
+              className={errors.startTime ? 'border-danger focus:border-danger focus:[box-shadow:0_0_0_3px_var(--color-danger-bg)]' : ''}
+              aria-invalid={Boolean(errors.startTime)}
+              aria-describedby={errors.startTime ? fieldErrorId('ot-start-time') : undefined}
               required
             />
           </FormField>
           <FormField
-            label="สิ้นสุด"
-            htmlFor="ot-planned-end"
+            label="วันที่สิ้นสุด"
+            htmlFor="ot-end-date"
+            error={errors.endDate?.message}
+            required
+          >
+            <input
+              id="ot-end-date"
+              type="date"
+              min={selectedWorkDate}
+              // Mirrors the zod ≤24h check above in the native picker itself. Guarded: before the
+              // form settles (or if it's ever cleared) selectedWorkDate is '', and addDaysToIso('')
+              // would split into NaN/undefined date parts -- undefined here just means "no cap yet",
+              // never a broken one.
+              max={selectedWorkDate ? addDaysToIso(selectedWorkDate, 1) : undefined}
+              {...register('endDate')}
+              aria-invalid={Boolean(errors.endDate)}
+              aria-describedby={errors.endDate ? fieldErrorId('ot-end-date') : undefined}
+              required
+            />
+          </FormField>
+          <FormField
+            label="เวลาสิ้นสุด"
+            htmlFor="ot-end-time"
             error={plannedEndError}
             required
           >
             <input
-              id="ot-planned-end"
-              type="datetime-local"
-              {...register('plannedEndAt')}
-              className={plannedEndError ? 'is-invalid' : ''}
+              id="ot-end-time"
+              type="time"
+              {...register('endTime')}
+              className={plannedEndError ? 'border-danger focus:border-danger focus:[box-shadow:0_0_0_3px_var(--color-danger-bg)]' : ''}
               aria-invalid={Boolean(plannedEndError)}
-              aria-describedby={plannedEndError ? fieldErrorId('ot-planned-end') : undefined}
+              aria-describedby={plannedEndError ? fieldErrorId('ot-end-time') : undefined}
               required
             />
           </FormField>
@@ -695,7 +815,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
             <FormField label="เหตุผลความจำเป็น" htmlFor="ot-reason" error={errors.reason?.message} required>
               <textarea
                 id="ot-reason"
-                className={errors.reason ? 'is-invalid' : ''}
+                className={errors.reason ? 'border-danger focus:border-danger focus:[box-shadow:0_0_0_3px_var(--color-danger-bg)]' : ''}
                 rows={3}
                 {...register('reason')}
                 aria-invalid={Boolean(errors.reason)}
@@ -727,7 +847,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
         ) : requests.length === 0 ? (
           <EmptyState icon="clock" title="ยังไม่มีคำขอ OT" description="ลองเปลี่ยนช่วงวันที่หรือยื่นคำขอใหม่" />
         ) : requests.map((request) => {
-          const status = statusInfo(request.status);
+          const status = statusInfo(request.status, request.pendingApproverRole);
           const isPending = request.status === 'SUBMITTED' || request.status === 'MANAGER_APPROVED';
           const pendingApproverNote = isPending
             ? pendingApproverText(request.pendingApproverRole, request.pendingApproverName)
@@ -744,10 +864,43 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
                 <strong>{formatWorkDate(request.workDate)}</strong>
                 <small>{request.employeeName || request.employeeCode || request.employeeId}</small>
               </span>
+              {/* A2: times only -- the "วันที่ / พนักงาน" column to the left already prints
+                  วันที่ทำ OT once, so repeating it here would be the same date shown twice in one
+                  row. "(+1 วัน)" is the only date-shaped thing this column ever adds, and only for
+                  the overnight case where plannedEndAt genuinely lands on a different day. */}
               <span data-label="แผน OT" className="mobile:order-4">
-                <strong>{formatDateTime(request.plannedStartAt)}</strong>
+                <strong>
+                  {formatBangkokTime(request.plannedStartAt)}–{formatBangkokTime(request.plannedEndAt)} น.
+                  {isOvernightWindow(request) ? ' (+1 วัน)' : ''}
+                </strong>
                 <small>
-                  {formatDateTime(request.plannedEndAt)} · {formatMinutes(request.plannedMinutes)} · {request.dayType === 'HOLIDAY' ? '3x' : '1.5x'}
+                  {formatMinutes(request.plannedMinutes)} · {request.dayType === 'HOLIDAY' ? '3x' : '1.5x'}
+                  {/* feat/ot-nonworkday-rate-suggestion: surfaces BEFORE approval that the system
+                      disagrees with the stored/requested rate -- either the employee's own claim
+                      disagreed with the suggestion at submit time, or the suggestion has since
+                      drifted (a calendar/schedule correction). Only meaningful while a decision is
+                      still pending; once approved/rejected/cancelled the approver's (or nobody's)
+                      call is already final. */}
+                  {isPending && hasDayTypeFlag(request) ? (
+                    <span
+                      className="ml-1 inline-flex items-center gap-1 text-warning-dark"
+                      title={request.calculationNote || 'ระบบแนะนำอัตราอื่นจากที่ระบุไว้ — โปรดตรวจสอบก่อนอนุมัติ'}
+                    >
+                      <Icon name="triangleAlert" size={11} />
+                      {/* The stored rate at submit is always the SUGGESTION, never the employee's
+                          raw claim (see OvertimeService#submit's SECURITY comment) -- so
+                          suggestedDayType usually already equals the rate shown just above, and
+                          repeating "แนะนำ 3x" beside an already-3x rate would read as a contradiction
+                          that isn't there. Only name the suggested rate when it has actually
+                          DRIFTED from what is stored (a calendar/schedule correction since
+                          submission/approval); otherwise a plain "ตรวจสอบ" is honest about there
+                          being a flag (see the tooltip/calculationNote for what it is) without
+                          implying the visible rate is wrong. */}
+                      {request.suggestedDayType && request.suggestedDayType !== request.dayType
+                        ? `แนะนำ ${request.suggestedDayType === 'HOLIDAY' ? '3x' : '1.5x'}`
+                        : 'ตรวจสอบ'}
+                    </span>
+                  ) : null}
                 </small>
               </span>
               <span data-label="เหตุผล" className="mobile:order-5">
@@ -767,14 +920,22 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
                     repeating it made this note a superset of the badge's own text, which broke an
                     e2e locator matching the badge's exact label (review #pending-approver-info). */}
                 {pendingApproverNote ? <small className="text-text-muted">{pendingApproverNote}</small> : null}
-                <small>ผู้จัดการ: {request.managerApprovedAt ? `${request.managerApprovedByName || '-'} · ${formatDateTime(request.managerApprovedAt)}` : '-'}</small>
+                {/* A1: only print the ผู้จัดการ audit line when this request actually HAS a
+                    manager stage (hasManagerStage mirrors OvertimeService.approve()'s own
+                    routing). On the manager-less route this slot could never fill -- it always
+                    read "-" -- which is exactly the contradiction the owner's screenshot showed:
+                    a badge naming CEO sitting next to an audit line naming a manager who never
+                    existed for this request. */}
+                {hasManagerStage(request) ? (
+                  <small>ผู้จัดการ: {request.managerApprovedAt ? `${request.managerApprovedByName || '-'} · ${formatDateTime(request.managerApprovedAt)}` : '-'}</small>
+                ) : null}
                 <small>CEO: {request.ceoApprovedAt ? `${request.ceoApprovedByName || '-'} · ${formatDateTime(request.ceoApprovedAt)}` : '-'}</small>
               </span>
               {/* Approve/reject visually differentiated per DESIGN.md (danger stays
                   outlined, not filled) and step 9 rule 2 — mirrors the exact
                   success/danger icon-button tinting CommissionPage uses for the
                   same manager/CEO review pattern. */}
-              <span className="row-actions mobile:order-3">
+              <RowActions className="mobile:order-3 mobile:flex-wrap">
                 {reviewable ? (
                   <>
                     <Button
@@ -806,7 +967,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
                     <Icon name="close" size={14} />
                   </Button>
                 ) : null}
-              </span>
+              </RowActions>
             </div>
           );
         })}
@@ -819,6 +980,17 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           const request = requests.find((item) => item.id === confirmState?.id);
           if (!request) return 'ยืนยันการอนุมัติคำขอ OT นี้?';
           const isCeoStep = canCeoApprove(request);
+          const isDirectCeoStep = isCeoStep && request.status === 'SUBMITTED';
+          // feat/ot-nonworkday-rate-suggestion: only the FIRST approval stage (SUBMITTED) may set
+          // the rate -- the freeze point does not move, so the second-stage CEO sign-off
+          // (MANAGER_APPROVED) shows no selector and always inherits what was already frozen,
+          // matching OvertimeService#ceoApprove never reading dayType.
+          const canOverrideDayType = request.status === 'SUBMITTED';
+          const flagged = canOverrideDayType
+            && (request.suggestedDayType === 'HOLIDAY' || hasDayTypeFlag(request));
+          // The rate that will ACTUALLY apply once this approval completes: the approver's live
+          // selection when one is on offer, else whatever is already frozen/suggested.
+          const effectiveDayType = (canOverrideDayType && confirmState?.dayType) || request.dayType;
           // Three outcomes, because there are three routes. Quoted from api.overtime.approve
           // (src/api/mockApi.js): the SUBMITTED->MANAGER_APPROVED step computes
           // payableMinutes = round(actualMinutes * multiplier) right there; the
@@ -826,11 +998,12 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           // manager step already computed. The manager-less route does BOTH at once, so its copy
           // has to promise the calculation as well as the final status -- telling a CEO their
           // one click "only flips the status" would be wrong on the one route that pays out.
-          const rateLabel = request.dayType === 'HOLIDAY' ? '3x (วันหยุด)' : '1.5x (วันทำงานปกติ)';
-          const isDirectCeoStep = isCeoStep && request.status === 'SUBMITTED';
+          const rateLabel = effectiveDayType === 'HOLIDAY' ? '3x (วันหยุด)' : '1.5x (วันทำงานปกติ)';
           let nextStep;
           if (isDirectCeoStep) {
-            nextStep = `คำขอนี้ไม่มีขั้นอนุมัติของหัวหน้างาน สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว" และคำนวณชั่วโมงจ่ายได้ตามอัตรา ${rateLabel}`;
+            // A3: state only the outcome -- the employee-facing/CEO-facing notifications for this
+            // same route dropped the "no supervisor step" framing too (OvertimeService#notifySubmitted).
+            nextStep = `สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว" และคำนวณชั่วโมงจ่ายได้ตามอัตรา ${rateLabel}`;
           } else if (isCeoStep) {
             nextStep = 'สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว" พร้อมชั่วโมงจ่ายได้ที่คำนวณไว้';
           } else {
@@ -838,17 +1011,48 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           }
           return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <p className="confirm-dialog-message" style={{ margin: 0 }}>
+              <p className="confirm-dialog-message text-text-secondary leading-normal" style={{ margin: 0 }}>
                 ตรวจสอบแผน OT ของ <strong>{request.employeeName || request.employeeCode || request.employeeId}</strong> ก่อนอนุมัติ
               </p>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid var(--color-border)', paddingTop: 8 }}>
                 <span style={{ color: 'var(--color-icon-muted)' }}>วันที่ / เวลา</span>
-                <span className="font-mono">{formatDateTime(request.plannedStartAt)}–{formatDateTime(request.plannedEndAt).slice(-5)}</span>
+                {/* A2: the date shows exactly ONCE here (nowhere else in this dialog prints it) --
+                    the old `.slice(-5)` hack existed only because plannedEndAt was being run
+                    through the full date+time formatter a second time just to throw the date part
+                    away. "(+1 วัน)" replaces that hack for the one case where the end genuinely
+                    lands on a different day. */}
+                <span className="font-mono">
+                  {formatWorkDate(request.workDate)} · {formatBangkokTime(request.plannedStartAt)}–{formatBangkokTime(request.plannedEndAt)} น.
+                  {isOvernightWindow(request) ? ' (+1 วัน)' : ''}
+                </span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700 }}>
                 <span>เวลาที่วางแผน</span>
-                <span className="font-mono">{formatMinutes(request.plannedMinutes)} · {request.dayType === 'HOLIDAY' ? '3x' : '1.5x'}</span>
+                <span className="font-mono">{formatMinutes(request.plannedMinutes)} · {effectiveDayType === 'HOLIDAY' ? '3x' : '1.5x'}</span>
               </div>
+              {/* feat/ot-nonworkday-rate-suggestion: the approver's DECISION -- shown only when
+                  there is something worth an active choice (a non-workday suggestion, or an
+                  explicit flag), and only on the stage that can still set the rate at all.
+                  Defaults to the suggestion; downgrading/upgrading from there is an explicit,
+                  visible act, never a silent default. */}
+              {flagged ? (
+                <label className="flex flex-col gap-1 border-t border-border pt-2 text-sm">
+                  <span className="font-medium text-text">
+                    ระบบตรวจพบว่าวันนี้อาจเป็นวันหยุด — เลือกอัตราที่ถูกต้องก่อนอนุมัติ
+                  </span>
+                  <select
+                    value={confirmState?.dayType || 'WORKDAY'}
+                    onChange={(event) => setConfirmState((current) => ({ ...current, dayType: event.target.value }))}
+                    aria-label="อัตราที่จะอนุมัติ"
+                  >
+                    <option value="WORKDAY">วันทำงานปกติ · 1.5x</option>
+                    <option value="HOLIDAY">วันหยุด/วันหยุดนักขัตฤกษ์ · 3x</option>
+                  </select>
+                  {request.calculationNote ? (
+                    <small className="text-text-muted">{request.calculationNote}</small>
+                  ) : null}
+                </label>
+              ) : null}
               <p style={{ margin: 0, fontSize: 12, color: 'var(--color-icon-muted)' }}>{nextStep}</p>
             </div>
           );

@@ -10,7 +10,7 @@ import React from 'react';
 export function Skeleton({ width = '100%', height = 16, radius = 'var(--radius-md)', className = '' }) {
   return (
     <span
-      className={`skeleton ${className}`.trim()}
+      className={`skeleton block bg-[linear-gradient(90deg,var(--color-surface-muted)_25%,var(--color-border)_37%,var(--color-surface-muted)_63%)] bg-[length:400%_100%] animate-[skeleton-shimmer_1.4s_ease_infinite] motion-reduce:animate-none motion-reduce:bg-none motion-reduce:bg-surface-muted ${className}`.trim()}
       aria-hidden="true"
       style={{ width, height, borderRadius: radius }}
     />
@@ -19,7 +19,7 @@ export function Skeleton({ width = '100%', height = 16, radius = 'var(--radius-m
 
 export function SkeletonText({ lines = 3, lastLineWidth = '60%', className = '' }) {
   return (
-    <div className={`skeleton-text ${className}`.trim()} aria-hidden="true">
+    <div className={`grid gap-2 ${className}`.trim()} aria-hidden="true">
       {Array.from({ length: lines }, (_, index) => (
         <Skeleton key={index} height={12} width={index === lines - 1 ? lastLineWidth : '100%'} />
       ))}
@@ -29,8 +29,8 @@ export function SkeletonText({ lines = 3, lastLineWidth = '60%', className = '' 
 
 export function SkeletonCard({ lines = 3, className = '' }) {
   return (
-    <div className={`skeleton-card ${className}`.trim()} aria-hidden="true">
-      <div className="skeleton-card-header">
+    <div className={`grid gap-3 p-4 border border-border rounded-md bg-surface ${className}`.trim()} aria-hidden="true">
+      <div className="flex items-center gap-3">
         <Skeleton width={40} height={40} radius="var(--radius-pill)" />
         <Skeleton width="40%" height={14} />
       </div>

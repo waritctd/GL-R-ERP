@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OvertimePage } from './OvertimePage.jsx';
 import { api } from '../../api/index.js';
@@ -95,12 +95,16 @@ describe('OvertimePage form validation', () => {
   it('blocks submit when planned end is not after planned start', async () => {
     renderOvertimePage();
 
-    const startInput = await screen.findByLabelText(/^เริ่ม/);
-    const endInput = screen.getByLabelText(/สิ้นสุด/);
+    // A2: two dates + two times now, not two datetime-local inputs -- both same-day here (วันที่
+    // ทำ OT / วันที่สิ้นสุด default to the same day), so this exercises the time-only ordering rule
+    // in isolation. Anchored regex, not an exact string: FormField appends a `required` asterisk
+    // to the label's actual text content, and `^เวลาสิ้นสุด` cannot also match "วันที่สิ้นสุด".
+    const startTimeInput = await screen.findByLabelText(/^เวลาเริ่ม/);
+    const endTimeInput = screen.getByLabelText(/^เวลาสิ้นสุด/);
     const submitButton = screen.getByRole('button', { name: /ส่งคำขอ/ });
 
-    fireEvent.change(startInput, { target: { value: '2026-07-07T20:00' } });
-    fireEvent.change(endInput, { target: { value: '2026-07-07T18:00' } });
+    fireEvent.change(startTimeInput, { target: { value: '20:00' } });
+    fireEvent.change(endTimeInput, { target: { value: '18:00' } });
 
     expect(await screen.findByText('เวลาสิ้นสุดต้องอยู่หลังเวลาเริ่ม')).not.toBeNull();
     await waitFor(() => expect(submitButton.disabled).toBe(true));
@@ -181,6 +185,50 @@ describe('OvertimePage form validation', () => {
 
     expect(api.overtime.create).not.toHaveBeenCalled();
   });
+
+  // A2 (OT UAT defect #3): mirrors OvertimeService#validatePlannedWindow's ≤24h guard client-side
+  // -- the two backend boundary tests (plannedWindowLongerThanOneDayIsRejected /
+  // ...ExactlyOneDayAfterWorkDateIsAccepted) have no frontend counterpart until now. Anchored
+  // regex for วันที่สิ้นสุด, not a bare substring match: "เวลาสิ้นสุด" also contains "สิ้นสุด", and
+  // FormField's required asterisk sits outside the anchor either way.
+  it('blocks submit when วันที่สิ้นสุด is more than one day after วันที่ทำ OT', async () => {
+    renderOvertimePage();
+    const workDate = isoDaysFromToday(3);
+    const tooFarEndDate = isoDaysFromToday(5); // workDate + 2 days -- one day past the allowed cap.
+
+    fireEvent.change(await screen.findByLabelText(/วันที่ทำ OT/), { target: { value: workDate } });
+    fireEvent.change(screen.getByLabelText(/^วันที่สิ้นสุด/), { target: { value: tooFarEndDate } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลความจำเป็น/), { target: { value: 'ทดสอบระบบ' } });
+
+    expect(await screen.findByText('วันที่สิ้นสุดต้องเป็นวันที่ทำ OT หรือวันถัดไปเท่านั้น')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
+
+    expect(api.overtime.create).not.toHaveBeenCalled();
+  });
+
+  // The boundary the guard above must still ACCEPT -- the overnight window the two-date redesign
+  // exists to support. เวลาเริ่ม/เวลาสิ้นสุด are left at their form defaults (18:00/20:00): the point
+  // of this case is วันที่สิ้นสุด = วันที่ทำ OT + 1 day exactly, not any particular time pair.
+  it('accepts a request whose วันที่สิ้นสุด is exactly one day after วันที่ทำ OT', async () => {
+    renderOvertimePage();
+    const workDate = isoDaysFromToday(3);
+    const nextDay = isoDaysFromToday(4);
+
+    fireEvent.change(await screen.findByLabelText(/วันที่ทำ OT/), { target: { value: workDate } });
+    fireEvent.change(screen.getByLabelText(/^วันที่สิ้นสุด/), { target: { value: nextDay } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลความจำเป็น/), { target: { value: 'ทดสอบระบบ' } });
+    fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
+
+    await waitFor(() => expect(api.overtime.create).toHaveBeenCalledTimes(1));
+    expect(api.overtime.create).toHaveBeenCalledWith({
+      employeeId: 1,
+      workDate,
+      plannedStartAt: `${workDate}T18:00:00+07:00`,
+      plannedEndAt: `${nextDay}T20:00:00+07:00`,
+      dayType: 'WORKDAY',
+      reason: 'ทดสอบระบบ',
+    });
+  });
 });
 
 // feat/pending-approver-info: "who this is waiting on" beside the OT status badge.
@@ -236,11 +284,91 @@ describe('OvertimePage pending-approver note', () => {
     });
     renderOvertimePage();
 
-    await screen.findByText('ไม่มีผู้จัดการฝ่าย');
+    const row = (await screen.findByText('ไม่มีผู้จัดการฝ่าย')).closest('.data-row');
+    // Scoped to the "ขั้นอนุมัติ" column specifically, NOT the whole row -- the row's own "เหตุผล"
+    // column legitimately contains the substring "ผู้จัดการ" in this fixture's reason text
+    // ("ไม่มีผู้จัดการฝ่าย"), which would otherwise make a row-wide /ผู้จัดการ/ query match for the
+    // wrong reason.
+    const approvalColumn = row.querySelector('[data-label="ขั้นอนุมัติ"]');
+
     // Scope to the approver note's own <small> -- bare "CEO" (no "รอ" prefix, review
     // #pending-approver-info) could otherwise match a StatusBadge whose own label happens to be
     // "CEO" text too, depending on status.
     expect(await screen.findByText('CEO', { selector: 'small.text-text-muted' })).not.toBeNull();
+
+    // A1 (OT UAT defect #1): the StatusBadge itself must read "รอ CEO", not the "รอผู้จัดการ" a
+    // status-only map would give every SUBMITTED row regardless of route -- and the ผู้จัดการ:
+    // audit line, which could never fill on this manager-less route, must not render at all. This
+    // is the exact fixture the header comment on this describe block warned had locked in the
+    // buggy badge.
+    expect(within(approvalColumn).getByText('รอ CEO')).not.toBeNull();
+    expect(within(approvalColumn).queryByText(/ผู้จัดการ/)).toBeNull();
+  });
+});
+
+// A2 (OT UAT defect #3): the "แผน OT" column must show " (+1 วัน)" only when plannedEndAt genuinely
+// lands on a different Bangkok-local calendar day than workDate (OvertimePanel.jsx's
+// isOvernightWindow) -- this is the one behaviour the whole two-date-picker redesign exists to
+// support, and until this block it had no permanent regression test (only a throwaway one written
+// and discarded during manual verification). Both a same-day and an overnight request render in
+// ONE list so the negative (same-day) assertion is not vacuous for an unrelated reason -- e.g. both
+// rows happening to share a status/route that coincidentally never shows the suffix.
+describe('OvertimePage แผน OT column (A2 overnight display)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.overtime.employees.mockResolvedValue({
+      employees: [{
+        employeeId: 1,
+        employeeName: 'พนักงาน ทดสอบ',
+        employeeCode: 'GLR-001',
+        self: true,
+        directReport: false,
+      }],
+    });
+    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [] } });
+    api.overtime.list.mockResolvedValue({
+      requests: [
+        {
+          id: 901, employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001',
+          workDate: '2026-07-07',
+          plannedStartAt: '2026-07-07T18:00:00+07:00', plannedEndAt: '2026-07-07T20:00:00+07:00',
+          plannedMinutes: 120, dayType: 'WORKDAY', reason: 'same-day shift', status: 'SUBMITTED',
+          actualMinutes: 0, payableMinutes: 0, hasManagerApprover: true,
+          pendingApproverRole: 'manager', pendingApproverName: null,
+        },
+        {
+          id: 902, employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001',
+          workDate: '2026-07-07',
+          // 22:00 -> 02:00 the NEXT Bangkok day. Real +07:00 instants, not bare local strings --
+          // isOvernightWindow compares dateIso(new Date(plannedEndAt)) (parsed in Asia/Bangkok)
+          // against workDate, so an offset-less string would instead be parsed in whatever zone
+          // the test happens to run in and could pass or fail for the wrong reason depending on
+          // where the suite executes.
+          plannedStartAt: '2026-07-07T22:00:00+07:00', plannedEndAt: '2026-07-08T02:00:00+07:00',
+          plannedMinutes: 240, dayType: 'WORKDAY', reason: 'overnight shift', status: 'SUBMITTED',
+          actualMinutes: 0, payableMinutes: 0, hasManagerApprover: true,
+          pendingApproverRole: 'manager', pendingApproverName: null,
+        },
+      ],
+    });
+  });
+
+  it('shows (+1 วัน) only for the request whose plannedEndAt lands on the next Bangkok day', async () => {
+    renderOvertimePage();
+
+    const sameDayRow = (await screen.findByText('same-day shift')).closest('.data-row');
+    const overnightRow = (await screen.findByText('overnight shift')).closest('.data-row');
+    const sameDayPlan = sameDayRow.querySelector('[data-label="แผน OT"] strong');
+    const overnightPlan = overnightRow.querySelector('[data-label="แผน OT"] strong');
+
+    // Negative case: a same-day request shows the time range with NO (+1 วัน) suffix. Exact-match,
+    // not a substring check -- วันที่ / พนักงาน (the first column) already prints วันที่ทำ OT once,
+    // so pinning the WHOLE string here also proves this column never repeats it: there is no room
+    // for a stray date to sneak into an exact match.
+    expect(sameDayPlan.textContent).toBe('18:00–20:00 น.');
+
+    // Positive case: the overnight request appends the suffix, same exact-match reasoning.
+    expect(overnightPlan.textContent).toBe('22:00–02:00 น. (+1 วัน)');
   });
 });
 
@@ -331,8 +459,15 @@ describe('OvertimePage holiday verdict', () => {
 
   it('shows the HOLIDAY verdict (3x) and the holiday name separately, so a long real name cannot break the pill', async () => {
     const today = isoDaysFromToday(0);
+    // feat/ot-nonworkday-rate-suggestion: the verdict now reads nonWorkingDates (the
+    // schedule-aware answer), not holidays[0] -- a realistic fixture for "today is a genuine
+    // holiday" carries both, matching the real LeaveCalendarContextService#get contract (a
+    // recorded holiday is always folded into nonWorkingDates too).
     api.leave.calendarContext.mockResolvedValue({
-      calendarContext: { holidays: [{ holidayDate: today, nameTh: LONGEST_REAL_HOLIDAY_NAME }] },
+      calendarContext: {
+        holidays: [{ holidayDate: today, nameTh: LONGEST_REAL_HOLIDAY_NAME }],
+        nonWorkingDates: [today],
+      },
     });
     renderOvertimePage();
 
@@ -364,23 +499,176 @@ describe('OvertimePage holiday verdict', () => {
     expect(await screen.findByText('ปฏิทินยังไม่ได้โหลด')).not.toBeNull();
   });
 
-  it('warns inline on ประเภท OT that submitting HOLIDAY will be refused when the date is not a holiday', async () => {
-    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [] } });
+  // feat/ot-nonworkday-rate-suggestion: owner ruling 2026-08-08 removed the outright refusal --
+  // an over-claim is now accepted and flagged for the approver, never refused. Renamed from
+  // "...will be refused when the date is not a holiday" and its assertion updated accordingly.
+  it('notes inline that an over-claim will be flagged for the approver, not refused', async () => {
+    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
     renderOvertimePage();
 
     await screen.findByText('วันทำงานปกติ · 1.5x', { selector: 'span' });
     fireEvent.change(screen.getByLabelText(/ประเภท OT/), { target: { value: 'HOLIDAY' } });
 
-    expect(await screen.findByText(/ระบบจะปฏิเสธคำขอนี้/)).not.toBeNull();
+    expect(await screen.findByText(/ระบบจะแนะนำผู้อนุมัติให้ใช้อัตรา 1\.5x/)).not.toBeNull();
   });
 
-  it('notes inline that a HOLIDAY date pays 3x automatically even while WORKDAY stays selected', async () => {
+  // Renamed from "...pays 3x automatically..." -- the approver, not an automatic recalculation,
+  // now decides the final rate (owner ruling 2026-08-08).
+  it('notes inline that a suggested-HOLIDAY date will be flagged for the approver even while WORKDAY stays selected', async () => {
     const today = isoDaysFromToday(0);
     api.leave.calendarContext.mockResolvedValue({
-      calendarContext: { holidays: [{ holidayDate: today, nameTh: 'วันหยุดทดสอบ' }] },
+      calendarContext: {
+        holidays: [{ holidayDate: today, nameTh: 'วันหยุดทดสอบ' }],
+        nonWorkingDates: [today],
+      },
     });
     renderOvertimePage();
 
-    expect(await screen.findByText(/ระบบจะคำนวณอัตรา 3x ให้โดยอัตโนมัติ/)).not.toBeNull();
+    expect(await screen.findByText(/ระบบจะแนะนำผู้อนุมัติให้ใช้อัตรา 3x/)).not.toBeNull();
+  });
+});
+
+// feat/ot-nonworkday-rate-suggestion: the approve dialog's day-type selector. Shown only when the
+// request is FLAGGED (a non-workday suggestion, or an explicit calculation_note flag) AND on the
+// stage that can still set the rate (SUBMITTED) -- the freeze point does not move, so the
+// second-stage CEO sign-off (MANAGER_APPROVED) never shows it, matching
+// OvertimeService#ceoApprove never reading dayType. Defaults to the suggestion; the approver's
+// selection, not the request's stored claim, is what gets sent.
+describe('OvertimePage approve dialog day-type override', () => {
+  const managerUser = {
+    employeeId: 99,
+    name: 'ผู้จัดการ ทดสอบ',
+    role: 'employee',
+    manager: true,
+    divisionId: 5,
+  };
+
+  const ceoUser = {
+    employeeId: 500,
+    name: 'ซีอีโอ ทดสอบ',
+    role: 'ceo',
+    manager: false,
+  };
+
+  function renderAsReviewer(reviewerUser) {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <OvertimePage
+          user={reviewerUser}
+          currentEmployee={{ id: reviewerUser.employeeId, nameTh: reviewerUser.name }}
+          showToast={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.overtime.employees.mockResolvedValue({
+      employees: [
+        { employeeId: 99, employeeName: 'ผู้จัดการ ทดสอบ', employeeCode: 'MGR-001', self: true, directReport: false },
+        { employeeId: 10, employeeName: 'ลูกทีม ทดสอบ', employeeCode: 'EMP-010', self: false, directReport: true },
+      ],
+    });
+    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
+    api.overtime.approve.mockResolvedValue({ request: { id: 900, status: 'MANAGER_APPROVED' } });
+  });
+
+  it('shows a selector defaulted to the suggestion for a flagged non-workday request, and sends the approver\'s override', async () => {
+    api.overtime.list.mockResolvedValue({
+      requests: [{
+        id: 900, employeeId: 10, employeeName: 'ลูกทีม ทดสอบ', employeeCode: 'EMP-010',
+        workDate: '2026-08-08', plannedStartAt: '2026-08-08T18:00:00+07:00', plannedEndAt: '2026-08-08T20:00:00+07:00',
+        plannedMinutes: 120, dayType: 'HOLIDAY', suggestedDayType: 'HOLIDAY', payableMinutes: 0, actualMinutes: 0,
+        reason: 'วันหยุดสุดสัปดาห์', status: 'SUBMITTED', hasManagerApprover: true,
+        pendingApproverRole: 'manager', pendingApproverName: null, calculationNote: null,
+      }],
+    });
+    renderAsReviewer(managerUser);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ผู้จัดการอนุมัติ' }));
+
+    const selector = await screen.findByRole('combobox', { name: 'อัตราที่จะอนุมัติ' });
+    expect(selector.value).toBe('HOLIDAY');
+
+    // The approver downgrades to WORKDAY -- the data looked wrong to them.
+    fireEvent.change(selector, { target: { value: 'WORKDAY' } });
+    fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
+
+    await waitFor(() => expect(api.overtime.approve).toHaveBeenCalledWith(900, { dayType: 'WORKDAY' }));
+  });
+
+  it('shows no selector for an unflagged ordinary request, and approves with no override at all', async () => {
+    api.overtime.list.mockResolvedValue({
+      requests: [{
+        id: 901, employeeId: 10, employeeName: 'ลูกทีม ทดสอบ', employeeCode: 'EMP-010',
+        workDate: '2026-08-04', plannedStartAt: '2026-08-04T18:00:00+07:00', plannedEndAt: '2026-08-04T20:00:00+07:00',
+        plannedMinutes: 120, dayType: 'WORKDAY', suggestedDayType: 'WORKDAY', payableMinutes: 0, actualMinutes: 0,
+        reason: 'งานเร่งด่วน', status: 'SUBMITTED', hasManagerApprover: true,
+        pendingApproverRole: 'manager', pendingApproverName: null, calculationNote: null,
+      }],
+    });
+    renderAsReviewer(managerUser);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ผู้จัดการอนุมัติ' }));
+    await screen.findByText('ยืนยันการอนุมัติ OT');
+
+    expect(screen.queryByRole('combobox', { name: 'อัตราที่จะอนุมัติ' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
+
+    // No dayType key at all -- the server falls back to its own fresh suggestion.
+    await waitFor(() => expect(api.overtime.approve).toHaveBeenCalledWith(901, {}));
+  });
+
+  it('shows the selector, defaulted to the SUGGESTION not the claim, for a flagged claim-disagreement even when the suggestion is WORKDAY', async () => {
+    api.overtime.list.mockResolvedValue({
+      requests: [{
+        id: 902, employeeId: 10, employeeName: 'ลูกทีม ทดสอบ', employeeCode: 'EMP-010',
+        workDate: '2026-08-04', plannedStartAt: '2026-08-04T18:00:00+07:00', plannedEndAt: '2026-08-04T20:00:00+07:00',
+        plannedMinutes: 120, dayType: 'WORKDAY', suggestedDayType: 'WORKDAY', payableMinutes: 0, actualMinutes: 0,
+        reason: 'งานเร่งด่วน', status: 'SUBMITTED', hasManagerApprover: true,
+        pendingApproverRole: 'manager', pendingApproverName: null,
+        calculationNote: '[ไม่ตรงกับที่ระบบแนะนำ] พนักงานระบุ วันหยุด (3x) แต่ระบบแนะนำ วันทำงานปกติ (1.5x) โปรดตรวจสอบก่อนอนุมัติ',
+      }],
+    });
+    renderAsReviewer(managerUser);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ผู้จัดการอนุมัติ' }));
+
+    const selector = await screen.findByRole('combobox', { name: 'อัตราที่จะอนุมัติ' });
+    expect(selector.value, 'defaults to the SUGGESTION (WORKDAY), never the employee\'s claimed HOLIDAY').toBe('WORKDAY');
+    // Two matches is correct, not a duplicate-render bug: the same flag note legitimately shows
+    // both in the list row's เหตุผล column AND inside the dialog (beside the selector).
+    expect(screen.getAllByText(/ไม่ตรงกับที่ระบบแนะนำ/).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
+
+    await waitFor(() => expect(api.overtime.approve).toHaveBeenCalledWith(902, { dayType: 'WORKDAY' }));
+  });
+
+  it('never shows the selector on the final CEO sign-off, even for a request already frozen at HOLIDAY/3x', async () => {
+    api.overtime.list.mockResolvedValue({
+      requests: [{
+        id: 903, employeeId: 10, employeeName: 'ลูกทีม ทดสอบ', employeeCode: 'EMP-010',
+        workDate: '2026-08-08', plannedStartAt: '2026-08-08T18:00:00+07:00', plannedEndAt: '2026-08-08T20:00:00+07:00',
+        plannedMinutes: 120, dayType: 'HOLIDAY', suggestedDayType: 'HOLIDAY', payableMinutes: 180, actualMinutes: 120,
+        reason: 'วันหยุดสุดสัปดาห์', status: 'MANAGER_APPROVED', hasManagerApprover: true,
+        pendingApproverRole: 'ceo', pendingApproverName: null, calculationNote: 'Calculated from the overlap...',
+      }],
+    });
+    renderAsReviewer(ceoUser);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'CEO อนุมัติ' }));
+    await screen.findByText('ยืนยันการอนุมัติ OT');
+
+    expect(screen.queryByRole('combobox', { name: 'อัตราที่จะอนุมัติ' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
+
+    await waitFor(() => expect(api.overtime.approve).toHaveBeenCalledWith(903, {}));
   });
 });

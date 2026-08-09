@@ -34,6 +34,41 @@ public class PayrollRepository {
 
     private final NamedParameterJdbcTemplate jdbc;
 
+    /**
+     * Total employee SSO contributions recorded for one employee in one TAX YEAR — ข้อ 13 of ล.ย.01.
+     *
+     * <p>Deliberately NOT a reuse of {@link #findYearToDateByEmployee}: that one filters
+     * {@code pp.payroll_month < :payrollMonth}, excluding the current period because it feeds a
+     * forward projection. Correct there, wrong here — a ล.ย.01 states what has actually been
+     * contributed, so the current month counts.
+     *
+     * <p>Unions the seed table for the same reason the YTD query does: an employee who joined before
+     * go-live has pre-system contributions in {@code payroll_year_to_date_seed}, and omitting it
+     * would understate their filing. VOID periods are excluded, matching every other money query.
+     *
+     * <p>ข้อ 13 is DERIVED, never typed: the employee cannot choose this number, so a form filed in
+     * January legitimately shows nothing here yet.
+     */
+    public BigDecimal sumSocialSecurityForTaxYear(long employeeId, int taxYear) {
+        BigDecimal total = jdbc.queryForObject("""
+            SELECT COALESCE(SUM(amount), 0) FROM (
+                SELECT pl.social_security AS amount
+                  FROM hr.payroll_line pl
+                  JOIN hr.payroll_period pp ON pp.period_id = pl.period_id
+                 WHERE pl.employee_id = :employeeId
+                   AND EXTRACT(YEAR FROM pp.payroll_month) = :taxYear
+                   AND pp.status <> 'VOID'
+                UNION ALL
+                SELECT s.social_security AS amount
+                  FROM hr.payroll_year_to_date_seed s
+                 WHERE s.employee_id = :employeeId AND s.tax_year = :taxYear
+            ) contributions
+            """,
+            Map.of("employeeId", employeeId, "taxYear", taxYear),
+            BigDecimal.class);
+        return total == null ? BigDecimal.ZERO : total;
+    }
+
     public PayrollRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }
@@ -417,7 +452,7 @@ public class PayrollRepository {
                    ssf_allowance, pension_insurance_allowance, thai_esg_allowance,
                    home_loan_interest_allowance, education_donation, general_donation, political_donation,
                    child_count, child_count_double, disabled_care_count,
-                   disability_card_holder, parent_care_count
+                   disability_card_holder, parent_care_count, provident_fund_allowance
               FROM hr.employee_tax_allowance
              WHERE tax_year = :taxYear
                AND effective_month <= :payrollMonthValue
@@ -452,7 +487,10 @@ public class PayrollRepository {
                 rs.getInt("child_count_double"),
                 rs.getInt("disabled_care_count"),
                 rs.getBoolean("disability_card_holder"),
-                rs.getInt("parent_care_count")
+                rs.getInt("parent_care_count"),
+                // ข้อ 9 (V137). This is the value PayrollCalculator's ฿500,000 retirement cluster
+                // consumes FIRST -- see that class.
+                money(rs.getBigDecimal("provident_fund_allowance"))
             )))
             .stream()
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
@@ -470,7 +508,8 @@ public class PayrollRepository {
                    eta.home_loan_interest_allowance, eta.education_donation, eta.general_donation,
                    eta.political_donation, eta.child_count,
                    eta.child_count_double, eta.disabled_care_count, eta.disability_card_holder,
-                   eta.parent_care_count, eta.effective_month, eta.document_reference, eta.updated_at,
+                   eta.parent_care_count, eta.provident_fund_allowance,
+                   eta.effective_month, eta.document_reference, eta.updated_at,
                    eta.verification_status, eta.verified_by_id, eta.verified_at, eta.verification_deadline
               FROM hr.employee e
               JOIN hr.employee_tax_allowance eta ON eta.employee_id = e.employee_id AND eta.tax_year = :taxYear
@@ -502,7 +541,8 @@ public class PayrollRepository {
                     rs.getInt("child_count_double"),
                     rs.getInt("disabled_care_count"),
                     rs.getBoolean("disability_card_holder"),
-                    rs.getInt("parent_care_count")
+                    rs.getInt("parent_care_count"),
+                    money(rs.getBigDecimal("provident_fund_allowance"))
                 ),
                 rs.getInt("effective_month"),
                 rs.getString("document_reference"),
@@ -633,7 +673,7 @@ public class PayrollRepository {
                     home_loan_interest_allowance, education_donation, general_donation,
                     political_donation, child_count, child_count_double,
                     disabled_care_count, disability_card_holder, parent_care_count, effective_month,
-                    document_reference, updated_by_id, updated_at
+                    document_reference, provident_fund_allowance, updated_by_id, updated_at
                 ) VALUES (
                     :employeeId, :taxYear, :spouseAllowance, :childAllowance, :parentCareAllowance,
                     :disabledCareAllowance, :maternityAllowance, :lifeInsuranceAllowance,
@@ -642,7 +682,7 @@ public class PayrollRepository {
                     :homeLoanInterestAllowance, :educationDonation, :generalDonation,
                     :politicalDonation, :childCount, :childCountDouble,
                     :disabledCareCount, :disabilityCardHolder, :parentCareCount, :effectiveMonth,
-                    :documentReference, :updatedById, now()
+                    :documentReference, :providentFundAllowance, :updatedById, now()
                 )
                 ON CONFLICT (employee_id, tax_year, effective_month) DO UPDATE SET
                     spouse_allowance = EXCLUDED.spouse_allowance,
@@ -666,6 +706,7 @@ public class PayrollRepository {
                     disabled_care_count = EXCLUDED.disabled_care_count,
                     disability_card_holder = EXCLUDED.disability_card_holder,
                     parent_care_count = EXCLUDED.parent_care_count,
+                    provident_fund_allowance = EXCLUDED.provident_fund_allowance,
                     document_reference = EXCLUDED.document_reference,
                     updated_by_id = EXCLUDED.updated_by_id,
                     updated_at = now(),
@@ -708,6 +749,7 @@ public class PayrollRepository {
                     // January, which is how every pre-V93 row was already applied.
                     .addValue("effectiveMonth", item.effectiveMonth() == null ? 1 : item.effectiveMonth())
                     .addValue("documentReference", item.documentReference())
+                    .addValue("providentFundAllowance", safe(item.providentFundAllowance()))
                     .addValue("updatedById", updatedById));
         }
     }

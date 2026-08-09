@@ -15,6 +15,8 @@ import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 import th.co.glr.hr.attachment.FileAttachmentBlobRepository;
 import th.co.glr.hr.payroll.PayrollTaxAllowanceInput;
+import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.LorYor01AddressPayload;
+import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.LorYor01Details;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceAttachmentDto;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationDto;
 
@@ -46,7 +48,20 @@ public class TaxAllowanceDeclarationRepository {
         d.status, d.submitted_by_id, d.submitted_at, d.on_behalf,
         d.reviewed_by_id, d.reviewed_at, d.reviewer_note,
         d.applied_at, d.applied_by_id, d.applied_effective_month,
-        d.expires_on, d.expired_at, d.reverified_at, d.reverified_by_id, d.superseded_by_id
+        d.expires_on, d.expired_at, d.reverified_at, d.reverified_by_id, d.superseded_by_id,
+        -- แบบ ล.ย.01 (V137): header block, ข้อ 1-2 สถานภาพ, the ข้อ 4/6 per-parent ticks,
+        -- the ข้อ 3 second tier, ข้อ 9, and the two free-text slots.
+        d.taxpayer_id, d.first_name_th AS declared_first_name, d.last_name_th AS declared_last_name,
+        d.addr_building, d.addr_room_no, d.addr_floor, d.addr_village, d.addr_house_no, d.addr_moo,
+        d.addr_soi, d.addr_junction, d.addr_road, d.addr_sub_district, d.addr_district,
+        d.addr_province, d.addr_postal_code,
+        d.marital_state, d.spousal_status, d.spouse_has_income,
+        d.children_total, d.child_extra_allowance,
+        d.own_father_supported, d.own_mother_supported,
+        d.spouse_father_supported, d.spouse_mother_supported, d.spouse_parent_care_allowance,
+        d.own_father_health_insured, d.own_mother_health_insured,
+        d.spouse_father_health_insured, d.spouse_mother_health_insured,
+        d.provident_fund_allowance, d.rmf_seller_name, d.other_donation_note
         """;
     private static final String FROM_JOIN = """
         FROM hr.tax_allowance_declaration d
@@ -114,8 +129,13 @@ public class TaxAllowanceDeclarationRepository {
     /** Inserts a new PENDING declaration and returns its generated id. */
     public long insert(
         long employeeId, int taxYear, int effectiveMonth, PayrollTaxAllowanceInput allowances,
-        String documentReference, long submittedById, boolean onBehalf
+        String documentReference, long submittedById, boolean onBehalf, LorYor01Details form
     ) {
+        LorYor01Details f = form == null ? LorYor01Details.empty() : form;
+        LorYor01AddressPayload addr = f.address() == null
+            ? new LorYor01AddressPayload(null, null, null, null, null, null, null, null, null,
+                null, null, null, null)
+            : f.address();
         Long id = jdbc.queryForObject("""
             INSERT INTO hr.tax_allowance_declaration (
                 employee_id, tax_year, effective_month,
@@ -126,7 +146,18 @@ public class TaxAllowanceDeclarationRepository {
                 education_donation, general_donation, political_donation,
                 child_count, child_count_double, disabled_care_count, disability_card_holder,
                 parent_care_count, document_reference,
-                status, submitted_by_id, submitted_at, on_behalf
+                status, submitted_by_id, submitted_at, on_behalf,
+                taxpayer_id, first_name_th, last_name_th,
+                addr_building, addr_room_no, addr_floor, addr_village, addr_house_no, addr_moo,
+                addr_soi, addr_junction, addr_road, addr_sub_district, addr_district,
+                addr_province, addr_postal_code,
+                marital_state, spousal_status, spouse_has_income,
+                children_total, child_extra_allowance,
+                own_father_supported, own_mother_supported,
+                spouse_father_supported, spouse_mother_supported, spouse_parent_care_allowance,
+                own_father_health_insured, own_mother_health_insured,
+                spouse_father_health_insured, spouse_mother_health_insured,
+                provident_fund_allowance, rmf_seller_name, other_donation_note
             ) VALUES (
                 :employeeId, :taxYear, :effectiveMonth,
                 :spouseAllowance, :childAllowance, :parentCareAllowance, :disabledCareAllowance,
@@ -136,7 +167,18 @@ public class TaxAllowanceDeclarationRepository {
                 :educationDonation, :generalDonation, :politicalDonation,
                 :childCount, :childCountDouble, :disabledCareCount, :disabilityCardHolder,
                 :parentCareCount, :documentReference,
-                'PENDING', :submittedById, now(), :onBehalf
+                'PENDING', :submittedById, now(), :onBehalf,
+                :taxpayerId, :firstNameTh, :lastNameTh,
+                :addrBuilding, :addrRoomNo, :addrFloor, :addrVillage, :addrHouseNo, :addrMoo,
+                :addrSoi, :addrJunction, :addrRoad, :addrSubDistrict, :addrDistrict,
+                :addrProvince, :addrPostalCode,
+                :maritalState, :spousalStatus, :spouseHasIncome,
+                :childrenTotal, :childExtraAllowance,
+                :ownFatherSupported, :ownMotherSupported,
+                :spouseFatherSupported, :spouseMotherSupported, :spouseParentCareAllowance,
+                :ownFatherHealthInsured, :ownMotherHealthInsured,
+                :spouseFatherHealthInsured, :spouseMotherHealthInsured,
+                :providentFundAllowance, :rmfSellerName, :otherDonationNote
             )
             RETURNING declaration_id
             """,
@@ -167,7 +209,40 @@ public class TaxAllowanceDeclarationRepository {
                 .addValue("parentCareCount", allowances.parentCareCount() == null ? 0 : allowances.parentCareCount())
                 .addValue("documentReference", documentReference)
                 .addValue("submittedById", submittedById)
-                .addValue("onBehalf", onBehalf),
+                .addValue("onBehalf", onBehalf)
+                .addValue("taxpayerId", f.taxpayerId())
+                .addValue("firstNameTh", f.firstNameTh())
+                .addValue("lastNameTh", f.lastNameTh())
+                .addValue("addrBuilding", addr.building())
+                .addValue("addrRoomNo", addr.roomNo())
+                .addValue("addrFloor", addr.floor())
+                .addValue("addrVillage", addr.village())
+                .addValue("addrHouseNo", addr.houseNo())
+                .addValue("addrMoo", addr.moo())
+                .addValue("addrSoi", addr.soi())
+                .addValue("addrJunction", addr.junction())
+                .addValue("addrRoad", addr.road())
+                .addValue("addrSubDistrict", addr.subDistrict())
+                .addValue("addrDistrict", addr.district())
+                .addValue("addrProvince", addr.province())
+                .addValue("addrPostalCode", addr.postalCode())
+                .addValue("maritalState", f.maritalState())
+                .addValue("spousalStatus", f.spousalStatus())
+                .addValue("spouseHasIncome", f.spouseHasIncome())
+                .addValue("childrenTotal", f.childrenTotal())
+                .addValue("childExtraAllowance", money(f.childExtraAllowance()))
+                .addValue("ownFatherSupported", flag(f.ownFatherSupported()))
+                .addValue("ownMotherSupported", flag(f.ownMotherSupported()))
+                .addValue("spouseFatherSupported", flag(f.spouseFatherSupported()))
+                .addValue("spouseMotherSupported", flag(f.spouseMotherSupported()))
+                .addValue("spouseParentCareAllowance", money(f.spouseParentCareAllowance()))
+                .addValue("ownFatherHealthInsured", flag(f.ownFatherHealthInsured()))
+                .addValue("ownMotherHealthInsured", flag(f.ownMotherHealthInsured()))
+                .addValue("spouseFatherHealthInsured", flag(f.spouseFatherHealthInsured()))
+                .addValue("spouseMotherHealthInsured", flag(f.spouseMotherHealthInsured()))
+                .addValue("providentFundAllowance", money(f.providentFundAllowance()))
+                .addValue("rmfSellerName", f.rmfSellerName())
+                .addValue("otherDonationNote", f.otherDonationNote()),
             Long.class);
         return id;
     }
@@ -460,6 +535,11 @@ public class TaxAllowanceDeclarationRepository {
         return value == null ? BigDecimal.ZERO : value;
     }
 
+    /** A null tick is FALSE in the database: the ข้อ 4/6 boxes are NOT NULL DEFAULT FALSE (V137). */
+    private static boolean flag(Boolean value) {
+        return Boolean.TRUE.equals(value);
+    }
+
     private TaxAllowanceDeclarationDto mapRow(ResultSet rs, int rowNum) throws SQLException {
         PayrollTaxAllowanceInput allowances = new PayrollTaxAllowanceInput(
             rs.getBigDecimal("spouse_allowance"),
@@ -482,8 +562,44 @@ public class TaxAllowanceDeclarationRepository {
             rs.getInt("child_count_double"),
             rs.getInt("disabled_care_count"),
             rs.getBoolean("disability_card_holder"),
-            rs.getInt("parent_care_count")
+            rs.getInt("parent_care_count"),
+            // ข้อ 9 (V137) is read into BOTH views of this row: here, so that apply() promotes it
+            // into employee_tax_allowance and payroll sees it, and again into LorYor01Details below
+            // so the rendered PDF prints it. One column, two shapes -- the payroll-facing
+            // PayrollTaxAllowanceInput and the form-facing LorYor01Details. Keep them in step.
+            rs.getBigDecimal("provident_fund_allowance")
         );
+        LorYor01Details lorYor01 = new LorYor01Details(
+            rs.getString("taxpayer_id"),
+            rs.getString("declared_first_name"),
+            rs.getString("declared_last_name"),
+            new LorYor01AddressPayload(
+                rs.getString("addr_building"), rs.getString("addr_room_no"),
+                rs.getString("addr_floor"), rs.getString("addr_village"),
+                rs.getString("addr_house_no"), rs.getString("addr_moo"),
+                rs.getString("addr_soi"), rs.getString("addr_junction"),
+                rs.getString("addr_road"), rs.getString("addr_sub_district"),
+                rs.getString("addr_district"), rs.getString("addr_province"),
+                rs.getString("addr_postal_code")),
+            rs.getString("marital_state"),
+            rs.getString("spousal_status"),
+            // getObject, not getBoolean: these three are genuinely nullable and getBoolean would
+            // turn "not answered" into a confident false on the form.
+            (Boolean) rs.getObject("spouse_has_income"),
+            (Integer) rs.getObject("children_total"),
+            rs.getBigDecimal("child_extra_allowance"),
+            rs.getBoolean("own_father_supported"),
+            rs.getBoolean("own_mother_supported"),
+            rs.getBoolean("spouse_father_supported"),
+            rs.getBoolean("spouse_mother_supported"),
+            rs.getBigDecimal("spouse_parent_care_allowance"),
+            rs.getBoolean("own_father_health_insured"),
+            rs.getBoolean("own_mother_health_insured"),
+            rs.getBoolean("spouse_father_health_insured"),
+            rs.getBoolean("spouse_mother_health_insured"),
+            rs.getBigDecimal("provident_fund_allowance"),
+            rs.getString("rmf_seller_name"),
+            rs.getString("other_donation_note"));
         return new TaxAllowanceDeclarationDto(
             rs.getLong("declaration_id"),
             rs.getLong("employee_id"),
@@ -507,7 +623,8 @@ public class TaxAllowanceDeclarationRepository {
             rs.getObject("expired_at", OffsetDateTime.class),
             rs.getObject("reverified_at", OffsetDateTime.class),
             nullableLong(rs, "reverified_by_id"),
-            nullableLong(rs, "superseded_by_id")
+            nullableLong(rs, "superseded_by_id"),
+            lorYor01
         );
     }
 

@@ -14,4 +14,8 @@ services:
       APP_MAIL_RESEND_API_KEY: ${APP_MAIL_RESEND_API_KEY:?set APP_MAIL_RESEND_API_KEY to your real Resend key}
       APP_MAIL_FROM: ${APP_MAIL_FROM:-onboarding@resend.dev}
       APP_MAIL_OVERRIDE_TO: ${LIVE_EMAIL_TO:?set LIVE_EMAIL_TO to the inbox that should receive every test email}
-      APP_MAIL_SUBJECT_PREFIX: "[UAT LIVE] "
+      # Renamed from APP_MAIL_SUBJECT_PREFIX (dropped 2026-08-08): the marker is now a SUFFIX, not a
+      # leading bracketed token, to avoid a classic spam-filter trigger on real deployments. Kept a
+      # distinct "(UAT LIVE)" wording here (rather than the deployed UAT stack's plain "(UAT)") so a
+      # received email makes it obvious it came from a local --live-email run, not the hosted stack.
+      APP_MAIL_SUBJECT_SUFFIX: " (UAT LIVE)"
