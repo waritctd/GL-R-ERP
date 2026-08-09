@@ -315,3 +315,40 @@ describe('AppShell nav — Division Manager (non-sales) role-scoped views', () =
     expect(screen.queryByText('ทีมในฝ่าย')).toBeNull();
   });
 });
+
+// The scroll container must be its own subtree's containing block, or a
+// `position: absolute` descendant with no other positioned ancestor (Tailwind's
+// `sr-only` is `position: absolute`) resolves to the *initial* containing block
+// and leaks its static offset into `<html>`'s scrollable overflow — a second,
+// outer scrollbar over a viewport-height shell. Measured before the fix:
+// /employee-requests?tab=welfare 543px, /tax-allowance 1994px of phantom
+// document scroll. See the CONTENT_SCROLL_CLASS comment in AppShell.jsx.
+//
+// This asserts the rendered class, not the computed layout: jsdom has no layout
+// engine, so `scrollHeight`/`getBoundingClientRect()` are all zero here and the
+// real symptom is invisible to it — only a browser can measure that. What this
+// DOES catch is the class going missing from the shipped element, whether by
+// edit or by a tailwind-merge collision with a positioning utility added later,
+// because it renders the real component rather than reading the source string.
+describe('AppShell — <main> is the containing block for its own scrolled subtree', () => {
+  it('renders <main> with both `relative` and `overflow-auto`, so absolutely-positioned page content cannot escape into document scroll', async () => {
+    renderShell({ role: 'employee', name: 'พนักงาน ทดสอบ', email: 'employee@glr.co.th', employeeId: 31 });
+    await screen.findByText('เนื้อหา');
+
+    const main = screen.getByRole('main');
+    const classes = main.className.split(/\s+/);
+
+    // Both halves matter and they are different ancestor walks: `overflow-auto`
+    // makes this the scroll container, `relative` makes it the containing
+    // block. `overflow-auto` alone is the bug.
+    expect(classes).toContain('relative');
+    expect(classes).toContain('overflow-auto');
+
+    // No competing positioning utility survived alongside it — `absolute`,
+    // `fixed` or `static` on this element would either re-open the leak or
+    // break the shell's flex layout outright.
+    expect(classes).not.toContain('static');
+    expect(classes).not.toContain('absolute');
+    expect(classes).not.toContain('fixed');
+  });
+});
