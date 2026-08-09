@@ -11,23 +11,33 @@ name: E2E (Playwright, real backend)
 # the pixels move?" — and neither substitutes for the other.
 #
 # NON-GATING: intentionally not a required check yet. Promote once proven stable across a few
-# PR cycles.
+# PR cycles. This workflow is now STRUCTURALLY READY for that promotion — see below — but
+# making it required is a branch-protection setting, deliberately left to the owner.
 #
 # Triggered by backend changes too, not just frontend ones — unlike the mock suite, this one
 # can actually break when a Java role gate or a migration moves, which is the point of it.
+#
+# ── WHY THERE IS NO `paths:` FILTER ON THE TRIGGERS ──────────────────────────────────────
+# There used to be one, on `frontend/**` + `backend/**`. A trigger-level filter makes the
+# `e2e-real` check ABSENT — not skipped, absent — on any PR that misses those paths, and
+# GitHub waits forever on a required check that never reports. Proof from this repo: PR #617
+# was workflow-only, and `e2e-real` and `lint-and-build` never reported at all, while
+# `build-and-test`, `dependency-review` and `visual` did. Requiring this job as it stood
+# would have deadlocked every such PR.
+#
+# The filter therefore lives INSIDE the job now (see "Detect relevant changes"), the same
+# shape `backend-ci.yml` uses for #435 and `visual-ci.yml` uses for its own required check.
+# The job always reports; the expensive work is gated on the diff. Do not "tidy this up" by
+# reintroducing a `paths:` key.
+#
+# One cost worth knowing: `services:` containers start before the first step runs, so the
+# Postgres service spins up even on a run that then skips everything. That is a few seconds
+# and cannot be conditioned away — a job's services are not step-gated.
 
 on:
   push:
     branches: [main]
-    paths:
-      - 'frontend/**'
-      - 'backend/**'
-      - '.github/workflows/e2e-real-ci.yml'
   pull_request:
-    paths:
-      - 'frontend/**'
-      - 'backend/**'
-      - '.github/workflows/e2e-real-ci.yml'
 
 jobs:
   e2e-real:
@@ -51,9 +61,55 @@ jobs:
           --health-retries 20
 
     steps:
+      # fetch-depth: 0 so the base commit is present for the diff below.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Replaces the old trigger-level `paths:` filter. Fails SAFE: if the base commit cannot be
+      # resolved (force-push, new branch, shallow history) we run the whole suite rather than
+      # report a green check we have not earned.
+      - name: Detect relevant changes
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE="$PR_BASE_SHA"
+          else
+            BASE="$PUSH_BEFORE_SHA"
+          fi
+
+          if [ -z "$BASE" ] \
+            || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "Base commit unresolvable ('$BASE') — running the full e2e suite."
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Two-dot: on a pull_request HEAD is the merge commit, so `BASE HEAD` is exactly the
+          # PR's net effect on the base branch. On a push it is the pushed range.
+          CHANGED="$(git diff --name-only "$BASE" HEAD)"
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          if echo "$CHANGED" | grep -qE '^(frontend/|backend/|\.github/workflows/e2e-real-ci\.yml$)'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: No frontend or backend changes — nothing to exercise
+        if: steps.changes.outputs.relevant != 'true'
+        run: echo "::notice::No frontend/** or backend/** changes in this diff; skipping the real-backend e2e run."
 
       - name: Set up Java 21
+        if: steps.changes.outputs.relevant == 'true'
         uses: actions/setup-java@v5
         with:
           java-version: '21'
@@ -61,6 +117,7 @@ jobs:
           cache: maven
 
       - name: Set up Node.js 22
+        if: steps.changes.outputs.relevant == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: '22'
@@ -68,21 +125,25 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Build backend jar
+        if: steps.changes.outputs.relevant == 'true'
         working-directory: backend
         # Tests are skipped on purpose: backend-ci.yml already runs them, and this job's
         # subject is the running service, not its unit suite.
         run: ./mvnw -B -DskipTests package
 
       - name: Install frontend dependencies
+        if: steps.changes.outputs.relevant == 'true'
         working-directory: frontend
         run: npm ci
 
       - name: Get installed Playwright version
+        if: steps.changes.outputs.relevant == 'true'
         id: playwright-version
         working-directory: frontend
         run: echo "version=$(node -e "console.log(require('./package-lock.json').packages['node_modules/@playwright/test'].version)")" >> "$GITHUB_OUTPUT"
 
       - name: Cache Playwright browsers
+        if: steps.changes.outputs.relevant == 'true'
         uses: actions/cache@v6
         id: playwright-cache
         with:
@@ -90,16 +151,17 @@ jobs:
           key: playwright-chromium-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
 
       - name: Install Playwright chromium (+ OS deps)
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        if: steps.changes.outputs.relevant == 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
         working-directory: frontend
         run: npx playwright install --with-deps chromium
 
       - name: Install Playwright OS deps only (browser cache hit)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        if: steps.changes.outputs.relevant == 'true' && steps.playwright-cache.outputs.cache-hit == 'true'
         working-directory: frontend
         run: npx playwright install-deps chromium
 
       - name: Start backend (demo seed profile)
+        if: steps.changes.outputs.relevant == 'true'
         working-directory: frontend
         # Flyway applies db/migration + db/migration-demo on boot under SPRING_PROFILES_ACTIVE=demo,
         # which is what creates the login accounts this suite drives. The script also sets the
@@ -110,6 +172,7 @@ jobs:
         run: node scripts/start-e2e-backend.mjs > "$RUNNER_TEMP/backend.log" 2>&1 &
 
       - name: Wait for backend to be healthy
+        if: steps.changes.outputs.relevant == 'true'
         run: |
           for i in $(seq 1 60); do
             if curl -sf -o /dev/null http://127.0.0.1:8080/actuator/health; then
@@ -123,13 +186,18 @@ jobs:
           exit 1
 
       - name: Run real-backend e2e
+        if: steps.changes.outputs.relevant == 'true'
         working-directory: frontend
         run: npm run test:e2e
 
+      # Also gated: if the detect step itself fails, `failure()` fires while no backend was ever
+      # started, and `cat` on a missing log would pile a second, misleading red on top of the real one.
       - name: Backend log (on failure)
-        if: failure()
+        if: failure() && steps.changes.outputs.relevant == 'true'
         run: cat "$RUNNER_TEMP/backend.log"
 
+      # if-no-files-found: ignore — with the suite skipped there is no report directory, and the
+      # default (`warn`) would print a spurious warning on every docs-only PR.
       - name: Upload Playwright HTML report
         if: always()
         uses: actions/upload-artifact@v7
@@ -137,3 +205,4 @@ jobs:
           name: playwright-report-real
           path: frontend/playwright-report-real/
           retention-days: 14
+          if-no-files-found: ignore
