@@ -562,7 +562,12 @@ public class TaxAllowanceDeclarationRepository {
             rs.getInt("child_count_double"),
             rs.getInt("disabled_care_count"),
             rs.getBoolean("disability_card_holder"),
-            rs.getInt("parent_care_count")
+            rs.getInt("parent_care_count"),
+            // ข้อ 9 (V137) is read into BOTH views of this row: here, so that apply() promotes it
+            // into employee_tax_allowance and payroll sees it, and again into LorYor01Details below
+            // so the rendered PDF prints it. One column, two shapes -- the payroll-facing
+            // PayrollTaxAllowanceInput and the form-facing LorYor01Details. Keep them in step.
+            rs.getBigDecimal("provident_fund_allowance")
         );
         LorYor01Details lorYor01 = new LorYor01Details(
             rs.getString("taxpayer_id"),

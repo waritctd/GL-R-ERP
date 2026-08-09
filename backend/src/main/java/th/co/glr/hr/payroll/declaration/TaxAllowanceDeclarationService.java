@@ -701,7 +701,11 @@ public class TaxAllowanceDeclarationService {
             zero(request.politicalDonation()),
             zeroInt(request.childCount()), zeroInt(request.childCountDouble()), zeroInt(request.disabledCareCount()),
             Boolean.TRUE.equals(request.disabilityCardHolder()),
-            request.parentCareCount() == null ? 0 : request.parentCareCount()
+            request.parentCareCount() == null ? 0 : request.parentCareCount(),
+            // ข้อ 9 lives on the ล.ย.01 sub-payload, not at the top level of the request, because it
+            // is a form item rather than one of the pre-V137 allowance fields. Pulled across here so
+            // the /estimate preview withholds on the same figure the applied declaration will.
+            lorYor01Zero(request.lorYor01())
         );
     }
 
@@ -715,12 +719,18 @@ public class TaxAllowanceDeclarationService {
             zero(request.politicalDonation()),
             zeroInt(request.childCount()), zeroInt(request.childCountDouble()), zeroInt(request.disabledCareCount()),
             Boolean.TRUE.equals(request.disabilityCardHolder()),
-            request.parentCareCount() == null ? 0 : request.parentCareCount()
+            request.parentCareCount() == null ? 0 : request.parentCareCount(),
+            lorYor01Zero(request.lorYor01())
         );
     }
 
     private java.math.BigDecimal zero(java.math.BigDecimal value) {
         return value == null ? java.math.BigDecimal.ZERO : value;
+    }
+
+    /** ข้อ 9 off the ล.ย.01 sub-payload; the whole sub-payload is optional, hence the null guard. */
+    private java.math.BigDecimal lorYor01Zero(LorYor01Details lorYor01) {
+        return lorYor01 == null ? java.math.BigDecimal.ZERO : zero(lorYor01.providentFundAllowance());
     }
 
     private int zeroInt(Integer value) {
@@ -740,7 +750,10 @@ public class TaxAllowanceDeclarationService {
             allowances.politicalDonation(),
             allowances.childCount(), allowances.childCountDouble(), allowances.disabledCareCount(),
             allowances.disabilityCardHolder(), allowances.parentCareCount(),
-            appliedEffectiveMonth, dto.documentReference()
+            appliedEffectiveMonth, dto.documentReference(),
+            // ข้อ 9 (V137): promoted from the declaration into employee_tax_allowance, which is what
+            // PayrollRepository#findTaxAllowancesByEmployee reads on every run.
+            allowances.providentFundAllowance()
         );
     }
 

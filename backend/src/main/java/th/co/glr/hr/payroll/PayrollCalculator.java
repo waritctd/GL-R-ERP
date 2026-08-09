@@ -109,6 +109,14 @@ public class PayrollCalculator {
     private static final BigDecimal GARNISHMENT_OVERTIME_MAX_RATE = new BigDecimal("0.30");
     private static final BigDecimal MIN_NET_AFTER_SEVERANCE_GARNISHMENT = new BigDecimal("300000.00");
 
+    // ข้อ 9 ล.ย.01 (V137, 2026-08-08) -- the single box covering กองทุนสำรองเลี้ยงชีพ / กบข. /
+    // กองทุนสงเคราะห์ครูโรงเรียนเอกชน / กอช. This is กอช.'s ฿30,000, the tightest of the four, NOT
+    // PVD's 15%-of-wages-to-฿500,000. Source: rd.go.th's current allowance table for ปีภาษี 2568
+    // (https://www.rd.go.th/65908.html, ข้อมูล ณ วันที่ 24 ธันวาคม 2568). The full reasoning for
+    // choosing the tightest sub-cap, and when to revisit it, is in #retirementAllowance.
+    // Mirrored in TaxAllowanceCapCatalog as "provident_fund"; change both together.
+    private static final BigDecimal PROVIDENT_FUND_ALLOWANCE_CAP = new BigDecimal("30000.00");
+
     public PayrollCalculation calculate(PayrollCalculationInput input) {
         PayrollYearToDate yearToDate = input.yearToDate() == null ? PayrollYearToDate.empty() : input.yearToDate();
         PayrollTaxAllowanceInput allowances = input.taxAllowances() == null
@@ -1029,14 +1037,6 @@ public class PayrollCalculator {
         return new AllowanceBreakdown(money(nonDonationAllowances.add(donationAllowance)), money(donationAllowance));
     }
 
-    /**
-     * The 500,000 retirement cluster, taken in a deliberate order.
-     *
-     * <p>กองทุนสำรองเลี้ยงชีพ comes FIRST (V93). It is deducted from the employee's pay at source
-     * every month, whether or not they ever buy an RMF unit, so it is the one item in this cluster
-     * they cannot choose to stop. If the cluster is going to run out, it must run out against the
-     * voluntary purchases, not against a contribution already taken from their salary.
-     */
     /** 30,000 per child, plus another 30,000 for each 2nd-or-later child born from พ.ศ. 2561. */
     private BigDecimal childAllowanceCap(PayrollTaxAllowanceInput input) {
         int children = Math.max(0, input.childCount());
@@ -1076,14 +1076,42 @@ public class PayrollCalculator {
     // input.payrollMonthValue() combined with the caller-supplied year (see PayrollService#calculateLine).
     private BigDecimal retirementAllowance(
         PayrollTaxAllowanceInput input, BigDecimal projectedAnnualIncome, int taxYear) {
-        // กองทุนสำรองเลี้ยงชีพ REMOVED (owner decision, 2026-07-29, handoff section 4 / V99): GL&R
-        // operates no provident fund -- verified against production, zero employees hold a
-        // provident_fund_no. V93 placed PVD first in this cluster on the reasoning that a contribution
-        // taken at source cannot be stopped by the employee, so the cluster should exhaust against
-        // voluntary purchases instead; with PVD gone that reasoning has nothing left to apply to, and
-        // the cluster now simply starts at RMF. The remaining order (RMF -> SSF -> pension), the
-        // ฿500,000 ceiling, and the RMF/pension sub-caps are unchanged.
         BigDecimal remainingCluster = new BigDecimal("500000.00");
+
+        // ข้อ 9 ล.ย.01 -- RESTORED 2026-08-08 (V137), reversing V99. Taken FIRST, restoring V93's
+        // rationale: a contribution taken at source cannot be stopped by the employee, so if the
+        // cluster is going to run out it must run out against the voluntary purchases below rather
+        // than against money already withheld from their salary.
+        //
+        // ⚠️ THE ORDER IS CURRENTLY UNOBSERVABLE IN THIS METHOD'S RESULT, and a reader should know
+        // that before trusting a test to defend it. Every term is capped independently and then
+        // clamped to whatever budget is left, so the total is min(sum of the own-caps, 500,000)
+        // whichever order they are taken in -- greedy fill of a fixed bucket is order-invariant.
+        // Swapping these blocks therefore changes NO returned figure and NO test goes red. The order
+        // is written this way because it is the correct rationale and because it becomes observable
+        // the moment anything reports the cluster's items separately (a breakdown, a drilldown, a
+        // ภ.ง.ด.91 line). Do not "simplify" it away on the grounds that nothing catches it.
+        //
+        // SUB-CAP ฿30,000, which is กอช.'s -- deliberately the tightest of the four funds ข้อ 9
+        // covers, not PVD's. rd.go.th's current allowance table (ปีภาษี 2568, ข้อมูล ณ 24 ธ.ค. 2568,
+        // https://www.rd.go.th/65908.html) gives each fund its own limit: กองทุนสำรองเลี้ยงชีพ
+        // "15% ของค่าจ้าง ไม่เกิน 500,000", กบข. and กองทุนสงเคราะห์ครูโรงเรียนเอกชน "500,000",
+        // กอช. "30,000" -- then "รวมกันไม่เกิน 500,000 บาท" across all of them plus RMF and
+        // ประกันชีวิตแบบบำนาญ. The form gives us ONE box for all four and no way to tell them apart,
+        // so the engine has to pick a limit that cannot over-claim for whichever fund it really was.
+        // ฿30,000 is that limit, and for GL&R it is also the EXACT one: of the four funds, PVD needs
+        // an employer scheme (V99 verified in production that GL&R runs none), กบข. is for civil
+        // servants and กองทุนสงเคราะห์ครูโรงเรียนเอกชน for private-school teachers -- leaving กอช.,
+        // an individual membership, as the only one an employee here can actually hold.
+        //
+        // Revisit this constant if GL&R ever establishes a provident fund: the cap would become
+        // min(15% of wages, 500,000) and this single box would stop being sufficient to tell the two
+        // cases apart. NOTE the printed 2562 form says only "(หักได้ไม่เกิน 500,000 บาท)" with no
+        // percentage -- that is the form being stale, exactly as it is for ข้อ 7's ฿10,000; the
+        // rd.go.th table above is the current figure and the one to follow.
+        BigDecimal providentFund = min(money(input.providentFundAllowance()), PROVIDENT_FUND_ALLOWANCE_CAP);
+        providentFund = min(providentFund, remainingCluster);
+        remainingCluster = remainingCluster.subtract(providentFund);
 
         BigDecimal rmf = min(money(input.rmfAllowance()), min(percentOf(projectedAnnualIncome, "0.30"), new BigDecimal("500000.00")));
         rmf = min(rmf, remainingCluster);
@@ -1102,7 +1130,7 @@ public class PayrollCalculator {
         BigDecimal pension = min(money(input.pensionInsuranceAllowance()), min(percentOf(projectedAnnualIncome, "0.15"), new BigDecimal("200000.00")));
         pension = min(pension, remainingCluster);
 
-        return money(rmf.add(ssf).add(pension));
+        return money(providentFund.add(rmf).add(ssf).add(pension));
     }
 
     private BigDecimal legalExecutionDeduction(
