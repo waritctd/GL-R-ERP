@@ -7,7 +7,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
-import { formatThaiDate, payrollStatusLabel } from '../../utils/format.js';
+import { bangkokMonthStartIso, formatThaiDate, payrollStatusLabel } from '../../utils/format.js';
 import { divisions, findDivision } from '../../data/referenceData.js';
 import { ActionQueue } from './ActionQueue.jsx';
 
@@ -74,9 +74,27 @@ function MonitorRow({ label, value, onClick }) {
 export function HrOverview({ employees, dashboardSummary }) {
   const navigate = useNavigate();
 
+  // `payrollMonth` is REQUIRED by the real backend. PayrollController#currentOrPreview declares it
+  // as a bare `@RequestParam String payrollMonth`, so omitting it never reaches parseMonth — Spring
+  // rejects the request with 400 first. This call used to pass nothing at all, and the `.catch`
+  // below turned that 400 into `null`, which renders as "ยังไม่เริ่มรอบเงินเดือนเดือนนี้": HR's
+  // landing page told them no payroll run existed this month, always, whether or not one did.
+  // Measured against the UAT seed, `?payrollMonth=2026-08` returns a PREVIEW period with 91 lines.
+  //
+  // It survived because mockApi.payroll.current DEFAULTS the month when the caller omits it
+  // (`params.payrollMonth ? ... : new Date()...`), so mock mode looked correct — the exact
+  // "mock is more permissive than production" shape CLAUDE.md warns about. contract.test.js cannot
+  // see it either: both implementations take one `params` argument, so the arity check matches.
+  //
+  // `YYYY-MM`, not `YYYY-MM-01`, for two reasons: parseMonth accepts either but the mock appends
+  // its own `-01`, and PayrollPage keys the same query on `YYYY-MM` — matching it means these two
+  // callers share one cache entry instead of holding two copies of the same period.
+  const payrollMonth = bangkokMonthStartIso().slice(0, 7);
   const payrollQuery = useQuery({
-    queryKey: queryKeys.payrollCurrent(),
-    queryFn: () => api.payroll.current().then((response) => response?.period ?? null).catch(() => null),
+    queryKey: queryKeys.payrollCurrent(payrollMonth),
+    queryFn: () => api.payroll.current({ payrollMonth })
+      .then((response) => response?.period ?? null)
+      .catch(() => null),
     enabled: !!api.payroll?.current,
   });
   const payrollPeriod = payrollQuery.data ?? null;
