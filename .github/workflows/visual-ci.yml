@@ -40,6 +40,15 @@ name: Visual regression (mock frontend)
 # making the job non-required or letting it continue-on-error, which would return it to
 # reporting nothing anyone acts on.
 #
+# ── AN INTENDED UI CHANGE IS NOT NOISE, AND HAS ITS OWN PATH ─────────────────────────────
+# A PR that deliberately changes the UI fails this job by construction — the baseline comes
+# from the merge base, and nothing here commits baselines. That is right for a CSS port
+# (which must change nothing) and wrong for a feature: #615 added a row to OvertimePanel and
+# was merged with this check RED, which is the habit that eventually waves a real regression
+# through. The sanctioned path is frontend/e2e-visual/accepted-changes.txt — name the
+# snapshot against your PR number, with a reason. Everything not named stays at zero.
+# Do NOT instead raise the tolerance, add a label that skips the job, or merge red.
+#
 # This is deliberately the second e2e-shaped job. PR #592 consolidated to one on purpose
 # ("one e2e job per PR instead of two"); restoring a second was an explicit owner decision on
 # the evidence above. It answers a different question from e2e-real-ci.yml: that one asks
@@ -182,6 +191,11 @@ jobs:
       - name: Capture baseline at the merge base
         if: steps.harness.outputs.present == 'true'
         working-directory: frontend
+        env:
+          # Only so a bad accepted-changes.txt entry fails here, at the first run, instead of
+          # after the baseline has been captured. Acceptances cannot affect this step's result:
+          # --update-snapshots writes rather than compares.
+          VISUAL_PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           git checkout --detach ${{ steps.base.outputs.sha }}
@@ -196,9 +210,19 @@ jobs:
       # --force because the step above deliberately left the harness paths ahead of $BASE.
       # It discards tracked-file changes only; the freshly captured baselines are gitignored,
       # so they survive into the comparison exactly as node_modules does.
+      #
+      # VISUAL_PR_NUMBER switches on frontend/e2e-visual/accepted-changes.txt — the list of
+      # snapshots whose change is INTENDED and reviewed, for this PR only. Read that file
+      # before touching this. Two things matter here:
+      #   - it is passed to BOTH runs, so a malformed or misspelled entry fails at the
+      #     baseline step rather than three minutes later;
+      #   - entries naming any other PR are ignored, so the variable is what scopes an
+      #     acceptance to one PR. Never hardcode it, and never default it.
       - name: Diff the PR head against it
         if: steps.harness.outputs.present == 'true'
         working-directory: frontend
+        env:
+          VISUAL_PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           git checkout --force --detach ${{ github.event.pull_request.head.sha }}
@@ -208,8 +232,14 @@ jobs:
       # regression from noise, and reading the image is what this harness is for. Retained
       # briefly: they are screenshots of the seeded MOCK demo data (VITE_USE_MOCKS=true), never
       # real employee or payroll records, but there is no reason to keep them around long.
+      #
+      # `always()`, not `failure()`: a snapshot listed in accepted-changes.txt still produces a
+      # -diff.png but no longer fails the job, and that image is the only way a reviewer can
+      # check the change is the one that was intended. Uploading only on failure would hide
+      # exactly the evidence the accept mechanism depends on. On a clean green run Playwright
+      # leaves test-results empty, so `if-no-files-found: ignore` makes this a no-op.
       - name: Upload diff images
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: visual-diff-${{ github.event.pull_request.number }}
