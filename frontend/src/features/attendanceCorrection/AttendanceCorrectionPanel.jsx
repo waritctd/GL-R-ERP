@@ -1,99 +1,31 @@
 import { useMemo, useState } from 'react';
-import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useForm, useWatch } from 'react-hook-form';
-import { z } from 'zod';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
-import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { FilterField, formGridSpan2, Panel, PageStack, RowActions } from '../../components/common/Layout.jsx';
+// FilterField is main's (#ef3c744e) shrinkable/uniform filter control -- kept, the status filter
+// below still uses it. formGridSpan2 and PageStack went with the submit form and the PageStack
+// root respectively, both of which moved out of this file.
+import { FilterField, Panel, RowActions } from '../../components/common/Layout.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { attendanceCorrectionStatusLabel as statusInfo } from '../../utils/format.js';
 
 const CORRECTION_TABLE_GRID = 'grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,1.4fr)_minmax(0,0.9fr)_minmax(0,0.75fr)] nav-drawer:min-w-[860px] reflow-cards';
-// FilterBar/FormGrid (Layout.jsx) render <div>s; the submit form needs native submit semantics
-// (Enter-to-submit) and this exact 2-col shape, so both utility strings are reproduced here the
-// same way OvertimePanel.jsx does for its own filter/submit forms.
+// FilterBar (Layout.jsx) renders a <div>; the status-filter form needs native submit semantics
+// (Enter-to-submit) so this exact utility string is reproduced here the same way OvertimePanel.jsx
+// does for its own filter form.
 const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-end bg-surface border border-border rounded-md p-[14px]';
-const FORM_GRID_CLASS = 'grid gap-[14px] mobile:grid-cols-1 grid-cols-2';
 
 const CORRECTION_TYPE_LABELS = {
   CHECK_IN: 'เวลาเข้างาน',
   CHECK_OUT: 'เวลาออกงาน',
   BOTH: 'ทั้งเข้างานและออกงาน',
 };
-
-function bangkokDateParts(date = new Date()) {
-  return Object.fromEntries(new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Bangkok',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(date).map((part) => [part.type, part.value]));
-}
-
-const dateIso = (date = new Date()) => {
-  const parts = bangkokDateParts(date);
-  return `${parts.year}-${parts.month}-${parts.day}`;
-};
-
-const todayIso = () => dateIso();
-
-function defaultForm() {
-  const date = todayIso();
-  return {
-    workDate: date,
-    correctionType: 'CHECK_IN',
-    requestedCheckIn: `${date}T08:30`,
-    requestedCheckOut: `${date}T17:30`,
-    reason: '',
-  };
-}
-
-export const CORRECTION_REASON_MIN_LENGTH = 5;
-
-export function createAttendanceCorrectionFormSchema() {
-  return z.object({
-    workDate: z.string().min(1, 'กรุณาเลือกวันที่'),
-    correctionType: z.enum(['CHECK_IN', 'CHECK_OUT', 'BOTH']),
-    requestedCheckIn: z.string(),
-    requestedCheckOut: z.string(),
-    reason: z.string().min(CORRECTION_REASON_MIN_LENGTH, 'กรุณาระบุเหตุผลให้ชัดเจน'),
-  }).superRefine((data, context) => {
-    if (data.workDate && data.workDate > todayIso()) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['workDate'],
-        message: 'ไม่สามารถขอแก้ไขเวลาสำหรับวันที่ในอนาคตได้',
-      });
-    }
-    if (data.correctionType !== 'CHECK_OUT' && !data.requestedCheckIn) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['requestedCheckIn'], message: 'กรุณาระบุเวลาเข้างาน' });
-    }
-    if (data.correctionType !== 'CHECK_IN' && !data.requestedCheckOut) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['requestedCheckOut'], message: 'กรุณาระบุเวลาออกงาน' });
-    }
-    if (data.correctionType === 'BOTH' && data.requestedCheckIn && data.requestedCheckOut
-        && data.requestedCheckOut <= data.requestedCheckIn) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['requestedCheckOut'],
-        message: 'เวลาออกงานต้องอยู่หลังเวลาเข้างาน',
-      });
-    }
-  });
-}
-
-function apiDateTime(value) {
-  if (!value) return null;
-  return value.length === 16 ? `${value}:00+07:00` : `${value}+07:00`;
-}
 
 function formatWorkDate(value) {
   if (!value) return '-';
@@ -118,6 +50,14 @@ function formatDateTime(value) {
   }).format(date);
 }
 
+/**
+ * The list/review half of "ขอแก้ไขเวลาเข้า-ออกงาน" -- the submit half moved into
+ * AttendanceCorrectionRequestModal.jsx, opened from a button on AttendancePage.jsx
+ * (fix/attendance-correction-on-attendance-page). This component now renders as its own
+ * section on /attendance, below that page's daily attendance table, rather than as a tab
+ * inside RequestsPage (/employee-requests) -- see RequestsPage.jsx's own header comment for
+ * where the tab used to be and why it moved.
+ */
 export function AttendanceCorrectionPanel({ user, showToast }) {
   const queryClient = useQueryClient();
   const isCeo = user.role === 'ceo';
@@ -134,32 +74,9 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
   const requests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
   const loading = requestsQuery.isLoading || requestsQuery.isFetching;
 
-  const formSchema = useMemo(() => createAttendanceCorrectionFormSchema(), []);
-  const {
-    register, handleSubmit, reset, setValue, getValues, control, formState: { errors },
-  } = useForm({
-    resolver: zodResolver(formSchema),
-    defaultValues: defaultForm(),
-    mode: 'onChange',
-    reValidateMode: 'onChange',
-  });
-  const correctionType = useWatch({ control, name: 'correctionType' });
-  const showCheckIn = correctionType !== 'CHECK_OUT';
-  const showCheckOut = correctionType !== 'CHECK_IN';
-
   function invalidateAttendanceCorrection() {
     return queryClient.invalidateQueries({ queryKey: ['attendanceCorrection'] });
   }
-
-  const createMutation = useMutation({
-    mutationFn: (payload) => api.attendanceCorrection.create(payload).then((response) => response.request),
-    onSuccess: () => {
-      reset(defaultForm());
-      showToast('success', 'ส่งคำขอแก้ไขเวลาแล้ว');
-      invalidateAttendanceCorrection();
-    },
-    onError: (error) => showToast('error', error.message || 'ส่งคำขอแก้ไขเวลาไม่สำเร็จ'),
-  });
 
   const approveMutation = useMutation({
     mutationFn: ({ id, reviewerNote }) => api.attendanceCorrection.approve(id, { reviewerNote }).then((response) => response.request),
@@ -167,6 +84,18 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
       showToast('success', 'อนุมัติคำขอแก้ไขเวลาแล้ว');
       setConfirmState(null);
       invalidateAttendanceCorrection();
+      // Deliberate addition (fix/attendance-correction-on-attendance-page): approving doesn't
+      // just flip this request's own status -- AttendanceCorrectionService#approve (backend)
+      // inserts a real hr.attendance_punch row and flips the day's is_manual_override via
+      // AttendanceDailyService#applyManualCorrection. This list now sits on the SAME page as
+      // the attendance day table (it used to be a standalone tab on /employee-requests, nowhere
+      // near attendance data), so an approval must also invalidate that table's query or it
+      // keeps showing the pre-correction day until the next 60s poll. queryKeys.attendanceDaily
+      // and .attendanceDailyScoped both start with ['attendance', 'daily', ...], so invalidating
+      // the ['attendance'] prefix catches both the self-view and the HR/CEO/manager-scoped query
+      // in one call. Reject and cancel never write to attendance_punch/attendance_daily (same
+      // backend javadoc), so they intentionally do NOT invalidate this -- only approve does.
+      queryClient.invalidateQueries({ queryKey: ['attendance'] });
     },
     onError: (error) => showToast('error', error.message || 'อนุมัติคำขอไม่สำเร็จ'),
   });
@@ -191,26 +120,7 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
     onError: (error) => showToast('error', error.message || 'ยกเลิกคำขอไม่สำเร็จ'),
   });
 
-  const saving = createMutation.isPending || approveMutation.isPending
-    || rejectMutation.isPending || cancelMutation.isPending;
-
-  function handleWorkDateChange(event) {
-    const value = event.target.value;
-    const checkInTime = getValues('requestedCheckIn').slice(11) || '08:30';
-    const checkOutTime = getValues('requestedCheckOut').slice(11) || '17:30';
-    setValue('requestedCheckIn', `${value}T${checkInTime}`, { shouldDirty: true, shouldValidate: true });
-    setValue('requestedCheckOut', `${value}T${checkOutTime}`, { shouldDirty: true, shouldValidate: true });
-  }
-
-  function submitCorrection(values) {
-    createMutation.mutate({
-      workDate: values.workDate,
-      correctionType: values.correctionType,
-      requestedCheckIn: showCheckIn ? apiDateTime(values.requestedCheckIn) : null,
-      requestedCheckOut: showCheckOut ? apiDateTime(values.requestedCheckOut) : null,
-      reason: values.reason.trim(),
-    });
-  }
+  const saving = approveMutation.isPending || rejectMutation.isPending || cancelMutation.isPending;
 
   function approve(id) {
     setConfirmState({ kind: 'approve', id });
@@ -243,15 +153,38 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
   }), [requests]);
 
   return (
-    <PageStack>
-      {/* No PageHeader here: this is a tab inside RequestsPage, which owns the page title. */}
+    // Not <PageStack>: this panel is now embedded inside AttendancePage.jsx's OWN PageStack
+    // (fix/attendance-correction-on-attendance-page) rather than owning a page of its own, and a
+    // bare fragment lets its sections become direct children of that outer grid -- so they pick
+    // up its 18px gap for free, with no extra wrapper and no risk of a nested grid's `gap`
+    // stacking with its parent's. Same pattern MyLeaveTab.jsx/TeamLeaveTab.jsx already use for the
+    // identical shape (a tab's content embedded in LeaveSurfacePage.jsx's own PageStack).
+    <>
       <div className="flex items-center justify-between gap-3">
-        <p className="m-0 text-sm text-text-muted">
-          {isCeo
-            ? 'พิจารณาคำขอแก้ไขเวลาเข้า-ออกงานของพนักงาน'
-            : 'ยื่นคำขอแก้ไขเวลาเข้า-ออกงานเมื่อลืมสแกนนิ้ว และดูประวัติของคุณ'}
-        </p>
-        <Button type="button" variant="secondary" onClick={() => requestsQuery.refetch()} disabled={loading}>
+        <div>
+          {/* This panel's own section heading, not a <PageHeader> -- it used to sit inside
+              RequestsPage, which owned the page's only h1, so it never needed one of its own.
+              Embedded on AttendancePage.jsx now, below that page's h1 and daily table, it needs
+              something identifying where this block starts. */}
+          <h2 className="m-0 min-w-0 text-lg break-words">คำขอแก้ไขเวลาเข้า-ออกงาน</h2>
+          <p className="m-0 mt-1 text-sm text-text-muted">
+            {isCeo
+              ? 'พิจารณาคำขอแก้ไขเวลาเข้า-ออกงานของพนักงาน'
+              : 'กดปุ่ม "ขอแก้ไขเวลา" ด้านบนเพื่อยื่นคำขอเมื่อลืมสแกนนิ้ว และดูประวัติคำขอของคุณได้ด้านล่าง'}
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => requestsQuery.refetch()}
+          disabled={loading}
+          // Distinct from AttendancePage's own "รีเฟรช" (refetches the day table, not this list) --
+          // both buttons now live on the same page (fix/attendance-correction-on-attendance-page),
+          // and an identical accessible name is a real problem for anyone navigating by button
+          // list. Visible text stays "รีเฟรช" -- pattern matches AttendancePage.jsx's own
+          // scanDetail button: a short visible label paired with a fuller aria-label.
+          aria-label="รีเฟรชคำขอแก้ไขเวลา"
+        >
           <Icon name="refresh" />
           รีเฟรช
         </Button>
@@ -264,77 +197,6 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
           { key: 'approved', label: 'อนุมัติแล้ว', value: totals.approved, helper: 'Approved' },
         ]}
       />
-
-      {!isCeo ? (
-        <Panel title="ยื่นคำขอแก้ไขเวลาเข้า-ออกงาน">
-          <SafeForm className={FORM_GRID_CLASS} onSubmit={handleSubmit(submitCorrection)} noValidate>
-            <FormField label="วันที่ที่ลืมสแกน" htmlFor="ac-work-date" error={errors.workDate?.message} required>
-              <input
-                id="ac-work-date"
-                type="date"
-                max={todayIso()}
-                {...register('workDate', { onChange: handleWorkDateChange })}
-                aria-invalid={Boolean(errors.workDate)}
-                required
-              />
-            </FormField>
-            <FormField label="รายการที่ต้องแก้ไข" htmlFor="ac-type" error={errors.correctionType?.message} required>
-              <select
-                id="ac-type"
-                {...register('correctionType')}
-                value={correctionType ?? ''}
-                onChange={(event) => setValue('correctionType', event.target.value, { shouldDirty: true, shouldValidate: true })}
-                aria-invalid={Boolean(errors.correctionType)}
-                aria-describedby={errors.correctionType ? fieldErrorId('ac-type') : undefined}
-              >
-                <option value="CHECK_IN">ลืมสแกนตอนเข้างาน</option>
-                <option value="CHECK_OUT">ลืมสแกนตอนออกงาน</option>
-                <option value="BOTH">ลืมสแกนทั้งเข้าและออกงาน</option>
-              </select>
-            </FormField>
-            {showCheckIn ? (
-              <FormField label="เวลาเข้างานที่ถูกต้อง" htmlFor="ac-check-in" error={errors.requestedCheckIn?.message} required>
-                <input
-                  id="ac-check-in"
-                  type="datetime-local"
-                  {...register('requestedCheckIn')}
-                  aria-invalid={Boolean(errors.requestedCheckIn)}
-                  required
-                />
-              </FormField>
-            ) : null}
-            {showCheckOut ? (
-              <FormField label="เวลาออกงานที่ถูกต้อง" htmlFor="ac-check-out" error={errors.requestedCheckOut?.message} required>
-                <input
-                  id="ac-check-out"
-                  type="datetime-local"
-                  {...register('requestedCheckOut')}
-                  aria-invalid={Boolean(errors.requestedCheckOut)}
-                  required
-                />
-              </FormField>
-            ) : null}
-            <div className={formGridSpan2}>
-              <FormField label="เหตุผล" htmlFor="ac-reason" error={errors.reason?.message} required>
-                <textarea
-                  id="ac-reason"
-                  rows={3}
-                  {...register('reason')}
-                  aria-invalid={Boolean(errors.reason)}
-                  aria-describedby={errors.reason ? fieldErrorId('ac-reason') : undefined}
-                  required
-                />
-              </FormField>
-            </div>
-            <RowActions className={formGridSpan2}>
-              <Button type="submit" disabled={saving} className="mobile:min-h-11 mobile:w-full">
-                <Icon name="plus" />
-                ส่งคำขอ
-              </Button>
-            </RowActions>
-          </SafeForm>
-        </Panel>
-      ) : null}
 
       <SafeForm className={FILTER_BAR_CLASS} onSubmit={(event) => event.preventDefault()}>
         <FilterField label="สถานะ">
@@ -359,7 +221,14 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
         {loading ? (
           <EmptyState icon="clock" title="กำลังโหลดคำขอแก้ไขเวลา" />
         ) : requests.length === 0 ? (
-          <EmptyState icon="clock" title="ยังไม่มีคำขอแก้ไขเวลา" description="ยื่นคำขอใหม่ได้ด้านบน" />
+          // CEO has no "ขอแก้ไขเวลา" button to press (it's gated !isCeo, AttendancePage.jsx) --
+          // the subtitle two lines above already branches on isCeo for the same reason; this
+          // branches the same way instead of telling the CEO to press a button they don't have.
+          <EmptyState
+            icon="clock"
+            title="ยังไม่มีคำขอแก้ไขเวลา"
+            description={isCeo ? 'ยังไม่มีคำขอที่ต้องพิจารณา' : 'กดปุ่ม "ขอแก้ไขเวลา" ด้านบนเพื่อยื่นคำขอ'}
+          />
         ) : requests.map((request) => {
           const status = statusInfo(request.status);
           const canReview = request.canReview;
@@ -455,6 +324,6 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
         onConfirm={confirmCancel}
         onCancel={() => setConfirmState(null)}
       />
-    </PageStack>
+    </>
   );
 }
