@@ -46,7 +46,7 @@ describe('AttendanceCorrectionRequestModal — submit flow', () => {
   it('renders the submit form defaulted to today and CHECK_IN', async () => {
     renderModal();
 
-    const dateInput = await screen.findByLabelText(/วันที่ที่ลืมสแกน/);
+    const dateInput = await screen.findByLabelText(/วันที่ที่ต้องการแก้ไข/);
     expect(dateInput.value).toBe(todayIso());
     expect(screen.getByLabelText(/เวลาเข้างานที่ถูกต้อง/)).not.toBeNull();
     expect(screen.queryByLabelText(/เวลาออกงานที่ถูกต้อง/)).toBeNull();
@@ -56,7 +56,7 @@ describe('AttendanceCorrectionRequestModal — submit flow', () => {
     renderModal();
     const workDate = todayIso();
 
-    fireEvent.change(await screen.findByLabelText(/วันที่ที่ลืมสแกน/), { target: { value: workDate } });
+    fireEvent.change(await screen.findByLabelText(/วันที่ที่ต้องการแก้ไข/), { target: { value: workDate } });
     fireEvent.change(screen.getByLabelText(/เวลาเข้างานที่ถูกต้อง/), { target: { value: `${workDate}T08:20` } });
     fireEvent.change(screen.getByLabelText(/เหตุผล/), { target: { value: 'ลืมสแกนนิ้วตอนเข้างาน' } });
     fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
@@ -97,7 +97,7 @@ describe('AttendanceCorrectionRequestModal — submit flow', () => {
     const { onClose } = renderModal();
     const workDate = todayIso();
 
-    fireEvent.change(await screen.findByLabelText(/วันที่ที่ลืมสแกน/), { target: { value: workDate } });
+    fireEvent.change(await screen.findByLabelText(/วันที่ที่ต้องการแก้ไข/), { target: { value: workDate } });
     fireEvent.change(screen.getByLabelText(/เวลาเข้างานที่ถูกต้อง/), { target: { value: `${workDate}T08:20` } });
     fireEvent.change(screen.getByLabelText(/เหตุผล/), { target: { value: 'ลืมสแกนนิ้วตอนเข้างาน' } });
     fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));

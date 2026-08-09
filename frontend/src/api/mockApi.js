@@ -392,7 +392,12 @@ db.leaveTypes = db.leaveTypes || [
 // functional regression — only the earlier "all three were dead code" claim was wrong.
 db.leaveRequests = db.leaveRequests || [];
 db.overtimeRequests = db.overtimeRequests || [];
-db.attendanceCorrectionRequests = db.attendanceCorrectionRequests || [];
+// Was `|| []` — i.e. empty for every persona, so /attendance's correction section rendered its
+// empty state for HR, CEO, the division manager and the employee alike and nothing on that surface
+// could be judged. Now seeded from demoHr.js with the full
+// AttendanceCorrectionStatus x AttendanceCorrectionType matrix; see that builder's comment.
+db.attendanceCorrectionRequests = db.attendanceCorrectionRequests?.length
+  ? db.attendanceCorrectionRequests : [];
 db.specialMoneyRequests = db.specialMoneyRequests || [];
 // Evidence uploads live only for the life of the mock session -- there is no file store here.
 db.specialMoneyAttachments = db.specialMoneyAttachments || [];
