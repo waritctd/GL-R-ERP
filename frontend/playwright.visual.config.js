@@ -35,6 +35,13 @@ import { defineConfig, devices } from '@playwright/test';
 // capture-baseline-then-diff sequence and its same-day rule.
 export default defineConfig({
   testDir: './e2e-visual',
+  // Playwright's DEFAULT testMatch is `**/*.@(spec|test).?(c|m)[jt]s?(x)` — it claims
+  // `*.test.js` as well as `*.spec.js`. e2e-visual/helpers/accepted-changes.test.js is a
+  // VITEST file, and without this line Playwright collects it, chokes on the vitest
+  // imports, and fails the whole run before a single screenshot is taken (hit for real
+  // while building it). Splitting the extensions gives each runner an unambiguous half:
+  // *.spec.js is Playwright's, *.test.js is vitest's (see vitest.config.js `include`).
+  testMatch: '**/*.spec.js',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
