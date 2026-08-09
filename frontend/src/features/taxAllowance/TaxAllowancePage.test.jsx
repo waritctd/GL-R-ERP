@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation, useNavigationType } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TaxAllowancePage } from './TaxAllowancePage.jsx';
 import { api } from '../../api/index.js';
@@ -287,6 +287,12 @@ describe('TaxAllowancePage', () => {
       await waitFor(() => expect(submit.disabled).toBe(false));
       fireEvent.click(submit);
 
+      // Submitting now opens a confirmation first (owner ruling 2026-08-09) — the button no longer
+      // files anything on its own. Scoped to the dialog: the page's own submit button carries the
+      // same label, and picking "the last match" instead would silently re-click the wrong one.
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ยื่นแบบแจ้ง' }));
+
       await waitFor(() => expect(api.payroll.submitMyTaxAllowanceDeclaration).toHaveBeenCalled());
       // Flushed against the REAL declarationId the submit just returned, tagged with the ข้อ it was
       // picked under while filling in -- proves this is not "attach after a first submit", it is
@@ -471,6 +477,104 @@ describe('TaxAllowancePage', () => {
 
       expect(await screen.findByText('ยังไม่ได้ยื่น')).not.toBeNull();
       expect(document.getElementById('ta-taxpayer-id').value).toBe('');
+    });
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // Confirm before filing (owner ruling 2026-08-09).
+  //
+  // Measured in a real browser first: once the signed scan is staged the submit button is enabled,
+  // and HTML's implicit submission then hands Enter in any text field a real `event.submitter`, so
+  // both of SafeForm's guards pass and Enter filed the declaration outright.
+  //
+  // The ruling was explicitly NOT an Enter-specific guard. The hazard is "files with no
+  // confirmation", and an Enter-only fix leaves a stray click on the enabled button just as
+  // exposed. The dialog sits between the submit EVENT and the mutation, so every trigger — Enter,
+  // click, anything added later — arrives through the same gate.
+  //
+  // ⚠️ jsdom cannot perform implicit submission at all, so nothing in THIS file exercises the
+  // trigger that prompted the ruling. What it does prove is the property that makes the trigger
+  // harmless: a submit event does not reach the API on its own. The Enter path itself is covered
+  // in frontend/e2e-real/loryor01-form.spec.js, in a real browser.
+  // -------------------------------------------------------------------------------------------
+  describe('filing asks for confirmation first', () => {
+    async function fillToSubmittable() {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [] }); // status NONE
+      renderPage();
+      fireEvent.click(await screen.findByRole('button', { name: /ตรวจทาน ลงนาม และยื่น/ }));
+      const signed = new File(['y'], 'signed.pdf', { type: 'application/pdf' });
+      fireEvent.change(await findPicker({ last: true }), { target: { files: [signed] } });
+      await screen.findByText('signed.pdf');
+      const submit = screen.getByRole('button', { name: 'ยื่นแบบแจ้ง' });
+      await waitFor(() => expect(submit.disabled).toBe(false));
+      return submit;
+    }
+
+    it('a submit does NOT reach the API — it opens the confirmation', async () => {
+      const submit = await fillToSubmittable();
+
+      fireEvent.click(submit);
+
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByRole('heading', { name: 'ยื่นแบบแจ้ง ล.ย.01' })).not.toBeNull();
+      // The assertion that matters. Everything above it is scaffolding.
+      expect(api.payroll.submitMyTaxAllowanceDeclaration).not.toHaveBeenCalled();
+    });
+
+    it('says what filing actually does, rather than asking "are you sure"', async () => {
+      const submit = await fillToSubmittable();
+      fireEvent.click(submit);
+
+      // Both consequences stated before the employee commits: it goes to HR, and the form locks
+      // until withdrawn. Someone who reads only this sentence should not be surprised afterwards.
+      // Scoped to the dialog on purpose: the sign-off panel's own step list also contains
+      // "ส่งให้ฝ่ายบุคคลตรวจสอบ", and an unscoped match reads that instead and passes for the
+      // wrong reason — which is exactly what the first draft of this test did.
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText(/ส่งให้ฝ่ายบุคคลตรวจสอบ/).textContent)
+        .toMatch(/ล็อกไม่ให้แก้ไขจนกว่าจะยกเลิกการยื่น/);
+    });
+
+    it('dismissing files nothing and leaves the form exactly as it was', async () => {
+      const submit = await fillToSubmittable();
+      fireEvent.click(submit);
+      await screen.findByRole('dialog');
+
+      fireEvent.click(screen.getByRole('button', { name: 'ตรวจทานอีกครั้ง' }));
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(api.payroll.submitMyTaxAllowanceDeclaration).not.toHaveBeenCalled();
+      // Still editable, still holding the staged signed form — dismissing returns you to the form,
+      // it does not reset it. `getAllByText`: the filename legitimately appears twice, once in
+      // FileUploadField's picked-file echo and once in the staged-evidence list.
+      expect(screen.getAllByText('signed.pdf').length).toBeGreaterThan(0);
+      expect(screen.getByRole('button', { name: 'ยื่นแบบแจ้ง' }).disabled).toBe(false);
+    });
+
+    it('confirming files exactly the declaration the form was holding', async () => {
+      api.payroll.submitMyTaxAllowanceDeclaration.mockResolvedValue({
+        declarationId: 77, employeeId: 9, status: 'PENDING',
+      });
+      const submit = await fillToSubmittable();
+
+      // A value typed before the dialog opened must survive into what is actually filed. The gate
+      // holds the submitted values, and handing the mutation a stale or empty snapshot is the
+      // obvious way to get this refactor subtly wrong.
+      fireEvent.click(screen.getByRole('button', { name: /ข้อ 7/ }));
+      fireEvent.change(await screen.findByLabelText('จำนวนเงิน'), { target: { value: '4321' } });
+
+      fireEvent.click(submit);
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ยื่นแบบแจ้ง' }));
+
+      await waitFor(() => expect(api.payroll.submitMyTaxAllowanceDeclaration).toHaveBeenCalledTimes(1));
+      expect(api.payroll.submitMyTaxAllowanceDeclaration.mock.calls[0][0]).toMatchObject({
+        taxYear: currentYear,
+        lifeInsuranceAllowance: 4321,
+      });
+      // The /me endpoint never carries an employeeId — the server resolves the caller from the
+      // session. Asserted here because this change moved the body-building call site.
+      expect(api.payroll.submitMyTaxAllowanceDeclaration.mock.calls[0][0].employeeId).toBeUndefined();
     });
   });
   /**
