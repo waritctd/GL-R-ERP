@@ -14,7 +14,7 @@ one of them.
 - `/employee-requests` — "คำขอ" (combined requests page, `RequestsPage.jsx`)
   - `?tab=ot` — "ล่วงเวลา" (Overtime) — **`OvertimePanel.jsx`, changed in this PR**
   - `?tab=welfare` — "สวัสดิการ / เงินพิเศษ" (unrelated to this PR)
-  - `?tab=attendance-correction` — "ขอแก้ไขเวลาเข้า-ออกงาน" (unrelated to this PR)
+  - `/attendance` — "ขอแก้ไขเวลาเข้า-ออกงาน" (unrelated to this PR; moved off `/employee-requests`)
 - `/leave/new` — leave-request composer (`LeaveRequestPage.jsx`) — **not touched in PR 2**; its
   own calendar-context note (step 2) already reads the same backend endpoint this PR reuses as a
   shared component. PR 3 is expected to replace or sit alongside that note with `UpcomingHolidays`.

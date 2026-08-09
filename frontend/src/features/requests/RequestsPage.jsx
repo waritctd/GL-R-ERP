@@ -2,20 +2,17 @@ import { useSearchParams } from 'react-router-dom';
 import { PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { cn } from '../../utils/cn.js';
-import { AttendanceCorrectionPanel } from '../attendanceCorrection/AttendanceCorrectionPanel.jsx';
 import { OvertimePanel } from '../overtime/OvertimePanel.jsx';
 import { SpecialMoneyPanel } from '../specialmoney/SpecialMoneyPanel.jsx';
 
 const TABS = [
   { key: 'ot', label: 'ล่วงเวลา' },
   { key: 'welfare', label: 'สวัสดิการ / เงินพิเศษ' },
-  { key: 'attendance-correction', label: 'ขอแก้ไขเวลาเข้า-ออกงาน' },
 ];
 
-// Combined "คำขอ" page: one shell, three tabs (overtime + welfare/special-money +
-// attendance-correction), tab state carried in the query string so a tab is
-// linkable/shareable/back-button-safe (?tab=ot | ?tab=welfare | ?tab=attendance-correction,
-// default ot).
+// Combined "คำขอ" page: one shell, two tabs (overtime + welfare/special-money), tab state
+// carried in the query string so a tab is linkable/shareable/back-button-safe
+// (?tab=ot | ?tab=welfare, default ot).
 //
 // Route note: the spec for this slice asked for this page at `/requests`, but
 // that path is already ProfileRequestsPage's HR review-queue route, with
@@ -27,14 +24,20 @@ const TABS = [
 // deep link (backend, out of scope for this slice), so those still land on
 // the profile-requests queue rather than here.
 //
-// Attendance-correction tab (feat/attendance-correction-request): the same
-// role-conditional-content shape OvertimePanel/SpecialMoneyPanel already use for their own
-// review affordances -- no separate ReviewQueueTab-style page, since this feature is a single
-// CEO-only review stage (no manager routing to split out).
+// A third tab (attendance-correction, feat/attendance-correction-request) used to live here,
+// with the same role-conditional-content shape the two tabs below still use -- no separate
+// review-queue page, since that feature is a single CEO-only review stage with no manager
+// routing to split out. It moved to /attendance instead
+// (fix/attendance-correction-on-attendance-page): an employee now presses a button on the
+// attendance page and a request modal pops up, and the CEO review queue sits below that page's
+// own daily table, next to the data an approval actually writes into. `activeTab` below falls
+// back to 'ot' for anything other than 'welfare' -- including a stale `?tab=attendance-correction`
+// bookmark or deep link -- rather than erroring, which is deliberate graceful degradation, not
+// an oversight.
 export function RequestsPage({ user, currentEmployee, showToast }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawTab = searchParams.get('tab');
-  const activeTab = ['welfare', 'attendance-correction'].includes(rawTab) ? rawTab : 'ot';
+  const activeTab = rawTab === 'welfare' ? 'welfare' : 'ot';
 
   function selectTab(key) {
     const next = new URLSearchParams(searchParams);
@@ -45,7 +48,7 @@ export function RequestsPage({ user, currentEmployee, showToast }) {
 
   return (
     <PageStack>
-      <PageHeader title="คำขอ" subtitle="ล่วงเวลา สวัสดิการ/เงินพิเศษ และแก้ไขเวลาเข้า-ออกงาน ในที่เดียว" />
+      <PageHeader title="คำขอ" subtitle="ล่วงเวลา และสวัสดิการ/เงินพิเศษ ในที่เดียว" />
 
       <div role="tablist" aria-label="ประเภทคำขอ" className="flex gap-2 border-b border-border">
         {TABS.map((tab) => (
@@ -69,8 +72,6 @@ export function RequestsPage({ user, currentEmployee, showToast }) {
 
       {activeTab === 'ot' ? (
         <OvertimePanel user={user} currentEmployee={currentEmployee} showToast={showToast} />
-      ) : activeTab === 'attendance-correction' ? (
-        <AttendanceCorrectionPanel user={user} showToast={showToast} />
       ) : (
         <SpecialMoneyPanel user={user} currentEmployee={currentEmployee} showToast={showToast} />
       )}
