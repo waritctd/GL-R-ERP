@@ -240,7 +240,7 @@ export function AttendanceCorrectionPanel({ user, showToast }) {
         `min-w-* inside Panel flush` pairing (attendance, welfare and the OT history are the
         others), which is why the durable fix belongs in the shared component rather than here.
       */}
-      <Panel flush className="overflow-x-auto">
+      <Panel flush>
         <div className={`${CORRECTION_TABLE_GRID} table-head`}>
           <span>วันที่ / พนักงาน</span>
           <span>รายการที่แก้ไข</span>
