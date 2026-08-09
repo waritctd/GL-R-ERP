@@ -80,32 +80,44 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
     }
 
     @Test
-    void findEmployeeEmailResolvesBothTheAddressAndTheThaiDisplayName() {
+    void findEmployeeRecipientResolvesBothTheAddressAndTheThaiDisplayName() {
         long divisionId = insertDivision("SA", "Sales2");
         long employeeId = insertEmployeeWithNameAndEmail("EMP-400", divisionId, "สมชาย", "ใจดี",
             "somchai@glr.co.th");
 
-        var recipient = repository.findEmployeeEmail(employeeId);
+        var recipient = repository.findEmployeeRecipient(employeeId);
 
         assertThat(recipient).isPresent();
         assertThat(recipient.get().email()).isEqualTo("somchai@glr.co.th");
         assertThat(recipient.get().name()).isEqualTo("สมชาย ใจดี");
     }
 
+    // Flipped from the old findEmployeeEmailIsEmptyWhenTheEmployeeHasAnEmptyStringEmailOnFile, which
+    // pinned the PRE-fix contract (empty Optional whenever the address was blank/missing). The
+    // employee row exists, so the new contract returns it present - but the email must still
+    // normalise from "" to null (not stay ""), since that null/non-null distinction is exactly what
+    // NotificationEmailService.send()'s isBlank() check relies on to decide whether app.mail
+    // .override-to is rescuing an addressless employee.
     @Test
-    void findEmployeeEmailIsEmptyWhenTheEmployeeHasAnEmptyStringEmailOnFile() {
+    void findEmployeeRecipientIsPresentWithNullEmailWhenTheEmployeeHasAnEmptyStringEmailOnFile() {
         long divisionId = insertDivision("SA", "Sales3");
         long employeeId = insertEmployeeWithNameAndEmail("EMP-401", divisionId, "สมหญิง", "ดีใจ", "");
 
-        assertThat(repository.findEmployeeEmail(employeeId)).isEmpty();
+        var recipient = repository.findEmployeeRecipient(employeeId);
+
+        assertThat(recipient).isPresent();
+        assertThat(recipient.get().email()).isNull();
+        assertThat(recipient.get().name()).isEqualTo("สมหญิง ดีใจ");
     }
 
     // hr.employee.email is a nullable VARCHAR(255) - a real SQL NULL (as opposed to an empty
     // string) is reachable in production and must pass through the same
     // NULLIF(BTRIM(...), '') as the empty-string case above. Map.of() rejects null values, so this
     // needs its own insert rather than reusing insertEmployeeWithNameAndEmail's "" coercion.
+    // Flipped from findEmployeeEmailIsEmptyWhenTheEmployeeHasATrueSqlNullEmail for the same reason as
+    // the empty-string case above.
     @Test
-    void findEmployeeEmailIsEmptyWhenTheEmployeeHasATrueSqlNullEmail() {
+    void findEmployeeRecipientIsPresentWithNullEmailWhenTheEmployeeHasATrueSqlNullEmail() {
         long divisionId = insertDivision("SA", "Sales4");
         Number id = jdbc.queryForObject("""
             INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, email, division_id, is_active)
@@ -115,7 +127,19 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
                 "divisionId", divisionId), Number.class);
         long employeeId = id.longValue();
 
-        assertThat(repository.findEmployeeEmail(employeeId)).isEmpty();
+        var recipient = repository.findEmployeeRecipient(employeeId);
+
+        assertThat(recipient).isPresent();
+        assertThat(recipient.get().email()).isNull();
+        assertThat(recipient.get().name()).isEqualTo("สมหญิง ดีใจ");
+    }
+
+    // The only case left that returns empty under the new contract: no employee row at all. Had no
+    // coverage before this fix - the old findEmployeeEmail() conflated "no employee" with "no
+    // address" into the same empty Optional, so nothing distinguished them.
+    @Test
+    void findEmployeeRecipientIsEmptyWhenTheEmployeeDoesNotExist() {
+        assertThat(repository.findEmployeeRecipient(999_999_999L)).isEmpty();
     }
 
     private long insertEmployeeWithNameAndEmail(String code, long divisionId, String firstName, String lastName,

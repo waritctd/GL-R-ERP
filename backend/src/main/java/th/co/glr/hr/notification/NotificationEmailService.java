@@ -64,6 +64,9 @@ public class NotificationEmailService {
         // (regardless of the employee's actual/fake address, or even a missing one) so the email
         // pipeline can be verified without real per-employee mailboxes. Blank on every other
         // deployment, so real deployments behave exactly as before.
+        // NotificationService no longer gates on the address before calling this, so `to` really can
+        // arrive null in production now, not just from a direct test call - this null/blank branch
+        // below is what makes the "or even a missing one" promise above true end-to-end.
         String recipient = overrideTo.isBlank() ? to : overrideTo;
         if (recipient == null || recipient.isBlank()) {
             log.info("Notification email skipped: employee={} has no email and no override configured",
