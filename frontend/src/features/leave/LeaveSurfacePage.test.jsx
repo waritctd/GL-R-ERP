@@ -70,9 +70,12 @@ describe('LeaveSurfacePage', () => {
     renderLeaveSurfacePage();
 
     const tabs = await screen.findAllByRole('tab');
+    // "กฎการลา" is gone as of 2026-08-10 -- the §5 announcement is now the LeavePolicyBar above
+    // the tabs, so a plain employee with no reports has exactly ONE tab.
     expect(tabs.map((tab) => tab.textContent)).toEqual(
-      expect.arrayContaining([expect.stringContaining('ของฉัน'), expect.stringContaining('กฎการลา')]),
+      expect.arrayContaining([expect.stringContaining('ของฉัน')]),
     );
+    expect(tabs.some((tab) => tab.textContent.includes('กฎการลา'))).toBe(false);
     expect(tabs.some((tab) => tab.textContent.includes('รอพิจารณา'))).toBe(false);
     // The beforeEach's api.leave.employees() fixture is self-only (directReport: false) --
     // see leaveSurfaceTabs.test.js's hasTeamMembers coverage for the pure-function rule.
@@ -145,18 +148,35 @@ describe('LeaveSurfacePage', () => {
     expect(teamIndex).toBeLessThan(reviewIndex);
   });
 
+  // Retargeted 2026-08-10: this used to click "กฎการลา", which no longer exists. A plain employee
+  // now has only one tab, so the ?tab= round-trip needs an actor with a second one -- a manager
+  // with a direct report, switching to "รอพิจารณา".
   it('switching tabs writes ?tab= with replace (no new history entry)', async () => {
-    renderLeaveSurfacePage();
+    const manager = { employeeId: 5, name: 'หัวหน้างาน', role: 'employee', manager: true };
+    api.leave.employees.mockResolvedValue({
+      employees: [
+        {
+          employeeId: 5, employeeName: 'หัวหน้างาน', employeeCode: 'GLR-005', self: true, directReport: false,
+        },
+        {
+          employeeId: 6, employeeName: 'ลูกทีม', employeeCode: 'GLR-006', self: false, directReport: true,
+        },
+      ],
+    });
+    api.leave.list.mockResolvedValue({
+      requests: [{
+        id: 805, employeeId: 6, employeeName: 'ลูกทีม', managerEmployeeId: 5, status: 'SUBMITTED',
+        leaveTypeCode: 'VACATION', leaveTypeNameTh: 'ลาพักร้อน', startDate: '2026-08-10', endDate: '2026-08-10',
+        totalDays: 1, quotaRemainingAfter: 5, reason: 'พักผ่อนของลูกทีม',
+      }],
+    });
+    renderLeaveSurfacePage(manager);
 
-    await screen.findAllByRole('tab');
-    fireEvent.click(screen.getByRole('tab', { name: /กฎการลา/ }));
+    const reviewTab = await screen.findByRole('tab', { name: /รอพิจารณา/ });
+    fireEvent.click(reviewTab);
 
-    await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/leave?tab=rules'));
-    expect(screen.getByRole('tab', { name: /กฎการลา/ }).getAttribute('aria-selected')).toBe('true');
-    // Phase A3: real rule disclosure now renders here (leavePolicySections.js/RulesTab.jsx) instead
-    // of Phase A1's placeholder — this mock's api.leave.types() (beforeEach above) seeds VACATION
-    // only, so its §5.3 section is what should appear.
-    expect(await screen.findByText('5.3 ลาพักร้อน')).not.toBeNull();
+    await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/leave?tab=review'));
+    expect(screen.getByRole('tab', { name: /รอพิจารณา/ }).getAttribute('aria-selected')).toBe('true');
   });
 
   it('a stale/unknown ?tab= falls back to "ของฉัน"', async () => {

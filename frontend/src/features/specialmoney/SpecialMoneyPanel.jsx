@@ -1002,12 +1002,29 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
           </div>
         )}
       >
-        <div className={`${TABLE_GRID} table-head`}>
-          <span>ประเภท / รายละเอียด</span>
-          <span>สถานะ</span>
-          <span>งวดจ่าย</span>
-          <span />
-        </div>
+        {/*
+          The wide grid needs its OWN horizontal scroll region, or the page gets one.
+
+          `TABLE_GRID` carries `nav-drawer:min-w-[820px]`, i.e. a hard 820px floor for the whole
+          721–1040px band (below 721px `reflow-cards` turns these rows into cards, so the floor
+          stops applying). This Panel is not `flush`, so it has no `overflow-hidden`, and nothing
+          else between here and `.content-scroll` scrolls sideways — so at tablet widths the table
+          simply pushed the page out. Measured at 768px before this wrapper: the grid rendered
+          820px wide and ran 137px past the content edge, giving `.content-scroll` 105px of
+          horizontal overflow, so the whole page slid sideways under the user's thumb.
+
+          `overflow-x-auto` moves that scroll onto the table itself, which is what the wide-table
+          pattern elsewhere in the app does. Note the alternative — letting a `flush` Panel clip it
+          with `overflow-hidden` — is worse, not better: it trades a scrolling page for columns
+          that are silently unreachable.
+        */}
+        <div className="overflow-x-auto">
+          <div className={`${TABLE_GRID} table-head`}>
+            <span>ประเภท / รายละเอียด</span>
+            <span>สถานะ</span>
+            <span>งวดจ่าย</span>
+            <span />
+          </div>
         {loading ? (
           <EmptyState icon="badgeDollar" title="กำลังโหลดคำขอ" />
         ) : requests.length === 0 ? (
@@ -1099,6 +1116,7 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
             </div>
           );
         })}
+        </div>
       </Panel>
 
       <ConfirmDialog

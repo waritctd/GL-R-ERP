@@ -4,6 +4,7 @@ import BadgeDollarSign from 'lucide-react/dist/esm/icons/badge-dollar-sign.mjs';
 import Bell from 'lucide-react/dist/esm/icons/bell.mjs';
 import FileText from 'lucide-react/dist/esm/icons/file-text.mjs';
 import BadgeCheck from 'lucide-react/dist/esm/icons/badge-check.mjs';
+import Ban from 'lucide-react/dist/esm/icons/ban.mjs';
 import BriefcaseBusiness from 'lucide-react/dist/esm/icons/briefcase-business.mjs';
 import Building2 from 'lucide-react/dist/esm/icons/building-2.mjs';
 import CalendarClock from 'lucide-react/dist/esm/icons/calendar-clock.mjs';
@@ -59,6 +60,11 @@ const icons = {
   clipboard: ClipboardCheck,
   clock: Clock3,
   close: X,
+  // "void / withdraw", NOT "reject". Added 2026-08-10 because the leave review queue rendered
+  // ปฏิเสธ (reject a pending request) and ยกเลิก (void an already-decided one) as two IDENTICAL
+  // `close` ✕ glyphs side by side, told apart only by border colour and a tooltip -- owner-reported
+  // as confusing. `close` stays reject; `ban` (circle-with-slash) is cancel.
+  ban: Ban,
   moreHorizontal: Ellipsis,
   externalLink: ExternalLink,
   dashboard: LayoutDashboard,

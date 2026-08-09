@@ -565,22 +565,12 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
   const holidayWindowFrom = todayIso();
   const holidayWindowTo = addDaysIso(90);
 
-  return (
-    <PageStack>
-      {/*
-        No PageHeader here: this is a tab inside RequestsPage, which owns the page title. Two
-        stacked headers is what you get if this panel keeps its own.
-      */}
-      <div className="flex items-center justify-between gap-3">
-        <p className="m-0 text-sm text-text-muted">
-          {canSubmitForTeam ? 'ยื่นคำขอแทนทีมและอนุมัติจากเวลาสแกนจริง' : 'ยื่นคำขอ OT และดูประวัติของคุณ'}
-        </p>
-        <Button type="button" variant="secondary" onClick={() => requestsQuery.refetch()} disabled={loading}>
-          <Icon name="refresh" />
-          รีเฟรช
-        </Button>
-      </div>
-
+  // The stat strip and the filter bar are both ABOUT the history table at the bottom of this
+  // panel: the strip counts the rows in the selected range, the bar chooses that range. They are
+  // rendered as one unit here so the two views below can place them where each one's primary task
+  // actually is, rather than one order having to serve both.
+  const historyControls = (
+    <>
       <CompactStatRow
         items={[
           { key: 'total', label: 'คำขอทั้งหมด', value: requests.length, helper: 'ในช่วงที่เลือก' },
@@ -626,6 +616,47 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           ค้นหา
         </Button>
       </SafeForm>
+    </>
+  );
+
+  return (
+    <PageStack>
+      {/*
+        No PageHeader here: this is a tab inside RequestsPage, which owns the page title. Two
+        stacked headers is what you get if this panel keeps its own.
+      */}
+      <div className="flex items-center justify-between gap-3">
+        <p className="m-0 text-sm text-text-muted">
+          {canSubmitForTeam ? 'ยื่นคำขอแทนทีมและอนุมัติจากเวลาสแกนจริง' : 'ยื่นคำขอ OT และดูประวัติของคุณ'}
+        </p>
+        <Button type="button" variant="secondary" onClick={() => requestsQuery.refetch()} disabled={loading}>
+          <Icon name="refresh" />
+          รีเฟรช
+        </Button>
+      </div>
+
+      {/*
+        Order follows whose task the view is for, because the two roles open this tab to do
+        opposite things.
+
+        A manager/HR (`canSubmitForTeam`) comes here to TRIAGE: the counts and the range filter are
+        the first thing they need, and their queue is the table below. That is the order this panel
+        has always had, and it stays.
+
+        An employee comes here to FILE ONE REQUEST. For them the same order buried the form under
+        ~2 screens of reporting chrome — a five-tile strip that reads 0/0/0/0 for anyone with no
+        history, and a four-field date-range filter for a table they have not scrolled to yet.
+        Measured at 390px: the "ยื่นคำขอ OT" heading sat 1,180px down a 2,301px page, so the one
+        control the page exists to offer was off-screen on arrival. The form now comes first and
+        the stats/filter travel down to sit directly above the history they describe — which also
+        fixes a smaller oddity, that the filter bar was separated from the table it filters by the
+        holidays panel AND the entire submit form.
+
+        The holidays panel stays ABOVE the form in both views: #ot-holiday-visibility is explicit
+        that the holiday answer has to arrive before the claim is made, and the equivalent
+        placement on the leave side is pinned by a test.
+      */}
+      {canSubmitForTeam ? historyControls : null}
 
       {/* Holiday answer arrives BEFORE the claim is made (#ot-holiday-visibility): this panel sits
           above the whole submit form, not just above the day-type select, so an employee can see
@@ -828,6 +859,10 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           </RowActions>
         </SafeForm>
       </Panel>
+
+      {/* Self-service view: the counts and the range filter arrive here, immediately above the
+          history table they describe — see the ordering note near the top of this return. */}
+      {canSubmitForTeam ? null : historyControls}
 
       <Panel flush>
         <div className={`${OVERTIME_TABLE_GRID} table-head`}>
