@@ -81,6 +81,27 @@ describe('HrOverview', () => {
     expect(screen.getByText('ไปที่หน้าเงินเดือน').closest('button')).not.toBeNull();
   });
 
+  // Regression guard for a defect only the REAL backend could show. PayrollController
+  // #currentOrPreview declares `payrollMonth` as a bare @RequestParam, so Spring rejects a call
+  // without it with 400 before parseMonth runs; this component's `.catch(() => null)` then rendered
+  // that as "ยังไม่เริ่มรอบเงินเดือนเดือนนี้" — HR's landing page claiming no payroll run existed,
+  // every month, whether or not one did. Measured on the UAT seed: the same request WITH the param
+  // returns a PREVIEW period of 91 lines.
+  //
+  // Nothing in the mock-driven suite could catch it. mockApi.payroll.current defaults the month
+  // when the caller omits it, and contract.test.js compares parameter COUNTS — one `params` bag
+  // either way. So the assertion has to be on the argument itself, which is what this does: revert
+  // to `api.payroll.current()` and this test goes red while every other test here stays green.
+  it('asks the backend for a specific payroll month — the real @RequestParam is mandatory', async () => {
+    const { api } = await import('../../api/index.js');
+    api.payroll.current.mockClear();
+    renderOverview();
+    await screen.findByText('ยังไม่เริ่มรอบเงินเดือนเดือนนี้');
+    expect(api.payroll.current).toHaveBeenCalledWith(
+      expect.objectContaining({ payrollMonth: expect.stringMatching(/^\d{4}-\d{2}$/) }),
+    );
+  });
+
   it('shows today attendance counts', () => {
     renderOverview();
     const panel = screen.getByText('การลงเวลาวันนี้').closest('section');

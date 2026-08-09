@@ -12,7 +12,17 @@ import { formatAddress, formatShortDate, requestStatus } from '../../utils/forma
 import { TaxAllowanceSummaryPanel } from '../taxAllowance/TaxAllowanceSummaryPanel.jsx';
 import { ChangeRequestModal } from './ChangeRequestModal.jsx';
 
-const MY_REQUESTS_TABLE_GRID = 'grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)_minmax(0,2fr)_minmax(0,0.9fr)_minmax(0,1fr)] nav-drawer:min-w-[900px] reflow-cards';
+// The วันที่ column takes a MIN-WIDTH FLOOR (6rem), not a bigger `fr`. At 1041px — the first
+// width where the desktop column widths apply, since `nav-drawer`/`tablet` cap at 1040 and `lg:`
+// starts at 1041 — `minmax(0,0.9fr)` computed to 80px against a date needing 84, and the cell is
+// `white-space: nowrap`, so it clipped rather than reflowed: "09/06/2569" lost its tail. Only 4px,
+// which is the dangerous size — it reads as a complete date until you compare it to another row.
+//
+// A floor rather than a wider `fr` share for the same reason the leave surface used one on its
+// status column: `fr` is proportional, so widening it just relocates the collapse to a narrower
+// viewport instead of removing it. 6rem/96px clears the 84px a Thai Buddhist-era date needs with
+// room for the cell's own padding.
+const MY_REQUESTS_TABLE_GRID = 'grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)_minmax(0,2fr)_minmax(6rem,0.9fr)_minmax(0,1fr)] nav-drawer:min-w-[900px] reflow-cards';
 
 export function ProfilePage({ user, employee, profileRequests, onCreateRequest, taxAllowanceSummary }) {
   const [requestField, setRequestField] = useState(null);
