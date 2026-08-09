@@ -17,6 +17,7 @@ import th.co.glr.hr.commission.CommissionCalculator;
 import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.leave.LeaveRepository;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
@@ -64,7 +65,7 @@ class PayrollRawSqlEmployeeClassificationReviewTest extends AbstractPostgresInte
             mock(AuditService.class),
             mock(th.co.glr.hr.notification.NotificationService.class),
             mock(TicketRepository.class),
-            mock(AttachmentRepository.class));
+            mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
         payrollService = new PayrollService(
             payrollRepository,
             new PayrollCalculator(),

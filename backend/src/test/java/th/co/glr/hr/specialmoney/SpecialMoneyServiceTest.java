@@ -31,6 +31,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 
 /**
@@ -45,8 +46,9 @@ class SpecialMoneyServiceTest {
     private final AuditService auditService = mock(AuditService.class);
     private final NotificationService notificationService = mock(NotificationService.class);
     private final AppProperties appProperties = new AppProperties();
+    private final CeoApproverRepository ceoApprovers = mock(CeoApproverRepository.class);
     private final SpecialMoneyService service = new SpecialMoneyService(
-        repository, evaluator, auditService, notificationService, appProperties);
+        repository, evaluator, auditService, notificationService, appProperties, ceoApprovers);
 
     /**
      * Evidence-required types cannot be approved with nothing attached. Default the count to 1 so
@@ -446,7 +448,7 @@ class SpecialMoneyServiceTest {
         SpecialMoneyRequestDto cancelled = dto(77L, 10L, "CANCELLED", "AID_WEDDING");
         when(repository.findById(77L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
         when(repository.cancel(77L, 10L, null)).thenReturn(1);
-        when(repository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
+        when(ceoApprovers.findEmployeeIds()).thenReturn(List.of(500L));
 
         SpecialMoneyRequestDto result = service.cancel(77L, null, user("employee", 10L));
 
@@ -477,7 +479,7 @@ class SpecialMoneyServiceTest {
         SpecialMoneyRequestDto cancelled = cancelFixtureDto(78L, 10L, 10099L, "CANCELLED");
         when(repository.findById(78L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
         when(repository.cancel(78L, 10099L, null)).thenReturn(1);
-        when(repository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
+        when(ceoApprovers.findEmployeeIds()).thenReturn(List.of(500L));
 
         service.cancel(78L, null, user("employee", 10099L));
 
@@ -504,7 +506,7 @@ class SpecialMoneyServiceTest {
         SpecialMoneyRequestDto cancelled = cancelFixtureDto(79L, 10L, 10099L, "CANCELLED");
         when(repository.findById(79L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
         when(repository.cancel(79L, 10099L, null)).thenReturn(1);
-        when(repository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
+        when(ceoApprovers.findEmployeeIds()).thenReturn(List.of(500L));
         UserPrincipal actingRequester = new UserPrincipal(
             10099L, "requester@glr.co.th", "Acting Requester", "employee", 10099L, true, LocalDate.now(), false, null, false);
 
@@ -527,7 +529,7 @@ class SpecialMoneyServiceTest {
         SpecialMoneyRequestDto cancelled = cancelFixtureDto(80L, 10L, 500L, "CANCELLED");
         when(repository.findById(80L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
         when(repository.cancel(80L, 500L, null)).thenReturn(1);
-        when(repository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
+        when(ceoApprovers.findEmployeeIds()).thenReturn(List.of(500L));
 
         service.cancel(80L, null, user("ceo", 500L));
 

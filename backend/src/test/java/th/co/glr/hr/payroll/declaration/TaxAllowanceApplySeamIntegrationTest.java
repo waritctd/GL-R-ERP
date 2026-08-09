@@ -24,6 +24,7 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.leave.LeaveRepository;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollCalculator;
 import th.co.glr.hr.payroll.PayrollComponent;
@@ -77,7 +78,7 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             mock(AuditService.class),
             mock(NotificationService.class),
             mock(TicketRepository.class),
-            mock(AttachmentRepository.class));
+            mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
         payrollService = new PayrollService(
             payrollRepository,
             new PayrollCalculator(),

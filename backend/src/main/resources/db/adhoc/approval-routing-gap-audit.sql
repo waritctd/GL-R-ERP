@@ -106,7 +106,13 @@ SELECT e.employee_id, e.employee_code,
   LEFT JOIN hr.division d ON d.division_id = e.division_id
  WHERE e.is_active
    AND regexp_replace(COALESCE(p.name_th, ''), '\s+', '', 'g') LIKE '%ผู้จัดการ%'
-   AND (d.source_code ILIKE 'MD%' OR d.source_code ILIKE 'MN%'
+   -- This is the `ceo` ROLE test (DivisionAccessPolicy.roleFor: division code EXACTLY 'md', or a
+   -- กรรมการ-family position), because this section asks who could self-APPROVE -- an authority
+   -- question, decided by the role.
+   -- Deliberately NOT the same as CeoApproverRule.SQL_PREDICATE, which decides who gets NOTIFIED
+   -- and is narrower still (กรรมการผู้จัดการ only, owner ruling 2026-08-10). Keeping the two apart
+   -- is the point: the other executives can still approve, they are just no longer told.
+   AND (LOWER(BTRIM(d.source_code)) = 'md'
         OR regexp_replace(COALESCE(p.name_th, ''), '\s+', '', 'g') LIKE '%กรรมการ%')
  ORDER BY e.employee_code;
 
