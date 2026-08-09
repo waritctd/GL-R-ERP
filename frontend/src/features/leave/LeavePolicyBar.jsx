@@ -1,9 +1,4 @@
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { api } from '../../api/index.js';
-import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from '../../components/common/Icon.jsx';
-import { downloadBlob } from '../../utils/download.js';
 
 // Leave-surface IA restructure (2026-08-10), owner ruling: the "กฎการลา" TAB is gone and the
 // §5 announcement is reached from a slim reference bar at the top of the leave page instead --
@@ -14,66 +9,65 @@ import { downloadBlob } from '../../utils/download.js';
 // What went with the tab: the in-app §5 clause breakdown (RulesTab.jsx + leavePolicySections.js,
 // ~8 CollapsibleSections of quota / notice / attachment rules per leave type). Dropped on the
 // owner's explicit call -- the PDF is the authoritative text and is one click away here.
-// `git show <this commit>^:frontend/src/features/leave/RulesTab.jsx` brings it back.
 //
-// ── The three states are not decoration ──
-// `available` is a real question with a real "no": the file is uploaded by HR and may simply not
-// be there. Rendering a download control that then 404s is worse than saying so up front, which is
-// why the unavailable branch replaces the trigger rather than disabling it. "We could not ask"
-// (isError, e.g. offline) collapses into the same branch on purpose -- a user who cannot reach the
-// endpoint has no more use for a live link than one where the document was never uploaded.
+// ── THE DOCUMENT IS NOW BUNDLED, NOT FETCHED (2026-08-11, owner ruling) ──────
+// This used to probe `GET /api/leave/policy-document` (HEAD for availability, then a blob
+// download) and render one of three states, because no file had ever been uploaded and the
+// honest answer was "ask HR". The announcement now ships with the app, at
+// frontend/public/policy/ -- served as-is at the href below, the same way
+// SpecialMoneyPanel.jsx already ships ระเบียบสวัสดิการ. So availability is no longer a question
+// with a real "no": the file is in the bundle or the build is broken, and there is nothing left
+// to probe, fail, or explain. The three states collapse to a link.
+//
+// ⚠️ Two consequences worth knowing before "restoring" the API version:
+//
+//  1. `api.leave.policyDocumentAvailable` / `downloadPolicyDocument` are now called by NOTHING.
+//     They stay in hrApi.js and mockApi.js because contract.test.js pins that surface against the
+//     real LeaveController, which still exposes the endpoint -- an unused client method is not a
+//     dead endpoint. If HR uploading a replacement ever becomes a real workflow, that endpoint is
+//     where it goes, and this bar would need to prefer it over the bundled copy.
+//  2. A bundled file is the ONLY option that works on the Vercel/Render demo, which has no
+//     backend at all. An API-served PDF is permanently unavailable there, which is exactly the
+//     state this replaces.
+//
+// The bundled PDF is the signed original: "กฎระเบียบข้อบังคับของพนักงาน บริษัท จี แอล แอนด์ อาร์
+// แทปส์ แอนด์ ไทลส์ จำกัด เรื่องวันเวลาทำงาน และ การลาหยุดงาน", effective 1 ตุลาคม 2567. Its
+// clause 5 is what every leave rule in this app traces back to, and the figures match
+// mockApi.js's db.leaveTypes / the V116-V125 migrations as seeded: 5.1 ลาป่วย 30 วัน,
+// 5.2 ลากิจ 7 วัน (and its five named purposes are leaveRequestTable.jsx's LEAVE_PURPOSE_OPTIONS),
+// 5.3 ลาพักร้อน 6 วัน + carryover, 5.4 ลาคลอด 98 วัน/จ่าย 45, 5.5 ลาทหาร จ่ายไม่เกิน 60 วัน
+// (the reason MILITARY's annualQuotaDays is a 366 sentinel, not a policy number), 5.6 ลาอุปสมบท
+// ครั้งเดียวตลอดอายุงาน. Do NOT treat this file as a spec to re-derive that logic from -- it is
+// reference material for the reader; the rules already live in the migrations.
+
+// Bundled at build time (frontend/public/policy/, served as-is at this path -- same convention as
+// SpecialMoneyPanel.jsx's POLICY_PDF_HREF). The download filename mirrors the source document's
+// own name rather than the URL slug, so a saved copy is recognisable regardless of what the asset
+// happens to be named on disk.
+// Exported so LeavePolicyBar.test.jsx can assert the file this points at ACTUALLY EXISTS in
+// public/. That is the one failure this component can have and jsdom cannot see: a rename or a
+// missing asset renders a perfectly good-looking link that 404s on click, with nothing else in the
+// suite to notice.
+export const POLICY_PDF_HREF = '/policy/leave-policy-2567.pdf';
+const POLICY_PDF_DOWNLOAD_NAME = 'วันเวลาทำงาน และการหยุดงาน_1_10_67.pdf';
 
 export function LeavePolicyBar() {
-  const [downloading, setDownloading] = useState(false);
-  const [error, setError] = useState(null);
-
-  const availableQuery = useQuery({
-    queryKey: queryKeys.leavePolicyDocumentAvailable(),
-    queryFn: () => api.leave.policyDocumentAvailable(),
-  });
-
-  async function handleDownload() {
-    setDownloading(true);
-    setError(null);
-    try {
-      const blob = await api.leave.downloadPolicyDocument();
-      downloadBlob(blob, 'glr-leave-policy-announcement', 'pdf');
-    } catch (err) {
-      setError(err.message || 'ดาวน์โหลดไม่สำเร็จ');
-    } finally {
-      setDownloading(false);
-    }
-  }
-
-  // Nothing at all while the availability check is in flight: this is a one-line reference bar
-  // above the tabs, and flashing a skeleton band there shifts every panel below it on first paint.
-  if (availableQuery.isPending) return null;
-
-  const available = availableQuery.isSuccess && availableQuery.data === true;
-
   return (
     <div className="flex flex-wrap items-center gap-2.5 rounded-md border border-border bg-surface px-3.5 py-2.5 text-sm">
       <Icon name="fileText" size={16} className="text-icon-muted" />
       <span className="min-w-0">
-        {available
-          ? 'ประกาศ §5 เรื่องวันลา — เอกสารต้นฉบับที่ใช้ตั้งกฎการลาทั้งหมด'
-          : 'ยังไม่มีไฟล์ประกาศ §5 ฉบับเต็ม — กรุณาติดต่อฝ่ายบุคคลหากต้องการเอกสารต้นฉบับ'}
+        กฎระเบียบพนักงาน เรื่องวันเวลาทำงานและการลาหยุดงาน (มีผล 1 ต.ค. 2567) — ข้อ 5 คือที่มาของกฎการลาทั้งหมดในหน้านี้
       </span>
-      {available ? (
-        // A button, not an `<a href>` as the welfare bar uses: this PDF is not a static file in
-        // public/ -- it is an authenticated API blob (GET /api/leave/policy-document), so it has to
-        // go through the api client. Styled to read as the same affordance regardless.
-        <button
-          type="button"
-          onClick={handleDownload}
-          disabled={downloading}
-          className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-bold text-primary disabled:opacity-60 mobile:ml-0"
-        >
-          <Icon name="fileText" size={15} />
-          {downloading ? 'กำลังดาวน์โหลด…' : 'ประกาศวันลา (PDF)'}
-        </button>
-      ) : null}
-      {error ? <span className="w-full text-sm text-danger">{error}</span> : null}
+      <a
+        href={POLICY_PDF_HREF}
+        target="_blank"
+        rel="noopener noreferrer"
+        download={POLICY_PDF_DOWNLOAD_NAME}
+        className="ml-auto inline-flex shrink-0 items-center gap-1.5 font-bold text-primary mobile:ml-0"
+      >
+        <Icon name="fileText" size={15} />
+        ประกาศวันลา (PDF)
+      </a>
     </div>
   );
 }

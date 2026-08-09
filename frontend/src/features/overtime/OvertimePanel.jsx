@@ -864,6 +864,18 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           history table they describe — see the ordering note near the top of this return. */}
       {canSubmitForTeam ? null : historyControls}
 
+      {/*
+        `overflow-x-auto`: OVERTIME_TABLE_GRID holds this table at `nav-drawer:min-w-[940px]`
+        across the whole 721-1040px band, and `<Panel flush>` is `overflow-hidden` (it has to be —
+        a flush body runs edge to edge, so the card radius is what clips its corners). With no
+        scroll region between the two, the excess was simply gone: measured at 768px, the grid
+        rendered 940px inside a 702px card — 238px unreachable by any gesture, taking the
+        เวลาจริง / จ่ายได้ and action columns with it.
+        Third instance of this same pairing (attendance and welfare were the other two), and the
+        one that hid the longest: it only renders for a manager/HR actor, because the plain
+        employee's own history never fills those columns. Nothing found it until the division
+        manager became loggable-in.
+      */}
       <Panel flush>
         <div className={`${OVERTIME_TABLE_GRID} table-head`}>
           <span>วันที่ / พนักงาน</span>

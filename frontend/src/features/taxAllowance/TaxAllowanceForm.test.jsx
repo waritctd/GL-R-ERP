@@ -123,7 +123,7 @@ describe('TaxAllowanceForm — the signed form gates submission', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it('generating the PDF hands over the values currently typed, not the defaults', () => {
+  it('generating the PDF hands over the values currently typed, not the defaults', async () => {
     const onGeneratePdf = vi.fn();
     renderForm({ onGeneratePdf });
 
@@ -132,8 +132,39 @@ describe('TaxAllowanceForm — the signed form gates submission', () => {
     openSection('ตรวจทาน ลงนาม และยื่น');
     fireEvent.click(screen.getByRole('button', { name: 'สร้างไฟล์ PDF แบบ ล.ย.01' }));
 
-    expect(onGeneratePdf).toHaveBeenCalledTimes(1);
+    // Awaited: the handler now validates the whole form before rendering anything (below).
+    await vi.waitFor(() => expect(onGeneratePdf).toHaveBeenCalledTimes(1));
     expect(Number(onGeneratePdf.mock.calls[0][0].homeLoanInterestAllowance)).toBe(54321);
+  });
+
+  /**
+   * The PDF is the sheet the employee prints and signs, so it must not be rendered from values the
+   * schema rejects. Until validation moved to `onTouched` this was unreachable in practice: the
+   * resolver only ran on submit, and submit is gated behind the signed scan — i.e. behind having
+   * already printed and signed this very PDF.
+   */
+  it('refuses to render the PDF while a field is invalid, and says so', async () => {
+    const onGeneratePdf = vi.fn();
+    const showToast = vi.fn();
+    renderForm({ onGeneratePdf, showToast });
+
+    // 13 printed cells; "123" cannot be a เลขประจำตัวผู้เสียภาษีอากร.
+    fireEvent.change(screen.getByLabelText('เลขประจำตัวผู้เสียภาษีอากร'), { target: { value: '123' } });
+    openSection('ตรวจทาน ลงนาม และยื่น');
+    fireEvent.click(screen.getByRole('button', { name: 'สร้างไฟล์ PDF แบบ ล.ย.01' }));
+
+    await vi.waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringMatching(/กรอกไม่ถูกต้อง/)));
+    expect(onGeneratePdf).not.toHaveBeenCalled();
+  });
+
+  it('shows the field error as soon as the field is left, not only at submit', async () => {
+    renderForm();
+
+    const taxId = screen.getByLabelText('เลขประจำตัวผู้เสียภาษีอากร');
+    fireEvent.change(taxId, { target: { value: '123' } });
+    fireEvent.blur(taxId);
+
+    expect(await screen.findByText('เลขประจำตัวผู้เสียภาษีอากรต้องมี 13 หลัก')).toBeTruthy();
   });
 });
 
@@ -149,6 +180,10 @@ describe('TaxAllowanceForm — read-only', () => {
     values.lifeInsuranceAllowance = 9999;
     renderForm({ readOnly: true, defaultValues: values });
 
-    expect(screen.getByText(/9,999/)).toBeTruthy();
+    // Twice, and that is the point: once as ข้อ 7's own collapsed-row subtotal, once as the
+    // declared total. The total used to live only inside the sign-off panel, which read-only does
+    // not render — so a filed declaration showed fifteen subtotals and no total anywhere.
+    expect(screen.getAllByText(/9,999/)).toHaveLength(2);
+    expect(screen.getByText('รวมค่าลดหย่อนที่ประกาศ')).toBeTruthy();
   });
 });

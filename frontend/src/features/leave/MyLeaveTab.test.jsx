@@ -125,35 +125,42 @@ describe('MyLeaveTab balances: one primary card + a single disclosure (owner fee
     expect(statValue).not.toMatch(/98/);
   });
 
-  it('lists every leave type behind one "โควตาการลาทั้งหมด" disclosure, collapsed by default, and never renders MILITARY\'s sentinel annualQuotaDays/remainingDays', async () => {
+  // Replaces "lists every leave type behind one โควตาการลาทั้งหมด disclosure": that disclosure was
+  // removed on 2026-08-11 (owner ruling -- it restated, as a second FieldList, what the select can
+  // say itself). The invariant it guarded is NOT dropped: MILITARY's sentinel must still never
+  // reach the DOM, and the option labels are now a new place it could leak into.
+  it('carries each everyday type\'s remaining days in the "ดูโควตา" options, and never renders MILITARY\'s sentinel', async () => {
+    api.leave.types.mockResolvedValue({
+      leaveTypes: [
+        { code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation' },
+        { code: 'MILITARY', nameTh: 'ลารับราชการทหาร', nameEn: 'Military' },
+      ],
+    });
     api.leave.balances.mockResolvedValue({
       balances: [
         { leaveTypeCode: 'VACATION', leaveTypeNameTh: 'ลาพักร้อน', remainingDays: 6, approvedDays: 0, pendingDays: 0, annualQuotaDays: 6 },
-        // MILITARY's annualQuotaDays (366) is a sentinel, not a real policy figure -- must never
-        // reach the DOM as "เหลือ 366 วัน" or "สิทธิ์ 366 วัน", inside the disclosure or out.
+        // MILITARY's annualQuotaDays/remainingDays (366) is a sentinel, not a real policy figure --
+        // must never reach the DOM as "เหลือ 366 วัน" or "สิทธิ์ 366 วัน", in an option or out.
         { leaveTypeCode: 'MILITARY', leaveTypeNameTh: 'ลารับราชการทหาร', remainingDays: 366, approvedDays: 10, pendingDays: 2, annualQuotaDays: 366 },
       ],
     });
 
     renderMyLeaveTab();
 
-    // The default selected type (VACATION) is the primary card; MILITARY is not on screen yet.
-    await screen.findByText('ลาพักร้อน');
-    expect(screen.queryByText('ลารับราชการทหาร')).toBeNull();
+    const select = await screen.findByLabelText('เลือกประเภทการลาที่ต้องการดูโควตา');
+    const optionTexts = () => [...select.querySelectorAll('option')].map((option) => option.textContent);
+    // Everyday type: the figure is on the option itself, which is what makes the removed
+    // disclosure redundant rather than missed. Re-read inside waitFor -- the labels only gain
+    // their "· เหลือ N วัน" suffix once balancesQuery lands, one render after the options exist.
+    await waitFor(() => expect(optionTexts()).toContain('ลาพักร้อน · เหลือ 6 วัน'));
+    // Rare type: name only, no derived figure.
+    expect(optionTexts()).toContain('ลารับราชการทหาร');
     expect(screen.queryByText(/366/)).toBeNull();
+    expect(document.body.textContent).not.toMatch(/366/);
 
-    fireEvent.click(screen.getByRole('button', { name: /โควตาการลาทั้งหมด/ }));
-
-    expect(await screen.findByText('ลารับราชการทหาร')).not.toBeNull();
-    expect(screen.getByText(/ใช้แล้ว.*10.*วัน/)).not.toBeNull();
-    // The sentinel quota must never render, expanded or not.
-    expect(screen.queryByText(/366/)).toBeNull();
-
-    // The disclosure body is a definition list, never card chrome (nested cards are always wrong
-    // per DESIGN.md's card-diet rule -- see the CollapsibleSection unmount-when-collapsed comment
-    // this relies on).
-    expect(document.querySelector('.collapsible-body dl')).not.toBeNull();
-    expect(document.querySelectorAll('.collapsible-body [class*="card"]')).toHaveLength(0);
+    // The disclosure is gone for good -- neither the trigger nor a second copy of the balances.
+    expect(screen.queryByRole('button', { name: /โควตาการลาทั้งหมด/ })).toBeNull();
+    expect(document.querySelector('.collapsible-body')).toBeNull();
   });
 
   it('updates the primary balance card to follow the "ประเภทการลา" select', async () => {

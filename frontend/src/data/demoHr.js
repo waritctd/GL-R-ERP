@@ -48,6 +48,17 @@ export function buildDemoLeaveRequests(employees) {
     reviewedAt: null,
     reviewerNote: null,
     cancelledAt: null,
+    // Present-and-null, not absent: create() always writes these six, and leaveRequestTable.jsx's
+    // expanded row reads all of them (sub-day window, paid/unpaid split, §5.2 purpose, emergency
+    // flag). Same reasoning as the module header's note about the pre-2026-08 rows that omitted
+    // fields a real panel then rendered as `undefined` — an absent key and a null one are the same
+    // pixel today only by luck of each call site's own fallback.
+    startTime: null,
+    endTime: null,
+    paidDays: null,
+    unpaidDays: null,
+    purposeCode: null,
+    emergencyFiling: false,
     createdAt: now,
     updatedAt: now,
     ...overrides,
@@ -161,6 +172,164 @@ export function buildDemoLeaveRequests(employees) {
       quotaRemainingBefore: 6, quotaRemainingAfter: 4,
       requestedById: employees[12].id, requestedByName: employees[12].nameTh, requestedAt: at(-45),
       ...hrReviewer, reviewedAt: at(-44), cancelledAt: at(-40),
+    }),
+
+    // ── TEAM COVERAGE (2026-08-11) ───────────────────────────────────────────
+    // The 12 rows above are a STATUS matrix: one row per reachable status, spread thin across
+    // divisions so no two land under the same manager. That is the right shape for "does the UI
+    // render every state", and the wrong shape for the two surfaces a manager actually uses —
+    // /leave's "ลูกทีม" and "รอพิจารณา" tabs. Measured before this block: the WHL ผู้จัดการฝ่าย
+    // (employees[5], the persona with the largest team at seven reports) had exactly TWO rows in
+    // "ลูกทีม", both from the same person, and ONE row in the review queue; the SAL ผู้จัดการฝ่าย
+    // (employees[0]) had two rows and NOTHING pending, which — since sales_manager is not in
+    // ROLE_PERMISSIONS.canReviewLeave and that tab is otherwise gated on having at least one
+    // actionable row — meant the review tab did not render for them AT ALL.
+    //
+    // A queue with one row cannot show what a queue is for: no scanning, no urgency ordering, no
+    // pagination, no mix of "decide this" and "already approved, could still void it". These rows
+    // fill both managers' teams to that bar. They are DEMO DEPTH, not new states — every status,
+    // field and edge below already appears above; what changes is that they now appear under one
+    // manager at once.
+    //
+    // Quotas stay coherent per employee/type/year (PERSONAL 7, SICK 30, VACATION 6): leaveBalance()
+    // derives the live figures from these rows, so an over-quota seed would render a manager's team
+    // as uniformly out of leave.
+
+    // SAL — under employees[0] (the sales.manager persona, see demoData.js's users table).
+    row({
+      id: 13, employeeId: employees[2].id, leaveTypeCode: 'PERSONAL',
+      startDate: iso(2026, 8, 13), endDate: iso(2026, 8, 13), totalDays: 1, quotaYear: 2026,
+      reason: 'พาบุตรไปตรวจสุขภาพตามนัดของโรงพยาบาล', status: 'SUBMITTED',
+      purposeCode: 'FAMILY_NECESSITY',
+      quotaRemainingBefore: 7, quotaRemainingAfter: 6,
+      requestedById: employees[2].id, requestedByName: employees[2].nameTh, requestedAt: at(-3),
+    }),
+    row({
+      id: 14, employeeId: employees[3].id, leaveTypeCode: 'SICK',
+      startDate: iso(2026, 8, 14), endDate: iso(2026, 8, 15), totalDays: 2, quotaYear: 2026,
+      reason: 'ผ่าตัดเล็กตามนัดแพทย์ และพักฟื้นอีกหนึ่งวัน', status: 'SUBMITTED',
+      attachmentId: 203, attachmentFileName: 'hospital-appointment-2026-08-14.pdf',
+      quotaRemainingBefore: 30, quotaRemainingAfter: 28,
+      requestedById: employees[3].id, requestedByName: employees[3].nameTh, requestedAt: at(-1),
+    }),
+    row({
+      // Sub-day leave (V90): times present, single date, fractional totalDays — the only seeded
+      // row that exercises the expanded row's "ช่วงเวลา (ลาบางส่วนของวัน)" field.
+      id: 15, employeeId: employees[4].id, leaveTypeCode: 'PERSONAL',
+      startDate: iso(2026, 8, 26), endDate: iso(2026, 8, 26), totalDays: 0.5, quotaYear: 2026,
+      startTime: '13:00', endTime: '17:00',
+      reason: 'ติดต่อราชการที่สำนักงานเขต ช่วงบ่าย', status: 'SUBMITTED',
+      purposeCode: 'DRIVING_LICENSE_OR_GOVERNMENT',
+      quotaRemainingBefore: 7, quotaRemainingAfter: 6.5,
+      requestedById: employees[4].id, requestedByName: employees[4].nameTh, requestedAt: at(-2),
+    }),
+    row({
+      id: 16, employeeId: employees[25].id, leaveTypeCode: 'VACATION',
+      startDate: iso(2026, 9, 7), endDate: iso(2026, 9, 11), totalDays: 5, quotaYear: 2026,
+      reason: 'เดินทางต่างจังหวัดกับครอบครัวช่วงต้นเดือนกันยายน', status: 'SUBMITTED',
+      quotaRemainingBefore: 6, quotaRemainingAfter: 1,
+      requestedById: employees[25].id, requestedByName: employees[25].nameTh, requestedAt: at(-6),
+    }),
+    row({
+      // APPROVED and still in the future — the state a manager may VOID but not decide. This is
+      // the row that makes the approve/reject-vs-cancel split visible in the review queue
+      // (leaveSurfaceTabs.js's canManagerCancelRequest is APPROVED-only as of 2026-08-11).
+      id: 17, employeeId: employees[1].id, leaveTypeCode: 'VACATION',
+      startDate: iso(2026, 8, 24), endDate: iso(2026, 8, 25), totalDays: 2, quotaYear: 2026,
+      reason: 'งานมงคลสมรสของญาติที่ต่างจังหวัด', status: 'APPROVED',
+      quotaRemainingBefore: 6, quotaRemainingAfter: 4,
+      requestedById: employees[1].id, requestedByName: employees[1].nameTh, requestedAt: at(-20),
+      ...hrReviewer, reviewedAt: at(-19),
+    }),
+    row({
+      // Partly unpaid — the one seeded row that renders the "ไม่รับค่าจ้าง" badge in the collapsed
+      // status column (leaveRequestTable.jsx), which no other row exercises.
+      id: 18, employeeId: employees[2].id, leaveTypeCode: 'VACATION',
+      startDate: iso(2026, 7, 22), endDate: iso(2026, 7, 23), totalDays: 2, quotaYear: 2026,
+      paidDays: 1, unpaidDays: 1,
+      reason: 'ธุระที่ต่างจังหวัด เกินสิทธิ์พักร้อนคงเหลือหนึ่งวัน', status: 'APPROVED',
+      quotaRemainingBefore: 1, quotaRemainingAfter: 0,
+      requestedById: employees[2].id, requestedByName: employees[2].nameTh, requestedAt: at(-30),
+      ...hrReviewer, reviewedAt: at(-29), reviewerNote: 'อนุมัติ แต่หนึ่งวันเป็นการลาแบบไม่รับค่าจ้าง',
+    }),
+    row({
+      // The SAL manager's OWN leave. employees[0].managerId is null, so this routes to "hr" —
+      // the branch pendingApproverForLeave falls back to, and the only seeded SUBMITTED row that
+      // shows it on a manager's own "ของฉัน" tab.
+      id: 19, employeeId: employees[0].id, leaveTypeCode: 'VACATION',
+      startDate: iso(2026, 9, 21), endDate: iso(2026, 9, 22), totalDays: 2, quotaYear: 2026,
+      reason: 'พาครอบครัวไปงานรับปริญญา', status: 'SUBMITTED',
+      quotaRemainingBefore: 6, quotaRemainingAfter: 4,
+      requestedById: employees[0].id, requestedByName: employees[0].nameTh, requestedAt: at(-5),
+    }),
+    row({
+      id: 20, employeeId: employees[0].id, leaveTypeCode: 'PERSONAL',
+      startDate: iso(2026, 6, 26), endDate: iso(2026, 6, 26), totalDays: 1, quotaYear: 2026,
+      reason: 'ติดต่อธนาคารเรื่องสินเชื่อบ้าน', status: 'APPROVED',
+      purposeCode: 'OTHER',
+      quotaRemainingBefore: 7, quotaRemainingAfter: 6,
+      requestedById: employees[0].id, requestedByName: employees[0].nameTh, requestedAt: at(-40),
+      ...hrReviewer, reviewedAt: at(-39),
+    }),
+
+    // WHL — under employees[5] (the warehouse.manager persona, seven direct reports).
+    row({
+      id: 21, employeeId: employees[6].id, leaveTypeCode: 'SICK',
+      startDate: iso(2026, 8, 12), endDate: iso(2026, 8, 12), totalDays: 1, quotaYear: 2026,
+      reason: 'อาหารเป็นพิษ พบแพทย์ที่คลินิก', status: 'SUBMITTED',
+      attachmentId: 204, attachmentFileName: 'clinic-note-2026-08-12.pdf',
+      quotaRemainingBefore: 30, quotaRemainingAfter: 29,
+      requestedById: employees[6].id, requestedByName: employees[6].nameTh, requestedAt: at(-1),
+    }),
+    row({
+      id: 22, employeeId: employees[7].id, leaveTypeCode: 'PERSONAL',
+      startDate: iso(2026, 8, 28), endDate: iso(2026, 8, 28), totalDays: 1, quotaYear: 2026,
+      reason: 'งานศพของคุณตา', status: 'SUBMITTED',
+      purposeCode: 'FAMILY_FUNERAL',
+      quotaRemainingBefore: 7, quotaRemainingAfter: 6,
+      requestedById: employees[7].id, requestedByName: employees[7].nameTh, requestedAt: at(-2),
+    }),
+    row({
+      id: 23, employeeId: employees[9].id, leaveTypeCode: 'VACATION',
+      startDate: iso(2026, 9, 2), endDate: iso(2026, 9, 4), totalDays: 3, quotaYear: 2026,
+      reason: 'พาครอบครัวกลับภูมิลำเนา', status: 'APPROVED',
+      quotaRemainingBefore: 6, quotaRemainingAfter: 3,
+      requestedById: employees[9].id, requestedByName: employees[9].nameTh, requestedAt: at(-16),
+      ...hrReviewer, reviewedAt: at(-15),
+    }),
+    row({
+      id: 24, employeeId: employees[11].id, leaveTypeCode: 'SICK',
+      startDate: iso(2026, 7, 17), endDate: iso(2026, 7, 17), totalDays: 1, quotaYear: 2026,
+      reason: 'ปวดหลังจากการยกของ', status: 'AUTO_REJECTED',
+      systemNote: 'ลาป่วยต้องแนบใบรับรองแพทย์ (ระบบปฏิเสธอัตโนมัติ)',
+      quotaRemainingBefore: 30, quotaRemainingAfter: 30,
+      requestedById: employees[11].id, requestedByName: employees[11].nameTh, requestedAt: at(-17),
+    }),
+    row({
+      id: 25, employeeId: employees[26].id, leaveTypeCode: 'VACATION',
+      startDate: iso(2026, 7, 6), endDate: iso(2026, 7, 7), totalDays: 2, quotaYear: 2026,
+      reason: 'พักร้อนประจำปี', status: 'APPROVED',
+      quotaRemainingBefore: 6, quotaRemainingAfter: 4,
+      requestedById: employees[26].id, requestedByName: employees[26].nameTh, requestedAt: at(-35),
+      ...hrReviewer, reviewedAt: at(-34),
+    }),
+    row({
+      // The WHL manager's OWN leave — same "manager has a personal tab too" coverage as row 19/20,
+      // so "ของฉัน" is not empty for either manager persona.
+      id: 26, employeeId: employees[5].id, leaveTypeCode: 'VACATION',
+      startDate: iso(2026, 7, 27), endDate: iso(2026, 7, 28), totalDays: 2, quotaYear: 2026,
+      reason: 'พักผ่อนประจำปี', status: 'APPROVED',
+      quotaRemainingBefore: 6, quotaRemainingAfter: 4,
+      requestedById: employees[5].id, requestedByName: employees[5].nameTh, requestedAt: at(-38),
+      ...hrReviewer, reviewedAt: at(-37),
+    }),
+    row({
+      id: 27, employeeId: employees[5].id, leaveTypeCode: 'SICK',
+      startDate: iso(2026, 8, 18), endDate: iso(2026, 8, 18), totalDays: 1, quotaYear: 2026,
+      reason: 'นัดตรวจสุขภาพประจำปี', status: 'SUBMITTED',
+      attachmentId: 205, attachmentFileName: 'annual-checkup-2026-08-18.pdf',
+      quotaRemainingBefore: 30, quotaRemainingAfter: 29,
+      requestedById: employees[5].id, requestedByName: employees[5].nameTh, requestedAt: at(-4),
     }),
   ];
 }
@@ -500,5 +669,126 @@ export function buildDemoNotifications() {
     { id: 6, userId: 6, ticketId: 5, ticketCode: 'PR-2026-0005', type: 'CUSTOMER_QUOTATION_ISSUED', message: 'ใบเสนอราคา QT-2026-0002 ถูกออกแล้ว', read: true, createdAt: '2026-07-21T09:00:00Z' },
     { id: 7, userId: 7, ticketId: 7, ticketCode: 'PR-2026-0007', type: 'ORDER_CONFIRMED', message: 'ลูกค้ายืนยันคำสั่งซื้อของดีล PR-2026-0007 แล้ว', read: false, createdAt: '2026-07-25T13:00:00Z' },
     { id: 8, userId: 12, ticketId: 16, ticketCode: 'PR-2026-0016', type: 'PRICING_REQUEST_SUBMITTED', message: 'คำขอราคาของคุณถูกส่งเข้าคิวฝ่ายนำเข้าแล้ว', read: false, createdAt: '2026-07-28T10:00:00Z' },
+  ];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Attendance-correction requests — mirrors AttendanceCorrectionService and the
+// mock's own create/approve/reject/cancel handlers (mockApi.js), so a seeded row
+// carries exactly the fields those handlers write.
+//
+// WHY THIS BUILDER EXISTS. `db.attendanceCorrectionRequests` was seeded `|| []`
+// — an empty array, for every persona. So /attendance's correction section
+// rendered its empty state for HR, CEO, the division manager and the employee
+// alike, and nothing about that surface could be judged: not the table, not the
+// status badges, not the review affordances, not how the columns behave when a
+// reason is long. A UI sweep over it was measuring an empty state and reporting
+// "clean". This is the state matrix the enums actually allow.
+//
+// The full grid is AttendanceCorrectionStatus (SUBMITTED / APPROVED / REJECTED /
+// CANCELLED) x AttendanceCorrectionType (CHECK_IN / CHECK_OUT / BOTH), read from
+// the Java enums, not invented. Rows are spread across employees so each persona
+// has something to look at:
+//   employees[8]  the plain employee quick-login  — his own history, all 4 statuses
+//   employees[5]  the WHL division manager        — a report's row plus one of his own
+//   employees[20] HR                              — sees everything; no rows of her own
+// The CEO reviews rather than files, so nothing is assigned to employees[0] as a
+// requester; what the CEO needs is SUBMITTED rows from other people, which the
+// employee's and the manager's rows supply.
+//
+// `canReview` is NOT set here: buildAttendanceCorrectionRecord() in mockApi.js
+// derives it per-caller from the session (CEO + status SUBMITTED), which is the
+// same shape the backend uses. Baking it into the seed would make every viewer
+// see the same buttons and quietly defeat the gate.
+// ─────────────────────────────────────────────────────────────────────────────
+export function buildDemoAttendanceCorrectionRequests(employees) {
+  const at = (offsetDays, time = '09:00') => {
+    const d = new Date('2026-08-10T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + offsetDays);
+    return `${d.toISOString().slice(0, 10)}T${time}:00+07:00`;
+  };
+  const day = (offsetDays) => {
+    const d = new Date('2026-08-10T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + offsetDays);
+    return d.toISOString().slice(0, 10);
+  };
+  const row = (overrides) => ({
+    requestedCheckIn: null,
+    requestedCheckOut: null,
+    reviewedById: null,
+    reviewedAt: null,
+    reviewerNote: null,
+    cancelledAt: null,
+    createdAt: at(-20),
+    updatedAt: at(-20),
+    ...overrides,
+  });
+
+  const employee = employees[8];
+  const manager = employees[5];
+  const ceo = employees[0];
+
+  return [
+    // ── SUBMITTED (the CEO's actual review queue) ──────────────────────────
+    row({
+      id: 1, employeeId: employee.id, workDate: day(-1), correctionType: 'CHECK_IN',
+      requestedCheckIn: at(-1, '08:25'),
+      reason: 'เครื่องสแกนนิ้วที่ประตูคลังไม่อ่านลายนิ้วมือตอนเช้า แจ้ง รปภ. ไว้แล้ว',
+      status: 'SUBMITTED', requestedById: employee.id, requestedAt: at(-1, '17:40'),
+    }),
+    row({
+      id: 2, employeeId: manager.id, workDate: day(-2), correctionType: 'CHECK_OUT',
+      requestedCheckOut: at(-2, '19:15'),
+      reason: 'ออกงานหลังปิดคลัง ลืมสแกนออก',
+      status: 'SUBMITTED', requestedById: manager.id, requestedAt: at(-2, '19:30'),
+    }),
+    // BOTH + a deliberately long reason: the longest realistic free-text this
+    // table has to lay out, and the row that shows whether the เหตุผล column
+    // wraps or clips at tablet.
+    row({
+      id: 3, employeeId: employee.id, workDate: day(-3), correctionType: 'BOTH',
+      requestedCheckIn: at(-3, '08:30'), requestedCheckOut: at(-3, '17:30'),
+      reason: 'ไปส่งของที่โรงงานลูกค้าตั้งแต่เช้าและกลับเข้าบริษัทหลังเวลาปิดทำการ '
+        + 'จึงไม่ได้สแกนทั้งขาเข้าและขาออก มีใบส่งของและลายเซ็นผู้รับเป็นหลักฐานแนบกับฝ่ายบุคคลแล้ว',
+      status: 'SUBMITTED', requestedById: employee.id, requestedAt: at(-3, '18:05'),
+    }),
+
+    // ── APPROVED ───────────────────────────────────────────────────────────
+    row({
+      id: 4, employeeId: employee.id, workDate: day(-9), correctionType: 'CHECK_IN',
+      requestedCheckIn: at(-9, '08:15'),
+      reason: 'สแกนนิ้วไม่ติดตอนเข้างาน',
+      status: 'APPROVED', requestedById: employee.id, requestedAt: at(-9, '16:00'),
+      reviewedById: ceo.id, reviewedAt: at(-8, '09:20'), reviewerNote: 'ตรวจสอบกับกล้องวงจรปิดแล้ว',
+      updatedAt: at(-8, '09:20'),
+    }),
+    row({
+      id: 5, employeeId: manager.id, workDate: day(-12), correctionType: 'BOTH',
+      requestedCheckIn: at(-12, '07:55'), requestedCheckOut: at(-12, '18:40'),
+      reason: 'ไฟดับทั้งอาคาร เครื่องสแกนไม่ทำงานทั้งวัน',
+      status: 'APPROVED', requestedById: manager.id, requestedAt: at(-12, '19:00'),
+      reviewedById: ceo.id, reviewedAt: at(-11, '10:05'), reviewerNote: null,
+      updatedAt: at(-11, '10:05'),
+    }),
+
+    // ── REJECTED (reviewerNote is required on this path) ───────────────────
+    row({
+      id: 6, employeeId: employee.id, workDate: day(-16), correctionType: 'CHECK_OUT',
+      requestedCheckOut: at(-16, '20:00'),
+      reason: 'ลืมสแกนออก',
+      status: 'REJECTED', requestedById: employee.id, requestedAt: at(-16, '20:10'),
+      reviewedById: ceo.id, reviewedAt: at(-15, '11:00'),
+      reviewerNote: 'เวลาที่ขอไม่ตรงกับบันทึกของหัวหน้างาน กรุณายื่นใหม่พร้อมระบุเวลาที่ถูกต้อง',
+      updatedAt: at(-15, '11:00'),
+    }),
+
+    // ── CANCELLED (withdrawn by the requester, never reviewed) ─────────────
+    row({
+      id: 7, employeeId: employee.id, workDate: day(-22), correctionType: 'CHECK_IN',
+      requestedCheckIn: at(-22, '08:40'),
+      reason: 'เข้าใจผิดเรื่องกะการทำงาน',
+      status: 'CANCELLED', requestedById: employee.id, requestedAt: at(-22, '12:00'),
+      cancelledAt: at(-21, '08:10'), updatedAt: at(-21, '08:10'),
+    }),
   ];
 }
