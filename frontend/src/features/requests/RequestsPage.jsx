@@ -64,6 +64,16 @@ export function RequestsPage({ user, currentEmployee, showToast }) {
             role="tab"
             aria-selected={activeTab === tab.key}
             className={cn(
+              // `appearance-none bg-transparent border-x-0 border-t-0 border-solid` FIRST, for the
+              // same reason Tabs.jsx spells it out: no Tailwind preflight ships here, so a bare
+              // <button> keeps the UA's chrome — measured on this tablist before the fix, the
+              // active tab was `border-top/left: 2px outset rgb(79,70,229)` and both tabs sat on
+              // `background: rgb(239,239,239)`. `border-b-2 border-primary` cannot say "bottom
+              // only" when the UA has already supplied 2px on all four sides: the primary colour
+              // landed on every edge, so the selected tab rendered as a blue RECTANGLE instead of
+              // an underline, on a grey button face. Zeroing the other three edges (and the face)
+              // is what leaves just the underline this was always meant to be.
+              'appearance-none bg-transparent border-x-0 border-t-0 border-solid',
               'px-4 py-2.5 text-sm font-bold border-b-2 -mb-px transition-colors',
               activeTab === tab.key
                 ? 'border-primary text-primary'
