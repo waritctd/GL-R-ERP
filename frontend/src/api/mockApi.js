@@ -863,6 +863,31 @@ function bangkokTodayIso() {
   }).format(new Date());
 }
 
+// Mirrors LeaveService.DEFAULT_WINDOW_MONTHS -- see leave.list's own comment for why this default
+// exists and what it fixes. A plain number here rather than an import: this file has no build-time
+// link to the Java source, so the two are kept in step by the cross-references in both comments.
+// CLAUDE.md's warning applies -- contract.test.js checks the method surface and arity, never a
+// constant's VALUE, so nothing fails if these two drift.
+const LEAVE_DEFAULT_WINDOW_MONTHS = 12;
+
+/**
+ * "YYYY-MM-DD" shifted by whole months, clamping to the target month's last day.
+ *
+ * Clamping is the point, and it is why this is not `new Date(y, m + n, d)`: JS OVERFLOWS a
+ * too-large day into the following month (2028-02-29 shifted -12 months would give 2027-03-01),
+ * whereas Java's LocalDate.plusMonths/minusMonths -- the thing this mirrors -- CLAMPS to the last
+ * valid day (2027-02-28). Only reachable on a leap day at the current +/-12-month usage, but the
+ * helper is written to match the semantics it claims to mirror rather than to match today's
+ * single call site.
+ */
+function shiftMonthsIso(iso, months) {
+  const [year, month, day] = iso.split('-').map(Number);
+  const target = new Date(Date.UTC(year, month - 1 + months, 1));
+  const lastDayOfTargetMonth = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  target.setUTCDate(Math.min(day, lastDayOfTargetMonth));
+  return target.toISOString().slice(0, 10);
+}
+
 // Step 6: mirrors OrderConfirmationService's own private unitLabel(), used when building a
 // deposit-notice item from a customer-quotation item's requestedUnitBasis.
 function mockUnitBasisLabel(unitBasis) {
@@ -4663,6 +4688,25 @@ export const api = {
       return delay({ contactDefaults: leaveContactDefaults(employee) });
     },
 
+    // Mirrors LeaveService#list + LeaveRepository#findRequests.
+    //
+    // Two things here are mirrors of the Java side, NOT mock conveniences, and both were missing
+    // until the 2026-08-10 leave-surface restructure -- each is a documented way for this file to
+    // produce a green suite that says nothing about production (see CLAUDE.md's mock-contract
+    // table):
+    //
+    //  1. THE NULL-DATE DEFAULT. LeaveService#list defaults each missing bound to
+    //     today -/+ DEFAULT_WINDOW_MONTHS (12). This mock previously applied NO default at all, so
+    //     `list({})` returned every seeded row -- strictly MORE permissive than production, the
+    //     dangerous direction. Five callers pass no dates (ReviewQueueTab, LeaveSurfacePage's
+    //     tab-visibility signal, CeoOverview, DivisionManagerOverview, EmployeeSelfService), so
+    //     under mocks they saw rows the real backend would have filtered out.
+    //  2. THE SORT. LeaveRepository#findRequests ends `ORDER BY lr.start_date DESC,
+    //     lr.leave_request_id DESC`. This mock returned db.leaveRequests in seed-insertion order.
+    //     Ordering is not cosmetic here: "ประวัติการลา" shows page 1 of a paginated table, so a
+    //     different order truncates a DIFFERENT SET of rows -- the exact mechanism of #434.
+    //
+    // Keep both in step with LeaveService.DEFAULT_WINDOW_MONTHS and that ORDER BY.
     async list(params = {}) {
       const user = requireSession();
       let list = db.leaveRequests;
@@ -4670,9 +4714,16 @@ export const api = {
       if (!includeAll) list = list.filter((item) => item.employeeId === user.employeeId || canReviewLeave(user, item.employeeId));
       if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
       if (params.status) list = list.filter((item) => item.status === params.status);
-      if (params.from) list = list.filter((item) => item.endDate >= params.from);
-      if (params.to) list = list.filter((item) => item.startDate <= params.to);
-      return delay({ requests: list.map((item) => buildLeaveRecord(item, user)) });
+      // Each bound defaults independently, exactly as LeaveService#list does -- passing only
+      // `from` must still get the default `to`.
+      const from = params.from || shiftMonthsIso(bangkokTodayIso(), -LEAVE_DEFAULT_WINDOW_MONTHS);
+      const to = params.to || shiftMonthsIso(bangkokTodayIso(), LEAVE_DEFAULT_WINDOW_MONTHS);
+      // Overlap, not containment -- mirrors `start_date <= :toDate AND end_date >= :fromDate`.
+      list = list.filter((item) => item.endDate >= from && item.startDate <= to);
+      const sorted = list.slice().sort((first, second) => (
+        second.startDate.localeCompare(first.startDate) || Number(second.id) - Number(first.id)
+      ));
+      return delay({ requests: sorted.map((item) => buildLeaveRecord(item, user)) });
     },
 
     async create(payload) {

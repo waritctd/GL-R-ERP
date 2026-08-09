@@ -173,7 +173,7 @@ export const api = {
     preview: (payload, options = {}) =>
       apiRequest(API_ROUTES.leave.preview, { method: 'POST', body: payload, signal: options.signal }),
     // Leave-surface IA rebuild, Phase A3: the §5 announcement PDF link on the "กฎการลา" tab.
-    // HEAD-probes first (no body transfer) so RulesTab.jsx can render a disabled/explained state
+    // HEAD-probes first (no body transfer) so LeavePolicyBar.jsx can render a disabled/explained state
     // when the backend has no path configured, instead of a broken link the user only discovers by
     // clicking — see LeaveController#policyDocument's Javadoc for why the same route answers both.
     policyDocumentAvailable: async () => {

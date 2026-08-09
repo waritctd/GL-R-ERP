@@ -4,14 +4,15 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
+import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable, expandedRowRegionId } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
-import { leaveStatusLabel as statusInfo } from '../../utils/format.js';
-import { formatDateRange, formatDays } from './leaveFormatting.js';
+import { addDaysIso, leaveStatusLabel as statusInfo } from '../../utils/format.js';
+import { formatDateRange, formatDays, todayIso } from './leaveFormatting.js';
 import {
   buildLeaveRequestColumns, LEAVE_REQUEST_TABLE_GRID, leaveRequestRowKey,
   PendingApproverNote, renderLeaveRequestExpanded,
@@ -51,9 +52,24 @@ export function ReviewQueueTab({ user, showToast }) {
 
   const canReviewAll = hasPermission(user.role, 'canReviewLeave');
 
-  // Unfiltered by design -- a SUBMITTED request awaiting decision can carry any date, and a
-  // reviewer should never lose sight of one because it falls outside some default range. Shares
-  // its cache key with LeaveSurfacePage.jsx's own `reviewSignalQuery` (both read
+  // No CLIENT-side date filter, by design -- a SUBMITTED request awaiting decision can carry any
+  // date, and a reviewer should never lose sight of one because it falls outside some default
+  // range.
+  //
+  // ⚠️ That was the stated intent, but until 2026-08-10 it was NOT what happened. `list({})` sends
+  // no date parameters, and LeaveService#list defaults the missing bounds server-side -- so this
+  // "unfiltered" query was in fact scoped to [month-start, +1 month]. findRequests matches on
+  // overlap, so a still-SUBMITTED request whose leave ended last month failed
+  // `end_date >= :fromDate` and DROPPED OUT OF THIS QUEUE the moment the month rolled over; leave
+  // booked more than a month ahead never appeared in it at all. The queue silently lost work its
+  // own comment promised it would never lose.
+  //
+  // The default is now +/-12 months (LeaveService.DEFAULT_WINDOW_MONTHS), which holds the intent
+  // for any realistic pending request. It is a WINDOW, not "unfiltered" -- do not restore the old
+  // wording. If a pending request older than a year is ever a real case, widen the constant rather
+  // than re-asserting something the code does not do.
+  //
+  // Shares its cache key with LeaveSurfacePage.jsx's own `reviewSignalQuery` (both read
   // `queryKeys.leaveRequests({})`), so mounting this tab costs no extra request once that one has
   // already landed.
   const requestsQuery = useQuery({
@@ -72,6 +88,28 @@ export function ReviewQueueTab({ user, showToast }) {
   const denied = requestsQuery.isError && isPermissionError(requestsQuery.error);
   const hasError = requestsQuery.isError && !denied;
   const refreshing = requestsQuery.isFetching && !requestsQuery.isPending;
+
+  // Stat-row parity with the other two tabs (owner ruling, 2026-08-10). Chosen for a QUEUE, which
+  // is a different question than the history tabs ask: not "how much leave was taken" but "how
+  // much is waiting on me, and how urgent is it".
+  //
+  // Counts are over `actionableRequests`, NOT `allRequests` -- the queue only ever shows rows this
+  // user may act on, so a headline number drawn from the wider list would not match the rows
+  // underneath it. `awaitingDecision` narrows further to the genuinely reviewable subset
+  // (canReviewRequest == SUBMITTED and mine to decide); the rest of `actionableRequests` are
+  // already-APPROVED rows this user may only cancel, which are not "waiting on" anyone.
+  const totals = useMemo(() => {
+    const reviewable = actionableRequests.filter((request) => canReviewRequest(request, user, canReviewAll));
+    const pendingDays = reviewable.reduce((sum, request) => sum + Number(request.totalDays || 0), 0);
+    const people = new Set(reviewable.map((request) => request.employeeId)).size;
+    // "Starting within 7 days" is the urgency signal a queue needs -- a request whose leave begins
+    // on Monday matters more than one three months out, and nothing else on this tab surfaces that.
+    const soonCutoff = addDaysIso(todayIso(), 7);
+    const startingSoon = reviewable.filter((request) => request.startDate <= soonCutoff).length;
+    return {
+      awaitingDecision: reviewable.length, pendingDays, people, startingSoon,
+    };
+  }, [actionableRequests, user, canReviewAll]);
 
   function invalidateLeave() {
     return queryClient.invalidateQueries({ queryKey: ['leave'] });
@@ -230,9 +268,14 @@ export function ReviewQueueTab({ user, showToast }) {
               </Button>
             </>
           ) : null}
+          {/* `ban`, not `close` (2026-08-10, owner-reported). This button sits directly beside
+              "ปฏิเสธ", and both used the same ✕ -- three icon-only controls where two were the
+              same glyph, distinguishable only by border colour and a tooltip nobody hovers.
+              They are also different ACTIONS on different rows: ปฏิเสธ decides a still-pending
+              request, ยกเลิก voids one that was already approved. Same glyph implied same thing. */}
           {cancellable ? (
             <Button type="button" variant="icon" title="ยกเลิก" aria-label="ยกเลิก" disabled={rowSaving} onClick={() => requestCancel(request.id)}>
-              <Icon name="close" size={14} />
+              <Icon name="ban" size={14} />
             </Button>
           ) : null}
         </>
@@ -316,6 +359,15 @@ export function ReviewQueueTab({ user, showToast }) {
 
   return (
     <>
+      <CompactStatRow
+        items={[
+          { key: 'awaiting', label: 'รอคุณพิจารณา', value: totals.awaitingDecision, helper: 'อนุมัติ / ปฏิเสธได้' },
+          { key: 'soon', label: 'เริ่มใน 7 วัน', value: totals.startingSoon, helper: 'ควรพิจารณาก่อน' },
+          { key: 'days', label: 'วันลารวม', value: formatDays(totals.pendingDays), helper: 'ที่รอพิจารณา' },
+          { key: 'people', label: 'พนักงาน', value: totals.people, helper: 'ที่ยื่นคำขอ' },
+        ]}
+      />
+
       {refreshing ? (
         <span className="inline-flex items-center gap-1 text-xs text-text-muted" aria-live="polite">
           <Icon name="refresh" size={12} />

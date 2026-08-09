@@ -87,7 +87,7 @@ export const API_ROUTES = {
     // see LeaveService#preview's Javadoc for the FULL vs QUICK depth and nullable-dates contract.
     preview: '/api/leave/preview',
     // Leave-surface IA rebuild, Phase A3: the §5 announcement PDF the "กฎการลา" tab links to. Same
-    // path serves both GET (download) and HEAD (RulesTab.jsx's availability probe) -- see
+    // path serves both GET (download) and HEAD (LeavePolicyBar.jsx's availability probe) -- see
     // LeaveController#policyDocument's Javadoc.
     policyDocument: '/api/leave/policy-document',
     // Phase A4: the medical-certificate/leave-attachment download an approver (or the owning
