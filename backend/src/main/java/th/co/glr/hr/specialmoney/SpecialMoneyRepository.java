@@ -534,18 +534,6 @@ public class SpecialMoneyRepository {
         return new HashSet<>(provinces);
     }
 
-    /** Mirrors {@code OvertimeRepository.findCeoApproverEmployeeIds} -- same MD/MN division convention. */
-    public List<Long> findCeoApproverEmployeeIds() {
-        return jdbc.query("""
-            SELECT e.employee_id
-              FROM hr.employee e
-              JOIN hr.division d ON d.division_id = e.division_id
-             WHERE e.is_active = TRUE
-               AND (d.source_code ILIKE 'MD%' OR d.source_code ILIKE 'MN%')
-             ORDER BY e.employee_id
-            """, Map.of(), (rs, rowNum) -> rs.getLong("employee_id"));
-    }
-
     public boolean payrollMonthProcessed(LocalDate payrollMonth) {
         Boolean processed = jdbc.queryForObject("""
             SELECT EXISTS (

@@ -20,6 +20,7 @@ import th.co.glr.hr.commission.CommissionCalculator;
 import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.leave.LeaveRepository;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentSsoInclusionUpsertRequest;
 import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentTaxTreatmentUpsertRequest;
@@ -180,7 +181,7 @@ class PayrollClassificationAndSsoInclusionIntegrationTest extends AbstractPostgr
             mock(AuditService.class),
             mock(NotificationService.class),
             mock(TicketRepository.class),
-            mock(AttachmentRepository.class));
+            mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
         return new PayrollService(
             repository,
             new PayrollCalculator(),

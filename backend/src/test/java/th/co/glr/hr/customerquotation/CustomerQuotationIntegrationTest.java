@@ -160,7 +160,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         salesRepId = createEmployee(employees, "พนักงานขาย สี่", "sales-step4@glr.co.th", "SALES", "แผนกขาย");
         otherSalesId = createEmployee(employees, "พนักงานขาย อื่นสี่", "sales-step4-other@glr.co.th", "SALES", "แผนกขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า สี่", "import-step4@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
-        ceoUserId = createEmployee(employees, "ผู้บริหาร สี่", "ceo-step4@glr.co.th", "MD", "ผู้บริหาร");
+        ceoUserId = createManagingDirector(employees, "ผู้บริหาร สี่", "ceo-step4@glr.co.th");
         accountUserId = createEmployee(employees, "บัญชี สี่", "account-step4@glr.co.th", "ACCT", "ฝ่ายบัญชี");
         salesManagerUserId = createEmployee(employees, "ผู้จัดการฝ่ายขาย สี่", "sales-manager-step4@glr.co.th", "SALES", "ฝ่ายขาย");
         salesActor = actor(salesRepId, "sales");
@@ -957,6 +957,22 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             null, null, nameTh, null, null, null, null, null, null, null,
             email, null, divisionSourceCode, divisionNameTh, divisionNameTh,
             null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
+    }
+
+    /**
+     * The CEO fixture. Unlike {@link #createEmployee}, which leaves {@code positionTh} null, this
+     * sets a real position -- {@code CeoApproverRule} keys the CEO-notified set on position
+     * กรรมการผู้จัดการ ALONE, so an employee with no position can never match it. These fixtures
+     * used to land in that set via the superseded division-based rule, which is why they needed no
+     * position before. Division stays MD so the {@code ceo} ROLE ({@code DivisionAccessPolicy}) and
+     * every authz assertion in this class are unchanged; only notification routing is affected.
+     */
+    private long createManagingDirector(EmployeeRepository employees, String nameTh, String email) {
+        return employees.create(new UpsertEmployeeRequest(
+            null, null, nameTh, null, null, null, null, null, null, null,
+            email, null, "MD", "ผู้บริหาร", "ผู้บริหาร",
+            "กรรมการผู้จัดการ", null, null, "ACT", new BigDecimal("30000"),
+            null, null, null, null, null, null, null));
     }
 
     private UserPrincipal actor(long employeeId, String role) {

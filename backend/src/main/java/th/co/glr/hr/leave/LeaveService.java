@@ -48,6 +48,27 @@ public class LeaveService {
     // #resolveTargetEmployee's own comment for why HR-for-a-subordinate must keep working.
     private static final Set<String> SELF_SUBMIT_BLOCKED_ROLES = Set.of("hr", "ceo");
     private static final Set<LeaveStatus> ACTIVE_QUOTA_STATUSES = Set.of(LeaveStatus.SUBMITTED, LeaveStatus.APPROVED);
+    // Leave-surface IA restructure (2026-08-10), owner-authorised API behaviour change. #list's
+    // null-date default used to be [today.withDayOfMonth(1), today.plusMonths(1)] -- a window that
+    // dropped still-pending rows off BOTH edges, because findRequests matches on overlap
+    // (`start_date <= :toDate AND end_date >= :fromDate`), not on submission time:
+    //
+    //   - a SUBMITTED request whose leave ENDED before this month failed `end_date >= :fromDate`,
+    //     so it vanished from its approver's queue the moment the month rolled over;
+    //   - a vacation booked more than a month ahead failed `start_date <= :toDate`, so it was
+    //     invisible to that approver until the month it started.
+    //
+    // Neither is a filter anyone asked for -- both are a browse default leaking into an approval
+    // queue. FIVE call sites pass no dates at all and inherit this: ReviewQueueTab (the queue
+    // itself), LeaveSurfacePage's `รอพิจารณา` tab-visibility signal, CeoOverview,
+    // DivisionManagerOverview and EmployeeSelfService. A symmetric +/-12mo window closes both edges
+    // at the single point all five read through, and keeps "recent" meaningful for the history
+    // table without the caller having to name a range.
+    //
+    // Callers that DO pass explicit dates are unaffected -- each bound is defaulted independently,
+    // so passing only `from` still gets the default `to` and vice versa. mockApi.js's leave.list
+    // mirrors this same default; keep the two in step.
+    private static final int DEFAULT_WINDOW_MONTHS = 12;
     // Sub-day leave (2026-07-25): day-fraction = clock-hours(start,end) / 8, no lunch subtraction
     // (decided rule -- see docs/agent-handoffs), rounded HALF_UP to 2dp, capped at 1.00 whole day.
     // Times must fall within the standard workday, matching the paper form's printed hours.
@@ -156,8 +177,8 @@ public class LeaveService {
             Long requestedEmployeeId,
             String requestedStatus) {
         LocalDate today = LocalDate.now(clock);
-        LocalDate effectiveTo = toDate == null ? today.plusMonths(1) : toDate;
-        LocalDate effectiveFrom = fromDate == null ? today.withDayOfMonth(1) : fromDate;
+        LocalDate effectiveTo = toDate == null ? today.plusMonths(DEFAULT_WINDOW_MONTHS) : toDate;
+        LocalDate effectiveFrom = fromDate == null ? today.minusMonths(DEFAULT_WINDOW_MONTHS) : fromDate;
         if (effectiveTo.isBefore(effectiveFrom)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่สิ้นสุดต้องไม่มาก่อนวันที่เริ่มต้น");
         }

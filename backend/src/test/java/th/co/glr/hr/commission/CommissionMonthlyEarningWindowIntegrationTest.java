@@ -16,6 +16,7 @@ import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -53,7 +54,7 @@ class CommissionMonthlyEarningWindowIntegrationTest extends AbstractPostgresInte
             org.mockito.Mockito.mock(AuditService.class),
             org.mockito.Mockito.mock(NotificationService.class),
             org.mockito.Mockito.mock(TicketRepository.class),
-            new AttachmentRepository(jdbc));
+            new AttachmentRepository(jdbc), new CeoApproverRepository(jdbc));
         long managerEmployeeId = createEmployee("ผู้จัดการฝ่ายขาย หน้าต่าง", "sm-window@glr.co.th", "SA", "แผนกขาย");
         managerActor = new UserPrincipal(managerEmployeeId, managerEmployeeId + "@glr.co.th", "Sales Manager",
             "sales_manager", managerEmployeeId, true, LocalDate.now(), false, null, false);

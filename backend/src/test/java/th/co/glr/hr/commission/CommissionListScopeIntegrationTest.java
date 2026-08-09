@@ -20,6 +20,7 @@ import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -87,7 +88,7 @@ class CommissionListScopeIntegrationTest extends AbstractPostgresIntegrationTest
             mock(AuditService.class),
             mock(NotificationService.class),
             mock(TicketRepository.class),
-            mock(AttachmentRepository.class));
+            mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
 
         repAId = createEmployee("พนักงานขาย เอ", "commission-list-a@glr.co.th", "SA", "แผนกขาย");
         repBId = createEmployee("พนักงานขาย บี", "commission-list-b@glr.co.th", "SA", "แผนกขาย");

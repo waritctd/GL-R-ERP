@@ -863,6 +863,31 @@ function bangkokTodayIso() {
   }).format(new Date());
 }
 
+// Mirrors LeaveService.DEFAULT_WINDOW_MONTHS -- see leave.list's own comment for why this default
+// exists and what it fixes. A plain number here rather than an import: this file has no build-time
+// link to the Java source, so the two are kept in step by the cross-references in both comments.
+// CLAUDE.md's warning applies -- contract.test.js checks the method surface and arity, never a
+// constant's VALUE, so nothing fails if these two drift.
+const LEAVE_DEFAULT_WINDOW_MONTHS = 12;
+
+/**
+ * "YYYY-MM-DD" shifted by whole months, clamping to the target month's last day.
+ *
+ * Clamping is the point, and it is why this is not `new Date(y, m + n, d)`: JS OVERFLOWS a
+ * too-large day into the following month (2028-02-29 shifted -12 months would give 2027-03-01),
+ * whereas Java's LocalDate.plusMonths/minusMonths -- the thing this mirrors -- CLAMPS to the last
+ * valid day (2027-02-28). Only reachable on a leap day at the current +/-12-month usage, but the
+ * helper is written to match the semantics it claims to mirror rather than to match today's
+ * single call site.
+ */
+function shiftMonthsIso(iso, months) {
+  const [year, month, day] = iso.split('-').map(Number);
+  const target = new Date(Date.UTC(year, month - 1 + months, 1));
+  const lastDayOfTargetMonth = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  target.setUTCDate(Math.min(day, lastDayOfTargetMonth));
+  return target.toISOString().slice(0, 10);
+}
+
 // Step 6: mirrors OrderConfirmationService's own private unitLabel(), used when building a
 // deposit-notice item from a customer-quotation item's requestedUnitBasis.
 function mockUnitBasisLabel(unitBasis) {
@@ -1502,6 +1527,56 @@ function taxAllowanceDeclarationPublic(row) {
     ...row,
     employeeCode: employee?.code ?? null,
     employeeName: employee?.nameTh ?? null,
+  };
+}
+
+/**
+ * ล.ย.01 header prefill. Mirrors TaxAllowanceDeclarationService#headerPrefill +
+ * EmployeeRepository#findLorYor01HeaderSource.
+ *
+ * ⚠️ SHAPE ONLY — this is not evidence about the real prefill, and three things differ:
+ *
+ *  - **The real read is scoped by SQL** (`WHERE e.employee_id = :employeeId` against
+ *    `hr_restricted.employee_pii`). CLAUDE.md is explicit that this mock's authorization is not
+ *    authoritative; `TaxAllowanceHeaderPrefillIntegrationTest` is where the scoping is proven,
+ *    wrong-way-round, against real Postgres.
+ *  - **`hr_restricted` has no analogue here.** The mock employee's `sensitive` block is `{}`, so a
+ *    faithful mirror would return a null `taxpayerId` and mock-mode click-through would show the
+ *    one field this feature exists for as permanently empty — indistinguishable from the bug.
+ *    A fabricated, obviously-fake demo tax ID is returned instead, and it is fake on purpose.
+ *  - **`employee_address` has thirteen columns here and four.** The real query selects all
+ *    thirteen; the mock employee record can only hold `line1`/`district`/`province`/`postalCode`,
+ *    and `line1` is itself a CONCAT of four of them on the real side. Mapping it onto `houseNo` is
+ *    the closest honest approximation; the remaining eight slots are null, not invented.
+ */
+function lorYor01HeaderPrefillFor(employeeId) {
+  const employee = db.employees.find((item) => item.id === employeeId);
+  const emptyAddress = {
+    building: null, roomNo: null, floor: null, village: null, houseNo: null, moo: null,
+    soi: null, junction: null, road: null, subDistrict: null, district: null, province: null,
+    postalCode: null,
+  };
+  if (!employee) {
+    return { taxpayerId: null, firstNameTh: null, lastNameTh: null, maritalState: null, address: emptyAddress };
+  }
+  // The backend splits stored first/last name columns; this mock only has the joined `nameTh`.
+  const [firstNameTh, ...rest] = String(employee.nameTh ?? '').trim().split(/\s+/);
+  const address = employee.currentAddress ?? {};
+  const blank = (value) => (value == null || String(value).trim() === '' || value === '-' ? null : value);
+  return {
+    taxpayerId: '1100000000001',
+    firstNameTh: blank(firstNameTh),
+    lastNameTh: blank(rest.join(' ')),
+    // Mirrors maritalStateFromMaster: only the two values the write-back can produce are mapped,
+    // and anything else leaves ข้อ 1 un-ticked rather than guessing a legal status.
+    maritalState: { 'โสด': 'SINGLE', 'สมรส': 'MARRIED' }[String(employee.maritalStatus ?? '').trim()] ?? null,
+    address: {
+      ...emptyAddress,
+      houseNo: blank(address.line1),
+      district: blank(address.district),
+      province: blank(address.province),
+      postalCode: blank(address.postalCode),
+    },
   };
 }
 
@@ -4613,6 +4688,25 @@ export const api = {
       return delay({ contactDefaults: leaveContactDefaults(employee) });
     },
 
+    // Mirrors LeaveService#list + LeaveRepository#findRequests.
+    //
+    // Two things here are mirrors of the Java side, NOT mock conveniences, and both were missing
+    // until the 2026-08-10 leave-surface restructure -- each is a documented way for this file to
+    // produce a green suite that says nothing about production (see CLAUDE.md's mock-contract
+    // table):
+    //
+    //  1. THE NULL-DATE DEFAULT. LeaveService#list defaults each missing bound to
+    //     today -/+ DEFAULT_WINDOW_MONTHS (12). This mock previously applied NO default at all, so
+    //     `list({})` returned every seeded row -- strictly MORE permissive than production, the
+    //     dangerous direction. Five callers pass no dates (ReviewQueueTab, LeaveSurfacePage's
+    //     tab-visibility signal, CeoOverview, DivisionManagerOverview, EmployeeSelfService), so
+    //     under mocks they saw rows the real backend would have filtered out.
+    //  2. THE SORT. LeaveRepository#findRequests ends `ORDER BY lr.start_date DESC,
+    //     lr.leave_request_id DESC`. This mock returned db.leaveRequests in seed-insertion order.
+    //     Ordering is not cosmetic here: "ประวัติการลา" shows page 1 of a paginated table, so a
+    //     different order truncates a DIFFERENT SET of rows -- the exact mechanism of #434.
+    //
+    // Keep both in step with LeaveService.DEFAULT_WINDOW_MONTHS and that ORDER BY.
     async list(params = {}) {
       const user = requireSession();
       let list = db.leaveRequests;
@@ -4620,9 +4714,16 @@ export const api = {
       if (!includeAll) list = list.filter((item) => item.employeeId === user.employeeId || canReviewLeave(user, item.employeeId));
       if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
       if (params.status) list = list.filter((item) => item.status === params.status);
-      if (params.from) list = list.filter((item) => item.endDate >= params.from);
-      if (params.to) list = list.filter((item) => item.startDate <= params.to);
-      return delay({ requests: list.map((item) => buildLeaveRecord(item, user)) });
+      // Each bound defaults independently, exactly as LeaveService#list does -- passing only
+      // `from` must still get the default `to`.
+      const from = params.from || shiftMonthsIso(bangkokTodayIso(), -LEAVE_DEFAULT_WINDOW_MONTHS);
+      const to = params.to || shiftMonthsIso(bangkokTodayIso(), LEAVE_DEFAULT_WINDOW_MONTHS);
+      // Overlap, not containment -- mirrors `start_date <= :toDate AND end_date >= :fromDate`.
+      list = list.filter((item) => item.endDate >= from && item.startDate <= to);
+      const sorted = list.slice().sort((first, second) => (
+        second.startDate.localeCompare(first.startDate) || Number(second.id) - Number(first.id)
+      ));
+      return delay({ requests: sorted.map((item) => buildLeaveRecord(item, user)) });
     },
 
     async create(payload) {
@@ -6330,15 +6431,26 @@ export const api = {
     // Tax-allowance DECLARATION workflow (PR A, 2026-08-01) -- see db.taxAllowanceDeclarations'
     // own comment above for why this can be a genuine in-memory implementation (unlike
     // getTaxAllowances/saveTaxAllowances above), except applyTaxAllowanceDeclaration.
-    async getMyTaxAllowanceDeclarations(params = {}) {
+    // Takes a plain `year`, mirroring hrApi's `getMyTaxAllowanceDeclarations(year)` — NOT a params
+    // bag. It read `params.year` until 2026-08-10, which meant the number both real callers pass
+    // (TaxAllowancePage and useHrData) had no `.year`, so every request silently collapsed to the
+    // current year and the tax-year selector did nothing under mocks.
+    //
+    // contract.test.js could not catch it: the arity check compares parameter COUNTS, and (params)
+    // and (year) are both 1. This is the "mock drops an argument the real API honours" shape
+    // CLAUDE.md documents — the same mechanism as the `limit` defect in #434.
+    async getMyTaxAllowanceDeclarations(year) {
       const user = requireSession();
       if (!user.employeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
-      const taxYear = params.year ? Number(params.year) : new Date().getFullYear();
+      const taxYear = year ? Number(year) : new Date().getFullYear();
       const items = db.taxAllowanceDeclarations
         .filter((row) => row.employeeId === user.employeeId && row.taxYear === taxYear)
         .sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt))
         .map(taxAllowanceDeclarationPublic);
-      return delay({ taxYear, items });
+      // `headerPrefill` rides on this envelope and NOT on the declaration DTO, matching the real
+      // response — see MyTaxAllowanceDeclarationsResponse. getTaxAllowanceDeclarations (HR's
+      // register, below) must therefore NEVER grow one: that would be a bulk tax-ID export.
+      return delay({ taxYear, items, headerPrefill: lorYor01HeaderPrefillFor(user.employeeId) });
     },
     async submitMyTaxAllowanceDeclaration(body = {}) {
       const user = requireSession();

@@ -25,6 +25,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.employee.ManagerApproverRepository;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
@@ -185,7 +186,7 @@ class OvertimeDayTypeDerivedFromCalendarIntegrationTest extends AbstractPostgres
             properties,
             mock(AttendanceDailyService.class),
             new DbHolidayCalendar(jdbc),
-            scheduleResolver);
+            scheduleResolver, new CeoApproverRepository(jdbc));
 
         division = insertDivision("SLS", "ฝ่ายขาย");
         manager = insertEmployee("M001", division, null, "ผู้จัดการฝ่ายขาย");

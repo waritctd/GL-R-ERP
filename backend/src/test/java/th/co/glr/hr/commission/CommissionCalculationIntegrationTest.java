@@ -10,6 +10,7 @@ import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -45,7 +46,7 @@ class CommissionCalculationIntegrationTest extends AbstractPostgresIntegrationTe
             mock(AuditService.class),
             mock(NotificationService.class),
             mock(TicketRepository.class),
-            mock(AttachmentRepository.class));
+            mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
         salesActor = new UserPrincipal(1L, "sales-slicea1@glr.co.th", "Sales Rep", "sales", 1L,
             true, LocalDate.now(), false, null, false);
     }

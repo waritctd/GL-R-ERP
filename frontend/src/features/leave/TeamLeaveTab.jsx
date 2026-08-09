@@ -5,23 +5,30 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
+import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { DataTable, expandedRowRegionId } from '../../components/common/DataTable.jsx';
-import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { Panel } from '../../components/common/Layout.jsx';
-import { SafeForm } from '../../components/common/SafeForm.jsx';
+// FilterField (#638) for the employee select this tab passes into LeaveFilterBar as a child --
+// see that component's own comment on why a hand-rolled `<label>` here is the bug, not a shortcut.
+import { FilterField, Panel } from '../../components/common/Layout.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
-import { leaveStatusLabel as statusInfo } from '../../utils/format.js';
+import { addDaysIso, leaveStatusLabel as statusInfo } from '../../utils/format.js';
+import { LeaveFilterBar } from './LeaveFilterBar.jsx';
 import {
-  formatDateRange, formatDays, monthStartIso, todayIso,
+  formatDateRange, formatDays, todayIso,
 } from './leaveFormatting.js';
 import {
   buildLeaveRequestColumns, LEAVE_REQUEST_TABLE_GRID, leaveRequestRowKey,
   PendingApproverNote, renderLeaveRequestExpanded,
 } from './leaveRequestTable.jsx';
+import { UpcomingLeaveList } from './UpcomingLeaveList.jsx';
+
+// Same forward horizon MyLeaveTab.jsx uses for its own "วันลาที่กำลังจะถึง" panel -- the team and
+// personal views must not disagree about how far "coming up" reaches.
+const UPCOMING_LEAVE_WINDOW_DAYS = 90;
 
 // Bugfix (2026-08): this tab is the correctly-labelled, correctly-scoped home for what
 // used to leak into MyLeaveTab.jsx's "ของฉัน" tab. LeaveService#list -- for any actor
@@ -33,13 +40,12 @@ import {
 // the (always-correct) response gets labelled and shown. See leaveSurfaceTabs.js's
 // `team` tab entry (hasTeamMembers) for the visibility gate.
 //
-// Same filter bar / calendar / table shape MyLeaveTab.jsx used to carry -- ported
-// (not rewritten) out of that file, reusing the exact same shared primitives
-// (buildLeaveRequestColumns/LEAVE_REQUEST_TABLE_GRID/leaveRequestRowKey/
-// renderLeaveRequestExpanded from leaveRequestTable.jsx) ReviewQueueTab.jsx already
-// uses, so all three tabs render a leave-request row identically.
-
-const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-end bg-surface border border-border rounded-md p-[14px]';
+// Same filter bar / upcoming-leave / table shape MyLeaveTab.jsx carries -- and as of the
+// 2026-08-10 IA restructure that is literal shared code, not a port: LeaveFilterBar.jsx and
+// UpcomingLeaveList.jsx replaced what were two verbatim copies in this file and MyLeaveTab.jsx
+// (the filter bar down to its own duplicated `items-end` rationale comment, the list panel down to
+// the byte). Both tabs already shared their row rendering via leaveRequestTable.jsx; this closes
+// the remaining duplication so a change lands on both surfaces at once.
 
 function isPermissionError(error) {
   return error?.status === 403;
@@ -112,7 +118,7 @@ function TeamRequestsSection({
           ) : null}
           {canCancel ? (
             <Button type="button" variant="icon" title="ยกเลิก" aria-label="ยกเลิก" onClick={() => onCancel(request.id)}>
-              <Icon name="close" size={14} />
+              <Icon name="ban" size={14} />
             </Button>
           ) : null}
         </span>
@@ -165,7 +171,7 @@ function TeamRequestsSection({
         ) : null}
         {canCancel ? (
           <Button type="button" variant="secondary" className="mt-1 min-h-11" onClick={() => onCancel(request.id)}>
-            <Icon name="close" size={14} />
+            <Icon name="ban" size={14} />
             ยกเลิกคำขอ
           </Button>
         ) : null}
@@ -241,9 +247,13 @@ function TeamRequestsSection({
 
 export function TeamLeaveTab({ user, showToast }) {
   const queryClient = useQueryClient();
+  // Empty dates by default -- same change and same reasoning as MyLeaveTab.jsx's own
+  // `initialFilters` (see its comment): `to: todayIso()` made future team leave unreachable, and
+  // `from: monthStartIso()` emptied the tab on the 1st of each month. hrApi.js's `withQuery` drops
+  // '' so no date parameter is sent, and LeaveService#list applies its +/-12-month default.
   const initialFilters = {
-    from: monthStartIso(),
-    to: todayIso(),
+    from: '',
+    to: '',
     employeeId: '',
     status: '',
   };
@@ -291,14 +301,35 @@ export function TeamLeaveTab({ user, showToast }) {
   const refreshing = requestsQuery.isFetching && !requestsQuery.isPending;
   const hasCustomFilters = JSON.stringify(appliedFilters) !== JSON.stringify(initialFilters);
 
-  const activeCalendarItems = useMemo(
-    () => requests
-      .filter((request) => ['SUBMITTED', 'APPROVED'].includes(request.status))
-      .slice()
-      .sort((first, second) => first.startDate.localeCompare(second.startDate))
-      .slice(0, 8),
-    [requests],
-  );
+  // Own forward window, independent of the filter above -- see UpcomingLeaveList.jsx's own doc
+  // comment for why this is a second query rather than a `.filter()` over `requests` (defect D1).
+  // Deliberately NOT scoped to `appliedFilters.employeeId`: this panel answers "who on my team is
+  // away soon", which is a question about the whole team even while the table below is narrowed to
+  // one person.
+  const upcomingFrom = todayIso();
+  const upcomingTo = addDaysIso(upcomingFrom, UPCOMING_LEAVE_WINDOW_DAYS);
+  const upcomingQuery = useQuery({
+    queryKey: queryKeys.leaveRequests({ from: upcomingFrom, to: upcomingTo }),
+    queryFn: () => api.leave.list({ from: upcomingFrom, to: upcomingTo })
+      .then((response) => response.requests || []),
+  });
+  const upcomingRequests = useMemo(() => upcomingQuery.data ?? [], [upcomingQuery.data]);
+
+  // Stat-row parity with the other two tabs (owner ruling, 2026-08-10). The four numbers are
+  // chosen for what THIS tab is for -- a manager scanning their team, not an employee tracking
+  // their own quota, so the fourth slot counts PEOPLE away rather than a personal quota balance.
+  const totals = useMemo(() => {
+    const submitted = requests.filter((request) => request.status === 'SUBMITTED').length;
+    const approved = requests.filter((request) => request.status === 'APPROVED');
+    const approvedDays = approved.reduce((sum, request) => sum + Number(request.totalDays || 0), 0);
+    // Distinct employees with any non-cancelled/non-rejected leave in the visible range.
+    const peopleAway = new Set(
+      requests
+        .filter((request) => ['SUBMITTED', 'APPROVED'].includes(request.status))
+        .map((request) => request.employeeId),
+    ).size;
+    return { submitted, approved: approved.length, approvedDays, peopleAway };
+  }, [requests]);
 
   function invalidateLeave() {
     return queryClient.invalidateQueries({ queryKey: ['leave'] });
@@ -345,72 +376,45 @@ export function TeamLeaveTab({ user, showToast }) {
 
   return (
     <>
-      <SafeForm className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
-        <label>
-          จากวันที่
-          <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
-        </label>
-        <label>
-          ถึงวันที่
-          <input type="date" value={filters.to} onChange={(event) => updateFilter('to', event.target.value)} />
-        </label>
-        <label>
-          สถานะ
-          <select value={filters.status} onChange={(event) => updateFilter('status', event.target.value)}>
-            <option value="">ทุกสถานะ</option>
-            <option value="SUBMITTED">รออนุมัติ</option>
-            <option value="APPROVED">อนุมัติแล้ว</option>
-            <option value="REJECTED">ปฏิเสธแล้ว</option>
-            <option value="CANCELLED">ยกเลิกแล้ว</option>
-            <option value="AUTO_REJECTED">โควตาไม่พอ</option>
-          </select>
-        </label>
+      <CompactStatRow
+        items={[
+          { key: 'total', label: 'คำขอทั้งหมด', value: requests.length, helper: 'ในช่วงที่เลือก' },
+          { key: 'submitted', label: 'รออนุมัติ', value: totals.submitted, helper: 'Submitted' },
+          { key: 'approved', label: 'อนุมัติแล้ว', value: totals.approved, helper: formatDays(totals.approvedDays) },
+          { key: 'people', label: 'พนักงานที่ลา', value: totals.peopleAway, helper: 'อนุมัติแล้ว + รออนุมัติ' },
+        ]}
+      />
+
+      <UpcomingLeaveList
+        title={canViewAllLeave ? 'วันลาที่กำลังจะถึงของพนักงานทั้งหมด' : 'วันลาที่กำลังจะถึงของทีม'}
+        requests={upcomingRequests}
+        loading={upcomingQuery.isPending}
+        showEmployee
+        emptyTitle="ยังไม่มีวันลาที่กำลังจะถึง"
+        emptyDescription="วันลาที่อนุมัติแล้วหรือรออนุมัติในช่วง 90 วันข้างหน้าจะแสดงที่นี่"
+      />
+
+      {/* Directly above the history table -- the one section it governs. */}
+      <LeaveFilterBar
+        values={filters}
+        onChange={updateFilter}
+        onSubmit={submitFilters}
+        submitDisabled={requestsQuery.isPending}
+        refreshing={refreshing}
+      >
         {hasMultipleEmployeeOptions ? (
-          <label>
-            พนักงาน
+          <FilterField label="พนักงาน">
             <select value={filters.employeeId} onChange={(event) => updateFilter('employeeId', event.target.value)}>
               <option value="">ทุกคน</option>
               {employeeOptions.map((employee) => (
                 <option key={employee.employeeId} value={employee.employeeId}>{employee.employeeName} · {employee.employeeCode}</option>
               ))}
             </select>
-          </label>
+          </FilterField>
         ) : null}
-        <Button type="submit" disabled={requestsQuery.isPending}>
-          <Icon name="search" />
-          ค้นหา
-        </Button>
-        {refreshing ? (
-          <span className="inline-flex items-center gap-1 text-xs text-text-muted" aria-live="polite">
-            <Icon name="refresh" size={12} />
-            กำลังอัปเดต…
-          </span>
-        ) : null}
-      </SafeForm>
+      </LeaveFilterBar>
 
-      <Panel title="ปฏิทินวันลา">
-        <div className="grid gap-2.5">
-          {activeCalendarItems.length === 0 ? (
-            <EmptyState icon="calendar" title="ยังไม่มีรายการวันลาในช่วงนี้" />
-          ) : activeCalendarItems.map((request) => {
-            const status = statusInfo(request.status);
-            return (
-              <div className="leave-calendar-item flex items-center justify-between gap-[14px] min-w-0 border-b border-surface-subtle py-2.5" key={request.id}>
-                <span className="min-w-0">
-                  <strong>{formatDateRange(request.startDate, request.endDate)}</strong>
-                  <small>{request.employeeName || request.employeeCode} · {request.leaveTypeNameTh}</small>
-                </span>
-                <span className="flex flex-col items-end gap-1 min-w-0">
-                  <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-                  <PendingApproverNote request={request} />
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </Panel>
-
-      <Panel title={canViewAllLeave ? 'คำขอลาพนักงานทั้งหมด' : 'คำขอลาของทีม'} flush>
+      <Panel title={canViewAllLeave ? 'ประวัติการลาพนักงานทั้งหมด' : 'ประวัติการลาของทีม'} flush>
         <TeamRequestsSection
           requestsQuery={requestsQuery}
           rows={requests}

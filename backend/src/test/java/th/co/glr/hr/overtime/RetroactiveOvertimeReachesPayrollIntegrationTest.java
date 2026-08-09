@@ -33,6 +33,7 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.employee.ManagerApproverRepository;
 import th.co.glr.hr.leave.LeaveRepository;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollCalculator;
 import th.co.glr.hr.payroll.PayrollComponent;
@@ -93,7 +94,7 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             new AppProperties(),
             mock(AttendanceDailyService.class),
             new DbHolidayCalendar(jdbc),
-            (employeeId, divisionId, departmentId, workDate) -> ALWAYS_WORKDAY_SCHEDULE);
+            (employeeId, divisionId, departmentId, workDate) -> ALWAYS_WORKDAY_SCHEDULE, new CeoApproverRepository(jdbc));
         CommissionService commissionService = new CommissionService(
             new CommissionRepository(jdbc),
             mock(CommissionAttachmentRepository.class),
@@ -102,7 +103,7 @@ class RetroactiveOvertimeReachesPayrollIntegrationTest extends AbstractPostgresI
             mock(AuditService.class),
             mock(NotificationService.class),
             mock(TicketRepository.class),
-            mock(AttachmentRepository.class));
+            mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
         // Leave -> payroll unpaid-day deduction (2026-07-23): mechanical constructor-arity fix only --
         // PayrollService gained a LeaveRepository dependency for #suggestedInputs (see
         // PayrollService.java), unrelated to what this test exercises (overtime -> preview). A real
