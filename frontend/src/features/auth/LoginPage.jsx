@@ -4,9 +4,34 @@ import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 
+// ── WHY ONE OF THESE LOGS IN BY EMAIL AND THE REST BY ROLE ──────────────────
+// The mock resolves `{ role }` with `db.users.find(u => u.role === r && u.active)` —
+// the FIRST match. A division manager is not a role: it is `role: 'employee'` with
+// direct reports (permissions.js `isDivisionManager`, driven by the org chart, see
+// demoData.js). So `{ role: 'employee' }` always resolves to the plain employee
+// (`employee@glr.co.th`, employees[8]) and `warehouse.manager@glr.co.th`
+// (employees[5], the WHL division manager) was unreachable — which meant the whole
+// "ทีมของฉัน" nav group and every team-scoped self-service view had no way to be
+// opened in mock mode at all.
+//
+// Logging that one in by email+password rather than by role is also the honest
+// shape: it is an ordinary credential login, so it works the same way against the
+// real backend, whereas `{ role }` is a mock-only affordance.
+//
+// employees[5] manages employees[8] (both are WHL — see divAssign), so these two
+// personas are a real manager/report pair: what the employee submits is what the
+// manager sees waiting.
 const quickAccounts = [
   { role: 'hr', label: 'ฝ่ายบุคคล', helper: 'พนักงานทั้งหมด · อนุมัติคำขอ', icon: 'badgeCheck' },
   { role: 'employee', label: 'พนักงาน', helper: 'โปรไฟล์ของฉัน · ส่งคำขอแก้ไข', icon: 'user' },
+  {
+    role: 'division_manager',
+    email: 'warehouse.manager@glr.co.th',
+    password: 'demo1234',
+    label: 'ผู้จัดการฝ่าย',
+    helper: 'อนุมัติ OT / วันลา ของทีม',
+    icon: 'users',
+  },
   { role: 'sales', label: 'ฝ่ายขาย', helper: 'สร้างคำขอราคา · ออกใบเสนอราคา', icon: 'briefcase' },
   { role: 'sales_manager', label: 'ผู้จัดการฝ่ายขาย', helper: 'อนุมัติค่าคอม · แก้ไขค่าหัก', icon: 'badgeDollar' },
   { role: 'import', label: 'ฝ่ายนำเข้า', helper: 'รับเรื่อง · เสนอราคาสินค้า', icon: 'clipboard' },
@@ -101,7 +126,9 @@ export function LoginPage({ onLogin, loading, error }) {
                     className="justify-start gap-[10px] py-[6px] px-3"
                     data-testid={`login-role-${account.role}`}
                     disabled={loading}
-                    onClick={() => onLogin({ role: account.role })}
+                    onClick={() => onLogin(account.email
+                      ? { email: account.email, password: account.password }
+                      : { role: account.role })}
                   >
                     <Icon name={account.icon} size={15} />
                     <span>
