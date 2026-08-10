@@ -96,16 +96,11 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       procurement: {
         listForPricingRequest: vi.fn(),
       },
-      // Slice F (ratio to TicketCreateModal.jsx's own estimate wiring): ราคาตั้ง on the items
-      // table needs FX rates + the CEO markup multiplier. Both are mocked so estimateReady can
-      // resolve true in tests — an unmocked namespace here would make every fxRates.list()/
-      // dealEstimateMarkup.get() call throw (api.fxRates is undefined), which would leave
-      // estimateReady permanently false rather than exercising the computed-value branch.
+      // The items table converts a foreign-currency factory price to baht. Mocked because an
+      // unmocked namespace makes every fxRates.list() call throw (api.fxRates is undefined),
+      // which would silently leave the baht line absent rather than exercising it.
       fxRates: {
         list: vi.fn(),
-      },
-      dealEstimateMarkup: {
-        get: vi.fn(),
       },
     },
   };
@@ -262,10 +257,10 @@ describe('TicketDetailPage', () => {
     // sales/sales_manager/ceo all see it now), so a default resolve is
     // needed the same way api.depositNotices.listByTicket needed one above.
     api.procurement.listForPricingRequest.mockResolvedValue({ factoryPurchaseOrders: [] });
-    // Slice F: ราคาตั้ง estimate inputs — resolved by default so estimateReady is true unless a
-    // test explicitly overrides one of these (mirrors TicketCreateModal.test.jsx's own defaults).
+    // FX rates back the baht companion beside a foreign-currency factory price. Defaults to an
+    // empty table — no rate, so no conversion — which keeps every unrelated test's item rows
+    // showing exactly one figure; the conversion test below supplies real rates itself.
     api.fxRates.list.mockResolvedValue({ fxRates: [] });
-    api.dealEstimateMarkup.get.mockResolvedValue({ dealEstimateMarkup: { multiplier: 1.2 } });
   });
 
   it('renders a ticket from a mocked api.tickets.get', async () => {
@@ -385,42 +380,47 @@ describe('TicketDetailPage', () => {
     expect(within(chip).queryByText('฿0.00')).toBeNull();
   });
 
-  // Slice F (ticket-workspace IA programme): ราคาตั้ง on the deal's item rows. Reuses
-  // dealEstimatePricing.js's computeItemEstimateThb/formatThb (unchanged by this slice) against
-  // a TicketItemDto shape read back from the ticket — exercising the SAME field names
-  // (source/catalogPrice/catalogCurrency/catalogPriceUnit/sqmPerPiece) TicketRepository's LEFT
-  // JOIN now resolves, per that file's own doc comment.
-  describe('Slice F — ราคาตั้ง column on the items table', () => {
-    it('computes ราคาตั้ง = catalog price × FX × CEO markup for a catalog-linked item', async () => {
+  // The ราคาตั้ง (ประมาณการ) column that used to sit here — catalog price × FX × a CEO-configured
+  // markup — was removed on the owner's instruction after UAT, together with dealEstimatePricing.js.
+  // What replaces it on this page is not another estimate: the factory price already shown in
+  // ราคาโรงงาน now carries a plain baht conversion beside it when it is quoted in a foreign
+  // currency. The live catalog is EUR + USD only, and sales.fx_rates covers both.
+  describe('factory price in baht (ราคาตั้ง estimate removed)', () => {
+    it('shows the factory price in its own currency with a baht conversion beside it', async () => {
+      // The suite-wide default is an empty rate table (no conversion possible); this test is
+      // specifically about the converted figure, so it supplies the real prod USD rate.
+      api.fxRates.list.mockResolvedValue({
+        fxRates: [{ currency: 'THB', rateToThb: 1 }, { currency: 'USD', rateToThb: 35.2 }],
+      });
       api.tickets.get.mockResolvedValueOnce({
         ticket: buildTicket({
           items: [
             {
-              id: 70101, brand: 'Cotto', model: 'Stone', qty: 10, qtySqm: 10, unitBasis: 'SQM',
-              qtyDelivered: 0, qtyFromStock: 0, proposedPrice: null, approvedPrice: null,
-              source: 'catalog', catalogPrice: 100, catalogCurrency: 'THB',
-              catalogPriceUnit: 'per_sqm', sqmPerPiece: null,
+              id: 70101, brand: 'Bode', model: 'Stone gallary', qty: 10, qtySqm: 7.2,
+              unitBasis: 'SQM', qtyDelivered: 0, qtyFromStock: 0,
+              proposedPrice: null, approvedPrice: null,
+              rawPrice: 8.8, rawCurrency: 'USD', rawUnit: 'sqm',
+              // calcedCost is what makes the CEO's ราคาโรงงาน breakdown columns render at all.
+              calcedCost: 320, calcedPrice: 450,
             },
           ],
         }),
       });
-      api.dealEstimateMarkup.get.mockResolvedValue({ dealEstimateMarkup: { multiplier: 2 } });
 
       renderTicketDetailPage();
       await openTab(/สินค้าและราคา/);
 
-      // 100 THB/sqm × 1 (THB→THB) × 2 (CEO markup) = 200 บาท/หน่วย; × 10 ตร.ม. = 2,000.00 บาท.
-      expect(await screen.findByText('200.00')).not.toBeNull();
-      expect(await screen.findByText('รวม 2,000.00 บาท')).not.toBeNull();
+      // 8.80 USD at 35.20 THB/USD = 309.76 บาท — a pure conversion, with no markup applied.
+      expect(await screen.findByText('8.80')).not.toBeNull();
+      expect(await screen.findByText('≈ 309.76 บาท/ตร.ม.')).not.toBeNull();
     });
 
-    it('shows the NOT_CATALOG reason for a free-text (custom) item, even once FX/markup are ready', async () => {
+    it('never renders the ราคาตั้ง column', async () => {
       api.tickets.get.mockResolvedValueOnce({
         ticket: buildTicket({
           items: [
             { id: 70101, brand: 'Custom', model: 'Line', qty: 5, qtyDelivered: 0, qtyFromStock: 0,
-              approvedPrice: null, source: 'custom', catalogPrice: null, catalogCurrency: null,
-              catalogPriceUnit: null, sqmPerPiece: null },
+              approvedPrice: null, rawPrice: null, rawCurrency: null },
           ],
         }),
       });
@@ -428,28 +428,9 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage();
       await openTab(/สินค้าและราคา/);
 
-      expect(await screen.findByText('ยังคำนวณไม่ได้ (ไม่ใช่รายการจากแคตตาล็อก)')).not.toBeNull();
-    });
-
-    it('shows a not-ready state — never a markup-defaulted-to-1 number — while the CEO markup fetch is failing', async () => {
-      api.tickets.get.mockResolvedValueOnce({
-        ticket: buildTicket({
-          items: [
-            { id: 70101, brand: 'Cotto', model: 'Stone', qty: 10, qtyDelivered: 0, qtyFromStock: 0,
-              approvedPrice: null, source: 'catalog', catalogPrice: 100, catalogCurrency: 'THB',
-              catalogPriceUnit: 'per_piece', sqmPerPiece: null },
-          ],
-        }),
-      });
-      api.dealEstimateMarkup.get.mockRejectedValue(new Error('network down'));
-
-      renderTicketDetailPage();
-      await openTab(/สินค้าและราคา/);
-
-      expect(await screen.findByText(/ยังคำนวณไม่ได้ \(กำลังโหลด/)).not.toBeNull();
-      // Sanity: the figure a markupMultiplier-defaulted-to-1 fallback would have produced
-      // (100 × 1 × 1) must never render — see dealEstimatePricing.js's own "never default to 1" rule.
-      expect(screen.queryByText('100.00')).toBeNull();
+      await screen.findByText('Custom');
+      expect(screen.queryByText('ราคาตั้ง')).toBeNull();
+      expect(screen.queryByText(/ยังคำนวณไม่ได้/)).toBeNull();
     });
   });
 

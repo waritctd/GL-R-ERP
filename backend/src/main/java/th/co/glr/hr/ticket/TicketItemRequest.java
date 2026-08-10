@@ -6,8 +6,19 @@ import java.math.BigDecimal;
 public record TicketItemRequest(
     @NotBlank String brand,
     @NotBlank String model,
-    @NotBlank String color,
-    @NotBlank String texture,
+    // color and texture are OPTIONAL (deliberate sales API contract change, 2026-08-10). They were
+    // @NotBlank, which the create-deal form mirrored as required fields -- but the price catalog
+    // populates `color` on only 21% of its 22,455 active rows and `surface` on 22% (both only for
+    // factories CDE/LEA/Panaria, plus Bode for surface), so a rep picking a catalogued product had
+    // to invent a colour and a finish on roughly four of every five picks just to get past
+    // validation. Invented specs on a deal line are worse than absent ones: they flow into the
+    // pricing request and the quotation as though someone had checked them.
+    //
+    // sales.ticket_item.color and .texture were already NULLable, so nothing migrates. brand,
+    // model and size stay @NotBlank -- factory name, collection and size_raw are present on
+    // essentially every catalog row, and brand additionally backs a NOT NULL column.
+    String color,
+    String texture,
     @NotBlank String size,
     String factory,
     BigDecimal qty,

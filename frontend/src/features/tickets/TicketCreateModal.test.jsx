@@ -32,14 +32,14 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: {
         list: vi.fn(),
       },
-      // ราคาตั้ง (ประมาณการ) estimate inputs (Part D/E) — both fetched via react-query inside the
-      // modal, so every render() needs a QueryClientProvider (see renderModal() below) and every
-      // test needs these two resolved (or explicitly rejected, for the "fetch failure" case).
+      // FX rates back the "≈ x บาท" companion shown beside a catalog price. Fetched via
+      // react-query inside the modal, so every render() needs a QueryClientProvider (see
+      // renderModal() below). The CEO markup multiplier used to be fetched here too, for the
+      // ราคาตั้ง (ประมาณการ) estimate; that whole feature was removed on the owner's instruction
+      // after UAT, so `api.dealEstimateMarkup` is deliberately NOT mocked — if the modal ever
+      // starts calling it again these tests will fail loudly rather than silently re-enable it.
       fxRates: {
         list: vi.fn(),
-      },
-      dealEstimateMarkup: {
-        get: vi.fn(),
       },
     },
   };
@@ -57,7 +57,7 @@ function validItem(overrides = {}) {
   };
 }
 
-/** A catalog-sourced item with a real reference price, for the ราคาตั้ง estimate tests. */
+/** A catalog-sourced item carrying a real catalog price, for the price-display tests. */
 function catalogItem(overrides = {}) {
   return validItem({
     source: 'catalog',
@@ -80,8 +80,8 @@ function catalogItem(overrides = {}) {
 // because the view gate rejected it -- this repo's own documented vacuous-test shape) and every
 // "submits" test fail outright. A manually constructed SubmitEvent with an explicit `submitter`
 // is picked up by React's onSubmit exactly like a real click (verified), so every call site below
-// now exercises `canSubmit` specifically: HUB/REVIEW let it through, every other view still
-// blocks it even though a submitter is present.
+// now exercises `canSubmit` specifically: HUB lets it through, every other view still blocks it
+// even though a submitter is present.
 function submitForm() {
   const form = document.getElementById('ticket-create-form');
   form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: document.createElement('button') }));
@@ -90,14 +90,13 @@ function submitForm() {
 // Anchored to the start of the accessible name: a hub row's name is its
 // title + subtitle concatenated (e.g. "โครงการจำเป็นเลือกลูกค้าก่อน"), so an
 // unanchored search for "ลูกค้า" would also match the โครงการ row while it's
-// waiting on a customer, and "สร้างดีล" would also match the ตรวจสอบ & บันทึก
-// row's "ตรวจก่อนสร้างดีล" subtitle.
+// waiting on a customer.
 function goToSection(name) {
   fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${name}`) }));
 }
 
-// Every render needs a QueryClientProvider now that the modal fetches fxRates/dealEstimateMarkup
-// via react-query (Part D). A fresh QueryClient per render keeps tests isolated from each other.
+// Every render needs a QueryClientProvider — the modal fetches fxRates via react-query. A fresh
+// QueryClient per render keeps tests isolated from each other.
 function renderModal(props = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -134,17 +133,15 @@ beforeEach(() => {
   api.customers.projects.mockResolvedValue({ projects: [mockProject] });
   api.customers.contacts.mockResolvedValue({ contacts: [] });
   api.tickets.list.mockResolvedValue({ tickets: [] });
-  // Default happy path for the ราคาตั้ง estimate: FX rates covering the catalogItem() fixture's
-  // EUR price, and the owner's default ×2 markup. Individual tests override these to exercise
-  // "fetch failed" / different markup scenarios.
+  // FX rates covering the catalogItem() fixture's EUR price. Individual tests override this to
+  // exercise the "no rate for this currency" path.
   api.fxRates.list.mockResolvedValue({
     fxRates: [
       { currency: 'THB', rateToThb: 1 },
       { currency: 'EUR', rateToThb: 38.5 },
-      { currency: 'USD', rateToThb: 33 },
+      { currency: 'USD', rateToThb: 35.2 },
     ],
   });
-  api.dealEstimateMarkup.get.mockResolvedValue({ dealEstimateMarkup: { multiplier: 2 } });
   // Best-effort: none of these tests exercise the "บันทึกร่าง" save-draft
   // action, so nothing here actually depends on a clean localStorage — this
   // is just hygiene. Guarded because some Node versions ship a broken
@@ -170,24 +167,46 @@ describe('TicketCreateModal validation', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it('marks a specific blank field (color), not just a generic row message', async () => {
+  it('marks a specific blank field (ขนาด), not just a generic row message', async () => {
     const onSubmit = vi.fn();
-    renderModal({ onSubmit, initialItems: [validItem({ color: '' })] });
+    renderModal({ onSubmit, initialItems: [validItem({ size: '' })] });
 
     await selectCustomerAndProject();
     submitForm();
 
-    const colorInput = await screen.findByPlaceholderText('เช่น ขาว, เทา, ครีม');
-    await waitFor(() => expect(colorInput.getAttribute('aria-invalid')).toBe('true'));
-    expect(colorInput.id).toBe('item-0-color');
-    expect(colorInput.getAttribute('aria-describedby')).toBe('item-0-color-error');
-    expect(screen.getByText('กรุณากรอกสี')).toBeTruthy();
+    const sizeInput = await screen.findByPlaceholderText('เช่น 600x1200');
+    await waitFor(() => expect(sizeInput.getAttribute('aria-invalid')).toBe('true'));
+    expect(sizeInput.id).toBe('item-0-size');
+    expect(sizeInput.getAttribute('aria-describedby')).toBe('item-0-size-error');
+    expect(screen.getByText('กรุณากรอกขนาด')).toBeTruthy();
 
     // The old generic string must not appear — the whole point of the fix.
     expect(screen.queryByText(/กรุณากรอกข้อมูลสินค้าให้ครบทุกช่องในรายการที่/)).toBeNull();
     // Other fields in the same row stay untouched.
     expect(document.getElementById('item-0-brand').getAttribute('aria-invalid')).toBeNull();
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  // The live price catalog fills `color` on 21% of its active rows and `surface` on 22%, so
+  // requiring either made a rep invent a value on most catalog picks. Asserted wrong-way-round:
+  // what matters is that a blank สี/เนื้อผิว does NOT block, and that it reaches the payload as
+  // null rather than as an empty string someone appears to have typed.
+  it('creates a deal with สี and เนื้อผิว left blank, sending them as null', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderModal({ onSubmit, initialItems: [validItem({ color: '', texture: '' })] });
+
+    await selectCustomerAndProject();
+    submitForm();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].items[0]).toMatchObject({ color: null, texture: null });
+
+    goToSection('รายการสินค้า');
+    fireEvent.click(screen.getByRole('button', { name: /^แก้ไขรายการที่ 1/ }));
+    const colorInput = await screen.findByPlaceholderText('เช่น ขาว, เทา, ครีม');
+    expect(colorInput.getAttribute('aria-invalid')).toBeNull();
+    expect(colorInput.getAttribute('aria-required')).toBeNull();
+    expect(screen.queryByText('กรุณากรอกสี')).toBeNull();
   });
 
   it('marks the qty field for a PIECE row with qty 0', async () => {
@@ -243,7 +262,8 @@ describe('TicketCreateModal validation', () => {
         color: 'ขาว',
         texture: 'ด้าน',
         size: '60x60',
-        factory: null,
+        // ยี่ห้อ and โรงงาน are one field now, so factory follows brand rather than staying null.
+        factory: 'SCG',
         unitBasis: 'PIECE',
         qty: 5,
         qtySqm: null,
@@ -255,19 +275,19 @@ describe('TicketCreateModal validation', () => {
 
   it('clears a field error once the user fixes it', async () => {
     const onSubmit = vi.fn();
-    renderModal({ onSubmit, initialItems: [validItem({ color: '' })] });
+    renderModal({ onSubmit, initialItems: [validItem({ size: '' })] });
 
     await selectCustomerAndProject();
     submitForm();
 
-    const colorInput = await screen.findByPlaceholderText('เช่น ขาว, เทา, ครีม');
-    await waitFor(() => expect(colorInput.getAttribute('aria-invalid')).toBe('true'));
+    const sizeInput = await screen.findByPlaceholderText('เช่น 600x1200');
+    await waitFor(() => expect(sizeInput.getAttribute('aria-invalid')).toBe('true'));
 
-    fireEvent.change(colorInput, { target: { value: 'เทา' } });
+    fireEvent.change(sizeInput, { target: { value: '600x1200' } });
 
-    expect(colorInput.getAttribute('aria-invalid')).toBeNull();
-    expect(colorInput.getAttribute('aria-describedby')).toBeNull();
-    expect(screen.queryByText('กรุณากรอกสี')).toBeNull();
+    expect(sizeInput.getAttribute('aria-invalid')).toBeNull();
+    expect(sizeInput.getAttribute('aria-describedby')).toBeNull();
+    expect(screen.queryByText('กรุณากรอกขนาด')).toBeNull();
   });
 
   it('carries the chosen entry channel into the create payload', async () => {
@@ -312,7 +332,7 @@ describe('TicketCreateModal validation', () => {
 // 'submit' event WITH a submitter attached (deliberately, not the submitter-less dispatch a real
 // Enter-on-a-buttonless-view would actually produce -- see the helper's own comment), does
 // SafeForm's `canSubmit` gate on `<TicketCreateModal>`'s form still reject it on every view except
-// HUB/REVIEW? A submitter-less dispatch would pass every "does NOT submit" case below for free
+// HUB? A submitter-less dispatch would pass every "does NOT submit" case below for free
 // (SafeForm's separate submitter guard would block it regardless of canSubmit), which would prove
 // nothing about `canSubmit` specifically -- this repo's own documented vacuous-test shape. Mirrors
 // TaxAllowanceForm.test.jsx's "form-level submit gate blocks Enter-key implicit submission"
@@ -371,12 +391,26 @@ describe('TicketCreateModal implicit submission (Enter-key) safety', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it('submits a real submit event dispatched from the REVIEW view', async () => {
+  it('does not submit a real submit event from the ITEMS view', async () => {
+    const onSubmit = vi.fn();
+    renderModal({ onSubmit, initialItems: [validItem()] });
+
+    await selectCustomerAndProject();
+    goToSection('รายการสินค้า');
+
+    submitForm();
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  // The positive half of the gate. HUB is the ONLY view that may submit now that ตรวจสอบ & บันทึก
+  // is gone, so this is what would catch `canSubmit` being narrowed to nothing — which would turn
+  // the footer's real สร้างดีล button into a dead click rather than closing any hole.
+  it('submits a real submit event dispatched from the HUB view', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     renderModal({ onSubmit, initialItems: [validItem()] });
 
     await selectCustomerAndProject();
-    goToSection('ตรวจสอบ & บันทึก');
 
     submitForm();
 
@@ -384,121 +418,109 @@ describe('TicketCreateModal implicit submission (Enter-key) safety', () => {
   });
 });
 
-// V110 fix: the catalog product picked here used to be discarded entirely (ticket_item had no
-// column for it), forcing PricingRequestCreateModal to re-search the same product. It is now
-// persisted as catalogPriceId/catalogProductCode. Picking a catalog product also used to write
-// the FACTORY name into ยี่ห้อ (brand) — a real bug, fixed here to match
-// PricingRequestCreateModal.applyCatalogItem's already-correct rule.
-describe('TicketCreateModal catalog picker (V110 catalog link + brand mapping fix)', () => {
+// V110: the catalog product picked here is persisted as catalogPriceId/catalogProductCode so
+// PricingRequestCreateModal need not re-search it.
+//
+// The brand mapping was rewritten on 2026-08-10 after UAT. It used to read the catalog's `grade`
+// as the brand; the live catalog shows `grade` holds only 'A01'/'A02' and only for factory Padana
+// (9,076 of 22,455 active rows), so that rule wrote a quality code into ยี่ห้อ or, for the other
+// 60%, left it blank — reported as "รายการสินค้า doesn't autofill everything". ยี่ห้อ and โรงงาน
+// are now one field carrying the factory name, which is what a rep means by the brand here
+// (Padana, Vives, LEA, Bode…).
+describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapping)', () => {
   function mockCatalogProduct(overrides = {}) {
     return {
       priceId: 501,
-      productCode: 'CT-100',
-      factoryName: 'Cotto Factory',
-      grade: 'Cotto',
-      collection: 'Stone Series',
-      color: 'ขาว',
-      surface: 'ด้าน',
-      sizeRaw: '60x60',
-      price: 250,
-      currency: 'THB',
+      productCode: 'BNFJ30126CA',
+      factoryName: 'Bode',
+      grade: null,
+      collection: 'Stone gallary',
+      productName: null,
+      color: null,
+      surface: 'MATT',
+      sizeRaw: '600x1200',
+      price: 8.8,
+      currency: 'USD',
+      priceUnit: 'per_sqm',
+      sqmPerPiece: null,
       ...overrides,
     };
   }
 
-  // Opens the item editor for a fresh row and types into the brand field to trigger the
-  // (debounced, real-timer) catalog search — mirrors the actual user flow, not a shortcut around
-  // it, since the brand-mapping bug lives inside applyCatalogItem, reached only via a real pick.
+  // Opens the item editor for a fresh row and types into the ยี่ห้อ/โรงงาน field to trigger the
+  // (debounced, real-timer) catalog search — the actual user flow, not a shortcut around it, since
+  // the mapping under test lives inside applyCatalogItem and is reached only via a real pick.
   async function addItemAndSearchBrand(query) {
     goToSection('รายการสินค้า');
-    fireEvent.click(screen.getByRole('button', { name: /ค้นหาสินค้า/ }));
-    const brandInput = await screen.findByPlaceholderText('เช่น SCG, Cotto, Panaria');
+    fireEvent.click(screen.getByRole('button', { name: /^เพิ่มรายการสินค้า/ }));
+    const brandInput = await screen.findByPlaceholderText('เช่น Panaria, LEA, Bode');
     fireEvent.change(brandInput, { target: { value: query } });
     return brandInput;
   }
 
-  it('fills brand from the catalog grade (not the factory name), and carries catalogPriceId/catalogProductCode into the submit payload', async () => {
+  /** Clicks the dropdown row whose <strong> leaf is exactly the factory name. */
+  async function pickFromDropdown(factoryName) {
+    const leaf = await screen.findByText(factoryName);
+    fireEvent.mouseDown(leaf.parentElement);
+  }
+
+  it('fills ยี่ห้อ/โรงงาน from the factory name and carries the catalog link into the payload', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     api.catalog.prices.mockResolvedValue({ items: [mockCatalogProduct()] });
     renderModal({ onSubmit });
 
     await selectCustomerAndProject();
-    const brandInput = await addItemAndSearchBrand('Cotto');
+    const brandInput = await addItemAndSearchBrand('Bode');
+    await pickFromDropdown('Bode');
 
-    // <strong>{cat.factoryName}</strong> is a leaf element whose OWN text is exactly the factory
-    // name, unlike the row's other text (collection/size/price share a div with the " — "
-    // separator) — the one reliably unique target to click without a test id on this legacy
-    // hand-rolled dropdown.
-    const factoryNameInDropdown = await screen.findByText('Cotto Factory');
-    fireEvent.mouseDown(factoryNameInDropdown.parentElement);
+    await waitFor(() => expect(brandInput.value).toBe('Bode'));
 
-    await waitFor(() => expect(brandInput.value).toBe('Cotto'));
-    // The bug this fixes: brand must NOT become the factory name.
-    expect(brandInput.value).not.toBe('Cotto Factory');
-    expect(screen.getByPlaceholderText('เช่น SCG Ceramics').value).toBe('Cotto Factory');
-
-    // Close the item editor back to the hub before submitting — the item editor itself never
-    // renders a submit control (fix/form-enter-submits-real-records's `handleFormSubmit` gate), so
-    // submitting from inside it is not a real, reachable path in a browser.
     fireEvent.click(screen.getByRole('button', { name: /บันทึกรายการ/ }));
     goToSection('กลับ');
-
     submitForm();
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit.mock.calls[0][0].items[0]).toMatchObject({
-      brand: 'Cotto',
-      model: 'Stone Series',
-      color: 'ขาว',
-      texture: 'ด้าน',
-      size: '60x60',
-      factory: 'Cotto Factory',
+      brand: 'Bode',
+      factory: 'Bode',
+      model: 'Stone gallary',
+      size: '600x1200',
+      texture: 'MATT',
+      // The catalog row has no colour — it must stay absent, not be back-filled from the code.
+      color: null,
       catalogPriceId: 501,
-      catalogProductCode: 'CT-100',
+      catalogProductCode: 'BNFJ30126CA',
     });
   });
 
-  it('keeps an already-typed brand instead of overwriting it with the catalog grade', async () => {
-    const onSubmit = vi.fn().mockResolvedValue(undefined);
-    api.catalog.prices.mockResolvedValue({ items: [mockCatalogProduct()] });
-    renderModal({ onSubmit });
+  // The regression that motivated the rewrite: a Padana row's grade is 'A01'.
+  it('never writes the catalog grade into ยี่ห้อ, showing it as a เกรด badge instead', async () => {
+    api.catalog.prices.mockResolvedValue({
+      items: [mockCatalogProduct({ factoryName: 'Padana', grade: 'A01', collection: 'Nuances' })],
+    });
+    renderModal({ onSubmit: vi.fn() });
 
     await selectCustomerAndProject();
-    goToSection('รายการสินค้า');
-    fireEvent.click(screen.getByRole('button', { name: /ค้นหาสินค้า/ }));
-    const modelInput = await screen.findByPlaceholderText('เช่น Stone, Elegance, L-Trim…');
-    // Type a brand FIRST (deliberately, before searching by model) — this is the case the
-    // fallback rule exists for.
-    fireEvent.change(screen.getByPlaceholderText('เช่น SCG, Cotto, Panaria'), { target: { value: 'MyOwnBrand' } });
-    fireEvent.change(modelInput, { target: { value: 'Stone' } });
+    const brandInput = await addItemAndSearchBrand('Padana');
+    await pickFromDropdown('Padana');
 
-    const factoryNameInDropdown = await screen.findByText('Cotto Factory');
-    fireEvent.mouseDown(factoryNameInDropdown.parentElement);
-
-    await waitFor(() => expect(modelInput.value).toBe('Stone Series'));
-    expect(screen.getByPlaceholderText('เช่น SCG, Cotto, Panaria').value).toBe('MyOwnBrand');
+    await waitFor(() => expect(brandInput.value).toBe('Padana'));
+    expect(brandInput.value).not.toBe('A01');
+    expect(screen.getByText('เกรด A01')).toBeTruthy();
   });
 
-  // ยี่ห้อ doubles as the catalog search box on THIS form (unlike PricingRequestCreateModal,
-  // which has a dedicated one). So a partial query left in it after a pick from the ยี่ห้อ
-  // dropdown is a QUERY, not a deliberate brand — keeping it would leave junk in the field and
-  // fail this fix's intent just as writing the factory name did. The grade must win here; the
-  // "already-typed brand wins" rule applies only to the รุ่น path (covered by the test above).
-  it('replaces a partial ยี่ห้อ search query with the catalog grade when picking from the ยี่ห้อ dropdown', async () => {
-    const onSubmit = vi.fn().mockResolvedValue(undefined);
+  // ยี่ห้อ doubles as the catalog search box, so a partial query left in it after a pick is a
+  // QUERY, not a deliberate brand — keeping it would leave junk ("Bod") in the field.
+  it('replaces a partial search query with the factory name', async () => {
     api.catalog.prices.mockResolvedValue({ items: [mockCatalogProduct()] });
-    renderModal({ onSubmit });
+    renderModal({ onSubmit: vi.fn() });
 
     await selectCustomerAndProject();
-    // "Cot" is a prefix query, deliberately NOT equal to the product's grade ("Cotto") — so
-    // this asserts the grade actually won, rather than the query coincidentally matching it.
-    const brandInput = await addItemAndSearchBrand('Cot');
-    const factoryNameInDropdown = await screen.findByText('Cotto Factory');
-    fireEvent.mouseDown(factoryNameInDropdown.parentElement);
+    const brandInput = await addItemAndSearchBrand('Bod');
+    await pickFromDropdown('Bode');
 
-    await waitFor(() => expect(brandInput.value).toBe('Cotto'));
-    expect(brandInput.value).not.toBe('Cot');
-    expect(brandInput.value).not.toBe('Cotto Factory');
+    await waitFor(() => expect(brandInput.value).toBe('Bode'));
+    expect(brandInput.value).not.toBe('Bod');
   });
 
   it('clears the catalog link when the user hand-edits a field after a catalog pick', async () => {
@@ -507,20 +529,15 @@ describe('TicketCreateModal catalog picker (V110 catalog link + brand mapping fi
     renderModal({ onSubmit });
 
     await selectCustomerAndProject();
-    const brandInput = await addItemAndSearchBrand('Cotto');
-    const factoryNameInDropdown = await screen.findByText('Cotto Factory');
-    fireEvent.mouseDown(factoryNameInDropdown.parentElement);
-    await waitFor(() => expect(brandInput.value).toBe('Cotto'));
+    const brandInput = await addItemAndSearchBrand('Bode');
+    await pickFromDropdown('Bode');
+    await waitFor(() => expect(brandInput.value).toBe('Bode'));
 
-    // Hand-edit color after the pick — the link no longer reliably describes this row.
+    // Hand-edit colour after the pick — the link no longer reliably describes this row.
     fireEvent.change(screen.getByPlaceholderText('เช่น ขาว, เทา, ครีม'), { target: { value: 'เทาเข้ม' } });
 
-    // Close the item editor back to the hub before submitting — the item editor itself never
-    // renders a submit control (fix/form-enter-submits-real-records's `handleFormSubmit` gate), so
-    // submitting from inside it is not a real, reachable path in a browser.
     fireEvent.click(screen.getByRole('button', { name: /บันทึกรายการ/ }));
     goToSection('กลับ');
-
     submitForm();
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -530,160 +547,102 @@ describe('TicketCreateModal catalog picker (V110 catalog link + brand mapping fi
       catalogProductCode: null,
     });
   });
+
+  // All 215 Bode rows are priced per_sqm yet carry no sqm_per_piece, which left the แผ่น↔ตร.ม.
+  // toggle unable to cross-fill — the stranded-quantity state reported from UAT.
+  it('derives ตร.ม./แผ่น from a millimetre size when the catalog has no factor', async () => {
+    api.catalog.prices.mockResolvedValue({ items: [mockCatalogProduct({ sqmPerPiece: null })] });
+    renderModal({ onSubmit: vi.fn() });
+
+    await selectCustomerAndProject();
+    await addItemAndSearchBrand('Bode');
+    await pickFromDropdown('Bode');
+
+    // 600mm × 1200mm = 0.72 ตร.ม., and the UI says so is derived rather than catalog fact.
+    expect(await screen.findByText(/1 แผ่น = 0.72 ตร.ม./)).toBeTruthy();
+    expect(screen.getByText(/คำนวณจากขนาด 600x1200/)).toBeTruthy();
+
+    // Cross-fill now works: 10 แผ่น → 7.200 ตร.ม.
+    fireEvent.change(screen.getByPlaceholderText('จำนวนแผ่น'), { target: { value: '10' } });
+    expect(screen.getByPlaceholderText('เช่น 120.500').value).toBe('7.200');
+  });
+
+  it('leaves BOTH quantity boxes editable when no ตร.ม./แผ่น factor can be established', async () => {
+    // A size that cannot be read as millimetres ("598X598X18" carries a thickness) — the catalog
+    // has no factor and none can be derived, so neither box may be locked.
+    api.catalog.prices.mockResolvedValue({
+      items: [mockCatalogProduct({ sizeRaw: '598X598X18', sqmPerPiece: null })],
+    });
+    renderModal({ onSubmit: vi.fn() });
+
+    await selectCustomerAndProject();
+    await addItemAndSearchBrand('Bode');
+    await pickFromDropdown('Bode');
+
+    expect(await screen.findByText(/ไม่มีค่า ตร.ม./)).toBeTruthy();
+    expect(screen.getByPlaceholderText('จำนวนแผ่น').readOnly).toBe(false);
+    expect(screen.getByPlaceholderText('เช่น 120.500').readOnly).toBe(false);
+  });
 });
 
-// Part D/E — ราคาตั้ง (ประมาณการ) estimate. dealEstimatePricing.js carries the actual math and its
-// own unit tests; these confirm the modal wires that math up correctly: fetches FX + markup,
-// renders the per-line and grand-total numbers, excludes non-computable lines from the total while
-// still counting them in the "ยังคำนวณไม่ได้" note, and hides the whole UI on a failed fetch.
-describe('TicketCreateModal ราคาตั้ง (ประมาณการ) estimate', () => {
-  it('computes and shows the per_sqm line total (qtySqm × catalog price × fx × markup)', async () => {
-    const item = catalogItem({ catalogPriceUnit: 'per_sqm', qtySqm: 10, qty: '' });
+// The catalog's own price, shown in the currency it is quoted in with a baht companion. This
+// replaced the ราคาตั้ง (ประมาณการ) estimate (catalog price × FX × a CEO markup), removed on the
+// owner's instruction after UAT because reps read its output as a selling price. Nothing here
+// multiplies by anything except an exchange rate — see catalogPriceDisplay.js.
+describe('TicketCreateModal catalog price display', () => {
+  it('shows the catalog price in its own currency and in baht, with the price unit', async () => {
+    const item = catalogItem({ catalogPrice: 8.8, catalogCurrency: 'USD', catalogPriceUnit: 'per_sqm' });
     renderModal({ onSubmit: vi.fn(), initialItems: [item] });
 
     goToSection('รายการสินค้า');
 
-    // 43 EUR × 38.5 THB/EUR × 2 markup × 10 ตร.ม. = 33,110.00
-    const row = await screen.findByTestId('item-estimate-0');
-    expect(within(row).getByText('33,110.00 บาท')).not.toBeNull();
-    const total = screen.getByTestId('items-estimate-total');
-    expect(within(total).getByText('33,110.00 บาท')).not.toBeNull();
-    expect(screen.queryByTestId('items-estimate-uncomputable')).toBeNull();
+    // 8.80 USD/ตร.ม. at 35.20 THB/USD = 309.76 บาท/ตร.ม. — a pure conversion, no markup.
+    // The row renders from local state immediately; the baht line waits on the FX query, so it
+    // must be awaited rather than asserted on the first paint.
+    const row = await screen.findByTestId('item-catalog-price-0');
+    expect(within(row).getByText('8.80 USD/ตร.ม.')).toBeTruthy();
+    expect(await within(row).findByText('≈ 309.76 บาท/ตร.ม.')).toBeTruthy();
   });
 
-  it('computes and shows the per_piece line total (qty × catalog price × fx × markup)', async () => {
-    const item = catalogItem({ catalogPriceUnit: 'per_piece', catalogPrice: 5.5, catalogCurrency: 'USD', unitBasis: 'PIECE', qty: 20, qtySqm: '' });
+  it('omits the baht line entirely when no FX rate exists for that currency', async () => {
+    api.fxRates.list.mockResolvedValue({ fxRates: [{ currency: 'THB', rateToThb: 1 }] });
+    const item = catalogItem({ catalogPrice: 8.8, catalogCurrency: 'USD', catalogPriceUnit: 'per_sqm' });
     renderModal({ onSubmit: vi.fn(), initialItems: [item] });
 
     goToSection('รายการสินค้า');
 
-    // 5.5 USD × 33 THB/USD × 2 markup × 20 pieces = 7,260.00
-    const row = await screen.findByTestId('item-estimate-0');
-    expect(within(row).getByText('7,260.00 บาท')).not.toBeNull();
+    const row = await screen.findByTestId('item-catalog-price-0');
+    expect(within(row).getByText('8.80 USD/ตร.ม.')).toBeTruthy();
+    // Never a 1:1 fallback: 8.80 USD must not appear as "8.80 บาท".
+    expect(within(row).queryByText(/บาท/)).toBeNull();
   });
 
-  // D1 regression: when the ENTIRE cart is uncomputable, dealEstimatePricing.js's
-  // summarizeItemsEstimate now returns total: null, and the grand-total block must be hidden
-  // entirely rather than rendering a bold "0.00 บาท" that reads as a real computed answer.
-  it('D1: hides the grand-total block entirely when the whole cart is uncomputable (single per_box line)', async () => {
-    const item = catalogItem({ catalogPriceUnit: 'per_box' });
-    renderModal({ onSubmit: vi.fn(), initialItems: [item] });
-
-    goToSection('รายการสินค้า');
-
-    const row = await screen.findByTestId('item-estimate-0');
-    expect(within(row).getByText('—')).not.toBeNull();
-
-    expect(screen.queryByTestId('items-estimate-total')).toBeNull();
-  });
-
-  // D1 regression, exact fire path from the review: adding a plain custom item (the default
-  // "เพิ่มรายการสินค้า" flow — no catalog pick at all) must not show a "0.00 บาท" grand total.
-  it('D1: hides the grand-total block for an all-custom cart (default add-item flow)', async () => {
-    renderModal({ onSubmit: vi.fn(), initialItems: [validItem()] });
-
-    goToSection('รายการสินค้า');
-
-    // Wait for the estimate fetches to actually settle (item-estimate-0 only renders once
-    // estimateReady is true) before asserting the total block is absent — otherwise this
-    // assertion could pass merely because react-query hasn't resolved yet.
-    const row = await screen.findByTestId('item-estimate-0');
-    expect(within(row).getByText('—')).not.toBeNull();
-    expect(screen.queryByTestId('items-estimate-total')).toBeNull();
-    expect(screen.queryByText('0.00 บาท')).toBeNull();
-  });
-
-  // D5 regression: the item-editor "ยังคำนวณไม่ได้" caveat used to hardcode "หน่วยราคานี้ยังไม่รองรับ"
-  // (unsupported unit) for EVERY not-computable reason. These two open the item editor (where the
-  // per-line reason is rendered) and check the message actually names the real cause.
-  describe('D5: not-computable reason messages', () => {
-    async function openItemEditor() {
-      goToSection('รายการสินค้า');
-      fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการที่ 1' }));
-      return screen.findByTestId('item-editor-estimate-0');
-    }
-
-    it('names a per_box line "หน่วยราคานี้ยังไม่รองรับ" (UNSUPPORTED_UNIT)', async () => {
-      const item = catalogItem({ catalogPriceUnit: 'per_box' });
-      renderModal({ onSubmit: vi.fn(), initialItems: [item] });
-
-      const box = await openItemEditor();
-      expect(within(box).getByText(/หน่วยราคานี้ยังไม่รองรับ/)).not.toBeNull();
-    });
-
-    // Fire path: a per_sqm item correctly on SQM basis (so no unit-basis mismatch) whose area
-    // simply hasn't been typed in yet — this must say "missing quantity", not "unit unsupported".
-    it('names a per_sqm line with an empty area "ยังไม่ได้กรอกจำนวน/พื้นที่" (MISSING_QUANTITY), not "unit unsupported"', async () => {
-      const item = catalogItem({ catalogPriceUnit: 'per_sqm', unitBasis: 'SQM', qtySqm: '', qty: '' });
-      renderModal({ onSubmit: vi.fn(), initialItems: [item] });
-
-      const box = await openItemEditor();
-      expect(within(box).getByText(/ยังไม่ได้กรอกจำนวน\/พื้นที่/)).not.toBeNull();
-      expect(within(box).queryByText(/หน่วยราคานี้ยังไม่รองรับ/)).toBeNull();
-    });
-  });
-
-  it('sums only the computable lines in a mixed cart (per_sqm + per_piece + per_box)', async () => {
-    const items = [
-      catalogItem({ catalogPriceUnit: 'per_sqm', qtySqm: 10, qty: '' }),          // 33,110.00
-      catalogItem({ catalogPriceUnit: 'per_piece', catalogPrice: 5.5, catalogCurrency: 'USD', unitBasis: 'PIECE', qty: 20, qtySqm: '' }), // 7,260.00
-      catalogItem({ catalogPriceUnit: 'per_box' }),                               // not computable
-    ];
-    renderModal({ onSubmit: vi.fn(), initialItems: items });
-
-    goToSection('รายการสินค้า');
-
-    // 33,110.00 + 7,260.00 = 40,370.00 — the per_box line must not silently zero this out or
-    // count towards it.
-    const total = await screen.findByTestId('items-estimate-total');
-    expect(within(total).getByText('40,370.00 บาท')).not.toBeNull();
-    expect(within(total).getByTestId('items-estimate-uncomputable').textContent).toContain('1 รายการ');
-  });
-
-  it('applies the CEO markup multiplier — a ×3 config yields 1.5× the ×2 default figure', async () => {
-    api.dealEstimateMarkup.get.mockResolvedValue({ dealEstimateMarkup: { multiplier: 3 } });
-    const item = catalogItem({ catalogPriceUnit: 'per_sqm', qtySqm: 10, qty: '' });
-    renderModal({ onSubmit: vi.fn(), initialItems: [item] });
-
-    goToSection('รายการสินค้า');
-
-    // 43 EUR × 38.5 × 3 markup × 10 = 49,665.00 (vs 33,110.00 at the default ×2 markup above).
-    const row = await screen.findByTestId('item-estimate-0');
-    expect(within(row).getByText('49,665.00 บาท')).not.toBeNull();
-  });
-
-  it('hides the ราคาตั้ง UI entirely when the FX fetch fails, and the modal still works', async () => {
-    api.fxRates.list.mockRejectedValue(new Error('network down'));
+  it('still renders the deal form when the FX fetch fails outright', async () => {
+    api.fxRates.list.mockRejectedValue(new Error('fx down'));
     const onSubmit = vi.fn().mockResolvedValue(undefined);
-    const item = catalogItem();
-    renderModal({ onSubmit, initialItems: [item] });
+    renderModal({ onSubmit, initialItems: [catalogItem()] });
 
+    await selectCustomerAndProject();
     goToSection('รายการสินค้า');
 
-    // The existing "จากแคตตาล็อก" provenance badge still renders — only the NEW ราคาตั้ง block is
-    // gone. Give the rejected query a tick to settle before asserting its absence.
-    await screen.findByText('✓ จากแคตตาล็อก');
-    await waitFor(() => expect(api.fxRates.list).toHaveBeenCalled());
-    expect(screen.queryByTestId('item-estimate-0')).toBeNull();
-    expect(screen.queryByTestId('items-estimate-total')).toBeNull();
-    expect(screen.queryByText('ราคาตั้ง (ประมาณการ)', { exact: false })).toBeNull();
+    const row = await screen.findByTestId('item-catalog-price-0');
+    expect(within(row).getByText('43.00 EUR/ตร.ม.')).toBeTruthy();
+    expect(within(row).queryByText(/บาท/)).toBeNull();
 
-    // The modal must still be fully usable — including creating the deal — with no price shown.
+    // A deal must stay creatable with no prices at all (V50).
     goToSection('กลับ');
-    await selectCustomerAndProject();
     submitForm();
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
   });
 
-  it('hides the ราคาตั้ง UI when the markup fetch fails, even though FX succeeded', async () => {
-    api.dealEstimateMarkup.get.mockRejectedValue(new Error('network down'));
-    const item = catalogItem();
-    renderModal({ onSubmit: vi.fn(), initialItems: [item] });
+  it('shows no ราคาตั้ง (ประมาณการ) figure or total anywhere', async () => {
+    renderModal({ onSubmit: vi.fn(), initialItems: [catalogItem(), catalogItem()] });
 
     goToSection('รายการสินค้า');
+    await screen.findByTestId('item-catalog-price-0');
 
-    await waitFor(() => expect(api.dealEstimateMarkup.get).toHaveBeenCalled());
-    expect(screen.queryByTestId('item-estimate-0')).toBeNull();
+    expect(screen.queryByText(/ราคาตั้ง/)).toBeNull();
     expect(screen.queryByTestId('items-estimate-total')).toBeNull();
+    expect(screen.queryByTestId('item-estimate-0')).toBeNull();
   });
 });

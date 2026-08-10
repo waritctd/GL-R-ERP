@@ -58,6 +58,24 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             .containsExactlyInAnyOrder("Toyota", "Honda");
     }
 
+    // สี and เนื้อผิว became optional on 2026-08-10 (@NotBlank dropped from TicketItemRequest).
+    // The live price catalog fills `color` on 21% of its 22,455 active rows and `surface` on 22%,
+    // so a rep picking a catalogued product previously had to invent both on most picks. This
+    // asserts the real Postgres round-trip rather than the annotation alone: sales.ticket_item's
+    // color/texture columns are nullable, so a null must persist as a null and read back as one
+    // — a mocked repository would "pass" this while the actual INSERT rejected it.
+    @Test
+    void createTicket_persistsItemWithNoColourOrTexture() {
+        long ticketId = tickets.create(sampleTicket(
+            item("Bode", "Stone gallary", null, null, "600x1200")),
+            tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
+        assertThat(persisted.brand()).isEqualTo("Bode");
+        assertThat(persisted.color()).isNull();
+        assertThat(persisted.texture()).isNull();
+    }
+
     // ── V110: catalog link (catalog_price_id/catalog_product_code) round-trip ─────────────────
     // Fix for "สร้างคำขอราคาไม่ควรต้องกรอกหาจาก catalog ซ้ำ": the catalog product picked when a
     // deal line is created must survive into ticket_item and read back out, through BOTH the
