@@ -73,6 +73,22 @@ spring:
 app:
   mail:
     provider: ${APP_MAIL_PROVIDER:resend}
+    # Pinned here for the SAME reason `provider` above is: a dashboard value that is deleted or
+    # mistyped must not silently change what UAT does. application.yml's repo-wide default is BLANK
+    # (`${APP_MAIL_OVERRIDE_TO:}`), which means "send to each employee's real address" -- so losing
+    # this one dashboard variable does not degrade UAT, it points a test deployment straight at real
+    # people. UAT's hr.employee mirrors prod: measured 2026-08-10, 99 rows carry real external
+    # inboxes (29 of them active staff) and NONE sit on a safe @uat.glr domain. A blank override
+    # therefore mails real personal gmail/hotmail accounts from a test environment.
+    #
+    # Defaulting to the test inbox inverts the failure mode: forgetting the dashboard variable now
+    # keeps mail contained instead of releasing it. Setting APP_MAIL_OVERRIDE_TO on the dashboard
+    # still wins, so a deliberate change is unaffected; only the ACCIDENT is caught.
+    #
+    # ⚠️ This is UAT-profile-only. prod/demo run no `uat` profile and keep application.yml's blank
+    # default, so real deployments still address employees directly -- do NOT lift this into
+    # application.yml.
+    override-to: ${APP_MAIL_OVERRIDE_TO:fasaiglrhr@gmail.com}
     # Appended (not prepended) to every UAT-sent subject so a real inbox (APP_MAIL_OVERRIDE_TO)
     # never confuses a test email for a real one, without putting a bracketed keyword at the FRONT
     # of the subject - a leading "[TEST]"-shaped token is a classic spam-filter trigger, and this
