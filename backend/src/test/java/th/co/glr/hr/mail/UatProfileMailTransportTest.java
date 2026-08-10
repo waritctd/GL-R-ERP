@@ -64,4 +64,35 @@ class UatProfileMailTransportTest {
             .as("yml default only, NOT the deployed value (the dashboard sets APP_MAIL_FROM directly) - see class Javadoc")
             .isEqualTo("onboarding@resend.dev"));
     }
+
+    /**
+     * The one {@code app.mail.*} key whose repo-wide default is DANGEROUS rather than merely inert.
+     * {@code application.yml} leaves {@code override-to} blank, and blank means "address each
+     * employee directly" - so losing the Render dashboard's {@code APP_MAIL_OVERRIDE_TO} does not
+     * degrade UAT, it points a test deployment at real people. UAT's {@code hr.employee} mirrors
+     * prod: measured 2026-08-10, 99 rows carry real external inboxes, 29 of them active staff, and
+     * none sit on a safe {@code @uat.glr} domain.
+     *
+     * <p>This is the inverse of {@link #uatProfileFallsBackToResendSandboxSenderWhenAppMailFromEnvVarIsUnset}
+     * above: there, the yml default is a SAFE fallback and the dashboard supplies the real value.
+     * Here the yml default must itself be the containment, because the accident being guarded is the
+     * dashboard variable going missing.
+     */
+    @Test
+    void uatProfileStillRedirectsMailToTheTestInboxWhenTheOverrideEnvVarIsUnset() {
+        uatProfile.run(ctx -> assertThat(ctx.getEnvironment().getProperty("app.mail.override-to"))
+            .as("a blank override on the uat profile mails real employees from a test deployment")
+            .isEqualTo("fasaiglrhr@gmail.com"));
+    }
+
+    /** prod/demo must keep the blank default — the containment above is UAT-only, and lifting it
+     *  into application.yml would silently stop real deployments reaching real employees. */
+    @Test
+    void defaultProfileLeavesTheOverrideBlankSoRealDeploymentsAddressEmployeesDirectly() {
+        new ApplicationContextRunner()
+            .withInitializer(new ConfigDataApplicationContextInitializer())
+            .run(ctx -> assertThat(ctx.getEnvironment().getProperty("app.mail.override-to"))
+                .as("prod/demo must address employees directly; only the uat profile redirects")
+                .isEmpty());
+    }
 }
