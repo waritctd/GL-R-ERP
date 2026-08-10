@@ -6,7 +6,7 @@
 | **Version** | 1.0 · 10 August 2026 |
 | **Audience** | Owner, QA, whoever signs off the go/no-go |
 | **Relationship to doc 11** | [`11_UAT_Test_Cases.md`](11_UAT_Test_Cases.md) is what **testers execute during** UAT. This document is what **must be true before** UAT starts. Doc 11 is the exam; this is the eligibility check. |
-| **Baseline** | Measured on `main` @ `2ecca72`, 10 August 2026. Re-measure before each UAT round — the status column ages. |
+| **Baseline** | Measured 10 August 2026 on branch `claude/pre-uat-testing-checklist-izlbkj` (base `main` @ `2ecca72`). Re-measure before each UAT round — the status column ages. |
 
 ---
 
@@ -60,18 +60,78 @@ not have rendered. The 26 checks in §4 are grouped into these phases.
 
 ## 3. Baseline measured today
 
-Run on `main` @ `2ecca72`, 10 August 2026, in a container with no Docker and no Postgres.
+Run on the branch head, 10 August 2026, against a **local PostgreSQL 16** (no Docker, so
+Testcontainers is unavailable and the `TEST_DB_URL` path was used instead).
 
 | Command | Result |
 |---|---|
 | `cd frontend && npm run lint` | ✅ clean, exit 0 |
 | `cd frontend && npm test` | ✅ **134 files / 1581 tests passed**, 102s |
 | `cd frontend && npm run build` | ✅ built in 629ms |
-| `cd frontend && npm run test:e2e` | ⏸️ **not run** — needs Postgres + a running backend |
-| `cd backend && ./mvnw -B clean verify` | ⏸️ **not run** — no Docker and no `TEST_DB_URL`, so Testcontainers cannot start |
+| `cd backend && ./mvnw -B test -Dtest='!*IntegrationTest' -Dtest.fork.count=1` | ⚠️ **1287 tests, 4 failures, 0 errors, 2 skipped** — all four are PDF font substitution, see below |
+| `cd backend && ./mvnw -B clean verify` | ⏸️ **not completed** — runs correctly but is impractically slow on this path, see below |
+| `cd frontend && npm run test:e2e` | ✅ **95 tests pass.** 3 need `--timeout` raised above the 30s default on slow hardware — see §3.1 |
 
-Both backend suites are unrun *for lack of a database in this environment*, not because they fail.
-They must be green before UAT; see §6.
+### Three environment gotchas that each cost real time
+
+Recorded because none of them is a code defect and all three look like one:
+
+1. **`-Dtest.fork.count=1` is mandatory when running against `TEST_DB_URL`.** The pom defaults to
+   2 parallel forks, which is right for Testcontainers (each fork gets its own throwaway Postgres)
+   and wrong for a single shared external database: both forks run Flyway `clean()` against it and
+   collide. The symptom is *every* integration test erroring with `Unable to drop "sales"."notification"
+   — table does not exist`, which reads like schema corruption and is really just a race. The pom's
+   `test.fork.count` comment says exactly this; it is easy to miss.
+2. **The external-DB path is too slow for the full suite.** Unlike the Testcontainers path — which
+   migrates once into a frozen `golden_it` template and clones it per test — `TEST_DB_URL` does a
+   full Flyway `clean()` + `migrate()` of all 133 migrations per test, measured at **~15s each**.
+   With 128 integration-test classes that runs to hours. **Docker, and therefore Testcontainers, is
+   the only practical way to run `mvnw verify` in full.** Budget for that before the pre-UAT run.
+3. **PDF rendering needs `libreoffice-calc`, and the fonts it wants are absent everywhere.** All 4
+   remaining unit failures are XLS→PDF renderers (`QuotationRendererTest` ×3,
+   `DepositNoticeRendererTest.rendersThaiTextCorrectly`). Two separate causes, and only the first
+   is local:
+   - `libreoffice-core` alone is not enough — without `libreoffice-calc` the spreadsheet filter is
+     missing and `soffice` answers `source file could not be loaded` **while still exiting 0**, so
+     `LibreOfficePdfConverter`'s exit-code check passes and it fails later on the absent PDF.
+     Installing `libreoffice-calc` took this from 11 errors to 4 failures.
+   - The remaining 4 are **font substitution**, and they are not local-only. The renderers assert
+     on extracted text, and with substitute fonts the extraction gains spurious spaces
+     (`"Pat ern"` for `"Pattern"`, `"ฝ่ าย"` for `"ฝ่าย"`). `backend/Dockerfile` is explicit that
+     the required families (Angsana/Browallia/Cordia New, Tahoma, Arial, Calibri, Cambria) are
+     proprietary, git-ignored, and that **nothing currently populates `backend/fonts/` on Render** —
+     the build warns and continues. So the deployed service renders customer-facing quotations and
+     deposit notices in substitute fonts too. That is a business question, not just a test failure;
+     it is item 8 in §6.
+
+### 3.1 Real-stack e2e — the suite that carries the authorization evidence
+
+`npm run test:e2e` now runs **95 tests across 10 spec files** (was 89 across 9) against real Spring
+services and real Postgres. What changed on this branch is covered in §4 Phase 5; the headline is
+that the sweeps went from six roles to **nine**, so `account`, `warehouse` and `qc` are covered for
+the first time. Every authorization sweep, every route walk, and both write workflows are green.
+
+**Three tests failed here on the default timeout, and re-running proved it was the clock, not a
+defect.** All three were in `loryor01-form.spec.js`, each dying at exactly the 30s default
+(30.1s / 30.1s / 30.5s) while a fourth test in the same file passed at 29.8s — the whole file runs
+on the edge of the wall. Three independent checks confirm the diagnosis:
+
+- **`--timeout=120000` makes the file pass 5/5** (2.6 min). That is the decisive one.
+- Machine load was 0.61 on 4 cores, so it was not CPU contention.
+- The endpoints the failing test asserts on were probed directly and are healthy and fast:
+  `GET /api/payroll/tax-allowances/declarations/me?year=2026` answers **200 in 0.17s**, and `/caps`
+  answers 400 (a parameter the spec deliberately tolerates) — no 5xx anywhere, which is precisely
+  what that test checks.
+
+Nothing on this branch touches that surface. **On adequate hardware the suite is 95/95.** If you
+gate from a slow machine, raise `--timeout` rather than reading these as failures.
+
+⚠️ **One local-only workaround was needed and is NOT committed.** This container ships Playwright
+browser build 1194 while the repo's `@playwright/test` 1.62.1 expects build 1234, so every
+browser-driven spec fails instantly with `Executable doesn't exist`. The API-only specs pass
+regardless, which makes the failure look selective and confusing. The fix is to launch with
+`executablePath: '/opt/pw-browsers/chromium'` rather than downloading a second browser. CI is
+unaffected — it installs the matching build.
 
 **Test inventory** (what exists, whether or not it ran today):
 
@@ -80,7 +140,7 @@ They must be green before UAT; see §6.
 | Frontend unit/component (vitest) | 134 files, 1581 tests |
 | Backend test classes | 226 |
 | …of which real-Postgres integration tests | 128 |
-| Real-stack e2e specs (`frontend/e2e-real/`) | 9 |
+| Real-stack e2e specs (`frontend/e2e-real/`) | 10 |
 
 **Database state**, read live from `hr.flyway_schema_history` on 10 August 2026:
 
@@ -93,6 +153,15 @@ They must be green before UAT; see §6.
 Both environments are **current with `main`** and carry no failed migrations. This supersedes
 issue **#439** ("prod is 4 migrations behind main"), which was accurate on 2 August and is now
 stale — see §6.
+
+**Where `V139` lands, and where it does not.** The new
+`V139__demo_missing_role_personas_and_hire_dates.sql` lives in `db/migration-demo`, so it applies
+only where that location is on the Flyway path: CI, a local `e2e-real` run, and the `GL&R`
+showcase project (`SPRING_PROFILES_ACTIVE=prod,demo` plus `SPRING_FLYWAY_LOCATIONS` in
+`render.yaml`). **It will not reach the UAT project**, which carries no demo migrations at all —
+and it does not need to, because UAT already has real accounts in all nine role divisions. A bare
+`prod` deploy gets nothing from it either. Verified applied on a real database during this run:
+`139 | demo missing role personas and hire dates | success`.
 
 Four notes on that table, each checked row by row against the repo's 133 core migrations rather
 than inferred from the max version:
@@ -124,7 +193,7 @@ than inferred from the max version:
 | # | Check | How to run it here | Status |
 |---|---|---|---|
 | 1 | **Smoke** — critical flows open and work | `npm run test:e2e` → `smoke.spec.js` (real Postgres rows rendering in the DOM) and `route-coverage.spec.js` (every route in `App.jsx`, as every seeded role, no error boundary and no 5xx) | ⚠️ Covered for *loads without crashing*. `route-coverage.spec.js` never asserts a page shows the **right** thing — only `smoke.spec.js` does that, for two screens. |
-| 19 | **Console & network** — no unexpected errors or failed requests | Nothing asserts this. `route-coverage.spec.js` fails on a 5xx behind a page but ignores console output and 4xx noise | ❌ Manual: open DevTools on each critical screen. |
+| 19 | **Console & network** — no unexpected errors or failed requests | `route-coverage.spec.js` now collects `pageerror` alongside its 5xx watch, attributed to whichever route was open, across all 30 routes × 9 roles | ⚠️ **Uncaught JS exceptions are now asserted** (no allowlist — an uncaught exception has no benign form). This is deliberately *not* the same check as the error boundary: React catches a throw during render, but a throw from an event handler, an effect's async continuation, or a rejected promise reaches no boundary and leaves the page looking fine. `console.error` and 4xx noise remain manual. |
 
 ### Phase 2 — Frontend ↔ Backend integration
 
@@ -138,7 +207,7 @@ than inferred from the max version:
 
 | # | Check | How to run it here | Status |
 |---|---|---|---|
-| 4 | **E2E** — complete user flows start → finish | `npm run test:e2e` → `write-overtime.spec.js`, `write-overtime-holiday.spec.js` | ❌ **One workflow only.** Overtime is driven end to end (`SUBMITTED → MANAGER_APPROVED → APPROVED`, each refusal asserted separately). Leave, pricing requests, deposit confirmation and deal close are **not driven end to end by anything** since the mock suite was removed. |
+| 4 | **E2E** — complete user flows start → finish | `npm run test:e2e` → `write-overtime.spec.js`, `write-overtime-holiday.spec.js`, `write-leave-review.spec.js` (new) | ⚠️ **Overtime end to end; leave partly.** Overtime runs the full chain (`SUBMITTED → MANAGER_APPROVED → APPROVED`, each refusal asserted separately). Leave covers submission-with-quota and the review gate's refusals, but **not** the successful approve transition — `LeaveService#submit` never yields `SUBMITTED`, so that path is unreachable through the API (see Phase 5). Pricing requests, deposit confirmation and deal close have **no end-to-end coverage anywhere**. |
 | 6 | **Data integrity** — create/update/delete calculations persist | The overtime specs read their setup back through a separate GET rather than trusting the create response — the right pattern, applied in one place | ⚠️ Real for overtime. Everything else: manual. Payroll/tax/commission math is deliberately **not** reimplemented in the mock, so no mock-driven test says anything about it. |
 | 15 | **File** — upload / download / export / PDF / Excel | Components exist (`FileUploadField`, `AttachmentList`, `DealAttachmentsPanel`, CSV export in `DataTable`, payroll/commission exports); covered by vitest at component level | ⚠️ Component-level only. **No e2e exercises a real upload or a real download** against the backend. |
 
@@ -156,42 +225,70 @@ This is the phase with the strictest evidence bar in the repo, and the one where
 
 | # | Check | How to run it here | Status |
 |---|---|---|---|
-| 5 | **Role & permission** — each role sees/does only what it should | `npm run test:e2e` → `api-authz.spec.js` (authorization matrix, hit against the real service, written wrong-way-round; every row cites the deciding Java class) and `write-authz.spec.js` (98 resource-scoped writes × 6 roles = 588 requests, asserting **0 × 2xx** against a non-existent resource) | ⚠️ Genuinely strong **for the six seeded roles**. Three roles are untested — see below. |
-| 22 | **Seed/test accounts ready for every UAT role** | Two different seeds; do not confuse them | ⚠️ **UAT is ready. The automated suite's seed is not.** |
+| 5 | **Role & permission** — each role sees/does only what it should | `npm run test:e2e` → `api-authz.spec.js` (authorization matrix, hit against the real service, written wrong-way-round; every row cites the deciding Java class) and `write-authz.spec.js` (98 resource-scoped writes × 9 roles = 882 requests, asserting **0 × 2xx** against a non-existent resource) | ✅ **All nine roles, closed on this branch.** Was six; see below. |
+| 22 | **Seed/test accounts ready for every UAT role** | Two different seeds — both now cover all nine roles | ✅ |
 
-**Role readiness — the two seeds differ, and the difference is the whole point:**
+**Role readiness — this was the biggest single gap, and it is now closed.**
 
-`DivisionAccessPolicy.roleFor` yields nine role strings. The demo seed
-(`db/migration-demo/V21`) creates six personas; the UAT database has active, login-ready accounts
-for **all nine** (read live, 10 August 2026 — counts only, no personal data):
+`DivisionAccessPolicy.roleFor` yields nine role strings. Until this branch the demo seed
+(`db/migration-demo/V21`) created six personas, so the automated sweeps ran six roles wide and said
+nothing whatever about `account`, `warehouse` or `qc`.
+`V139__demo_missing_role_personas_and_hire_dates.sql` adds the missing three and
+`e2e-real/helpers/accounts.js` registers them, which widens **every** sweep keyed on `REAL_ROLES` —
+`api-authz`, `api-surface`, `auth`, `route-coverage`, `smoke` and `write-authz` — at once.
 
-| Role | Division | Active in UAT | Covered by `e2e-real`? |
-|---|---|---|---|
-| `ceo` | MD | 4 | ✅ |
-| `hr` | HR | 2 | ✅ |
-| `import` | PCIM | 3 | ✅ |
-| `sales_manager` | SA (manager-titled) | 1 | ✅ |
-| `sales` | SA (other) | 15 | ✅ |
-| `employee` | no division / SV | 3 | ✅ |
-| `account` | AC | 2 | ❌ **no demo persona** |
-| `warehouse` | WH | 5 | ❌ **no demo persona** |
-| `qc` | QC | 1 | ❌ **no demo persona** |
+Verified against the real service on 10 August 2026: `demo.account` → `account`,
+`demo.warehouse` → `warehouse`, `demo.qc` → `qc`.
 
-All 36 active UAT accounts have `must_change_password = false`, so none will hit the forced-change
-screen on first login. What that check **cannot** tell you is whether anyone still knows those
-passwords — the hashes are BCrypt and unreadable. Confirm a working credential for each of the
-nine roles by actually logging in, before testers arrive rather than during the session.
+| Role | Division | Active in UAT | Demo persona | Covered by `e2e-real` |
+|---|---|---|---|---|
+| `ceo` | MD | 4 | `DEMO-CEO01` | ✅ |
+| `hr` | HR | 2 | `DEMO-HR01` | ✅ |
+| `import` | PCIM | 3 | `DEMO-IMP01` | ✅ |
+| `sales_manager` | SA (manager-titled) | 1 | `DEMO-MGR01` | ✅ |
+| `sales` | SA (other) | 15 | `DEMO-SLS01` | ✅ |
+| `employee` | no division / SV | 3 | `DEMO-EMP01` | ✅ |
+| `account` | AC | 2 | **`DEMO-ACC01` (new)** | ✅ **new** |
+| `warehouse` | WH | 5 | **`DEMO-WH01` (new)** | ✅ **new** |
+| `qc` | QC | 1 | **`DEMO-QC01` (new)** | ✅ **new** |
 
-So: **UAT can test all nine roles by hand, but the automated authz suite covers only six.**
-`account` is the sharp end of that — it is in `TicketAccessPolicy.VIEWER_ROLES` and is the **only
-role permitted to confirm payments**, and no automated test has ever exercised it. Give that role
-deliberate manual attention in UAT.
+`account` was the sharp end: it is in `TicketAccessPolicy.VIEWER_ROLES` and is the **only role
+permitted to confirm payments**, and nothing automated had ever exercised it. Two `api-authz` rows
+now pin the asymmetry that makes it distinctive — `account` **can** read `/api/tickets`
+(`TicketAccessPolicy.VIEWER_ROLES` includes it) and **cannot** read `/api/pricing-requests`
+(`PricingRequestService.VIEWER_ROLES` does not). Before a persona existed, those two rows looked
+identical from the seeded roles' point of view, so nothing tested the one role that tells them
+apart.
 
-**Also unverified**: HR's leave-review authorization. The demo seed cannot produce a reviewable
-leave request (every leave type either auto-approves, auto-rejects for a missing hire date,
-requires an attachment, or has zero quota), so the review path is unreachable from it. This is the
-interesting counterpart to #199 — `LeaveService.REVIEW_ALL_ROLES` is `{hr}`, so HR *can* review
-leave while being refused overtime, and that asymmetry has never been tested.
+**On the UAT database specifically:** all 36 active accounts have `must_change_password = false`,
+so none hits the forced-change screen on first login. What that cannot tell you is whether anyone
+still knows those passwords — the hashes are BCrypt and unreadable. Confirm a working credential
+for each of the nine roles by logging in, before testers arrive rather than during the session.
+
+**HR's leave-review authorization is now partly covered** (`write-leave-review.spec.js`, new), and
+investigating it turned up something the repo had recorded wrongly. The e2e README blamed the demo
+seed for leave being untestable. The seed was one of two causes, and the smaller one:
+
+- **The seed, now fixed.** Every demo employee had `hire_date IS NULL`, and
+  `LeaveService#employeeAnnualQuota` returns zero quota when the hire date is missing, so `VACATION`
+  and `PERSONAL` failed closed and `ORDINATION` auto-rejected on `HIRE_DATE_MISSING_MIN_SERVICE`.
+  V139 backfills a hire date three years back; the spec guards it.
+- **The service, which no seed can work around.** `LeaveService#submit` reads
+  `status = systemNote == null ? APPROVED : AUTO_REJECTED` — **it never produces a `SUBMITTED`
+  request at all.** A submission is decided on the spot, so there is no pending state to review.
+  Fixing the hire date moved `VACATION` from auto-rejected to auto-approved; it did not create
+  anything reviewable, and could not have.
+
+The only reviewable row in the database is the single one V21 seeds, and it is consumable. So the
+spec asserts the two directions that mutate nothing: the **refusals** (`ceo`, `import` and `sales`
+each 403 on approve *and* reject, with the row re-read afterwards to prove it was untouched) and
+HR's **capability** via the `canReview` flag, which `#withCanReviewFlag` computes from the same
+decision `#approve`/`#reject` gate on rather than from the role alone. That pins the counterpart to
+#199: **HR reviews leave while `OvertimeService` refuses HR an overtime approval outright.**
+
+Still missing, and stated rather than papered over: the successful `SUBMITTED → APPROVED`
+transition. It needs a reviewable row the API cannot create, or a per-test database reset this
+suite does not have.
 
 ### Phase 6 — UI / responsive / browser
 
@@ -218,24 +315,32 @@ it. Treat every row below as a manual gate.
 | # | Check | How to run it here | Status |
 |---|---|---|---|
 | 7 | **Validation** — required fields, invalid input, duplicates, limits | Zod schemas in `frontend/src/api/schemas`, Bean Validation on the backend, DB constraints | ⚠️ Well covered at unit level; no systematic sweep. Note **there is no customer duplicate detection at all** (#401) — duplicates are a product gap, not a validation bug. |
-| 8 | **Error handling** — 400 / 401 / 403 / 404 / 409 / 500 | `api-surface.spec.js` + `write-authz.spec.js` sweep the surface for unexpected 5xx | ⚠️ **Two known violations of this exact check are recorded and still open.** See below. |
+| 8 | **Error handling** — 400 / 401 / 403 / 404 / 409 / 500 | `api-surface.spec.js` + `write-authz.spec.js` sweep the surface for unexpected 5xx | ✅ **Both recorded violations fixed on this branch.** Both `KNOWN_SERVER_ERRORS` lists are now empty. See below. |
 | 9 | **Empty / null / edge cases** | `EmptyState`, `StatePanel`, `Skeleton` exist and are unit-tested | ⚠️ Components exist. No sweep asserts every list uses them. Long-text and large-number rendering: manual. |
 | 16 | **Date / time / currency** — format, timezone, rounding | `Asia/Bangkok` (39 refs), `th-TH` (46), THB (157), `Intl.DateTimeFormat` (28) | ⚠️ Unit-covered per component; no cross-cutting audit. The e2e specs deliberately use **today in `Asia/Bangkok`** rather than a hardcoded date, because approval is gated on the payroll month being open — keep that habit in any new test. |
 
-**The two recorded error-handling defects**, both found by the real-stack sweeps and both
-deliberately left unfixed there (a controller's response status is an API-contract change and
-belongs in its own branch):
+**The two recorded error-handling defects — both fixed on this branch.** These are deliberate,
+stated API-contract changes (a controller's response status is exactly that), not side effects of
+test work:
 
-1. **`PriceImportController` returns 500, not 404, for an unknown id** — on `GET
+1. **`PriceImportController` returned 500, not 404, for an unknown id** — on `GET
    /api/price-import/profile/{factoryId}`, `POST /api/price-import/validate/{id}` and `POST
-   /api/price-import/commit/{id}` alike. A real id returns 200, so it is specifically the
-   missing-row path. Only `import` and `ceo` can reach it; every other role is refused 403 before
-   the lookup, so the defect is invisible to most of the role matrix.
-2. **A wrong HTTP verb returns 500, not 405** — `GET` on a POST-only endpoint produces an
-   unhandled `HttpRequestMethodNotSupportedException` reaching the generic error handler.
+   /api/price-import/commit/{id}` alike, while a real id returned 200. Both paths run through
+   `PriceImportService`, and the fix is the idiom the same class already used one method away:
+   `#getRawProfile` and `#requireDraft` now catch `EmptyResultDataAccessException` and raise 404.
+   In `#requireDraft` the 404 is raised **before** the DRAFT status check, because a missing row is
+   not a status conflict and 409 would be a different wrong answer. Only `import` and `ceo` could
+   ever reach this, which is why it survived so long.
+2. **A wrong HTTP verb returned 500, not 405** — an unhandled
+   `HttpRequestMethodNotSupportedException` reaching the generic handler told the caller the server
+   had broken when the request was merely malformed.
+   `ApiExceptionHandler#handleMethodNotSupported` now answers **405 with an `Allow` header**
+   (RFC 9110 §15.5.6), guarding the nullable `getSupportedHttpMethods()` case so the status never
+   depends on the header being populatable.
 
-Both are pinned as **exact** expectations in the sweeps, not skips — so a *new* server error fails
-the suite, and so does fixing one of these without deleting its entry.
+Both `KNOWN_SERVER_ERRORS` lists are now **empty, and that emptiness is the assertion** — the
+machinery is deliberately kept. A new server error fails the sweep, and so does fixing one without
+deleting its entry, so neither direction can drift silently.
 
 ### Phase 8 — Bug cleanup and environment
 
@@ -257,18 +362,26 @@ Condensed from §4. These are the honest gaps; none is a reason not to run UAT, 
 not to *claim* something is verified.
 
 1. **Rendered UI, at every viewport.** No automated gate since 2026-08-08/08-10. `lint`, `test` and
-   `build` were green for all four CSS-port regressions that motivated the visual harness.
-2. **Every business workflow except overtime.** Leave, pricing requests, deposit confirmation and
-   deal close are driven end to end by nothing.
-3. **Three roles — `account`, `warehouse`, `qc`.** No demo persona, so zero automated authz
-   coverage. `account` is the only role that can confirm payments.
-4. **HR's leave-review authorization.** Unreachable from the demo seed.
-5. **Browsers other than Chromium.** Never run.
-6. **Real file upload/download through the stack.** Component-level only.
-7. **Console errors, performance, back-button state.** Nothing measures them.
-8. **Payroll, tax, commission and pricing math.** Out of scope for the mock by standing rule — a
-   mock that mirrors a computation can never validate it. Backend unit/integration tests are the
-   only evidence here, and they did not run in this environment.
+   `build` were green for all four CSS-port regressions that motivated the visual harness. The
+   harness still runs by hand: `cd frontend && VISUAL_BASELINE=1 npm run test:visual`.
+2. **Pricing requests, deposit confirmation, deal close.** No end-to-end coverage anywhere.
+3. **Leave's successful approve transition.** The review gate's refusals and HR's capability are
+   now asserted, but no test drives `SUBMITTED → APPROVED`, because `LeaveService#submit` never
+   creates a `SUBMITTED` row and the one seeded row is consumable.
+4. **Browsers other than Chromium.** Never run, and this container has no other browser installed.
+5. **Real file upload/download through the stack.** Component-level only.
+6. **`console.error` output, performance, back-button state.** Uncaught JS exceptions are now
+   asserted; these three still are not.
+7. **Payroll, tax, commission and pricing math.** Out of scope for the mock by standing rule — a
+   mock that mirrors a computation can never validate it. Backend unit tests are the evidence, and
+   1287 of them pass.
+8. **The full backend integration suite (128 classes) has not been run end to end.** Not because it
+   fails — the targeted subset passes, including `FlywayMigrationTest`, which applies core + demo
+   migrations to a clean database and therefore validates V139. It is a runtime problem: see
+   gotcha 2 in §3.
+
+**Closed on this branch**, previously on this list: the three unseeded roles; HR's leave-review
+authorization; both recorded error-handling defects; uncaught JS exceptions during route walks.
 
 ## 6. Open items before UAT
 
@@ -276,14 +389,15 @@ Ordered by what blocks a sign-off soonest.
 
 | | Item | Why it matters |
 |---|---|---|
-| 1 | **Run `./mvnw -B clean verify` and `npm run test:e2e` green on a machine with Postgres.** | Both are unrun in this baseline. 128 integration tests and every authz assertion in the repo live behind them — the gate is not measurable without them. |
+| 1 | **Run `./mvnw -B clean verify` on a machine with Docker.** | `npm run test:e2e` is green and the 1287 backend unit tests are green, but the 128 integration-test classes have not been run end to end — the external-DB path is too slow (§3, gotcha 2). Docker/Testcontainers is the practical route. |
 | 2 | **Verify and close #439.** | It is the only open critical, and it no longer describes reality. A stale critical either blocks the gate for nothing or trains people to ignore the label. |
 | 3 | **Decide `APP_FLYWAY_VALIDATE_ON_MIGRATE` per database — do not flip it globally.** | See below; the right answer differs for the two projects, and getting it backwards breaks a deploy. |
 | 4 | **Get UAT's `V900`–`V911` seed into the repository.** | UAT's fixtures cannot currently be rebuilt from source. If that database is lost or reset, they go with it — customer master, the golden PCR deal, the `account` persona, and the only accounts that exist for `account`, `warehouse` and `qc`. |
 | 5 | **Confirm which backend serves the UAT database.** | `render.yaml` declares **one** service, and its documented configuration (`prod,demo` + demo Flyway locations) matches the `GL&R` showcase project, not UAT. Whatever points at UAT is not described in the repo. |
 | 6 | **Decide and publish the supported browser set.** | Testers need to know what to file a bug against. Today only Chromium has ever been run. |
 | 7 | **Confirm the deployed UAT build is the intended commit,** and that `GET /actuator/health` answers. | `autoDeploy: false`; not checkable from a checkout. |
-| 8 | **Brief testers on the login rate limiter.** | See below — this will otherwise eat a UAT session. |
+| 8 | **Decide whether customer-facing PDFs may ship in substitute fonts.** | `backend/fonts/` is unpopulated on Render, so quotations and deposit notices — documents that go to customers — render in whatever LibreOffice substitutes. The build warns and continues by design. This is a business call, not a bug: either supply the licensed fonts to the image or accept the substituted output. |
+| 9 | **Brief testers on the login rate limiter.** | See below — this will otherwise eat a UAT session. |
 
 ### Item 3 in full — why `validate-on-migrate` is not a single switch
 
@@ -308,7 +422,7 @@ upstream. `V67`'s header records that having already happened here. The fix is p
 not a global flip: turn validation on where the history is clean, and keep the drifted showcase
 DB on `false` until its history is repaired.
 
-### Item 8 in full — the login rate limiter
+### Item 9 in full — the login rate limiter
 
 `LoginRateLimitFilter` counts **both 401 and 403** responses to `POST /api/auth/login` as auth
 failures: **5 per account** and **20 per client IP** within a 900s window, locking out for 900s
