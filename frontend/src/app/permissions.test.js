@@ -142,22 +142,19 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/tickets', sales)).toBe(true);
     expect(canAccessPath('/tickets/12', sales)).toBe(true);
     expect(canAccessPath('/tickets/12/deposit', sales)).toBe(true);
-    expect(canAccessPath('/ticket-overview', sales)).toBe(true);
     expect(canAccessPath('/tickets', employee)).toBe(false);
   });
 
-  // Account role-scoped views: the pipeline BROWSER (`/tickets` list,
-  // `/ticket-overview`) is narrower than ticket-DETAIL read (`/tickets/:id`)
-  // — account keeps the latter (its worklist deep-links straight to a single
-  // deal) but loses the former (its own งานการเงิน worklist replaces it).
+  // Account role-scoped views: the pipeline BROWSER (the `/tickets` list) is
+  // narrower than ticket-DETAIL read (`/tickets/:id`) — account keeps the
+  // latter (its worklist deep-links straight to a single deal) but loses the
+  // former (its own งานการเงิน worklist replaces it).
   it('splits the deal-pipeline browser from ticket-detail read for account', () => {
     expect(canAccessPath('/tickets', account)).toBe(false);
-    expect(canAccessPath('/ticket-overview', account)).toBe(false);
     expect(canAccessPath('/tickets/12', account)).toBe(true);
     expect(canAccessPath('/tickets/12/deposit', account)).toBe(true);
     // sales/sales_manager/ceo are unaffected by the split — they still see everything.
     expect(canAccessPath('/tickets', ceo)).toBe(true);
-    expect(canAccessPath('/ticket-overview', ceo)).toBe(true);
   });
 
   it('scopes /finance to canConfirmPayments (account/ceo)', () => {
@@ -262,22 +259,30 @@ describe('canAccessPath', () => {
   });
 
   // Role-scoped views (Import build): import is blocked from the pipeline
-  // BROWSER (/tickets exact, /ticket-overview) but keeps ticket-detail read
-  // (/tickets/:id) and gains the combined procurement/fulfilment page.
-  it('blocks import from the deal-pipeline browser but allows ticket detail and /procurement', () => {
+  // BROWSER (/tickets exact) but keeps ticket-detail read (/tickets/:id).
+  it('blocks import from the deal-pipeline browser but allows ticket detail', () => {
     expect(canAccessPath('/tickets', importer)).toBe(false);
-    expect(canAccessPath('/ticket-overview', importer)).toBe(false);
     expect(canAccessPath('/tickets/12', importer)).toBe(true);
     expect(canAccessPath('/tickets/12/deposit', importer)).toBe(true);
-    expect(canAccessPath('/procurement', importer)).toBe(true);
-    expect(canAccessPath('/procurement', ceo)).toBe(true);
-    expect(canAccessPath('/procurement', sales)).toBe(false);
-    expect(canAccessPath('/procurement', { role: 'account', employeeId: 3 })).toBe(false);
+  });
+
+  // /procurement and /factory-purchase-orders(/:id) were removed 2026-08-11
+  // (owner ruling — see AppShell.test.jsx). Their PATH_GUARDS entries went with
+  // them, so canAccessPath now falls through to its unguarded default (`true`)
+  // for every role — including sales/account, which the deleted guard refused.
+  // That is not a widening: App.jsx has no route at either path any more, so
+  // both fall to the `path="*"` catch-all and redirect to '/'. This asserts the
+  // guard is really GONE rather than silently left behind pointing at nothing.
+  it('leaves no guard behind for the removed procurement routes', () => {
+    for (const path of ['/procurement', '/factory-purchase-orders', '/factory-purchase-orders/1']) {
+      for (const user of [importer, ceo, sales, { role: 'account', employeeId: 3 }]) {
+        expect(canAccessPath(path, user)).toBe(true);
+      }
+    }
   });
 
   it('keeps sales/sales_manager/ceo on the deal-pipeline browser', () => {
     expect(canAccessPath('/tickets', sales)).toBe(true);
-    expect(canAccessPath('/ticket-overview', sales)).toBe(true);
     expect(canAccessPath('/tickets', ceo)).toBe(true);
     expect(canAccessPath('/tickets', { role: 'sales_manager', employeeId: 4 })).toBe(true);
   });

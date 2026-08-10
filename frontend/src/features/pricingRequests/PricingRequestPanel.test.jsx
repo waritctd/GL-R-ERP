@@ -199,6 +199,40 @@ describe('PricingRequestPanel', () => {
     await waitFor(() => expect(api.pricingRequests.submit).toHaveBeenCalledWith(1));
   });
 
+  // Regression, reported from UAT 2026-08-11: submit() 422'd and the user saw NOTHING — the
+  // button appeared to do nothing and the reason existed only in the browser console, because
+  // submitMutation had no onError and the component rendered `.error` nowhere. The service always
+  // returns a Thai, user-facing message; this asserts it actually reaches the screen.
+  it('shows the server error message when submitting to Import fails, instead of failing silently', async () => {
+    api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'DRAFT' })] });
+    api.pricingRequests.submit.mockRejectedValue(new Error('รายการที่ 1: ไม่ผ่านเงื่อนไขการส่ง'));
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('รายการที่ 1: ไม่ผ่านเงื่อนไขการส่ง');
+  });
+
+  // The mutation instance is shared by every row, so an unscoped render would print one row's
+  // failure under all of them. Two DRAFTs, submit the second, assert exactly one alert.
+  it('reports a submit failure only under the row it was fired from', async () => {
+    api.pricingRequests.listForTicket.mockResolvedValue({
+      items: [
+        summary({ id: 1, requestCode: 'PCR-2026-0001', status: 'DRAFT' }),
+        summary({ id: 2, requestCode: 'PCR-2026-0002', status: 'DRAFT' }),
+      ],
+    });
+    api.pricingRequests.submit.mockRejectedValue(new Error('ส่งไม่สำเร็จ'));
+    renderPanel();
+
+    const submitButtons = await screen.findAllByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' });
+    fireEvent.click(submitButtons[1]);
+
+    await screen.findByRole('alert');
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+  });
+
   // Fix 2 (review-remediation plan): a saved draft had no path to fix a wrong
   // quantity/recipient/date before this — only submit or cancel. The edit
   // modal reuses PricingRequestCreateModal in mode="edit", seeded from

@@ -28,17 +28,13 @@ export function allowedRoute(route, user) {
   if (!user) return 'dashboard';
   const fallback = defaultRouteFor(user);
   if (route === 'hr-dashboard' && !hasPermission(user.role, 'canViewEmployees')) return fallback;
-  // /ticket-overview is the pipeline's own ภาพรวม tab — gated with the
-  // pipeline browser, not plain ticket-detail read.
-  if (route === 'ticket-dashboard' && !hasPermission(user.role, 'canViewDealPipeline')) return fallback;
   if (route === 'employees' && !hasPermission(user.role, 'canViewEmployees')) return fallback;
   if (route === 'detail' && !hasPermission(user.role, 'canViewEmployees')) return fallback;
   if (route === 'requests' && !hasPermission(user.role, 'canReviewProfileRequests')) return fallback;
   if (route === 'myrequests' && !hasPermission(user.role, 'canSubmitProfileRequests')) return fallback;
-  // Role-scoped views: 'tickets'/'ticket-dashboard' are the pipeline BROWSER
-  // (canViewDealPipeline — sales/sales_manager/ceo only), 'ticket-detail'
-  // stays the broader ticket-DETAIL read (canViewTickets — keeps
-  // import/account).
+  // Role-scoped views: 'tickets' is the pipeline BROWSER (canViewDealPipeline
+  // — sales/sales_manager/ceo only), 'ticket-detail' stays the broader
+  // ticket-DETAIL read (canViewTickets — keeps import/account).
   if (route === 'tickets' && !hasPermission(user.role, 'canViewDealPipeline')) return fallback;
   if (route === 'ticket-detail' && !hasPermission(user.role, 'canViewTickets')) return fallback;
   if (route === 'finance' && !hasPermission(user.role, 'canConfirmPayments')) return fallback;
@@ -59,12 +55,11 @@ export function allowedRoute(route, user) {
 // route table / `*` fallback handles those.
 const PATH_GUARDS = [
   { test: (p) => p === '/hr', can: (u) => hasPermission(u.role, 'canViewEmployees') },
-  // Role-scoped views: `/ticket-overview` and the bare `/tickets` list are the
-  // deal-PIPELINE BROWSER (canViewDealPipeline — sales/sales_manager/ceo
-  // only); `/tickets/:id` detail stays on the broader canViewTickets (keeps
-  // import/account, whose Overview/worklist rows deep-link straight to a
-  // single deal). See docs/role-scoped-views.md.
-  { test: (p) => p === '/ticket-overview', can: (u) => hasPermission(u.role, 'canViewDealPipeline') },
+  // Role-scoped views: the bare `/tickets` list is the deal-PIPELINE BROWSER
+  // (canViewDealPipeline — sales/sales_manager/ceo only); `/tickets/:id`
+  // detail stays on the broader canViewTickets (keeps import/account, whose
+  // Overview/worklist rows deep-link straight to a single deal). See
+  // docs/role-scoped-views.md.
   { test: (p) => p === '/employees' || p.startsWith('/employees/'), can: (u) => hasPermission(u.role, 'canViewEmployees') },
   { test: (p) => p === '/requests', can: (u) => hasPermission(u.role, 'canReviewProfileRequests') },
   // `/my-requests` is now an alias that redirects to `/profile`, so it has to
@@ -120,13 +115,6 @@ const PATH_GUARDS = [
   { test: (p) => p.startsWith('/pricing-requests/'), can: (u) => hasPermission(u.role, 'canViewPricingRequestQueue') || u.role === 'sales' },
   // Matches the sidebar's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
   { test: (p) => p === '/ceo-settings', can: (u) => u.role === 'ceo' },
-  // Step 7: Factory Purchase Order and Import Execution — Import/CEO only, mirrors
-  // ProcurementService.RAW_PO_ROLES and AppShell.jsx's own nav condition.
-  { test: (p) => p === '/factory-purchase-orders' || p.startsWith('/factory-purchase-orders/'), can: (u) => hasPermission(u.role, 'canManageProcurement') },
-  // Role-scoped views (Import build): the combined "จัดซื้อ & นำเข้า" page
-  // (ProcurementFulfilmentPage) — same audience as the raw PO list above,
-  // since it embeds ProcurementListPage as its second section.
-  { test: (p) => p === '/procurement', can: (u) => hasPermission(u.role, 'canManageProcurement') },
   // Attendance calendar admin (hr.holiday / hr.work_schedule / hr.work_schedule_assignment CRUD —
   // PR #480's API, this branch's UI). Mirrors the three controllers' requireAnyRole(user, "hr",
   // "ceo") exactly. This is frontend gating only — see ROLE_PERMISSIONS.canManageAttendanceCalendar

@@ -587,11 +587,6 @@ function sortedFormulaConfig(config) {
   };
 }
 
-// V112 — deal-create modal's ราคาตั้ง (ประมาณการ) display multiplier. Its own single-row store,
-// deliberately separate from mockPriceCalcConfigs (see DealEstimateMarkupController's javadoc for
-// why this is not the margin policy). Matches V112's seed exactly (multiplier 2.000).
-let mockDealEstimateMarkup = { multiplier: 2.0, updatedAt: new Date().toISOString(), updatedBy: null };
-
 // R5: Attachments
 const mockAttachments = [];
 let mockAttachSeq = 1;
@@ -626,7 +621,10 @@ const mockCatalog = [
   { id: 14, brand: 'Panaria',  collection: 'Frame',             color: 'Ash',         surface: 'Naturale',     size: '80x80 cm',   factory: 'Panaria SpA',       sqmPerPiece: 0.64 },
 ];
 
-let mockPriceImportFactorySeq = 10;
+// Bumped past the three domestic factories added below. This counter mints ids for
+// factories a user creates at runtime, so leaving it at 10 would have re-issued 10/11/12
+// and collided with them on the first `priceImport` factory creation.
+let mockPriceImportFactorySeq = 13;
 const mockPriceImportFactories = [
   { factoryId: 1, name: 'Panaria SpA',    country: 'Italy',   numberFormat: 'eu' },
   { factoryId: 2, name: 'REFIN',          country: 'Italy',   numberFormat: 'eu' },
@@ -637,6 +635,14 @@ const mockPriceImportFactories = [
   { factoryId: 7, name: 'Padana Marmi',   country: 'Italy',   numberFormat: 'eu' },
   { factoryId: 8, name: 'LEA',            country: 'Italy',   numberFormat: 'eu' },
   { factoryId: 9, name: 'CITY Ceramica',  country: 'Italy',   numberFormat: 'eu' },
+  // The three DOMESTIC factories every seeded deal actually names. Their absence here is
+  // why /catalog was unusable: the page reads `catalog.prices` (mockProductPrices below),
+  // whose rows were all European imports, while every factory quote in demoSales.js is from
+  // SCG / Cotto / Duragres. A rep searching the brand on their own deal got
+  // "ไม่พบสินค้าที่ตรงกัน". `numberFormat: 'us'` — Thai price lists use a decimal point.
+  { factoryId: 10, name: 'SCG Ceramics',      country: 'Thailand', numberFormat: 'us' },
+  { factoryId: 11, name: 'Cotto Industry',    country: 'Thailand', numberFormat: 'us' },
+  { factoryId: 12, name: 'Duragres Thailand', country: 'Thailand', numberFormat: 'us' },
 ];
 
 // Two separate ID spaces, deliberately. priceImport.upload() used to mint version
@@ -656,6 +662,38 @@ const mockProductPrices = [
   { priceId: 9, factoryId: 5, factoryName: 'Bode',         productCode: 'BVLE10426KGA', grade: null,  collection: 'Limestone',    productName: null,               color: null,      surface: 'Honed',     sizeRaw: '600x600',price: 23.50, currency: 'USD', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
   { priceId: 10,factoryId: 7, factoryName: 'Padana Marmi', productCode: '0400012',      grade: 'A01', collection: 'Stone',        productName: null,               color: 'Beige',   surface: 'Lucidato',  sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
   { priceId: 11,factoryId: 7, factoryName: 'Padana Marmi', productCode: '0400012',      grade: 'A02', collection: 'Stone',        productName: null,               color: 'Beige',   surface: 'Lucidato',  sizeRaw: '60x120', price: 21.50, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
+  // ── Domestic price list (THB) ───────────────────────────────────────────────────────────
+  //
+  // One row per SCG / Cotto / Duragres product in `mockCatalog` above, so the two fixtures
+  // finally describe the same world. They did not: `mockCatalog` carried the Thai brands and
+  // nothing reads it, while this list — which /catalog actually queries via `catalog.prices`
+  // — held only European imports. Every factory quote in demoSales.js names one of these
+  // three factories, so a rep searching "SCG" from a deal they own got no results at all.
+  //
+  // THB rather than EUR/USD on purpose: these are domestic suppliers quoting in baht, and it
+  // keeps the FX-conversion path exercised by the import rows above rather than everywhere.
+  // Prices are plausible retail-tier Thai porcelain rates for the size, not round numbers, so
+  // a costing built on them looks like a real one.
+  { priceId: 12,factoryId: 10,factoryName: 'SCG Ceramics',      productCode: 'SCG-ELG-6060-WH', grade: 'A',   collection: 'Elegance Series',   productName: 'Elegance ขาวนวล',   color: 'ขาวนวล',      surface: 'ด้าน',        sizeRaw: '60x60',  price: 420.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  { priceId: 13,factoryId: 10,factoryName: 'SCG Ceramics',      productCode: 'SCG-ELG-6060-GY', grade: 'A',   collection: 'Elegance Series',   productName: 'Elegance เทาอ่อน',  color: 'เทาอ่อน',     surface: 'ด้าน',        sizeRaw: '60x60',  price: 420.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  { priceId: 14,factoryId: 10,factoryName: 'SCG Ceramics',      productCode: 'SCG-NAT-3060-BG', grade: 'A',   collection: 'Natura Collection', productName: 'Natura เบจธรรมชาติ', color: 'เบจธรรมชาติ', surface: 'หยาบ',        sizeRaw: '30x60',  price: 385.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.18 },
+  { priceId: 15,factoryId: 10,factoryName: 'SCG Ceramics',      productCode: 'SCG-NAT-20100-WD',grade: 'B',   collection: 'Natura Collection', productName: 'Natura น้ำตาลไม้',  color: 'น้ำตาลไม้',   surface: 'หยาบ',        sizeRaw: '20x100', price: 465.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.20 },
+  { priceId: 16,factoryId: 10,factoryName: 'SCG Ceramics',      productCode: 'SCG-CRW-60120-PL',grade: 'A',   collection: 'Crystal White',     productName: 'Crystal ขาวมุก',    color: 'ขาวมุก',      surface: 'มัน',         sizeRaw: '60x120', price: 890.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
+  { priceId: 17,factoryId: 11,factoryName: 'Cotto Industry',    productCode: 'CT-MTS-3030-WH',  grade: 'A',   collection: 'Metro Square',      productName: 'Metro ขาว',         color: 'ขาว',         surface: 'ด้าน',        sizeRaw: '30x30',  price: 245.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.09 },
+  { priceId: 18,factoryId: 11,factoryName: 'Cotto Industry',    productCode: 'CT-MTS-3030-CR',  grade: 'A',   collection: 'Metro Square',      productName: 'Metro ครีม',        color: 'ครีม',        surface: 'ด้าน',        sizeRaw: '30x30',  price: 245.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.09 },
+  { priceId: 19,factoryId: 11,factoryName: 'Cotto Industry',    productCode: 'CT-STN-6060-DG',  grade: 'A',   collection: 'Stone Series',      productName: 'Stone เทาเข้ม',     color: 'เทาเข้ม',     surface: 'หยาบ',        sizeRaw: '60x60',  price: 505.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  { priceId: 20,factoryId: 11,factoryName: 'Cotto Industry',    productCode: 'CT-TMB-20120-LB', grade: 'A',   collection: 'Timber Line',       productName: 'Timber น้ำตาลอ่อน', color: 'น้ำตาลอ่อน',  surface: 'ลายไม้',      sizeRaw: '20x120', price: 610.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.24 },
+  // Same product at two grades — the domestic mirror of Padana Marmi's A01/A02 rows above,
+  // so grade handling is exercised on a THB list too and a search on the code returns two rows.
+  { priceId: 21,factoryId: 12,factoryName: 'Duragres Thailand', productCode: 'DG-GRP-6060-MG',  grade: 'A',   collection: 'Granite Plus',      productName: 'Granite เทากลาง',   color: 'เทากลาง',     surface: 'หยาบกึ่งมัน', sizeRaw: '60x60',  price: 470.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  { priceId: 22,factoryId: 12,factoryName: 'Duragres Thailand', productCode: 'DG-GRP-6060-MG',  grade: 'B',   collection: 'Granite Plus',      productName: 'Granite เทากลาง',   color: 'เทากลาง',     surface: 'หยาบกึ่งมัน', sizeRaw: '60x60',  price: 395.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  { priceId: 23,factoryId: 12,factoryName: 'Duragres Thailand', productCode: 'DG-GRP-6060-BK',  grade: 'A',   collection: 'Granite Plus',      productName: 'Granite ดำ',        color: 'ดำ',          surface: 'หยาบกึ่งมัน', sizeRaw: '60x60',  price: 470.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  // Priced per PIECE, not per sqm — the only domestic row that is, so the unit-basis branch
+  // (and the per-piece -> per-sqm conversion a costing has to do) is reachable in THB.
+  { priceId: 24,factoryId: 12,factoryName: 'Duragres Thailand', productCode: 'DG-POR-8080-WH',  grade: 'A',   collection: 'Porcelain Pro',     productName: 'Porcelain ขาวเนียน',color: 'ขาวเนียน',    surface: 'มัน',         sizeRaw: '80x80',  price: 545.00, currency: 'THB', priceUnit: 'per_piece', sqmPerPiece: 0.64 },
+  // A row with NULL optional fields, mirroring REFIN's above: no product code, no colour, no
+  // surface. /catalog must render it without holes, and it must not match a code search.
+  { priceId: 25,factoryId: 11,factoryName: 'Cotto Industry',    productCode: null,              grade: null,  collection: 'Trim & Accessories',productName: 'บัวเชิงผนัง',       color: null,          surface: null,          sizeRaw: '10x60',  price: 175.00, currency: 'THB', priceUnit: 'per_piece', sqmPerPiece: null },
 ];
 
 const mockPriceImportVersions = [
@@ -705,14 +743,9 @@ let mockPricingDecisionItemSeq = 1;
 const mockCustomerQuotations = [];
 let mockCustomerQuotationSeq = 1;
 let mockCustomerQuotationItemSeq = 1;
-// Step 7: Factory Purchase Order and Import Execution (sales.factory_purchase_order /
-// factory_purchase_order_item). Mirrors ProcurementRepository/ProcurementService.
-const mockFactoryPurchaseOrders = [];
-let mockFactoryPurchaseOrderSeq = 1;
-let mockFactoryPurchaseOrderItemSeq = 1;
 
 // Sales/CRM state-matrix seed (chore/mock-demo-seed-state-matrix): this whole aggregate
-// (mockPricingRequests through mockFactoryPurchaseOrders, plus mockDealActivities and
+// (mockPricingRequests through mockCustomerQuotations, plus mockDealActivities and
 // mockAttachments above) starts completely empty every session — demoSales.js is the only
 // source of rows for it. Every counter below is advanced past the highest seeded id so the
 // first user-created row after boot can never collide with one of these.
@@ -741,9 +774,6 @@ let mockFactoryPurchaseOrderItemSeq = 1;
   mockCustomerQuotations.push(...salesSeed.customerQuotations);
   mockCustomerQuotationSeq = salesSeed.nextSeq.customerQuotation;
   mockCustomerQuotationItemSeq = salesSeed.nextSeq.customerQuotationItem;
-  mockFactoryPurchaseOrders.push(...salesSeed.factoryPurchaseOrders);
-  mockFactoryPurchaseOrderSeq = salesSeed.nextSeq.factoryPurchaseOrder;
-  mockFactoryPurchaseOrderItemSeq = salesSeed.nextSeq.factoryPurchaseOrderItem;
   // Deal-tracking readiness gate (dealIsReadyToAdvance) needs `ticket.nextFollowUpAt` set —
   // not part of the ticket's own literal object in demoSales.js since it's normally written
   // by tickets.setBilling, not ticket creation.
@@ -774,26 +804,6 @@ function findPricingRequestRaw(id) {
   const pr = mockPricingRequests.find((p) => p.id === Number(id));
   if (!pr) fail('ไม่พบคำขอราคานี้', 404);
   return pr;
-}
-
-// Step 7: Factory Purchase Order and Import Execution — mirrors ProcurementRepository.findById /
-// ProcurementRepository.withItems (joins request/ticket codes + item display fields for read).
-function findFactoryPurchaseOrderRaw(id) {
-  const po = mockFactoryPurchaseOrders.find((p) => p.id === Number(id));
-  if (!po) fail('ไม่พบใบสั่งซื้อโรงงานนี้', 404);
-  return po;
-}
-
-function buildFactoryPurchaseOrderView(po) {
-  const pr = mockPricingRequests.find((p) => p.id === po.pricingRequestId);
-  const ticket = db.tickets.find((t) => t.id === po.ticketId);
-  const creator = db.users.find((u) => u.id === po.createdBy);
-  return {
-    ...po,
-    pricingRequestCode: pr?.requestCode ?? null,
-    ticketCode: ticket?.code ?? null,
-    createdByName: creator?.name ?? po.createdByName ?? null,
-  };
 }
 
 // Mock stand-in for FactoryQuoteEmailDispatchWorker: send() only enqueues (dispatchStatus:
@@ -1334,24 +1344,6 @@ function snapshotPricingRequestCatalogSelections(pr) {
     item.catalogCollection = product.collection ?? null;
     item.catalogModel = product.productName ?? null;
     item.factory = item.factory?.trim() ? item.factory : (factory?.name ?? product.factoryName ?? item.factory);
-  }
-}
-
-// Mirrors PricingRequestService.submit's Finding A gate (financial-integrity review, commit
-// 3): the catalog is now MANDATORY — every item must have a fully-resolved catalog snapshot
-// (run snapshotPricingRequestCatalogSelections first) or submit() 422s naming every failing
-// 1-based line number in one message, same "รายการที่ N" style as the identity check above.
-function submitPricingRequestCatalogGate(pr) {
-  const missingLines = [];
-  pr.items.forEach((item, index) => {
-    if (item.catalogPriceId == null || item.priceListVersionId == null
-        || item.catalogBasePrice == null || item.catalogCurrency == null
-        || item.resolvedFactoryId == null || item.resolvedFactoryName == null) {
-      missingLines.push(index + 1);
-    }
-  });
-  if (missingLines.length > 0) {
-    fail(`รายการที่ ${missingLines.join(', ')}: ต้องเลือกสินค้าจาก Price Catalog ที่ active ก่อนส่งคำขอราคา (ไม่พบข้อมูลราคา/โรงงานจาก catalog)`, 422);
   }
 }
 
@@ -5798,7 +5790,23 @@ export const api = {
     async create(payload) {
       const user = hasRole('account', 'sales_manager', 'ceo');
       if (!payload.invoiceAttachment) fail('ต้องแนบไฟล์ใบกำกับภาษี', 400);
-      if (db.commissions.some((item) => item.invoiceDetails.invoiceNumber === payload.invoiceNumber)) {
+      // `?.` and the truthiness check are both load-bearing. createManualCommission() sets
+      // `invoiceDetails: null` — the faithful shape for a manual entry (V84) — so the moment ANY
+      // manual commission exists this line used to throw a TypeError and take every subsequent
+      // create() down with it, in the live mock app as well as in tests. That is why the four
+      // MANUAL_COMMISSION_KINDS could not be seeded at all until now.
+      //
+      // Skipping null rows also matches the real backend rather than merely avoiding the crash:
+      // CommissionService's duplicate check is a SQL comparison, and in SQL a NULL invoice number
+      // is never equal to anything.
+      //
+      // The truthiness half is what a bare `?.` would get wrong. This method does NOT require
+      // `payload.invoiceNumber` (only the attachment is checked above), so a call that omits it
+      // would compare `undefined === undefined`, match the manual row, and be refused as a
+      // duplicate of an invoice that does not exist. Crash traded for a spurious 409.
+      if (db.commissions.some((item) => (
+        item.invoiceDetails?.invoiceNumber && item.invoiceDetails.invoiceNumber === payload.invoiceNumber
+      ))) {
         fail('เลขที่ใบกำกับภาษีนี้มีอยู่ในระบบแล้ว', 409);
       }
       // Step 9 gate + cross-check — mirrors CommissionService#resolveDealLinkage exactly. Unlinked
@@ -5899,7 +5907,11 @@ export const api = {
         && !['VOID', 'REJECTED'].includes(item.status))) {
         fail('มีรายการค่าคอมมิชชั่นสำหรับดีลนี้อยู่แล้ว', 409);
       }
-      if (db.commissions.some((item) => item.invoiceDetails.invoiceNumber === payload.invoiceNumber)) {
+      // Same null guard, same reason as commissions.create() above — a manual commission's
+      // `invoiceDetails` is null and both call sites walked into it.
+      if (db.commissions.some((item) => (
+        item.invoiceDetails?.invoiceNumber && item.invoiceDetails.invoiceNumber === payload.invoiceNumber
+      ))) {
         fail('เลขที่ใบกำกับภาษีนี้มีอยู่ในระบบแล้ว', 409);
       }
       if (ticket.salesStage !== 'CLOSED_PAID') {
@@ -7343,27 +7355,6 @@ export const api = {
       };
       mockPricingFormulaConfigVersions.push(newConfig);
       return delay({ formulaConfig: sortedFormulaConfig(newConfig) });
-    },
-  },
-
-  // Mirrors DealEstimateMarkupController (pricing/), V112. get() is open to any authenticated
-  // session — same reasoning as fxRates.list above (see the controller's javadoc): the deal-create
-  // modal's ราคาตั้ง estimate needs this multiplier for every rep who can pick a catalog item, and
-  // a bare multiplier reveals nothing about landed cost or margin. update stays CEO-only. NOT the
-  // same store as priceCalcConfigs above — that IS the margin policy, this is not.
-  dealEstimateMarkup: {
-    async get() {
-      requireSession();
-      return delay({ dealEstimateMarkup: structuredClone(mockDealEstimateMarkup) });
-    },
-    async update(payload) {
-      const user = hasRole('ceo');
-      mockDealEstimateMarkup = {
-        multiplier: Number(payload.multiplier),
-        updatedAt: new Date().toISOString(),
-        updatedBy: user.id,
-      };
-      return delay({ dealEstimateMarkup: structuredClone(mockDealEstimateMarkup) });
     },
   },
 
@@ -9070,11 +9061,12 @@ export const api = {
       // create()/update() time — a draft saved before this rule existed (or
       // one whose items were never touched again) must still be blocked here.
       requirePricingRequestItemFieldsValid(pr.items);
-      // Finding A (financial-integrity review, commit 3): snapshot the catalog selection for
-      // every catalog-backed item, then reject the submit unless EVERY item resolved — mirrors
-      // PricingRequestService.submit calling snapshotCatalogSelections then re-checking.
+      // Snapshot the catalog selection for every catalog-backed item — mirrors
+      // PricingRequestService.submit calling snapshotCatalogSelections. The "Finding A" gate that
+      // used to follow this (reject unless EVERY item resolved) was removed on 2026-08-11 with
+      // its Java counterpart: an item naming a product that is not in the catalogue yet is now a
+      // valid submit, and just carries a null snapshot through to Import.
       snapshotPricingRequestCatalogSelections(pr);
-      submitPricingRequestCatalogGate(pr);
       const seenSourceItemIds = new Set();
       for (const item of pr.items) {
         if (item.sourceTicketItemId != null) {
@@ -9311,197 +9303,6 @@ export const api = {
       const attachment = owningPr.attachments.find((a) => a.id === Number(id));
       attachment.includeInFactoryEmail = Boolean(includeInFactoryEmail);
       return delay({ attachment });
-    },
-  },
-
-  // ── Step 7: Factory Purchase Order and Import Execution — mirrors ProcurementController +
-  // ProcurementService (procurement/). Authorization is NOT authoritative (CLAUDE.md); verify
-  // role behavior against the real Java service. Import/CEO only, matching the real service's
-  // RAW_PO_ROLES — sales/sales_manager cannot reach any method here at all.
-  //
-  // Source of truth, mirroring the real backend exactly: a PO's items are sourced from the
-  // pricing request's currently-APPROVED mockPricingDecisions entry's own pricingCostingId, never
-  // re-picked/re-priced at PO time. Simplification vs the real backend (documented, not silent):
-  // like every mock costing/decision item above, pricingCostingItemId is stood in by
-  // pricingRequestItemId (1:1 within one costing, and the costing is immutable once its decision
-  // is approved) rather than a separate synthetic id.
-  procurement: {
-    async create(pricingRequestId, payload = {}) {
-      const user = hasRole('import', 'ceo');
-      const pr = findPricingRequestRaw(pricingRequestId);
-      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-
-      if (payload.clientRequestId) {
-        const replay = mockFactoryPurchaseOrders.filter(
-          (po) => po.createdBy === user.id && po.clientRequestId === payload.clientRequestId);
-        if (replay.length > 0) return delay({ factoryPurchaseOrders: replay.map(buildFactoryPurchaseOrderView) });
-      }
-
-      if (pr.status !== 'QUOTATION_ACCEPTED') {
-        fail(`สร้างใบสั่งซื้อโรงงานได้เฉพาะคำขอราคาที่ลูกค้ายอมรับใบเสนอราคาแล้วเท่านั้น (ปัจจุบัน: ${pr.status})`, 409);
-      }
-      if (ticket?.salesStage !== 'PROCUREMENT') {
-        fail(`สร้างใบสั่งซื้อโรงงานได้หลังจากออกคำขอนำเข้า (Import Request) แล้วเท่านั้น (สถานะดีลปัจจุบัน: ${ticket?.salesStage})`, 409);
-      }
-
-      const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
-      if (!decision) fail('ไม่พบราคาต้นทุนที่ได้รับอนุมัติสำหรับคำขอราคานี้', 409);
-      const costing = mockPricingCostings.find((c) => c.id === decision.pricingCostingId);
-      if (!costing || costing.items.length === 0) fail('ไม่พบรายการต้นทุนสำหรับสร้างใบสั่งซื้อโรงงาน', 409);
-
-      const byFactory = new Map();
-      for (const item of costing.items) {
-        if (!byFactory.has(item.factoryName)) byFactory.set(item.factoryName, []);
-        byFactory.get(item.factoryName).push(item);
-      }
-
-      const created = [];
-      for (const [factoryName, items] of byFactory) {
-        let po = mockFactoryPurchaseOrders.find(
-          (p) => p.pricingRequestId === pr.id && p.factoryName === factoryName);
-        if (!po) {
-          po = {
-            id: mockFactoryPurchaseOrderSeq++,
-            poNumber: `FPO-2026-${String(mockFactoryPurchaseOrderSeq).padStart(4, '0')}`,
-            pricingRequestId: pr.id,
-            ticketId: pr.ticketId,
-            factoryName,
-            status: 'OPEN',
-            supplierProformaRef: null,
-            supplierPaymentScheduleNote: null,
-            currency: items[0].rawCurrency,
-            totalAmount: items.reduce((sum, item) => sum + Number(item.rawUnitPrice) * Number(item.requestedQuantity), 0),
-            etd: null, eta: null, containerRef: null, customsStatus: null,
-            actualLandedCostThb: null, cancelReason: null,
-            clientRequestId: payload.clientRequestId ?? null,
-            createdBy: user.id, createdByName: user.name,
-            createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-            receivedAt: null, cancelledAt: null,
-            items: items.map((item) => ({
-              id: mockFactoryPurchaseOrderItemSeq++,
-              pricingCostingItemId: item.pricingRequestItemId,
-              pricingRequestItemId: item.pricingRequestItemId,
-              quantity: item.requestedQuantity,
-              unitPrice: item.rawUnitPrice,
-              currency: item.rawCurrency,
-              lineTotal: Number(item.rawUnitPrice) * Number(item.requestedQuantity),
-              estimatedLandedCostPerUnitThb: item.landedCostPerUnitThb,
-              estimatedTotalLandedCostThb: item.totalLandedCostThb,
-            })),
-          };
-          mockFactoryPurchaseOrders.push(po);
-          pushPricingRequestEvent(pr, user, 'FACTORY_PO_CREATED', pr.status, pr.status,
-            `สร้างใบสั่งซื้อโรงงาน ${factoryName} (${po.poNumber})`);
-        }
-        created.push(po);
-      }
-      const ceoUsers = db.users.filter((u) => u.role === 'ceo');
-      ceoUsers.forEach((ceo) => addNotification(ceo.id, pr.ticketId, ticket?.code, 'FACTORY_PO_CREATED',
-        `สร้างใบสั่งซื้อโรงงาน ${created.length} ฉบับสำหรับคำขอราคา ${pr.requestCode}`));
-      return delay({ factoryPurchaseOrders: created.map(buildFactoryPurchaseOrderView) });
-    },
-
-    async listForPricingRequest(pricingRequestId) {
-      hasRole('import', 'ceo');
-      const items = mockFactoryPurchaseOrders
-        .filter((po) => po.pricingRequestId === Number(pricingRequestId))
-        .map(buildFactoryPurchaseOrderView);
-      return delay({ factoryPurchaseOrders: items });
-    },
-
-    async list(status) {
-      hasRole('import', 'ceo');
-      const items = mockFactoryPurchaseOrders
-        .filter((po) => !status || po.status === status)
-        .map(buildFactoryPurchaseOrderView);
-      return delay({ factoryPurchaseOrders: items });
-    },
-
-    async get(id) {
-      hasRole('import', 'ceo');
-      const po = findFactoryPurchaseOrderRaw(id);
-      return delay({ factoryPurchaseOrder: buildFactoryPurchaseOrderView(po) });
-    },
-
-    async recordSupplierProforma(id, payload) {
-      const user = hasRole('import', 'ceo');
-      const po = findFactoryPurchaseOrderRaw(id);
-      if (['RECEIVED', 'CANCELLED'].includes(po.status)) fail('ใบสั่งซื้อนี้ปิดแล้ว ไม่สามารถแก้ไขได้', 409);
-      po.supplierProformaRef = payload.supplierProformaRef;
-      po.supplierPaymentScheduleNote = payload.supplierPaymentScheduleNote ?? null;
-      po.updatedAt = new Date().toISOString();
-      const pr = findPricingRequestRaw(po.pricingRequestId);
-      pushPricingRequestEvent(pr, user, 'FACTORY_PO_PROFORMA_RECORDED', null, null,
-        `บันทึกใบแจ้งหนี้ล่วงหน้า (Proforma) ${payload.supplierProformaRef} (${po.poNumber})`);
-      return delay({ factoryPurchaseOrder: buildFactoryPurchaseOrderView(po) });
-    },
-
-    async recordShippingDetail(id, payload = {}) {
-      const user = hasRole('import', 'ceo');
-      const po = findFactoryPurchaseOrderRaw(id);
-      if (['RECEIVED', 'CANCELLED'].includes(po.status)) fail('ใบสั่งซื้อนี้ปิดแล้ว ไม่สามารถแก้ไขได้', 409);
-      if (payload.containerRef != null) po.containerRef = payload.containerRef;
-      if (payload.etd != null) po.etd = payload.etd;
-      if (payload.eta != null) po.eta = payload.eta;
-      if (payload.customsStatus != null) po.customsStatus = payload.customsStatus;
-      if (po.status === 'OPEN') po.status = 'SHIPPING';
-      po.updatedAt = new Date().toISOString();
-      const pr = findPricingRequestRaw(po.pricingRequestId);
-      pushPricingRequestEvent(pr, user, 'FACTORY_PO_SHIPPING_RECORDED', null, null,
-        `บันทึกรายละเอียดการขนส่ง (${po.poNumber})`);
-      return delay({ factoryPurchaseOrder: buildFactoryPurchaseOrderView(po) });
-    },
-
-    async recordGoodsReceived(id, payload) {
-      // Step 8: mirrors ProcurementService.recordGoodsReceived — items is OPTIONAL (null/absent
-      // defaults every line to its own ordered quantity, zero discrepancy, backward-compatible
-      // with the unmodified Step 7 caller); an explicitly-supplied list (even empty) must cover
-      // EVERY line on the PO or the call is rejected.
-      const user = hasRole('import', 'ceo');
-      const po = findFactoryPurchaseOrderRaw(id);
-      if (['RECEIVED', 'CANCELLED'].includes(po.status)) fail('ใบสั่งซื้อนี้ปิดแล้ว ไม่สามารถบันทึกรับสินค้าได้อีก', 409);
-      const items = payload.items ?? null;
-      if (items === null) {
-        po.items.forEach((item) => {
-          item.qtyReceived = item.quantity;
-          item.qcNote = null;
-          item.discrepancyQty = 0;
-        });
-      } else {
-        const validIds = new Set(po.items.map((item) => item.id));
-        const requestedIds = new Set(items.map((line) => Number(line.itemId)));
-        const sameSize = requestedIds.size === validIds.size;
-        const covers = sameSize && [...requestedIds].every((itemId) => validIds.has(itemId));
-        if (!covers) fail('ต้องระบุจำนวนรับสินค้าให้ครบทุกรายการในใบสั่งซื้อนี้ และรายการที่ระบุต้องอยู่ในใบสั่งซื้อนี้เท่านั้น', 400);
-        for (const line of items) {
-          const item = po.items.find((it) => it.id === Number(line.itemId));
-          item.qtyReceived = moneyValue(line.qtyReceived);
-          item.qcNote = line.qcNote ?? null;
-          item.discrepancyQty = moneyValue(item.qtyReceived - Number(item.quantity ?? 0));
-        }
-      }
-      po.actualLandedCostThb = payload.actualLandedCostThb;
-      po.status = 'RECEIVED';
-      po.receivedAt = new Date().toISOString();
-      po.updatedAt = po.receivedAt;
-      const pr = findPricingRequestRaw(po.pricingRequestId);
-      pushPricingRequestEvent(pr, user, 'FACTORY_PO_GOODS_RECEIVED', null, null,
-        `รับสินค้าแล้ว ต้นทุนนำเข้าจริง ${payload.actualLandedCostThb} (${po.poNumber})`);
-      return delay({ factoryPurchaseOrder: buildFactoryPurchaseOrderView(po) });
-    },
-
-    async cancel(id, payload) {
-      const user = hasRole('import', 'ceo');
-      const po = findFactoryPurchaseOrderRaw(id);
-      if (['RECEIVED', 'CANCELLED'].includes(po.status)) fail('ใบสั่งซื้อนี้ปิดแล้ว ไม่สามารถยกเลิกได้', 409);
-      po.status = 'CANCELLED';
-      po.cancelReason = payload.reason;
-      po.cancelledAt = new Date().toISOString();
-      po.updatedAt = po.cancelledAt;
-      const pr = findPricingRequestRaw(po.pricingRequestId);
-      pushPricingRequestEvent(pr, user, 'FACTORY_PO_CANCELLED', null, null,
-        `ยกเลิกใบสั่งซื้อโรงงาน: ${payload.reason} (${po.poNumber})`);
-      return delay({ factoryPurchaseOrder: buildFactoryPurchaseOrderView(po) });
     },
   },
 

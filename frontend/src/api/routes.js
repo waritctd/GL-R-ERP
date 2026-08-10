@@ -179,12 +179,6 @@ export const API_ROUTES = {
     get: '/api/pricing-formula-config',
     update: '/api/pricing-formula-config',
   },
-  // V112 — deal-create modal's ราคาตั้ง (ประมาณการ) display multiplier. NOT priceCalcConfigs:
-  // see DealEstimateMarkupController's javadoc for why this is a separate, openly-readable table.
-  dealEstimateMarkup: {
-    get: '/api/deal-estimate-markup',
-    update: '/api/deal-estimate-markup',
-  },
   attachments: {
     list: (ticketId) => `/api/tickets/${ticketId}/attachments`,
     upload: (ticketId) => `/api/tickets/${ticketId}/attachments`,
@@ -352,17 +346,6 @@ export const API_ROUTES = {
     attachment: (id) => `/api/pricing-request-attachments/${id}`,
     attachmentIncludeInFactoryEmail: (id) => `/api/pricing-request-attachments/${id}/include-in-factory-email`,
   },
-  // Step 7: Factory Purchase Order and Import Execution. Mirrors ProcurementController.
-  procurement: {
-    create: (pricingRequestId) => `/api/pricing-requests/${pricingRequestId}/factory-purchase-orders`,
-    listForPricingRequest: (pricingRequestId) => `/api/pricing-requests/${pricingRequestId}/factory-purchase-orders`,
-    list: (status) => `/api/factory-purchase-orders${status ? `?status=${encodeURIComponent(status)}` : ''}`,
-    detail: (id) => `/api/factory-purchase-orders/${id}`,
-    proforma: (id) => `/api/factory-purchase-orders/${id}/proforma`,
-    shipping: (id) => `/api/factory-purchase-orders/${id}/shipping`,
-    goodsReceived: (id) => `/api/factory-purchase-orders/${id}/goods-received`,
-    cancel: (id) => `/api/factory-purchase-orders/${id}/cancel`,
-  },
 };
 
 export const ROLE_PERMISSIONS = {
@@ -397,8 +380,8 @@ export const ROLE_PERMISSIONS = {
   // canGenerateQuotation/canConfirmPayments. Mirrors TicketService.VIEWER_ROLES.
   canViewTickets: ['sales', 'import', 'ceo', 'account', 'sales_manager'],
   // Role-scoped views (docs/role-scoped-views.md): the deal PIPELINE BROWSER
-  // (list `/tickets`, `/ticket-overview`, the รายการดีล nav item, SalesTabs
-  // pipeline tabs) is narrower than ticket-detail read (canViewTickets above,
+  // (list `/tickets`, the รายการดีล nav item, the SalesTabs deal-list tab) is
+  // narrower than ticket-detail read (canViewTickets above,
   // unchanged) — only roles whose job IS the pipeline get it. Import and
   // Account are deliberately excluded — their jobs are procurement→delivery
   // and money-confirmation respectively, not browsing the whole deal list
@@ -492,9 +475,6 @@ export const ROLE_PERMISSIONS = {
   // pricing request (sales still sees its own deal's requests via
   // PricingRequestPanel, gated by ticket ownership, not this key).
   canViewPricingRequestQueue: ['import', 'ceo', 'sales_manager'],
-  // Step 7: Factory Purchase Order and Import Execution — Import/CEO only, mirrors
-  // ProcurementService.RAW_PO_ROLES. Raw supplier PO detail is never shown to sales.
-  canManageProcurement: ['import', 'ceo'],
   // Attendance calendar admin UI (/settings/attendance-calendar — PR #480 shipped the write API
   // with no UI at all). Mirrors HolidayController / WorkScheduleController /
   // WorkScheduleAssignmentController's requireAnyRole(user, "hr", "ceo") exactly. FRONTEND GATING

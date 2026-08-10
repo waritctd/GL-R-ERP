@@ -323,10 +323,6 @@ export const api = {
     get: () => apiRequest(API_ROUTES.pricingFormulaConfig.get),
     update: (payload) => apiRequest(API_ROUTES.pricingFormulaConfig.update, { method: 'POST', body: payload }),
   },
-  dealEstimateMarkup: {
-    get: () => apiRequest(API_ROUTES.dealEstimateMarkup.get),
-    update: (payload) => apiRequest(API_ROUTES.dealEstimateMarkup.update, { method: 'PUT', body: payload }),
-  },
   attachments: {
     list: (ticketId) => apiRequest(API_ROUTES.attachments.list(ticketId)),
     upload: async (ticketId, file, attachType, quotationId) => {
@@ -777,20 +773,5 @@ export const api = {
       API_ROUTES.pricingRequests.attachmentIncludeInFactoryEmail(id),
       { method: 'PUT', body: { includeInFactoryEmail } },
     ),
-  },
-  // Step 7: Factory Purchase Order and Import Execution. Mirrors ProcurementController +
-  // ProcurementService (procurement/). Import/CEO only — sales/sales_manager cannot reach any of
-  // these endpoints (raw supplier PO detail is never exposed to sales, same confidentiality cut
-  // as FactoryQuoteService/PricingDecisionService's own RAW_*_ROLES).
-  procurement: {
-    create: (pricingRequestId, payload = {}) => apiRequest(
-      API_ROUTES.procurement.create(pricingRequestId), { method: 'POST', body: payload }),
-    listForPricingRequest: (pricingRequestId) => apiRequest(API_ROUTES.procurement.listForPricingRequest(pricingRequestId)),
-    list: (status) => apiRequest(API_ROUTES.procurement.list(status)),
-    get: (id) => apiRequest(API_ROUTES.procurement.detail(id)),
-    recordSupplierProforma: (id, payload) => apiRequest(API_ROUTES.procurement.proforma(id), { method: 'POST', body: payload }),
-    recordShippingDetail: (id, payload = {}) => apiRequest(API_ROUTES.procurement.shipping(id), { method: 'POST', body: payload }),
-    recordGoodsReceived: (id, payload) => apiRequest(API_ROUTES.procurement.goodsReceived(id), { method: 'POST', body: payload }),
-    cancel: (id, payload) => apiRequest(API_ROUTES.procurement.cancel(id), { method: 'POST', body: payload }),
   },
 };

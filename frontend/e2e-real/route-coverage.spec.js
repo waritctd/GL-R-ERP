@@ -47,7 +47,6 @@ const ROUTES = [
   '/payroll',
   '/settings/attendance-calendar',
   '/attendance',
-  '/ticket-overview',
   '/tickets',
   '/tickets/1', // DEMO-TKT-01 (V21) — a real deal
   '/tickets/1/deposit',
@@ -57,9 +56,6 @@ const ROUTES = [
   '/finance',
   '/price-import',
   '/ceo-settings',
-  '/factory-purchase-orders',
-  '/factory-purchase-orders/1',
-  '/procurement',
   '/catalog',
 ];
 

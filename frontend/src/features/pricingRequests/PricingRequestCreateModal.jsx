@@ -3,7 +3,19 @@ import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
-import { QUANTITY_TYPE_OPTIONS, RECIPIENT_OPTIONS, UNIT_BASIS_OPTIONS, unitBasisLabel } from './pricingRequestMeta.js';
+import { RECIPIENT_OPTIONS, UNIT_BASIS_OPTIONS, unitBasisLabel } from './pricingRequestMeta.js';
+
+// ลักษณะจำนวน / วันที่ต้องการส่งมอบ / สถานที่ส่งมอบ / ข้อกำหนดพิเศษ were removed from this form
+// (owner request, 2026-08-11): Sales does not have that information at คำขอราคา time, so the
+// four inputs only ever collected noise. The BACKEND CONTRACT IS UNCHANGED —
+// PricingRequestItemRequest.quantityType is still @NotBlank, and the other three are still
+// nullable columns — so every payload below keeps carrying all four. They are simply no longer
+// user-editable:
+//   - create mode sends this default plus three nulls;
+//   - edit/revision mode PRESERVES whatever the persisted request already holds (see
+//     itemFromExisting), because buildPayload writes the FULL item representation and nulling a
+//     field here would silently erase data on any draft created before this change.
+const DEFAULT_QUANTITY_TYPE = 'ESTIMATE';
 
 // Maps price_catalog.product_prices.price_unit ('per_sqm' | 'per_piece' | 'per_box' |
 // 'per_linear_m' | 'unknown') to our canonical UnitBasis code, for pre-filling the unit select
@@ -17,13 +29,6 @@ function unitBasisForPriceUnit(priceUnit, fallback) {
     case 'per_linear_m': return 'PER_LINEAR_M';
     default: return fallback;
   }
-}
-
-let pricingCatalogTimer = null;
-
-function debouncedCatalogSearch(query, callback) {
-  clearTimeout(pricingCatalogTimer);
-  pricingCatalogTimer = setTimeout(() => callback(query), 250);
 }
 
 // TicketItemDto's unitBasis is a code ('PIECE' | 'SQM'), never a display unit —
@@ -47,7 +52,7 @@ function quantityForTicketItem(ticketItem) {
   return ticketItem?.qty ?? 1;
 }
 
-function emptyItemFromTicketItem(ticketItem, deliveryLocationSeed = '') {
+function emptyItemFromTicketItem(ticketItem) {
   return {
     sourceTicketItemId: ticketItem?.id ?? null,
     // V110: seed the catalog link the deal-creation catalog picker already resolved (see
@@ -68,12 +73,13 @@ function emptyItemFromTicketItem(ticketItem, deliveryLocationSeed = '') {
     requestedQty: quantityForTicketItem(ticketItem),
     requestedUnit: unitLabelForTicketItem(ticketItem),
     requestedUnitBasis: unitBasisForTicketItem(ticketItem),
-    quantityType: 'ESTIMATE',
+    // No longer user-editable — see DEFAULT_QUANTITY_TYPE above. Carried so buildPayload keeps
+    // satisfying PricingRequestItemRequest unchanged. deliveryLocation used to be seeded from
+    // deal.projectName; with no input to review or correct it, seeding it would write an
+    // unreviewed guess into the request, so a new row now starts blank.
+    quantityType: DEFAULT_QUANTITY_TYPE,
     targetDeliveryDate: '',
-    // Seeded from the deal's own project (create mode only — see the modal's
-    // dealDeliveryLocationSeed) rather than left blank like the rest of this row's fields, which
-    // have no deal-level equivalent to seed from.
-    deliveryLocation: deliveryLocationSeed,
+    deliveryLocation: '',
     specialRequirement: '',
     // Fuzzy catalog fallback provenance (V110 follow-up) — true only when
     // findSingleFuzzyCatalogMatch auto-applied a match with no user action, so the UI can badge
@@ -102,7 +108,11 @@ function itemFromExisting(item) {
     requestedQty: item?.requestedQty ?? 1,
     requestedUnit: item?.requestedUnit ?? '',
     requestedUnitBasis: item?.requestedUnitBasis ?? 'PER_PIECE',
-    quantityType: item?.quantityType ?? 'ESTIMATE',
+    // Preserved, not edited (see DEFAULT_QUANTITY_TYPE above): these four have no input in the
+    // form any more, but buildPayload writes the FULL item representation, so carrying the
+    // persisted values through is what stops a plain "save" from erasing them on a draft that
+    // was created while the inputs still existed.
+    quantityType: item?.quantityType ?? DEFAULT_QUANTITY_TYPE,
     targetDeliveryDate: item?.targetDeliveryDate ?? '',
     deliveryLocation: item?.deliveryLocation ?? '',
     specialRequirement: item?.specialRequirement ?? '',
@@ -176,9 +186,10 @@ function findSingleFuzzyCatalogMatch(candidates, item) {
   return matches.length === 1 ? matches[0] : null;
 }
 
-// Pure product-application logic shared by applyCatalogItem (a real user pick) and the fuzzy
-// catalog fallback effect (an automatic best-guess) — same fields, same brand-fallback rule,
-// different only in who calls it and whether catalogAutoApplied ends up true afterward.
+// Pure product-application logic for the fuzzy catalog fallback effect (an automatic
+// best-guess). It used to be shared with applyCatalogItem, the manual "ค้นหา Catalog" picker;
+// that picker was removed on 2026-08-11 (see its former call site in the item rows below), so
+// the automatic path is now the only caller.
 function deriveItemFromCatalogProduct(item, product) {
   // Mirrors PricingRequestRepository.snapshotCatalogSelections: catalog_brand =
   // COALESCE(pri.brand, pp.grade) — an already-typed brand wins, otherwise the catalog's
@@ -263,11 +274,6 @@ export function PricingRequestCreateModal({
   // ticket_item rows instead.
   const seedsFromExisting = isEdit || isRevision;
   const initialSummary = initialValue?.summary ?? null;
-  // Fix for "ทุกอย่างควร autofill ตามข้อมูลขั้นตอนนั้น": deal-derived seeds, CREATE MODE ONLY —
-  // edit/revision seed every field from the PERSISTED request above and must never have `deal`
-  // leak into them, so this is gated the same way seedsFromExisting gates itemFromExisting vs.
-  // emptyItemFromTicketItem just above.
-  const dealDeliveryLocationSeed = !seedsFromExisting ? (deal?.projectName ?? '') : '';
   const [recipientType, setRecipientType] = useState(() => initialSummary?.recipientType ?? 'DESIGNER');
   const [recipientLabel, setRecipientLabel] = useState(() => (
     seedsFromExisting
@@ -293,8 +299,8 @@ export function PricingRequestCreateModal({
       return initialValue?.items?.length ? initialValue.items.map(itemFromExisting) : [emptyItemFromTicketItem(null)];
     }
     return ticketItems.length
-      ? ticketItems.map((ticketItem) => emptyItemFromTicketItem(ticketItem, dealDeliveryLocationSeed))
-      : [emptyItemFromTicketItem(null, dealDeliveryLocationSeed)];
+      ? ticketItems.map((ticketItem) => emptyItemFromTicketItem(ticketItem))
+      : [emptyItemFromTicketItem(null)];
   });
 
   // Re-fills recipientLabel from the deal whenever the ผู้รับ chip changes — create mode only,
@@ -379,8 +385,6 @@ export function PricingRequestCreateModal({
   // failure) reuses the same draft instead of calling createFn again and
   // orphaning a duplicate. Always null in edit mode (there is no create step).
   const [createdId, setCreatedId] = useState(null);
-  const [catalogQuery, setCatalogQuery] = useState({});
-  const [catalogResults, setCatalogResults] = useState({});
 
   // Pricing Request attachments (V69, review remediation COMMIT 4): Sales may optionally attach
   // supporting files while the request is a DRAFT (also true in edit mode, since editing a
@@ -443,8 +447,9 @@ export function PricingRequestCreateModal({
         next.catalogProductCode = '';
         next.catalogBasePrice = null;
         next.catalogCurrency = '';
-        // A hand-edit invalidates a fuzzy-matched link exactly like a real catalog pick — it no
-        // longer describes an unconfirmed auto-match, it describes whatever the user just typed.
+        // A hand-edit invalidates a fuzzy-matched link — the row no longer describes an
+        // unconfirmed auto-match, it describes whatever the user just typed. With the manual
+        // picker gone this is also the only way to clear a wrong auto-match.
         next.catalogAutoApplied = false;
       }
       return next;
@@ -469,48 +474,11 @@ export function PricingRequestCreateModal({
   }
 
   function addItem() {
-    // A row added later via "เพิ่มรายการ" gets the same deal-derived deliveryLocation seed as
-    // the rows this modal opened with (create mode only — dealDeliveryLocationSeed is already ''
-    // in edit/revision, see its own definition above).
-    setItems((cur) => [...cur, emptyItemFromTicketItem(null, dealDeliveryLocationSeed)]);
+    setItems((cur) => [...cur, emptyItemFromTicketItem(null)]);
   }
 
   function removeItem(index) {
     setItems((cur) => cur.filter((_, i) => i !== index));
-  }
-
-  function searchCatalog(index, value) {
-    setCatalogQuery((cur) => ({ ...cur, [index]: value }));
-    debouncedCatalogSearch(value, async (query) => {
-      if (!query.trim()) {
-        setCatalogResults((cur) => ({ ...cur, [index]: [] }));
-        return;
-      }
-      try {
-        const res = await api.catalog.prices(query, undefined, 20);
-        setCatalogResults((cur) => ({ ...cur, [index]: res.items ?? [] }));
-      } catch {
-        setCatalogResults((cur) => ({ ...cur, [index]: [] }));
-      }
-    });
-  }
-
-  function applyCatalogItem(index, product) {
-    setItems((cur) => cur.map((item, i) => (
-      // A real user pick always wins over — and clears — any unconfirmed auto-match.
-      i === index ? { ...deriveItemFromCatalogProduct(item, product), catalogAutoApplied: false } : item
-    )));
-    setCatalogQuery((cur) => ({
-      ...cur,
-      [index]: [product.productCode, product.collection, product.productName].filter(Boolean).join(' · '),
-    }));
-    setCatalogResults((cur) => ({ ...cur, [index]: [] }));
-    setItemErrors((cur) => {
-      if (!(index in cur)) return cur;
-      const next = { ...cur };
-      delete next[index];
-      return next;
-    });
   }
 
   function validate() {
@@ -814,49 +782,33 @@ export function PricingRequestCreateModal({
                 {itemErrors[index] ? (
                   <p role="alert" className="text-2xs font-bold text-danger-dark">{itemErrors[index]}</p>
                 ) : null}
-                <div className="relative">
-                  <label className="flex flex-col gap-1 text-xs">
-                    ค้นหา Catalog
-                    <input
-                      value={catalogQuery[index] ?? item.catalogProductCode ?? ''}
-                      onChange={(e) => searchCatalog(index, e.target.value)}
-                      placeholder="รหัสสินค้า / Collection / โรงงาน"
-                    />
-                  </label>
-                  {(catalogResults[index] ?? []).length > 0 ? (
-                    <div className="absolute left-0 right-0 top-full z-50 max-h-56 overflow-y-auto rounded-md border border-border bg-surface shadow-lg">
-                      {(catalogResults[index] ?? []).map((product) => (
-                        <button
-                          key={product.priceId}
-                          type="button"
-                          className="block w-full border-b border-border-subtle px-3 py-2 text-left text-xs hover:bg-surface-subtle"
-                          onMouseDown={(event) => {
-                            event.preventDefault();
-                            applyCatalogItem(index, product);
-                          }}
-                        >
-                          <strong>{product.factoryName}</strong>
-                          {' · '}
-                          {[product.productCode, product.collection, product.productName].filter(Boolean).join(' · ') || '-'}
-                          <span className="ml-2 text-info">
-                            {product.price != null ? `${Number(product.price).toLocaleString('th-TH')} ${product.currency ?? ''}` : ''}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                  {item.productId ? (
-                    <p className="mt-1 text-2xs font-bold text-info">
-                      Catalog #{item.productId}{item.catalogBasePrice != null ? ` · ${Number(item.catalogBasePrice).toLocaleString('th-TH')} ${item.catalogCurrency}` : ''}
-                    </p>
-                  ) : null}
-                  {item.catalogAutoApplied ? (
-                    <p role="status" className="mt-1 flex items-center gap-1 text-2xs font-bold text-warning-dark">
-                      <Icon name="triangleAlert" size={12} />
-                      จับคู่สินค้าจาก Catalog ให้อัตโนมัติ — โปรดตรวจสอบก่อนใช้งาน (ไม่ใช่การเลือกที่ยืนยันแล้ว)
-                    </p>
-                  ) : null}
-                </div>
+                {/*
+                  The manual "ค้นหา Catalog" picker was removed (owner request, 2026-08-11) —
+                  a คำขอราคา may name a product that is not in the catalogue yet, so requiring a
+                  catalog pick blocked exactly the case the request exists to cover. What stays is
+                  read-only PROVENANCE: a productId still arrives from the deal's own catalog link
+                  (ticket_item.catalog_price_id, V110) or from the background fuzzy matcher, and
+                  both are worth showing so Import can see where a base price came from.
+                */}
+                {item.productId || item.catalogAutoApplied ? (
+                  // Rendered only when there is provenance to show. An unconditional wrapper
+                  // would still be a flex item of the gap-2 column above and leave a stray gap
+                  // on every row without a catalog link — which, with the picker gone, is most
+                  // of them.
+                  <div className="flex flex-col gap-1">
+                    {item.productId ? (
+                      <p className="text-2xs font-bold text-info">
+                        Catalog #{item.productId}{item.catalogBasePrice != null ? ` · ${Number(item.catalogBasePrice).toLocaleString('th-TH')} ${item.catalogCurrency}` : ''}
+                      </p>
+                    ) : null}
+                    {item.catalogAutoApplied ? (
+                      <p role="status" className="flex items-center gap-1 text-2xs font-bold text-warning-dark">
+                        <Icon name="triangleAlert" size={12} />
+                        จับคู่สินค้าจาก Catalog ให้อัตโนมัติ — โปรดตรวจสอบก่อนใช้งาน (ไม่ใช่การเลือกที่ยืนยันแล้ว)
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   <label className="col-span-2 flex flex-col gap-1 text-xs sm:col-span-1">
                     ยี่ห้อ
@@ -898,26 +850,6 @@ export function PricingRequestCreateModal({
                         <option key={option.code} value={option.code}>{option.label}</option>
                       ))}
                     </select>
-                  </label>
-                  <label className="flex flex-col gap-1 text-xs">
-                    ลักษณะจำนวน *
-                    <select value={item.quantityType} onChange={(e) => updateItem(index, 'quantityType', e.target.value)}>
-                      {QUANTITY_TYPE_OPTIONS.map((option) => (
-                        <option key={option.code} value={option.code}>{option.label}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="flex flex-col gap-1 text-xs">
-                    วันที่ต้องการส่งมอบ
-                    <input type="date" value={item.targetDeliveryDate} onChange={(e) => updateItem(index, 'targetDeliveryDate', e.target.value)} />
-                  </label>
-                  <label className="col-span-2 flex flex-col gap-1 text-xs sm:col-span-1">
-                    สถานที่ส่งมอบ
-                    <input value={item.deliveryLocation} onChange={(e) => updateItem(index, 'deliveryLocation', e.target.value)} />
-                  </label>
-                  <label className="col-span-2 flex flex-col gap-1 text-xs sm:col-span-3">
-                    ข้อกำหนดพิเศษ
-                    <input value={item.specialRequirement} onChange={(e) => updateItem(index, 'specialRequirement', e.target.value)} />
                   </label>
                 </div>
               </div>

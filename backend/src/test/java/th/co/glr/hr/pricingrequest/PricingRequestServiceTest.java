@@ -401,34 +401,42 @@ class PricingRequestServiceTest {
         verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
     }
 
-    // Finding A (financial-integrity review, commit 3): the catalog is now MANDATORY — a
-    // free-text item (or a productId that never resolved against an ACTIVE catalog price at
-    // snapshotCatalogSelections time) must 422 at submit(), not silently reach Import/costing.
+    // INVERTED 2026-08-11 (owner request): "Finding A" used to make the catalog MANDATORY, so a
+    // free-text item 422'd here. It no longer does — a คำขอราคา may name a product that is not in
+    // the catalogue yet, which is precisely what Import is being asked to price. This is the
+    // wrong-way-round case for the removal: it fails if anyone reinstates the gate.
     @Test
-    void submit_rejectsPreExistingDraftWithIncompleteCatalogSnapshot() {
+    void submit_acceptsFreeTextItemWithNoCatalogSnapshot() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.findItems(20L)).thenReturn(List.of(
             itemDtoWithoutCatalogSnapshot(null, null, "Brand", "Model")));
+        // transition() returns the compare-and-set row count; Mockito's int default of 0 would
+        // make submit() throw the optimistic-lock 409 before this test could observe anything.
+        when(requestRepo.transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null))
+            .thenReturn(1);
 
-        assertUnprocessable(() -> service.submit(20L, salesActor), "รายการที่ 1");
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+        service.submit(20L, salesActor);
+
+        verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
     }
 
-    // Same gate, several failing lines at once — the message must report every failing line
-    // number, not just the first, so a rep with multiple free-text lines fixes them all in one
-    // pass instead of being told about them one at a time.
+    // Same, with several free-text lines mixed in beside a fully-snapshotted one — the old gate
+    // reported "รายการที่ 2, 3" here and blocked the submit.
     @Test
-    void submit_reportsEveryLineWithAnIncompleteCatalogSnapshot() {
+    void submit_acceptsAMixOfCatalogBackedAndFreeTextItems() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.findItems(20L)).thenReturn(List.of(
             sampleItem(null),
             itemDtoWithoutCatalogSnapshot(null, null, "Brand 2", "Model 2"),
             itemDtoWithoutCatalogSnapshot(null, null, "Brand 3", "Model 3")));
+        when(requestRepo.transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null))
+            .thenReturn(1);
 
-        assertUnprocessable(() -> service.submit(20L, salesActor), "รายการที่ 2, 3");
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+        service.submit(20L, salesActor);
+
+        verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
     }
 
     // A request whose items already have a full catalog snapshot (simulating a real submit(),
