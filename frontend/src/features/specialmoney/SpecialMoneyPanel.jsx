@@ -1079,9 +1079,15 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
               </span>
               <span data-label="สถานะ" className="mobile:order-2">
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-                {/* No "รอ" prefix -- the StatusBadge above already says that; repeating it made
-                    this note a superset of the badge's own text (review #pending-approver-info). */}
-                {pendingApproverNote ? <small className="text-text-muted">{pendingApproverNote}</small> : null}
+                {/* Only when a NAME was resolved. The role-only note was correct when the badge
+                    read a generic pending label, but specialMoneyStatusLabel now names the role
+                    itself ("รอ CEO อนุมัติ" -- welfare has been single-stage CEO-only since #482),
+                    and the note then merely repeated it: two lines for one fact. A name is the
+                    note's only remaining content -- "CEO (คุณราม)" tells you who to chase, which
+                    the badge cannot. Same reasoning as OvertimePanel's ขั้นอนุมัติ column. */}
+                {request.pendingApproverName && pendingApproverNote
+                  ? <small className="text-text-muted">{pendingApproverNote}</small>
+                  : null}
                 {typeMeta?.evidenceRequired && request.status === 'SUBMITTED' && !request.attachmentCount ? (
                   <small className="text-warning">ยังไม่ได้แนบเอกสาร — อนุมัติไม่ได้</small>
                 ) : null}

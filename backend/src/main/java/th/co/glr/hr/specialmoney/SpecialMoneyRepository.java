@@ -25,8 +25,13 @@ import th.co.glr.hr.common.ApiException;
 /**
  * Modelled closely on {@code th.co.glr.hr.overtime.OvertimeRepository} -- same idioms
  * (text-block SQL, {@link MapSqlParameterSource}, a shared {@code baseSelect()}, a private row
- * mapper). Deliberately does not import anything from the {@code overtime} package; see {@link
- * SpecialMoneyEmployeeAccess}.
+ * mapper). Deliberately does not import anything from the {@code overtime} package, so the two
+ * modules' rules can diverge without dragging each other along.
+ *
+ * <p>They now HAVE diverged, in the direction that matters: overtime scopes reads to a ผู้จัดการ's
+ * ฝ่าย, welfare scopes them to the employee alone. {@link #findRequests} and
+ * {@link #findEmployeeOptions} therefore no longer take a division at all -- see
+ * {@link SpecialMoneyFilter}. Do not "restore the symmetry" with overtime here.
  */
 @Repository
 public class SpecialMoneyRepository {
@@ -50,20 +55,12 @@ public class SpecialMoneyRepository {
         return Boolean.TRUE.equals(exists);
     }
 
-    public Optional<SpecialMoneyEmployeeAccess> findEmployeeAccess(long employeeId) {
-        return jdbc.query("""
-            SELECT employee_id, reports_to_employee_id, division_id, is_active
-              FROM hr.employee
-             WHERE employee_id = :employeeId
-            """, Map.of("employeeId", employeeId), (rs, rowNum) -> new SpecialMoneyEmployeeAccess(
-                rs.getLong("employee_id"),
-                nullableLong(rs, "reports_to_employee_id"),
-                nullableLong(rs, "division_id"),
-                rs.getBoolean("is_active")
-            ))
-            .stream()
-            .findFirst();
-    }
+    // findEmployeeAccess (employee -> division / reports-to) was deleted on 2026-08-10 along with
+    // SpecialMoneyService.managesEmployee, its only caller. It answered "does this ผู้จัดการ manage
+    // this employee?" -- exactly the question welfare must no longer ask, since hr/ceo are the only
+    // roles that may look at another employee's claim. Reinstating it is how the division-wide read
+    // comes back; overtime and leave keep their own copies for their own (still division-scoped)
+    // rules.
 
     public Optional<EmployeeEligibilitySnapshot> findEligibility(long employeeId, LocalDate today) {
         return jdbc.query("""
@@ -335,20 +332,14 @@ public class SpecialMoneyRepository {
             sql.append(" AND s.employee_id = :employeeId");
             params.addValue("employeeId", filter.employeeId());
         }
-        if (filter.managerEmployeeId() != null) {
-            StringBuilder scope = new StringBuilder(
-                // Own requests, plus the whole ฝ่าย for a ผู้จัดการ. reports_to is deliberately not
-                // a disjunct here: it no longer grants approval rights (see
-                // SpecialMoneyService.managesEmployee), and a list that showed rows the viewer
-                // cannot act on is how a reviewer ends up staring at a request with no buttons.
-                " AND (s.employee_id = :managerEmployeeId");
-            params.addValue("managerEmployeeId", filter.managerEmployeeId());
-            if (filter.managerDivisionId() != null) {
-                scope.append(" OR e.division_id = :managerDivisionId");
-                params.addValue("managerDivisionId", filter.managerDivisionId());
-            }
-            scope.append(")");
-            sql.append(scope);
+        if (filter.ownEmployeeId() != null) {
+            // Own rows ONLY -- no division disjunct, no reports_to disjunct. Welfare is
+            // confidential to each employee (SpecialMoneyService's class Javadoc): hr/ceo read
+            // across it by leaving ownEmployeeId null, and everyone else, ผู้จัดการ included, is
+            // pinned to themselves. This clause used to read
+            // `(s.employee_id = :me OR e.division_id = :myDivision)`, which is the bug.
+            sql.append(" AND s.employee_id = :ownEmployeeId");
+            params.addValue("ownEmployeeId", filter.ownEmployeeId());
         }
         if (filter.status() != null) {
             sql.append(" AND s.status = :status");
@@ -481,48 +472,46 @@ public class SpecialMoneyRepository {
             .addValue("reviewerNote", cleanNote(reviewerNote)));
     }
 
-    /** Mirrors {@code OvertimeRepository.findEmployeeOptions}. */
-    public List<SpecialMoneyEmployeeOption> findEmployeeOptions(
-            Long managerEmployeeId, Long managerDivisionId, boolean includeAll) {
+    /**
+     * The submit form's employee picker. <b>Not</b> {@code OvertimeRepository.findEmployeeOptions}'s
+     * shape any more: overtime offers a ผู้จัดการ their whole ฝ่าย because overtime really can be
+     * filed and approved for a team, whereas welfare is confidential per employee.
+     *
+     * <p>So there is no {@code managerDivisionId} parameter: {@code includeAll} (hr/ceo) returns
+     * every active employee as a LIST FILTER roster, and everyone else gets exactly themselves.
+     * That keeps the picker in step with {@link SpecialMoneyService#resolveTargetEmployee}, which
+     * refuses any target but the caller — offering a name here that submit would then 403 turns a
+     * picker choice into an error.
+     */
+    public List<SpecialMoneyEmployeeOption> findEmployeeOptions(Long actorEmployeeId, boolean includeAll) {
         StringBuilder sql = new StringBuilder("""
             SELECT e.employee_id,
                    e.employee_code,
                    concat_ws(' ', e.first_name_th, e.last_name_th) AS employee_name,
-                   dep.name_th AS department_name,
-                   e.reports_to_employee_id,
-                   e.division_id
+                   dep.name_th AS department_name
               FROM hr.employee e
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
              WHERE e.is_active = TRUE
             """);
         MapSqlParameterSource params = new MapSqlParameterSource()
-            .addValue("managerEmployeeId", managerEmployeeId)
-            .addValue("managerDivisionId", managerDivisionId);
+            .addValue("actorEmployeeId", actorEmployeeId);
         if (!includeAll) {
-            // Kept in step with findRequests' scope and SpecialMoneyService.managesEmployee:
-            // offering an employee here that submit() would then refuse turns a picker choice
-            // into a 403.
-            sql.append(" AND (e.employee_id = :managerEmployeeId");
-            if (managerDivisionId != null) {
-                sql.append(" OR e.division_id = :managerDivisionId");
-            }
-            sql.append(")");
+            sql.append(" AND e.employee_id = :actorEmployeeId");
         }
         sql.append(" ORDER BY e.employee_code");
 
         return jdbc.query(sql.toString(), params, (rs, rowNum) -> {
             long employeeId = rs.getLong("employee_id");
-            Long divisionId = nullableLong(rs, "division_id");
-            boolean self = managerEmployeeId != null && employeeId == managerEmployeeId;
-            boolean directReport =
-                managerDivisionId != null && managerDivisionId.equals(divisionId) && !self;
             return new SpecialMoneyEmployeeOption(
                 employeeId,
                 rs.getString("employee_code"),
                 rs.getString("employee_name"),
                 rs.getString("department_name"),
-                self,
-                directReport
+                actorEmployeeId != null && employeeId == actorEmployeeId,
+                // directReport is now ALWAYS false -- nobody may file for anybody. Kept on the DTO
+                // (rather than removed) so the wire shape and mockApi's mirror stay put; see
+                // SpecialMoneyEmployeeOption.
+                false
             );
         });
     }
