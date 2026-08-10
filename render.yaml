@@ -4,37 +4,30 @@
 #   https://gl-r-erp.onrender.com
 # which is what the Vercel frontend proxies /api to (see frontend/vercel.json).
 #
-# ── DEPLOYS FROM A PRE-BUILT IMAGE, NOT FROM SOURCE (#666) ───────────────────────────────
-# This service used `runtime: docker` + `dockerfilePath`, so Render built the image itself from
-# a fresh git clone. That cannot work for this app: the licensed Thai fonts the Excel→PDF
-# templates require are proprietary and git-ignored, so `backend/fonts/` is ALWAYS empty in a
-# clone, and every Render-built image rendered customer-facing quotations and deposit notices in
-# substitute fonts (wider glyphs, header text overflowing the certification badges).
+# ── BUILDS FROM SOURCE. THE FONT CAVEAT IS REAL AND UNRESOLVED (#666) ────────────────────
+# #670 switched this service to `runtime: image` so the licensed Thai fonts could be baked in
+# where they exist. Reverted here under a UAT phase-1 deadline: the image URL was a placeholder,
+# so every deploy would have failed, and building+pushing an image needs Docker and the licensed
+# font files. Deployability today beat font fidelity today — an explicit owner call, not a
+# retraction of the finding.
 #
-# The image is therefore built where the fonts exist — a machine that can fetch them from private
-# storage — and pushed to a registry Render pulls from. See scripts/build-push-backend-image.sh
-# and backend/fonts/README.md.
+# WHAT THAT MEANS, PLAINLY: `backend/fonts/` is always empty in a fresh clone, so this service
+# renders customer-facing quotations and deposit notices in SUBSTITUTE fonts — wider glyphs,
+# header text overflowing the certification badges. That is the status quo of the last several
+# months, not a regression introduced here.
 #
-# WHAT THIS CHANGES FOR YOU: a push to main no longer produces a deployable artifact on its own.
-# Backend changes need `scripts/build-push-backend-image.sh <tag>` before the Render deploy. That
-# is a real cost, accepted deliberately — the alternative is shipping the wrong fonts to customers.
-# `autoDeploy: false` already meant deploys were manual, so the sequence gains a step rather than
-# changing shape.
+# The build no longer fails on an empty fonts/ (see backend/Dockerfile) so this path works, but
+# the substitution guard added by #670 is kept: if fonts ARE supplied and fontconfig substitutes
+# one anyway, the build still fails loudly.
 #
-# BEFORE THE FIRST DEPLOY, set both of these — they are placeholders:
-#   • image.url   — the registry path you actually push to
-#   • image.creds.fromRegistryCreds.name — the name of the registry credential you create in the
-#     Render dashboard (Settings → Registry Credentials). Omit the whole `creds:` block if the
-#     registry is public.
+# To finish #666 properly, restore `runtime: image` with a real image.url and use
+# scripts/build-push-backend-image.sh, which is left in place and working.
 services:
   - type: web
     name: gl-r-erp
-    runtime: image
-    image:
-      url: docker.io/REPLACE_ME/glr-hr-backend:latest
-      creds:
-        fromRegistryCreds:
-          name: REPLACE_ME_REGISTRY_CREDS
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
     region: singapore          # closest Render region to the Supabase ap-northeast-1 DB
     plan: starter              # free tier is CPU-throttled (slow startup races the port scan) and cold-starts; starter avoids both
     # Owner ruling 2026-08-03: auto-deploy off. This is UAT sitting on the same DB as HR/sales

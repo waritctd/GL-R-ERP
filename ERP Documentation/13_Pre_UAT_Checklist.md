@@ -110,12 +110,18 @@ Recorded because none of them is a code defect and all three look like one:
      substitute is wider and **header text overflows the certification badges** on customer-facing
      documents.
 
-     **Since fixed structurally (#666):** an empty `backend/fonts/` now **fails** the Docker build
-     rather than warning, an `fc-match` check fails it again if fontconfig substitutes a family
-     instead of resolving it to itself (the check that was actually missing — `fc-list` alone
-     cannot see substitution), and `render.yaml` pulls a **pre-built image** rather than building
-     from a clone. What is left is operational: build, push, deploy, and compare a rendered
-     quotation against a Windows-authored reference. Item 7 in §6.
+     **Partly addressed, then partly reverted (#666, #670, #674).** #670 made an empty
+     `backend/fonts/` fail the build and moved `render.yaml` to a pre-built image. Both were
+     reverted under the UAT phase-1 deadline: the image URL was a placeholder, so every deploy
+     would have failed, and building an image needs Docker plus the licensed fonts. **The hosted
+     service therefore still renders customer documents in substitute fonts** — unchanged from the
+     last several months, not a regression.
+
+     What survived is the check that was actually missing: `fc-match` fails the build if a supplied
+     font is substituted rather than resolving to itself (`fc-list` alone cannot see substitution).
+     Plus `scripts/build-push-backend-image.sh`, which still works. Finishing #666 means supplying
+     the fonts, pushing an image, restoring `runtime: image`, and comparing a rendered quotation
+     against a Windows-authored reference. Item 7 in §6.
 
 ### 3.1 Real-stack e2e — the suite that carries the authorization evidence
 
@@ -406,7 +412,7 @@ Ordered by what blocks a sign-off soonest.
 | 4 | **Confirm which backend serves the UAT database.** | `render.yaml` declares **one** service, and its documented configuration (`prod,demo` + demo Flyway locations) matches the `GL&R` showcase project, not UAT. Whatever points at UAT is not described in the repo. |
 | 5 | **Decide and publish the supported browser set.** | Testers need to know what to file a bug against. Today only Chromium has ever been run. |
 | 6 | **Confirm the deployed UAT build is the intended commit,** and that `GET /actuator/health` answers. | `autoDeploy: false`; not checkable from a checkout. |
-| 7 | **Build and deploy the backend image with the licensed fonts** (**#666**). | The mechanism now exists and the guards are in place: `render.yaml` pulls a pre-built image instead of building from a clone, an empty `backend/fonts/` **fails** the build, and an `fc-match` check fails it again if fontconfig substitutes a family rather than resolving it. What remains is operational and cannot be done from a checkout — run `scripts/build-push-backend-image.sh <tag>` on a machine that can reach the licensed fonts, set `image.url` and the registry-creds name in `render.yaml` (both are `REPLACE_ME`), deploy, then compare a rendered quotation against a Windows-authored reference. **That comparison is the acceptance signal — a green suite is not**, because the renderer tests pass under substitution. |
+| 7 | **Customer-facing PDFs still render in substitute fonts** (**#666**). | `render.yaml` was moved to a pre-built image in #670 and **reverted to build-from-source** under the UAT phase-1 deadline, because the image URL was a placeholder and every deploy would have failed. So the status quo stands: `backend/fonts/` is empty in a clone, and quotations and deposit notices render in substitutes — wider glyphs, header text overflowing the certification badges. The tooling to fix it is in place and working (`scripts/build-push-backend-image.sh`, plus an `fc-match` guard that fails the build if a supplied font is substituted); what is missing is the licensed fonts, a registry, and a deploy. |
 | 8 | **Brief testers on the login rate limiter.** | See below — this will otherwise eat a UAT session. |
 
 ### Item 2 in full — why `validate-on-migrate` is not a single switch

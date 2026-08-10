@@ -32,18 +32,18 @@ RUN apt-get update && \
 # not by git. See backend/fonts/README.md for how to supply them.
 COPY fonts/ /usr/local/share/fonts/glr/
 
-# Rebuild the font cache, then PROVE the required families are actually usable. A missing font is
-# now a BUILD FAILURE, not a warning (#666).
+# Rebuild the font cache, then verify the required families where they are present.
 #
-# It used to warn and continue when backend/fonts/ was empty. That looked like kind graceful
-# degradation and was really a silent defect channel: Render built from a fresh clone where the
-# folder is always empty, so the showcase shipped substitute fonts for months with nothing but a
-# build-log line nobody reads. backend/fonts/README.md meanwhile claimed the build already failed
-# in this case — the two disagreed, which is a large part of why it went unnoticed. They agree now.
+# AN EMPTY backend/fonts/ WARNS AND CONTINUES. #670 made it fatal, which was the right instinct —
+# a fontless image renders customer documents in substitutes, and warning about it in a build log
+# nobody reads is how that shipped unnoticed for months. But Render builds this Dockerfile from a
+# fresh git clone, where the licensed fonts are git-ignored and the folder is ALWAYS empty, so
+# fatal means the service cannot deploy at all. Reverted under a UAT deadline (#666 stays open).
 #
-# Escape hatch, deliberately explicit and off by default: --build-arg ALLOW_MISSING_FONTS=true for
-# a knowingly fontless build (a local smoke test, say). Anything that reaches a user should never
-# set it.
+# Do not "fix" this back to fatal without first moving the service to a pre-built image
+# (scripts/build-push-backend-image.sh, still in place) — otherwise you break every deploy.
+#
+# --build-arg ALLOW_MISSING_FONTS=false makes it fatal again, for a build that SHOULD carry fonts.
 #
 # TWO checks, because the obvious one is not sufficient:
 #
@@ -54,13 +54,13 @@ COPY fonts/ /usr/local/share/fonts/glr/
 #      substitute. So "Angsana New" resolving to DejaVu Sans is exactly the production defect,
 #      and check 1 alone cannot see it — LibreOffice makes the same substitution and the wider
 #      glyphs overflow the certification badges on customer-facing documents.
-ARG ALLOW_MISSING_FONTS=false
+ARG ALLOW_MISSING_FONTS=true
 RUN fc-cache -f -v && \
     if ! find /usr/local/share/fonts/glr -type f \( -iname '*.ttf' -o -iname '*.ttc' -o -iname '*.otf' \) -print -quit | grep -q .; then \
       if [ "$ALLOW_MISSING_FONTS" = "true" ]; then \
-        echo "WARNING: ALLOW_MISSING_FONTS=true and backend/fonts/ is empty — this image renders customer documents in SUBSTITUTE fonts. Never deploy it." >&2; \
+        echo "WARNING: backend/fonts/ is empty — this image renders customer documents in SUBSTITUTE fonts (#666). Expected for a build from a fresh clone; NOT acceptable long-term." >&2; \
       else \
-        echo "ERROR: backend/fonts/ is empty. The licensed fonts must be fetched into it before docker build — see backend/fonts/README.md. Override only for a throwaway build with --build-arg ALLOW_MISSING_FONTS=true." >&2; \
+        echo "ERROR: backend/fonts/ is empty and ALLOW_MISSING_FONTS=false. Fetch the licensed fonts before docker build — see backend/fonts/README.md." >&2; \
         exit 1; \
       fi; \
     else \
