@@ -76,3 +76,22 @@ services:
         sync: false
       - key: BOT_HOLIDAY_API_TOKEN
         sync: false
+      # Notification email. Exactly the same omission as the BOT tokens above, with the same
+      # symptom: spring.mail.username/password default to BLANK in application.yml, neither was
+      # declared here, and NotificationEmailService#send catches every exception and only logs —
+      # so with mail.smtp.auth=true and no credentials, every notification email failed silently.
+      # Reported by the owner: an OT notification never arrived. The employee row and the whole
+      # app-side path were fine; the credentials were simply never set on this service.
+      #
+      # ⚠️ Gmail will NOT accept an account password here. Create a 16-character App Password
+      # (Google Account → Security → 2-Step Verification → App passwords) and use that as
+      # MAIL_PASSWORD. MAIL_USERNAME doubles as the From address (NotificationEmailService's
+      # fromAddress falls back to spring.mail.username), so it must be a real sendable mailbox.
+      - key: MAIL_HOST
+        sync: false
+      - key: MAIL_PORT
+        sync: false
+      - key: MAIL_USERNAME
+        sync: false
+      - key: MAIL_PASSWORD
+        sync: false

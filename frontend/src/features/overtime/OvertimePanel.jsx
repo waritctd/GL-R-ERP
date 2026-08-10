@@ -959,20 +959,29 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               </span>
               <span data-label="ขั้นอนุมัติ" className="mobile:order-2">
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-                {/* No "รอ" prefix -- the StatusBadge above already says that (รอผู้จัดการ/รอ CEO);
-                    repeating it made this note a superset of the badge's own text, which broke an
-                    e2e locator matching the badge's exact label (review #pending-approver-info). */}
-                {pendingApproverNote ? <small className="text-text-muted">{pendingApproverNote}</small> : null}
-                {/* A1: only print the ผู้จัดการ audit line when this request actually HAS a
-                    manager stage (hasManagerStage mirrors OvertimeService.approve()'s own
-                    routing). On the manager-less route this slot could never fill -- it always
-                    read "-" -- which is exactly the contradiction the owner's screenshot showed:
-                    a badge naming CEO sitting next to an audit line naming a manager who never
-                    existed for this request. */}
-                {hasManagerStage(request) ? (
-                  <small>ผู้จัดการ: {request.managerApprovedAt ? `${request.managerApprovedByName || '-'} · ${formatDateTime(request.managerApprovedAt)}` : '-'}</small>
+                {/* Only when a NAME was resolved. The note used to render the bare role too, which
+                    was right when the badge said a generic "รอผู้จัดการ" for every pending row --
+                    but A1 made the badge role-aware ("รอ CEO"), and the role-only note then just
+                    repeated it. Two independently-correct changes that combined into duplication:
+                    the owner's screenshot showed "รอ CEO" / "CEO" / "CEO: -" stacked, three lines
+                    for one fact. A name is the note's only remaining content -- "CEO (คุณสมชาย)"
+                    tells you who to chase, which the badge cannot. */}
+                {request.pendingApproverName && pendingApproverNote
+                  ? <small className="text-text-muted">{pendingApproverNote}</small>
+                  : null}
+                {/* Audit lines print only once the stage has actually HAPPENED. They previously
+                    rendered "ผู้จัดการ: -" / "CEO: -" while pending, which is a slot for a fact
+                    that does not exist yet -- and the badge already says the stage is outstanding.
+                    (A1 had removed the ผู้จัดการ line on the manager-less route for the related
+                    reason that it could never fill at all; this extends the same rule to "not
+                    filled yet" on both lines.) An APPROVED request still shows both, which is the
+                    case the audit trail exists for. */}
+                {request.managerApprovedAt ? (
+                  <small>ผู้จัดการ: {request.managerApprovedByName || '-'} · {formatDateTime(request.managerApprovedAt)}</small>
                 ) : null}
-                <small>CEO: {request.ceoApprovedAt ? `${request.ceoApprovedByName || '-'} · ${formatDateTime(request.ceoApprovedAt)}` : '-'}</small>
+                {request.ceoApprovedAt ? (
+                  <small>CEO: {request.ceoApprovedByName || '-'} · {formatDateTime(request.ceoApprovedAt)}</small>
+                ) : null}
               </span>
               {/* Approve/reject visually differentiated per DESIGN.md (danger stays
                   outlined, not filled) and step 9 rule 2 — mirrors the exact
