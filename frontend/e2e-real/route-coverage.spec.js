@@ -149,6 +149,18 @@ test.describe('every role can open every route it is allowed to open', () => {
         }
       });
 
+      // Uncaught JS exceptions, attributed the same way. This is deliberately NOT the same check
+      // as the error boundary below: React catches a throw during *render* and shows the fallback,
+      // but a throw from an event handler, an effect's async continuation, or a promise rejection
+      // never reaches a boundary at all. Those leave the page looking fine and silently broken,
+      // which is precisely the failure this sweep could not see before.
+      //
+      // Asserted with no allowlist, because an uncaught exception has no benign form.
+      const pageErrors = [];
+      page.on('pageerror', (error) => {
+        pageErrors.push(`${currentRoute} → ${error.name}: ${error.message}`);
+      });
+
       const crashed = [];
       const misrendered = [];
 
@@ -183,6 +195,7 @@ test.describe('every role can open every route it is allowed to open', () => {
       expect(crashed, `${role}: routes that hit the React error boundary`).toEqual([]);
       expect(misrendered, `${role}: guard disagreed with canAccessPath`).toEqual([]);
       expect(serverErrors, `${role}: 5xx responses while walking the app`).toEqual([]);
+      expect(pageErrors, `${role}: uncaught JS exceptions while walking the app`).toEqual([]);
     });
   }
 });

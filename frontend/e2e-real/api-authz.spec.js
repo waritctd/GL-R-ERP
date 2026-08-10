@@ -51,24 +51,28 @@ const GATES = [
   {
     name: 'GET /api/tickets — the sales deal list',
     path: '/api/tickets',
-    allowed: ['sales', 'sales_manager', 'import', 'ceo'],
+    allowed: ['sales', 'sales_manager', 'import', 'ceo', 'account'],
     // hr and employee are the interesting denials: hr is privileged over the whole HR half of
     // this product and still has no business reading the sales pipeline.
-    denied: ['hr', 'employee'],
+    denied: except('sales', 'sales_manager', 'import', 'ceo', 'account'),
     // TicketService gates on TicketAccessPolicy.VIEWER_ROLES =
-    // {sales, import, ceo, account, sales_manager}. `account` is in that set but has no seeded
-    // persona (see accounts.js) — so this row covers 4 of the 5 viewer roles, not all 5.
+    // {sales, import, ceo, account, sales_manager}. This row now covers all five: `account` got
+    // its seeded persona in V139, and warehouse/qc got theirs at the same time, so the denial
+    // side is derived with except() rather than hand-listed and cannot fall behind a new role.
     source: 'TicketAccessPolicy.VIEWER_ROLES',
   },
   {
     name: 'GET /api/pricing-requests — the pricing-request aggregate',
     path: '/api/pricing-requests',
     allowed: ['sales', 'sales_manager', 'import', 'ceo'],
-    denied: ['hr', 'employee'],
-    // PricingRequestService's viewer set = {sales, import, ceo, sales_manager}. Deliberately
-    // one role narrower than TicketAccessPolicy.VIEWER_ROLES above — `account` reads deals but
-    // not pricing requests — which is why these two rows are listed separately rather than
-    // sharing a role list that happens to look identical from the seeded personas' point of view.
+    denied: except('sales', 'sales_manager', 'import', 'ceo'),
+    // PricingRequestService.VIEWER_ROLES = {sales, import, ceo, sales_manager}. Deliberately one
+    // role narrower than TicketAccessPolicy.VIEWER_ROLES above — `account` reads deals but not
+    // pricing requests. That asymmetry is the reason these two rows exist separately, and until
+    // V139 seeded an `account` persona it was pure prose: both rows looked identical from the
+    // seeded personas' point of view, so nothing tested the one role that tells them apart.
+    // `account` is now in this row's denied set and the previous row's allowed set, which is the
+    // assertion that actually pins the difference.
     source: 'PricingRequestService',
   },
   {

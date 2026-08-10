@@ -50,15 +50,37 @@ export const PERSONAS = {
     employeeCode: 'DEMO-CEO01',
     division: 'MD',
   },
+  // The three below were the suite's long-standing coverage gap, closed by
+  // V139__demo_missing_role_personas_and_hire_dates.sql. Until that seed existed there was no
+  // real login in AC / WH / QC at all, so every sweep here ran six roles wide and said nothing
+  // whatever about these three.
+  account: {
+    // The sharp edge of that gap: `account` is in TicketAccessPolicy.VIEWER_ROLES and is the
+    // only role permitted to confirm a payment, and no automated test had ever driven it.
+    email: 'demo.account@demo.invalid',
+    employeeCode: 'DEMO-ACC01',
+    division: 'AC',
+  },
+  warehouse: {
+    email: 'demo.warehouse@demo.invalid',
+    employeeCode: 'DEMO-WH01',
+    division: 'WH',
+  },
+  qc: {
+    // Division source_code 'QC', not the 'QC&ISO' name — DivisionAccessPolicy compares the
+    // lowercased source_code exactly, so a row coded 'QC&ISO' would resolve to plain employee.
+    email: 'demo.qc@demo.invalid',
+    employeeCode: 'DEMO-QC01',
+    division: 'QC',
+  },
 };
 
 // The roles this suite can actually exercise against a real backend.
 //
-// DELIBERATE GAP — this is 6 roles, while the mock suite's SEEDED_ROLES has 7 and
-// DivisionAccessPolicy.roleFor can return 8. V21 seeds no employee in the AC-ฝ่ายบัญชี,
-// WH-คลังสินค้า or QC&ISO divisions, so there is no real `account`, `warehouse` or `qc`
-// login to drive. Any claim about those three roles' backend authorization is therefore
-// NOT covered here — do not read a green run of this suite as evidence about them.
+// This is now all nine roles DivisionAccessPolicy.roleFor can return, so a green run covers the
+// whole role matrix rather than two thirds of it. If roleFor ever grows a tenth branch, add the
+// persona to V139's pattern and to PERSONAS above — auth.spec.js asserts the backend derives each
+// role from its division, so an unseeded role is a silent hole, not a failing test.
 export const REAL_ROLES = Object.keys(PERSONAS);
 
 export function personaFor(role) {

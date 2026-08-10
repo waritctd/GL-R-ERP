@@ -147,20 +147,18 @@ test.describe('API surface — authenticated sweep', () => {
   // Listing them as an EXACT expectation (not a filter, not a skip) keeps them visible in both
   // directions: a new server error fails the test, and so does fixing one of these without
   // removing its entry. A silent exclusion would let the first quietly become permanent.
-  const KNOWN_SERVER_ERRORS = [
-    {
-      entry: 'priceImport.profile() /api/price-import/profile/999999 → 500',
-      // PriceImportController gates on requireAnyRole(user, "ceo", "import"); everyone else is
-      // refused with 403 before reaching the defect.
-      roles: ['ceo', 'import'],
-      // GET with a real factory id returns 200 and its profile JSON; an unknown id 500s instead
-      // of 404. A missing row is not a server fault — this should be the same "ไม่พบรายการนี้"
-      // 404 the neighbouring endpoints return. Left unfixed here deliberately: this suite is
-      // test-only work, and changing a controller's response status is an API-contract change
-      // that belongs in its own branch (CLAUDE.md, "as a side effect").
-      reason: 'unknown factoryId yields 500 rather than 404',
-    },
-  ];
+  // Empty, and that is the assertion — every entry this list once held has been fixed.
+  //
+  // It previously carried `priceImport.profile() /api/price-import/profile/999999 → 500`, reachable
+  // only by ceo and import (PriceImportController gates on requireAnyRole(user, "ceo", "import"),
+  // so every other role was refused 403 before the defect). PriceImportService#getRawProfile now
+  // catches EmptyResultDataAccessException and raises a 404, matching the idiom #loadProfile in the
+  // same class already used for the identical query.
+  //
+  // Keep this as an exact expectation rather than deleting the machinery: the value is symmetric.
+  // A new server error fails the test, and so does fixing one without removing its entry. Add a row
+  // here only with the same detail — which roles reach it, and why it is not simply fixed.
+  const KNOWN_SERVER_ERRORS = [];
 
   for (const role of REAL_ROLES) {
     test(`${role} — no readable endpoint answers with a server error`, async () => {
