@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AttendancePage, PunchDetail, punchRole } from './AttendancePage.jsx';
 import { api } from '../../api/index.js';
 import { useToast } from '../../hooks/useToast.js';
@@ -351,5 +351,82 @@ describe('AttendancePage attendance-correction button and section', () => {
     await waitFor(() => expect(api.attendance.daily).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole('button', { name: 'ขอแก้ไขเวลา' })).toBeNull();
     expect(screen.queryByRole('heading', { name: /คำขอแก้ไขเวลาเข้า-ออกงาน/ })).toBeNull();
+  });
+});
+
+// The company view's day table pages at 50, which is fine on a desk and is 7.6 SCREENS on a phone:
+// at <=720px every row reflows into a card via `mobileCard`, so 50 people is ~4,500px of scrolling.
+// Measured for HR and CEO against the 91-employee UAT roster, that made /attendance more than twice
+// as long as any other self-service page.
+//
+// jsdom cannot see any of that — it has no layout — so these tests assert the thing that CAUSES it
+// and that jsdom CAN see: how many of the supplied rows the table actually puts on a page. The
+// pagination summary is the observable, and the two viewports have to disagree, or the test would
+// pass with the page size hardcoded back to a single number.
+describe('AttendancePage day-table page size', () => {
+  function mockViewport(isMobile) {
+    window.matchMedia = vi.fn().mockReturnValue({
+      matches: isMobile,
+      media: '(max-width: 720px)',
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    });
+  }
+
+  // 25 rows is deliberately BETWEEN the two page sizes: at 20 the table has to paginate and at 50
+  // it must not, so the same fixture distinguishes them. A fixture under 20 (or over 50) would
+  // render identically either way and assert nothing.
+  const days = Array.from({ length: 25 }, (_, index) => ({
+    employee_id: index + 1,
+    work_date: '2026-08-01',
+    employee_name: `พนักงาน ${index + 1}`,
+    employee_code: `GLR-${String(index + 1).padStart(3, '0')}`,
+    check_in: '2026-08-01T08:00:00+07:00',
+    check_out: '2026-08-01T17:00:00+07:00',
+    total_minutes: 480,
+    status: 'ON_TIME',
+    punch_count: 2,
+  }));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.attendance.daily.mockResolvedValue({ days });
+    api.attendance.employees.mockResolvedValue({ employees: [] });
+    api.attendance.devices.mockResolvedValue({ devices: [] });
+    api.attendance.unmapped.mockResolvedValue({ badges: [] });
+    api.attendanceCorrection.list.mockResolvedValue({ requests: [] });
+  });
+
+  afterEach(() => {
+    delete window.matchMedia;
+  });
+
+  it('pages the company view at 20 on a phone', async () => {
+    mockViewport(true);
+    const { container } = renderWithClient(<AttendancePage user={hrUser} showToast={vi.fn()} />);
+
+    await waitFor(() => expect(container.textContent).toMatch(/แสดง 1–20 จาก 25 รายการ/));
+    // …and the other 5 are still reachable, which is the whole justification for shrinking the
+    // page rather than truncating it.
+    expect(container.textContent).toMatch(/หน้า 1 \/ 2/);
+  });
+
+  it('keeps the company view at 50 on a desktop', async () => {
+    mockViewport(false);
+    const { container } = renderWithClient(<AttendancePage user={hrUser} showToast={vi.fn()} />);
+
+    await waitFor(() => expect(container.textContent).toMatch(/แสดง 1–25 จาก 25 รายการ/));
+    expect(container.textContent).toMatch(/หน้า 1 \/ 1/);
+  });
+
+  // The self view is one person's calendar month, not 91 people, and is ~1.6 screens at 390px
+  // already. It stays at 31 so you can scroll your own month end to end without paging — the
+  // phone-sized page must NOT be applied to it.
+  it('leaves the self view unpaginated on a phone', async () => {
+    mockViewport(true);
+    const { container } = renderWithClient(<AttendancePage user={selfViewUser} showToast={vi.fn()} />);
+
+    await waitFor(() => expect(container.textContent).toMatch(/แสดง 1–25 จาก 25 รายการ/));
+    expect(container.textContent).toMatch(/หน้า 1 \/ 1/);
   });
 });

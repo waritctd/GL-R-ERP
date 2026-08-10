@@ -744,3 +744,71 @@ describe('OvertimePanel section order follows the role', () => {
     expect(orderOf(searchButton, form)).toBe(true);
   });
 });
+
+// The panel arranges itself around `canSubmitForTeam`, which is derived from the employees query —
+// so the very first render always says "false" and a manager/HR briefly gets the EMPLOYEE layout.
+// When the data lands, the stats/filter block jumps from the bottom of the page to the top and
+// shoves the holidays panel and the submit form down.
+//
+// Measured in a real browser at 390px against the UAT roster: CLS 0.434 for HR and for a division
+// manager, in a single shift ~139ms in, against a 0.1 "good" threshold. A plain employee measured
+// 0.000, because their initial guess happens to be correct — which is exactly why testing as an
+// employee never showed it.
+//
+// jsdom has no layout and cannot measure CLS, so these assert the cause instead: nothing
+// order-dependent may render until the answer is known. Deferring only the stats block would not
+// have fixed it (dropping it in at the top later still pushes everything below it down), so the
+// assertion is that the FORM is absent too, not just the stats.
+describe('OvertimePanel does not render a layout it is about to rearrange', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.overtime.list.mockResolvedValue({ requests: [] });
+    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [] } });
+  });
+
+  it('shows a loading state instead of guessing an order, while the roster is in flight', async () => {
+    let releaseRoster;
+    api.overtime.employees.mockReturnValue(new Promise((resolve) => { releaseRoster = resolve; }));
+
+    renderOvertimePage();
+
+    // Pending: neither layout. Not just "the stats block is absent" — the submit form, the thing
+    // the reorder MOVES, must be absent too.
+    // The panel's own placeholder, deliberately worded apart from the request table's
+    // "กำลังโหลดคำขอ OT" EmptyState — asserting on that shared string would match either element
+    // and could not tell "no layout chosen yet" from "the list is still loading".
+    expect(await screen.findByText('กำลังเตรียมหน้าคำขอ OT')).not.toBeNull();
+    expect(screen.queryByRole('heading', { name: 'ยื่นคำขอ OT' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /ส่งคำขอ/ })).toBeNull();
+    // The subtitle names the role as well ("…แทนทีม" vs "…ประวัติของคุณ"), so it is held back too
+    // rather than guessed and corrected.
+    expect(screen.queryByText(/ยื่นคำขอแทนทีม/)).toBeNull();
+    expect(screen.queryByText(/ประวัติของคุณ/)).toBeNull();
+
+    releaseRoster({
+      employees: [{
+        employeeId: 1,
+        employeeName: 'พนักงาน ทดสอบ',
+        employeeCode: 'GLR-001',
+        self: true,
+        directReport: false,
+      }],
+    });
+
+    // Settled: the real panel arrives, in one piece.
+    expect(await screen.findByRole('heading', { name: 'ยื่นคำขอ OT' })).not.toBeNull();
+    expect(screen.queryByText('กำลังเตรียมหน้าคำขอ OT')).toBeNull();
+  });
+
+  // A failed roster fetch must not strand the panel on the skeleton forever. `isPending` goes
+  // false on an error too, which resolves to the employee layout — the right degradation, since
+  // an empty roster is exactly "no direct reports".
+  it('falls through to the employee layout when the roster fetch fails', async () => {
+    api.overtime.employees.mockRejectedValue(new Error('boom'));
+
+    renderOvertimePage();
+
+    expect(await screen.findByRole('heading', { name: 'ยื่นคำขอ OT' })).not.toBeNull();
+    expect(screen.queryByText('กำลังเตรียมหน้าคำขอ OT')).toBeNull();
+  });
+});
