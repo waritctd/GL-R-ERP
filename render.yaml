@@ -3,6 +3,25 @@
 # The service name is pinned so the public URL is deterministic:
 #   https://gl-r-erp.onrender.com
 # which is what the Vercel frontend proxies /api to (see frontend/vercel.json).
+#
+# ── BUILDS FROM SOURCE. THE FONT CAVEAT IS REAL AND UNRESOLVED (#666) ────────────────────
+# #670 switched this service to `runtime: image` so the licensed Thai fonts could be baked in
+# where they exist. Reverted here under a UAT phase-1 deadline: the image URL was a placeholder,
+# so every deploy would have failed, and building+pushing an image needs Docker and the licensed
+# font files. Deployability today beat font fidelity today — an explicit owner call, not a
+# retraction of the finding.
+#
+# WHAT THAT MEANS, PLAINLY: `backend/fonts/` is always empty in a fresh clone, so this service
+# renders customer-facing quotations and deposit notices in SUBSTITUTE fonts — wider glyphs,
+# header text overflowing the certification badges. That is the status quo of the last several
+# months, not a regression introduced here.
+#
+# The build no longer fails on an empty fonts/ (see backend/Dockerfile) so this path works, but
+# the substitution guard added by #670 is kept: if fonts ARE supplied and fontconfig substitutes
+# one anyway, the build still fails loudly.
+#
+# To finish #666 properly, restore `runtime: image` with a real image.url and use
+# scripts/build-push-backend-image.sh, which is left in place and working.
 services:
   - type: web
     name: gl-r-erp
