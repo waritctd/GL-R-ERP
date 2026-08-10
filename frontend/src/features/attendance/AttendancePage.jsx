@@ -13,6 +13,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { useIsMobile } from '../../hooks/useIsMobile.js';
 import {
   addDaysIso,
   attendanceFlagLabels,
@@ -70,6 +71,27 @@ function monthBounds() {
 export function AttendancePage({ user, showToast }) {
   const mode = attendanceMode(user);
   const isSelfView = mode === 'employee';
+  // Same 720px boundary as the `mobile:` variant. `useMediaQuery` seeds its first value from
+  // `matchMedia` synchronously rather than starting false and correcting, so switching a page
+  // size on it costs no layout shift.
+  const isMobile = useIsMobile();
+
+  // 50 rows is a fine desk view and a bad phone one. At <=720px every row reflows into a card via
+  // the day table's `mobileCard`, so the company view came to ~90px per person: measured for HR
+  // and CEO against the 91-employee UAT roster, /attendance ran 7.6 SCREENS at 390px — more than
+  // twice any other self-service page, and ~3x its own length at 1440px. 20 brings that to ~2.5
+  // screens, and is DataTable's own default rather than a number invented here.
+  //
+  // Company view only. The self view stays at 31: one calendar month, deliberately unpaginated so
+  // you can scroll your own attendance end to end, and already only ~1.6 screens because one
+  // person's month is 31 rows rather than 91 people.
+  //
+  // This is a CLIENT-SIDE page size, not a request limit. DataTable paginates rows it has already
+  // been handed, so neither which rows are fetched nor their order changes here — the distinction
+  // that matters, because a limit applied under a different sort truncates a different set of
+  // rows (#434). Reachability is unaffected too: the pagination controls and the search box (the
+  // way you actually find one person among 91) both stay.
+  const dayTablePageSize = isSelfView ? 31 : (isMobile ? 20 : 50);
   const canImport = hasPermission(user.role, 'canImportAttendance');
   const canSeeUnmapped = hasPermission(user.role, 'canViewAllAttendance');
   // CEO's 08:30 stand-up / WFH roster. Same audience as canViewAllAttendance (hr/ceo), so this is
@@ -778,7 +800,7 @@ export function AttendancePage({ user, showToast }) {
             onToggle={() => toggleExpanded(day)}
           />
         )}
-        pageSize={isSelfView ? 31 : 50}
+        pageSize={dayTablePageSize}
         searchable={!isSelfView}
         searchPlaceholder="ค้นหาพนักงาน / รหัส / ชื่อเล่น"
         loading={loading}

@@ -13,6 +13,7 @@ import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { FilterField, formGridSpan2, Panel, PageStack, RowActions } from '../../components/common/Layout.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
+import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { UpcomingHolidays } from '../../components/common/UpcomingHolidays.jsx';
 import {
@@ -618,6 +619,53 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
       </SafeForm>
     </>
   );
+
+  // Hold the whole ordered body until we know WHICH order it is.
+  //
+  // Everything below arranges itself around `canSubmitForTeam`, which is derived from
+  // employeesQuery — so on the first render it is always `false`, and a manager/HR gets the
+  // employee layout for as long as that request takes. When the data lands, `historyControls`
+  // jumps from the bottom slot to the top one and shoves the holidays panel and the submit form
+  // down the page.
+  //
+  // Measured on a real backend at 390px: CLS 0.434 for HR and for a division manager, in a single
+  // shift ~139ms in, against a 0.1 "good" threshold. A plain employee measured 0.000 — their
+  // initial guess happens to be the right one, which is exactly why this never showed up in
+  // testing done as an employee.
+  //
+  // Deferring only `historyControls` would not fix it: dropping it into the top slot later still
+  // pushes everything beneath it down. The shift is the reorder itself, so the only thing that
+  // removes it is not rendering a layout we are about to rearrange.
+  //
+  // `isPending` is false the moment the query settles either way — an error leaves
+  // `employeeOptions` empty, which resolves to the employee layout and is the right degradation
+  // (the error toast above already fired). On a revisit the cache is warm, so this branch is
+  // skipped entirely and there is no skeleton at all.
+  if (employeesQuery.isPending) {
+    return (
+      <PageStack>
+        <div className="flex items-center justify-between gap-3">
+          {/* The subtitle names the role too ("ยื่นคำขอแทนทีม…" vs "…ประวัติของคุณ"), so it is
+              held back with the rest rather than guessed and corrected. The row keeps its height
+              from the button, not the text, so nothing moves when the copy arrives. */}
+          <p className="m-0 text-sm text-text-muted" />
+          <Button type="button" variant="secondary" disabled>
+            <Icon name="refresh" />
+            รีเฟรช
+          </Button>
+        </div>
+        {/* "กำลังเตรียม…", not "กำลังโหลดคำขอ OT" — that exact string is already the request
+            table's own loading EmptyState further down, and the two mean different things: this
+            one is "we don't know what to show you yet", that one is "the list is on its way". They
+            are also briefly both live, since the table starts loading the moment this clears. */}
+        <div role="status" aria-live="polite" aria-busy="true" className="grid gap-[18px]">
+          <span className="sr-only">กำลังเตรียมหน้าคำขอ OT</span>
+          <Skeleton height={132} />
+          <Skeleton height={220} />
+        </div>
+      </PageStack>
+    );
+  }
 
   return (
     <PageStack>
