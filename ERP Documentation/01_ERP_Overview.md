@@ -162,6 +162,7 @@ Honest status of every headline feature from the original proposals:
 | [10_Troubleshooting_Guide](10_Troubleshooting_Guide.md) | Support | Known failure modes & fixes |
 | [11_UAT_Test_Cases](11_UAT_Test_Cases.md) | QA / business testers | Acceptance test cases |
 | [12_Change_Log](12_Change_Log.md) | All | Release history by wave |
+| [13_Pre_UAT_Checklist](13_Pre_UAT_Checklist.md) | Owner / QA | Go/no-go gate that must pass **before** UAT starts |
 
 ---
 

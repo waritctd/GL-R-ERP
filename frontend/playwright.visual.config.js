@@ -15,24 +15,36 @@ import { defineConfig, devices } from '@playwright/test';
 // spins its own dedicated mock instance on a free port (reuseExistingServer:
 // false — never silently reuses a non-mock server on another port).
 //
-// ── THIS CONFIG RUNS IN CI, AS A REQUIRED CHECK ──────────────────────────────
+// ── THIS CONFIG NO LONGER RUNS IN CI ─────────────────────────────────────────
 // #616 wired it up as `.github/workflows/visual-ci.yml` and #617 made that job
-// required, with no `paths:` filter. Read that workflow's header before changing
-// anything here — especially before concluding the job should not exist.
+// required. **#637 (2026-08-10) retired it** — owner decision — and that
+// workflow file is deleted. The `visual` context was removed from main's
+// required checks BEFORE the workflow was deleted, deliberately: dropping the
+// workflow while the context stayed required would leave every future PR
+// waiting forever on a check that never reports.
 //
-// It used to say the opposite, and the reasoning is worth keeping straight: PR
-// #592 did delete the old mock e2e suite and its e2e-ci.yml to get to "one e2e
-// job per PR instead of two" (owner ruling). Reinstating a second e2e-shaped job
-// was then a later, explicit owner decision, taken on the evidence of four
-// CSS-port regressions that `npm run lint`, `npm test` and `npm run build` all
-// passed — jsdom has no layout engine, so nothing else could catch them. The two
-// jobs answer different questions: e2e-real asks "does the real backend still
-// honour this?", this one asks "did the pixels move?".
+// Why it went: the gate compares at maxDiffPixelRatio 0 against the merge base,
+// which is right for a CSS port (which must change nothing) and wrong for a
+// deliberate redesign. The self-service responsive overhaul changes pixels on
+// every surface at every band on purpose, so the gate would need an
+// accepted-changes entry per surface per viewport — at which point the accept
+// mechanism is a rubber stamp, which trains reviewers worse than no gate.
 //
-// Still opt-in LOCALLY: the spec is skipped unless VISUAL_BASELINE=1, so a bare
-// `npm test` / `npx playwright test` never picks it up. Run it by hand with
-// `npm run test:visual`, or directly — see the spec header for the
-// capture-baseline-then-diff sequence and its same-day rule.
+// The harness is deliberately NOT deleted, and still works. Run it by hand:
+//
+//   cd frontend && VISUAL_BASELINE=1 npm run test:visual
+//
+// What is now unguarded, so nothing catches it automatically: the four CSS-port
+// failure modes the deleted workflow documented (a ported rule gaining priority,
+// an element losing a rule it still needs, a deleted rule whose replacement is
+// never applied, a merge reuniting new markup with a deleted class). `lint`,
+// `test` and `build` were green for every one of them — jsdom has no layout
+// engine. The workflow is in git history if it should come back once the
+// redesign settles.
+//
+// Still opt-in locally too: the spec is skipped unless VISUAL_BASELINE=1, so a
+// bare `npm test` / `npx playwright test` never picks it up. See the spec header
+// for the capture-baseline-then-diff sequence and its same-day rule.
 export default defineConfig({
   testDir: './e2e-visual',
   // Playwright's DEFAULT testMatch is `**/*.@(spec|test).?(c|m)[jt]s?(x)` — it claims

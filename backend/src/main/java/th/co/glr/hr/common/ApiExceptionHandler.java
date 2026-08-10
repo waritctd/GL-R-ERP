@@ -2,16 +2,19 @@ package th.co.glr.hr.common;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.AuthenticationCredentialsNotFoundException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -75,6 +78,30 @@ public class ApiExceptionHandler {
         return ResponseEntity
             .status(HttpStatus.NOT_FOUND)
             .body(new ErrorResponse("ไม่พบรายการนี้", HttpStatus.NOT_FOUND.value()));
+    }
+
+    // A known verb on a known path, but the wrong one — GET on a POST-only endpoint, say.
+    //
+    // Without this handler the exception falls through to handleUnexpected and the client is told
+    // 500 "เกิดข้อผิดพลาดภายในระบบ", which says the server broke when in fact the request was
+    // malformed. That mattered beyond politeness: the real-stack sweep in
+    // frontend/e2e-real/api-surface.spec.js exists to find endpoints that answer a server error,
+    // and this one defect made ~130 endpoints report one. Its `surface.js` had to read each
+    // endpoint's real verb out of hrApi.js purely to avoid asking the wrong question and burying
+    // the single genuine finding underneath the noise.
+    //
+    // RFC 9110 §15.5.6 requires an Allow header on a 405; Spring populates
+    // getSupportedHttpMethods() from the handler mapping, but it is nullable when no candidate
+    // handler was resolved, so it is only set when actually present.
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    ResponseEntity<ErrorResponse> handleMethodNotSupported(HttpRequestMethodNotSupportedException exception) {
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED);
+        Set<HttpMethod> supported = exception.getSupportedHttpMethods();
+        if (supported != null && !supported.isEmpty()) {
+            response.allow(supported.toArray(new HttpMethod[0]));
+        }
+        return response.body(
+            new ErrorResponse("เมธอดนี้ไม่รองรับสำหรับรายการนี้", HttpStatus.METHOD_NOT_ALLOWED.value()));
     }
 
     @ExceptionHandler(DataAccessException.class)

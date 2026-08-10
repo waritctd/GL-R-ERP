@@ -67,7 +67,7 @@ Two of these files go deep on a few things; two go wide over everything.
 
 **Depth — hand-verified behaviour:**
 
-- **`auth.spec.js`** — real credential login for all six seeded personas, the backend deriving
+- **`auth.spec.js`** — real credential login for all nine seeded personas, the backend deriving
   each role from its division, session survival across a hard reload, server-side session
   invalidation on logout, and 401 for anonymous callers. Also pins the mock/real divergence:
   `POST /api/auth/login {role}` is refused with 403 by the real `AuthService`.
@@ -97,9 +97,10 @@ Two of these files go deep on a few things; two go wide over everything.
   approval leaves the request's status untouched (a 403 that still mutated would look safe and
   not be). Plus the CSRF control, which is only reachable on an authenticated write.
 - **`write-authz.spec.js`** — every resource-scoped write endpoint (98, across
-  POST/PUT/PATCH/DELETE) × every role = 588 requests, asserting that **no role ever gets a 2xx
-  from a write against a resource that does not exist**. A 2xx there would mean an endpoint
-  mutating or creating without an existence check.
+  POST/PUT/PATCH/DELETE) × every role, asserting that **no role ever gets a 2xx from a write
+  against a resource that does not exist**. A 2xx there would mean an endpoint mutating or
+  creating without an existence check. The role list is `REAL_ROLES`, so the sweep widened from
+  588 requests to 882 when V139 took the seeded personas from six to nine.
 - **`write-overtime-holiday.spec.js`** — `day_type`/`pay_rate_multiplier` are derived exclusively
   from `hr.holiday` (`OvertimeService#deriveDayType`), never from the client's
   `SubmitOvertimeRequest.dayType` claim, which is validated but never trusted for pay
@@ -126,7 +127,7 @@ There is no per-test database reset, and the specs are built so none is needed:
   for a reason unrelated to the code under test;
 - the breadth sweep only touches **resource-scoped** writes against a placeholder id. Collection
   writes (`POST /api/employees`, `POST /api/overtime`) are excluded precisely because those *can*
-  create something — sweeping them across six roles would mean writing rows into a shared
+  create something — sweeping them across every role would mean writing rows into a shared
   database to discover who is allowed to write rows. The measured result of the sweep is
   **0 × 2xx**, which is both the assertion and the evidence that it mutated nothing.
 
@@ -157,18 +158,18 @@ into a second mock run.
 
 ### Backend behaviour this suite surfaced
 
-Things the sweeps found on the real backend. None is fixed here — this branch is test-only, and
-changing a controller's response status is an API-contract change that belongs in its own branch
-(`CLAUDE.md`, "as a side effect"). All are recorded so they stay visible.
+Things the sweeps found on the real backend. Two were response-status defects and are now fixed
+(deliberate, stated API-contract changes rather than side effects of test work); the rest are
+behaviour worth knowing. All stay recorded so they remain visible.
 
-- **`PriceImportController` has no missing-resource handling, on any verb.** An unknown id yields
-  500 rather than 404 for `GET /api/price-import/profile/{factoryId}`, `POST
-  /api/price-import/validate/{id}` and `POST /api/price-import/commit/{id}` alike — a real id
-  returns 200, so it is specifically the missing-row path. Recorded as **exact** expectations
-  (`KNOWN_SERVER_ERRORS` in `api-surface.spec.js` for the read, `write-authz.spec.js` for the
-  writes), not skips: a new server error fails the sweep, and so does fixing one of these without
-  deleting its entry. Only `import` and `ceo` reach the defect — every other role is refused 403
-  before the lookup, which means it is invisible to five of the six roles.
+- **`PriceImportController` had no missing-resource handling, on any verb — now fixed.** An
+  unknown id yielded 500 rather than 404 for `GET /api/price-import/profile/{factoryId}`, `POST
+  /api/price-import/validate/{id}` and `POST /api/price-import/commit/{id}` alike, while a real id
+  returned 200 — specifically the missing-row path. Both `KNOWN_SERVER_ERRORS` lists are now
+  **empty**, which is the assertion rather than the absence of one: `PriceImportService`'s
+  `#getRawProfile` and `#requireDraft` catch `EmptyResultDataAccessException` and raise 404, the
+  idiom `#loadProfile` in the same class already used. Only `import` and `ceo` ever reached the
+  defect — every other role is refused 403 before the lookup, which is why it survived so long.
 - **CSRF is enforced by the app, not by Spring.** `SecurityConfig` calls
   `.csrf(AbstractHttpConfigurer::disable)`, but `CsrfCookieFilter` (`@Order(0)`) implements the
   OWASP double-submit pattern by hand — an authenticated write without an `X-XSRF-TOKEN` header
@@ -176,34 +177,47 @@ changing a controller's response status is an API-contract change that belongs i
   Security's chain runs at order −100 and rejects an *anonymous* write with 401 first, so CSRF is
   only reachable once authenticated. `helpers/api.js` handles the header; `write-overtime.spec.js`
   asserts the control is live rather than merely configured.
-- **A wrong HTTP verb returns 500, not 405.** `GET` on a POST-only endpoint produces
-  `{"message":"เกิดข้อผิดพลาดภายในระบบ","status":500}` — an unhandled
-  `HttpRequestMethodNotSupportedException` reaching the generic error handler. This is why
-  `surface.js` reads each endpoint's real verb out of `hrApi.js` instead of GETting everything:
-  without that, ~130 endpoints would report a "server error" that is purely an artefact of asking
-  the wrong question, and would bury the one real finding above.
+- **A wrong HTTP verb returned 500, not 405 — now fixed.** `GET` on a POST-only endpoint produced
+  `{"message":"เกิดข้อผิดพลาดภายในระบบ","status":500}`, an unhandled
+  `HttpRequestMethodNotSupportedException` reaching the generic handler.
+  `ApiExceptionHandler#handleMethodNotSupported` now answers 405 with an `Allow` header
+  (RFC 9110 §15.5.6). `surface.js` still reads each endpoint's real verb out of `hrApi.js`, and
+  should keep doing so — asking the right question is what keeps the sweep's output meaningful,
+  and ~130 endpoints reporting a well-formed 405 would be just as much noise as 500s were.
 
 ### Not covered — read this before citing a green run
 
-- **Three of the eight roles have no seeded persona.** `V21__demo_seed_accounts.sql` creates no
-  employee in the AC-ฝ่ายบัญชี, WH-คลังสินค้า or QC&ISO divisions, so `account`, `warehouse` and
-  `qc` are **untested here**. `account` in particular is a real gap: it is in
-  `TicketAccessPolicy.VIEWER_ROLES` and is the only role permitted to confirm payments.
 - **Overtime is the only business workflow driven end to end.** Every other multi-step flow —
-  leave, a pricing request, a deposit confirmation, closing a deal — is still exercised only by
-  the mock suite, against `mockApi.js`.
-- **Leave was attempted and deliberately left out**, because the demo seed cannot produce a
-  reviewable leave request. Measured against `demo.sales`: `LEAVE_WITHOUT_PAY`, `MATERNITY` and
-  `MILITARY` all land straight in `APPROVED` with no review stage; `ORDINATION` lands in
-  `AUTO_REJECTED` (`HIRE_DATE_MISSING_MIN_SERVICE` — the demo employees carry no hire date);
-  `SICK` requires an attachment; `PERSONAL` and `VACATION` have zero quota. So there is nothing
-  in a `SUBMITTED` state for HR to review, and the leave review path cannot be reached at all
-  from this seed.
+  leave, a pricing request, a deposit confirmation, closing a deal — has no end-to-end coverage
+  anywhere since the mock suite was removed.
+- **Leave's successful approve transition is still not driven, and the reason is the service, not
+  the seed.** This entry used to blame the demo seed alone. Two things were in the way and only one
+  of them was seed-shaped:
 
-  That is worth knowing on its own: it means **HR's leave-review authorization is untested**,
-  and it is the interesting counterpart to #199 — `LeaveService.REVIEW_ALL_ROLES` is `{hr}`, so
-  HR *can* review leave while being refused overtime. Testing that asymmetry needs seed data the
-  demo migration does not currently provide.
+  1. *The seed, now fixed.* Every demo employee had `hire_date IS NULL`, and
+     `LeaveService#employeeAnnualQuota` returns ZERO when `findHireDate` is empty, so `VACATION`
+     (6.00) and `PERSONAL` (3.00) prorated to nothing and failed closed on quota, while
+     `#autoRejectNote` failed `ORDINATION` with `HIRE_DATE_MISSING_MIN_SERVICE`.
+     `V139__demo_missing_role_personas_and_hire_dates.sql` backfills a hire date three years back,
+     past `FULL_SERVICE_MONTHS`, and `write-leave-review.spec.js` guards that.
+  2. *The service, which no seed can work around.* **`LeaveService#submit` never produces a
+     `SUBMITTED` request.** It reads
+     `LeaveStatus status = systemNote == null ? APPROVED : AUTO_REJECTED` — a submission is decided
+     on the spot, so there is no pending state to review. Fixing the hire date moved `VACATION`
+     from `AUTO_REJECTED` to `APPROVED`; it did not, and could not, create anything reviewable.
+
+  The only `SUBMITTED` row in the database is the single one `V21` seeds for `DEMO-EMP01`, and it
+  is consumable — approving it once leaves every later run with nothing. So `write-leave-review.spec.js`
+  asserts the review gate in the two directions that mutate nothing: the **refusals** (`ceo`,
+  `import`, `sales` are each 403 on approve *and* reject, with the row re-read afterwards to prove
+  it was untouched), and HR's **capability** via the `canReview` flag — which
+  `#withCanReviewFlag`'s Javadoc states is computed from the same decision `#approve`/`#reject`
+  gate on, not a role check. That pins the counterpart to #199: HR reviews leave while
+  `OvertimeService` refuses HR outright.
+
+  **What is still missing is the successful `SUBMITTED → APPROVED` transition.** Driving it needs
+  either a reviewable row the API cannot create or a per-test database reset this suite does not
+  have.
 - **"Every route loads" is not "every route works".** `route-coverage.spec.js` asserts each page
   renders without hitting the error boundary and without a 5xx behind it. It does not assert the
   page shows the *right* thing; `smoke.spec.js` does that for two screens only.
