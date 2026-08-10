@@ -1380,24 +1380,6 @@ function snapshotPricingRequestCatalogSelections(pr) {
   }
 }
 
-// Mirrors PricingRequestService.submit's Finding A gate (financial-integrity review, commit
-// 3): the catalog is now MANDATORY — every item must have a fully-resolved catalog snapshot
-// (run snapshotPricingRequestCatalogSelections first) or submit() 422s naming every failing
-// 1-based line number in one message, same "รายการที่ N" style as the identity check above.
-function submitPricingRequestCatalogGate(pr) {
-  const missingLines = [];
-  pr.items.forEach((item, index) => {
-    if (item.catalogPriceId == null || item.priceListVersionId == null
-        || item.catalogBasePrice == null || item.catalogCurrency == null
-        || item.resolvedFactoryId == null || item.resolvedFactoryName == null) {
-      missingLines.push(index + 1);
-    }
-  });
-  if (missingLines.length > 0) {
-    fail(`รายการที่ ${missingLines.join(', ')}: ต้องเลือกสินค้าจาก Price Catalog ที่ active ก่อนส่งคำขอราคา (ไม่พบข้อมูลราคา/โรงงานจาก catalog)`, 422);
-  }
-}
-
 // Mirrors PricingCostingService.requireFactor/missingFactor (financial-integrity review
 // Finding B): 422 naming both the item and the missing conversion factor, rather than letting
 // a null factor silently propagate into a wrong number (or a NaN).
@@ -9126,11 +9108,12 @@ export const api = {
       // create()/update() time — a draft saved before this rule existed (or
       // one whose items were never touched again) must still be blocked here.
       requirePricingRequestItemFieldsValid(pr.items);
-      // Finding A (financial-integrity review, commit 3): snapshot the catalog selection for
-      // every catalog-backed item, then reject the submit unless EVERY item resolved — mirrors
-      // PricingRequestService.submit calling snapshotCatalogSelections then re-checking.
+      // Snapshot the catalog selection for every catalog-backed item — mirrors
+      // PricingRequestService.submit calling snapshotCatalogSelections. The "Finding A" gate that
+      // used to follow this (reject unless EVERY item resolved) was removed on 2026-08-11 with
+      // its Java counterpart: an item naming a product that is not in the catalogue yet is now a
+      // valid submit, and just carries a null snapshot through to Import.
       snapshotPricingRequestCatalogSelections(pr);
-      submitPricingRequestCatalogGate(pr);
       const seenSourceItemIds = new Set();
       for (const item of pr.items) {
         if (item.sourceTicketItemId != null) {

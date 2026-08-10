@@ -11,9 +11,28 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
 import {
   canCancelPricingRequest, canCreatePricingRequest, canRequestInformation, canRespondInformation,
-  canSubmitPricingRequest, canUpdatePricingRequest, pricingRequestRecipientLabel, quantityTypeLabel,
+  canSubmitPricingRequest, canUpdatePricingRequest, pricingRequestRecipientLabel,
 } from './pricingRequestMeta.js';
 import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
+
+/**
+ * Every action in this panel is a react-query mutation whose failure used to go NOWHERE: none of
+ * submit/cancel/respond/requestInformation had an onError or rendered `.error`, so a rejected call
+ * left the button looking like it simply did nothing, with the reason visible only in the browser
+ * console. That is how a real backend 422 ("ต้องเลือกสินค้าจาก Price Catalog…") reached a UAT user
+ * as silence. The service already returns a Thai, user-facing message for every one of these
+ * failures, so showing it is all that was missing.
+ */
+function MutationError({ mutation, match }) {
+  // One mutation instance serves every row, so `variables` is what says WHICH row the in-flight
+  // call belonged to — without this check a failure would print under all of them at once.
+  if (!mutation.isError || (match !== undefined && !match)) return null;
+  return (
+    <p role="alert" className="basis-full text-2xs font-bold text-danger-dark">
+      {mutation.error?.message || 'ทำรายการไม่สำเร็จ'}
+    </p>
+  );
+}
 
 // Mirrors PricingRequestEventKind — labels for this request's own event log
 // (rendered here, per-request, NOT merged into the deal's main timeline).
@@ -187,6 +206,10 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                         ยกเลิก
                       </Button>
                     ) : null}
+                    {/* Cancel/respond/requestInformation each render their own error inside the
+                        modal that stays open on failure; submit is the only action fired straight
+                        from this row, so it is the only one that reports here. */}
+                    <MutationError mutation={submitMutation} match={submitMutation.variables === pr.id} />
                   </div>
                 ) : null}
 
@@ -208,10 +231,6 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                                 ) : null}
                                 <span className="text-text-muted">{[item.color, item.texture, item.size].filter(Boolean).join(' · ')}</span>
                                 <span className="text-text-muted">{item.requestedQty} {item.requestedUnit}</span>
-                                <StatusBadge tone="neutral">{quantityTypeLabel(item.quantityType)}</StatusBadge>
-                                {item.targetDeliveryDate ? (
-                                  <span className="text-text-muted">ส่งมอบ {formatThaiDate(item.targetDeliveryDate)}</span>
-                                ) : null}
                               </div>
                             );
                           })}
@@ -295,6 +314,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
               onChange={(e) => setRespondDraft((d) => ({ ...d, response: e.target.value }))}
             />
           </label>
+          <MutationError mutation={respondMutation} />
         </Modal>
       ) : null}
 
@@ -337,6 +357,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                 onChange={(e) => setRequestInfoDraft((d) => ({ ...d, dueDate: e.target.value }))}
               />
             </label>
+            <MutationError mutation={requestInfoMutation} />
           </div>
         </Modal>
       ) : null}
@@ -367,6 +388,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
               onChange={(e) => setCancelDraft((d) => ({ ...d, reason: e.target.value }))}
             />
           </label>
+          <MutationError mutation={cancelMutation} />
         </Modal>
       ) : null}
     </Panel>
