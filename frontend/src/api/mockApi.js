@@ -743,14 +743,9 @@ let mockPricingDecisionItemSeq = 1;
 const mockCustomerQuotations = [];
 let mockCustomerQuotationSeq = 1;
 let mockCustomerQuotationItemSeq = 1;
-// Step 7: Factory Purchase Order and Import Execution (sales.factory_purchase_order /
-// factory_purchase_order_item). Mirrors ProcurementRepository/ProcurementService.
-const mockFactoryPurchaseOrders = [];
-let mockFactoryPurchaseOrderSeq = 1;
-let mockFactoryPurchaseOrderItemSeq = 1;
 
 // Sales/CRM state-matrix seed (chore/mock-demo-seed-state-matrix): this whole aggregate
-// (mockPricingRequests through mockFactoryPurchaseOrders, plus mockDealActivities and
+// (mockPricingRequests through mockCustomerQuotations, plus mockDealActivities and
 // mockAttachments above) starts completely empty every session — demoSales.js is the only
 // source of rows for it. Every counter below is advanced past the highest seeded id so the
 // first user-created row after boot can never collide with one of these.
@@ -779,9 +774,6 @@ let mockFactoryPurchaseOrderItemSeq = 1;
   mockCustomerQuotations.push(...salesSeed.customerQuotations);
   mockCustomerQuotationSeq = salesSeed.nextSeq.customerQuotation;
   mockCustomerQuotationItemSeq = salesSeed.nextSeq.customerQuotationItem;
-  mockFactoryPurchaseOrders.push(...salesSeed.factoryPurchaseOrders);
-  mockFactoryPurchaseOrderSeq = salesSeed.nextSeq.factoryPurchaseOrder;
-  mockFactoryPurchaseOrderItemSeq = salesSeed.nextSeq.factoryPurchaseOrderItem;
   // Deal-tracking readiness gate (dealIsReadyToAdvance) needs `ticket.nextFollowUpAt` set —
   // not part of the ticket's own literal object in demoSales.js since it's normally written
   // by tickets.setBilling, not ticket creation.
@@ -812,26 +804,6 @@ function findPricingRequestRaw(id) {
   const pr = mockPricingRequests.find((p) => p.id === Number(id));
   if (!pr) fail('ไม่พบคำขอราคานี้', 404);
   return pr;
-}
-
-// Step 7: Factory Purchase Order and Import Execution — mirrors ProcurementRepository.findById /
-// ProcurementRepository.withItems (joins request/ticket codes + item display fields for read).
-function findFactoryPurchaseOrderRaw(id) {
-  const po = mockFactoryPurchaseOrders.find((p) => p.id === Number(id));
-  if (!po) fail('ไม่พบใบสั่งซื้อโรงงานนี้', 404);
-  return po;
-}
-
-function buildFactoryPurchaseOrderView(po) {
-  const pr = mockPricingRequests.find((p) => p.id === po.pricingRequestId);
-  const ticket = db.tickets.find((t) => t.id === po.ticketId);
-  const creator = db.users.find((u) => u.id === po.createdBy);
-  return {
-    ...po,
-    pricingRequestCode: pr?.requestCode ?? null,
-    ticketCode: ticket?.code ?? null,
-    createdByName: creator?.name ?? po.createdByName ?? null,
-  };
 }
 
 // Mock stand-in for FactoryQuoteEmailDispatchWorker: send() only enqueues (dispatchStatus:
@@ -9324,197 +9296,6 @@ export const api = {
       const attachment = owningPr.attachments.find((a) => a.id === Number(id));
       attachment.includeInFactoryEmail = Boolean(includeInFactoryEmail);
       return delay({ attachment });
-    },
-  },
-
-  // ── Step 7: Factory Purchase Order and Import Execution — mirrors ProcurementController +
-  // ProcurementService (procurement/). Authorization is NOT authoritative (CLAUDE.md); verify
-  // role behavior against the real Java service. Import/CEO only, matching the real service's
-  // RAW_PO_ROLES — sales/sales_manager cannot reach any method here at all.
-  //
-  // Source of truth, mirroring the real backend exactly: a PO's items are sourced from the
-  // pricing request's currently-APPROVED mockPricingDecisions entry's own pricingCostingId, never
-  // re-picked/re-priced at PO time. Simplification vs the real backend (documented, not silent):
-  // like every mock costing/decision item above, pricingCostingItemId is stood in by
-  // pricingRequestItemId (1:1 within one costing, and the costing is immutable once its decision
-  // is approved) rather than a separate synthetic id.
-  procurement: {
-    async create(pricingRequestId, payload = {}) {
-      const user = hasRole('import', 'ceo');
-      const pr = findPricingRequestRaw(pricingRequestId);
-      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-
-      if (payload.clientRequestId) {
-        const replay = mockFactoryPurchaseOrders.filter(
-          (po) => po.createdBy === user.id && po.clientRequestId === payload.clientRequestId);
-        if (replay.length > 0) return delay({ factoryPurchaseOrders: replay.map(buildFactoryPurchaseOrderView) });
-      }
-
-      if (pr.status !== 'QUOTATION_ACCEPTED') {
-        fail(`สร้างใบสั่งซื้อโรงงานได้เฉพาะคำขอราคาที่ลูกค้ายอมรับใบเสนอราคาแล้วเท่านั้น (ปัจจุบัน: ${pr.status})`, 409);
-      }
-      if (ticket?.salesStage !== 'PROCUREMENT') {
-        fail(`สร้างใบสั่งซื้อโรงงานได้หลังจากออกคำขอนำเข้า (Import Request) แล้วเท่านั้น (สถานะดีลปัจจุบัน: ${ticket?.salesStage})`, 409);
-      }
-
-      const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
-      if (!decision) fail('ไม่พบราคาต้นทุนที่ได้รับอนุมัติสำหรับคำขอราคานี้', 409);
-      const costing = mockPricingCostings.find((c) => c.id === decision.pricingCostingId);
-      if (!costing || costing.items.length === 0) fail('ไม่พบรายการต้นทุนสำหรับสร้างใบสั่งซื้อโรงงาน', 409);
-
-      const byFactory = new Map();
-      for (const item of costing.items) {
-        if (!byFactory.has(item.factoryName)) byFactory.set(item.factoryName, []);
-        byFactory.get(item.factoryName).push(item);
-      }
-
-      const created = [];
-      for (const [factoryName, items] of byFactory) {
-        let po = mockFactoryPurchaseOrders.find(
-          (p) => p.pricingRequestId === pr.id && p.factoryName === factoryName);
-        if (!po) {
-          po = {
-            id: mockFactoryPurchaseOrderSeq++,
-            poNumber: `FPO-2026-${String(mockFactoryPurchaseOrderSeq).padStart(4, '0')}`,
-            pricingRequestId: pr.id,
-            ticketId: pr.ticketId,
-            factoryName,
-            status: 'OPEN',
-            supplierProformaRef: null,
-            supplierPaymentScheduleNote: null,
-            currency: items[0].rawCurrency,
-            totalAmount: items.reduce((sum, item) => sum + Number(item.rawUnitPrice) * Number(item.requestedQuantity), 0),
-            etd: null, eta: null, containerRef: null, customsStatus: null,
-            actualLandedCostThb: null, cancelReason: null,
-            clientRequestId: payload.clientRequestId ?? null,
-            createdBy: user.id, createdByName: user.name,
-            createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-            receivedAt: null, cancelledAt: null,
-            items: items.map((item) => ({
-              id: mockFactoryPurchaseOrderItemSeq++,
-              pricingCostingItemId: item.pricingRequestItemId,
-              pricingRequestItemId: item.pricingRequestItemId,
-              quantity: item.requestedQuantity,
-              unitPrice: item.rawUnitPrice,
-              currency: item.rawCurrency,
-              lineTotal: Number(item.rawUnitPrice) * Number(item.requestedQuantity),
-              estimatedLandedCostPerUnitThb: item.landedCostPerUnitThb,
-              estimatedTotalLandedCostThb: item.totalLandedCostThb,
-            })),
-          };
-          mockFactoryPurchaseOrders.push(po);
-          pushPricingRequestEvent(pr, user, 'FACTORY_PO_CREATED', pr.status, pr.status,
-            `สร้างใบสั่งซื้อโรงงาน ${factoryName} (${po.poNumber})`);
-        }
-        created.push(po);
-      }
-      const ceoUsers = db.users.filter((u) => u.role === 'ceo');
-      ceoUsers.forEach((ceo) => addNotification(ceo.id, pr.ticketId, ticket?.code, 'FACTORY_PO_CREATED',
-        `สร้างใบสั่งซื้อโรงงาน ${created.length} ฉบับสำหรับคำขอราคา ${pr.requestCode}`));
-      return delay({ factoryPurchaseOrders: created.map(buildFactoryPurchaseOrderView) });
-    },
-
-    async listForPricingRequest(pricingRequestId) {
-      hasRole('import', 'ceo');
-      const items = mockFactoryPurchaseOrders
-        .filter((po) => po.pricingRequestId === Number(pricingRequestId))
-        .map(buildFactoryPurchaseOrderView);
-      return delay({ factoryPurchaseOrders: items });
-    },
-
-    async list(status) {
-      hasRole('import', 'ceo');
-      const items = mockFactoryPurchaseOrders
-        .filter((po) => !status || po.status === status)
-        .map(buildFactoryPurchaseOrderView);
-      return delay({ factoryPurchaseOrders: items });
-    },
-
-    async get(id) {
-      hasRole('import', 'ceo');
-      const po = findFactoryPurchaseOrderRaw(id);
-      return delay({ factoryPurchaseOrder: buildFactoryPurchaseOrderView(po) });
-    },
-
-    async recordSupplierProforma(id, payload) {
-      const user = hasRole('import', 'ceo');
-      const po = findFactoryPurchaseOrderRaw(id);
-      if (['RECEIVED', 'CANCELLED'].includes(po.status)) fail('ใบสั่งซื้อนี้ปิดแล้ว ไม่สามารถแก้ไขได้', 409);
-      po.supplierProformaRef = payload.supplierProformaRef;
-      po.supplierPaymentScheduleNote = payload.supplierPaymentScheduleNote ?? null;
-      po.updatedAt = new Date().toISOString();
-      const pr = findPricingRequestRaw(po.pricingRequestId);
-      pushPricingRequestEvent(pr, user, 'FACTORY_PO_PROFORMA_RECORDED', null, null,
-        `บันทึกใบแจ้งหนี้ล่วงหน้า (Proforma) ${payload.supplierProformaRef} (${po.poNumber})`);
-      return delay({ factoryPurchaseOrder: buildFactoryPurchaseOrderView(po) });
-    },
-
-    async recordShippingDetail(id, payload = {}) {
-      const user = hasRole('import', 'ceo');
-      const po = findFactoryPurchaseOrderRaw(id);
-      if (['RECEIVED', 'CANCELLED'].includes(po.status)) fail('ใบสั่งซื้อนี้ปิดแล้ว ไม่สามารถแก้ไขได้', 409);
-      if (payload.containerRef != null) po.containerRef = payload.containerRef;
-      if (payload.etd != null) po.etd = payload.etd;
-      if (payload.eta != null) po.eta = payload.eta;
-      if (payload.customsStatus != null) po.customsStatus = payload.customsStatus;
-      if (po.status === 'OPEN') po.status = 'SHIPPING';
-      po.updatedAt = new Date().toISOString();
-      const pr = findPricingRequestRaw(po.pricingRequestId);
-      pushPricingRequestEvent(pr, user, 'FACTORY_PO_SHIPPING_RECORDED', null, null,
-        `บันทึกรายละเอียดการขนส่ง (${po.poNumber})`);
-      return delay({ factoryPurchaseOrder: buildFactoryPurchaseOrderView(po) });
-    },
-
-    async recordGoodsReceived(id, payload) {
-      // Step 8: mirrors ProcurementService.recordGoodsReceived — items is OPTIONAL (null/absent
-      // defaults every line to its own ordered quantity, zero discrepancy, backward-compatible
-      // with the unmodified Step 7 caller); an explicitly-supplied list (even empty) must cover
-      // EVERY line on the PO or the call is rejected.
-      const user = hasRole('import', 'ceo');
-      const po = findFactoryPurchaseOrderRaw(id);
-      if (['RECEIVED', 'CANCELLED'].includes(po.status)) fail('ใบสั่งซื้อนี้ปิดแล้ว ไม่สามารถบันทึกรับสินค้าได้อีก', 409);
-      const items = payload.items ?? null;
-      if (items === null) {
-        po.items.forEach((item) => {
-          item.qtyReceived = item.quantity;
-          item.qcNote = null;
-          item.discrepancyQty = 0;
-        });
-      } else {
-        const validIds = new Set(po.items.map((item) => item.id));
-        const requestedIds = new Set(items.map((line) => Number(line.itemId)));
-        const sameSize = requestedIds.size === validIds.size;
-        const covers = sameSize && [...requestedIds].every((itemId) => validIds.has(itemId));
-        if (!covers) fail('ต้องระบุจำนวนรับสินค้าให้ครบทุกรายการในใบสั่งซื้อนี้ และรายการที่ระบุต้องอยู่ในใบสั่งซื้อนี้เท่านั้น', 400);
-        for (const line of items) {
-          const item = po.items.find((it) => it.id === Number(line.itemId));
-          item.qtyReceived = moneyValue(line.qtyReceived);
-          item.qcNote = line.qcNote ?? null;
-          item.discrepancyQty = moneyValue(item.qtyReceived - Number(item.quantity ?? 0));
-        }
-      }
-      po.actualLandedCostThb = payload.actualLandedCostThb;
-      po.status = 'RECEIVED';
-      po.receivedAt = new Date().toISOString();
-      po.updatedAt = po.receivedAt;
-      const pr = findPricingRequestRaw(po.pricingRequestId);
-      pushPricingRequestEvent(pr, user, 'FACTORY_PO_GOODS_RECEIVED', null, null,
-        `รับสินค้าแล้ว ต้นทุนนำเข้าจริง ${payload.actualLandedCostThb} (${po.poNumber})`);
-      return delay({ factoryPurchaseOrder: buildFactoryPurchaseOrderView(po) });
-    },
-
-    async cancel(id, payload) {
-      const user = hasRole('import', 'ceo');
-      const po = findFactoryPurchaseOrderRaw(id);
-      if (['RECEIVED', 'CANCELLED'].includes(po.status)) fail('ใบสั่งซื้อนี้ปิดแล้ว ไม่สามารถยกเลิกได้', 409);
-      po.status = 'CANCELLED';
-      po.cancelReason = payload.reason;
-      po.cancelledAt = new Date().toISOString();
-      po.updatedAt = po.cancelledAt;
-      const pr = findPricingRequestRaw(po.pricingRequestId);
-      pushPricingRequestEvent(pr, user, 'FACTORY_PO_CANCELLED', null, null,
-        `ยกเลิกใบสั่งซื้อโรงงาน: ${payload.reason} (${po.poNumber})`);
-      return delay({ factoryPurchaseOrder: buildFactoryPurchaseOrderView(po) });
     },
   },
 

@@ -56,9 +56,6 @@ const ROUTES = [
   '/finance',
   '/price-import',
   '/ceo-settings',
-  '/factory-purchase-orders',
-  '/factory-purchase-orders/1',
-  '/procurement',
   '/catalog',
 ];
 

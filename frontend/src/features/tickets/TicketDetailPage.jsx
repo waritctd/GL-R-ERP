@@ -1959,7 +1959,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 summary={summary}
                 items={items}
                 availableActions={availableActions}
-                pricingRequests={pricingRequests}
                 showToast={showToast}
               />
             ) : null}

@@ -37,7 +37,6 @@ const PATH_LABELS = {
   '/pricing-requests': 'คิวคำขอราคา',
   '/ceo-settings': 'ตั้งค่าราคา',
   '/factory-purchase-orders': 'ใบสั่งซื้อโรงงาน',
-  '/procurement': 'จัดซื้อ & นำเข้า',
   '/employee-requests': 'คำขอ (OT / สวัสดิการ)',
   '/overtime': 'คำขอ (OT / สวัสดิการ)',
   '/leave': 'วันลา',

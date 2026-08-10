@@ -543,7 +543,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
             description="ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้"
             action={(
               <Button type="button" variant="primary" onClick={returnToSafeList}>
-                {canReturnToPricingQueue ? 'กลับไปที่คิวคำขอราคา' : 'กลับ'}
+                {canReturnToPricingQueue ? 'กลับไปที่คิวขอราคา' : 'กลับ'}
               </Button>
             )}
           />
@@ -560,7 +560,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
             description="ระบบไม่เปิดเผยรายละเอียดของคำขอราคาที่คุณไม่มีสิทธิ์เข้าถึง"
             action={(
               <Button type="button" variant="primary" onClick={returnToSafeList}>
-                {canReturnToPricingQueue ? 'กลับไปที่คิวคำขอราคา' : 'กลับ'}
+                {canReturnToPricingQueue ? 'กลับไปที่คิวขอราคา' : 'กลับ'}
               </Button>
             )}
           />
@@ -582,7 +582,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           )}
           secondaryAction={(
             <Button type="button" variant="primary" onClick={returnToSafeList}>
-              {canReturnToPricingQueue ? 'กลับไปที่คิวคำขอราคา' : 'กลับ'}
+              {canReturnToPricingQueue ? 'กลับไปที่คิวขอราคา' : 'กลับ'}
             </Button>
           )}
         />
@@ -599,7 +599,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           description="ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้"
           action={(
             <Button type="button" variant="primary" onClick={returnToSafeList}>
-              {canReturnToPricingQueue ? 'กลับไปที่คิวคำขอราคา' : 'กลับ'}
+              {canReturnToPricingQueue ? 'กลับไปที่คิวขอราคา' : 'กลับ'}
             </Button>
           )}
         />

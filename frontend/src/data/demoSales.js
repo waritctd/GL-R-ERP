@@ -40,8 +40,6 @@ export function buildDemoSalesSeed() {
   let quotationItemSeq = 0;
   let docSeq = 0;
   let docNumberSeq = 0;
-  let fpoSeq = 0;
-  let fpoItemSeq = 0;
   let dealActivitySeq = 0;
   let attachSeq = 0;
   let prAttachSeq = 0;
@@ -52,7 +50,6 @@ export function buildDemoSalesSeed() {
   const pricingDecisions = [];
   const customerQuotations = [];
   const depositNotices = [];
-  const factoryPurchaseOrders = [];
   const dealActivities = [];
   const attachments = [];
 
@@ -362,36 +359,6 @@ export function buildDemoSalesSeed() {
     }
     depositNotices.push(doc);
     return doc;
-  }
-
-  // ── FactoryPurchaseOrder builder ────────────────────────────────────────
-  function makeFpo(pr, ticket, { status, factoryName, lines, createdAt, extra = {} }) {
-    fpoSeq += 1;
-    const id = fpoSeq;
-    const items = lines.map((line) => {
-      fpoItemSeq += 1;
-      return {
-        id: fpoItemSeq, pricingCostingItemId: line.prItemId, pricingRequestItemId: line.prItemId,
-        quantity: line.qty, unitPrice: line.rawUnitPrice, currency: 'THB',
-        lineTotal: line.rawUnitPrice * line.qty,
-        estimatedLandedCostPerUnitThb: line.landedCostPerUnitThb,
-        estimatedTotalLandedCostThb: line.landedCostPerUnitThb * line.qty,
-        ...(status === 'RECEIVED' ? { qtyReceived: line.qty, qcNote: 'ตรวจนับครบตามจำนวน', discrepancyQty: 0 } : {}),
-      };
-    });
-    const po = {
-      id, poNumber: `FPO-2026-${String(id).padStart(4, '0')}`,
-      pricingRequestId: pr.id, ticketId: ticket.id, factoryName, status,
-      supplierProformaRef: status !== 'OPEN' ? `PF-${factoryName.slice(0, 3).toUpperCase()}-${id}` : null,
-      supplierPaymentScheduleNote: status !== 'OPEN' ? 'ชำระ 30% มัดจำ ส่วนที่เหลือก่อนส่งมอบ' : null,
-      currency: 'THB', totalAmount: items.reduce((s, i) => s + i.lineTotal, 0),
-      etd: null, eta: null, containerRef: null, customsStatus: null,
-      actualLandedCostThb: null, cancelReason: null, clientRequestId: uuid(9900 + id),
-      createdBy: IMPORT1.id, createdByName: IMPORT1.name, createdAt, updatedAt: createdAt,
-      receivedAt: null, cancelledAt: null, items, ...extra,
-    };
-    factoryPurchaseOrders.push(po);
-    return po;
   }
 
   function addDealActivity(ticketId, { kind, activityDate, note, createdBy, at }) {
@@ -727,9 +694,6 @@ export function buildDemoSalesSeed() {
   const dn11Old = makeDepositNotice(ticket7, q11, { status: 'SUPERSEDED', createdAt: daysAgoIso(24), issueDate: daysAgoIso(23), version: 1 });
   makeDepositNotice(ticket7, q11, { status: 'ISSUED', createdAt: daysAgoIso(18), issueDate: daysAgoIso(17), version: 2 });
   void dn11Old;
-  makeFpo(pr11, ticket7, { status: 'OPEN', factoryName: 'SCG Ceramics', lines: [{ prItemId: pr11.items[0].id, qty: 400, rawUnitPrice: 90, landedCostPerUnitThb: 104 }], createdAt: daysAgoIso(15) });
-  makeFpo(pr11, ticket7, { status: 'SHIPPING', factoryName: 'Cotto Industry', lines: [{ prItemId: pr11.items[1].id, qty: 200, rawUnitPrice: 450, landedCostPerUnitThb: 518 }], createdAt: daysAgoIso(14), extra: { containerRef: 'TCLU-8812345', etd: daysAgoIso(10, '').slice(0, 10), eta: daysAgoIso(-15, '').slice(0, 10), customsStatus: 'IN_TRANSIT' } });
-  makeFpo(pr11, ticket7, { status: 'RECEIVED', factoryName: 'Duragres Thailand', lines: [{ prItemId: pr11.items[2].id, qty: 250, rawUnitPrice: 200, landedCostPerUnitThb: 230 }], createdAt: daysAgoIso(30), extra: { receivedAt: daysAgoIso(5), actualLandedCostThb: 57500 } });
 
   // PR12 — ticket 8 — MORE_INFO_REQUIRED
   const pr12 = makePr({
@@ -875,11 +839,6 @@ export function buildDemoSalesSeed() {
   const decision20 = makeDecision(pr20, costing20, { status: 'APPROVED', createdAt: daysAgoIso(11), approvedAt: daysAgoIso(11) });
   const quotation20 = makeQuotation(pr20, decision20, { docStatus: 'ACCEPTED', createdAt: daysAgoIso(10), issuedAt: daysAgoIso(10), sentAt: daysAgoIso(10), acceptedAt: daysAgoIso(9) });
   makeDepositNotice({ id: 18, customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด' }, quotation20, { status: 'DRAFT', createdAt: daysAgoIso(4) });
-  makeFpo(pr20, { id: 18, customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด' }, {
-    status: 'CANCELLED', factoryName: 'Duragres Thailand',
-    lines: [{ prItemId: pr20.items[0].id, qty: 300, rawUnitPrice: 110, landedCostPerUnitThb: 127 }],
-    createdAt: daysAgoIso(7), extra: { cancelReason: 'ลูกค้าขอเลื่อนคำสั่งซื้อไปไตรมาสหน้า', cancelledAt: daysAgoIso(3) },
-  });
 
   // PR21 — ticket 18 — COSTING_IN_PROGRESS with a CALCULATED (not yet submitted) costing.
   const pr21 = makePr({
@@ -954,7 +913,7 @@ export function buildDemoSalesSeed() {
   return {
     tickets,
     pricingRequests, factoryQuotes, pricingCostings, pricingDecisions,
-    customerQuotations, depositNotices, factoryPurchaseOrders,
+    customerQuotations, depositNotices,
     dealActivities, attachments, followUpOverrides,
     nextSeq: {
       pricingRequest: prSeq + 1,
@@ -970,8 +929,6 @@ export function buildDemoSalesSeed() {
       customerQuotationItem: quotationItemSeq + 1,
       doc: docSeq + 1,
       docNumber: docNumberSeq + 1,
-      factoryPurchaseOrder: fpoSeq + 1,
-      factoryPurchaseOrderItem: fpoItemSeq + 1,
       dealActivity: dealActivitySeq + 1,
       attach: attachSeq + 1,
     },
