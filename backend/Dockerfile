@@ -32,21 +32,47 @@ RUN apt-get update && \
 # not by git. See backend/fonts/README.md for how to supply them.
 COPY fonts/ /usr/local/share/fonts/glr/
 
-# Rebuild the system font cache. If NO font files were supplied at all (nothing currently
-# populates backend/fonts/ on Render — see backend/fonts/README.md), don't fail the build: warn
-# and continue, same graceful degradation as before this file existed (LibreOffice substitutes a
-# wider font; PDFs still render, just not pixel-perfect). But if fonts WERE supplied, verify every
-# required family registered — checked individually, not one combined grep, so a single missing
-# family fails loudly instead of being masked by the others still matching. A partial/broken font
-# set (e.g. a truncated fetch) is a real bug and should fail; an intentionally fontless build
-# (Render today) should not.
+# Rebuild the font cache, then verify the required families where they are present.
+#
+# AN EMPTY backend/fonts/ WARNS AND CONTINUES. #670 made it fatal, which was the right instinct —
+# a fontless image renders customer documents in substitutes, and warning about it in a build log
+# nobody reads is how that shipped unnoticed for months. But Render builds this Dockerfile from a
+# fresh git clone, where the licensed fonts are git-ignored and the folder is ALWAYS empty, so
+# fatal means the service cannot deploy at all. Reverted under a UAT deadline (#666 stays open).
+#
+# Do not "fix" this back to fatal without first moving the service to a pre-built image
+# (scripts/build-push-backend-image.sh, still in place) — otherwise you break every deploy.
+#
+# --build-arg ALLOW_MISSING_FONTS=false makes it fatal again, for a build that SHOULD carry fonts.
+#
+# TWO checks, because the obvious one is not sufficient:
+#
+#   1. fc-list  — is a font by this NAME registered? Catches a truncated or partial font fetch.
+#   2. fc-match — does fontconfig actually RESOLVE this family to itself, or silently fall back?
+#      This is the check that was missing, and the only one that detects substitution. fc-match
+#      never fails: asked for a font it does not have, it cheerfully returns whatever it would
+#      substitute. So "Angsana New" resolving to DejaVu Sans is exactly the production defect,
+#      and check 1 alone cannot see it — LibreOffice makes the same substitution and the wider
+#      glyphs overflow the certification badges on customer-facing documents.
+ARG ALLOW_MISSING_FONTS=true
 RUN fc-cache -f -v && \
-    if find /usr/local/share/fonts/glr -type f \( -iname '*.ttf' -o -iname '*.ttc' -o -iname '*.otf' \) -print -quit | grep -q .; then \
-      for f in "Arial" "Calibri" "Cambria" "Tahoma" "Angsana New" "Browallia New" "BrowalliaUPC" "Cordia New"; do \
-        fc-list | grep -qi "$f" || { echo "Missing font: $f" >&2; exit 1; }; \
-      done; \
+    if ! find /usr/local/share/fonts/glr -type f \( -iname '*.ttf' -o -iname '*.ttc' -o -iname '*.otf' \) -print -quit | grep -q .; then \
+      if [ "$ALLOW_MISSING_FONTS" = "true" ]; then \
+        echo "WARNING: backend/fonts/ is empty — this image renders customer documents in SUBSTITUTE fonts (#666). Expected for a build from a fresh clone; NOT acceptable long-term." >&2; \
+      else \
+        echo "ERROR: backend/fonts/ is empty and ALLOW_MISSING_FONTS=false. Fetch the licensed fonts before docker build — see backend/fonts/README.md." >&2; \
+        exit 1; \
+      fi; \
     else \
-      echo "WARNING: no fonts supplied in backend/fonts/ — PDFs will render with substitute fonts. See backend/fonts/README.md." >&2; \
+      for f in "Arial" "Calibri" "Cambria" "Tahoma" "Angsana New" "Browallia New" "BrowalliaUPC" "Cordia New"; do \
+        fc-list | grep -qi "$f" || { echo "ERROR: font not registered: $f" >&2; exit 1; }; \
+        resolved=$(fc-match "$f" family 2>/dev/null); \
+        case "$resolved" in \
+          *"$f"*) ;; \
+          *) echo "ERROR: '$f' resolves to '$resolved' — fontconfig is SUBSTITUTING it. Customer PDFs would render wrong. See #666." >&2; exit 1;; \
+        esac; \
+      done; \
+      echo "All 8 required font families registered and resolving to themselves."; \
     fi
 
 # finalName defaults to ${artifactId}-${version} -> glr-hr-backend-0.1.0.jar
