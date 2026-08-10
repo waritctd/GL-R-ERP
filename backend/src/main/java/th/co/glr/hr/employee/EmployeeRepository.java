@@ -480,8 +480,8 @@ public class EmployeeRepository {
             rs.getString("account_no"),
             new AddressDto(defaultText(rs.getString("address_line1"), ""), defaultText(rs.getString("district"), ""),
                 defaultText(rs.getString("province"), ""), defaultText(rs.getString("postal_code"), "")),
-            new EmergencyContactDto(defaultText(rs.getString("emergency_name"), "-"),
-                defaultText(rs.getString("emergency_relationship"), "-"), defaultText(rs.getString("emergency_phone"), "-")),
+            new EmergencyContactDto(defaultText(rs.getString("emergency_name"), NO_VALUE),
+                defaultText(rs.getString("emergency_relationship"), NO_VALUE), defaultText(rs.getString("emergency_phone"), NO_VALUE)),
             List.of(),
             List.of(),
             includeSensitive
@@ -955,28 +955,57 @@ public class EmployeeRepository {
         return "D".equals(code) ? "รายวัน" : "รายเดือน";
     }
 
+    /**
+     * The display placeholder this class substitutes for a value it does not have. Emitted for an
+     * employee with no English name ({@link #fullName}) and for missing emergency-contact fields.
+     *
+     * <p>Named because it also has to be RECOGNISED, not only produced -- see {@link #initials},
+     * which used to consume its own sibling's output as if it were a name.
+     */
+    private static final String NO_VALUE = "-";
+
     private static String fullName(String first, String last) {
-        return defaultText((defaultText(first, "") + " " + defaultText(last, "")).trim(), "-");
+        return defaultText((defaultText(first, "") + " " + defaultText(last, "")).trim(), NO_VALUE);
     }
 
+    /**
+     * Two letters for an avatar: from the English name when there is one, otherwise from the Thai.
+     *
+     * <p><b>The English branch has to reject {@link #NO_VALUE}.</b> Its caller passes
+     * {@code fullName(firstNameEn, lastNameEn)}, and that method returns the literal {@code "-"}
+     * when both halves are blank. {@code hasText("-")} is TRUE -- it is a non-blank string -- so
+     * the branch ran, took the first character, and returned {@code "-"}, leaving the Thai fallback
+     * directly beneath it unreachable for exactly the employees who need it.
+     *
+     * <p>Nobody in the UAT seed has an English name, so every avatar in the app -- topbar, employee
+     * list, profile header, approval queues -- rendered a dash for every user, on every page.
+     */
     private static String initials(String englishName, String thaiName) {
-        if (hasText(englishName)) {
-            String[] parts = englishName.trim().split("\\s+");
-            StringBuilder builder = new StringBuilder();
-            for (String part : parts) {
-                if (!part.isBlank()) {
-                    builder.append(Character.toUpperCase(part.charAt(0)));
-                }
-                if (builder.length() == 2) {
-                    break;
-                }
+        String fromEnglish = hasText(englishName) && !NO_VALUE.equals(englishName.trim())
+            ? leadingLetters(englishName)
+            : "";
+        if (!fromEnglish.isEmpty()) {
+            return fromEnglish;
+        }
+        String fromThai = leadingLetters(thaiName);
+        return fromThai.isEmpty() ? "GL" : fromThai;
+    }
+
+    /** First letter of each of the first two words, upper-cased. Empty when there are no words. */
+    private static String leadingLetters(String name) {
+        if (!hasText(name)) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (String part : name.trim().split("\\s+")) {
+            if (!part.isBlank()) {
+                builder.append(Character.toUpperCase(part.charAt(0)));
             }
-            if (!builder.isEmpty()) {
-                return builder.toString();
+            if (builder.length() == 2) {
+                break;
             }
         }
-        String fallback = defaultText(thaiName, "GL").replaceAll("\\s+", "");
-        return fallback.length() <= 2 ? fallback : fallback.substring(0, 2);
+        return builder.toString();
     }
 
     private static NameParts splitName(String fullName) {
