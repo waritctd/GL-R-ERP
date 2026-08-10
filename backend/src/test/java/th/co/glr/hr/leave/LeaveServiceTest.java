@@ -565,6 +565,25 @@ class LeaveServiceTest {
         verify(auditService).record(hr, "APPROVE_LEAVE_REQUEST", "leave_request", 77L, submitted, approved);
     }
 
+    /**
+     * mail-copy wording fix, defect 2: dates used to be a raw {@code LocalDate} concatenated into
+     * text (e.g. "2026-07-13"), which a Thai reader does not expect. Same fixture as {@link
+     * #hrCanApproveLeave} (kept separate so a mutation to the date formatting fails only this test).
+     */
+    @Test
+    void approvedNotificationRendersTheThaiDateRangeNotTheIsoDate() {
+        LeaveRequestDto submitted = requestDto(77L, 10L, "SUBMITTED", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), "2.00", "0.00");
+        LeaveRequestDto approved = requestDto(77L, 10L, "APPROVED", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), "2.00", "0.00");
+        when(leaveRepository.findById(77L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(approved));
+        when(leaveRepository.approve(77L, 20L, "ok")).thenReturn(1);
+
+        leaveService.approve(77L, new ReviewLeaveRequest("ok"), user("hr", 20L));
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(eq(10L), eq("LEAVE_APPROVED"), any(String.class), body.capture(), eq("/leave"), eq(true));
+        assertThat(body.getValue()).contains("กรกฎาคม 2569").doesNotContain("2026-07-");
+    }
+
     @Test
     void employeesCannotApproveTheirOwnLeave() {
         when(leaveRepository.findById(77L)).thenReturn(Optional.of(
@@ -758,7 +777,9 @@ class LeaveServiceTest {
 
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
         verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), body.capture(), eq("/leave"), eq(true));
-        assertThat(body.getValue()).contains("ถูกยกเลิกเรียบร้อยแล้ว").doesNotContain("ถูกยกเลิกโดย");
+        // mail-copy wording fix: active voice now ("ยกเลิก... เรียบร้อยแล้ว", no "ถูก...โดย" passive
+        // attribution to an actor) -- still distinguishes self-cancel by naming no actor at all.
+        assertThat(body.getValue()).contains("เรียบร้อยแล้ว").doesNotContain("ยกเลิกโดย");
     }
 
     @Test
@@ -774,7 +795,9 @@ class LeaveServiceTest {
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
         verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), body.capture(), eq("/leave"), eq(true));
         // user("hr", 20L)'s UserPrincipal#name() is the literal role string "hr" -- see that helper.
-        assertThat(body.getValue()).contains("ถูกยกเลิกโดย hr");
+        // mail-copy wording fix: active voice now -- "<ACT> ยกเลิก..." (actor named as the subject),
+        // not the old passive "...ถูกยกเลิกโดย <ACT>".
+        assertThat(body.getValue()).contains("hr ยกเลิก");
     }
 
     /**
@@ -960,6 +983,59 @@ class LeaveServiceTest {
         verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(true));
         verify(notificationService).notify(eq(10200L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), eq("/leave"), eq(true));
         verify(notificationService).notify(eq(10201L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), eq("/leave"), eq(true));
+    }
+
+    /**
+     * Opus review (2026-08-10): the submitted-notification body said "รอผู้จัดการอนุมัติ"
+     * unconditionally, while the routing right below it falls back to HR whenever there is no
+     * manager of record. So the ONE population that takes the fallback -- employees with no manager
+     * -- was told to wait on an approver who does not exist for them. The sibling test above proves
+     * the fallback ROUTING is right; it asserts the body with {@code any(String.class)} and so could
+     * never see the wording. This pins the wording against the same fixture.
+     */
+    @Test
+    void submitWithNoManagerOfRecordTellsTheEmployeeHrIsReviewingNotAManager() {
+        SubmitLeaveRequest request = validSubmit(10010L);
+        when(leaveRepository.employeeExists(10010L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.sumUsedDays(eq(10010L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10010L), eq(10010L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(70L);
+        when(leaveRepository.findById(70L)).thenReturn(Optional.of(
+            requestDtoWithManager(70L, 10010L, request.startDate(), request.endDate(), null)));
+        when(employeeRepository.findHrEmployeeIds()).thenReturn(List.of(10200L));
+
+        leaveService.submit(request, user("employee", 10010L));
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), body.capture(), eq("/leave"), eq(true));
+        assertThat(body.getValue()).contains("รอฝ่ายบุคคลอนุมัติ").doesNotContain("รอผู้จัดการอนุมัติ");
+    }
+
+    /** The ordinary path still names the manager -- the counterpart to the test above, so a mutation
+     *  that hardcodes either branch reddens one of the two. */
+    @Test
+    void submitWithAManagerOfRecordTellsTheEmployeeTheManagerIsReviewing() {
+        SubmitLeaveRequest request = validSubmit(10010L);
+        when(leaveRepository.employeeExists(10010L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.sumUsedDays(eq(10010L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10010L), eq(10010L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(70L);
+        when(leaveRepository.findById(70L)).thenReturn(Optional.of(
+            requestDtoWithManager(70L, 10010L, request.startDate(), request.endDate(), 99L)));
+
+        leaveService.submit(request, user("employee", 10010L));
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), body.capture(), eq("/leave"), eq(true));
+        assertThat(body.getValue()).contains("รอผู้จัดการอนุมัติ").doesNotContain("รอฝ่ายบุคคลอนุมัติ");
     }
 
     /**

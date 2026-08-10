@@ -366,6 +366,41 @@ class SpecialMoneyServiceTest {
         assertThat(result.status()).isEqualTo("APPROVED");
     }
 
+    /**
+     * mail-copy wording fix, defect 1: {@code SpecialMoneyRequestDto#requestType} stores {@code
+     * type.name()} ("TRAVEL_PER_DIEM" -- see {@code SpecialMoneyRepository#create}), and {@code
+     * SpecialMoneyType#thaiLabel()} ("เบี้ยเลี้ยงเดินทาง") was never called for notification copy
+     * before this fix, so a welfare email printed the raw enum constant. Same fixture/setup as
+     * {@link #approvalIsAllowedWithoutEvidenceForATypeThatDoesNotRequireIt} (kept separate so a
+     * mutation to {@code thaiLabelOf} fails only this test, not the unrelated evidence-gate one).
+     *
+     * <p>Also proves defect 2 (a raw {@code LocalDate} concatenated into text, e.g. "2026-07-01") is
+     * gone for the same message -- {@code eventDate} is 1 July 2026 per {@link #dto}'s fixture.
+     */
+    @Test
+    void ceoApprovedNotificationRendersTheThaiTypeLabelAndThaiDateNotTheRawEnumOrIsoDate() {
+        Map<String, String> driverInBangkok = Map.of("destination", "DOMESTIC", "role", "driver", "province", "ตาก");
+        SpecialMoneyRequestDto submitted = dto(77L, 10L, "SUBMITTED", "TRAVEL_PER_DIEM", driverInBangkok);
+        when(repository.findById(77L)).thenReturn(Optional.of(submitted))
+            .thenReturn(Optional.of(dto(77L, 10L, "APPROVED", "TRAVEL_PER_DIEM", driverInBangkok)));
+        when(repository.countAttachments(77L)).thenReturn(0);
+        when(repository.findEligibility(eq(10L), any(LocalDate.class))).thenReturn(Optional.of(activeEligibility(10L)));
+        when(repository.findUsage(eq(10L), anyInt())).thenReturn(emptyUsage());
+        when(repository.findPolicyAmounts(eq("TRAVEL_PER_DIEM"), any(LocalDate.class)))
+            .thenReturn(new PolicyAmounts(Map.of("rate_driver", new BigDecimal("400")), 1));
+        when(repository.findExcludedProvinces()).thenReturn(Set.of());
+        when(repository.ceoDirectApprove(eq(77L), eq(500L), any(), any(), any(), any())).thenReturn(1);
+
+        service.approve(77L, new ReviewSpecialMoneyRequest(null, new BigDecimal("400"), null), user("ceo", 500L));
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(
+            eq(10L), eq("SPECIAL_MONEY_APPROVED"), anyString(), body.capture(), eq("/employee-requests"), eq(true));
+        assertThat(body.getValue())
+            .contains("เบี้ยเลี้ยงเดินทาง").doesNotContain("TRAVEL_PER_DIEM")
+            .contains("กรกฎาคม 2569").doesNotContain("2026-07-");
+    }
+
     @Test
     void ceoRejectionTransitionsSubmittedToRejected() {
         SpecialMoneyRequestDto submitted = dto(77L, 10L, "SUBMITTED", "AID_WEDDING");
@@ -499,6 +534,14 @@ class SpecialMoneyServiceTest {
      * instead of their name). Uses a distinctive actor name instead, matching how OT's own
      * counterpart ({@code managerCancelOfSubmittedOvertimeWordsTheApproverMessageFromTheActingManager})
      * asserts on {@code "Acting Manager"}.
+     *
+     * <p>mail-copy wording fix: the approved copy now DELIBERATELY names the employee too --
+     * {@code "<ACT> ยกเลิกคำขอ<T>ของ <N> วันที่ <D>"} -- so the message no longer omits {@code
+     * "Test Employee"} outright. What still must hold, and is what this asserts now, is that the
+     * ACTOR is credited with performing the action (the sentence's subject) while the employee is
+     * named only as whose request it is ("ของ <N>") -- the original BLOCKING 1 bug was the message
+     * putting the EMPLOYEE'S name in the actor/subject position, not the employee's name appearing
+     * anywhere at all.
      */
     @Test
     void onBehalfCancelWordsTheCeoMessageFromTheActingRequesterNotTheEmployee() {
@@ -514,7 +557,7 @@ class SpecialMoneyServiceTest {
 
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
         verify(notificationService).notify(eq(500L), eq("SPECIAL_MONEY_CANCELLED"), anyString(), body.capture(), eq("/employee-requests"), eq(true));
-        assertThat(body.getValue()).contains("Acting Requester").doesNotContain("Test Employee");
+        assertThat(body.getValue()).startsWith("Acting Requester ยกเลิก").contains("ของ Test Employee");
     }
 
     /**

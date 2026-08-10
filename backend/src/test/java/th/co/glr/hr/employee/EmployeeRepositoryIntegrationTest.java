@@ -251,6 +251,53 @@ class EmployeeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(hrEmployeeIds).doesNotContain(executiveInHrEmployee);
     }
 
+    /**
+     * An employee with no English name must get Thai initials, not the placeholder.
+     *
+     * <p>{@code initials(nameEn, nameTh)} is fed {@code fullName(firstNameEn, lastNameEn)}, which
+     * returns the literal {@code "-"} when both halves are blank. {@code hasText("-")} is true, so
+     * the English branch ran, took the first character and returned {@code "-"} -- the Thai
+     * fallback right below it was unreachable for exactly the employees who needed it.
+     *
+     * <p>Not a seed quirk: nobody in db/migration-uat has an English name, so EVERY avatar in the
+     * app -- topbar, employee list, profile header, approval queues -- rendered a dash for every
+     * user, on every page.
+     *
+     * <p>Asserts the CHARACTERS, not merely "not a dash": a guard that returned an empty string
+     * would also stop being a dash while still telling the user nothing.
+     *
+     * <p>"สใ" -- one letter per word -- and NOT "สม", the first two letters of the given name,
+     * which is what the Thai branch used to produce. That old rule barely distinguishes anyone:
+     * สมชาย, สมหญิง and สมพงษ์ all collapse to "สม". It also disagreed with the frontend's own
+     * initialsFromName, which has always taken one letter per word, so the two would have rendered
+     * different avatars for the same employee depending on which one supplied the value. Both sides
+     * now use the same rule for Thai and English alike.
+     */
+    @Test
+    void derivesThaiInitialsForAnEmployeeWithNoEnglishName() {
+        long id = repository.create(req("สมชาย ใจดี", "SALES", "somchai@glr.co.th", new BigDecimal("25000")));
+
+        EmployeeDto dto = repository.findEmployeeById(id, true).orElseThrow();
+        assertThat(dto.nameEn()).isEqualTo("-");
+        assertThat(dto.initials()).isEqualTo("สใ");
+    }
+
+    /** The English name still wins when there actually is one. */
+    @Test
+    void prefersEnglishInitialsWhenAnEnglishNameExists() {
+        long id = repository.create(reqWithEnglishName("สมหญิง มีสุข", "Somying Meesuk"));
+
+        EmployeeDto dto = repository.findEmployeeById(id, true).orElseThrow();
+        assertThat(dto.initials()).isEqualTo("SM");
+    }
+
+    private UpsertEmployeeRequest reqWithEnglishName(String nameTh, String nameEn) {
+        return new UpsertEmployeeRequest(
+            null, null, nameTh, nameEn, null, null, null, null, null, null,
+            "en." + Math.abs(nameEn.hashCode()) + "@glr.co.th", null, "SALES", "SALES Division", "แผนกทดสอบ",
+            null, null, null, "ACT", new BigDecimal("25000"), BigDecimal.ZERO, null, null, null, null, null, null);
+    }
+
     private UpsertEmployeeRequest req(String nameTh, String divisionCode, String email, BigDecimal salary) {
         return req(nameTh, divisionCode, email, salary, BigDecimal.ZERO);
     }

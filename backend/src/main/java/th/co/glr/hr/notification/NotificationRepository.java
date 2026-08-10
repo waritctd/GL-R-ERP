@@ -84,13 +84,23 @@ public class NotificationRepository {
      * here would make the override unreachable for exactly the employees it exists to rescue, so
      * that decision now lives entirely in {@link NotificationEmailService#send}; this method's job is
      * only to say whether the employee exists. {@code name} on its own may still be {@code null} (no
-     * first/last name on file); callers already fall back to a generic greeting for that.
+     * first name on file); callers already fall back to a generic greeting for that.
+     *
+     * <p><b>{@code name} is first name only</b> (owner ruling, mail-copy wording fix): was {@code
+     * CONCAT_WS(' ', first_name_th, last_name_th)} (full name) until this change. Confirmed by
+     * tracing every reader of {@link EmailRecipient#name()} before narrowing it -- it flows through
+     * {@code NotificationService#notify}/{@code #sendEmailAfterCommit} into {@code
+     * NotificationEmailService#send(..., recipientName, ...)}, and inside that class {@code
+     * recipientName} is used ONLY to build the {@code textBody}/{@code htmlBody} greeting line
+     * ("เรียน คุณ&lt;name&gt;,"); nothing else in this codebase reads {@link EmailRecipient#name()}. A
+     * Thai greeting addresses someone by first name after "คุณ" (a title, not "Mr./Ms." -- "คุณสมชาย",
+     * not "คุณสมชาย ใจดี"), so the full name read as stiff/translated rather than natural Thai.
      */
     public Optional<EmailRecipient> findEmployeeRecipient(long employeeId) {
         try {
             EmailRecipient recipient = jdbc.queryForObject("""
                 SELECT NULLIF(BTRIM(email), '') AS email,
-                       NULLIF(TRIM(CONCAT_WS(' ', first_name_th, last_name_th)), '') AS name
+                       NULLIF(BTRIM(first_name_th), '') AS name
                   FROM hr.employee
                  WHERE employee_id = :employeeId
                 """, Map.of("employeeId", employeeId),

@@ -21,6 +21,7 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.ThaiText;
 import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.ticket.AttachType;
@@ -967,7 +968,8 @@ public class CommissionService {
                 managerEmployeeId,
                 "COMMISSION_PENDING_MANAGER",
                 "มีคำขอค่าคอมรออนุมัติ",
-                record.salesRepName() + " ส่งคำขอค่าคอม" + description,
+                record.salesRepName() + " ส่งคำขอค่าคอม" + description
+                    + "\nกรุณาพิจารณาอนุมัติหรือปฏิเสธในระบบ",
                 "/commissions",
                 true
             );
@@ -989,7 +991,8 @@ public class CommissionService {
                 ceoEmployeeId,
                 "COMMISSION_PENDING_CEO",
                 "มีคำขอค่าคอมรอ CEO อนุมัติ",
-                record.salesRepName() + " มีคำขอค่าคอม" + description + " ที่ผู้จัดการอนุมัติแล้ว",
+                record.salesRepName() + " มีคำขอค่าคอม" + description + " ที่ผู้จัดการอนุมัติแล้ว"
+                    + "\nกรุณาพิจารณาอนุมัติหรือปฏิเสธในระบบ",
                 "/commissions",
                 true
             );
@@ -1037,7 +1040,7 @@ public class CommissionService {
             record.salesRepId(),
             fullyApproved ? "COMMISSION_APPROVED" : "COMMISSION_MANAGER_APPROVED",
             fullyApproved ? "CEO เพิ่มค่าคอมให้" : "มีการเพิ่มค่าคอมให้คุณ",
-            description + " จำนวน " + record.manualAmount() + " บาท ถูกเพิ่มเข้าค่าคอมของคุณแล้ว"
+            description + " จำนวน " + ThaiText.money(record.manualAmount()) + " บาท ถูกเพิ่มเข้าค่าคอมของคุณแล้ว"
                 + (fullyApproved ? "" : " และรอ CEO อนุมัติขั้นสุดท้าย"),
             "/commissions",
             true
@@ -1048,7 +1051,8 @@ public class CommissionService {
                     ceoEmployeeId,
                     "COMMISSION_PENDING_CEO",
                     "มีรายการค่าคอมแบบ manual รออนุมัติ",
-                    record.salesRepName() + " มี" + description + " ที่ผู้จัดการเพิ่มแล้ว รอ CEO อนุมัติ",
+                    record.salesRepName() + " มี" + description + " ที่ผู้จัดการเพิ่มแล้ว รอ CEO อนุมัติ"
+                        + "\nกรุณาพิจารณาอนุมัติหรือปฏิเสธในระบบ",
                     "/commissions",
                     true
                 );
