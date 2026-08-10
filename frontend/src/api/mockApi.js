@@ -587,11 +587,6 @@ function sortedFormulaConfig(config) {
   };
 }
 
-// V112 — deal-create modal's ราคาตั้ง (ประมาณการ) display multiplier. Its own single-row store,
-// deliberately separate from mockPriceCalcConfigs (see DealEstimateMarkupController's javadoc for
-// why this is not the margin policy). Matches V112's seed exactly (multiplier 2.000).
-let mockDealEstimateMarkup = { multiplier: 2.0, updatedAt: new Date().toISOString(), updatedBy: null };
-
 // R5: Attachments
 const mockAttachments = [];
 let mockAttachSeq = 1;
@@ -626,7 +621,10 @@ const mockCatalog = [
   { id: 14, brand: 'Panaria',  collection: 'Frame',             color: 'Ash',         surface: 'Naturale',     size: '80x80 cm',   factory: 'Panaria SpA',       sqmPerPiece: 0.64 },
 ];
 
-let mockPriceImportFactorySeq = 10;
+// Bumped past the three domestic factories added below. This counter mints ids for
+// factories a user creates at runtime, so leaving it at 10 would have re-issued 10/11/12
+// and collided with them on the first `priceImport` factory creation.
+let mockPriceImportFactorySeq = 13;
 const mockPriceImportFactories = [
   { factoryId: 1, name: 'Panaria SpA',    country: 'Italy',   numberFormat: 'eu' },
   { factoryId: 2, name: 'REFIN',          country: 'Italy',   numberFormat: 'eu' },
@@ -637,6 +635,14 @@ const mockPriceImportFactories = [
   { factoryId: 7, name: 'Padana Marmi',   country: 'Italy',   numberFormat: 'eu' },
   { factoryId: 8, name: 'LEA',            country: 'Italy',   numberFormat: 'eu' },
   { factoryId: 9, name: 'CITY Ceramica',  country: 'Italy',   numberFormat: 'eu' },
+  // The three DOMESTIC factories every seeded deal actually names. Their absence here is
+  // why /catalog was unusable: the page reads `catalog.prices` (mockProductPrices below),
+  // whose rows were all European imports, while every factory quote in demoSales.js is from
+  // SCG / Cotto / Duragres. A rep searching the brand on their own deal got
+  // "ไม่พบสินค้าที่ตรงกัน". `numberFormat: 'us'` — Thai price lists use a decimal point.
+  { factoryId: 10, name: 'SCG Ceramics',      country: 'Thailand', numberFormat: 'us' },
+  { factoryId: 11, name: 'Cotto Industry',    country: 'Thailand', numberFormat: 'us' },
+  { factoryId: 12, name: 'Duragres Thailand', country: 'Thailand', numberFormat: 'us' },
 ];
 
 // Two separate ID spaces, deliberately. priceImport.upload() used to mint version
@@ -656,6 +662,38 @@ const mockProductPrices = [
   { priceId: 9, factoryId: 5, factoryName: 'Bode',         productCode: 'BVLE10426KGA', grade: null,  collection: 'Limestone',    productName: null,               color: null,      surface: 'Honed',     sizeRaw: '600x600',price: 23.50, currency: 'USD', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
   { priceId: 10,factoryId: 7, factoryName: 'Padana Marmi', productCode: '0400012',      grade: 'A01', collection: 'Stone',        productName: null,               color: 'Beige',   surface: 'Lucidato',  sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
   { priceId: 11,factoryId: 7, factoryName: 'Padana Marmi', productCode: '0400012',      grade: 'A02', collection: 'Stone',        productName: null,               color: 'Beige',   surface: 'Lucidato',  sizeRaw: '60x120', price: 21.50, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
+  // ── Domestic price list (THB) ───────────────────────────────────────────────────────────
+  //
+  // One row per SCG / Cotto / Duragres product in `mockCatalog` above, so the two fixtures
+  // finally describe the same world. They did not: `mockCatalog` carried the Thai brands and
+  // nothing reads it, while this list — which /catalog actually queries via `catalog.prices`
+  // — held only European imports. Every factory quote in demoSales.js names one of these
+  // three factories, so a rep searching "SCG" from a deal they own got no results at all.
+  //
+  // THB rather than EUR/USD on purpose: these are domestic suppliers quoting in baht, and it
+  // keeps the FX-conversion path exercised by the import rows above rather than everywhere.
+  // Prices are plausible retail-tier Thai porcelain rates for the size, not round numbers, so
+  // a costing built on them looks like a real one.
+  { priceId: 12,factoryId: 10,factoryName: 'SCG Ceramics',      productCode: 'SCG-ELG-6060-WH', grade: 'A',   collection: 'Elegance Series',   productName: 'Elegance ขาวนวล',   color: 'ขาวนวล',      surface: 'ด้าน',        sizeRaw: '60x60',  price: 420.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  { priceId: 13,factoryId: 10,factoryName: 'SCG Ceramics',      productCode: 'SCG-ELG-6060-GY', grade: 'A',   collection: 'Elegance Series',   productName: 'Elegance เทาอ่อน',  color: 'เทาอ่อน',     surface: 'ด้าน',        sizeRaw: '60x60',  price: 420.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  { priceId: 14,factoryId: 10,factoryName: 'SCG Ceramics',      productCode: 'SCG-NAT-3060-BG', grade: 'A',   collection: 'Natura Collection', productName: 'Natura เบจธรรมชาติ', color: 'เบจธรรมชาติ', surface: 'หยาบ',        sizeRaw: '30x60',  price: 385.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.18 },
+  { priceId: 15,factoryId: 10,factoryName: 'SCG Ceramics',      productCode: 'SCG-NAT-20100-WD',grade: 'B',   collection: 'Natura Collection', productName: 'Natura น้ำตาลไม้',  color: 'น้ำตาลไม้',   surface: 'หยาบ',        sizeRaw: '20x100', price: 465.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.20 },
+  { priceId: 16,factoryId: 10,factoryName: 'SCG Ceramics',      productCode: 'SCG-CRW-60120-PL',grade: 'A',   collection: 'Crystal White',     productName: 'Crystal ขาวมุก',    color: 'ขาวมุก',      surface: 'มัน',         sizeRaw: '60x120', price: 890.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
+  { priceId: 17,factoryId: 11,factoryName: 'Cotto Industry',    productCode: 'CT-MTS-3030-WH',  grade: 'A',   collection: 'Metro Square',      productName: 'Metro ขาว',         color: 'ขาว',         surface: 'ด้าน',        sizeRaw: '30x30',  price: 245.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.09 },
+  { priceId: 18,factoryId: 11,factoryName: 'Cotto Industry',    productCode: 'CT-MTS-3030-CR',  grade: 'A',   collection: 'Metro Square',      productName: 'Metro ครีม',        color: 'ครีม',        surface: 'ด้าน',        sizeRaw: '30x30',  price: 245.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.09 },
+  { priceId: 19,factoryId: 11,factoryName: 'Cotto Industry',    productCode: 'CT-STN-6060-DG',  grade: 'A',   collection: 'Stone Series',      productName: 'Stone เทาเข้ม',     color: 'เทาเข้ม',     surface: 'หยาบ',        sizeRaw: '60x60',  price: 505.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  { priceId: 20,factoryId: 11,factoryName: 'Cotto Industry',    productCode: 'CT-TMB-20120-LB', grade: 'A',   collection: 'Timber Line',       productName: 'Timber น้ำตาลอ่อน', color: 'น้ำตาลอ่อน',  surface: 'ลายไม้',      sizeRaw: '20x120', price: 610.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.24 },
+  // Same product at two grades — the domestic mirror of Padana Marmi's A01/A02 rows above,
+  // so grade handling is exercised on a THB list too and a search on the code returns two rows.
+  { priceId: 21,factoryId: 12,factoryName: 'Duragres Thailand', productCode: 'DG-GRP-6060-MG',  grade: 'A',   collection: 'Granite Plus',      productName: 'Granite เทากลาง',   color: 'เทากลาง',     surface: 'หยาบกึ่งมัน', sizeRaw: '60x60',  price: 470.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  { priceId: 22,factoryId: 12,factoryName: 'Duragres Thailand', productCode: 'DG-GRP-6060-MG',  grade: 'B',   collection: 'Granite Plus',      productName: 'Granite เทากลาง',   color: 'เทากลาง',     surface: 'หยาบกึ่งมัน', sizeRaw: '60x60',  price: 395.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  { priceId: 23,factoryId: 12,factoryName: 'Duragres Thailand', productCode: 'DG-GRP-6060-BK',  grade: 'A',   collection: 'Granite Plus',      productName: 'Granite ดำ',        color: 'ดำ',          surface: 'หยาบกึ่งมัน', sizeRaw: '60x60',  price: 470.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
+  // Priced per PIECE, not per sqm — the only domestic row that is, so the unit-basis branch
+  // (and the per-piece -> per-sqm conversion a costing has to do) is reachable in THB.
+  { priceId: 24,factoryId: 12,factoryName: 'Duragres Thailand', productCode: 'DG-POR-8080-WH',  grade: 'A',   collection: 'Porcelain Pro',     productName: 'Porcelain ขาวเนียน',color: 'ขาวเนียน',    surface: 'มัน',         sizeRaw: '80x80',  price: 545.00, currency: 'THB', priceUnit: 'per_piece', sqmPerPiece: 0.64 },
+  // A row with NULL optional fields, mirroring REFIN's above: no product code, no colour, no
+  // surface. /catalog must render it without holes, and it must not match a code search.
+  { priceId: 25,factoryId: 11,factoryName: 'Cotto Industry',    productCode: null,              grade: null,  collection: 'Trim & Accessories',productName: 'บัวเชิงผนัง',       color: null,          surface: null,          sizeRaw: '10x60',  price: 175.00, currency: 'THB', priceUnit: 'per_piece', sqmPerPiece: null },
 ];
 
 const mockPriceImportVersions = [
@@ -1334,24 +1372,6 @@ function snapshotPricingRequestCatalogSelections(pr) {
     item.catalogCollection = product.collection ?? null;
     item.catalogModel = product.productName ?? null;
     item.factory = item.factory?.trim() ? item.factory : (factory?.name ?? product.factoryName ?? item.factory);
-  }
-}
-
-// Mirrors PricingRequestService.submit's Finding A gate (financial-integrity review, commit
-// 3): the catalog is now MANDATORY — every item must have a fully-resolved catalog snapshot
-// (run snapshotPricingRequestCatalogSelections first) or submit() 422s naming every failing
-// 1-based line number in one message, same "รายการที่ N" style as the identity check above.
-function submitPricingRequestCatalogGate(pr) {
-  const missingLines = [];
-  pr.items.forEach((item, index) => {
-    if (item.catalogPriceId == null || item.priceListVersionId == null
-        || item.catalogBasePrice == null || item.catalogCurrency == null
-        || item.resolvedFactoryId == null || item.resolvedFactoryName == null) {
-      missingLines.push(index + 1);
-    }
-  });
-  if (missingLines.length > 0) {
-    fail(`รายการที่ ${missingLines.join(', ')}: ต้องเลือกสินค้าจาก Price Catalog ที่ active ก่อนส่งคำขอราคา (ไม่พบข้อมูลราคา/โรงงานจาก catalog)`, 422);
   }
 }
 
@@ -5798,7 +5818,23 @@ export const api = {
     async create(payload) {
       const user = hasRole('account', 'sales_manager', 'ceo');
       if (!payload.invoiceAttachment) fail('ต้องแนบไฟล์ใบกำกับภาษี', 400);
-      if (db.commissions.some((item) => item.invoiceDetails.invoiceNumber === payload.invoiceNumber)) {
+      // `?.` and the truthiness check are both load-bearing. createManualCommission() sets
+      // `invoiceDetails: null` — the faithful shape for a manual entry (V84) — so the moment ANY
+      // manual commission exists this line used to throw a TypeError and take every subsequent
+      // create() down with it, in the live mock app as well as in tests. That is why the four
+      // MANUAL_COMMISSION_KINDS could not be seeded at all until now.
+      //
+      // Skipping null rows also matches the real backend rather than merely avoiding the crash:
+      // CommissionService's duplicate check is a SQL comparison, and in SQL a NULL invoice number
+      // is never equal to anything.
+      //
+      // The truthiness half is what a bare `?.` would get wrong. This method does NOT require
+      // `payload.invoiceNumber` (only the attachment is checked above), so a call that omits it
+      // would compare `undefined === undefined`, match the manual row, and be refused as a
+      // duplicate of an invoice that does not exist. Crash traded for a spurious 409.
+      if (db.commissions.some((item) => (
+        item.invoiceDetails?.invoiceNumber && item.invoiceDetails.invoiceNumber === payload.invoiceNumber
+      ))) {
         fail('เลขที่ใบกำกับภาษีนี้มีอยู่ในระบบแล้ว', 409);
       }
       // Step 9 gate + cross-check — mirrors CommissionService#resolveDealLinkage exactly. Unlinked
@@ -5899,7 +5935,11 @@ export const api = {
         && !['VOID', 'REJECTED'].includes(item.status))) {
         fail('มีรายการค่าคอมมิชชั่นสำหรับดีลนี้อยู่แล้ว', 409);
       }
-      if (db.commissions.some((item) => item.invoiceDetails.invoiceNumber === payload.invoiceNumber)) {
+      // Same null guard, same reason as commissions.create() above — a manual commission's
+      // `invoiceDetails` is null and both call sites walked into it.
+      if (db.commissions.some((item) => (
+        item.invoiceDetails?.invoiceNumber && item.invoiceDetails.invoiceNumber === payload.invoiceNumber
+      ))) {
         fail('เลขที่ใบกำกับภาษีนี้มีอยู่ในระบบแล้ว', 409);
       }
       if (ticket.salesStage !== 'CLOSED_PAID') {
@@ -7343,27 +7383,6 @@ export const api = {
       };
       mockPricingFormulaConfigVersions.push(newConfig);
       return delay({ formulaConfig: sortedFormulaConfig(newConfig) });
-    },
-  },
-
-  // Mirrors DealEstimateMarkupController (pricing/), V112. get() is open to any authenticated
-  // session — same reasoning as fxRates.list above (see the controller's javadoc): the deal-create
-  // modal's ราคาตั้ง estimate needs this multiplier for every rep who can pick a catalog item, and
-  // a bare multiplier reveals nothing about landed cost or margin. update stays CEO-only. NOT the
-  // same store as priceCalcConfigs above — that IS the margin policy, this is not.
-  dealEstimateMarkup: {
-    async get() {
-      requireSession();
-      return delay({ dealEstimateMarkup: structuredClone(mockDealEstimateMarkup) });
-    },
-    async update(payload) {
-      const user = hasRole('ceo');
-      mockDealEstimateMarkup = {
-        multiplier: Number(payload.multiplier),
-        updatedAt: new Date().toISOString(),
-        updatedBy: user.id,
-      };
-      return delay({ dealEstimateMarkup: structuredClone(mockDealEstimateMarkup) });
     },
   },
 
@@ -9070,11 +9089,12 @@ export const api = {
       // create()/update() time — a draft saved before this rule existed (or
       // one whose items were never touched again) must still be blocked here.
       requirePricingRequestItemFieldsValid(pr.items);
-      // Finding A (financial-integrity review, commit 3): snapshot the catalog selection for
-      // every catalog-backed item, then reject the submit unless EVERY item resolved — mirrors
-      // PricingRequestService.submit calling snapshotCatalogSelections then re-checking.
+      // Snapshot the catalog selection for every catalog-backed item — mirrors
+      // PricingRequestService.submit calling snapshotCatalogSelections. The "Finding A" gate that
+      // used to follow this (reject unless EVERY item resolved) was removed on 2026-08-11 with
+      // its Java counterpart: an item naming a product that is not in the catalogue yet is now a
+      // valid submit, and just carries a null snapshot through to Import.
       snapshotPricingRequestCatalogSelections(pr);
-      submitPricingRequestCatalogGate(pr);
       const seenSourceItemIds = new Set();
       for (const item of pr.items) {
         if (item.sourceTicketItemId != null) {

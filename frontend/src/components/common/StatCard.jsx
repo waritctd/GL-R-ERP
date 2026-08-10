@@ -16,7 +16,7 @@ import { Icon } from './Icon.jsx';
  * it any more.
  *
  * `neutral` has no entry on purpose. No `.stat-neutral` rule ever existed in
- * styles.css either — TicketDashboard.jsx passes tone="neutral" for its
+ * styles.css either — callers pass tone="neutral" for their
  * "cancelled"/"dormant" cards and that has always rendered an unstyled icon
  * tile; an absent key here reproduces that exact gap instead of inventing a
  * new tone.
@@ -57,7 +57,7 @@ export function StatCard({ icon, label, value, helper, tone = 'indigo', onClick 
       type={onClick ? 'button' : undefined}
       onClick={onClick}
       className={cn(
-        // Bare marker, no CSS rule behind it: TicketDashboard.test.jsx and
+        // Bare marker, no CSS rule behind it: the dashboard tests and
         // CeoOverview.test.jsx locate a card via `.closest('.stat-card')`,
         // and EmployeeDashboard.test.jsx via `.closest('div.stat-card')`.
         'stat-card',
@@ -73,7 +73,7 @@ export function StatCard({ icon, label, value, helper, tone = 'indigo', onClick 
         <Icon name={icon} size={21} />
       </div>
       {/* Bare marker, no CSS rule behind it: 6 unit tests do
-          `querySelector('.stat-value')` (CeoOverview/SalesOverview/TicketDashboard). */}
+          `querySelector('.stat-value')` (CeoOverview/SalesOverview). */}
       <div className="stat-value text-[length:var(--text-3xl)] font-extrabold leading-[1.1] text-text mobile:text-[length:var(--text-xl)]">
         {value}
       </div>

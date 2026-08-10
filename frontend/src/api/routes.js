@@ -179,12 +179,6 @@ export const API_ROUTES = {
     get: '/api/pricing-formula-config',
     update: '/api/pricing-formula-config',
   },
-  // V112 — deal-create modal's ราคาตั้ง (ประมาณการ) display multiplier. NOT priceCalcConfigs:
-  // see DealEstimateMarkupController's javadoc for why this is a separate, openly-readable table.
-  dealEstimateMarkup: {
-    get: '/api/deal-estimate-markup',
-    update: '/api/deal-estimate-markup',
-  },
   attachments: {
     list: (ticketId) => `/api/tickets/${ticketId}/attachments`,
     upload: (ticketId) => `/api/tickets/${ticketId}/attachments`,
@@ -397,8 +391,8 @@ export const ROLE_PERMISSIONS = {
   // canGenerateQuotation/canConfirmPayments. Mirrors TicketService.VIEWER_ROLES.
   canViewTickets: ['sales', 'import', 'ceo', 'account', 'sales_manager'],
   // Role-scoped views (docs/role-scoped-views.md): the deal PIPELINE BROWSER
-  // (list `/tickets`, `/ticket-overview`, the รายการดีล nav item, SalesTabs
-  // pipeline tabs) is narrower than ticket-detail read (canViewTickets above,
+  // (list `/tickets`, the รายการดีล nav item, the SalesTabs deal-list tab) is
+  // narrower than ticket-detail read (canViewTickets above,
   // unchanged) — only roles whose job IS the pipeline get it. Import and
   // Account are deliberately excluded — their jobs are procurement→delivery
   // and money-confirmation respectively, not browsing the whole deal list

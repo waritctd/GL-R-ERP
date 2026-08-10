@@ -51,6 +51,40 @@ export function buildDemoCommissions() {
     ...overrides,
   });
 
+  // A MANUAL commission (ADJUSTMENT / MANAGER / STOCK_BONUS / INCENTIVE). Separate from `row`
+  // because the two shapes genuinely differ rather than overlapping: a manual entry carries
+  // `manualAmount` + `manualReason` and NO invoice, where an invoice-backed SALE carries
+  // `invoiceDetails` and a computed `commissionableBase`. Building both from one helper would
+  // mean a pile of nulls at every call site and would hide which fields each kind actually has.
+  //
+  // Field-for-field with createManualCommission()'s own record, including the parts that look
+  // odd out of context: `actualReceived`/`commissionableBase` are 0 (there is no invoice to
+  // derive them from), `approvedById`/`approvedAt` are always set (the creator approves at the
+  // level they act on), and the manager/ceo approval pair is mutually exclusive — a
+  // sales_manager entry lands MANAGER_APPROVED, a CEO entry lands APPROVED.
+  const manualRow = (overrides) => ({
+    sourceTicketId: null,
+    weightMultiplier: 1,
+    actualReceived: 0,
+    commissionableBase: 0,
+    payrollMonth: '2026-08-01',
+    approvedById: overrides.submittedById,
+    approvedAt: now,
+    managerApprovedBy: null, managerApprovedByName: null, managerApprovedAt: null,
+    ceoApprovedBy: null, ceoApprovedByName: null, ceoApprovedAt: null,
+    rejectedById: null, rejectedByName: null, rejectedAt: null, rejectionReason: null,
+    cancellationOfId: null, cancellationReason: null,
+    dealPayableAmountSnapshot: null, dealAmountMismatch: false,
+    invoiceDetails: null,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+    // Timestamps belong to whichever approval the caller named, so they are applied AFTER the
+    // spread rather than being repeated at every call site.
+    ...(overrides.managerApprovedBy ? { managerApprovedAt: now } : {}),
+    ...(overrides.ceoApprovedBy ? { ceoApprovedAt: now } : {}),
+  });
+
   // D1 fix (review pass): db.tickets only has TWO tickets whose salesStage derives to
   // CLOSED_PAID — ticket 9 (status 'closed') and ticket 14 (paymentStatus 'FULLY_PAID'); see
   // the derivation loop at the top of this file's companion mockApi.js (the `if (t.salesStage)
@@ -141,18 +175,23 @@ export function buildDemoCommissions() {
       approvedById: 8, approvedAt: now,
       invoiceDetails: invoice({ id: 8, invoiceNumber: 'INV-2026-07051', invoiceDate: '2026-07-10', grossAmount: 1200000 }),
     }),
-    // NOTE: MANUAL_COMMISSION_KINDS (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE) are
-    // deliberately NOT seeded here. createManualCommission() always sets
-    // `invoiceDetails: null` (the correct, faithful shape for a manual entry — V84) — but
-    // commissions.create()'s duplicate-invoice-number check
-    // (`db.commissions.some(item => item.invoiceDetails.invoiceNumber === ...)`) has no
-    // null guard, a PRE-EXISTING bug already documented in
-    // mockApi.commissionIncentiveStockBonus.test.js's own header comment. The moment ANY
-    // commission row has `invoiceDetails: null`, every subsequent commissions.create() call
-    // throws — not just in that test, in the live app too (any sales_manager/ceo creating a
-    // new invoice-based commission after a manual entry exists would hit this crash). Per
-    // HARD CONSTRAINT #1 (seed data only, never patch handler logic), this row is left out
-    // rather than worked around — see the report's "could not seed" section.
+    // MANUAL_COMMISSION_KINDS (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE) are seeded below.
+    //
+    // They used to be impossible to seed: createManualCommission() sets `invoiceDetails: null`
+    // (the faithful shape for a manual entry — V84), and BOTH commissions.create() and
+    // commissions.createFromDeal() did an unguarded
+    // `db.commissions.some(item => item.invoiceDetails.invoiceNumber === ...)`. One such row
+    // and every subsequent create threw a TypeError — in the live mock app, not only in tests.
+    // The previous pass recorded that as "could not seed" under a seed-data-only constraint.
+    // Both call sites now null-guard (mockApi.js), matching the real backend rather than merely
+    // dodging the crash: the Java duplicate check is a SQL comparison, and a NULL invoice number
+    // is never equal to anything in SQL.
+    //
+    // Four kinds x the two statuses createManualCommission itself can produce — a
+    // sales_manager entry lands MANAGER_APPROVED, a CEO entry lands APPROVED — so the manual
+    // path's own branch is visible in the list rather than only its happy end state. Kept in
+    // 2026-08 (the current month) because these are the four kinds a UAT tester has no other
+    // way to see: they have no auto-generated equivalent to find in another month.
     // SALE for the second sales rep. Unlinked (D1): ticket 17 sits at QUOTE_DESIGN_SIDE with no
     // quotation at all, and rep2 (id 12) doesn't own either real CLOSED_PAID ticket (both are
     // rep1's), so null is the only option that keeps this "genuinely tied to a rep pointing at
@@ -168,6 +207,38 @@ export function buildDemoCommissions() {
       ceoApprovedBy: 8, ceoApprovedByName: 'คุณวิชัย ธนาคาร', ceoApprovedAt: now,
       approvedById: 8, approvedAt: now,
       invoiceDetails: invoice({ id: 7, invoiceNumber: 'INV-2026-08002', invoiceDate: '2026-08-01', grossAmount: 210000 }),
+    }),
+    // ── Manual entries. `invoiceDetails: null` and `actualReceived/commissionableBase: 0` are
+    // not omissions: a manual commission has no invoice behind it and no progressive
+    // calculation, so the amount lives in `manualAmount` and the justification in
+    // `manualReason`. Mirrors createManualCommission()'s record shape field for field.
+    //
+    // ADJUSTMENT is the one kind the backend permits to be NEGATIVE (a correction); MANAGER is
+    // explicitly sign-checked against it. Seeding a negative ADJUSTMENT is what makes that
+    // asymmetry visible instead of merely asserted.
+    manualRow({
+      id: 9, salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี', submittedById: 9,
+      kind: 'ADJUSTMENT', status: 'MANAGER_APPROVED',
+      manualAmount: -4500, manualReason: 'ปรับลดจากค่าขนส่งที่เรียกเก็บลูกค้าเกิน งวดก่อน',
+      managerApprovedBy: 9, managerApprovedByName: 'คุณมณี ผู้จัดการฝ่ายขาย',
+    }),
+    manualRow({
+      id: 10, salesRepId: 9, salesRepName: 'คุณมณี ผู้จัดการฝ่ายขาย', submittedById: 8,
+      kind: 'MANAGER', status: 'APPROVED',
+      manualAmount: 18000, manualReason: 'ค่าคอมมิชชั่นผู้จัดการทีมขาย ประจำงวด',
+      ceoApprovedBy: 8, ceoApprovedByName: 'คุณวิชัย ธนาคาร',
+    }),
+    manualRow({
+      id: 11, salesRepId: 12, salesRepName: 'คุณอรุณี ขายเก่ง', submittedById: 9,
+      kind: 'STOCK_BONUS', status: 'MANAGER_APPROVED',
+      manualAmount: 7500, manualReason: 'โบนัสระบายสต็อกค้างคลัง รุ่น Metro Square',
+      managerApprovedBy: 9, managerApprovedByName: 'คุณมณี ผู้จัดการฝ่ายขาย',
+    }),
+    manualRow({
+      id: 12, salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี', submittedById: 8,
+      kind: 'INCENTIVE', status: 'APPROVED',
+      manualAmount: 12000, manualReason: 'อินเซนทีฟพิเศษ ปิดยอดไตรมาส 3 เกินเป้า',
+      ceoApprovedBy: 8, ceoApprovedByName: 'คุณวิชัย ธนาคาร',
     }),
   ];
 }

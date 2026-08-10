@@ -26,7 +26,6 @@ const CeoOverview = lazy(() => import('./features/dashboard/CeoOverview.jsx').th
 const ImportOverview = lazy(() => import('./features/dashboard/ImportOverview.jsx').then(toDefault('ImportOverview')));
 const EmployeeSelfService = lazy(() => import('./features/dashboard/EmployeeSelfService.jsx').then(toDefault('EmployeeSelfService')));
 const DivisionManagerOverview = lazy(() => import('./features/dashboard/DivisionManagerOverview.jsx').then(toDefault('DivisionManagerOverview')));
-const TicketDashboard = lazy(() => import('./features/dashboard/TicketDashboard.jsx').then(toDefault('TicketDashboard')));
 // Role-scoped views: Sales Manager's team-cockpit Overview (landing).
 const ManagerOverview = lazy(() => import('./features/dashboard/ManagerOverview.jsx').then(toDefault('ManagerOverview')));
 const EmployeeListPage = lazy(() => import('./features/employees/EmployeeListPage.jsx').then(toDefault('EmployeeListPage')));
@@ -392,10 +391,6 @@ export function App() {
             {/* Frozen sales stack — param-wired to keep working / URL-addressable. */}
             {SALES_ENABLED && (
               <>
-                <Route
-                  path="/ticket-overview"
-                  element={<TicketDashboard user={user} employee={currentEmployee} showToast={showToast} />}
-                />
                 <Route
                   path="/tickets"
                   element={<TicketListPage user={user} showToast={showToast} />}

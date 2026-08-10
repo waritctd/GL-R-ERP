@@ -104,16 +104,19 @@ describe('PricingRequestCreateModal', () => {
     expect(createFn).not.toHaveBeenCalled();
   });
 
-  it('keeps specialRequirement separate from product identity', async () => {
-    const { createFn } = renderModal({ ticketItems: [] });
-    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
-    fireEvent.change(screen.getByLabelText('ข้อกำหนดพิเศษ'), { target: { value: 'ส่งด่วน' } });
-
-    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
-
-    const rowError = await screen.findByRole('alert');
-    expect(rowError.textContent).toContain('ต้องระบุสินค้าที่ต้องการเสนอราคา');
-    expect(createFn).not.toHaveBeenCalled();
+  // The four per-item fields ลักษณะจำนวน / วันที่ต้องการส่งมอบ / สถานที่ส่งมอบ / ข้อกำหนดพิเศษ, and the
+  // manual "ค้นหา Catalog" picker, were removed from this form on 2026-08-11 (owner request).
+  // The old "keeps specialRequirement separate from product identity" case lived here and drove
+  // ข้อกำหนดพิเศษ; with no such input it could no longer distinguish anything, and the rule it
+  // covered (brand/free text alone is not a product identity) is still pinned by the
+  // "blocks an item with no identity field" case just above.
+  it('no longer renders the four removed per-item fields, or the catalog search box', () => {
+    renderModal({ ticketItems: [ticketItem()] });
+    expect(screen.queryByLabelText('ข้อกำหนดพิเศษ')).toBeNull();
+    expect(screen.queryByLabelText('สถานที่ส่งมอบ')).toBeNull();
+    expect(screen.queryByLabelText('วันที่ต้องการส่งมอบ')).toBeNull();
+    expect(screen.queryByLabelText(/ลักษณะจำนวน/)).toBeNull();
+    expect(screen.queryByPlaceholderText('รหัสสินค้า / Collection / โรงงาน')).toBeNull();
   });
 
   it('clears the row error once productDescription is filled in, and allows submission', async () => {
@@ -400,8 +403,9 @@ describe('PricingRequestCreateModal deal-derived autofill (V110)', () => {
   it('prefills the catalog link and code from the ticket item — no re-search needed', () => {
     renderModal({ ticketItems: [ticketItem({ catalogPriceId: 777, catalogProductCode: 'PC-777' })] });
 
+    // The catalog CODE used to be shown in the (now removed) search box; the seeded link itself
+    // is still surfaced read-only, which is the part V110 exists to prove.
     expect(screen.getByText('Catalog #777')).not.toBeNull();
-    expect(screen.getByPlaceholderText('รหัสสินค้า / Collection / โรงงาน').value).toBe('PC-777');
   });
 
   it("autofills ผู้รับ's label per recipient type, from the deal", () => {
@@ -430,18 +434,20 @@ describe('PricingRequestCreateModal deal-derived autofill (V110)', () => {
     expect(screen.getByDisplayValue('ผู้ติดต่อ ค.')).not.toBeNull();
   });
 
-  it("seeds note from deal.note and each row's deliveryLocation from deal.projectName, including a row added afterward", () => {
+  // Was "seeds note from deal.note and each row's deliveryLocation from deal.projectName". The
+  // deliveryLocation half went with the สถานที่ส่งมอบ input on 2026-08-11: with no field to review
+  // or correct it, seeding deal.projectName would have written an unreviewed guess straight into
+  // the request, so a row now starts blank there. The note seed is unaffected and still asserted.
+  it('seeds note from deal.note, and no longer seeds any row from deal.projectName', () => {
     renderModal({ deal: dealFixture() });
 
     expect(screen.getByLabelText(/หมายเหตุถึงฝ่ายนำเข้า/).value).toBe('โน้ตจากขั้นตอนสร้างดีล');
-    const deliveryInputs = screen.getAllByLabelText('สถานที่ส่งมอบ');
-    expect(deliveryInputs).toHaveLength(1);
-    expect(deliveryInputs[0].value).toBe('โครงการทดสอบ A');
+    expect(screen.queryByLabelText('สถานที่ส่งมอบ')).toBeNull();
+    // Wrong-way-round: the project name must not have leaked into ANY surviving input.
+    expect(screen.queryByDisplayValue('โครงการทดสอบ A')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการ/ }));
-    const afterAdd = screen.getAllByLabelText('สถานที่ส่งมอบ');
-    expect(afterAdd).toHaveLength(2);
-    expect(afterAdd[1].value).toBe('โครงการทดสอบ A');
+    expect(screen.queryByDisplayValue('โครงการทดสอบ A')).toBeNull();
   });
 
   it('does NOT autofill requiredDate from the deal (not requested)', () => {
@@ -476,7 +482,6 @@ describe('PricingRequestCreateModal deal-derived autofill (V110)', () => {
 
     expect(screen.getByDisplayValue('เจ้าของโครงการ ข.')).not.toBeNull();
     expect(screen.getByDisplayValue('โน้ตเดิม')).not.toBeNull();
-    expect(screen.getByDisplayValue('ที่ส่งมอบเดิม')).not.toBeNull();
     // None of the deal's own values leaked in anywhere.
     expect(screen.queryByDisplayValue('บริษัท เจ้าของ จำกัด')).toBeNull();
     expect(screen.queryByDisplayValue('โน้ตจากขั้นตอนสร้างดีล')).toBeNull();
@@ -514,8 +519,66 @@ describe('PricingRequestCreateModal deal-derived autofill (V110)', () => {
 
     expect(screen.getByDisplayValue('เจ้าของโครงการ ข.')).not.toBeNull();
     expect(screen.getByDisplayValue('โน้ตเดิม')).not.toBeNull();
-    expect(screen.getByDisplayValue('ที่ส่งมอบเดิม')).not.toBeNull();
     expect(screen.queryByDisplayValue('บริษัท เจ้าของ จำกัด')).toBeNull();
+  });
+});
+
+// Removing the four inputs on 2026-08-11 created a data-loss trap that no other test covers:
+// buildPayload writes the FULL item representation, so if the modal had simply stopped tracking
+// those fields, opening any draft created BEFORE the removal and pressing บันทึกการแก้ไข would
+// have silently nulled four persisted columns. The fields are therefore still seeded from the
+// persisted request and echoed straight back. This is the test that would go red if someone
+// "tidied up" by dropping them from itemFromExisting or hardcoding nulls in buildPayload.
+describe('PricingRequestCreateModal preserves the removed per-item fields through an edit', () => {
+  it('echoes back a persisted quantityType/targetDeliveryDate/deliveryLocation/specialRequirement instead of nulling them', async () => {
+    const updateFn = vi.fn().mockResolvedValue({});
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialValue={{
+          summary: {
+            id: 77, recipientType: 'OWNER', recipientLabel: 'เจ้าของโครงการ ข.',
+            requiredDate: null, customerTargetPrice: null, targetCurrency: 'THB', note: null,
+          },
+          items: [{
+            id: 5, sourceTicketItemId: null, productId: null, brand: 'SCG', model: 'A1',
+            color: 'ขาว', productDescription: '', texture: 'ด้าน', size: '60x60', factory: null,
+            requestedQty: 20, requestedUnit: 'แผ่น', requestedUnitBasis: 'PER_PIECE',
+            quantityType: 'CONFIRMED', targetDeliveryDate: '2026-09-30',
+            deliveryLocation: 'ที่ส่งมอบเดิม', specialRequirement: 'ส่งด่วน',
+          }],
+        }}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        updateFn={updateFn}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /บันทึกการแก้ไข/ }));
+
+    await waitFor(() => expect(updateFn).toHaveBeenCalled());
+    expect(updateFn.mock.calls[0][1].items[0]).toMatchObject({
+      quantityType: 'CONFIRMED',
+      targetDeliveryDate: '2026-09-30',
+      deliveryLocation: 'ที่ส่งมอบเดิม',
+      specialRequirement: 'ส่งด่วน',
+    });
+  });
+
+  it('sends the ESTIMATE default and three nulls for a brand-new create-mode row', async () => {
+    const { createFn } = renderModal({ ticketItems: [] });
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fireEvent.change(screen.getAllByLabelText('รายละเอียดสินค้า')[0], { target: { value: 'สินค้าใหม่ยังไม่มีใน catalog' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(createFn).toHaveBeenCalled());
+    expect(createFn.mock.calls[0][0].items[0]).toMatchObject({
+      quantityType: 'ESTIMATE',
+      targetDeliveryDate: null,
+      deliveryLocation: null,
+      specialRequirement: null,
+    });
   });
 });
 
