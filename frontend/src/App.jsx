@@ -1,6 +1,7 @@
-import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { api } from './api/index.js';
+import { setUnauthorizedHandler } from './api/client.js';
 import { AppShell } from './components/layout/AppShell.jsx';
 import { Toast } from './components/common/Toast.jsx';
 import { RouteFallback } from './components/common/RouteFallback.jsx';
@@ -141,6 +142,39 @@ export function App() {
   // instead of re-deriving `!user?.manager` inline — a manager-flagged
   // employee lands on DivisionManagerOverview above, never here.
   const isPlainEmployee = user?.role === 'employee' && !isDivisionManager(user);
+
+  // Sessions idle out after 30 minutes. Without this, one that died mid-use left every subsequent
+  // query throwing the generic "คำขอไม่สำเร็จ" with no hint that signing in again is the fix, until
+  // the user reloaded of their own accord — the boot `auth.me` probe was the only place a 401 was
+  // ever acted on. `client.js` calls this on any 401 that is not one of the auth probes.
+  //
+  // The handler lives behind a ref because `showToast`'s identity is UNSTABLE (useToast re-creates
+  // it every render, which is what makes it able to carry a fresh toast). Putting it in this
+  // effect's dependency array would re-register on every render; leaving it out of the array while
+  // calling it directly would capture a stale one. The ref is re-pointed on each render and the
+  // effect registers exactly once.
+  const handleSessionExpiredRef = useRef(null);
+  // Written in an effect with NO dependency array (runs after every render), not during render —
+  // react-hooks/refs forbids the latter, and this is the standard "latest ref" shape.
+  useEffect(() => {
+    handleSessionExpiredRef.current = () => {
+      // Guard on `user`, not on a module flag: several queries fail together when a session dies,
+      // so without this the user gets one toast per in-flight request. After the first, `user` is
+      // null and the rest are no-ops. It also keeps a stray 401 from bouncing someone who is not
+      // signed in to begin with.
+      if (!user) return;
+      setUser(null);
+      resetData();
+      showToast('error', 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง');
+    };
+  });
+
+  // Registers once, for the app's lifetime. The indirection through the ref is what lets that be
+  // once: it always reaches the CURRENT closure without this effect having to depend on `user`,
+  // `resetData` or `showToast` — the last of which has an unstable identity by design (useToast
+  // re-creates it every render, which is what lets it carry a fresh toast), so depending on it
+  // would re-register on every single render.
+  useEffect(() => setUnauthorizedHandler(() => handleSessionExpiredRef.current?.()), []);
 
   useEffect(() => {
     let alive = true;
