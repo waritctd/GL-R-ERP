@@ -221,6 +221,25 @@ export function TaxAllowanceForm({
     );
   };
 
+  // What the collapsed address section says about itself. Built from the live form values (not
+  // `defaultValues`) so editing an address and closing the section shows the edit, not the value it
+  // started with — a summary that can go stale is worse than none, because it invites trusting it.
+  //
+  // Only the parts that identify a place: house number, moo, soi, road, then the administrative
+  // chain. อาคาร / ห้องเลขที่ / ชั้น / แยก are left out — including them would rebuild the wall of
+  // text this summary exists to replace, and they never disambiguate on their own.
+  // A targeted watch rather than reading `watchedValues` above: that one is `useWatch({ control })
+  // ?? {}`, so its identity changes on every render and memoising against it would recompute every
+  // time anyway (eslint react-hooks/exhaustive-deps says so).
+  const watchedAddress = useWatch({ control, name: 'lorYor01.address' });
+  const addressSummary = useMemo(() => {
+    const address = watchedAddress ?? {};
+    return ['houseNo', 'moo', 'soi', 'road', 'subDistrict', 'district', 'province', 'postalCode']
+      .map((key) => (address[key] ?? '').toString().trim())
+      .filter(Boolean)
+      .join(' ');
+  }, [watchedAddress]);
+
   const identityFields = (
     <div className="grid gap-4">
       <FormGrid>
@@ -236,17 +255,40 @@ export function TaxAllowanceForm({
           <input id="ta-last-name" type="text" disabled={readOnly} {...register('lorYor01.lastNameTh')} />
         </FormField>
       </FormGrid>
-      <p className="m-0 text-2xs font-extrabold uppercase tracking-wide text-text-muted">ที่อยู่</p>
-      <FormGrid>
-        {LOR_YOR_01_ADDRESS_KEYS.map((key) => (
-          <FormField key={key} label={ADDRESS_LABELS[key]} htmlFor={`ta-addr-${key}`}
-            error={key === 'postalCode' ? errors.lorYor01?.address?.postalCode?.message : undefined}>
-            <input id={`ta-addr-${key}`} type="text" disabled={readOnly}
-              maxLength={key === 'postalCode' ? 5 : undefined}
-              {...register(`lorYor01.address.${key}`)} />
-          </FormField>
-        ))}
-      </FormGrid>
+      {/*
+        The address is 13 fields — the government form's full breakdown, down to อาคาร / ห้องเลขที่
+        / ชั้น / แยก — and it arrives PRE-FILLED from the employee register. Stacked one per row on
+        a phone that is ~2,700px of inputs nobody usually touches, sitting between the employee and
+        the ข้อ they came to fill in. Measured at 390px: this open section alone was 3,341px of a
+        4,340px page (5.1 screens), while every other ข้อ was collapsed at ~100px.
+
+        So it collapses too, and shows what it holds in its subtitle. The identity section stays
+        open — it is the form's entry point and losing that would leave a wall of closed accordions
+        — but "open" now means the three fields that identify you, not sixteen.
+
+        Unmounting registered inputs is safe here for the same reason it is safe for every ข้อ
+        below: react-hook-form defaults `shouldUnregister: false`, so a collapsed field keeps its
+        value and still submits. That is a library default this form depends on, and
+        TaxAllowanceForm.test.jsx pins it rather than trusting it — see the file header.
+      */}
+      <CollapsibleSection
+        id="ta-section-address"
+        headingLevel={3}
+        title="ที่อยู่"
+        subtitle={addressSummary || 'ยังไม่ได้กรอกที่อยู่'}
+        defaultOpen={false}
+      >
+        <FormGrid>
+          {LOR_YOR_01_ADDRESS_KEYS.map((key) => (
+            <FormField key={key} label={ADDRESS_LABELS[key]} htmlFor={`ta-addr-${key}`}
+              error={key === 'postalCode' ? errors.lorYor01?.address?.postalCode?.message : undefined}>
+              <input id={`ta-addr-${key}`} type="text" disabled={readOnly}
+                maxLength={key === 'postalCode' ? 5 : undefined}
+                {...register(`lorYor01.address.${key}`)} />
+            </FormField>
+          ))}
+        </FormGrid>
+      </CollapsibleSection>
       <p className="m-0 text-xs text-text-muted">
         ข้อมูลนี้กรอกให้อัตโนมัติจากทะเบียนพนักงาน แก้ไขได้ และจะบันทึกกลับเข้าทะเบียนก็ต่อเมื่อฝ่ายบุคคลอนุมัติแล้วเท่านั้น
       </p>

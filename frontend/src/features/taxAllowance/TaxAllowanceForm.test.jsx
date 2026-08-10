@@ -90,6 +90,65 @@ describe('TaxAllowanceForm — the page is the government form', () => {
       expect(onSubmit.mock.calls[0][0].lifeInsuranceAllowance).toBe(12345);
     });
   });
+
+  /**
+   * The address is the sharper version of the case above, and it needs its own test.
+   *
+   * The 13 address fields are pre-filled from the employee register and their section now starts
+   * COLLAPSED — 13 stacked inputs of mostly-blank government address slots were 3,341px of a
+   * 4,340px page at 390px, between the employee and the ข้อ they came to fill in.
+   *
+   * Collapsed by default means the inputs are never mounted at all unless the employee chooses to
+   * open them, so the address reaches the wire purely through form state. If `shouldUnregister`
+   * ever flips, the ข้อ test above fails only for someone who typed into a ข้อ and closed it —
+   * whereas EVERY declaration would silently file a blank address, on a government form, with
+   * nobody having touched anything. That is worth pinning separately.
+   */
+  it('a pre-filled address still submits while its section has never been opened', () => {
+    const onSubmit = vi.fn();
+    const defaults = emptyAllowanceValues();
+    defaults.lorYor01 = {
+      ...defaults.lorYor01,
+      address: { ...defaults.lorYor01?.address, houseNo: '123/45', province: 'กรุงเทพมหานคร', postalCode: '10310' },
+    };
+    renderForm({ onSubmit, defaultValues: defaults, signedFormAttached: true });
+
+    // Never opened: the inputs are not in the document, and the summary is what the employee reads.
+    expect(document.getElementById('ta-addr-houseNo')).toBeNull();
+    expect(screen.getByText(/123\/45/)).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'ยื่นแบบแจ้ง' }));
+    return vi.waitFor(() => {
+      expect(onSubmit).toHaveBeenCalled();
+      const submitted = onSubmit.mock.calls[0][0];
+      expect(submitted.lorYor01.address.houseNo).toBe('123/45');
+      expect(submitted.lorYor01.address.province).toBe('กรุงเทพมหานคร');
+      expect(submitted.lorYor01.address.postalCode).toBe('10310');
+    });
+  });
+
+  // The collapsed summary is the only view of the address an employee gets without opening it, so
+  // it has to track edits. A summary built from `defaultValues` would look right on load and then
+  // quietly go stale the moment someone corrected a typo — worse than no summary, because it
+  // invites trusting it.
+  it('the collapsed summary reflects an edited address, not the value it loaded with', () => {
+    const defaults = emptyAllowanceValues();
+    defaults.lorYor01 = {
+      ...defaults.lorYor01,
+      address: { ...defaults.lorYor01?.address, houseNo: '123/45', province: 'กรุงเทพมหานคร' },
+    };
+    renderForm({ defaultValues: defaults });
+
+    // By id, not by accessible name: the identity section's own subtitle is "ชื่อ
+    // เลขประจำตัวผู้เสียภาษีอากร และที่อยู่ตามแบบ ล.ย.01", so /ที่อยู่/ matches its header too.
+    const addressHeader = document.getElementById('ta-section-address-header');
+    fireEvent.click(addressHeader);
+    fireEvent.change(document.getElementById('ta-addr-houseNo'), { target: { value: '999' } });
+    fireEvent.click(addressHeader); // collapse again
+
+    expect(screen.getByText(/999 กรุงเทพมหานคร/)).not.toBeNull();
+    expect(screen.queryByText(/123\/45/)).toBeNull();
+  });
 });
 
 describe('TaxAllowanceForm — the signed form gates submission', () => {

@@ -490,6 +490,26 @@ describe('TaxAllowancePage', () => {
       if (header.getAttribute('aria-expanded') === 'false') fireEvent.click(header);
     }
 
+    /**
+     * The 13 address fields moved behind their own collapsed sub-section — 3,341px of a 4,340px
+     * page at 390px, pre-filled and rarely touched. They are not in the document until opened, so
+     * every assertion below that reads one has to open it first.
+     *
+     * By id rather than by accessible name: the identity section's subtitle is "ชื่อ
+     * เลขประจำตัวผู้เสียภาษีอากร และที่อยู่ตามแบบ ล.ย.01", so a /ที่อยู่/ name query matches its
+     * header as well and fails ambiguously.
+     *
+     * These still assert on the INPUTS rather than on the collapsed summary, deliberately: what is
+     * under test is where the prefill comes from and which declaration wins, and an input is the
+     * unambiguous read of that. That the values survive while the section stays SHUT — the thing
+     * this collapse could plausibly have broken — is pinned separately, on the submit payload, in
+     * TaxAllowanceForm.test.jsx.
+     */
+    function openAddress() {
+      const header = document.getElementById('ta-section-address-header');
+      if (header?.getAttribute('aria-expanded') === 'false') fireEvent.click(header);
+    }
+
     it('seeds the identity block on a year that has never been filed', async () => {
       api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [], headerPrefill });
       renderPage();
@@ -500,6 +520,7 @@ describe('TaxAllowancePage', () => {
       });
       expect(document.getElementById('ta-first-name').value).toBe('สมชาย');
       expect(document.getElementById('ta-last-name').value).toBe('ใจดี');
+      openAddress();
       expect(document.getElementById('ta-addr-houseNo').value).toBe('123/45');
       expect(document.getElementById('ta-addr-moo').value).toBe('4');
       expect(document.getElementById('ta-addr-postalCode').value).toBe('10310');
@@ -517,6 +538,7 @@ describe('TaxAllowancePage', () => {
       // disclosed before they can be read — being blank is still the assertion.
       openIdentity();
       expect(document.getElementById('ta-taxpayer-id').value).toBe('');
+      openAddress();
       expect(document.getElementById('ta-addr-houseNo').value).toBe('');
     });
 
@@ -533,6 +555,7 @@ describe('TaxAllowancePage', () => {
       });
       openIdentity();
       expect(document.getElementById('ta-taxpayer-id').value).toBe('');
+      openAddress();
       expect(document.getElementById('ta-addr-province').value).toBe('');
     });
 
@@ -561,6 +584,7 @@ describe('TaxAllowancePage', () => {
       await waitFor(() => {
         expect(document.getElementById('ta-taxpayer-id').value).toBe('9999999999999');
       });
+      openAddress();
       expect(document.getElementById('ta-addr-houseNo').value).toBe('77/7');
       // ...while the slots that declaration left blank still come from the master.
       expect(document.getElementById('ta-addr-province').value).toBe('กรุงเทพมหานคร');

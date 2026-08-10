@@ -86,9 +86,26 @@ export function ProfilePage({ user, employee, profileRequests, onCreateRequest, 
                 <small className="block text-[length:var(--text-xs)] font-medium text-text-muted">{field.displayValue ?? field.oldValue}</small>
               </span>
               {isEmployee ? (
+                /*
+                  `aria-label` names WHICH field, because the visible text cannot. There is one of
+                  these per editable contact field, so a sighted user reads the button against the
+                  label beside it while a screen reader hears four buttons all called "ขอแก้ไข" and
+                  a fifth called "รออนุมัติ" — announced identically, in a list, with nothing to
+                  choose between them. WCAG 2.4.6: the accessible name has to carry the context the
+                  layout is carrying visually.
+
+                  The visible text is unchanged; `aria-label` overrides the accessible name only.
+                  It tracks the pending state too — a button that says "awaiting approval" for the
+                  phone number must not announce itself as "request a change to the phone number".
+                */
                 <Button
                   type="button"
                   variant="secondary"
+                  aria-label={
+                    pendingKeys.has(field.fieldKey)
+                      ? `${field.fieldLabel}: รออนุมัติ`
+                      : `ขอแก้ไข${field.fieldLabel}`
+                  }
                   onClick={() => setRequestField(field)}
                   disabled={pendingKeys.has(field.fieldKey)}
                 >

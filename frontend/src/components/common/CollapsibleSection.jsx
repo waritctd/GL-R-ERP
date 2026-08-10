@@ -32,7 +32,16 @@ export function CollapsibleSection({
   children,
   id,
   headerRight,
+  /**
+   * Heading level for the section title, as a number. Defaults to 2, which is right for a section
+   * sitting directly on a page. Pass 3 when NESTING one of these inside another — a section inside
+   * a section is a sub-section, and emitting a second <h2> there would flatten the two into
+   * siblings in the heading outline, which is exactly the navigation aid this component wraps its
+   * button in a heading to provide.
+   */
+  headingLevel = 2,
 }) {
+  const Heading = `h${headingLevel}`;
   const [open, setOpen] = useState(defaultOpen);
   const autoId = useId();
   const sectionId = id ?? autoId;
@@ -48,7 +57,7 @@ export function CollapsibleSection({
         <div className="collapsible-header flex items-center justify-between gap-3">
           <div className="flex-1 flex items-center pt-3 px-3 pb-0">
             <span className="collapsible-title-group flex flex-col gap-0.5">
-              <h2 id={headerId} className="collapsible-title text-[length:var(--text-base)] m-0">{title}</h2>
+              <Heading id={headerId} className="collapsible-title text-[length:var(--text-base)] m-0">{title}</Heading>
               {subtitle ? <span className="collapsible-subtitle text-[length:var(--text-xs)] font-medium text-text-muted">{subtitle}</span> : null}
             </span>
           </div>
@@ -84,7 +93,7 @@ export function CollapsibleSection({
           `flex-1` moves to the heading (the flex child now) and the button takes `w-full`, so the
           rendered layout is unchanged for every existing caller.
         */}
-        <h2 id={`${headerId}-heading`} className="collapsible-title-heading m-0 min-w-0 flex-1 text-[length:var(--text-lg)] font-bold mobile:basis-full">
+        <Heading id={`${headerId}-heading`} className="collapsible-title-heading m-0 min-w-0 flex-1 text-[length:var(--text-lg)] font-bold mobile:basis-full">
         <button
           type="button"
           id={headerId}
@@ -107,7 +116,7 @@ export function CollapsibleSection({
             {subtitle ? <span className="collapsible-subtitle text-[length:var(--text-xs)] font-medium text-text-muted">{subtitle}</span> : null}
           </span>
         </button>
-        </h2>
+        </Heading>
         {headerRight ? <div className="collapsible-header-right pr-4 mobile:basis-full mobile:pb-4 mobile:pl-4">{headerRight}</div> : null}
       </div>
       {open ? (
