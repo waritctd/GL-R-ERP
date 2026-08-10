@@ -13,15 +13,29 @@ import { apiSessionFor, apiWrite, disposeSessions } from './helpers/api.js';
 //    three years back, past FULL_SERVICE_MONTHS, so the prorating branch returns the full quota.
 //    `submitting VACATION now succeeds` below is the regression guard for that.
 //
-// 2. The service, which the README previously mis-attributed to the seed. **LeaveService#submit
-//    never produces a SUBMITTED request at all.** Line ~286 reads
+// 2. The service, which the README previously mis-attributed to the seed. This half is now
+//    HISTORY on this branch, and the correction matters because the paragraph below used to be
+//    the reason this file avoids the review path.
+//
+//    It USED to read
 //
 //        LeaveStatus status = systemNote == null ? LeaveStatus.APPROVED : LeaveStatus.AUTO_REJECTED;
 //
-//    so a submission is auto-approved or auto-rejected on the spot; there is no pending state to
-//    review. Fixing the hire date changed VACATION from AUTO_REJECTED to APPROVED — it did not,
-//    and could not, produce anything reviewable. No amount of seed work reaches the review path
-//    through the API, because that path is not reachable from #submit by construction.
+//    i.e. a submission was auto-approved or auto-rejected on the spot and there was no pending
+//    state to review; fixing the hire date changed VACATION from AUTO_REJECTED to APPROVED and
+//    could not, by construction, produce anything reviewable.
+//
+//    The 2026-08-05 "leave requires approval" change replaced that: LeaveService#submit now reads
+//
+//        LeaveStatus status = systemNote == null ? LeaveStatus.SUBMITTED : LeaveStatus.AUTO_REJECTED;
+//
+//    so a rule-passing request DOES land SUBMITTED and wait for #approve/#reject. (See
+//    #notifyAfterSubmit's javadoc, which removed the then-dead LEAVE_AUTO_APPROVED branch.)
+//    Consequences for this file: the guard below no longer pins a status, and the "one consumable
+//    SUBMITTED row" constraint described next is now a floor rather than a ceiling — a submission
+//    can create reviewable rows, so a future test CAN drive approve → APPROVED without a database
+//    reset. Nothing here does that yet; it is recorded so the next person does not re-derive it
+//    from the paragraph above and conclude, wrongly, that the path is unreachable.
 //
 // WHAT THAT LEAVES TESTABLE, AND WHY IT IS STILL WORTH HAVING.
 //
@@ -44,9 +58,10 @@ import { apiSessionFor, apiWrite, disposeSessions } from './helpers/api.js';
 // surfaces with opposite answers for the same actor, which is precisely what an approximating mock
 // gets wrong.
 //
-// STILL NOT COVERED, deliberately: the successful approve → APPROVED transition. Driving it needs
-// either a reviewable row the API cannot create, or a per-test database reset this suite does not
-// have. Recorded in e2e-real/README.md rather than faked here.
+// STILL NOT COVERED: the successful approve → APPROVED transition. This was deliberate while
+// #submit could not produce a reviewable row; since the 2026-08-05 change it is simply not written
+// yet, and it is now writable (submit a request, approve it as HR, cancel it back). Recorded in
+// e2e-real/README.md rather than faked here.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const OWNER = 'employee'; // DEMO-EMP01 — the employee V21's SUBMITTED row belongs to.
@@ -94,9 +109,8 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
 
   test('submitting VACATION now succeeds — the V139 hire-date regression guard', async () => {
     // Before V139 this returned 400: hire_date was NULL, employeeAnnualQuota returned zero, and
-    // the request failed closed with no quota. It now lands APPROVED, which is #submit's normal
-    // outcome for a request that breaks no rule (there is no SUBMITTED path — see this file's
-    // header). Cancelled immediately so the run leaves no live rows behind.
+    // the request failed closed with no quota. It now succeeds and lands in a live status.
+    // Cancelled immediately so the run leaves no live rows behind.
     const day = daysFromToday(45);
     const response = await apiWrite(sessions[OWNER], 'post', '/api/leave', {
       leaveTypeCode: 'VACATION',
@@ -111,18 +125,39 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
     ).toBe(200);
 
     const { request: created } = await response.json();
-    expect(created.status).toBe('APPROVED');
+    // The resulting status is deliberately NOT pinned to one value, and that is a fix rather than a
+    // weakening. This guard is about the HIRE-DATE BACKFILL — "quota is non-zero, so the request is
+    // accepted at all" — and pinning `APPROVED` additionally encoded which workflow #submit runs.
+    // Those two moved apart: leave used to be auto-approved on the spot, and the 2026-08-05 "leave
+    // requires approval" change made a rule-passing request land SUBMITTED and wait for
+    // #approve/#reject (LeaveService#submit, `status = systemNote == null ? SUBMITTED :
+    // AUTO_REJECTED`, and see #notifyAfterSubmit's javadoc on removing the dead LEAVE_AUTO_APPROVED
+    // branch). A branch carrying the old service and one carrying the new both satisfy this test's
+    // actual subject while disagreeing on that one field, which is exactly how it failed on the
+    // main→uat sync for a reason that had nothing to do with hire dates.
+    //
+    // AUTO_REJECTED is the value that must NOT appear: that is the pre-V139 symptom (a systemNote
+    // was attached because the prorated quota was zero), so this assertion still fails loudly if
+    // the backfill regresses.
+    expect(
+      ['SUBMITTED', 'APPROVED'],
+      'a rule-passing request must land in a live status; AUTO_REJECTED means the quota gate fired '
+        + 'again, which is the hire-date regression this test exists to catch'
+    ).toContain(created.status);
     expect(
       Number(created.quotaRemainingBefore),
       'quota must be non-zero — that is the whole point of the backfill'
     ).toBeGreaterThan(0);
 
-    // Cancel as HR, NOT as the owner. LeaveService#cancel lets a non-reviewer cancel only a
-    // SUBMITTED request (`if (!reviewer && !"SUBMITTED".equals(...)) -> 409`), and #submit just
-    // auto-APPROVED this one — so an owner-issued cancel 409s and silently leaves the row live.
+    // Cancel as HR, NOT as the owner — for the same reason the status above is not pinned: HR is
+    // the one canceller that works whichever status #submit produced. LeaveService#cancel lets a
+    // non-reviewer cancel only a SUBMITTED request (`if (!reviewer && !"SUBMITTED".equals(...)) ->
+    // 409`), so an owner-issued cancel 409s against an auto-APPROVED row and silently leaves it
+    // live; a reviewer may cancel from either SUBMITTED or APPROVED.
     // That leak is not cosmetic: VACATION's annual quota is 6.00 days, and CANCELLED is outside
-    // ACTIVE_QUOTA_STATUSES while APPROVED is inside it, so six leaked runs exhaust the quota and
-    // every later run fails on a zero balance for a reason that looks nothing like the cause.
+    // ACTIVE_QUOTA_STATUSES while SUBMITTED and APPROVED are both inside it, so six leaked runs
+    // exhaust the quota and every later run fails on a zero balance for a reason that looks
+    // nothing like the cause.
     // Asserted rather than fired and forgotten, so a future change to the cancel gate surfaces
     // here instead of as a slow quota leak.
     const cleanup = await apiWrite(sessions.hr, 'post', `/api/leave/${created.id}/cancel`, {});
