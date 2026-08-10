@@ -69,7 +69,7 @@ Testcontainers is unavailable and the `TEST_DB_URL` path was used instead).
 | `cd frontend && npm test` | ✅ **134 files / 1581 tests passed**, 102s |
 | `cd frontend && npm run build` | ✅ built in 629ms |
 | `cd backend && ./mvnw -B test -Dtest='!*IntegrationTest' -Dtest.fork.count=1` | ⚠️ **1287 tests, 4 failures, 0 errors, 2 skipped** — all four are PDF font substitution and **local-only; CI passes them**, see below |
-| `cd backend && ./mvnw -B clean verify` | ⏸️ **not completed** — runs correctly but is impractically slow on this path, see below |
+| `cd backend && ./mvnw -B clean verify` | ✅ **green in CI** (13m24s, all 128 integration tests). Not completed *locally* — impractically slow without Docker, see gotcha 2 |
 | `cd frontend && npm run test:e2e` | ✅ **95 tests pass.** 3 need `--timeout` raised above the 30s default on slow hardware — see §3.1 |
 
 ### Three environment gotchas that each cost real time
@@ -109,7 +109,7 @@ Recorded because none of them is a code defect and all three look like one:
      and that **nothing currently populates `backend/fonts/` on Render**; the build warns and
      continues. `backend/fonts/README.md` records the consequence: the substitute is wider and
      **header text overflows the certification badges** on customer-facing documents. Tracked as
-     **#666**; it is item 8 in §6.
+     **#666**; it is item 7 in §6.
 
 ### 3.1 Real-stack e2e — the suite that carries the authorization evidence
 
@@ -207,7 +207,7 @@ than inferred from the max version:
 | # | Check | How to run it here | Status |
 |---|---|---|---|
 | 3 | **Integration** — all real endpoints tested | `npm run test:e2e` → `api-surface.spec.js` walks `API_ROUTES` (~219 endpoints, derived from `hrApi.js` at runtime, so a new endpoint is in scope the moment it exists) | ⚠️ Asserts *reachability and refusal*: anonymous GET **and** POST are 401, and no endpoint 5xxs for any authenticated role. It does not assert any endpoint returns *correct data*. |
-| 20 | **Environment check** — API URL, DB, storage, env vars | `vercel.json` proxies `/api/*` → `https://gl-r-erp.onrender.com`; `render.yaml` declares the backend env; secrets are `sync: false` (dashboard-set, not in git) | ⚠️ Config is declarative and readable. **Not verifiable from a checkout**: which database `SPRING_DATASOURCE_URL` points at, and how `APP_FLYWAY_VALIDATE_ON_MIGRATE` is set, both live in the Render dashboard. See §6 items 3 and 5. |
+| 20 | **Environment check** — API URL, DB, storage, env vars | `vercel.json` proxies `/api/*` → `https://gl-r-erp.onrender.com`; `render.yaml` declares the backend env; secrets are `sync: false` (dashboard-set, not in git) | ⚠️ Config is declarative and readable. **Not verifiable from a checkout**: which database `SPRING_DATASOURCE_URL` points at, and how `APP_FLYWAY_VALIDATE_ON_MIGRATE` is set, both live in the Render dashboard. See §6 items 2 and 4. |
 | 21 | **No mock/test-data logic in the production build** | `cd frontend && npm run build`, then grep `dist/` for mock markers | ✅ **Verified today.** `src/api/index.js` selects the impl on `VITE_USE_MOCKS === 'true'` (so unset ⇒ real API) **and** throws at build time if mocks are on in a PROD build. Vite tree-shakes `mockApi.js` out entirely: `dist/` contains no `MOCK_`, no `mockApi`, no mock-mode strings. |
 
 ### Phase 3 — End-to-end
@@ -382,13 +382,11 @@ not to *claim* something is verified.
 7. **Payroll, tax, commission and pricing math.** Out of scope for the mock by standing rule — a
    mock that mirrors a computation can never validate it. Backend unit tests are the evidence, and
    1287 of them pass.
-8. **The full backend integration suite (128 classes) has not been run end to end.** Not because it
-   fails — the targeted subset passes, including `FlywayMigrationTest`, which applies core + demo
-   migrations to a clean database and therefore validates V139. It is a runtime problem: see
-   gotcha 2 in §3.
-
 **Closed on this branch**, previously on this list: the three unseeded roles; HR's leave-review
-authorization; both recorded error-handling defects; uncaught JS exceptions during route walks.
+authorization; both recorded error-handling defects; uncaught JS exceptions during route walks; and
+the full backend integration suite, which is **green in CI** (`build-and-test`, 13m24s, all 128
+classes on Docker/Testcontainers). Only the *local* run is impractical, for the reason in gotcha 2 —
+that is a property of the `TEST_DB_URL` path, not of the suite.
 
 ## 6. Open items before UAT
 
@@ -396,17 +394,16 @@ Ordered by what blocks a sign-off soonest.
 
 | | Item | Why it matters |
 |---|---|---|
-| 1 | **Run `./mvnw -B clean verify` on a machine with Docker.** | `npm run test:e2e` is green and the 1287 backend unit tests are green, but the 128 integration-test classes have not been run end to end — the external-DB path is too slow (§3, gotcha 2). Docker/Testcontainers is the practical route. |
-| 2 | **Verify and close #439.** | It is the only open critical, and it no longer describes reality. A stale critical either blocks the gate for nothing or trains people to ignore the label. |
-| 3 | **Decide `APP_FLYWAY_VALIDATE_ON_MIGRATE` per database — do not flip it globally.** | See below; the right answer differs for the two projects, and getting it backwards breaks a deploy. |
-| 4 | **Get UAT's `V900`–`V911` seed into the repository.** | UAT's fixtures cannot currently be rebuilt from source. If that database is lost or reset, they go with it — customer master, the golden PCR deal, the `account` persona, and the only accounts that exist for `account`, `warehouse` and `qc`. |
-| 5 | **Confirm which backend serves the UAT database.** | `render.yaml` declares **one** service, and its documented configuration (`prod,demo` + demo Flyway locations) matches the `GL&R` showcase project, not UAT. Whatever points at UAT is not described in the repo. |
-| 6 | **Decide and publish the supported browser set.** | Testers need to know what to file a bug against. Today only Chromium has ever been run. |
-| 7 | **Confirm the deployed UAT build is the intended commit,** and that `GET /actuator/health` answers. | `autoDeploy: false`; not checkable from a checkout. |
-| 8 | **Decide whether customer-facing PDFs may ship in substitute fonts** (**#666**). | `backend/fonts/` is unpopulated on Render, so quotations and deposit notices render in whatever LibreOffice substitutes; `backend/fonts/README.md` records that the substitute is wider and overflows the certification badges. Nothing catches it: the build warns and continues, and the renderer tests pass under substitution in CI. Either supply the licensed fonts to the image or accept the output deliberately. |
-| 9 | **Brief testers on the login rate limiter.** | See below — this will otherwise eat a UAT session. |
+| 1 | **Verify and close #439.** | It is the only open critical, and it no longer describes reality. A stale critical either blocks the gate for nothing or trains people to ignore the label. |
+| 2 | **Decide `APP_FLYWAY_VALIDATE_ON_MIGRATE` per database — do not flip it globally.** | See below; the right answer differs for the two projects, and getting it backwards breaks a deploy. |
+| 3 | **Get UAT's `V900`–`V911` seed into the repository.** | UAT's fixtures cannot currently be rebuilt from source. If that database is lost or reset, they go with it — customer master, the golden PCR deal, the `account` persona, and the only accounts that exist for `account`, `warehouse` and `qc`. |
+| 4 | **Confirm which backend serves the UAT database.** | `render.yaml` declares **one** service, and its documented configuration (`prod,demo` + demo Flyway locations) matches the `GL&R` showcase project, not UAT. Whatever points at UAT is not described in the repo. |
+| 5 | **Decide and publish the supported browser set.** | Testers need to know what to file a bug against. Today only Chromium has ever been run. |
+| 6 | **Confirm the deployed UAT build is the intended commit,** and that `GET /actuator/health` answers. | `autoDeploy: false`; not checkable from a checkout. |
+| 7 | **Decide whether customer-facing PDFs may ship in substitute fonts** (**#666**). | `backend/fonts/` is unpopulated on Render, so quotations and deposit notices render in whatever LibreOffice substitutes; `backend/fonts/README.md` records that the substitute is wider and overflows the certification badges. Nothing catches it: the build warns and continues, and the renderer tests pass under substitution in CI. Either supply the licensed fonts to the image or accept the output deliberately. |
+| 8 | **Brief testers on the login rate limiter.** | See below — this will otherwise eat a UAT session. |
 
-### Item 3 in full — why `validate-on-migrate` is not a single switch
+### Item 2 in full — why `validate-on-migrate` is not a single switch
 
 `application-prod.yml` reads `validate-on-migrate: ${APP_FLYWAY_VALIDATE_ON_MIGRATE:false}`, and
 the `prod` profile is activated by **both** the real deploy and the public showcase. That single
@@ -429,7 +426,7 @@ upstream. `V67`'s header records that having already happened here. The fix is p
 not a global flip: turn validation on where the history is clean, and keep the drifted showcase
 DB on `false` until its history is repaired.
 
-### Item 9 in full — the login rate limiter
+### Item 8 in full — the login rate limiter
 
 `LoginRateLimitFilter` counts **both 401 and 403** responses to `POST /api/auth/login` as auth
 failures: **5 per account** and **20 per client IP** within a 900s window, locking out for 900s
