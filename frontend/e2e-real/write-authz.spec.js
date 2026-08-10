@@ -29,22 +29,20 @@ import { writeEndpointsWithId } from './helpers/surface.js';
 
 const WRITE_ENDPOINTS = writeEndpointsWithId();
 
-// Real defects, recorded as an EXACT expectation rather than skipped — the same pattern (and
-// for the same reason) as api-surface.spec.js's KNOWN_SERVER_ERRORS: a new server error fails
-// the sweep, and so does fixing one of these without removing its entry.
+// Empty, and that is the assertion — the same pattern (and for the same reason) as
+// api-surface.spec.js's KNOWN_SERVER_ERRORS: a new server error fails the sweep, and so does
+// fixing one without removing its entry.
 //
-// PriceImportController answers a non-existent id with 500 rather than 404, on every verb.
-// api-surface.spec.js already records the GET half of this (`GET /api/price-import/profile/
-// {factoryId}`); these are the write half, and together they make it one coherent finding
-// rather than three unrelated ones: that controller has no missing-resource handling at all.
-// Only `import` and `ceo` reach it — every other role is refused 403 before the lookup, which
-// is itself worth noticing, since it means the gap is invisible to five of the six roles.
-const KNOWN_SERVER_ERRORS = [
-  'ceo POST /api/price-import/commit/999999',
-  'ceo POST /api/price-import/validate/999999',
-  'import POST /api/price-import/commit/999999',
-  'import POST /api/price-import/validate/999999',
-];
+// This list previously held all four write halves of one coherent finding — PriceImportController
+// had no missing-resource handling on any verb, so an unknown id produced 500 rather than 404 on
+// commit and validate alike (and on the GET that api-surface.spec.js recorded). Both paths run
+// through PriceImportService#requireDraft, which now catches EmptyResultDataAccessException and
+// raises 404 before the DRAFT status check — a missing row is not a status conflict, so 409 would
+// have been a different wrong answer.
+//
+// Only `import` and `ceo` ever reached it; every other role was refused 403 before the lookup,
+// which is why the defect stayed invisible for so long.
+const KNOWN_SERVER_ERRORS = [];
 
 test.describe('write endpoints refuse a resource that does not exist', () => {
   /** @type {Record<string, import('@playwright/test').APIRequestContext>} */

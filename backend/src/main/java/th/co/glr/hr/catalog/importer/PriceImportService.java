@@ -469,11 +469,24 @@ public class PriceImportService {
 
     // ── helper ────────────────────────────────────────────────────────────────
 
+    // Guards both POST /validate/{versionId} and POST /commit/{versionId}. An unknown version id
+    // used to escape as EmptyResultDataAccessException and surface as a 500 from
+    // handleDataAccess, so "this version does not exist" and "the server broke" were
+    // indistinguishable to the caller — the write half of the same defect fixed in
+    // getRawProfile above, recorded in frontend/e2e-real/write-authz.spec.js.
+    //
+    // The 404 is deliberately raised before the DRAFT check: a missing row is not a status
+    // conflict, and answering 409 for it would be a different wrong answer.
     private void requireDraft(long versionId) {
-        String status = jdbc.queryForObject(
-            "SELECT status FROM price_catalog.price_list_versions WHERE version_id = :vid",
-            Map.of("vid", versionId), String.class
-        );
+        String status;
+        try {
+            status = jdbc.queryForObject(
+                "SELECT status FROM price_catalog.price_list_versions WHERE version_id = :vid",
+                Map.of("vid", versionId), String.class
+            );
+        } catch (EmptyResultDataAccessException e) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบ price list version id=" + versionId);
+        }
         if (!"DRAFT".equals(status))
             throw new ApiException(HttpStatus.CONFLICT,
                 "version " + versionId + " สถานะ " + status + " (ต้อง DRAFT)");
@@ -517,11 +530,21 @@ public class PriceImportService {
 
     // ── C4: profile management ────────────────────────────────────────────────
 
+    // Same lookup as loadProfile above, and now the same missing-row behaviour. It used to let
+    // EmptyResultDataAccessException escape, which handleDataAccess turns into a 500 — so an
+    // unknown factory id reported a server fault on GET /api/price-import/profile/{factoryId}
+    // while the identical query one method up correctly answered 404. Recorded against this
+    // endpoint in frontend/e2e-real/api-surface.spec.js (KNOWN_SERVER_ERRORS).
     public String getRawProfile(long factoryId) {
-        return jdbc.queryForObject(
-            "SELECT config FROM price_catalog.import_profiles WHERE factory_id = :fid",
-            Map.of("fid", factoryId), String.class
-        );
+        try {
+            return jdbc.queryForObject(
+                "SELECT config FROM price_catalog.import_profiles WHERE factory_id = :fid",
+                Map.of("fid", factoryId), String.class
+            );
+        } catch (EmptyResultDataAccessException e) {
+            throw new ApiException(HttpStatus.NOT_FOUND,
+                "ไม่พบ import profile สำหรับ factory id=" + factoryId);
+        }
     }
 
     @Transactional

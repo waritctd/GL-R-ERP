@@ -6,6 +6,7 @@
 | **Version** | 1.0 · 2 July 2026 |
 | **Audience** | QA, business testers |
 | **How to run** | Execute each case in order; record Pass/Fail and notes. Use the demo environment (`Demo@2026` accounts, one per role) or a seeded test DB. |
+| **Before you start** | [`13_Pre_UAT_Checklist.md`](13_Pre_UAT_Checklist.md) is the gate that must pass **before** these cases are worth executing — build/test baseline, environment state, role-account readiness, and the coverage gaps to keep in mind while testing. |
 
 ---
 
