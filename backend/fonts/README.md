@@ -73,20 +73,19 @@ RUN fc-cache -f -v && ...
    `DejaVu Sans` and `fc-match "Arial" family` prints `Liberation Sans` — measured, not assumed.
    That is exactly the production defect, and check 1 alone cannot see it.
 
-**An empty `backend/fonts/` now FAILS the build** (#666). It used to warn and continue, which is
-how the hosted service shipped substitute fonts for months with nothing but a build-log line
-nobody read — and this README claimed it already failed, so the two disagreed. They agree now.
-For a knowingly fontless throwaway build, opt out explicitly:
-`docker build --build-arg ALLOW_MISSING_FONTS=true ...`. Never for anything a user will see.
+**An empty `backend/fonts/` WARNS and continues.** #670 made it fatal — the right instinct, since
+a fontless image renders customer documents in substitutes and a build-log warning nobody reads is
+exactly how that shipped unnoticed. It was reverted under a UAT phase-1 deadline: Render builds
+from a fresh clone where this folder is always empty, so fatal meant the service could not deploy
+at all. `--build-arg ALLOW_MISSING_FONTS=false` makes it fatal again, for a build that *should*
+carry fonts.
 
-**Render (hosted):** resolved — the service no longer builds from source. Render's Docker builds
-run from a fresh git clone where this folder is always empty, so a Render-built image could never
-contain the fonts. `render.yaml` now uses `runtime: image` and pulls a pre-built image instead
-(#666). Build and push it with the script above, then deploy from the dashboard.
+The substitution guard from #670 is **kept**: if fonts are supplied and fontconfig substitutes one
+anyway, the build fails.
 
-The cost, stated plainly: **a push to `main` no longer produces a deployable artifact.** Backend
-changes need a build+push before the deploy. `autoDeploy: false` already made deploys manual, so
-this adds a step rather than changing the shape of the workflow.
+**Render (hosted): builds from source again, and therefore ships substitute fonts.** `render.yaml`
+is back on `runtime: docker` + `dockerfilePath`. `scripts/build-push-backend-image.sh` is left in
+place and working — restoring `runtime: image` with a real `image.url` is what finishes #666.
 
 **On-prem (future):** natural fit — your build server/CI job fetches `thai-fonts.tar.gz` into
 `backend/fonts/` as a step before `docker build`, exactly like the script does.
