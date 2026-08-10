@@ -57,9 +57,6 @@ const PriceImportPage = lazy(() => import('./features/catalog/PriceImportPage.js
 const CatalogSearchPage = lazy(() => import('./features/catalog/CatalogSearchPage.jsx').then(toDefault('CatalogSearchPage')));
 const PricingRequestQueuePage = lazy(() => import('./features/pricingRequests/PricingRequestQueuePage.jsx').then(toDefault('PricingRequestQueuePage')));
 const PricingRequestDetailPage = lazy(() => import('./features/pricingRequests/PricingRequestDetailPage.jsx').then(toDefault('PricingRequestDetailPage')));
-const ProcurementListPage = lazy(() => import('./features/procurement/ProcurementListPage.jsx').then(toDefault('ProcurementListPage')));
-const ProcurementDetailPage = lazy(() => import('./features/procurement/ProcurementDetailPage.jsx').then(toDefault('ProcurementDetailPage')));
-const ProcurementFulfilmentPage = lazy(() => import('./features/procurement/ProcurementFulfilmentPage.jsx').then(toDefault('ProcurementFulfilmentPage')));
 // Attendance calendar admin (PR #480 shipped the hr.holiday / hr.work_schedule_assignment write
 // API with no UI at all) — HR/CEO only, gated via canManageAttendanceCalendar. Never gated on
 // SALES_ENABLED: this is attendance/HR-core, not the sales/CRM stack.
@@ -427,22 +424,6 @@ export function App() {
                 <Route
                   path="/ceo-settings"
                   element={<CeoSettingsPage showToast={showToast} />}
-                />
-                <Route
-                  path="/factory-purchase-orders"
-                  element={<ProcurementListPage showToast={showToast} />}
-                />
-                <Route
-                  path="/factory-purchase-orders/:id"
-                  element={<ProcurementDetailPage showToast={showToast} />}
-                />
-                {/* Role-scoped views (Import build): combined "จัดซื้อ & นำเข้า" —
-                    fulfilment worklist (section 1) + the raw factory-PO list
-                    reused wholesale (section 2). /factory-purchase-orders(/:id)
-                    stay registered above for direct PO-detail deep-links. */}
-                <Route
-                  path="/procurement"
-                  element={<ProcurementFulfilmentPage user={user} showToast={showToast} />}
                 />
                 {/* Catalog browsing — the `canViewCatalog` guard in PATH_GUARDS
                     (sales/import/ceo/account/sales_manager) is only enforced if the

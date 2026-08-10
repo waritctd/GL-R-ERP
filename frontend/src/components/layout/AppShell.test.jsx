@@ -40,15 +40,28 @@ function renderShell(user, initialEntries = ['/']) {
 
 // Role-scoped views (Import build, docs/role-scoped-views.md): the sidebar's
 // รายการดีล item is gated on canViewDealPipeline, not canViewTickets — import
-// loses it, and the raw factory-PO nav item is replaced by the combined
-// "จัดซื้อ & นำเข้า" item pointing at /procurement.
+// loses it and leads with its pricing queue instead.
+//
+// The "จัดซื้อ & นำเข้า" item (/procurement) that used to sit here was removed
+// 2026-08-11 (owner ruling — factory purchase orders are not part of the
+// current business requirement, and the page's fulfilment worklist duplicated
+// ImportOverview's). Asserted wrong-way-round below: the item must be GONE,
+// not merely different, so a re-added nav entry fails this test.
 describe('AppShell navigation (role-scoped views)', () => {
-  it('hides รายการดีล for import and shows the combined จัดซื้อ & นำเข้า item instead', async () => {
+  it('hides รายการดีล for import and leads with คิวขอราคา', async () => {
     renderShell({ role: 'import', employeeId: 2, name: 'นำเข้า ทดสอบ', email: 'import@test.local' });
 
     await screen.findByText('เนื้อหา');
     expect(screen.queryByText('รายการดีล')).toBeNull();
-    expect(screen.getByText('จัดซื้อ & นำเข้า')).toBeTruthy();
+    expect(screen.getByText('คิวขอราคา')).toBeTruthy();
+  });
+
+  it('shows import no procurement / factory-purchase-order nav item', async () => {
+    renderShell({ role: 'import', employeeId: 2, name: 'นำเข้า ทดสอบ', email: 'import@test.local' });
+
+    await screen.findByText('เนื้อหา');
+    expect(screen.queryByText('จัดซื้อ & นำเข้า')).toBeNull();
+    expect(screen.queryByText('ใบสั่งซื้อโรงงาน')).toBeNull();
   });
 
   it('keeps รายการดีล for sales', async () => {

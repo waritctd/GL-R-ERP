@@ -5,7 +5,6 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
-import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -199,12 +198,6 @@ export function ImportOverview({ user, employee }) {
     setActiveBucket((current) => (current === key ? null : key));
   }
 
-  // "คิวของฉัน" — the two workspaces the worklist above feeds into: the
-  // pricing-request queue (pickup happens there) and the combined
-  // procurement/fulfilment page (everything past pickup happens there).
-  const pricingQueueCount = pricingRequests.filter((pr) => pr.status === 'SUBMITTED').length;
-  const procurementQueueCount = tickets.filter((t) => nextFulfilmentActionCode(t) != null).length;
-
   const greeting = `สวัสดี, ${greetingName(employee?.nickName || employee?.nameTh || user?.name)}`;
 
   return (
@@ -257,66 +250,37 @@ export function ImportOverview({ user, employee }) {
         )}
       </Panel>
 
-      <div className="grid grid-cols-2 gap-[14px] mobile:grid-cols-1">
-        <Panel title="คิวของฉัน" flush>
+      {/* "คิวของฉัน" used to sit beside this panel — a two-row launcher into
+          /pricing-requests and /procurement, described in its own comment as
+          "the two workspaces the worklist above feeds into". /procurement is
+          gone (owner ruling 2026-08-11, see AppShell.jsx), and the surviving
+          row duplicated a permanent sidebar item, so the whole panel went
+          rather than leaving a one-row shortcut list behind. */}
+      <Panel title="กำลังขนส่ง" flush>
+        {inTransit.length === 0 ? (
+          <p className="px-4 py-6 text-sm text-text-muted">ไม่มีสินค้าระหว่างขนส่งตอนนี้</p>
+        ) : (
           <div className="flex flex-col">
-            <button
-              type="button"
-              onClick={() => navigate('/pricing-requests')}
-              className="flex items-center justify-between gap-3 border-t border-border-subtle px-4 py-3 text-left first:border-t-0 hover:bg-surface-hover"
-            >
-              <span className="flex items-center gap-2 text-sm font-bold text-text">
-                <Icon name="clipboard" size={16} className="text-text-muted" />
-                คิวคำขอราคา
-              </span>
-              <span className="flex items-center gap-2">
-                <StatusBadge tone={pricingQueueCount > 0 ? 'warning' : 'neutral'}>{pricingQueueCount}</StatusBadge>
-                <Icon name="chevronRight" size={16} className="text-text-faint" />
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => navigate('/procurement')}
-              className="flex items-center justify-between gap-3 border-t border-border-subtle px-4 py-3 text-left hover:bg-surface-hover"
-            >
-              <span className="flex items-center gap-2 text-sm font-bold text-text">
-                <Icon name="fileText" size={16} className="text-text-muted" />
-                จัดซื้อ & นำเข้า
-              </span>
-              <span className="flex items-center gap-2">
-                <StatusBadge tone={procurementQueueCount > 0 ? 'info' : 'neutral'}>{procurementQueueCount}</StatusBadge>
-                <Icon name="chevronRight" size={16} className="text-text-faint" />
-              </span>
-            </button>
+            {inTransit.map((ticket) => {
+              const status = fulfilmentStatusLabel(ticket.fulfillmentStatus);
+              return (
+                <button
+                  key={ticket.id}
+                  type="button"
+                  onClick={() => navigate(`/tickets/${ticket.id}`)}
+                  className="flex items-center justify-between gap-3 border-t border-border-subtle px-4 py-3 text-left first:border-t-0 hover:bg-surface-hover"
+                >
+                  <span className="min-w-0">
+                    <strong className="block truncate text-sm text-text">{ticket.customerName || ticket.title}</strong>
+                    <code className="block truncate text-2xs text-text-muted">{ticket.code}</code>
+                  </span>
+                  <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                </button>
+              );
+            })}
           </div>
-        </Panel>
-
-        <Panel title="กำลังขนส่ง" flush>
-          {inTransit.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-text-muted">ไม่มีสินค้าระหว่างขนส่งตอนนี้</p>
-          ) : (
-            <div className="flex flex-col">
-              {inTransit.map((ticket) => {
-                const status = fulfilmentStatusLabel(ticket.fulfillmentStatus);
-                return (
-                  <button
-                    key={ticket.id}
-                    type="button"
-                    onClick={() => navigate(`/tickets/${ticket.id}`)}
-                    className="flex items-center justify-between gap-3 border-t border-border-subtle px-4 py-3 text-left first:border-t-0 hover:bg-surface-hover"
-                  >
-                    <span className="min-w-0">
-                      <strong className="block truncate text-sm text-text">{ticket.customerName || ticket.title}</strong>
-                      <code className="block truncate text-2xs text-text-muted">{ticket.code}</code>
-                    </span>
-                    <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </Panel>
-      </div>
+        )}
+      </Panel>
     </PageStack>
   );
 }

@@ -437,7 +437,7 @@ describe('PricingRequestDetailPage unavailable states', () => {
 
     expect(await screen.findByText('ไม่พบคำขอราคานี้')).toBeTruthy();
     expect(screen.getByText('ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'กลับไปที่คิวคำขอราคา' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'กลับไปที่คิวขอราคา' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /ลองใหม่/ })).toBeNull();
   });
 
@@ -447,7 +447,7 @@ describe('PricingRequestDetailPage unavailable states', () => {
 
     expect(await screen.findByText('ยังเปิดคำขอราคานี้ไม่ได้')).toBeTruthy();
     expect(screen.getByText('ระบบไม่เปิดเผยรายละเอียดของคำขอราคาที่คุณไม่มีสิทธิ์เข้าถึง')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'กลับไปที่คิวคำขอราคา' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'กลับไปที่คิวขอราคา' })).toBeTruthy();
     expect(screen.queryByText('ไม่มีสิทธิ์เข้าถึงรายการนี้')).toBeNull();
     expect(screen.queryByRole('button', { name: /ลองใหม่/ })).toBeNull();
   });
@@ -462,7 +462,7 @@ describe('PricingRequestDetailPage unavailable states', () => {
     expect(await screen.findByText('ไม่พบคำขอราคานี้')).toBeTruthy();
     expect(screen.getByText('ตรวจสอบลิงก์อีกครั้ง หรือกลับไปเปิดจากรายการที่คุณเข้าถึงได้')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'กลับ' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'กลับไปที่คิวคำขอราคา' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'กลับไปที่คิวขอราคา' })).toBeNull();
   });
 });
 
