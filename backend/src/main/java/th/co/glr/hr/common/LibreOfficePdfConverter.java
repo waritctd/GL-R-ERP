@@ -88,6 +88,23 @@ public final class LibreOfficePdfConverter {
             String xlsName = tmpXls.getFileName().toString();
             String pdfName = xlsName.substring(0, xlsName.lastIndexOf('.')) + ".pdf";
             pdfPath = outDir.resolve(pdfName);
+
+            // LibreOffice exits 0 even when it could not load the source at all — it prints
+            // "Error: source file could not be loaded" and returns success. The exit-code check
+            // above therefore passes, and without this guard the next line fails with a bare
+            // NoSuchFileException that reads like a disk problem.
+            //
+            // The overwhelmingly common cause is an incomplete install: `libreoffice-core` alone
+            // has no spreadsheet import filter, so every XLS is unloadable. That is a one-package
+            // fix, but nothing in the old error said so — this message does, and echoes what
+            // soffice actually printed. Diagnosed the hard way while working #666.
+            if (!Files.exists(pdfPath)) {
+                throw new IllegalStateException(
+                    "LibreOffice exited 0 but produced no PDF at " + pdfPath + ". It almost"
+                        + " always means the spreadsheet import filter is missing — install the"
+                        + " Calc subset, not just the core: apt-get install -y libreoffice-calc."
+                        + " soffice said: " + new String(procOut).trim());
+            }
             return Files.readAllBytes(pdfPath);
         } catch (RuntimeException e) {
             throw e;
