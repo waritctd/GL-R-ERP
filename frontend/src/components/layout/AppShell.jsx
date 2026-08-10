@@ -174,21 +174,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     { path: '/price-import', label: 'นำเข้าราคา', helper: 'Price import', icon: 'upload', group: 'sales', show: hasPermission(user.role, 'canManagePriceImport') && SALES_ENABLED },
     // Import's cross-deal PricingRequest queue — see permissions.js's PATH_GUARDS
     // comment for why this is a narrower audience than a single request's detail page.
-    { path: '/pricing-requests', label: 'คิวคำขอราคา', helper: 'Pricing request queue', icon: 'clipboard', group: 'sales', show: hasPermission(user.role, 'canViewPricingRequestQueue') && SALES_ENABLED },
-    // Role-scoped views (Import build): the raw factory-PO list and Import's
-    // deal-level fulfilment worklist are combined into one nav item —
-    // Import/CEO only, mirrors ProcurementService.RAW_PO_ROLES. Sales never
-    // sees raw supplier PO detail. `match` keeps this highlighted on both the
-    // combined page and the raw PO detail route it still deep-links to.
-    {
-      path: '/procurement',
-      label: 'จัดซื้อ & นำเข้า',
-      helper: 'Procurement & fulfilment',
-      icon: 'fileText',
-      group: 'sales',
-      show: hasPermission(user.role, 'canManageProcurement') && SALES_ENABLED,
-      match: ['/procurement', '/factory-purchase-orders'],
-    },
+    { path: '/pricing-requests', label: 'คิวขอราคา', helper: 'Pricing request queue', icon: 'clipboard', group: 'sales', show: hasPermission(user.role, 'canViewPricingRequestQueue') && SALES_ENABLED },
     // Account has NO ค่าคอมมิชชัน nav item (finalized Account design, owner-confirmed
     // 2026-07-24): the invoice+commission step (บันทึกใบกำกับ + ออกค่าคอม / create-from-deal
     // at close) is the LAST STAGE of the งานการเงิน money lifecycle + the Overview worklist

@@ -115,13 +115,6 @@ const PATH_GUARDS = [
   { test: (p) => p.startsWith('/pricing-requests/'), can: (u) => hasPermission(u.role, 'canViewPricingRequestQueue') || u.role === 'sales' },
   // Matches the sidebar's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
   { test: (p) => p === '/ceo-settings', can: (u) => u.role === 'ceo' },
-  // Step 7: Factory Purchase Order and Import Execution — Import/CEO only, mirrors
-  // ProcurementService.RAW_PO_ROLES and AppShell.jsx's own nav condition.
-  { test: (p) => p === '/factory-purchase-orders' || p.startsWith('/factory-purchase-orders/'), can: (u) => hasPermission(u.role, 'canManageProcurement') },
-  // Role-scoped views (Import build): the combined "จัดซื้อ & นำเข้า" page
-  // (ProcurementFulfilmentPage) — same audience as the raw PO list above,
-  // since it embeds ProcurementListPage as its second section.
-  { test: (p) => p === '/procurement', can: (u) => hasPermission(u.role, 'canManageProcurement') },
   // Attendance calendar admin (hr.holiday / hr.work_schedule / hr.work_schedule_assignment CRUD —
   // PR #480's API, this branch's UI). Mirrors the three controllers' requireAnyRole(user, "hr",
   // "ceo") exactly. This is frontend gating only — see ROLE_PERMISSIONS.canManageAttendanceCalendar

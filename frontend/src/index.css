@@ -607,7 +607,10 @@
           (`/factory-purchase-orders/:id`, six inputs in `flex flex-wrap` rows
           beside a `.primary-button`) with their inputs ending 4px above the
           button — measured 699 vs 703 at 700px. Matching the floor restores a
-          flush row deliberately instead of by side effect.
+          flush row deliberately instead of by side effect. That page was
+          deleted in 2026-08 (factory purchase orders left the product); the
+          measurement stands as the worked example, and the rule itself is
+          global — every input/select on a phone still needs the 44px floor.
 
        `textarea` is excluded along with checkbox/radio: it is the growable
        control, and pinning its height would undo `height: auto` above. */

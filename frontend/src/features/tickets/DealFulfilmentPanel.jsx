@@ -1,16 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
-import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import {
-  factoryPurchaseOrderStatusLabel, formatMoney, formatThaiDate, fulfilmentStatusLabel,
-} from '../../utils/format.js';
+import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
 import { nextFulfilmentActionCode } from './importActions.js';
 import { PROCUREMENT_SUBSTEPS } from './stageMeta.js';
 
@@ -68,18 +64,6 @@ function SubstepChips({ currentCode }) {
   );
 }
 
-// Most recently created pricing request that reached order confirmation —
-// mirrors DealDepositPanel's pickAcceptedPricingRequest (same reasoning: the
-// deal may carry several PricingRequests, and QUOTATION_ACCEPTED is also the
-// only status ProcurementService.create accepts — see api/mockApi.js
-// procurement.create's own status gate). This is the request a factory
-// purchase order, if any exists for this deal, was created against.
-function pickAcceptedPricingRequest(pricingRequests = []) {
-  return pricingRequests
-    .filter((pr) => pr.status === 'QUOTATION_ACCEPTED')
-    .sort((a, b) => b.id - a.id)[0] ?? null;
-}
-
 /**
  * "การส่งมอบ / นำเข้า" (Phase 3 Slice S4 — see
  * docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md): one
@@ -89,26 +73,26 @@ function pickAcceptedPricingRequest(pricingRequests = []) {
  *      รับสินค้าแล้ว, or the from-stock path via reserveStock.
  *   2. ส่งมอบสินค้า (import/CEO): record/complete delivery against the
  *      deal's own items, with the running progress bar + history.
- * — plus an optional third "ใบสั่งซื้อโรงงาน" block, shown to
- * import/CEO only (the same roles ProcurementService.RAW_PO_ROLES allows —
- * see api/mockApi.js's own `hasRole('import', 'ceo')` guard on
- * procurement.listForPricingRequest), summarizing any per-factory purchase
- * orders that exist for the deal's order-confirmed PricingRequest, with a
- * link to ProcurementDetailPage for full editing. This is unused in
- * production today (0 factory purchase orders exist yet — see handoff 105's
- * S4 section), so it renders a plain empty state rather than an empty table.
+ *
+ * There used to be an optional third "ใบสั่งซื้อโรงงาน" block here (import/CEO
+ * only, listing per-factory purchase orders for the deal's order-confirmed
+ * PricingRequest). Removed 2026-08-11, owner ruling: factory purchase orders
+ * are not part of the current business requirement, and the block had never
+ * shown a row in production (0 POs ever created). The backend
+ * ProcurementController and sales.factory_purchase_order survive, dormant and
+ * with no frontend caller, for whenever the requirement does land.
  *
  * Replaces the "การส่งมอบสินค้า" panel, the docActions Import Request button,
  * and the delivery/stock-reservation modals that used to live directly on
  * TicketDetailPage. Every mutation here reuses an existing hrApi method
  * verbatim (tickets.issueImportRequest/markIrSent/markShipping/
- * markGoodsReceived/reserveStock/recordDelivery/completeDelivery,
- * procurement.listForPricingRequest) — none of that surface changed shape or
+ * markGoodsReceived/reserveStock/recordDelivery/completeDelivery) — none of
+ * that surface changed shape or
  * gate for this slice; the `can.*` predicates below are moved out of
  * TicketDetailPage byte-for-byte.
  */
 export function DealFulfilmentPanel({
-  user, ticketId, summary, items = [], availableActions = [], pricingRequests = [], showToast,
+  user, ticketId, summary, items = [], availableActions = [], showToast,
 }) {
   const queryClient = useQueryClient();
   const role = user?.role;
@@ -136,19 +120,6 @@ export function DealFulfilmentPanel({
     enabled: !!ticketId,
   });
   const deliveryRecords = deliveriesQuery.data ?? [];
-
-  const pr = useMemo(() => pickAcceptedPricingRequest(pricingRequests), [pricingRequests]);
-  // procurement.listForPricingRequest is import/CEO only (mirrors
-  // ProcurementService.RAW_PO_ROLES) — sales/account see this panel's other
-  // two steps read-only, but never call this query (it would 403 in the
-  // mock, same reasoning noted on DealDepositPanel's canCreateNotice gate).
-  const canViewProcurement = pr != null && ['import', 'ceo'].includes(role);
-  const procurementQuery = useQuery({
-    queryKey: queryKeys.factoryPurchaseOrdersForPricingRequest(pr?.id),
-    queryFn: () => api.procurement.listForPricingRequest(pr.id).then((r) => r.factoryPurchaseOrders ?? []),
-    enabled: canViewProcurement,
-  });
-  const purchaseOrders = procurementQuery.data ?? [];
 
   function invalidateAfterFulfilmentChange() {
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
@@ -381,60 +352,6 @@ export function DealFulfilmentPanel({
             )}
           </div>
         </div>
-
-        {/* Step 3 (optional): per-factory purchase orders — import/CEO only,
-            unused in production today (0 POs — see handoff 105's S4 section). */}
-        {['import', 'ceo'].includes(role) ? (
-          <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
-            <div className="flex items-center gap-2">
-              <StepNumber no={3} />
-              <strong className="text-sm">ใบสั่งซื้อโรงงาน</strong>
-              <StepRoleTag owners={['import', 'ceo']} viewerRole={role} />
-            </div>
-
-            {pr == null ? (
-              <p className="text-xs text-text-muted">
-                ยังไม่มีคำขอราคาที่ลูกค้ายืนยันคำสั่งซื้อสำหรับดีลนี้ — ยังสร้างใบสั่งซื้อโรงงานไม่ได้
-              </p>
-            ) : procurementQuery.isLoading ? (
-              <p className="text-xs text-text-muted">กำลังโหลดใบสั่งซื้อโรงงาน…</p>
-            ) : purchaseOrders.length === 0 ? (
-              <EmptyState
-                icon="fileText"
-                title="ยังไม่มีใบสั่งซื้อโรงงาน"
-                description="ใบสั่งซื้อแยกตามโรงงานจะปรากฏที่นี่เมื่อถูกสร้างขึ้นสำหรับคำขอราคานี้"
-              />
-            ) : (
-              <div className="flex flex-col gap-1.5">
-                {purchaseOrders.map((po) => {
-                  const status = factoryPurchaseOrderStatusLabel(po.status);
-                  return (
-                    <div key={po.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-border-subtle bg-surface-muted px-2.5 py-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-mono text-xs font-bold text-text">{po.poNumber}</span>
-                          <span className="text-2xs text-text-muted">{po.factoryName}</span>
-                        </div>
-                        <span className="text-2xs text-text-muted">
-                          {formatMoney(po.totalAmount)} {po.currency}
-                          {' · '}Proforma: {po.supplierProformaRef || '-'}
-                          {' · '}ขนส่ง: {po.containerRef || '-'} ({formatThaiDate(po.etd)} → {formatThaiDate(po.eta)})
-                          {' · '}ต้นทุนจริง: {po.actualLandedCostThb != null ? formatMoney(po.actualLandedCostThb) : '-'}
-                        </span>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-                        <Link to={`/factory-purchase-orders/${po.id}`} className="text-xs font-bold text-link">
-                          รายละเอียด →
-                        </Link>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        ) : null}
       </div>
 
       {deliveryOpen ? (

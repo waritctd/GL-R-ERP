@@ -90,12 +90,6 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         downloadXlsx: vi.fn(),
         downloadPdf: vi.fn(),
       },
-      // Fulfilment (Phase 3 Slice S4 — handoff 105): DealFulfilmentPanel's
-      // optional per-factory PO detail — import/CEO only, see its own tests
-      // below.
-      procurement: {
-        listForPricingRequest: vi.fn(),
-      },
       // The items table converts a foreign-currency factory price to baht. Mocked because an
       // unmocked namespace makes every fxRates.list() call throw (api.fxRates is undefined),
       // which would silently leave the baht line absent rather than exercising it.
@@ -252,11 +246,6 @@ describe('TicketDetailPage', () => {
     // query needs a default resolve or every existing test above would hit
     // "api.depositNotices.listByTicket is not a function"-shaped rejections.
     api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [] });
-    // Fulfilment (Phase 3 Slice S4 — handoff 105): DealFulfilmentPanel mounts
-    // for every role that isn't 'hr' (sections.delivery — import/account/
-    // sales/sales_manager/ceo all see it now), so a default resolve is
-    // needed the same way api.depositNotices.listByTicket needed one above.
-    api.procurement.listForPricingRequest.mockResolvedValue({ factoryPurchaseOrders: [] });
     // FX rates back the baht companion beside a foreign-currency factory price. Defaults to an
     // empty table — no rate, so no conversion — which keeps every unrelated test's item rows
     // showing exactly one figure; the conversion test below supplies real rates itself.
@@ -1956,42 +1945,8 @@ describe('TicketDetailPage', () => {
       expect(section.queryByRole('button', { name: 'จองสินค้าจากสต็อก' })).toBeNull();
       expect(section.queryByRole('button', { name: 'บันทึกการส่งสินค้า' })).toBeNull();
       expect(section.queryByRole('button', { name: 'ส่งมอบครบ' })).toBeNull();
-      expect(section.queryByText('ใบสั่งซื้อโรงงาน')).toBeNull();
-      expect(api.procurement.listForPricingRequest).not.toHaveBeenCalled();
     });
 
-    it('import sees an empty factory-PO state (production has none yet) once the deal has an order-confirmed pricing request', async () => {
-      api.pricingRequests.listForTicket.mockResolvedValue({
-        items: [{ id: 601, requestCode: 'PCR-2026-0601', status: 'QUOTATION_ACCEPTED', recipientType: 'OWNER' }],
-      });
-
-      renderTicketDetailPage(importUser);
-      const section = await fulfilmentSection();
-
-      expect(await section.findByText('ใบสั่งซื้อโรงงาน')).not.toBeNull();
-      expect(await section.findByText('ยังไม่มีใบสั่งซื้อโรงงาน')).not.toBeNull();
-      await waitFor(() => expect(api.procurement.listForPricingRequest).toHaveBeenCalledWith(601));
-    });
-
-    it('import sees each factory PO once created, with a link to its detail page', async () => {
-      api.pricingRequests.listForTicket.mockResolvedValue({
-        items: [{ id: 601, requestCode: 'PCR-2026-0601', status: 'QUOTATION_ACCEPTED', recipientType: 'OWNER' }],
-      });
-      api.procurement.listForPricingRequest.mockResolvedValue({
-        factoryPurchaseOrders: [{
-          id: 3001, poNumber: 'FPO-2026-0001', factoryName: 'SCG Ceramics', status: 'OPEN',
-          totalAmount: 50000, currency: 'THB', supplierProformaRef: null,
-          containerRef: null, etd: null, eta: null, actualLandedCostThb: null,
-        }],
-      });
-
-      renderTicketDetailPage(importUser);
-      const section = await fulfilmentSection();
-
-      expect(await section.findByText('FPO-2026-0001')).not.toBeNull();
-      const link = section.getByRole('link', { name: /รายละเอียด/ });
-      expect(link.getAttribute('href')).toBe('/factory-purchase-orders/3001');
-    });
   });
 
   // Slice A "chip diet": DealStateHeader's stat-chip set is now role-aware
