@@ -429,19 +429,33 @@ describe('SpecialMoneyPanel', () => {
       // ("รอ CEO อนุมัติ") already conveys pending-ness, so this bare "CEO (คุณราม)" doesn't
       // duplicate it. The REJECTED row (rejectedRequest, pendingApproverRole: null) renders no
       // such note at all.
+      //
+      // This is also the case that keeps the sibling test below honest: the note now renders ONLY
+      // when a name resolved, and without this assertion that rule could quietly decay into
+      // "never render the note" with nothing going red.
       expect(await screen.findByText('CEO (คุณราม)')).not.toBeNull();
     });
 
-    it('shows the role alone (CEO) when the backend could not resolve a single approver name', async () => {
+    it('drops the approver note entirely when the backend could not resolve a single approver name', async () => {
       api.specialMoney.list.mockResolvedValue({
         requests: [submittedRequest({ pendingApproverRole: 'ceo', pendingApproverName: null })],
       });
       renderPanel();
 
-      await screen.findByText(/พนักงาน ทดสอบ ·/);
-      // Scoped to the approver note's own <small>, matching OvertimePage.test.jsx's sibling
-      // assertion -- bare "CEO" could otherwise also match a StatusBadge with that exact label.
-      expect(await screen.findByText('CEO', { selector: 'small.text-text-muted' })).not.toBeNull();
+      const statusColumn = (await screen.findByText(/พนักงาน ทดสอบ ·/))
+        .closest('.data-row')
+        .querySelector('[data-label="สถานะ"]');
+
+      // This REPLACES an assertion that required a bare "CEO" note here, rather than deleting it:
+      // the inverse is now the thing worth pinning. The role-only note was correct when the badge
+      // read a generic pending label, but specialMoneyStatusLabel names the role itself now, so
+      // the note just repeated the badge -- and with no name it carries nothing the badge cannot
+      // already say. Only the badge is left of the "who holds this" story.
+      expect(within(statusColumn).getByText('รอ CEO อนุมัติ')).not.toBeNull();
+      expect(statusColumn.querySelector('small.text-text-muted')).toBeNull();
+      // Scoped to the note's own class deliberately: this fixture (AID_WEDDING, evidenceRequired,
+      // no attachment) still renders the separate `small.text-warning` evidence line in this same
+      // column, so "the column has no <small> at all" would be the wrong, over-tight assertion.
     });
   });
 
