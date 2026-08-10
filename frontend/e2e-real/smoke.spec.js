@@ -65,9 +65,10 @@ test.describe('real data reaches the browser', () => {
     await expect(page.getByText('DEMO-TKT-', { exact: false }).first()).toBeVisible();
   });
 
-  // One test per persona rather than one loop over all six: each login is a full page load
+  // One test per persona rather than one loop over all of them: each login is a full page load
   // against a dev server, so the loop blew the default 30s timeout, and a single failure in it
-  // told you nothing about the other five.
+  // told you nothing about the rest. That argument only got stronger when V139 took REAL_ROLES
+  // from six personas to nine.
   for (const role of REAL_ROLES) {
     test(`${role} sees its own backend-supplied identity in the shell`, async ({ page }) => {
       const persona = personaFor(role);

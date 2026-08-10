@@ -6,6 +6,7 @@
 | **Version** | 1.0 · 2 July 2026 |
 | **Audience** | QA, business testers |
 | **How to run** | Execute each case in order; record Pass/Fail and notes. Preferred environment: the **hosted UAT stack** (`gl-r-erp-uat` Render service on the `uat` branch, `SPRING_PROFILES_ACTIVE=uat`), which auto-seeds the realistic dataset + the **9 `@uat.glr` accounts** — see `UAT Deliverables/UAT_Accounts.md`. The public demo (`Demo@2026`) may be used for a quick smoke only, never for sign-off. |
+| **Before you start** | [`13_Pre_UAT_Checklist.md`](13_Pre_UAT_Checklist.md) is the gate that must pass **before** these cases are worth executing — build/test baseline, environment state, role-account readiness, and the coverage gaps to keep in mind while testing. |
 | **Baseline** | Reflects the `uat` branch (Flyway head **V39**): 3-step overtime approval, dual manager+CEO commission approval, in-app **and email** notifications, and Thai **PDF** document export are all live. Also live: the **post-quotation dual-track sales flow** — independent `paymentStatus` (customer confirmation → deposit notice → deposit paid → final payment) and `fulfillmentStatus` (import request → IR sent → shipping → goods received) tracks on a `quotation_issued` ticket, the **remaining-invoice** document (deposit-notice-adjacent, downloadable once a ticket reaches `quotation_issued`), **CEO manual price override** per ticket item (with a required reason), and **unit-basis PIECE vs SQM** on ticket items. |
 
 ---
