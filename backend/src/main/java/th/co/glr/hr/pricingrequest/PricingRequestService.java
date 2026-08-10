@@ -242,26 +242,26 @@ public class PricingRequestService {
         }
         requests.snapshotCatalogSelections(id);
         items = requests.findItems(id);
-        // Finding A (financial-integrity review, commit 3): the catalog is now MANDATORY —
-        // a free-text item (product_id null, or a productId that never matched an ACTIVE
-        // catalog price at snapshot time above) must never reach Import/costing without a
-        // priceable catalog reference. findUnresolvableCatalogItemIds above only inspected
-        // items with a non-null product_id; this closes the gap for every item regardless of
-        // how it was created, by requiring the persisted snapshot to be fully populated. A
-        // request already past DRAFT (i.e. every request this check cannot run against) keeps
-        // whatever it already has — this gate only ever runs at submit(), never retroactively.
-        List<Integer> missingCatalogLines = new ArrayList<>();
-        for (int i = 0; i < items.size(); i++) {
-            PricingRequestItemDto item = items.get(i);
-            if (item.catalogPriceId() == null || item.priceListVersionId() == null
-                    || item.catalogBasePrice() == null || item.catalogCurrency() == null
-                    || item.resolvedFactoryId() == null || item.resolvedFactoryName() == null) {
-                missingCatalogLines.add(i + 1);
-            }
-        }
-        if (!missingCatalogLines.isEmpty()) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, catalogGapErrorMessage(missingCatalogLines));
-        }
+        // REMOVED 2026-08-11 (owner request): "Finding A" (financial-integrity review, commit 3)
+        // used to require a fully-populated catalog snapshot on EVERY line here, 422-ing with
+        // "ต้องเลือกสินค้าจาก Price Catalog ที่ active ก่อนส่งคำขอราคา" otherwise. That made the
+        // catalogue mandatory, which blocked the case a คำขอราคา exists to serve: asking Import to
+        // price a product that is NOT in the catalogue yet. A free-text line may now be submitted
+        // with a null catalog snapshot, and Import quotes it from scratch.
+        //
+        // What still protects the money path, so this is a narrowing rather than a hole:
+        //   - findUnresolvableCatalogItemIds above (kept) still rejects a DANGLING reference — an
+        //     item whose product_id points at a missing or non-ACTIVE price. That is a data fault,
+        //     not a new product, and is a different thing from having no reference at all.
+        //   - FactoryQuoteService.groupByFactory 422s ("ยังไม่ได้ระบุโรงงาน") if a line reaches the
+        //     factory-email step with neither a resolved nor a free-text factory, so a line with no
+        //     routable factory is still stopped — just later, and only when it actually matters.
+        //   - Downstream reads already tolerate a null snapshot: FactoryQuoteService and
+        //     PricingCostingService both resolve the factory via
+        //     firstText(resolvedFactoryName, factory), and resolvedFactoryId is collected with
+        //     filter(nonNull)...orElse(null).
+        // The trade-off is real and deliberate: an item submitted this way carries NO preliminary
+        // base price, so Import receives it un-anchored.
         if (summary.recipientContactId() == null
                 && (summary.recipientLabel() == null || summary.recipientLabel().isBlank())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุผู้รับคำขอราคา");
@@ -908,25 +908,6 @@ public class PricingRequestService {
     private static String identityErrorMessage(int zeroBasedIndex) {
         return "รายการที่ " + (zeroBasedIndex + 1)
             + ": ต้องระบุสินค้าที่ต้องการเสนอราคา (เลือกจากรายการในดีล หรือระบุรุ่น/รายละเอียด)";
-    }
-
-    /**
-     * Finding A (financial-integrity review, commit 3): reports every 1-based line number
-     * whose persisted catalog snapshot is incomplete, in the same "รายการที่ N" style as
-     * {@link #identityErrorMessage}, but batched across all failing lines in one message
-     * rather than failing on the first — a submit attempt with several free-text lines
-     * should not force the rep to fix them one at a time.
-     */
-    private static String catalogGapErrorMessage(List<Integer> oneBasedLineNumbers) {
-        StringBuilder lines = new StringBuilder();
-        for (int i = 0; i < oneBasedLineNumbers.size(); i++) {
-            if (i > 0) {
-                lines.append(", ");
-            }
-            lines.append(oneBasedLineNumbers.get(i));
-        }
-        return "รายการที่ " + lines
-            + ": ต้องเลือกสินค้าจาก Price Catalog ที่ active ก่อนส่งคำขอราคา (ไม่พบข้อมูลราคา/โรงงานจาก catalog)";
     }
 
     /**

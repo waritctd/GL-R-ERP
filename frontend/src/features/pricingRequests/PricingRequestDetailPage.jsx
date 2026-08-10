@@ -40,7 +40,6 @@ import {
   canViewCustomerQuotation,
   isCustomerQuotationEditable,
   pricingRequestRecipientLabel,
-  quantityTypeLabel,
 } from './pricingRequestMeta.js';
 import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 import { buttonVariants } from '../../components/common/Button.jsx';
@@ -636,7 +635,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
             <div key={item.id} className="rounded-md border border-border bg-surface p-3">
               <div className="flex flex-wrap items-center gap-2">
                 <strong>{[item.catalogBrand ?? item.brand, item.catalogModel ?? item.model].filter(Boolean).join(' ') || item.productDescription || '-'}</strong>
-                <StatusBadge tone="neutral">{quantityTypeLabel(item.quantityType)}</StatusBadge>
                 <span className="text-xs text-text-muted">{item.requestedQty} {item.requestedUnit}</span>
               </div>
               <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">

@@ -1268,19 +1268,25 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Finding A (financial-integrity review, commit 3): submit()'s catalog-completeness gate,
-    // through the REAL PricingRequestService + PricingRequestRepository + real Postgres — not
-    // Mockito. PricingRequestServiceTest (Mockito-based) covers the branch being chosen with
-    // hand-built PricingRequestItemDto stubs; it cannot prove PricingRequestRepository.
-    // snapshotCatalogSelections's actual SQL (a join across price_catalog.product_prices /
-    // price_list_versions / factories) resolves correctly — a mocked repository would pass
-    // happily even if that SQL joined on the wrong column. These tests are written
-    // wrong-way-round per CLAUDE.md: assert the request CANNOT be submitted / CANNOT reach
-    // Import unpriced, and assert the persisted database row, not just the thrown exception.
+    // submit()'s catalog handling, through the REAL PricingRequestService +
+    // PricingRequestRepository + real Postgres — not Mockito. PricingRequestServiceTest
+    // (Mockito-based) covers the branch being chosen with hand-built PricingRequestItemDto
+    // stubs; it cannot prove PricingRequestRepository.snapshotCatalogSelections's actual SQL
+    // (a join across price_catalog.product_prices / price_list_versions / factories) resolves
+    // correctly — a mocked repository would pass happily even if that SQL joined on the wrong
+    // column.
+    //
+    // The "Finding A" completeness gate that used to live here was REMOVED on 2026-08-11 (owner
+    // request): a คำขอราคา may legitimately name a product that is not in the catalogue yet. What
+    // these tests now pin is that the removal was a NARROWING, not a hole — a free-text line
+    // submits, while a DANGLING catalog reference (a product_id whose price list is not ACTIVE)
+    // is still rejected by findUnresolvableCatalogItemIds. That pair is the whole point: if
+    // someone later deletes the surviving gate too, the second test goes red on its own.
+    // Both still assert the persisted database row, not merely the thrown exception.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
-    void submitCatalogGate_rejectsFreeTextItemAndLeavesRequestInDraft() {
+    void submitCatalogGate_acceptsFreeTextItemAndAdvancesRequestToSubmitted() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId,
             new PricingRequestRequests.CreatePricingRequestRequest(
                 PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
@@ -1288,18 +1294,18 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
                 List.of(freeTextPricingItem("Free-text tile, no catalog product"))),
             salesActor).summary().id();
 
-        assertThatThrownBy(() -> pricingRequestService.submit(pricingRequestId, salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
-                assertThat(e.getMessage()).contains("รายการที่ 1");
-            });
-        // Wrong-way-round: assert the row genuinely never left DRAFT, not merely that an
-        // exception was thrown — a bug that threw AFTER a partial commit would still "throw"
-        // but leave the request wrongly advanced.
+        pricingRequestService.submit(pricingRequestId, salesActor);
+
         assertThat(jdbc.queryForObject(
             "SELECT status FROM sales.pricing_request WHERE pricing_request_id = :id",
             Map.of("id", pricingRequestId), String.class))
-            .isEqualTo(PricingRequestStatus.DRAFT);
+            .isEqualTo(PricingRequestStatus.SUBMITTED);
+        // The line reaches Import with a NULL catalog snapshot — stated explicitly, because it is
+        // the deliberate cost of the removal: Import receives this item un-anchored to any price.
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.pricing_request_item
+             WHERE pricing_request_id = :id AND catalog_price_id IS NULL AND catalog_base_price IS NULL
+            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
     }
 
     @Test
@@ -1353,8 +1359,12 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         assertThat(row.get("resolved_factory_name")).isEqualTo("Factory A");
     }
 
+    // Was submitCatalogGate_reportsEveryFailingLineNumberAcrossMultipleItems, which asserted
+    // "รายการที่ 2, 3" and a blocked submit. A mixed request — one catalog-backed line plus two
+    // free-text ones — is now valid, and the catalog-backed line must STILL get its snapshot:
+    // removing the gate must not have disturbed snapshotCatalogSelections itself.
     @Test
-    void submitCatalogGate_reportsEveryFailingLineNumberAcrossMultipleItems() {
+    void submitCatalogGate_acceptsAMixOfCatalogBackedAndFreeTextItemsAndStillSnapshotsTheCatalogLine() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId,
             new PricingRequestRequests.CreatePricingRequestRequest(
                 PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
@@ -1365,11 +1375,16 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
                     freeTextPricingItem("Free-text line 3"))),
             salesActor).summary().id();
 
-        assertThatThrownBy(() -> pricingRequestService.submit(pricingRequestId, salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
-                assertThat(e.getMessage()).contains("รายการที่ 2, 3");
-            });
+        pricingRequestService.submit(pricingRequestId, salesActor);
+
+        assertThat(jdbc.queryForObject(
+            "SELECT status FROM sales.pricing_request WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId), String.class))
+            .isEqualTo(PricingRequestStatus.SUBMITTED);
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.pricing_request_item
+             WHERE pricing_request_id = :id AND catalog_price_id IS NOT NULL
+            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
     }
 
     private PricingRequestRequests.PricingRequestItemRequest freeTextPricingItem(String description) {
