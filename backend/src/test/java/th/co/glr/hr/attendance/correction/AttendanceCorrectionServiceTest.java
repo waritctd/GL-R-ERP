@@ -17,6 +17,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
 import th.co.glr.hr.audit.AuditService;
@@ -252,6 +253,29 @@ class AttendanceCorrectionServiceTest {
             eq(500L), eq("ATTENDANCE_CORRECTION_SUBMITTED"), anyString(), anyString(), eq("/attendance"), eq(true));
         verify(notificationService).notify(
             eq(501L), eq("ATTENDANCE_CORRECTION_SUBMITTED"), anyString(), anyString(), eq("/attendance"), eq(true));
+    }
+
+    /**
+     * mail-copy wording fix, defect 2: dates used to be a raw {@code LocalDate} concatenated into
+     * text (e.g. "2020-01-06"), which a Thai reader does not expect. Same fixture/setup as {@link
+     * #approvingNotifiesTheEmployeeAtTheAttendancePageLink} (kept separate so a mutation to the date
+     * formatting fails only this test).
+     */
+    @Test
+    void approvedNotificationRendersTheThaiDateNotTheIsoDate() {
+        when(repository.findById(55L))
+            .thenReturn(Optional.of(dto(55L, 10L, "SUBMITTED")))
+            .thenReturn(Optional.of(dto(55L, 10L, "APPROVED")));
+        when(repository.resolveSiteCode(10L, PAST_DATE)).thenReturn("SHOWROOM");
+        when(repository.resolveBadgeCode(10L)).thenReturn("MANUAL-10");
+        when(repository.approve(eq(55L), eq(500L), any())).thenReturn(1);
+
+        service.approve(55L, null, ceo(500L));
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(
+            eq(10L), eq("ATTENDANCE_CORRECTION_APPROVED"), anyString(), body.capture(), eq("/attendance"), eq(true));
+        assertThat(body.getValue()).contains("มกราคม 2563").doesNotContain("2020-01-");
     }
 
     // --- helpers ------------------------------------------------------------
