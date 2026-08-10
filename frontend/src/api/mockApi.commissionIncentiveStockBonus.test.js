@@ -14,15 +14,18 @@ import { api } from './mockApi.js';
 // The tests below prove the fixed rule: POSITIVE manual amount replaces (suppresses) the auto
 // limb; ZERO/NEGATIVE is a correction layered on top of it.
 //
-// Test-ordering note: every api.commissions.create() call below runs in a beforeAll, BEFORE any
-// manual commission is created anywhere in this file. mockApi.js's create() has a pre-existing,
-// unrelated bug (not introduced by issue #405, not one of this branch's four review fixes): its
-// duplicate-invoice-number check does `db.commissions.some(item => item.invoiceDetails
-// .invoiceNumber === ...)` with no null guard, and a manual-kind record's invoiceDetails is
-// always null (V84) -- so calling create() again after ANY manual commission exists anywhere in
-// the shared mock db throws "Cannot read properties of null". Front-loading every create() call
-// here sidesteps it; this is a real latent defect worth its own fix, flagged in the PR body, not
-// something this branch touches.
+// Test-ordering note (HISTORICAL): every api.commissions.create() call below runs in a
+// beforeAll, BEFORE any manual commission is created anywhere in this file. That used to be
+// load-bearing — create()'s duplicate-invoice-number check did `db.commissions.some(item =>
+// item.invoiceDetails.invoiceNumber === ...)` with no null guard, and a manual-kind record's
+// invoiceDetails is always null (V84), so calling create() after ANY manual commission existed
+// in the shared mock db threw "Cannot read properties of null".
+//
+// That defect is FIXED (both call sites null-guard now, matching the real backend: the Java
+// check is SQL, where a NULL invoice number is never equal to anything). The ordering is left
+// as it is because it costs nothing, but it is no longer a workaround — and the four
+// MANUAL_COMMISSION_KINDS are seeded in demoPayroll.js as a result. `createSucceedsAlongside
+// ManualRows` below is the regression guard.
 
 // 3,210,000.00 / 1.07 = 3,000,000.00 exactly -- lands precisely on the first INCENTIVE threshold.
 const ACTUAL_RECEIVED_AT_FIRST_THRESHOLD = 3210000;
@@ -143,5 +146,67 @@ describe('mockApi payrollReady — manual INCENTIVE double-count guard (issue #4
     const row = repRowFor(summary, REP_ZERO_MANUAL);
 
     expect(row.incentiveAmount).toBe(15000);
+  });
+});
+
+/**
+ * The null-guard regression, kept separate from the incentive maths above.
+ *
+ * A manual commission carries `invoiceDetails: null` (V84). Both commissions.create() and
+ * commissions.createFromDeal() compared `item.invoiceDetails.invoiceNumber` unguarded, so ONE
+ * manual row anywhere in the shared mock db made every later create() throw — in the live mock
+ * app, not only here. It is why the four MANUAL_COMMISSION_KINDS were unseedable, and why the
+ * calls above are front-loaded.
+ *
+ * Asserts the create SUCCEEDS with an invoice-less row present, and — the half that a bare
+ * optional-chain would have got wrong — that two invoice-less rows are NOT treated as duplicates
+ * of each other. `undefined === undefined` is true, so `?.` alone would have turned the crash
+ * into a spurious 409.
+ */
+describe('duplicate-invoice check tolerates invoice-less manual commissions', () => {
+  const REP = 990501;
+
+  it('lets an invoice-backed commission be created while a manual row exists', async () => {
+    await api.auth.login({ role: 'sales_manager' });
+    await api.commissions.createManualCommission({
+      salesRepId: REP, kind: 'ADJUSTMENT', amount: -1000,
+      reason: 'ปรับปรุงยอดงวดก่อน', payrollMonth: '2026-08',
+    });
+
+    await expect(api.commissions.create({
+      salesRepId: REP, invoiceNumber: 'INV-NULLGUARD-001', invoiceDate: '2026-08-09',
+      grossAmount: 60000, payrollMonth: '2026-08', invoiceAttachment: { name: 'inv.pdf' },
+    })).resolves.toBeTruthy();
+  });
+
+  // The half-fix case. A bare `?.` stops the crash and introduces a quieter bug: create() does
+  // not require an invoice number (only the attachment), so a call that omits one compares
+  // `undefined === undefined` against the manual row and is refused as a duplicate of an invoice
+  // that does not exist. This is the assertion that separates `?.` from `?. &&`.
+  it('does not treat a missing invoice number as a duplicate of an invoice-less row', async () => {
+    await api.auth.login({ role: 'sales_manager' });
+    await api.commissions.createManualCommission({
+      salesRepId: REP, kind: 'STOCK_BONUS', amount: 2500,
+      reason: 'โบนัสระบายสต็อก', payrollMonth: '2026-08',
+    });
+
+    await expect(api.commissions.create({
+      salesRepId: REP, invoiceDate: '2026-08-09', grossAmount: 45000,
+      payrollMonth: '2026-08', invoiceAttachment: { name: 'inv.pdf' },
+    })).resolves.toBeTruthy();
+  });
+
+  // A real duplicate must still be refused — the guard skips NULLs, it does not skip the check.
+  it('still refuses a genuinely duplicated invoice number', async () => {
+    await api.auth.login({ role: 'sales_manager' });
+    await api.commissions.create({
+      salesRepId: REP, invoiceNumber: 'INV-NULLGUARD-002', invoiceDate: '2026-08-09',
+      grossAmount: 70000, payrollMonth: '2026-08', invoiceAttachment: { name: 'inv.pdf' },
+    });
+
+    await expect(api.commissions.create({
+      salesRepId: REP, invoiceNumber: 'INV-NULLGUARD-002', invoiceDate: '2026-08-09',
+      grossAmount: 70000, payrollMonth: '2026-08', invoiceAttachment: { name: 'inv.pdf' },
+    })).rejects.toThrow();
   });
 });
