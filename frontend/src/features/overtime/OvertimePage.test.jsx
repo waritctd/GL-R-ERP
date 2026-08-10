@@ -291,11 +291,6 @@ describe('OvertimePage pending-approver note', () => {
     // wrong reason.
     const approvalColumn = row.querySelector('[data-label="ขั้นอนุมัติ"]');
 
-    // Scope to the approver note's own <small> -- bare "CEO" (no "รอ" prefix, review
-    // #pending-approver-info) could otherwise match a StatusBadge whose own label happens to be
-    // "CEO" text too, depending on status.
-    expect(await screen.findByText('CEO', { selector: 'small.text-text-muted' })).not.toBeNull();
-
     // A1 (OT UAT defect #1): the StatusBadge itself must read "รอ CEO", not the "รอผู้จัดการ" a
     // status-only map would give every SUBMITTED row regardless of route -- and the ผู้จัดการ:
     // audit line, which could never fill on this manager-less route, must not render at all. This
@@ -303,6 +298,38 @@ describe('OvertimePage pending-approver note', () => {
     // buggy badge.
     expect(within(approvalColumn).getByText('รอ CEO')).not.toBeNull();
     expect(within(approvalColumn).queryByText(/ผู้จัดการ/)).toBeNull();
+
+    // ...and with NO name resolved, that badge is the ONLY thing this column says. This assertion
+    // replaces one that required a bare "CEO" note here. That note was correct when the badge read
+    // a generic "รอผู้จัดการ" for every pending row, but A1 made the badge name the role, and the
+    // note then merely repeated it -- the owner's screenshot showed "รอ CEO" / "CEO" / "CEO: -",
+    // three lines carrying one fact. The role-only note and the unfilled audit lines are both gone.
+    expect(approvalColumn.querySelector('small.text-text-muted')).toBeNull();
+    expect(within(approvalColumn).queryByText(/^CEO:/)).toBeNull();
+  });
+
+  it('keeps the approver note when a NAME was resolved — that is the part the badge cannot say', async () => {
+    // The other side of the rule above: the note earns its line only by naming who holds the
+    // request. Without this case, "drop the note when it has no name" could silently decay into
+    // "drop the note", and nobody would notice the one informative variant had gone too.
+    api.overtime.list.mockResolvedValue({
+      requests: [{
+        id: 804, employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001',
+        workDate: '2026-07-04', plannedStartAt: '2026-07-04T18:00:00+07:00', plannedEndAt: '2026-07-04T20:00:00+07:00',
+        plannedMinutes: 120, dayType: 'WORKDAY', reason: 'มีชื่อผู้อนุมัติ', status: 'SUBMITTED',
+        actualMinutes: 0, payableMinutes: 0, hasManagerApprover: false,
+        pendingApproverRole: 'ceo', pendingApproverName: 'สมชาย ใจดี',
+      }],
+    });
+    renderOvertimePage();
+
+    const row = (await screen.findByText('มีชื่อผู้อนุมัติ')).closest('.data-row');
+    const approvalColumn = row.querySelector('[data-label="ขั้นอนุมัติ"]');
+    const note = approvalColumn.querySelector('small.text-text-muted');
+
+    expect(note).not.toBeNull();
+    expect(note.textContent).toContain('CEO');
+    expect(note.textContent).toContain('สมชาย');
   });
 });
 

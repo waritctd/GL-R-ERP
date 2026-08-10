@@ -103,13 +103,25 @@ Recorded because none of them is a code defect and all three look like one:
      `build-and-test` is consistently green on `main`.
 
      Read that carefully, because the useful conclusion is the opposite of the obvious one: the
-     renderer tests **pass without the licensed fonts**, so they are not a detector for the real
-     problem. And there is a real problem — `backend/Dockerfile` states the required families
-     (Angsana/Browallia/Cordia New, Tahoma, Arial, Calibri, Cambria) are proprietary, git-ignored,
-     and that **nothing currently populates `backend/fonts/` on Render**; the build warns and
-     continues. `backend/fonts/README.md` records the consequence: the substitute is wider and
-     **header text overflows the certification badges** on customer-facing documents. Tracked as
-     **#666**; it is item 7 in §6.
+     renderer tests **pass without the licensed fonts**, so they never were a detector for the real
+     problem. And there is a real problem — the required families (Angsana/Browallia/Cordia New,
+     Tahoma, Arial, Calibri, Cambria) are proprietary and git-ignored, so a build from a fresh
+     clone can never contain them, and `backend/fonts/README.md` records the consequence: the
+     substitute is wider and **header text overflows the certification badges** on customer-facing
+     documents.
+
+     **Partly addressed, then partly reverted (#666, #670, #674).** #670 made an empty
+     `backend/fonts/` fail the build and moved `render.yaml` to a pre-built image. Both were
+     reverted under the UAT phase-1 deadline: the image URL was a placeholder, so every deploy
+     would have failed, and building an image needs Docker plus the licensed fonts. **The hosted
+     service therefore still renders customer documents in substitute fonts** — unchanged from the
+     last several months, not a regression.
+
+     What survived is the check that was actually missing: `fc-match` fails the build if a supplied
+     font is substituted rather than resolving to itself (`fc-list` alone cannot see substitution).
+     Plus `scripts/build-push-backend-image.sh`, which still works. Finishing #666 means supplying
+     the fonts, pushing an image, restoring `runtime: image`, and comparing a rendered quotation
+     against a Windows-authored reference. Item 7 in §6.
 
 ### 3.1 Real-stack e2e — the suite that carries the authorization evidence
 
@@ -400,7 +412,7 @@ Ordered by what blocks a sign-off soonest.
 | 4 | **Confirm which backend serves the UAT database.** | `render.yaml` declares **one** service, and its documented configuration (`prod,demo` + demo Flyway locations) matches the `GL&R` showcase project, not UAT. Whatever points at UAT is not described in the repo. |
 | 5 | **Decide and publish the supported browser set.** | Testers need to know what to file a bug against. Today only Chromium has ever been run. |
 | 6 | **Confirm the deployed UAT build is the intended commit,** and that `GET /actuator/health` answers. | `autoDeploy: false`; not checkable from a checkout. |
-| 7 | **Decide whether customer-facing PDFs may ship in substitute fonts** (**#666**). | `backend/fonts/` is unpopulated on Render, so quotations and deposit notices render in whatever LibreOffice substitutes; `backend/fonts/README.md` records that the substitute is wider and overflows the certification badges. Nothing catches it: the build warns and continues, and the renderer tests pass under substitution in CI. Either supply the licensed fonts to the image or accept the output deliberately. |
+| 7 | **Customer-facing PDFs still render in substitute fonts** (**#666**). | `render.yaml` was moved to a pre-built image in #670 and **reverted to build-from-source** under the UAT phase-1 deadline, because the image URL was a placeholder and every deploy would have failed. So the status quo stands: `backend/fonts/` is empty in a clone, and quotations and deposit notices render in substitutes — wider glyphs, header text overflowing the certification badges. The tooling to fix it is in place and working (`scripts/build-push-backend-image.sh`, plus an `fc-match` guard that fails the build if a supplied font is substituted); what is missing is the licensed fonts, a registry, and a deploy. |
 | 8 | **Brief testers on the login rate limiter.** | See below — this will otherwise eat a UAT session. |
 
 ### Item 2 in full — why `validate-on-migrate` is not a single switch

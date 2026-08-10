@@ -42,38 +42,53 @@ merged to `main` is effectively public within the org.
 ## How the Docker build gets them: `backend/fonts/` must be populated before you build
 
 The Dockerfile does a plain `COPY fonts/ /usr/local/share/fonts/glr/` — it does **not** fetch or
-generate anything itself. That means whatever process runs `docker build` is responsible for
-putting the real `.ttf`/`.ttc` files into this folder **first**, from private storage you control
-(a private S3/GCS/R2 bucket, an authenticated private host, whatever you already have), e.g.:
+generate anything itself. Whatever process runs `docker build` must put the real `.ttf`/`.ttc`
+files into this folder **first**, from private storage you control.
+
+Use the script; it does the fetch, the safety checks, the build and the push:
 
 ```bash
-# however you fetch it — signed URL, private bucket CLI, scp, etc.
-curl -fsSL "https://your-private-storage/thai-fonts.tar.gz?<signature>" -o /tmp/thai-fonts.tar.gz
-tar -xzf /tmp/thai-fonts.tar.gz -C backend/fonts/
-docker build -t glr-hr-backend backend
+export GLR_IMAGE_REPO=docker.io/yourorg/glr-hr-backend   # must match render.yaml's image.url
+export GLR_FONTS_URL="https://your-private-storage/thai-fonts.tar.gz?<signature>"
+./scripts/build-push-backend-image.sh v2026-08-10 --also-latest
 ```
 
-The build itself then verifies every required family actually registered — `fc-cache -f -v`
-followed by an individual check per family (not one combined grep, so a single missing font fails
-loudly instead of being masked by the others still matching):
-```
-RUN fc-cache -f -v && \
-    for f in "Arial" "Calibri" "Cambria" "Tahoma" "Angsana New" "Browallia New" "BrowalliaUPC" "Cordia New"; do \
-      fc-list | grep -qi "$f" || { echo "Missing font: $f" >&2; exit 1; }; \
-    done
-```
-If `backend/fonts/` is empty (nothing fetched), this fails the build immediately with
-`Missing font: <name>` rather than silently shipping an image with substitute fonts.
+`GLR_FONTS_URL` is optional — leave it unset and populate `backend/fonts/` by hand instead. The
+script refuses to build on an empty folder, and refuses outright if the font files have somehow
+become git-tracked.
 
-**Render (hosted):** Render's Docker builds run straight from a fresh git clone with no
-pre-build hook, so this fetch step has to happen somewhere Render can run it — either switch
-this service to build from a pre-built image you push yourself (fetch fonts + `docker build` +
-`docker push` from your own machine/CI, point Render at that image instead of `dockerfilePath`),
-or move the fetch into a Render-supported pre-build mechanism if one fits your setup. This is the
-piece to work out once the storage location exists.
+### What the build verifies, and why it takes two checks
+
+```
+ARG ALLOW_MISSING_FONTS=false
+RUN fc-cache -f -v && ...
+      fc-list  | grep -qi "$f"        # 1. is a font by this NAME registered?
+      fc-match "$f" family            # 2. does it RESOLVE to itself, or silently fall back?
+```
+
+1. **`fc-list`** catches a truncated or partial fetch — a family that never registered.
+2. **`fc-match`** is the one that catches *substitution*, and it is the check this repo was
+   missing. `fc-match` never fails: ask it for a font it does not have and it cheerfully returns
+   whatever it would substitute. On a fontless image `fc-match "Angsana New" family` prints
+   `DejaVu Sans` and `fc-match "Arial" family` prints `Liberation Sans` — measured, not assumed.
+   That is exactly the production defect, and check 1 alone cannot see it.
+
+**An empty `backend/fonts/` WARNS and continues.** #670 made it fatal — the right instinct, since
+a fontless image renders customer documents in substitutes and a build-log warning nobody reads is
+exactly how that shipped unnoticed. It was reverted under a UAT phase-1 deadline: Render builds
+from a fresh clone where this folder is always empty, so fatal meant the service could not deploy
+at all. `--build-arg ALLOW_MISSING_FONTS=false` makes it fatal again, for a build that *should*
+carry fonts.
+
+The substitution guard from #670 is **kept**: if fonts are supplied and fontconfig substitutes one
+anyway, the build fails.
+
+**Render (hosted): builds from source again, and therefore ships substitute fonts.** `render.yaml`
+is back on `runtime: docker` + `dockerfilePath`. `scripts/build-push-backend-image.sh` is left in
+place and working — restoring `runtime: image` with a real `image.url` is what finishes #666.
 
 **On-prem (future):** natural fit — your build server/CI job fetches `thai-fonts.tar.gz` into
-`backend/fonts/` as a step before `docker build`, exactly like the command above.
+`backend/fonts/` as a step before `docker build`, exactly like the script does.
 
 ## Local dev (macOS)
 

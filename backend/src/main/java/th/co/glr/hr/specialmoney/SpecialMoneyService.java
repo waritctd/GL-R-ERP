@@ -31,8 +31,40 @@ import th.co.glr.hr.notification.NotificationService;
  * <p>{@code MANAGER_APPROVED} survives in {@link SpecialMoneyStatus} and in {@code chk_smr_status}
  * only for rows written before the manager stage was removed; nothing can enter that state now.
  *
- * <p>{@code managesEmployee} still exists here, but only for <em>read scoping and submit-on-behalf</em>
- * — a ฝ่าย manager may file for their team and see their team's requests. It grants no approval.
+ * <p><b>A ฝ่าย manager has no welfare access of any kind (owner ruling, 2026-08-10).</b> Welfare is
+ * confidential to each employee: {@code hr} and {@code ceo} see everything, and <em>everyone else,
+ * a ผู้จัดการ included, sees only their own rows</em>. There is deliberately no
+ * {@code managesEmployee} concept left in this class — it used to grant a division-wide read plus
+ * submit-on-behalf, and both are gone:
+ *
+ * <ul>
+ *   <li><b>Read</b> — {@link #list}, {@link #usage}, {@link #listAttachments} and
+ *       {@link #resolveAttachmentForDownload} all funnel through {@link #canAccessEmployee}, which
+ *       is now "view-all role, or your own employee id", full stop.
+ *   <li><b>Submit-on-behalf</b> — removed with the read scope, not kept alongside it. Filing a
+ *       welfare claim means supplying the event date, the reason and the type-specific
+ *       {@code detail} (a death in the family, a wedding, a medical event); that IS the
+ *       confidential content, so "may file for you but may not read it" is not a coherent
+ *       boundary. Keeping it would also have left a write-only limbo: the filer could create a row
+ *       and then neither list it, read its evidence, nor see its outcome.
+ *   <li><b>{@code requested_by_id}</b> — {@link #cancel} and {@link #requireCanAttach} still
+ *       honour "whoever filed it", but <b>never for a {@code manager()} principal</b>. Cancelling
+ *       hands the full DTO back, so honouring it for a ผู้จัดการ would be a read of a
+ *       subordinate's welfare row around the gate above; for anyone else it is the filer reaching
+ *       a row they created. With on-behalf gone the disjunct can only ever match a legacy row, and
+ *       deleting it outright — as this class briefly did — strands those rows on everyone but the
+ *       claimant. The employee themselves always keeps both rights.
+ * </ul>
+ *
+ * <p>Nothing is stranded by that last point: every row's own employee can still cancel and attach.
+ *
+ * <p><b>Notifications are part of the read gate, not separate from it.</b> A notification is
+ * delivered to one {@code employee_id} and read back own-only
+ * ({@code NotificationRepository#findByEmployeeId}), so a message naming the employee, the welfare
+ * type, the date and the amount IS confidential welfare content. {@link #notifyCeoApproved} and
+ * {@link #notifyRejected} used to copy {@code managerApprovedBy}; both branches are removed for
+ * that reason, and the removal is pinned wrong-way-round by
+ * {@code ceoRejectionOfALegacyManagerApprovedRequestTellsTheClaimantOnlyNotTheApprovingManager}.
  */
 @Service
 public class SpecialMoneyService {
@@ -76,11 +108,13 @@ public class SpecialMoneyService {
         }
 
         Long employeeId = requestedEmployeeId;
-        Long managerEmployeeId = null;
-        Long managerDivisionId = null;
+        Long ownEmployeeId = null;
         if (!canViewAll(user)) {
-            managerEmployeeId = requireEmployeeId(user);
-            managerDivisionId = user.manager() ? user.divisionId() : null;
+            // The caller's OWN employee id, and nothing else. This used to also pass the ฝ่าย of a
+            // ผู้จัดการ, which handed every manager a division-wide read of their team's welfare
+            // claims -- medical, funeral, wedding. Welfare is confidential per employee, so the
+            // only non-hr/ceo scope is self.
+            ownEmployeeId = requireEmployeeId(user);
             if (requestedEmployeeId != null && !canAccessEmployee(user, requestedEmployeeId)) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
             }
@@ -88,8 +122,7 @@ public class SpecialMoneyService {
 
         return repository.findRequests(new SpecialMoneyFilter(
             employeeId,
-            managerEmployeeId,
-            managerDivisionId,
+            ownEmployeeId,
             effectiveFrom,
             effectiveTo,
             parseStatus(requestedStatus),
@@ -97,10 +130,15 @@ public class SpecialMoneyService {
         ));
     }
 
+    /**
+     * The submit form's employee picker. Non-hr/ceo callers get exactly one entry — themselves —
+     * because {@link #resolveTargetEmployee} will refuse anyone else. hr/ceo still get the full
+     * roster, which for them is a <em>list filter</em>, not an on-behalf picker: they cannot submit
+     * for an arbitrary employee either.
+     */
     public List<SpecialMoneyEmployeeOption> employeeOptions(UserPrincipal user) {
         Long actorEmployeeId = requireEmployeeId(user);
-        Long managerDivisionId = user.manager() ? user.divisionId() : null;
-        return repository.findEmployeeOptions(actorEmployeeId, managerDivisionId, canViewAll(user));
+        return repository.findEmployeeOptions(actorEmployeeId, canViewAll(user));
     }
 
     public SpecialMoneyUsageDto usage(long employeeId, int year, UserPrincipal user) {
@@ -320,13 +358,28 @@ public class SpecialMoneyService {
         SpecialMoneyRequestDto existing = requireRequest(id);
         Long actorEmployeeId = requireEmployeeId(user);
         boolean isEmployee = existing.employeeId() == actorEmployeeId;
-        // S2 (pre-existing bug, not introduced by this branch): requestedById() is a boxed Long and
-        // was compared with `==`, i.e. REFERENCE equality. Real employee ids in this system are 4-5
-        // digits (10025, 142, ...), well outside Java's Long cache (-128..127), so two distinct Long
-        // instances holding the identical value never compared equal here -- isRequester was ALWAYS
-        // false in production, silently disabling the entire on-behalf-cancel path for anyone whose
-        // id fell outside the cache. Fixed to value equality via .equals().
-        boolean isRequester = existing.requestedById() != null && existing.requestedById().equals(actorEmployeeId);
+        // S2 (uat): requestedById() is a boxed Long and was compared with `==`, i.e. REFERENCE
+        // equality. Real ids here are 4-5 digits, outside Java's Long cache (-128..127), so it was
+        // ALWAYS false in production. Fixed to value equality.
+        //
+        // MERGE RESOLUTION, main→uat 2026-08-10. The two sides disagreed on this disjunct and both
+        // were partly right, so it is neither kept nor deleted — it is narrowed to !manager():
+        //
+        //   • main deleted it outright, reasoning that #resolveTargetEmployee now refuses every
+        //     submit-on-behalf, so a non-self requested_by_id can only be a LEGACY row.
+        //     That reasoning is correct — verify it there before widening this back.
+        //   • uat kept it, and has notification wording ("…แทนคุณ") plus tests around it. Deleting
+        //     it strands the legacy rows that already exist: nobody but the claimant could cancel
+        //     or attach, including the person who filed.
+        //
+        // What the owner's ruling actually requires is that a ผู้จัดการ have NO welfare access of
+        // any kind. Cancelling returns the DTO, so honouring requested_by_id for a manager is a
+        // read of a subordinate's welfare row through the back door — exactly the channel
+        // #canAccessEmployee closes on every query path. Excluding managers closes it; excluding
+        // everyone also strands the legacy rows, which the ruling never asked for.
+        boolean isRequester = existing.requestedById() != null
+            && existing.requestedById().equals(actorEmployeeId)
+            && !user.manager();
         if (!isEmployee && !isRequester) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
@@ -403,10 +456,16 @@ public class SpecialMoneyService {
     // Gates
     // ---------------------------------------------------------------------
 
+    /**
+     * Welfare is filed for yourself, by yourself — <b>every role, no exception</b>. A ฝ่าย manager
+     * used to be able to file for a team member; that is gone with the read scope, because the
+     * request body itself (event date, reason, {@code detail}) is the confidential content. HR and
+     * the CEO were never able to file on someone's behalf and still cannot.
+     */
     private long resolveTargetEmployee(Long requestedEmployeeId, UserPrincipal user) {
         Long actorEmployeeId = requireEmployeeId(user);
         long targetEmployeeId = requestedEmployeeId == null ? actorEmployeeId : requestedEmployeeId;
-        if (targetEmployeeId != actorEmployeeId && !managesEmployee(targetEmployeeId, user)) {
+        if (targetEmployeeId != actorEmployeeId) {
             throw new ApiException(HttpStatus.FORBIDDEN, "พนักงานสามารถยื่นคำขอเงินพิเศษให้ตนเองเท่านั้น");
         }
         return targetEmployeeId;
@@ -448,23 +507,33 @@ public class SpecialMoneyService {
     // ---------------------------------------------------------------------
 
     /**
-     * Attaches a piece of evidence. Only the employee or whoever filed on their behalf may upload,
-     * and only while the request is still SUBMITTED — once a decision is recorded the evidence it
-     * was based on must not change underneath it.
-     */
-    /**
-     * The upload gate, split out so the controller can authorize BEFORE writing the file to disk.
-     * Called again inside {@link #addAttachment} — the two calls are cheap, and leaving the write
-     * path unguarded on the assumption that the caller checked first is how that guarantee decays.
+     * Attaches a piece of evidence. <b>Only the employee the claim belongs to</b> may upload, and
+     * only while the request is still SUBMITTED — once a decision is recorded the evidence it was
+     * based on must not change underneath it.
+     *
+     * <p>As with {@link #cancel}, the old "or whoever filed it" disjunct is gone: it survived only
+     * on legacy on-behalf rows, where it let a ฝ่าย manager put documents into a colleague's
+     * confidential claim.
+     *
+     * <p>The upload gate is split out so the controller can authorize BEFORE writing the file to
+     * disk. It is called again inside {@link #addAttachment} — the two calls are cheap, and leaving
+     * the write path unguarded on the assumption that the caller checked first is how that
+     * guarantee decays.
      */
     public void requireCanAttach(long id, UserPrincipal user) {
         Long actorEmployeeId = requireEmployeeId(user);
         SpecialMoneyRequestDto existing = requireRequest(id);
 
         boolean isEmployee = existing.employeeId() == actorEmployeeId;
-        // S2-shaped bug, same fix as #cancel: requestedById() is a boxed Long and must be compared
-        // by value, not reference.
-        boolean isRequester = existing.requestedById() != null && existing.requestedById().equals(actorEmployeeId);
+        // S2-shaped bug, same fix as #cancel: requestedById() is a boxed Long, compared by value.
+        // The !manager() narrowing is #cancel's too, and is duplicated rather than shared on
+        // purpose: these are two separate gates with two separate copies of the check, and fixing
+        // one without the other is the realistic mistake — so they are kept side by side and both
+        // are pinned by aLegacyOnBehalfFilerCanNoLongerCancelOrAttachToTheEmployeesRow. Read
+        // #cancel's comment for why the disjunct is narrowed rather than deleted.
+        boolean isRequester = existing.requestedById() != null
+            && existing.requestedById().equals(actorEmployeeId)
+            && !user.manager();
         if (!isEmployee && !isRequester) {
             throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะผู้ยื่นคำขอเท่านั้นที่แนบเอกสารได้");
         }
@@ -516,8 +585,10 @@ public class SpecialMoneyService {
     }
 
     /**
-     * The single approval gate for welfare. A ฝ่าย manager gets no say here — they may file for
-     * their team and see their team's requests, but only the CEO decides.
+     * The single approval gate for welfare: only the CEO decides. A ฝ่าย manager gets no say here —
+     * and, since 2026-08-10, no read of a team member's welfare either (see the class Javadoc).
+     * This sentence used to add "they may file for their team and see their team's requests", which
+     * is exactly the access that was removed.
      */
     private void requireCeo(UserPrincipal user) {
         if (user == null || !"ceo".equals(user.role())) {
@@ -527,34 +598,23 @@ public class SpecialMoneyService {
         }
     }
 
+    /**
+     * The one read gate for welfare, shared by {@link #usage}, {@link #listAttachments},
+     * {@link #resolveAttachmentForDownload} and {@link #list}'s {@code employeeId} filter.
+     *
+     * <p><b>Two disjuncts only: a view-all role, or your own row.</b> There is deliberately no
+     * manager branch. It used to end in {@code || managesEmployee(employeeId, user)}, which meant
+     * a ฝ่าย manager could list their whole division's welfare claims, read the per-type amounts
+     * those employees had drawn down, and download the evidence behind them — death certificates,
+     * medical receipts. Welfare is confidential to each employee; only hr/ceo look across it.
+     *
+     * <p>Unlike {@code OvertimeService} and {@code AttendanceService}, which are division-scoped by
+     * design, this method must stay two-disjunct. Re-adding a manager branch here silently reopens
+     * every read path above at once — {@code SpecialMoneyScopeIntegrationTest} pins all four.
+     */
     private boolean canAccessEmployee(UserPrincipal user, long employeeId) {
         return canViewAll(user)
-            || (user.employeeId() != null && user.employeeId() == employeeId)
-            || managesEmployee(employeeId, user);
-    }
-
-    /**
-     * True when {@code user} is a ฝ่าย manager sharing the employee's division (excluding self).
-     *
-     * <p><b>This grants no approval rights</b> — welfare is CEO-only. It gates two lesser things:
-     * filing a request on a team member's behalf ({@code resolveTargetEmployee}) and seeing a team
-     * member's requests and quota ({@code canAccessEmployee}).
-     *
-     * <p>{@code reports_to_employee_id} is deliberately not consulted; it used to be, and was
-     * dropped on the owner's instruction so this matches {@code AttendanceService.resolveScope},
-     * which has always been division-only. HR is not special-cased either: it gets no
-     * manager-shaped access to file on someone else's behalf.
-     */
-    private boolean managesEmployee(long employeeId, UserPrincipal user) {
-        if (user == null || user.employeeId() == null) {
-            return false;
-        }
-        return repository.findEmployeeAccess(employeeId)
-            .map(access -> user.manager()
-                && user.divisionId() != null
-                && user.divisionId().equals(access.divisionId())
-                && employeeId != user.employeeId())
-            .orElse(false);
+            || (user.employeeId() != null && user.employeeId() == employeeId);
     }
 
     private boolean canViewAll(UserPrincipal user) {
@@ -591,6 +651,18 @@ public class SpecialMoneyService {
         }
     }
 
+    /**
+     * Goes to the employee and to nobody else — the same rule as {@link #notifySubmitted}.
+     *
+     * <p>This used to also notify {@code managerApprovedBy} on any row that carried one, with a
+     * body naming the employee, the welfare type and the event date. A notification is delivered to
+     * one {@code employee_id} and read back own-only ({@code NotificationRepository#findByEmployeeId}),
+     * so that branch pushed confidential welfare content straight into a ผู้จัดการ's own inbox —
+     * the very thing {@link #canAccessEmployee} now refuses them through every query path. It could
+     * only ever fire on a legacy row ({@code ceoDirectApprove} never stamps the manager columns, and
+     * nothing can enter {@code MANAGER_APPROVED} any more), and it linked to a screen where that
+     * manager can no longer see the request at all, so it was a dead-end leak rather than a feature.
+     */
     private void notifyCeoApproved(SpecialMoneyRequestDto request) {
         String type = SpecialMoneyType.thaiLabelOf(request.requestType());
         String date = ThaiText.date(request.eventDate());
@@ -604,35 +676,20 @@ public class SpecialMoneyService {
             "/employee-requests",
             true
         );
-        if (request.managerApprovedBy() != null) {
-            notificationService.notify(
-                request.managerApprovedBy(),
-                "SPECIAL_MONEY_APPROVED",
-                "อนุมัติคำขอ" + type + "ของ " + request.employeeName() + " แล้ว",
-                "CEO อนุมัติคำขอ" + type + "ของ " + request.employeeName() + " วันที่ " + date
-                    + " จำนวน " + amount + " บาท แล้ว",
-                "/employee-requests",
-                true
-            );
-        }
     }
 
     /**
-     * Notification coverage gap C: a rejection used to tell only the requester. Every LIVE welfare
-     * request goes SUBMITTED -> CEO directly (see the class Javadoc), so {@code managerApprovedBy()}
-     * is null for it and there is nobody upstream to tell. It is non-null ONLY for a legacy row
-     * written before the manager stage was removed, rejected via {@code ceoRejectFrom(MANAGER_APPROVED,
-     * ...)} -- that manager approved it under the old rules and should still hear that CEO closed it
-     * as a rejection, the same counterpart-notify {@link #notifyCeoApproved} already applies to the
-     * approve path.
+     * Rejection tells the CLAIMANT only.
      *
-     * <p><b>S-6 (review, second pass):</b> like {@code OvertimeService#notifyRejected}, this had no
-     * actor self-skip -- the one place the "nobody is notified about their own action" rule wasn't
-     * applied. Reachable for BOTH recipients: welfare allows self-submission, so a CEO who filed
-     * their own SUBMITTED request and then rejects it themselves would be told about their own
-     * rejection; and a legacy row's {@code managerApprovedBy} can coincide with the current CEO
-     * actor the same way {@code OvertimeService}'s does. {@code actorEmployeeId} is threaded through
-     * and both recipients are skipped when they are the actor.
+     * <p>uat also notified {@code managerApprovedBy} here, and {@link #notifyCeoApproved} did the
+     * same on the approve path. Both are removed: those messages name the employee, the welfare
+     * type, the date and (on approve) the amount, and notifications are read own-only — so they
+     * delivered confidential welfare content straight into a manager's inbox, a second channel
+     * around the read gate this change exists to close. Only ever non-null on a LEGACY row
+     * predating the manager stage's removal, so nothing live loses a notification.
+     *
+     * <p>uat's S-6 actor self-skip is KEPT — welfare allows self-submission, so a CEO rejecting
+     * their own request must not be told about their own action.
      */
     private void notifyRejected(SpecialMoneyRequestDto request, long actorEmployeeId) {
         String type = SpecialMoneyType.thaiLabelOf(request.requestType());
@@ -643,23 +700,15 @@ public class SpecialMoneyService {
                 "SPECIAL_MONEY_REJECTED",
                 "ไม่อนุมัติคำขอ" + type,
                 "CEO ไม่อนุมัติคำขอ" + type + " วันที่ " + date
-                    + "\nเหตุผล: " + (request.reviewerNote() == null ? "กรุณาติดต่อผู้จัดการหรือ HR" : request.reviewerNote())
+                    + "\nเหตุผล: " + (request.reviewerNote() == null ? "กรุณาติดต่อฝ่ายบุคคล" : request.reviewerNote())
                     + "\nหากต้องการยื่นใหม่ กรุณาแก้ไขตามเหตุผลข้างต้นแล้วส่งอีกครั้ง",
                 "/employee-requests",
                 true
             );
         }
-        if (request.managerApprovedBy() != null && request.managerApprovedBy() != actorEmployeeId) {
-            notificationService.notify(
-                request.managerApprovedBy(),
-                "SPECIAL_MONEY_REJECTED",
-                "ไม่อนุมัติคำขอ" + type + "ของ " + request.employeeName(),
-                "CEO ไม่อนุมัติคำขอ" + type + "ของ " + request.employeeName() + " ที่คุณอนุมัติไว้"
-                    + "\nเหตุผล: " + (request.reviewerNote() == null ? "กรุณาติดต่อ HR" : request.reviewerNote()),
-                "/employee-requests",
-                true
-            );
-        }
+        // The managerApprovedBy notification that stood here is removed — see this method's Javadoc.
+        // It named the employee and the welfare type in a manager's inbox, which is the same
+        // confidential read this change closes on the list/detail paths.
     }
 
     // ---------------------------------------------------------------------

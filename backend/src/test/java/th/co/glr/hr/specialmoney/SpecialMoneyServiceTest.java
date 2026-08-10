@@ -106,14 +106,140 @@ class SpecialMoneyServiceTest {
         verify(repository, never()).create(anyLong(), any(), any(), any(), any());
     }
 
-    @Test
-    void employeesCannotSubmitForAnEmployeeTheyDoNotManage() {
-        when(repository.findEmployeeAccess(11L)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> service.submit("AID_WEDDING", weddingRequest(11L, LocalDate.of(2026, 7, 1)), user("employee", 10L)))
+    /**
+     * Welfare has no submit-on-behalf for anyone, so the target employee is the ONLY thing this
+     * gate looks at -- not the caller's role, not their ฝ่าย. All three shapes that used to differ
+     * (a plain colleague, the employee's own ผู้จัดการ, HR) now take the same branch.
+     */
+    @ParameterizedTest(name = "{0} cannot submit a welfare request for someone else")
+    @MethodSource("nonSelfSubmitters")
+    void nobodyCanSubmitAWelfareRequestForAnotherEmployee(String label, UserPrincipal caller) {
+        assertThatThrownBy(() -> service.submit(
+                "AID_WEDDING", weddingRequest(11L, LocalDate.of(2026, 7, 1)), caller))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.FORBIDDEN);
+        // Refused before the row exists, not after.
+        verify(repository, never()).create(anyLong(), any(), any(), any(), any());
+    }
+
+    static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments> nonSelfSubmitters() {
+        return java.util.stream.Stream.of(
+            org.junit.jupiter.params.provider.Arguments.of("an unrelated colleague",
+                new UserPrincipal(10L, "e@glr.co.th", "e", "employee", 10L, true, LocalDate.now(), false, 5L, false)),
+            // THE case this change is about: employee 11 sits in division 5 and so does this
+            // ผู้จัดการ. Before 2026-08-10 managesEmployee() made this succeed.
+            org.junit.jupiter.params.provider.Arguments.of("the employee's own ฝ่าย manager",
+                new UserPrincipal(88L, "m@glr.co.th", "m", "employee", 88L, true, LocalDate.now(), false, 5L, true)),
+            org.junit.jupiter.params.provider.Arguments.of("hr",
+                new UserPrincipal(500L, "hr@glr.co.th", "hr", "hr", 500L, true, LocalDate.now(), false, 5L, false)),
+            org.junit.jupiter.params.provider.Arguments.of("the ceo",
+                new UserPrincipal(501L, "ceo@glr.co.th", "ceo", "ceo", 501L, true, LocalDate.now(), false, 5L, false)));
+    }
+
+    // ---------------------------------------------------------------------
+    // The read-scope DECISION (which branch list()/canAccessEmployee take).
+    // Enforcement -- that the branch survives into the SQL WHERE clause -- is NOT provable here;
+    // see SpecialMoneyScopeIntegrationTest.
+    // ---------------------------------------------------------------------
+
+    /**
+     * A ฝ่าย manager must be scoped to their OWN employee id, exactly like a plain employee. The
+     * captured filter is the decision: {@link SpecialMoneyFilter} no longer even has a division
+     * field, so the only way to widen the scope would be to leave {@code ownEmployeeId} null, which
+     * is the hr/ceo branch.
+     */
+    @Test
+    void managerListIsScopedToTheirOwnEmployeeIdNotTheirDivision() {
+        UserPrincipal divisionManager = manager(88L, 5L);
+
+        service.list(divisionManager, LocalDate.of(2026, 1, 1), LocalDate.of(2026, 12, 31), null, null, null);
+
+        ArgumentCaptor<SpecialMoneyFilter> captor = ArgumentCaptor.forClass(SpecialMoneyFilter.class);
+        verify(repository).findRequests(captor.capture());
+        assertThat(captor.getValue().ownEmployeeId()).isEqualTo(88L);
+        assertThat(captor.getValue().employeeId()).isNull();
+    }
+
+    @Test
+    void hrAndCeoListsAreNotScopedToAnEmployeeAtAll() {
+        for (UserPrincipal viewAll : List.of(user("hr", 500L), user("ceo", 501L))) {
+            service.list(viewAll, LocalDate.of(2026, 1, 1), LocalDate.of(2026, 12, 31), null, null, null);
+        }
+
+        ArgumentCaptor<SpecialMoneyFilter> captor = ArgumentCaptor.forClass(SpecialMoneyFilter.class);
+        verify(repository, org.mockito.Mockito.times(2)).findRequests(captor.capture());
+        assertThat(captor.getAllValues()).allSatisfy(filter -> assertThat(filter.ownEmployeeId()).isNull());
+    }
+
+    /**
+     * The employee picker must not offer a ผู้จัดการ their ฝ่าย: {@code includeAll} false means
+     * "self only" now that {@code findEmployeeOptions} has no division parameter to widen it.
+     */
+    @Test
+    void managerEmployeePickerAsksForSelfOnly() {
+        service.employeeOptions(manager(88L, 5L));
+
+        verify(repository).findEmployeeOptions(88L, false);
+    }
+
+    @Test
+    void managerCannotReadATeamMembersUsageQuota() {
+        assertThatThrownBy(() -> service.usage(10L, 2026, manager(88L, 5L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.FORBIDDEN);
+        verify(repository, never()).findUsage(anyLong(), anyInt());
+    }
+
+    @Test
+    void managerCannotFilterTheListToATeamMembersRequests() {
+        assertThatThrownBy(() -> service.list(
+                manager(88L, 5L), LocalDate.of(2026, 1, 1), LocalDate.of(2026, 12, 31), 10L, null, null))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.FORBIDDEN);
+        verify(repository, never()).findRequests(any());
+    }
+
+    /**
+     * {@code requested_by_id} is no longer a key to anybody else's row. Both gates that honoured it
+     * are asserted here because they are separate methods with separate copies of the check --
+     * fixing one and not the other is the realistic mistake.
+     */
+    @Test
+    void aLegacyOnBehalfFilerCanNoLongerCancelOrAttachToTheEmployeesRow() {
+        // employee 10's row, filed back when a ผู้จัดการ could file on their behalf: requested_by_id 88.
+        SpecialMoneyRequestDto legacyOnBehalfRow = dtoRequestedBy(77L, 10L, "SUBMITTED", "AID_WEDDING", 88L);
+        when(repository.findById(77L)).thenReturn(Optional.of(legacyOnBehalfRow));
+        UserPrincipal filer = manager(88L, 5L);
+
+        assertThatThrownBy(() -> service.cancel(77L, null, filer))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.FORBIDDEN);
+        assertThatThrownBy(() -> service.requireCanAttach(77L, filer))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.FORBIDDEN);
+
+        verify(repository, never()).cancel(anyLong(), any(), any());
+        verify(repository, never()).addAttachment(anyLong(), any(), any(), any(), any(), any());
+    }
+
+    /** ...and the employee whose claim it is keeps both, so nothing is stranded by the line above. */
+    @Test
+    void theEmployeeThemselvesStillCancelsAndAttachesOnALegacyOnBehalfRow() {
+        SpecialMoneyRequestDto legacyOnBehalfRow = dtoRequestedBy(77L, 10L, "SUBMITTED", "AID_WEDDING", 88L);
+        // Three reads in order: requireCanAttach's, then cancel's "existing", then cancel's "after".
+        when(repository.findById(77L))
+            .thenReturn(Optional.of(legacyOnBehalfRow))
+            .thenReturn(Optional.of(legacyOnBehalfRow))
+            .thenReturn(Optional.of(dtoRequestedBy(77L, 10L, "CANCELLED", "AID_WEDDING", 88L)));
+        when(repository.cancel(77L, 10L, null)).thenReturn(1);
+
+        service.requireCanAttach(77L, user("employee", 10L));
+        assertThat(service.cancel(77L, null, user("employee", 10L)).status()).isEqualTo("CANCELLED");
     }
 
     // ---------------------------------------------------------------------
@@ -129,7 +255,6 @@ class SpecialMoneyServiceTest {
     @MethodSource("nonCeoApprovers")
     void nobodyBelowCeoCanApproveSubmittedRequest(String label, UserPrincipal caller) {
         when(repository.findById(77L)).thenReturn(Optional.of(dto(77L, 10L, "SUBMITTED", "AID_WEDDING")));
-        when(repository.findEmployeeAccess(10L)).thenReturn(Optional.of(new SpecialMoneyEmployeeAccess(10L, 99L, 5L, true)));
 
         assertThatThrownBy(() -> service.approve(77L, null, caller))
             .isInstanceOf(ApiException.class)
@@ -420,15 +545,22 @@ class SpecialMoneyServiceTest {
     }
 
     /**
-     * Notification coverage gap C, positive case. Reachable only via a legacy row written before
-     * welfare's manager stage was removed (see the class Javadoc): {@code
-     * ceoRejectFrom(MANAGER_APPROVED, ...)} rejects it, and {@code managerApprovedBy} -- set back
-     * when that manager stage still existed -- is never cleared by a reject. {@link #dto}'s own
-     * helper ties {@code managerApprovedBy} to the CURRENT status only, so this builds the "after"
-     * row directly to reflect what a real legacy row looks like.
+     * INVERTED on the main→uat sync (2026-08-10). uat had two tests here asserting the POSITIVE:
+     * that {@code notifyRejected} also told {@code managerApprovedBy}, plus an S-6 self-skip
+     * variant of the same branch. The owner's welfare-confidentiality ruling deleted that branch
+     * (see {@code SpecialMoneyService#notifyRejected} / {@code #notifyCeoApproved}) — a
+     * notification is delivered to one {@code employee_id} and read back own-only, so naming the
+     * employee, the welfare type and the date in a ผู้จัดการ's inbox was a second channel around
+     * the read gate. The self-skip test then became vacuous, since nothing notifies that id at all.
+     *
+     * <p>Rather than drop uat's coverage, it is rewritten wrong-way-round against the new rule,
+     * which is the direction this repo asks for anyway. The fixture is still the real legacy shape:
+     * {@code managerApprovedBy} is set back when the manager stage existed and is never cleared by
+     * a reject, so it survives on the "after" row — {@link #dto} ties that column to the CURRENT
+     * status and cannot express it.
      */
     @Test
-    void ceoRejectionOfALegacyManagerApprovedRequestNotifiesTheApprovingManagerToo() {
+    void ceoRejectionOfALegacyManagerApprovedRequestTellsTheClaimantOnlyNotTheApprovingManager() {
         SpecialMoneyRequestDto managerApproved = dto(77L, 10L, "MANAGER_APPROVED", "AID_WEDDING");
         SpecialMoneyRequestDto rejected = rejectedWithManagerApprovedBy(77L, 10L, 99L);
         when(repository.findById(77L)).thenReturn(Optional.of(managerApproved)).thenReturn(Optional.of(rejected));
@@ -437,32 +569,16 @@ class SpecialMoneyServiceTest {
         service.reject(77L, new ReviewSpecialMoneyRequest("not justified", null, null), user("ceo", 500L));
 
         verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_REJECTED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
-        verify(notificationService).notify(eq(99L), eq("SPECIAL_MONEY_REJECTED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
-    }
-
-    /**
-     * S-6 (review, second pass): {@code notifyRejected} had no actor self-skip, mirroring the
-     * identical fix in {@code OvertimeService}. Reachable here too: {@code managerApprovedBy} on a
-     * legacy row can coincide with the CEO actor now rejecting it.
-     */
-    @Test
-    void ceoRejectionOfALegacyManagerApprovedRequestSkipsNotifyingSelfWhenActorIsTheLegacyApprovingManager() {
-        SpecialMoneyRequestDto managerApproved = dto(77L, 10L, "MANAGER_APPROVED", "AID_WEDDING");
-        SpecialMoneyRequestDto rejected = rejectedWithManagerApprovedBy(77L, 10L, 500L);
-        when(repository.findById(77L)).thenReturn(Optional.of(managerApproved)).thenReturn(Optional.of(rejected));
-        when(repository.ceoReject(77L, 500L, "not justified")).thenReturn(1);
-
-        service.reject(77L, new ReviewSpecialMoneyRequest("not justified", null, null), user("ceo", 500L));
-
-        verify(notificationService).notify(eq(10L), eq("SPECIAL_MONEY_REJECTED"), anyString(), anyString(), eq("/employee-requests"), eq(true));
         verify(notificationService, never())
-            .notify(eq(500L), eq("SPECIAL_MONEY_REJECTED"), anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyBoolean());
+            .notify(eq(99L), anyString(), anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyBoolean());
+        // Not merely "not the REJECTED type" — the manager must get nothing at all on this row.
+        verify(notificationService, org.mockito.Mockito.times(1))
+            .notify(anyLong(), anyString(), anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyBoolean());
     }
 
     @Test
     void managerCannotRejectASubmittedRequest() {
         when(repository.findById(77L)).thenReturn(Optional.of(dto(77L, 10L, "SUBMITTED", "AID_WEDDING")));
-        when(repository.findEmployeeAccess(10L)).thenReturn(Optional.of(new SpecialMoneyEmployeeAccess(10L, 99L, 5L, true)));
 
         // Reject must be gated exactly as approve is; a manager who can refuse but not approve
         // still controls the outcome.
@@ -647,8 +763,24 @@ class SpecialMoneyServiceTest {
         return dto(id, employeeId, status, requestType, Map.of());
     }
 
+    /**
+     * A row whose {@code requested_by_id} is someone OTHER than the employee -- i.e. one filed
+     * on-behalf before that capability was removed. Nothing can create this shape any more, which
+     * is precisely why the gates that used to key on it need a fixture that still can.
+     */
+    private SpecialMoneyRequestDto dtoRequestedBy(
+            long id, long employeeId, String status, String requestType, long requestedById) {
+        return dto(id, employeeId, status, requestType, Map.of(), requestedById);
+    }
+
     private SpecialMoneyRequestDto dto(
             long id, long employeeId, String status, String requestType, Map<String, String> detail) {
+        return dto(id, employeeId, status, requestType, detail, employeeId);
+    }
+
+    private SpecialMoneyRequestDto dto(
+            long id, long employeeId, String status, String requestType, Map<String, String> detail,
+            long requestedById) {
         boolean managerApproved = "MANAGER_APPROVED".equals(status) || "APPROVED".equals(status);
         boolean ceoApproved = "APPROVED".equals(status);
         return new SpecialMoneyRequestDto(
@@ -670,7 +802,7 @@ class SpecialMoneyServiceTest {
             status,
             ceoApproved ? LocalDate.of(2026, 7, 1) : null,
             null,
-            employeeId,
+            requestedById,
             "Test Employee",
             OffsetDateTime.parse("2026-06-14T10:00:00+07:00"),
             managerApproved ? 99L : null,

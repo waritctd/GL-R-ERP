@@ -22,7 +22,12 @@ import {
   pendingApproverText,
 } from '../../utils/format.js';
 
-const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,0.75fr)] nav-drawer:min-w-[940px] reflow-cards';
+// Five columns since the เวลาจริง / จ่ายได้ column was dropped (owner: not necessary —
+// it read "0 นาที / จ่ายได้ 0 นาที" on every row that is not yet approved, and the
+// approved total is already a summary tile, ชั่วโมงจ่ายได้). min-w drops 940 -> 820 with
+// it: the old value existed to keep the six columns legible, and leaving it would have
+// reserved horizontal scroll for a column that no longer renders.
+const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1.15fr)_minmax(0,0.75fr)] nav-drawer:min-w-[820px] reflow-cards';
 // FilterBar (Layout.jsx) renders a <div>; this form needs native submit semantics
 // (Enter-to-submit on the search button), so its exact utility string is reproduced
 // here rather than wrapping a <form> inside a non-form primitive.
@@ -870,7 +875,8 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
         a flush body runs edge to edge, so the card radius is what clips its corners). With no
         scroll region between the two, the excess was simply gone: measured at 768px, the grid
         rendered 940px inside a 702px card — 238px unreachable by any gesture, taking the
-        เวลาจริง / จ่ายได้ and action columns with it.
+        ขั้นอนุมัติ and action columns with it (the เวลาจริง / จ่ายได้ column this
+        originally named has since been removed).
         Third instance of this same pairing (attendance and welfare were the other two), and the
         one that hid the longest: it only renders for a manager/HR actor, because the plain
         employee's own history never fills those columns. Nothing found it until the division
@@ -881,7 +887,6 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           <span>วันที่ / พนักงาน</span>
           <span>แผน OT</span>
           <span>เหตุผล</span>
-          <span>เวลาจริง / จ่ายได้</span>
           <span>ขั้นอนุมัติ</span>
           <span />
         </div>
@@ -950,29 +955,31 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
                 <strong>{request.reason}</strong>
                 <small>{request.reviewerNote || request.calculationNote || '-'}</small>
               </span>
-              {/* Pure-numeric column: right-aligned + mono on desktop so the figures
-                  line up for scanning (DESIGN.md mono is for "figures needing
-                  alignment"). Left on mobile, where it reads as a stacked card. */}
-              <span data-label="เวลาจริง / จ่ายได้" className="mobile:order-6 min-[721px]:text-right">
-                <strong className="font-mono">{formatMinutes(request.actualMinutes)}</strong>
-                <small className="font-mono">จ่ายได้ {formatMinutes(request.payableMinutes)}</small>
-              </span>
               <span data-label="ขั้นอนุมัติ" className="mobile:order-2">
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-                {/* No "รอ" prefix -- the StatusBadge above already says that (รอผู้จัดการ/รอ CEO);
-                    repeating it made this note a superset of the badge's own text, which broke an
-                    e2e locator matching the badge's exact label (review #pending-approver-info). */}
-                {pendingApproverNote ? <small className="text-text-muted">{pendingApproverNote}</small> : null}
-                {/* A1: only print the ผู้จัดการ audit line when this request actually HAS a
-                    manager stage (hasManagerStage mirrors OvertimeService.approve()'s own
-                    routing). On the manager-less route this slot could never fill -- it always
-                    read "-" -- which is exactly the contradiction the owner's screenshot showed:
-                    a badge naming CEO sitting next to an audit line naming a manager who never
-                    existed for this request. */}
-                {hasManagerStage(request) ? (
-                  <small>ผู้จัดการ: {request.managerApprovedAt ? `${request.managerApprovedByName || '-'} · ${formatDateTime(request.managerApprovedAt)}` : '-'}</small>
+                {/* Only when a NAME was resolved. The note used to render the bare role too, which
+                    was right when the badge said a generic "รอผู้จัดการ" for every pending row --
+                    but A1 made the badge role-aware ("รอ CEO"), and the role-only note then just
+                    repeated it. Two independently-correct changes that combined into duplication:
+                    the owner's screenshot showed "รอ CEO" / "CEO" / "CEO: -" stacked, three lines
+                    for one fact. A name is the note's only remaining content -- "CEO (คุณสมชาย)"
+                    tells you who to chase, which the badge cannot. */}
+                {request.pendingApproverName && pendingApproverNote
+                  ? <small className="text-text-muted">{pendingApproverNote}</small>
+                  : null}
+                {/* Audit lines print only once the stage has actually HAPPENED. They previously
+                    rendered "ผู้จัดการ: -" / "CEO: -" while pending, which is a slot for a fact
+                    that does not exist yet -- and the badge already says the stage is outstanding.
+                    (A1 had removed the ผู้จัดการ line on the manager-less route for the related
+                    reason that it could never fill at all; this extends the same rule to "not
+                    filled yet" on both lines.) An APPROVED request still shows both, which is the
+                    case the audit trail exists for. */}
+                {request.managerApprovedAt ? (
+                  <small>ผู้จัดการ: {request.managerApprovedByName || '-'} · {formatDateTime(request.managerApprovedAt)}</small>
                 ) : null}
-                <small>CEO: {request.ceoApprovedAt ? `${request.ceoApprovedByName || '-'} · ${formatDateTime(request.ceoApprovedAt)}` : '-'}</small>
+                {request.ceoApprovedAt ? (
+                  <small>CEO: {request.ceoApprovedByName || '-'} · {formatDateTime(request.ceoApprovedAt)}</small>
+                ) : null}
               </span>
               {/* Approve/reject visually differentiated per DESIGN.md (danger stays
                   outlined, not filled) and step 9 rule 2 — mirrors the exact
