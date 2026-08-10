@@ -136,6 +136,12 @@ export function TaxAllowanceForm({
   onGeneratePdf,
   generatingPdf = false,
   /**
+   * Fetches the PDF of the declaration ALREADY FILED, from the server. Undefined when this tax year
+   * has no saved declaration to fetch. Distinct from `onGeneratePdf`, which renders today's draft.
+   */
+  onDownloadFiledForm,
+  downloadingFiledForm = false,
+  /**
    * Owner decision #3: the signed scan is required before submit. The PAGE owns that state because
    * it owns the staged-evidence buckets; this component only gates on it.
    */
@@ -450,6 +456,29 @@ export function TaxAllowanceForm({
     </div>
   );
 
+  /**
+   * What a filed declaration offers: the figure that was declared, and a copy of the document.
+   *
+   * <p>The download is the point. Read-only does not render the sign-off panel, which held the only
+   * PDF button on the page, so a declaration became unretrievable the moment it was submitted — the
+   * employee could produce the sheet they were about to sign and never get back the one they filed.
+   * It applies at ANY saved status, not just an approved one: a PENDING filing is equally theirs.
+   */
+  const filedFormBlock = (
+    <div className="grid gap-3">
+      {declaredTotalRow}
+      {onDownloadFiledForm ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <Button type="button" variant="secondary" loading={downloadingFiledForm}
+            disabled={downloadingFiledForm} onClick={onDownloadFiledForm}>
+            ดาวน์โหลดแบบ ล.ย.01 ที่ยื่นไว้
+          </Button>
+          <p className="m-0 text-xs text-text-muted">ไฟล์ PDF ของแบบแจ้งฉบับที่ยื่นไว้ สำหรับเก็บไว้เป็นหลักฐาน</p>
+        </div>
+      ) : null}
+    </div>
+  );
+
   const signOffPanel = readOnly ? null : (
     <CollapsibleSection id="ta-section-sign" title="ตรวจทาน ลงนาม และยื่น" defaultOpen={false}
       headerRight={signedFormAttached
@@ -521,10 +550,10 @@ export function TaxAllowanceForm({
       </div>
       {autoGranted}
       <div className="grid gap-2">{sections}</div>
-      {/* Read-only loses the sign-off panel, and with it the only place the grand total appeared —
-          so a filed declaration showed fifteen per-ข้อ subtotals and no total. It shows here instead,
-          in the slot the panel would occupy. */}
-      {readOnly ? declaredTotalRow : signOffPanel}
+      {/* Read-only loses the sign-off panel, and with it the only place the grand total and the PDF
+          button appeared — so a filed declaration showed fifteen per-ข้อ subtotals, no total, and no
+          way to get the document back. Both live here instead, in the slot the panel would occupy. */}
+      {readOnly ? filedFormBlock : signOffPanel}
       {submitFooter}
       {lawReferences}
     </SafeForm>

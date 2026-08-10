@@ -21,6 +21,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         withdrawMyTaxAllowanceDeclaration: vi.fn(),
         estimateMyTaxAllowanceDeclaration: vi.fn(),
         listTaxAllowanceAttachments: vi.fn(),
+        downloadTaxAllowanceForm: vi.fn(),
         uploadTaxAllowanceAttachment: vi.fn(),
       },
     },
@@ -93,6 +94,12 @@ async function findPicker({ last = false } = {}) {
 }
 
 describe('TaxAllowancePage', () => {
+  /** ข้อมูลผู้มีเงินได้ is collapsed unless the form is editable — open it to read its slots. */
+  function openIdentity() {
+    const header = screen.getByRole('button', { name: /ข้อมูลผู้มีเงินได้/ });
+    if (header.getAttribute('aria-expanded') === 'false') fireEvent.click(header);
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     api.payroll.getTaxAllowanceCaps.mockResolvedValue({ caps: [] });
@@ -303,6 +310,103 @@ describe('TaxAllowancePage', () => {
     });
   });
 
+  // ---------------------------------------------------------------------------------------------
+  // Revising an ALREADY-CONFIRMED declaration, and getting a copy of it.
+  //
+  // Both were missing, and neither was a backend limitation:
+  //   - `TaxAllowanceDeclarationService#submitOwn` refuses only on `existsPending`, and `#approve`
+  //     calls `supersedeApproved` first (decision #7, "a new submission supersedes the previous
+  //     once approved") — so a revision has always been accepted by the server.
+  //   - `GET /declarations/{id}/form.pdf` and `hrApi.downloadTaxAllowanceForm` existed with ZERO
+  //     call sites, so a filed declaration could not be downloaded at all.
+  // ---------------------------------------------------------------------------------------------
+  describe('an already-confirmed declaration can be revised and downloaded', () => {
+    const applied = (overrides = {}) => declaration({
+      status: 'APPROVED',
+      appliedAt: `${currentYear}-01-20T00:00:00.000Z`,
+      appliedEffectiveMonth: 1,
+      allowances: { lifeInsuranceAllowance: 40000 },
+      ...overrides,
+    });
+
+    it('offers a revise action on an APPLIED declaration, where there used to be none', async () => {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [applied()] });
+      renderPage();
+
+      expect(await screen.findByText(/ใช้กับเงินเดือนแล้ว/)).not.toBeNull();
+      expect(await screen.findByRole('button', { name: 'ยื่นฉบับแก้ไข' })).not.toBeNull();
+      // Its own words, not the rejected/expired button's — this replaces a declaration in force.
+      expect(screen.queryByRole('button', { name: 'แก้ไข / ยื่นฉบับใหม่' })).toBeNull();
+    });
+
+    it('offers the same on APPROVED-but-not-yet-applied', async () => {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({
+        items: [applied({ appliedAt: null, appliedEffectiveMonth: null })],
+      });
+      renderPage();
+
+      expect(await screen.findByText('อนุมัติแล้ว — ยังไม่ใช้กับเงินเดือน')).not.toBeNull();
+      expect(await screen.findByRole('button', { name: 'ยื่นฉบับแก้ไข' })).not.toBeNull();
+    });
+
+    it('a past tax year is still read-only — revising applies to the current year only', async () => {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [applied()] });
+      renderPage({ entry: `/tax-allowance?year=${currentYear - 1}` });
+
+      expect(await screen.findByText(new RegExp(`ยื่นหรือแก้ไขได้เฉพาะปีภาษี ${currentYear}`))).not.toBeNull();
+      expect(screen.queryByRole('button', { name: 'ยื่นฉบับแก้ไข' })).toBeNull();
+    });
+
+    /**
+     * The header-prefill invariant, wrong-way-round. A confirmed declaration shows WHAT WAS FILED —
+     * seeding its blank header from today's employee master would show the employee an address they
+     * never declared, on a document HR has already accepted. Making it revisable must not leak the
+     * prefill into the read-only view it is still sitting in.
+     */
+    it('does NOT seed the header from the master while the confirmed declaration is only being viewed', async () => {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({
+        items: [applied()],
+        headerPrefill: {
+          taxpayerId: '1103700000011', firstNameTh: 'สมชาย', lastNameTh: 'ใจดี',
+          maritalState: 'SINGLE', address: { province: 'กรุงเทพมหานคร' },
+        },
+      });
+      renderPage();
+
+      expect(await screen.findByRole('button', { name: 'ยื่นฉบับแก้ไข' })).not.toBeNull();
+      openIdentity();
+      expect(document.getElementById('ta-taxpayer-id').value).toBe('');
+      expect(document.getElementById('ta-addr-province').value).toBe('');
+    });
+
+    it('downloads the filed declaration by its own id', async () => {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [applied({ declarationId: 91 })] });
+      api.payroll.downloadTaxAllowanceForm.mockResolvedValue(new Blob(['%PDF-1.6'], { type: 'application/pdf' }));
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'ดาวน์โหลดแบบ ล.ย.01 ที่ยื่นไว้' }));
+
+      await waitFor(() => {
+        expect(api.payroll.downloadTaxAllowanceForm).toHaveBeenCalledWith(91);
+      });
+    });
+
+    it('offers no download on a year that was never filed — there is no saved row to fetch', async () => {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [] });
+      renderPage();
+
+      expect(await screen.findByText('ยังไม่ได้ยื่น')).not.toBeNull();
+      expect(screen.queryByRole('button', { name: 'ดาวน์โหลดแบบ ล.ย.01 ที่ยื่นไว้' })).toBeNull();
+    });
+
+    it('still offers the download while the declaration is only PENDING — a filing is the employee\'s either way', async () => {
+      api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [declaration({ declarationId: 55 })] });
+      renderPage();
+
+      expect(await screen.findByRole('button', { name: 'ดาวน์โหลดแบบ ล.ย.01 ที่ยื่นไว้' })).not.toBeNull();
+    });
+  });
+
   describe('tax-year history', () => {
     it('refetches when a past year is chosen', async () => {
       renderPage();
@@ -483,12 +587,6 @@ describe('TaxAllowancePage', () => {
         subDistrict: 'ห้วยขวาง', district: 'ห้วยขวาง', province: 'กรุงเทพมหานคร', postalCode: '10310',
       },
     };
-
-    /** ข้อมูลผู้มีเงินได้ is collapsed unless the form is editable — open it to read its slots. */
-    function openIdentity() {
-      const header = screen.getByRole('button', { name: /ข้อมูลผู้มีเงินได้/ });
-      if (header.getAttribute('aria-expanded') === 'false') fireEvent.click(header);
-    }
 
     it('seeds the identity block on a year that has never been filed', async () => {
       api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({ items: [], headerPrefill });
