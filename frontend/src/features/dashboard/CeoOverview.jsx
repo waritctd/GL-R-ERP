@@ -100,7 +100,7 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
   const navigate = useNavigate();
   const monthStart = bangkokMonthStartIso();
 
-  // Shares the same cache entries TicketDashboard/PricingRequestQueuePage
+  // Shares the same cache entries PricingRequestQueuePage
   // already populate for a CEO session — one company-wide fetch each, no
   // per-row detail calls (see the tickets.list() mock-parity note below for
   // why that matters for the close-verify worklist).

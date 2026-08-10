@@ -29,7 +29,6 @@ const PATH_LABELS = {
   '/my-requests': 'ข้อมูลส่วนตัว',
   '/profile': 'ข้อมูลส่วนตัว',
   '/tickets': 'รายการดีล',
-  '/ticket-overview': 'ภาพรวมดีล',
   '/catalog': 'แคตตาล็อกสินค้า',
   '/commissions': 'ค่าคอมมิชชัน',
   '/finance': 'งานการเงิน',
