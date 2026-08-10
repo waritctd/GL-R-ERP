@@ -164,7 +164,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       // Account gets its own งานการเงิน worklist below instead of this item.
       // See docs/role-scoped-views.md.
       show: hasPermission(user.role, 'canViewDealPipeline') && SALES_ENABLED,
-      match: ['/tickets', '/ticket-overview'],
+      match: ['/tickets'],
     },
     { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', group: 'sales', show: user.role === 'ceo' && SALES_ENABLED },
     // Catalog browsing is scoped to the sales/CRM audience (canViewCatalog),

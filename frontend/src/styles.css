@@ -210,10 +210,10 @@
    border, so its square corners poked into the card's rounded ones. Scoped to
    `:first-child` rather than a blanket rule — several call sites render
    `.table-head` AFTER a `.panel-header`/title bar inside the same card
-   (ProfilePage.jsx's "คำขอแก้ไขของฉัน" section, TicketDashboard.jsx's
-   "คำขอราคาล่าสุด" section, TicketDetailPage.jsx's "รายการสินค้า" section) —
-   rounding it there would float a rounded corner mid-card, a regression in
-   the other direction. `:first-child` correctly excludes all three: each has
+   (ProfilePage.jsx's "คำขอแก้ไขของฉัน" section and TicketDetailPage.jsx's
+   "รายการสินค้า" section) — rounding it there would float a rounded corner
+   mid-card, a regression in the other direction. `:first-child` correctly
+   excludes both: each has
    a header <div> as an actual preceding sibling, so `.table-head` is never
    its parent's first child there. Verified against every current call site
    (`grep -rn "table-head" frontend/src`): DataTable.jsx, OvertimePanel.jsx,
@@ -264,10 +264,11 @@
   grid-template-columns: minmax(0,1.8fr) minmax(0,1.1fr) minmax(0,1.6fr) minmax(0,1.7fr) minmax(0,0.9fr) minmax(0,1.2fr);
 }
 
-/* Shared 4-column deal row. Consumed by TicketDashboard and
-   AccountFinancePage, which each emit exactly 4 cells — do NOT widen this
-   template for the /tickets worklist. The worklist has 6 columns and owns
-   `.ticket-worklist-table` below for that reason. */
+/* 4-column deal row. Sole consumer is AccountFinancePage, which emits exactly
+   4 cells — do NOT widen this template for the /tickets worklist. The worklist
+   has 6 columns and owns `.ticket-worklist-table` below for that reason.
+   (It was shared with TicketDashboard until that page was removed on
+   2026-08-10; the name stayed rather than churn the one call site left.) */
 .ticket-table {
   grid-template-columns: minmax(0,2.6fr) minmax(0,1.3fr) minmax(0,1.3fr) minmax(0,1fr);
 }
@@ -1052,10 +1053,10 @@
 }
 
 @media (max-width: 1040px) {
-  /* `.ticket-worklist-table`, not `.ticket-table`: the shared 4-column class is
-     also used by TicketDashboard and AccountFinancePage, both of which render
-     inside `overflow: hidden` panels with no scroller, so a forced 900px
-     minimum would clip their last column instead of scrolling it.
+  /* `.ticket-worklist-table`, not `.ticket-table`: the 4-column class is used
+     by AccountFinancePage, which renders inside an `overflow: hidden` panel with
+     no scroller, so a forced 900px minimum would clip its last column instead of
+     scrolling it.
      `.payroll-table` is deliberately NOT in this list (B3 fix, 2026-07-31): its
      own natural grid is only ~630px, so forcing a 900px floor here would
      manufacture a horizontal-scroll trap this table never needed -- see the
