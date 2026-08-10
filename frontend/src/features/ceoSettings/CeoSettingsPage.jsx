@@ -454,11 +454,6 @@ export function CeoSettingsPage({ showToast }) {
   // row's error can never bleed onto another row.
   const [fxErrors, setFxErrors] = useState({});       // currency → message
 
-  // Deal-estimate markup (V112) inline edit — single value, same pattern as the FX rows above
-  // but with no per-row keying since there is only ever one multiplier.
-  const [editMarkup, setEditMarkup] = useState(null);   // draft string | null (not editing)
-  const [markupError, setMarkupError] = useState('');
-
   // Config edit modal state
   const [editingConfig, setEditingConfig] = useState(null);  // PriceCalcConfigDto or null
 
@@ -485,13 +480,7 @@ export function CeoSettingsPage({ showToast }) {
   });
   const formulaConfig = formulaConfigQuery.data ?? null;
 
-  const markupQuery = useQuery({
-    queryKey: queryKeys.dealEstimateMarkup(),
-    queryFn: () => api.dealEstimateMarkup.get().then((response) => response.dealEstimateMarkup ?? null),
-  });
-  const markup = markupQuery.data ?? null;
-
-  const loading = fxRatesQuery.isLoading || configsQuery.isLoading || markupQuery.isLoading;
+  const loading = fxRatesQuery.isLoading || configsQuery.isLoading;
 
   useEffect(() => {
     if (fxRatesQuery.error) showToast('error', fxRatesQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
@@ -502,9 +491,6 @@ export function CeoSettingsPage({ showToast }) {
   useEffect(() => {
     if (formulaConfigQuery.error) showToast('error', formulaConfigQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
   }, [formulaConfigQuery.error, showToast]);
-  useEffect(() => {
-    if (markupQuery.error) showToast('error', markupQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
-  }, [markupQuery.error, showToast]);
 
   const saveFxRateMutation = useMutation({
     mutationFn: ({ currency, rateToThb }) => api.fxRates.upsert(currency, { rateToThb }),
@@ -542,33 +528,6 @@ export function CeoSettingsPage({ showToast }) {
     }
     clearFxError(currency);
     saveFxRateMutation.mutate({ currency, rateToThb: Number(val) });
-  }
-
-  const saveMarkupMutation = useMutation({
-    mutationFn: (multiplier) => api.dealEstimateMarkup.update({ multiplier }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.dealEstimateMarkup() });
-      setEditMarkup(null);
-      showToast('success', 'อัปเดตตัวคูณราคาตั้งแล้ว');
-    },
-    onError: (e) => showToast('error', e.message || 'บันทึกไม่สำเร็จ'),
-  });
-
-  // Bounds mirror the backend's UpdateDealEstimateMarkupRequest / V112's
-  // `NUMERIC(6,3) CHECK (multiplier > 0)` column: 999.999 is the largest value the column can
-  // hold, and 0.001 is the smallest value that doesn't round away to 0.000 and trip the CHECK.
-  // Catching this client-side turns a raw Postgres-error toast into a clear Thai message.
-  const MIN_MARKUP = 0.001;
-  const MAX_MARKUP = 999.999;
-
-  function saveMarkup() {
-    const value = Number(editMarkup);
-    if (!editMarkup || isNaN(value) || value < MIN_MARKUP || value > MAX_MARKUP) {
-      setMarkupError(`กรุณากรอกตัวคูณที่ถูกต้อง (${MIN_MARKUP} - ${MAX_MARKUP})`);
-      return;
-    }
-    setMarkupError('');
-    saveMarkupMutation.mutate(value);
   }
 
   function openConfigEdit(cfg) {
@@ -872,61 +831,14 @@ export function CeoSettingsPage({ showToast }) {
         )}
       </Panel>
 
-      {/* Deal-estimate markup (V112) — the coarse ราคาตั้ง display multiplier the deal-create
-          modal applies on top of the raw catalog price. Deliberately its own section, separate
-          from "สูตรคำนวณราคา" above: that section IS the margin policy; this is a single bare
-          number with no relationship to it beyond both being CEO-editable pricing inputs. */}
-      {markup ? (
-        <Panel flush title="ตัวคูณราคาตั้งประมาณการ (หน้าสร้างดีล)">
-          <div className="px-[18px] py-2 text-2xs text-text-muted border-b border-surface-subtle">
-            คูณกับราคาแคตตาล็อก (แปลงเป็นบาทแล้ว) เพื่อประมาณ &quot;ราคาตั้ง&quot; ในหน้าสร้างดีล — ไม่ใช่สูตรกำไรจริง ราคาขายจริงยังคำนวณจากขั้นคำขอราคา
-          </div>
-          <div className="flex items-center gap-2.5 px-[18px] py-3">
-            {editMarkup !== null ? (
-              <div>
-                <div className="flex gap-1.5 items-center">
-                  <input
-                    id="deal-estimate-markup-input"
-                    type="number" step="0.1" min="0"
-                    value={editMarkup}
-                    onChange={(e) => { setEditMarkup(e.target.value); setMarkupError(''); }}
-                    aria-invalid={markupError ? true : undefined}
-                    aria-describedby={markupError ? 'deal-estimate-markup-error' : undefined}
-                    className={`w-[100px] py-1 px-2 rounded-[4px] text-sm border ${markupError ? 'border-danger' : 'border-info-border-strong'}`}
-                  />
-                  <span className="text-xs text-text-muted">เท่า</span>
-                  <Button type="button" variant="primary" className="text-xs px-[10px] py-1"
-                    disabled={saveMarkupMutation.isPending}
-                    onClick={saveMarkup}>
-                    {saveMarkupMutation.isPending ? '…' : 'บันทึก'}
-                  </Button>
-                  <Button type="button" variant="secondary" className="text-xs px-[10px] py-1"
-                    onClick={() => { setEditMarkup(null); setMarkupError(''); }}>
-                    ยกเลิก
-                  </Button>
-                </div>
-                {markupError && (
-                  <p id="deal-estimate-markup-error" role="alert" className="m-0 mt-1 text-danger text-2xs font-semibold">
-                    {markupError}
-                  </p>
-                )}
-              </div>
-            ) : (
-              <>
-                <strong className="text-[15px]">× {Number(markup.multiplier).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</strong>
-                {/* "แก้ไขตัวคูณ", not the bare "แก้ไข" the ราคาสูตรคำนวณ table above uses — this
-                    section can render at the same time as that table, and a shared accessible
-                    name would make the two edit buttons indistinguishable to assistive tech
-                    (and to a role-query test) once both are on screen. */}
-                <Button type="button" variant="secondary" className="text-2xs px-2 py-[3px]"
-                  onClick={() => setEditMarkup(String(markup.multiplier))}>
-                  แก้ไขตัวคูณ
-                </Button>
-              </>
-            )}
-          </div>
-        </Panel>
-      ) : null}
+      {/* The "ตัวคูณราคาตั้งประมาณการ (หน้าสร้างดีล)" panel stood here until 2026-08-10. It set a
+          coarse display multiplier that the deal-create modal applied on top of the raw catalog
+          price to show a "ราคาตั้ง (ประมาณการ)". That estimate was removed on the owner's
+          instruction after UAT — reps read its output as a selling price when the real one only
+          comes out of the pricing-request → CEO costing chain — so this control had nothing left
+          to configure. The deal-create modal now shows the catalog price in its own currency plus
+          a straight FX conversion, with no multiplier anywhere. "สูตรคำนวณราคา" above is
+          untouched: that section IS the margin policy and always was a separate thing. */}
 
       {/* Config Edit Modal */}
       {editingConfig && (

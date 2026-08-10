@@ -10,32 +10,50 @@ import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { dealStageLabel, ticketPriorityLabel } from '../../utils/format.js';
-import { computeItemEstimateThb, formatThb, summarizeItemsEstimate } from './dealEstimatePricing.js';
+import { formatCatalogPrice } from './catalogPriceDisplay.js';
 
-// Thai copy for each dealEstimatePricing.js `reason` code — keep in sync with that module's
-// EstimateNotComputableReason typedef. An unmapped reason still renders (falls back to the
-// generic message) rather than showing "undefined" to a rep.
-const ESTIMATE_REASON_LABELS = {
-  UNSUPPORTED_UNIT: 'หน่วยราคานี้ยังไม่รองรับ',
-  MISSING_QUANTITY: 'ยังไม่ได้กรอกจำนวน/พื้นที่',
-  NO_FX_RATE: 'ยังไม่มีอัตราแลกเปลี่ยนสำหรับสกุลเงินนี้',
-  NO_CATALOG_PRICE: 'ยังไม่มีราคาแคตตาล็อก',
-  UNIT_BASIS_MISMATCH: 'หน่วยที่เลือกไม่ตรงกับหน่วยราคา — เปลี่ยนหน่วยหรือกรอกอัตราแปลงต่อแผ่น',
-  NOT_CATALOG: 'ไม่ใช่รายการจากแคตตาล็อก',
-  NO_MARKUP: 'ยังไม่มีตัวคูณราคาจาก CEO',
-};
-function estimateReasonLabel(reason) {
-  return ESTIMATE_REASON_LABELS[reason] || 'ยังคำนวณไม่ได้';
+/**
+ * ตร.ม. per piece derived from a catalog `size_raw` string, for the ~350 active catalog rows that
+ * carry no `sqm_per_piece` of their own (all of factory Bode, plus LEA's trim pieces). Without a
+ * factor the แผ่น↔ตร.ม. toggle cannot cross-fill, which is what stranded a rep's entered quantity
+ * in UAT.
+ *
+ * Only ever called when the catalog has no factor of its own, and deliberately only accepts a
+ * MILLIMETRE reading — both dimensions >= 100. Catalog sizes are genuinely mixed-unit ("600x1200"
+ * is mm, "30 x 60" and "120 x 278" are cm), and there is no reliable way to tell them apart from
+ * the string alone. Every row that actually lacks a factor is millimetres; every centimetre-format
+ * row already ships its own `sqm_per_piece` and so never reaches this function. Anything else —
+ * centimetre-looking values, a third thickness dimension ("598X598X18"), junk ("15X1'5"), or no
+ * size at all — returns null, and the UI then lets the rep enter both quantities by hand rather
+ * than converting on a guess.
+ */
+export function deriveSqmPerPiece(sizeRaw) {
+  const match = /^\s*(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)\s*$/.exec(sizeRaw ?? '');
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!(width >= 100) || !(height >= 100)) return null;
+  const sqm = (width / 1000) * (height / 1000);
+  return sqm > 0 ? Number(sqm.toFixed(6)) : null;
 }
 
 const emptyItem = () => ({
   brand: '', model: '', color: '', texture: '', size: '', factory: '',
   unitBasis: 'PIECE', qty: 1, qtySqm: '', sqmPerPiece: null,
+  // True when sqmPerPiece came from deriveSqmPerPiece() rather than the catalog, so the UI can
+  // label the conversion as derived instead of presenting it as catalog fact.
+  sqmPerPieceDerived: false,
   // source ('catalog' | 'custom') + the catalog's reference price/currency/priceUnit are UI-only
   // — never sent in the onSubmit payload (see submit() below). They exist so the items view can
-  // badge a line "จากแคตตาล็อก" vs "custom", show a read-only reference price, and (catalogPriceUnit)
-  // let dealEstimatePricing.js compute the ราคาตั้ง estimate against the right quantity basis.
+  // badge a line "จากแคตตาล็อก" vs "custom" and show the catalog's own price in its own currency
+  // alongside a baht conversion (catalogPriceUnit names the unit that price is quoted per).
   source: 'custom', catalogPrice: null, catalogCurrency: null, catalogPriceUnit: null,
+  // Padana's A01/A02 quality code, shown as a badge. NEVER written into ยี่ห้อ: `grade` is a
+  // quality code that only factory Padana populates (9,076 of 22,455 active rows, values A01/A02
+  // only) — the code used to map it to ยี่ห้อ, which put "A01" in a brand field or left it blank
+  // for the other 60%. The brand a rep means is the factory (Padana, Vives, LEA, Bode…), which is
+  // why ยี่ห้อ and โรงงาน are now one field.
+  catalogGrade: null,
   // catalogPriceId/catalogProductCode ARE sent (see submit()'s items map below) — the catalog
   // identity picked here, persisted on ticket_item (V110) so PricingRequestCreateModal can seed
   // its own catalog link without a re-search. Cleared by updateItem() below whenever the user
@@ -99,11 +117,15 @@ const PRIORITY_OPTIONS = ['LOW', 'NORMAL', 'HIGH'].map((code) => ({ code, label:
 // field is now reported (keyed the same way as `fieldErrors` state below:
 // 'customer', 'project', `items.<index>.<field>`), so a long form doesn't
 // force the user to fix-and-resubmit one message at a time.
+// สี and เนื้อผิว are deliberately NOT here. The live catalog fills `color` on 21% of active rows
+// and `surface` on 22% (both only for factories CDE/LEA/Panaria, plus Bode for surface), so
+// requiring them forced a rep to invent a value on ~4 of every 5 catalog picks. They are optional
+// on both sides now — `sales.ticket_item.color`/`.texture` were already nullable, and
+// TicketItemRequest's @NotBlank on the two was removed to match. ยี่ห้อ/รุ่น/ขนาด stay required:
+// the factory name, collection and size_raw are present on ~100% of rows.
 const REQUIRED_ITEM_FIELD_LABELS = {
-  brand: 'ชื่อยี่ห้อ',
+  brand: 'ยี่ห้อ / โรงงาน',
   model: 'ชื่อรุ่น / Collection',
-  color: 'สี',
-  texture: 'เนื้อผิว',
   size: 'ขนาด',
 };
 
@@ -266,6 +288,118 @@ function SearchSelect({ id, label, value, onSelect, placeholder, options, onSear
   );
 }
 
+/**
+ * Label content for the item-editor fields.
+ *
+ * Everything is wrapped in ONE <span> on purpose. The global `label { display: grid }` rule in
+ * styles.css turns every direct child of a <label> — including a bare text node — into its own
+ * grid row, so an unwrapped `{label}` + required-marker + hint would render as three stacked
+ * lines instead of one (the same trap FormField.jsx documents at length).
+ */
+function ItemFieldLabel({ label, required, hint }) {
+  return (
+    <span>
+      {label}
+      {required ? <span className="text-danger" aria-hidden="true"> *</span> : null}
+      {hint ? <span className="ml-1 font-semibold text-text-muted">{hint}</span> : null}
+    </span>
+  );
+}
+
+/**
+ * Label + control + error wrapper for the item editor, matching CatalogAutocompleteField's own
+ * markup exactly so every cell of the two-column grid has an identical label row, gap and error
+ * slot. That identity is the alignment fix: the editor previously mixed bare <label> fields with
+ * hand-built <div> ones and read-only <div> boxes styled `px-2.5 py-[7px]` next to 40px-tall
+ * inputs, so adjacent cells sat at visibly different heights and baselines.
+ *
+ * `content-start` keeps the control at its natural height instead of stretching it to the tallest
+ * cell in the row — the row-stretch behaviour FormField.jsx documents as the app-wide field
+ * stagger. The slack falls below the control, where it is invisible.
+ */
+function ItemField({ id, label, hint, required, error, children }) {
+  const errorId = error ? fieldErrorId(id) : undefined;
+  return (
+    <div className="grid content-start gap-[7px]">
+      <label htmlFor={id} className="m-0 text-xs">
+        <ItemFieldLabel label={label} required={required} hint={hint} />
+      </label>
+      {children}
+      {error ? (
+        <p id={errorId} role="alert" className="m-0 text-2xs font-bold text-danger">{error}</p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * One catalog-search row of the summary dropdown. Shared by the ยี่ห้อ/โรงงาน and รุ่น fields so a
+ * result reads identically whichever box the rep is typing in.
+ */
+function CatalogOption({ cat }) {
+  return (
+    <>
+      <strong>{cat.factoryName || cat.brand}</strong>
+      {' — '}
+      {cat.collection || cat.productName || cat.productCode || '—'}
+      <span className="ml-1 text-text-muted">
+        {[cat.color, cat.sizeRaw || cat.size].filter(Boolean).join(' · ')}
+      </span>
+      {cat.price && (
+        <span className="ml-1.5 text-2xs font-semibold text-link">
+          {Number(cat.price).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {cat.currency}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * Text input with the catalog autocomplete attached. Extracted because ยี่ห้อ/โรงงาน and รุ่น
+ * carried two byte-identical copies of the dropdown markup, which is how the two drifted apart in
+ * the first place — a fix applied to one silently missed the other.
+ */
+function CatalogAutocompleteField({
+  id, label, hint, required, value, placeholder, onInput, onFocusSearch,
+  onBlur, expanded, results, onPick, error, inputRef,
+}) {
+  const errorId = error ? fieldErrorId(id) : undefined;
+  return (
+    <div className="relative grid content-start gap-[7px]">
+      <label htmlFor={id} className="m-0 text-xs">
+        <ItemFieldLabel label={label} required={required} hint={hint} />
+      </label>
+      <input
+        id={id}
+        ref={inputRef}
+        value={value}
+        onChange={(e) => onInput(e.target.value)}
+        onFocus={onFocusSearch}
+        onBlur={onBlur}
+        placeholder={placeholder}
+        aria-required={required ? 'true' : undefined}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={errorId}
+      />
+      {error ? (
+        <p id={errorId} role="alert" className="m-0 text-2xs font-bold text-danger">{error}</p>
+      ) : null}
+      {expanded && results.length > 0 && (
+        <div className="absolute left-0 right-0 top-full z-[60] max-h-[200px] overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_16px_rgba(0,0,0,0.12)]">
+          {results.map((cat) => (
+            // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- autocomplete option row; onMouseDown (not click) preserves input focus for typeahead
+            <div key={cat.priceId ?? cat.id} onMouseDown={() => onPick(cat)}
+              className="cursor-pointer border-b border-surface-subtle px-2.5 py-[7px] text-xs hover:bg-info-row-active"
+            >
+              <CatalogOption cat={cat} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Back-to-hub / back-to-list link used at the top of every sub-view. */
 function BackLink({ onClick, label = 'กลับ' }) {
   return (
@@ -319,7 +453,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   // Read once at mount — a stable snapshot, not re-read on every render.
   const [initialDraft] = useState(() => loadDraft());
 
-  // hub | customer | project | contact | items | details | review
+  // hub | customer | project | contact | items | details
   const [view, setView] = useState('hub');
   // fieldErrors key waiting to be scrolled+focused once its owning view/item
   // editor has actually mounted (see the effect below).
@@ -386,22 +520,19 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   // same row don't both render the same catalogResults dropdown at once.
   const [catalogFocus, setCatalogFocus] = useState(null);
 
-  // ── ราคาตั้ง (ประมาณการ) estimate inputs — FX rates + CEO markup multiplier ────────────
-  // Both fetches degrade silently: if EITHER fails, `estimateReady` below stays false and every
-  // ราคาตั้ง display site is skipped entirely, leaving the existing catalog reference price as the
-  // only price shown (a deal must stay creatable with zero prices — V50). Never surfaced via
-  // showToast from an effect — this is optional estimate enrichment, not critical modal data, so
-  // these are silent, no-toast failures on purpose (independent of useToast's own identity, which
-  // useToast.js now keeps stable via useCallback([])). `retry: false` keeps a genuinely-down
-  // endpoint from stalling the modal.
+  // ── FX rates, for showing a catalog price in baht alongside its own currency ───────────────
+  // The catalog quotes EUR and USD only. This is a straight currency conversion and nothing more:
+  // the ราคาตั้ง (ประมาณการ) estimate that used to live here — catalog price × FX × a
+  // CEO-configured markup — was removed on the owner's instruction after UAT, because reps read
+  // its output as a selling price when the real one only comes out of the pricing-request → CEO
+  // costing chain. See catalogPriceDisplay.js.
+  //
+  // Degrades silently by design: `retry: false`, no toast (this is optional display enrichment,
+  // not critical modal data, and a deal must stay creatable with zero prices — V50). When a rate
+  // is missing the catalog's own currency is shown alone; it is never converted at an assumed 1:1.
   const fxRatesQuery = useQuery({
     queryKey: queryKeys.fxRates(),
     queryFn: () => api.fxRates.list().then((res) => res.fxRates ?? []),
-    retry: false,
-  });
-  const markupQuery = useQuery({
-    queryKey: queryKeys.dealEstimateMarkup(),
-    queryFn: () => api.dealEstimateMarkup.get().then((res) => res.dealEstimateMarkup ?? null),
     retry: false,
   });
   const fxRatesByCurrency = useMemo(() => {
@@ -411,17 +542,6 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     }
     return map;
   }, [fxRatesQuery.data]);
-  const markupMultiplier = markupQuery.data?.multiplier ?? null;
-  // Deliberately requires BOTH queries to have actually succeeded with a usable multiplier — never
-  // "readable, so default markup to 1": an un-marked-up supplier cost displayed as ราคาตั้ง is
-  // exactly what the product owner said must not happen (see dealEstimatePricing.js).
-  const estimateReady = fxRatesQuery.isSuccess && markupQuery.isSuccess && markupMultiplier != null;
-  const estimateContext = { fxRatesByCurrency, markupMultiplier };
-  const itemsEstimate = useMemo(
-    () => (estimateReady ? summarizeItemsEstimate(items, estimateContext) : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- estimateContext is a fresh object every render; fxRatesByCurrency/markupMultiplier are its real deps
-    [items, estimateReady, fxRatesByCurrency, markupMultiplier],
-  );
 
   // new customer form
   const [showNewCustomer, setShowNewCustomer] = useState(false);
@@ -482,6 +602,16 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     setPendingFocusKey(null);
   }, [pendingFocusKey, view, items, editingItemIndex]);
 
+  // Opening the ลูกค้า step lands the cursor in its search box, which also opens the results list
+  // (SearchSelect searches on focus). Without this the step arrives as one empty field in a tall
+  // panel — the company list, the only thing on the step, stays hidden behind a keystroke. Skipped
+  // while a validation jump is pending so the two never fight over focus, and once a customer is
+  // chosen (the field is then a value chip, not an input).
+  useEffect(() => {
+    if (view !== 'customer' || selectedCustomer || pendingFocusKey) return;
+    fieldRefs.current.customer?.focus();
+  }, [view, selectedCustomer, pendingFocusKey]);
+
   function jumpToField(key) {
     setPendingFocusKey(key);
     const targetView = viewForFieldKey(key);
@@ -513,6 +643,10 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     setItems((cur) => cur.map((item, i) => {
       if (i !== index) return item;
       const updated = { ...item, [field]: value };
+      // ยี่ห้อ and โรงงาน are one input now (the brand a rep means IS the factory — Padana, Vives,
+      // LEA, Bode…), but the payload still carries both fields, so keep them in lockstep here
+      // rather than deriving at submit time only.
+      if (field === 'brand') updated.factory = value;
       if (field === 'qty' && item.sqmPerPiece) {
         updated.qtySqm = value ? (Number(value) * item.sqmPerPiece).toFixed(3) : '';
       }
@@ -523,6 +657,14 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         if (value === 'SQM' && item.qty) updated.qtySqm = (Number(item.qty) * item.sqmPerPiece).toFixed(3);
         if (value === 'PIECE' && item.qtySqm) updated.qty = Math.ceil(Number(item.qtySqm) / item.sqmPerPiece);
       }
+      // A size edit invalidates a factor that was DERIVED from the old size (see
+      // deriveSqmPerPiece) — recompute it, or drop it when the new size can't be read. A factor
+      // the catalog supplied is left alone; the user editing the size already unlinks the row.
+      if (field === 'size' && item.sqmPerPieceDerived) {
+        const rederived = deriveSqmPerPiece(value);
+        updated.sqmPerPiece = rederived;
+        updated.sqmPerPieceDerived = rederived != null;
+      }
       // A hand-edit to any field that describes WHICH product this row is invalidates a
       // previously-picked catalog link — what's typed no longer necessarily matches what the
       // link points at. Mirrors PricingRequestCreateModal.updateItem's identical rule.
@@ -532,50 +674,55 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         updated.catalogProductCode = '';
         updated.catalogPrice = null;
         updated.catalogCurrency = null;
+        updated.catalogPriceUnit = null;
+        updated.catalogGrade = null;
       }
       return updated;
     }));
   }
 
-  // `pickedFrom` is which autocomplete the user chose from ('brand' | 'model'), which decides
-  // whether the current ยี่ห้อ text is a deliberate brand entry or merely the search query —
-  // see the brand rule below.
-  function applyCatalogItem(index, cat, pickedFrom) {
+  function applyCatalogItem(index, cat) {
     setItems((cur) => cur.map((item, i) => {
       if (i !== index) return item;
-      const newQtySqm = item.qty && cat.sqmPerPiece ? (Number(item.qty) * cat.sqmPerPiece).toFixed(3) : '';
-      // Brand bug fix: this used to write the FACTORY name into ยี่ห้อ
-      // (cat.factoryName || cat.brand), which is wrong — factory and brand are
-      // different concepts (factory has its own field below). The catalog's
-      // grade is the right source: ProductPriceDto has no separate "brand" of
-      // its own, and grade is the closest analogue (the same
-      // COALESCE(pri.brand, pp.grade) rule
-      // PricingRequestRepository.snapshotCatalogSelections uses server-side).
-      //
-      // Unlike PricingRequestCreateModal — which has a DEDICATED catalog search
-      // box, so a non-blank brand there is always a deliberate entry that must
-      // win — ยี่ห้อ IS the search box on this form. Text sitting in it after a
-      // pick from the ยี่ห้อ dropdown is the QUERY ("sc"), not a brand, so
-      // keeping it would leave junk in the field and fail this fix's own intent
-      // just as the factory name did. A pick from the รุ่น dropdown is the
-      // other case: ยี่ห้อ was filled independently there, so it wins.
-      const brandTypedIndependently = pickedFrom !== 'brand' && item.brand?.trim();
-      const brand = brandTypedIndependently ? item.brand : (cat.grade || cat.brand || '');
-      // support both old catalog (brand/size) and new price catalog (factoryName/sizeRaw)
+
+      // ยี่ห้อ = the factory name, unconditionally. The previous rule read the catalog's `grade`
+      // as the brand, on the reasoning that ProductPriceDto has no "brand" column of its own. The
+      // live catalog disproves it: `grade` holds only 'A01'/'A02', and only for factory Padana
+      // (9,076 of 22,455 active rows) — a quality code. So that rule wrote "A01" into ยี่ห้อ for
+      // Padana and left it blank for the other 60%, which is the "doesn't autofill everything"
+      // report from UAT. The factory names in this catalog — Padana, Vives, Equipe, REFIN, CDE,
+      // LEA, Panaria, Bode, CITY — are exactly what a rep calls the brand; this form's own ยี่ห้อ
+      // placeholder cites "Panaria", which is a factory row. ยี่ห้อ and โรงงาน are therefore one
+      // field, and no text a rep left in it survives a pick: whatever is in that box when the
+      // dropdown opens is the search query, not an independent brand entry.
+      const factory = cat.factoryName || cat.factory || cat.brand || '';
+
+      // The catalog carries a per-piece area for 98.4% of rows; derive it from the size for the
+      // rest so the แผ่น↔ตร.ม. toggle can still cross-fill (see deriveSqmPerPiece).
+      const catalogSqmPerPiece = cat.sqmPerPiece || null;
+      const sizeRaw = cat.sizeRaw || cat.size || '';
+      const derivedSqmPerPiece = catalogSqmPerPiece ? null : deriveSqmPerPiece(sizeRaw);
+      const sqmPerPiece = catalogSqmPerPiece ?? derivedSqmPerPiece;
+      const newQtySqm = item.qty && sqmPerPiece ? (Number(item.qty) * sqmPerPiece).toFixed(3) : '';
+
       return {
         ...item,
-        brand,
+        brand:       factory,
+        factory,
         model:       cat.collection   || cat.productName || cat.productCode || '',
+        // Blank stays blank — สี and เนื้อผิว are absent for ~79% of the catalog and are optional
+        // now. Never substitute a product code or factory name for a colour the catalog lacks.
         color:       cat.color        || '',
         texture:     cat.surface      || '',
-        size:        cat.sizeRaw      || cat.size      || '',
-        factory:     cat.factoryName  || cat.factory   || '',
-        sqmPerPiece: cat.sqmPerPiece  || null,
+        size:        sizeRaw,
+        sqmPerPiece,
+        sqmPerPieceDerived: catalogSqmPerPiece == null && derivedSqmPerPiece != null,
         qtySqm:      newQtySqm,
         // UI-only provenance — see emptyItem()'s comment.
         source: 'catalog',
         catalogPrice: cat.price ?? null,
         catalogCurrency: cat.currency ?? null,
+        catalogGrade: cat.grade ?? null,
         // Persisted (V110) — see emptyItem()'s comment. cat.priceId is
         // ProductPriceDto.priceId, the same price_catalog.product_prices.price_id that
         // sales.pricing_request_item.product_id already points at (V68).
@@ -584,9 +731,8 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         catalogPriceUnit: cat.priceUnit ?? null,
       };
     }));
-    // Catalog pick fills brand/model/color/texture/size in one shot — clear
-    // any of those five that were previously flagged as blank.
-    ['brand', 'model', 'color', 'texture', 'size'].forEach((f) => clearFieldError(`items.${index}.${f}`));
+    // A catalog pick fills every required field in one shot — clear anything previously flagged.
+    Object.keys(REQUIRED_ITEM_FIELD_LABELS).forEach((f) => clearFieldError(`items.${index}.${f}`));
     setCatalogResults([]);
     setCatalogFocus(null);
   }
@@ -716,10 +862,15 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         items: items.map((item) => ({
           brand: item.brand.trim(),
           model: item.model.trim(),
-          color: item.color.trim(),
-          texture: item.texture.trim(),
+          // Optional since the ยี่ห้อ/สี/เนื้อผิว rework — null, not '', so a row with no colour
+          // reads as absent rather than as an empty string someone typed. Both columns are
+          // nullable in sales.ticket_item and TicketItemRequest no longer marks them @NotBlank.
+          color: item.color.trim() || null,
+          texture: item.texture.trim() || null,
           size: item.size.trim(),
-          factory: item.factory.trim() || null,
+          // One input feeds both — see updateItem(). The fallback covers a row restored from an
+          // older draft whose factory was captured separately.
+          factory: (item.factory || item.brand).trim() || null,
           unitBasis: item.unitBasis || 'PIECE',
           qty: Number(item.qty) || 0,
           qtySqm: item.qtySqm !== '' && item.qtySqm != null ? Number(item.qtySqm) : null,
@@ -748,8 +899,21 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     items: items.length > 0,
     details: Boolean(dealTitle.trim() || form.note.trim() || priority !== 'NORMAL'),
   };
-  const TOTAL_SECTIONS = 6; // 5 above + ตรวจสอบ & บันทึก itself (never "done" on its own)
+  // 5 real sections. The separate "ตรวจสอบ & บันทึก" step used to be a sixth row that could never
+  // be ticked; it was removed on the owner's instruction after UAT — the hub already IS the
+  // review (every row shows what is filled in), and the สร้างดีล button sits in the footer beside
+  // it, so a dedicated step only added a click between the rep and the thing they came to do.
+  const TOTAL_SECTIONS = 5;
   const doneCount = Object.values(sectionDone).filter(Boolean).length;
+
+  // Outstanding fields listed on the hub after a failed submit. Recomputed from the CURRENT form
+  // rather than read off `fieldErrors`' key order, so the list shrinks as the rep fixes things and
+  // stays in on-screen order (`fieldErrors` is a plain object and carries neither property).
+  const hubValidation = Object.keys(fieldErrors).length > 0
+    ? validateTicketForm({ customer: selectedCustomer, project: selectedProject, items })
+    : null;
+  const hubMissingErrors = hubValidation?.errors ?? {};
+  const hubMissingKeys = hubValidation?.order ?? [];
   const canCreateNow = Boolean(selectedCustomer && selectedProject);
 
   const entryChannelLabel = ENTRY_CHANNEL_OPTIONS.find((o) => o.code === entryChannel)?.label ?? entryChannel;
@@ -803,16 +967,38 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             subtitle={[dealTitle.trim(), priority !== 'NORMAL' ? priorityLabel : null, form.note.trim() ? 'มีหมายเหตุ' : null].filter(Boolean).join(' · ') || 'ชื่อดีล · ความสำคัญ · หมายเหตุ'}
             onClick={() => setView('details')}
           />
-          <HubRow
-            title="ตรวจสอบ & บันทึก"
-            subtitle="ตรวจก่อนสร้างดีล"
-            onClick={() => setView('review')}
-          />
         </div>
+
+        {/* Only after a submit attempt has actually failed — the จำเป็น badges above already say
+            what is outstanding, so showing a red block to someone who has just opened the form
+            would be nagging rather than helping. This is what the removed ตรวจสอบ step contributed
+            that the hub rows do not: a jump straight to a specific bad field inside an item row. */}
+        {hubMissingKeys.length > 0 ? (
+          <div className="rounded-lg border border-danger-border bg-danger-bg px-3 py-2.5">
+            <p className="flex items-center gap-1.5 text-xs font-extrabold text-danger-dark">
+              <Icon name="triangleAlert" size={14} /> ยังกรอกไม่ครบ {hubMissingKeys.length} รายการ
+            </p>
+            <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-4 text-2xs text-danger-dark">
+              {hubMissingKeys.map((key) => (
+                <li key={key}>
+                  {hubMissingErrors[key]}
+                  {' — '}
+                  <button
+                    type="button"
+                    className="font-extrabold underline"
+                    onClick={() => { setFieldErrors(hubMissingErrors); jumpToField(key); }}
+                  >
+                    ไปที่ขั้นตอน
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
 
         <div className="flex items-start gap-2 rounded-lg border border-info-border bg-info-bg px-3 py-2.5 text-xs text-info-dark">
           <Icon name="info" size={15} className="mt-0.5 shrink-0" />
-          <span>เพิ่มรายการสินค้าอย่างน้อย 1 รายการ ก่อนจึงจะสร้างคำขอราคาได้</span>
+          <span>ดีลที่สร้างยังไม่มีราคา — ขั้นต่อไปคือ “สร้างคำขอราคา” จากหน้าดีล ซึ่งต้องมีรายการสินค้าอย่างน้อย 1 รายการ</span>
         </div>
 
         {error ? <div className="py-2.5 px-3 rounded-md bg-danger-bg text-danger-dark font-bold text-[length:var(--text-sm)]" role="alert">{error}</div> : null}
@@ -1078,267 +1264,192 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   function renderItemEditor(index) {
     const item = items[index];
     if (!item) return null;
+    const basis = item.unitBasis || 'PIECE';
+    // With a ตร.ม./แผ่น factor the two quantity boxes cross-fill, so whichever one the rep is not
+    // driving is derived and read-only. Without a factor NEITHER can be derived — ~350 active
+    // catalog rows carry no area per piece and their size string could not be read either — so
+    // both stay editable instead of leaving the required box empty while the number the rep
+    // actually typed sits greyed out in the other one. That stranding is the exact state in the
+    // UAT screenshot: "1000 แผ่น" greyed beside an empty, erroring พื้นที่ (ตร.ม.).
+    const hasFactor = Boolean(item.sqmPerPiece);
+    const catalogPrice = item.catalogPrice != null
+      ? formatCatalogPrice(item.catalogPrice, item.catalogCurrency, item.catalogPriceUnit, fxRatesByCurrency)
+      : null;
+
     return (
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-4">
         <BackLink onClick={() => setEditingItemIndex(null)} label="กลับไปรายการสินค้า" />
 
         {item.source === 'catalog' ? (
-          <div className="flex items-start gap-2 rounded-lg border border-accent bg-accent/10 px-3 py-2 text-xs font-bold text-accent-dark">
-            <Icon name="check" size={14} className="mt-0.5 shrink-0" />
-            <span>เติมสเปคและราคาตั้งต้นจากแคตตาล็อกให้แล้ว — ตรวจสอบและแก้ไขได้</span>
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-accent bg-accent/10 px-3 py-2 text-xs font-bold text-accent-dark">
+            <Icon name="check" size={14} className="shrink-0" />
+            <span className="min-w-0 flex-1">เติมข้อมูลจากแคตตาล็อกให้แล้ว — ตรวจสอบและแก้ไขได้</span>
+            {item.catalogGrade ? <StatusBadge tone="teal">เกรด {item.catalogGrade}</StatusBadge> : null}
           </div>
         ) : null}
 
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <CatalogAutocompleteField
+            id={`item-${index}-brand`}
+            label="ยี่ห้อ / โรงงาน"
+            required
+            value={item.brand}
+            placeholder="เช่น Panaria, LEA, Bode"
+            onInput={(value) => onBrandInput(index, value)}
+            onFocusSearch={() => { setCatalogFocus({ index, field: 'brand' }); if (item.brand) onBrandInput(index, item.brand); }}
+            onBlur={() => setTimeout(() => setCatalogFocus(null), 180)}
+            expanded={catalogFocus?.index === index && catalogFocus?.field === 'brand'}
+            results={catalogResults}
+            onPick={(cat) => applyCatalogItem(index, cat)}
+            error={fieldErrors[`items.${index}.brand`]}
+            inputRef={(el) => { fieldRefs.current[`items.${index}.brand`] = el; }}
+          />
 
-          {/* Brand with catalog autocomplete */}
-          <div className="relative m-0">
-            <span className="mb-[3px] block text-xs">ชื่อยี่ห้อ *</span>
-            <input
-              id={`item-${index}-brand`}
-              ref={(el) => { fieldRefs.current[`items.${index}.brand`] = el; }}
-              value={item.brand}
-              onChange={(e) => onBrandInput(index, e.target.value)}
-              onFocus={() => { setCatalogFocus({ index, field: 'brand' }); if (item.brand) onBrandInput(index, item.brand); }}
-              onBlur={() => setTimeout(() => setCatalogFocus(null), 180)}
-              placeholder="เช่น SCG, Cotto, Panaria"
-              required
-              aria-required="true"
-              aria-invalid={fieldErrors[`items.${index}.brand`] ? true : undefined}
-              aria-describedby={fieldErrors[`items.${index}.brand`] ? fieldErrorId(`item-${index}-brand`) : undefined}
-            />
-            {fieldErrors[`items.${index}.brand`] ? (
-              <p id={fieldErrorId(`item-${index}-brand`)} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">{fieldErrors[`items.${index}.brand`]}</p>
-            ) : null}
-            {catalogFocus?.index === index && catalogFocus?.field === 'brand' && catalogResults.length > 0 && (
-              <div className="absolute left-0 right-0 top-full z-[60] max-h-[200px] overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_16px_rgba(0,0,0,0.12)]">
-                {catalogResults.map((cat) => (
-                  // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- autocomplete option row; onMouseDown (not click) preserves input focus for typeahead
-                  <div key={cat.priceId ?? cat.id} onMouseDown={() => applyCatalogItem(index, cat, 'brand')}
-                    className="cursor-pointer border-b border-surface-subtle px-2.5 py-[7px] text-xs hover:bg-info-row-active"
-                  >
-                    <strong>{cat.factoryName || cat.brand}</strong>
-                    {' — '}
-                    {cat.collection || cat.productName || cat.productCode || '—'}
-                    <span className="ml-1 text-text-muted">
-                      {[cat.color, cat.sizeRaw || cat.size].filter(Boolean).join(' · ')}
-                    </span>
-                    {cat.price && (
-                      <span className="ml-1.5 text-2xs font-semibold text-link">
-                        {Number(cat.price).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {cat.currency}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <CatalogAutocompleteField
+            id={`item-${index}-model`}
+            label="ชื่อรุ่น / Collection"
+            required
+            value={item.model}
+            placeholder="เช่น Stone Villa, Eco stone"
+            onInput={(value) => onModelInput(index, value)}
+            onFocusSearch={() => { setCatalogFocus({ index, field: 'model' }); if (item.model) onModelInput(index, item.model); }}
+            onBlur={() => setTimeout(() => setCatalogFocus(null), 180)}
+            expanded={catalogFocus?.index === index && catalogFocus?.field === 'model'}
+            results={catalogResults}
+            onPick={(cat) => applyCatalogItem(index, cat)}
+            error={fieldErrors[`items.${index}.model`]}
+            inputRef={(el) => { fieldRefs.current[`items.${index}.model`] = el; }}
+          />
 
-          <div className="relative m-0">
-            <span className="mb-[3px] block text-xs">ชื่อรุ่น / Collection *</span>
-            <input
-              id={`item-${index}-model`}
-              ref={(el) => { fieldRefs.current[`items.${index}.model`] = el; }}
-              value={item.model}
-              onChange={(e) => onModelInput(index, e.target.value)}
-              onFocus={() => { setCatalogFocus({ index, field: 'model' }); if (item.model) onModelInput(index, item.model); }}
-              onBlur={() => setTimeout(() => setCatalogFocus(null), 180)}
-              placeholder="เช่น Stone, Elegance, L-Trim…"
-              required
-              aria-required="true"
-              aria-invalid={fieldErrors[`items.${index}.model`] ? true : undefined}
-              aria-describedby={fieldErrors[`items.${index}.model`] ? fieldErrorId(`item-${index}-model`) : undefined}
-            />
-            {fieldErrors[`items.${index}.model`] ? (
-              <p id={fieldErrorId(`item-${index}-model`)} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">{fieldErrors[`items.${index}.model`]}</p>
-            ) : null}
-            {catalogFocus?.index === index && catalogFocus?.field === 'model' && catalogResults.length > 0 && (
-              <div className="absolute left-0 right-0 top-full z-[60] max-h-[200px] overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_16px_rgba(0,0,0,0.12)]">
-                {catalogResults.map((cat) => (
-                  // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- autocomplete option row; onMouseDown (not click) preserves input focus for typeahead
-                  <div key={cat.priceId ?? cat.id} onMouseDown={() => applyCatalogItem(index, cat, 'model')}
-                    className="cursor-pointer border-b border-surface-subtle px-2.5 py-[7px] text-xs hover:bg-info-row-active"
-                  >
-                    <strong>{cat.factoryName || cat.brand}</strong>
-                    {' — '}
-                    {cat.collection || cat.productName || cat.productCode || '—'}
-                    <span className="ml-1 text-text-muted">
-                      {[cat.color, cat.sizeRaw || cat.size].filter(Boolean).join(' · ')}
-                    </span>
-                    {cat.price && (
-                      <span className="ml-1.5 text-2xs font-semibold text-link">
-                        {Number(cat.price).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {cat.currency}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          <label className="m-0">
-            <span className="text-xs">สี *</span>
-            <input
-              id={`item-${index}-color`}
-              ref={(el) => { fieldRefs.current[`items.${index}.color`] = el; }}
-              value={item.color}
-              onChange={(e) => updateItem(index, 'color', e.target.value)}
-              placeholder="เช่น ขาว, เทา, ครีม"
-              required
-              aria-required="true"
-              aria-invalid={fieldErrors[`items.${index}.color`] ? true : undefined}
-              aria-describedby={fieldErrors[`items.${index}.color`] ? fieldErrorId(`item-${index}-color`) : undefined}
-            />
-            {fieldErrors[`items.${index}.color`] ? (
-              <p id={fieldErrorId(`item-${index}-color`)} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">{fieldErrors[`items.${index}.color`]}</p>
-            ) : null}
-          </label>
-          <label className="m-0">
-            <span className="text-xs">เนื้อผิว *</span>
-            <input
-              id={`item-${index}-texture`}
-              ref={(el) => { fieldRefs.current[`items.${index}.texture`] = el; }}
-              value={item.texture}
-              onChange={(e) => updateItem(index, 'texture', e.target.value)}
-              placeholder="เช่น ด้าน, มัน, หยาบ"
-              required
-              aria-required="true"
-              aria-invalid={fieldErrors[`items.${index}.texture`] ? true : undefined}
-              aria-describedby={fieldErrors[`items.${index}.texture`] ? fieldErrorId(`item-${index}-texture`) : undefined}
-            />
-            {fieldErrors[`items.${index}.texture`] ? (
-              <p id={fieldErrorId(`item-${index}-texture`)} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">{fieldErrors[`items.${index}.texture`]}</p>
-            ) : null}
-          </label>
-          <label className="m-0">
-            <span className="text-xs">ขนาด *</span>
+          <ItemField
+            id={`item-${index}-size`}
+            label="ขนาด"
+            required
+            error={fieldErrors[`items.${index}.size`]}
+          >
             <input
               id={`item-${index}-size`}
               ref={(el) => { fieldRefs.current[`items.${index}.size`] = el; }}
               value={item.size}
               onChange={(e) => updateItem(index, 'size', e.target.value)}
-              placeholder="เช่น 60x60, 30x60 ซม."
-              required
+              placeholder="เช่น 600x1200"
               aria-required="true"
               aria-invalid={fieldErrors[`items.${index}.size`] ? true : undefined}
               aria-describedby={fieldErrors[`items.${index}.size`] ? fieldErrorId(`item-${index}-size`) : undefined}
             />
-            {fieldErrors[`items.${index}.size`] ? (
-              <p id={fieldErrorId(`item-${index}-size`)} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">{fieldErrors[`items.${index}.size`]}</p>
-            ) : null}
-          </label>
-          <label className="m-0">
-            <span className="text-xs">โรงงาน</span>
-            <input value={item.factory} onChange={(e) => updateItem(index, 'factory', e.target.value)} placeholder="เช่น SCG Ceramics" />
-          </label>
+          </ItemField>
 
-          {/* Unit basis toggle */}
-          <div className="col-span-2 m-0">
-            <span className="mb-1.5 block text-xs">หน่วยที่ใช้สั่ง *</span>
-            <div className="flex flex-wrap items-center gap-4">
-              {[{ value: 'PIECE', label: 'แผ่น' }, { value: 'SQM', label: 'ตร.ม.' }].map((opt) => (
-                <label key={opt.value} className="flex cursor-pointer items-center gap-1.5 text-sm">
-                  <input type="radio" name={`unitBasis-${index}`} value={opt.value}
-                    checked={(item.unitBasis || 'PIECE') === opt.value}
-                    onChange={() => updateItem(index, 'unitBasis', opt.value)}
-                    className="h-4 w-4 cursor-pointer accent-info-dot" />
-                  <strong>{opt.label}</strong>
-                </label>
-              ))}
-              {item.sqmPerPiece && (
-                <span className="text-2xs text-text-muted">· 1 แผ่น = {item.sqmPerPiece} ตร.ม.</span>
-              )}
-            </div>
-          </div>
+          {/* สี and เนื้อผิว are optional: the live catalog fills them on ~21% of active rows, so
+              requiring them made a rep invent a value on 4 of every 5 catalog picks. */}
+          <ItemField id={`item-${index}-color`} label="สี" hint="(ไม่บังคับ)">
+            <input
+              id={`item-${index}-color`}
+              value={item.color}
+              onChange={(e) => updateItem(index, 'color', e.target.value)}
+              placeholder="เช่น ขาว, เทา, ครีม"
+            />
+          </ItemField>
 
-          {/* Primary qty input */}
-          {(item.unitBasis || 'PIECE') === 'PIECE' ? (
-            <>
-              <label className="m-0">
-                <span className="text-xs">จำนวน (แผ่น) *</span>
-                <input type="number" value={item.qty} step="1"
-                  id={`item-${index}-qty`}
-                  ref={(el) => { fieldRefs.current[`items.${index}.qty`] = el; }}
-                  onChange={(e) => updateItem(index, 'qty', e.target.value)}
-                  placeholder="จำนวนแผ่น" required
-                  aria-required="true"
-                  aria-invalid={fieldErrors[`items.${index}.qty`] ? true : undefined}
-                  aria-describedby={fieldErrors[`items.${index}.qty`] ? fieldErrorId(`item-${index}-qty`) : undefined}
-                />
-                {fieldErrors[`items.${index}.qty`] ? (
-                  <p id={fieldErrorId(`item-${index}-qty`)} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">{fieldErrors[`items.${index}.qty`]}</p>
-                ) : null}
-              </label>
-              <div className="m-0">
-                <span className="mb-1 block text-xs">พื้นที่รวม (ตร.ม.)</span>
-                <div className={`rounded-[6px] border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm ${item.qtySqm ? 'text-icon-muted' : 'text-text-muted'}`}>
-                  {item.qtySqm ? `${Number(item.qtySqm).toFixed(3)} ตร.ม.` : item.sqmPerPiece ? 'กรอกจำนวนแผ่นก่อน' : '—'}
-                </div>
-              </div>
-            </>
-          ) : (
-            <>
-              <label className="m-0">
-                <span className="text-xs">พื้นที่ (ตร.ม.) *</span>
-                <input type="number" value={item.qtySqm} min="0" step="0.001"
-                  id={`item-${index}-qtySqm`}
-                  ref={(el) => { fieldRefs.current[`items.${index}.qtySqm`] = el; }}
-                  onChange={(e) => updateItem(index, 'qtySqm', e.target.value)}
-                  placeholder="เช่น 120.500" required
-                  aria-required="true"
-                  aria-invalid={fieldErrors[`items.${index}.qtySqm`] ? true : undefined}
-                  aria-describedby={fieldErrors[`items.${index}.qtySqm`] ? fieldErrorId(`item-${index}-qtySqm`) : undefined}
-                />
-                {fieldErrors[`items.${index}.qtySqm`] ? (
-                  <p id={fieldErrorId(`item-${index}-qtySqm`)} role="alert" className="mx-0 mb-0 mt-1 text-2xs font-bold text-danger">{fieldErrors[`items.${index}.qtySqm`]}</p>
-                ) : null}
-              </label>
-              <div className="m-0">
-                <span className="mb-1 block text-xs">จำนวน (แผ่น)</span>
-                <div className={`rounded-[6px] border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm ${item.qty ? 'text-icon-muted' : 'text-text-muted'}`}>
-                  {item.qty ? `${item.qty} แผ่น` : item.sqmPerPiece ? 'กรอกพื้นที่ก่อน' : '—'}
-                </div>
-              </div>
-            </>
-          )}
-
-          {item.catalogPrice != null ? (
-            <div className="col-span-2 m-0 flex items-center justify-between rounded-md border border-border-input bg-surface-muted px-3 py-2.5">
-              {/* Two-tone hierarchy restored here (review-remediation, fix/ui-contrast-tokens):
-                  both label and caveat used to share --color-text-muted after the AA fix, which
-                  flattened the label/caveat distinction to weight alone. The label now uses
-                  --color-icon-muted (#475569, 7.24:1+ on this row's surfaces) so it reads a step
-                  darker than the caveat's --color-text-muted (#5c6b80, 5.19:1) — both clear AA. */}
-              <span className="text-2xs font-bold text-icon-muted">
-                ราคาอ้างอิง (แคตตาล็อก) <span className="font-medium text-text-muted">— ราคาขายจริงมาจากขั้นคำขอราคา</span>
-              </span>
-              <span className="text-md font-extrabold">
-                {Number(item.catalogPrice).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {item.catalogCurrency}
-              </span>
-            </div>
-          ) : null}
-
-          {/* ราคาตั้ง (ประมาณการ) — hidden entirely (not just blank) whenever the FX/markup
-              fetch failed, per the "never fall back to markup=1" rule in dealEstimatePricing.js. */}
-          {estimateReady && item.catalogPrice != null ? (() => {
-            const lineEstimate = computeItemEstimateThb(item, estimateContext);
-            return (
-              <div data-testid={`item-editor-estimate-${index}`} className="col-span-2 m-0 flex items-center justify-between rounded-md border border-accent bg-success-bg px-3 py-2.5">
-                <span className="text-2xs font-bold text-icon-muted">
-                  ราคาตั้ง (ประมาณการ) <span className="font-medium text-text-muted">— ราคาแคตตาล็อก × อัตราแลกเปลี่ยน × ตัวคูณ CEO ไม่ใช่ราคาขายจริง</span>
-                </span>
-                {lineEstimate.ok ? (
-                  <span className="text-right text-md font-extrabold">
-                    {formatThb(lineEstimate.unitThb)} บาท/หน่วย
-                    <br />
-                    <span className="text-xs">รวม {formatThb(lineEstimate.total)} บาท</span>
-                  </span>
-                ) : (
-                  <span className="text-xs font-bold text-text-muted">ยังคำนวณไม่ได้ ({estimateReasonLabel(lineEstimate.reason)})</span>
-                )}
-              </div>
-            );
-          })() : null}
+          <ItemField id={`item-${index}-texture`} label="เนื้อผิว" hint="(ไม่บังคับ)">
+            <input
+              id={`item-${index}-texture`}
+              value={item.texture}
+              onChange={(e) => updateItem(index, 'texture', e.target.value)}
+              placeholder="เช่น MATT, GLOSSY, ด้าน"
+            />
+          </ItemField>
         </div>
+
+        <div className="flex flex-col gap-2 border-t border-border-subtle pt-4">
+          <span className="text-xs">
+            หน่วยที่ใช้สั่ง<span className="text-danger" aria-hidden="true"> *</span>
+          </span>
+          <div className="flex flex-wrap items-center gap-4" role="radiogroup" aria-label="หน่วยที่ใช้สั่ง">
+            {[{ value: 'PIECE', label: 'แผ่น' }, { value: 'SQM', label: 'ตร.ม.' }].map((opt) => (
+              <label key={opt.value} className="m-0 flex cursor-pointer items-center gap-1.5 text-sm">
+                <input type="radio" name={`unitBasis-${index}`} value={opt.value}
+                  checked={basis === opt.value}
+                  onChange={() => updateItem(index, 'unitBasis', opt.value)}
+                  className="h-4 w-4 cursor-pointer accent-info-dot" />
+                <strong>{opt.label}</strong>
+              </label>
+            ))}
+          </div>
+          {hasFactor ? (
+            <span className="text-2xs text-text-muted">
+              1 แผ่น = {item.sqmPerPiece} ตร.ม.
+              {item.sqmPerPieceDerived ? ` (คำนวณจากขนาด ${item.size})` : ''}
+            </span>
+          ) : (
+            <span className="text-2xs text-text-muted">
+              สินค้านี้ไม่มีค่า ตร.ม./แผ่น ในแคตตาล็อก — กรอกจำนวนและพื้นที่เองได้ทั้งสองช่อง
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <ItemField
+            id={`item-${index}-qty`}
+            label="จำนวน (แผ่น)"
+            required={basis === 'PIECE'}
+            hint={hasFactor && basis === 'SQM' ? '(คำนวณให้)' : undefined}
+            error={fieldErrors[`items.${index}.qty`]}
+          >
+            <input
+              type="number" step="1" min="0"
+              id={`item-${index}-qty`}
+              ref={(el) => { fieldRefs.current[`items.${index}.qty`] = el; }}
+              value={item.qty ?? ''}
+              onChange={(e) => updateItem(index, 'qty', e.target.value)}
+              placeholder="จำนวนแผ่น"
+              readOnly={hasFactor && basis === 'SQM'}
+              className={hasFactor && basis === 'SQM' ? 'bg-surface-muted text-text-muted' : undefined}
+              aria-required={basis === 'PIECE' ? 'true' : undefined}
+              aria-invalid={fieldErrors[`items.${index}.qty`] ? true : undefined}
+              aria-describedby={fieldErrors[`items.${index}.qty`] ? fieldErrorId(`item-${index}-qty`) : undefined}
+            />
+          </ItemField>
+
+          <ItemField
+            id={`item-${index}-qtySqm`}
+            label="พื้นที่ (ตร.ม.)"
+            required={basis === 'SQM'}
+            hint={hasFactor && basis === 'PIECE' ? '(คำนวณให้)' : undefined}
+            error={fieldErrors[`items.${index}.qtySqm`]}
+          >
+            <input
+              type="number" min="0" step="0.001"
+              id={`item-${index}-qtySqm`}
+              ref={(el) => { fieldRefs.current[`items.${index}.qtySqm`] = el; }}
+              value={item.qtySqm ?? ''}
+              onChange={(e) => updateItem(index, 'qtySqm', e.target.value)}
+              placeholder="เช่น 120.500"
+              readOnly={hasFactor && basis === 'PIECE'}
+              className={hasFactor && basis === 'PIECE' ? 'bg-surface-muted text-text-muted' : undefined}
+              aria-required={basis === 'SQM' ? 'true' : undefined}
+              aria-invalid={fieldErrors[`items.${index}.qtySqm`] ? true : undefined}
+              aria-describedby={fieldErrors[`items.${index}.qtySqm`] ? fieldErrorId(`item-${index}-qtySqm`) : undefined}
+            />
+          </ItemField>
+        </div>
+
+        {/* Catalog price: the factory's own figure in the currency it is quoted in, with a baht
+            conversion underneath. Replaces the ราคาตั้ง (ประมาณการ) block — see
+            catalogPriceDisplay.js for why a marked-up figure is no longer shown here. */}
+        {catalogPrice ? (
+          <div className="flex flex-col gap-1 rounded-md border border-border-input bg-surface-muted px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+            <span className="text-2xs font-bold text-icon-muted">
+              ราคาแคตตาล็อก
+              <span className="block font-medium text-text-muted">ราคาซื้อจากโรงงาน — ราคาขายจริงมาจากขั้นคำขอราคา</span>
+            </span>
+            <span className="shrink-0 text-left sm:text-right">
+              <span className="text-md font-extrabold">{catalogPrice.original}</span>
+              {catalogPrice.thb ? (
+                <span className="block text-xs font-semibold text-text-muted">{catalogPrice.thb}</span>
+              ) : null}
+            </span>
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -1357,15 +1468,12 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border-strong bg-surface px-5 py-8 text-center">
             <Icon name="fileText" size={28} className="text-text-faint" />
             <p className="text-sm font-extrabold text-text">ยังไม่มีรายการสินค้า</p>
-            <p className="text-xs text-text-muted">ค้นหาจากแคตตาล็อก หรือเพิ่มสินค้าที่ยังไม่มีในระบบเอง</p>
-            <div className="mt-1 flex flex-wrap justify-center gap-2">
-              <Button variant="primary" className="text-xs" onClick={addItem}>
-                <Icon name="plus" size={13} /> ค้นหาสินค้า
-              </Button>
-              <Button variant="secondary" className="text-xs" onClick={addItem}>
-                เพิ่มสินค้าเอง (custom)
-              </Button>
-            </div>
+            <p className="text-xs text-text-muted">พิมพ์ในช่อง ยี่ห้อ / โรงงาน หรือ รุ่น เพื่อค้นจากแคตตาล็อก — หรือกรอกสินค้าที่ยังไม่มีในระบบเอง</p>
+            {/* One button, not two: the pair here ("ค้นหาสินค้า" / "เพิ่มสินค้าเอง") both called
+                addItem() and opened the same editor, so the choice they offered was not real. */}
+            <Button variant="primary" className="mt-1" onClick={addItem}>
+              <Icon name="plus" size={13} /> เพิ่มรายการสินค้า
+            </Button>
           </div>
         ) : (
           <div className="flex flex-col gap-2">
@@ -1376,9 +1484,11 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                     {[item.brand, item.model].filter(Boolean).join(' ') || `รายการที่ ${index + 1}`}
                   </p>
                   <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    {/* No factory chip: ยี่ห้อ and โรงงาน are one field now, so it would repeat
+                        the brand already shown in this row's title. */}
                     {item.color ? <span className="rounded-md bg-surface-subtle px-1.5 py-0.5 text-2xs font-bold text-text-secondary">{item.color}</span> : null}
                     {item.texture ? <span className="rounded-md bg-surface-subtle px-1.5 py-0.5 text-2xs font-bold text-text-secondary">{item.texture}</span> : null}
-                    {item.factory ? <span className="rounded-md bg-surface-subtle px-1.5 py-0.5 text-2xs font-bold text-text-secondary">{item.factory}</span> : null}
+                    {item.size ? <span className="rounded-md bg-surface-subtle px-1.5 py-0.5 text-2xs font-bold text-text-secondary">{item.size}</span> : null}
                     {item.source === 'catalog' ? (
                       <StatusBadge tone="teal">✓ จากแคตตาล็อก</StatusBadge>
                     ) : (
@@ -1390,11 +1500,19 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   {(item.unitBasis || 'PIECE') === 'SQM'
                     ? (item.qtySqm ? `${item.qtySqm} ตร.ม.` : '—')
                     : (item.qty ? `${item.qty} แผ่น` : '—')}
-                  {estimateReady ? (
-                    <div data-testid={`item-estimate-${index}`} className="mt-0.5 font-semibold text-2xs text-accent-dark">
-                      {itemsEstimate?.perItem[index]?.ok ? `${formatThb(itemsEstimate.perItem[index].total)} บาท` : '—'}
-                    </div>
-                  ) : null}
+                  {/* The catalog's own price, in its own currency plus baht. No row total and no
+                      grand total: a line's price unit (per_sqm / per_piece / per_box) does not
+                      always match the unit the rep is ordering in, and restating it needs a
+                      pieces-per-box factor the catalog has no column for. */}
+                  {item.catalogPrice != null ? (() => {
+                    const price = formatCatalogPrice(item.catalogPrice, item.catalogCurrency, item.catalogPriceUnit, fxRatesByCurrency);
+                    return (
+                      <div data-testid={`item-catalog-price-${index}`} className="mt-0.5 font-semibold text-2xs text-text-muted">
+                        {price.original}
+                        {price.thb ? <span className="block">{price.thb}</span> : null}
+                      </div>
+                    );
+                  })() : null}
                 </div>
                 <div className="flex shrink-0 flex-col gap-1">
                   <Button variant="icon" aria-label={`แก้ไขรายการที่ ${index + 1}`} onClick={() => setEditingItemIndex(index)}>
@@ -1406,19 +1524,6 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                 </div>
               </div>
             ))}
-            {itemsEstimate?.total != null ? (
-              <div data-testid="items-estimate-total" className="flex items-center justify-between rounded-xl border border-accent bg-success-bg px-3.5 py-2.5">
-                <span className="text-xs font-extrabold text-text">
-                  ราคาตั้งรวม (ประมาณการ)
-                  {itemsEstimate.uncomputableCount > 0 ? (
-                    <span data-testid="items-estimate-uncomputable" className="ml-1.5 font-semibold text-2xs text-text-muted">
-                      · ยังคำนวณไม่ได้ {itemsEstimate.uncomputableCount} รายการ
-                    </span>
-                  ) : null}
-                </span>
-                <span className="text-sm font-extrabold text-accent-dark">{formatThb(itemsEstimate.total)} บาท</span>
-              </div>
-            ) : null}
             <Button variant="secondary" onClick={addItem}>
               <Icon name="plus" size={14} /> เพิ่มรายการสินค้า
             </Button>
@@ -1472,128 +1577,8 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     );
   }
 
-  function renderReviewView() {
-    const { errors: reviewErrors, order: reviewOrder } = validateTicketForm({
-      customer: selectedCustomer, project: selectedProject, items,
-    });
-    return (
-      <div className="flex flex-col gap-3">
-        <BackLink onClick={() => setView('hub')} />
-
-        {reviewOrder.length > 0 ? (
-          <div className="rounded-lg border border-danger-border bg-danger-bg px-3 py-2.5">
-            <p className="flex items-center gap-1.5 text-xs font-extrabold text-danger-dark">
-              <Icon name="triangleAlert" size={14} /> ยังกรอกไม่ครบ {reviewOrder.length} รายการ
-            </p>
-            <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-4 text-2xs text-danger-dark">
-              {reviewOrder.map((key) => (
-                <li key={key}>
-                  {reviewErrors[key]}
-                  {' — '}
-                  <button
-                    type="button"
-                    className="font-extrabold underline"
-                    onClick={() => { setFieldErrors(reviewErrors); jumpToField(key); }}
-                  >
-                    ไปที่ขั้นตอน
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-
-        <div className="rounded-xl border border-border bg-surface">
-          <div className="flex items-center justify-between border-b border-border px-3.5 py-2.5">
-            <h4 className="text-sm font-extrabold text-text">ลูกค้า</h4>
-            <button type="button" className="text-xs font-extrabold text-primary" onClick={() => setView('customer')}>แก้ไข</button>
-          </div>
-          <div className="px-3.5 py-2.5 text-sm">
-            {selectedCustomer ? selectedCustomer.name : <span className="text-text-muted">ยังไม่ได้เลือก</span>}
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-border bg-surface">
-          <div className="flex items-center justify-between border-b border-border px-3.5 py-2.5">
-            <h4 className="text-sm font-extrabold text-text">โครงการ</h4>
-            <button type="button" className="text-xs font-extrabold text-primary" onClick={() => setView('project')}>แก้ไข</button>
-          </div>
-          <div className="px-3.5 py-2.5 text-sm">
-            {selectedProject ? selectedProject.name : <span className="text-text-muted">ยังไม่ได้เลือก</span>}
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-border bg-surface">
-          <div className="flex items-center justify-between border-b border-border px-3.5 py-2.5">
-            <h4 className="text-sm font-extrabold text-text">ผู้ติดต่อ & ช่องทางดีล</h4>
-            <button type="button" className="text-xs font-extrabold text-primary" onClick={() => setView('contact')}>แก้ไข</button>
-          </div>
-          <div className="flex flex-col gap-0.5 px-3.5 py-2.5 text-sm">
-            <span>ช่องทาง: {entryChannelLabel}</span>
-            <span>ผู้ติดต่อ: {selectedContact ? `${selectedContact.firstName} ${selectedContact.lastName}`.trim() : <span className="text-text-muted">ไม่ได้ระบุ</span>}</span>
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-border bg-surface">
-          <div className="flex items-center justify-between border-b border-border px-3.5 py-2.5">
-            <h4 className="text-sm font-extrabold text-text">รายการสินค้า · {items.length}</h4>
-            <button type="button" className="text-xs font-extrabold text-primary" onClick={() => setView('items')}>แก้ไข</button>
-          </div>
-          <div className="px-3.5 py-2.5">
-            {items.length === 0 ? (
-              <p className="text-xs text-text-muted">ยังไม่มีรายการสินค้า — เพิ่มได้ภายหลังจากหน้าดีล (ไม่บังคับตอนนี้)</p>
-            ) : (
-              <div className="flex flex-col gap-1">
-                {items.map((item, index) => (
-                  <div key={index} className="flex items-center justify-between text-sm">
-                    <span className="truncate">{[item.brand, item.model].filter(Boolean).join(' ') || `รายการที่ ${index + 1}`}</span>
-                    <span className="shrink-0 text-text-muted">
-                      {(item.unitBasis || 'PIECE') === 'SQM' ? `${item.qtySqm || 0} ตร.ม.` : `${item.qty || 0} แผ่น`}
-                    </span>
-                  </div>
-                ))}
-                {itemsEstimate?.total != null ? (
-                  <div data-testid="review-estimate-total" className="mt-1 flex items-center justify-between border-t border-border-subtle pt-1.5 text-sm font-extrabold text-text">
-                    <span>
-                      ราคาตั้งรวม (ประมาณการ)
-                      {itemsEstimate.uncomputableCount > 0 ? (
-                        <span className="ml-1.5 font-semibold text-2xs text-text-muted">
-                          · ยังคำนวณไม่ได้ {itemsEstimate.uncomputableCount} รายการ
-                        </span>
-                      ) : null}
-                    </span>
-                    <span className="text-accent-dark">{formatThb(itemsEstimate.total)} บาท</span>
-                  </div>
-                ) : null}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-border bg-surface">
-          <div className="flex items-center justify-between border-b border-border px-3.5 py-2.5">
-            <h4 className="text-sm font-extrabold text-text">รายละเอียดดีล</h4>
-            <button type="button" className="text-xs font-extrabold text-primary" onClick={() => setView('details')}>แก้ไข</button>
-          </div>
-          <div className="flex flex-col gap-0.5 px-3.5 py-2.5 text-sm">
-            <span>ชื่อดีล: {dealTitle.trim() || (selectedCustomer?.name ?? '—')}</span>
-            <span>ความสำคัญ: {priorityLabel}</span>
-            <span>หมายเหตุ: {form.note.trim() || <span className="text-text-muted">ไม่มี</span>}</span>
-          </div>
-        </div>
-
-        <div className="flex items-start gap-2 rounded-lg border border-info-border bg-info-bg px-3 py-2.5 text-xs text-info-dark">
-          <Icon name="info" size={15} className="mt-0.5 shrink-0" />
-          <span>สร้างดีลแล้วยังไม่มีราคา — ขั้นต่อไปคือ “สร้างคำขอราคา” จากหน้าดีล</span>
-        </div>
-
-        {error ? <div className="py-2.5 px-3 rounded-md bg-danger-bg text-danger-dark font-bold text-[length:var(--text-sm)]" role="alert">{error}</div> : null}
-      </div>
-    );
-  }
-
   function renderFooter() {
-    if (view === 'hub' || view === 'review') {
+    if (view === 'hub') {
       return (
         <>
           <Button variant="secondary" onClick={onClose} disabled={loading}>ยกเลิก</Button>
@@ -1623,7 +1608,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   }
 
   // CRITICAL (HTML implicit submission, fix/form-enter-submits-real-records; migrated to
-  // SafeForm's `canSubmit` under #safe-form-primitive): this <form> wraps all 7 sub-views below,
+  // SafeForm's `canSubmit` under #safe-form-primitive): this <form> wraps all 6 sub-views below,
   // and a form with no submit button but exactly ONE field that blocks implicit submission fires
   // a real 'submit' event on Enter with no button ever pressed. That was true for DETAILS
   // (renderDetailsView's ชื่อดีล input is its only such field -- the textarea and role="radio"
@@ -1633,21 +1618,22 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   // implicit submission, which is why the suite stayed green with the bug live — see
   // TicketCreateModal.test.jsx's `fireEvent.submit(form)` cases).
   //
-  // `canSubmit={view === 'hub' || view === 'review'}` reproduces the old bespoke
-  // `handleFormSubmit`'s condition exactly, matching renderFooter()'s own condition for when a
-  // real `type="submit" form="ticket-create-form"` button exists (above) — not `view === 'review'`
-  // alone: CUSTOMER/PROJECT/CONTACT/ITEMS/DETAILS never render one, so they can never legitimately
-  // submit, implicit or explicit, and are unconditionally blocked here. HUB is different from
-  // every other non-REVIEW view — a linked submit button is in the DOM the whole time HUB is
-  // showing (it lives in the modal's footer, a sibling of this <form>, wired via `form=` — see
-  // Modal.jsx), so HUB never satisfies "no submit button" and was never part of this bug class;
-  // narrowing this gate to review-only would silently turn that real, working button into a dead
-  // click instead of closing a hole that was never open on HUB. `canSubmit` is a RESTRICTION and
-  // never a permission (see SafeForm.jsx's header): SafeForm's submitter guard still applies on
-  // top of it, so BOTH must pass. That AND costs this form nothing — HUB/REVIEW's footer button is
-  // real and always in the DOM whenever `canSubmit` is true — but it does mean the happy-path
-  // tests have to carry a real submitter rather than dispatching a bare `fireEvent.submit(form)`;
-  // see `submitForm()` in TicketCreateModal.test.jsx.
+  // `canSubmit={view === 'hub'}` matches renderFooter()'s own condition for when a real
+  // `type="submit" form="ticket-create-form"` button exists (above). It was
+  // `view === 'hub' || view === 'review'` until the ตรวจสอบ & บันทึก step was removed; HUB is now
+  // the only view that renders a submitter, and every other view is unconditionally blocked here.
+  // The protection is unchanged in strength — the set of submitting views shrank by one, and the
+  // one that went away is the one that no longer exists.
+  //
+  // HUB was never part of this bug class: a linked submit button is in the DOM the whole time HUB
+  // is showing (it lives in the modal's footer, a sibling of this <form>, wired via `form=` — see
+  // Modal.jsx), so HUB never satisfies "no submit button". Narrowing this gate further would
+  // silently turn that real, working button into a dead click instead of closing a hole.
+  // `canSubmit` is a RESTRICTION and never a permission (see SafeForm.jsx's header): SafeForm's
+  // submitter guard still applies on top of it, so BOTH must pass. That AND costs this form
+  // nothing — HUB's footer button is real and always in the DOM whenever `canSubmit` is true — but
+  // it does mean the happy-path tests have to carry a real submitter rather than dispatching a
+  // bare `fireEvent.submit(form)`; see `submitForm()` in TicketCreateModal.test.jsx.
 
   return (
     <Modal
@@ -1667,14 +1653,23 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         our aria-wired per-field errors and scroll-to-first-invalid below
         would never run for exactly the case they exist to handle.
       */}
-      <SafeForm id="ticket-create-form" onSubmit={submit} canSubmit={view === 'hub' || view === 'review'} noValidate>
-        {view === 'hub' && renderHub()}
-        {view === 'customer' && renderCustomerView()}
-        {view === 'project' && renderProjectView()}
-        {view === 'contact' && renderContactView()}
-        {view === 'items' && renderItemsView()}
-        {view === 'details' && renderDetailsView()}
-        {view === 'review' && renderReviewView()}
+      <SafeForm id="ticket-create-form" onSubmit={submit} canSubmit={view === 'hub'} noValidate>
+        {/*
+          min-height keeps the panel one consistent size across steps. Modal's body is
+          `overflow-auto` with no floor, so a short view — ลูกค้า is a single search field — used to
+          collapse the whole dialog to a few centimetres and then CLIP its own results dropdown at
+          the body's scroll edge (reported from UAT: "the modal when selecting ลูกค้า is very
+          small", with the company list cut mid-row). 26rem clears SearchSelect's 380px dropdown
+          with room to spare, and the body still scrolls normally on a short viewport.
+        */}
+        <div className="min-h-[26rem]">
+          {view === 'hub' && renderHub()}
+          {view === 'customer' && renderCustomerView()}
+          {view === 'project' && renderProjectView()}
+          {view === 'contact' && renderContactView()}
+          {view === 'items' && renderItemsView()}
+          {view === 'details' && renderDetailsView()}
+        </div>
       </SafeForm>
     </Modal>
   );
