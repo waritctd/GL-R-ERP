@@ -68,7 +68,7 @@ Testcontainers is unavailable and the `TEST_DB_URL` path was used instead).
 | `cd frontend && npm run lint` | ✅ clean, exit 0 |
 | `cd frontend && npm test` | ✅ **134 files / 1581 tests passed**, 102s |
 | `cd frontend && npm run build` | ✅ built in 629ms |
-| `cd backend && ./mvnw -B test -Dtest='!*IntegrationTest' -Dtest.fork.count=1` | ⚠️ **1287 tests, 4 failures, 0 errors, 2 skipped** — all four are PDF font substitution, see below |
+| `cd backend && ./mvnw -B test -Dtest='!*IntegrationTest' -Dtest.fork.count=1` | ⚠️ **1287 tests, 4 failures, 0 errors, 2 skipped** — all four are PDF font substitution and **local-only; CI passes them**, see below |
 | `cd backend && ./mvnw -B clean verify` | ⏸️ **not completed** — runs correctly but is impractically slow on this path, see below |
 | `cd frontend && npm run test:e2e` | ✅ **95 tests pass.** 3 need `--timeout` raised above the 30s default on slow hardware — see §3.1 |
 
@@ -95,14 +95,21 @@ Recorded because none of them is a code defect and all three look like one:
      missing and `soffice` answers `source file could not be loaded` **while still exiting 0**, so
      `LibreOfficePdfConverter`'s exit-code check passes and it fails later on the absent PDF.
      Installing `libreoffice-calc` took this from 11 errors to 4 failures.
-   - The remaining 4 are **font substitution**, and they are not local-only. The renderers assert
-     on extracted text, and with substitute fonts the extraction gains spurious spaces
-     (`"Pat ern"` for `"Pattern"`, `"ฝ่ าย"` for `"ฝ่าย"`). `backend/Dockerfile` is explicit that
-     the required families (Angsana/Browallia/Cordia New, Tahoma, Arial, Calibri, Cambria) are
-     proprietary, git-ignored, and that **nothing currently populates `backend/fonts/` on Render** —
-     the build warns and continues. So the deployed service renders customer-facing quotations and
-     deposit notices in substitute fonts too. That is a business question, not just a test failure;
-     it is item 8 in §6.
+   - The remaining 4 are **font substitution, and they are local-only.** The renderers assert on
+     extracted text, and this container's substitutes shift the metrics enough to insert spurious
+     spaces (`"Pat ern"` for `"Pattern"`, `"ฝ่ าย"` for `"ฝ่าย"`) — it has just 12 Thai-capable
+     faces (Loma, FreeSerif, Unifont). **CI passes these same tests**, because `backend-ci.yml`
+     installs `libreoffice-calc` (so they do not self-skip) and the runner substitutes differently.
+     `build-and-test` is consistently green on `main`.
+
+     Read that carefully, because the useful conclusion is the opposite of the obvious one: the
+     renderer tests **pass without the licensed fonts**, so they are not a detector for the real
+     problem. And there is a real problem — `backend/Dockerfile` states the required families
+     (Angsana/Browallia/Cordia New, Tahoma, Arial, Calibri, Cambria) are proprietary, git-ignored,
+     and that **nothing currently populates `backend/fonts/` on Render**; the build warns and
+     continues. `backend/fonts/README.md` records the consequence: the substitute is wider and
+     **header text overflows the certification badges** on customer-facing documents. Tracked as
+     **#666**; it is item 8 in §6.
 
 ### 3.1 Real-stack e2e — the suite that carries the authorization evidence
 
@@ -396,7 +403,7 @@ Ordered by what blocks a sign-off soonest.
 | 5 | **Confirm which backend serves the UAT database.** | `render.yaml` declares **one** service, and its documented configuration (`prod,demo` + demo Flyway locations) matches the `GL&R` showcase project, not UAT. Whatever points at UAT is not described in the repo. |
 | 6 | **Decide and publish the supported browser set.** | Testers need to know what to file a bug against. Today only Chromium has ever been run. |
 | 7 | **Confirm the deployed UAT build is the intended commit,** and that `GET /actuator/health` answers. | `autoDeploy: false`; not checkable from a checkout. |
-| 8 | **Decide whether customer-facing PDFs may ship in substitute fonts.** | `backend/fonts/` is unpopulated on Render, so quotations and deposit notices — documents that go to customers — render in whatever LibreOffice substitutes. The build warns and continues by design. This is a business call, not a bug: either supply the licensed fonts to the image or accept the substituted output. |
+| 8 | **Decide whether customer-facing PDFs may ship in substitute fonts** (**#666**). | `backend/fonts/` is unpopulated on Render, so quotations and deposit notices render in whatever LibreOffice substitutes; `backend/fonts/README.md` records that the substitute is wider and overflows the certification badges. Nothing catches it: the build warns and continues, and the renderer tests pass under substitution in CI. Either supply the licensed fonts to the image or accept the output deliberately. |
 | 9 | **Brief testers on the login rate limiter.** | See below — this will otherwise eat a UAT session. |
 
 ### Item 3 in full — why `validate-on-migrate` is not a single switch
