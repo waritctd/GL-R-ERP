@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
@@ -127,7 +128,10 @@ class NotificationServiceTest {
 
         @Bean
         NotificationEmailService notificationEmailService(JavaMailSender mailer) {
-            return new NotificationEmailService(mailer, "noreply@test.glr");
+            // Non-blank username/password: these tests assert that NotificationService actually
+            // dispatches to the mailer, and an unconfigured service short-circuits before it ever
+            // calls send() — which would make every "email was sent" assertion here vacuous.
+            return new NotificationEmailService(mailer, "noreply@test.glr", "noreply@test.glr", "test-password");
         }
 
         @Bean
@@ -144,5 +148,36 @@ class NotificationServiceTest {
         Executor taskExecutor() {
             return new SyncTaskExecutor();
         }
+    }
+
+    /**
+     * Blank credentials must DROP the message rather than hand it to the mailer.
+     *
+     * This is the case that actually happened on the hosted service: spring.mail.username/password
+     * default to blank, neither was declared in render.yaml, and with mail.smtp.auth=true every
+     * send failed — invisibly, because {@link NotificationEmailService#send} catches everything
+     * and logs. Constructed directly here rather than through the shared TestConfig, precisely
+     * because the whole point is the *other* configuration.
+     */
+    @Test
+    void unconfiguredMailDropsTheMessageInsteadOfHandingItToTheMailer() {
+        JavaMailSender unusedMailer = mock(JavaMailSender.class);
+        NotificationEmailService unconfigured =
+            new NotificationEmailService(unusedMailer, "noreply@test.glr", "", "");
+
+        assertThat(unconfigured.isConfigured()).isFalse();
+
+        unconfigured.send(7L, "someone@example.com", "subject", "body");
+
+        // The mailer is never touched. Asserted wrong-way-round on purpose: "it logged an error"
+        // is weak, but "it did not attempt an SMTP round trip it cannot complete" is the behaviour.
+        verifyNoInteractions(unusedMailer);
+    }
+
+    @Test
+    void configuredMailReportsItselfConfigured() {
+        // Guards the negative above from decaying into "isConfigured() always returns false",
+        // which would make that test pass for the wrong reason.
+        assertThat(emailService.isConfigured()).isTrue();
     }
 }
