@@ -297,7 +297,7 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
             new CreateCostingRequest("chain draft", null), importActor);
         assertThat(costingDraft.status()).isEqualTo(PricingCostingStatus.DRAFT);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.COSTING_IN_PROGRESS);
+            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
 
         costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 1"), importActor);
         PricingCostingDto calculated = costingService.recalculate(costingDraft.id(),
@@ -492,7 +492,7 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
             new CreateCostingRequest("v2", null), importActor);
         assertThat(costingV2.versionNo()).isEqualTo(2);
         assertThat(pricingRequestService.get(fixture.pricingRequestId(), importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.COSTING_IN_PROGRESS);
+            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
         costingService.recalculate(costingV2.id(), new RecalculateCostingRequest("v2 pass 1"), importActor);
         PricingCostingDto costingV2Calculated = costingService.recalculate(costingV2.id(),
             new RecalculateCostingRequest("v2 pass 2"), importActor);

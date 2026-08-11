@@ -88,7 +88,7 @@ class FactoryQuoteServiceAttachmentTest {
     void rejectsWhenTheQuoteItselfIsReadyForCosting() {
         stubAttachment(10L, 20L, null);
         stubQuote(20L, 30L, FactoryQuoteStatus.READY_FOR_COSTING);
-        stubPricingRequest(30L, PricingRequestStatus.COSTING_IN_PROGRESS);
+        stubPricingRequest(30L, PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
 
         assertConflict(() -> service.deleteAttachment(10L, "reason", importActor));
         verify(quotes, never()).tombstoneAttachment(anyLong(), anyLong(), anyString());
@@ -98,7 +98,7 @@ class FactoryQuoteServiceAttachmentTest {
     void rejectsWhenReferencedByASubmittedCosting() {
         stubAttachment(10L, 20L, null);
         stubQuote(20L, 30L, FactoryQuoteStatus.RESPONSE_RECEIVED);
-        stubPricingRequest(30L, PricingRequestStatus.COSTING_IN_PROGRESS);
+        stubPricingRequest(30L, PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
         when(quotes.existsSubmittedCostingReferencingQuote(20L)).thenReturn(true);
 
         assertConflict(() -> service.deleteAttachment(10L, "reason", importActor));

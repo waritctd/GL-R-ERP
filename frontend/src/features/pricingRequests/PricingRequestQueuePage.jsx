@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
@@ -12,11 +12,46 @@ import { SalesTabs } from '../sales/SalesTabs.jsx';
 import { formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
 import { canPickupPricingRequest, pricingRequestRecipientLabel } from './pricingRequestMeta.js';
 
-// Queue-relevant statuses only — DRAFT is the sales rep's private scratchpad
-// (never submitted, nothing for Import to act on) and CANCELLED requests have
-// no further action, so neither is a useful default filter here. "ทั้งหมด"
-// still lets import/ceo/sales_manager see the full picture when needed.
-const STATUS_FILTERS = ['', 'SUBMITTED', 'IMPORT_REVIEWING', 'MORE_INFO_REQUIRED', 'DRAFT', 'CANCELLED'];
+// Import's three meaningful stages (owner ruling, 2026-08-11) — รับเรื่อง,
+// เจรจาราคากับโรงงาน, รอ CEO อนุมัติราคา — bracketed by the two ends of the
+// queue: SUBMITTED (nothing has picked it up yet) and CANCELLED (dead, but
+// still needs to be findable). Deliberately absent: DRAFT, the sales rep's
+// private scratchpad, which is never Import's work; and MORE_INFO_REQUIRED,
+// whose ขอข้อมูลเพิ่มเติม feature was removed from the product entirely.
+// "ทั้งหมด" still lets import/ceo/sales_manager see the full picture.
+//
+// `statuses` is a LIST, not a string, because เจรจาราคากับโรงงาน still has to
+// match TWO stored values. V140 merged COSTING_IN_PROGRESS into
+// AWAITING_FACTORY_RESPONSE and dropped it from the DB constraint, but rows sit
+// in the old value for the whole window between this code deploying and the
+// migration running — so the chip keeps matching both ON PURPOSE. Do not
+// "simplify" it to a single status: doing so makes those rows unreachable from
+// the chip that is supposed to find them, and the failure is invisible in tests
+// because every fixture is already on the new value.
+//
+// GET /api/pricing-requests takes a SINGLE `status` value
+// (PricingRequestController#list -> PricingRequestService.list, which 400s on
+// anything that is not one valid status — and COSTING_IN_PROGRESS is no longer
+// one), so a two-status chip cannot be expressed server-side at all. It
+// therefore fetches everything (status=undefined) and narrows the rows below.
+// Once V140 has run everywhere, this entry can collapse to a single-value chip
+// and the client-side filter can go with it.
+//
+// Labels are read from pricingRequestStatusLabel (utils/format.js), the
+// canonical source, so a chip can never drift from the badge on the row it
+// filters to. Only the "all" chip carries its own label.
+const STATUS_FILTERS = [
+  { key: 'ALL', label: 'ทั้งหมด', statuses: [] },
+  { key: 'SUBMITTED', statuses: ['SUBMITTED'] },
+  { key: 'IMPORT_REVIEWING', statuses: ['IMPORT_REVIEWING'] },
+  { key: 'FACTORY_NEGOTIATION', statuses: ['AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS'] },
+  { key: 'READY_FOR_CEO_REVIEW', statuses: ['READY_FOR_CEO_REVIEW'] },
+  { key: 'CANCELLED', statuses: ['CANCELLED'] },
+];
+
+function statusFilterLabel(filter) {
+  return filter.label ?? pricingRequestStatusLabel(filter.statuses[0]).label;
+}
 
 const COLUMNS = [
   {
@@ -128,13 +163,23 @@ function QueueCard({ row, onPickup, canPickup, pickingUp }) {
  */
 export function PricingRequestQueuePage({ user, showToast }) {
   const queryClient = useQueryClient();
-  const [status, setStatus] = useState('SUBMITTED');
+  const [filterKey, setFilterKey] = useState('SUBMITTED');
+  const filter = STATUS_FILTERS.find((f) => f.key === filterKey) ?? STATUS_FILTERS[0];
+
+  // One status -> the API filters it server-side. Zero (ทั้งหมด) or two
+  // (เจรจาราคากับโรงงาน) -> fetch everything and narrow below; see STATUS_FILTERS
+  // for why the two-status chip cannot be pushed down to the query.
+  const queryStatus = filter.statuses.length === 1 ? filter.statuses[0] : undefined;
 
   const queueQuery = useQuery({
-    queryKey: queryKeys.pricingRequestQueue({ status, activeOnly: true }),
-    queryFn: () => api.pricingRequests.queue({ status: status || undefined, activeOnly: true }).then((r) => r.items ?? []),
+    queryKey: queryKeys.pricingRequestQueue({ status: queryStatus, activeOnly: true }),
+    queryFn: () => api.pricingRequests.queue({ status: queryStatus, activeOnly: true }).then((r) => r.items ?? []),
   });
-  const rows = queueQuery.data ?? [];
+  const rows = useMemo(() => {
+    const items = queueQuery.data ?? [];
+    if (filter.statuses.length < 2) return items;
+    return items.filter((row) => filter.statuses.includes(row.status));
+  }, [queueQuery.data, filter]);
 
   const pickupMutation = useMutation({
     mutationFn: (id) => api.pricingRequests.pickup(id),
@@ -187,18 +232,18 @@ export function PricingRequestQueuePage({ user, showToast }) {
 
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-3">
         <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">สถานะ</span>
-        {STATUS_FILTERS.map((value) => {
-          const active = status === value;
-          const label = value ? pricingRequestStatusLabel(value).label : 'ทั้งหมด';
+        {STATUS_FILTERS.map((option) => {
+          const active = filterKey === option.key;
+          const label = statusFilterLabel(option);
           return (
             <button
-              key={value || 'all'}
+              key={option.key}
               type="button"
               aria-pressed={active}
               className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
                 active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
               }`}
-              onClick={() => setStatus(value)}
+              onClick={() => setFilterKey(option.key)}
             >
               {label}
             </button>

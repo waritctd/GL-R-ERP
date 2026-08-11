@@ -147,10 +147,22 @@ export function pricingRequestStatusLabel(status) {
   const map = {
     DRAFT: { label: 'แบบร่าง', tone: 'neutral' },
     SUBMITTED: { label: 'รอฝ่ายนำเข้ารับเรื่อง', tone: 'warning' },
-    IMPORT_REVIEWING: { label: 'ฝ่ายนำเข้าตรวจคำขอราคา', tone: 'info' },
-    AWAITING_FACTORY_RESPONSE: { label: 'รอราคาโรงงาน', tone: 'warning' },
-    COSTING_IN_PROGRESS: { label: 'กำลังร่างต้นทุน', tone: 'info' },
-    READY_FOR_CEO_REVIEW: { label: 'ส่งให้ CEO ตรวจแล้ว', tone: 'success' },
+    // Import's workflow was simplified to three meaningful stages (owner ruling,
+    // 2026-08-11): รับเรื่อง -> เจรจาราคากับโรงงาน -> รอ CEO อนุมัติราคา.
+    IMPORT_REVIEWING: { label: 'รับเรื่อง', tone: 'info' },
+    // AWAITING_FACTORY_RESPONSE now covers costing too: V140 merged COSTING_IN_PROGRESS
+    // into it and dropped it from the DB constraint. COSTING_IN_PROGRESS is kept here
+    // ON PURPOSE, mapped to the SAME label and tone, for two reasons: rows still sit in
+    // it during the window between deploying this code and V140 running, and historical
+    // pricing_request_event rows keep the old value forever (V140 deliberately does not
+    // rewrite history). Do not re-split them, and do not delete this entry — without it
+    // such a row falls through to the raw enum string below.
+    AWAITING_FACTORY_RESPONSE: { label: 'เจรจาราคากับโรงงาน', tone: 'info' },
+    COSTING_IN_PROGRESS: { label: 'เจรจาราคากับโรงงาน', tone: 'info' },
+    // Wording is now "waiting on the CEO", not "Import has sent it" — tone follows
+    // SUBMITTED's (the queue's other waiting-on-someone stage) rather than staying
+    // 'success', which would paint a pending approval green.
+    READY_FOR_CEO_REVIEW: { label: 'รอ CEO อนุมัติราคา', tone: 'warning' },
     // Step 3 (CEO Selling Price Decision).
     CEO_REVIEWING: { label: 'CEO กำลังพิจารณาราคาขาย', tone: 'info' },
     APPROVED_FOR_QUOTATION: { label: 'อนุมัติราคาขายแล้ว', tone: 'success' },
@@ -159,6 +171,9 @@ export function pricingRequestStatusLabel(status) {
     // QUOTATION_ACCEPTED; QUOTATION_ISSUED fell back to the raw status string before).
     QUOTATION_ISSUED: { label: 'ออกใบเสนอราคาลูกค้าแล้ว', tone: 'success' },
     QUOTATION_ACCEPTED: { label: 'ลูกค้ายอมรับใบเสนอราคาแล้ว', tone: 'success' },
+    // Retired by V140 along with the ขอข้อมูลเพิ่มเติม feature. Kept for the same two
+    // reasons as COSTING_IN_PROGRESS above — the deploy-before-migration window, and
+    // historical event rows — not because anything can still reach this status.
     MORE_INFO_REQUIRED: { label: 'รอข้อมูลเพิ่มเติม', tone: 'warning' },
     SUPERSEDED: { label: 'ถูกแทนที่แล้ว', tone: 'neutral' },
     CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },

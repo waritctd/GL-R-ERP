@@ -32,8 +32,6 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.CancelPricingRequestRe
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CustomerChangeRevisionRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
-import th.co.glr.hr.pricingrequest.PricingRequestRequests.RequestMoreInformationRequest;
-import th.co.glr.hr.pricingrequest.PricingRequestRequests.RespondMoreInformationRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestAttachmentRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 import th.co.glr.hr.ticket.DealLifecycle;
@@ -42,8 +40,7 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
 
 /**
  * Workflow + authz for the PricingRequest aggregate: createDraft, get, listForTicket,
- * list (the Import queue), updateDraft, submit, pickup, requestInformation,
- * respondInformation, cancel, plus the internal {@link #cancelOpenForTicket} cascade
+ * list (the Import queue), updateDraft, submit, pickup, cancel, plus the internal {@link #cancelOpenForTicket} cascade
  * invoked by {@code TicketService} when a deal reaches a terminal lifecycle state.
  *
  * <p>Reads {@link TicketRepository} for deal ownership/lifecycle/scoping context
@@ -61,10 +58,6 @@ public class PricingRequestService {
     // two lists in sync by inspection, not by sharing a mutable reference.
     private static final Set<String> SALES_ROLES  = Set.of("sales");
     private static final Set<String> IMPORT_ROLES = Set.of("import");
-    private static final Set<String> INFORMATION_REQUEST_STATUSES = Set.of(
-        PricingRequestStatus.IMPORT_REVIEWING,
-        PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
-        PricingRequestStatus.COSTING_IN_PROGRESS);
     // Mirrors TicketService.VIEWER_ROLES: who may read a pricing request at all.
     // sales_manager stays read-only oversight here too — never add it to
     // SALES_ROLES/IMPORT_ROLES.
@@ -74,14 +67,17 @@ public class PricingRequestService {
     private static final int CANCEL_MAX_ATTEMPTS = 3;
     /**
      * Statuses in which Sales may upload/delete a Pricing Request attachment (V69, review
-     * remediation COMMIT 4). A DRAFT is the rep's own scratchpad; MORE_INFO_REQUIRED is the one
-     * other state where Sales is actively expected to add supporting material in response to
-     * Import's request. Once past those, the request has moved into Import/CEO territory and its
-     * attachment set should stop changing out from under whatever email draft or costing review
-     * is already in flight.
+     * remediation COMMIT 4). A DRAFT is the rep's own scratchpad. Once past it, the request has
+     * moved into Import/CEO territory and its attachment set should stop changing out from under
+     * whatever email draft or costing review is already in flight.
+     *
+     * <p>V140 narrowed this from {DRAFT, MORE_INFO_REQUIRED} to {DRAFT} — a consequence of
+     * removing the ขอข้อมูลเพิ่มเติม round-trip, not a separate decision. That was the one state
+     * where Sales was expected to add material AFTER submitting; with it gone, Sales attaches
+     * while drafting or creates a revision.
      */
     private static final Set<String> ATTACHMENT_EDITABLE_STATUSES =
-        Set.of(PricingRequestStatus.DRAFT, PricingRequestStatus.MORE_INFO_REQUIRED);
+        Set.of(PricingRequestStatus.DRAFT);
 
     private final PricingRequestRepository requests;
     private final TicketRepository tickets;
@@ -346,70 +342,10 @@ public class PricingRequestService {
     }
 
     @Transactional
-    public PricingRequestDetailDto requestInformation(long id, RequestMoreInformationRequest request, UserPrincipal actor) {
-        requireRole(actor, IMPORT_ROLES);
-        PricingRequestSummaryDto summary = requireViewable(id, actor);
-        if (!INFORMATION_REQUEST_STATUSES.contains(summary.status())) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "ไม่สามารถขอข้อมูลเพิ่มเติมได้จากสถานะ '" + summary.status() + "'");
-        }
-        TicketSummaryDto ticket = requireTicket(summary.ticketId());
-        requireActive(ticket);
-        int rows = requests.requestMoreInformation(id, summary.status());
-        if (rows == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
-        }
-        requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
-            PricingRequestEventKind.MORE_INFO_REQUESTED, summary.status(),
-            PricingRequestStatus.MORE_INFO_REQUIRED, request.message(), toDueDateMetadataJson(request.dueDate()));
-        notifications.notifyEmployeeForPricingRequest(summary.requestedById(), summary.id(), "MORE_INFO_REQUIRED",
-            "คำขอราคา " + summary.requestCode() + " ต้องการข้อมูลเพิ่มเติม");
-        notifyCeo(summary, PricingRequestEventKind.MORE_INFO_REQUESTED,
-            "คำขอราคา " + summary.requestCode() + " ถูกขอข้อมูลเพิ่มเติมจาก Sales");
-        return detail(id);
-    }
-
-    @Transactional
-    public PricingRequestDetailDto respondInformation(long id, RespondMoreInformationRequest request, UserPrincipal actor) {
-        requireRole(actor, SALES_ROLES);
-        PricingRequestSummaryDto summary = requireViewable(id, actor);
-        if (summary.ticketCreatedById() != actor.id()) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
-        }
-        if (!PricingRequestStatus.MORE_INFO_REQUIRED.equals(summary.status())) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "ต้องเป็นคำขอราคาที่อยู่ในสถานะ 'MORE_INFO_REQUIRED' เท่านั้น (สถานะปัจจุบัน: '" + summary.status() + "')");
-        }
-        TicketSummaryDto ticket = requireTicket(summary.ticketId());
-        requireActive(ticket);
-        String resumeStatus = requests.findResumeStatus(id)
-            .filter(INFORMATION_REQUEST_STATUSES::contains)
-            .orElse(PricingRequestStatus.IMPORT_REVIEWING);
-        int rows = requests.resumeFromMoreInformation(id, resumeStatus);
-        if (rows == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
-        }
-        requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
-            PricingRequestEventKind.MORE_INFO_RESPONDED, PricingRequestStatus.MORE_INFO_REQUIRED,
-            resumeStatus, request.response(), null);
-        // Guard against a null assignee: NotificationRepository.notifyEmployee takes
-        // a primitive long, not a Long, so this cannot be skipped by a null check
-        // inside the call itself. Should not happen once a request has been through
-        // pickup(), but a defensive check here costs nothing.
-        if (summary.assignedImportId() != null) {
-            notifications.notifyEmployeeForPricingRequest(summary.assignedImportId(), summary.id(), "MORE_INFO_RESPONDED",
-                "คำขอราคา " + summary.requestCode() + " ได้รับข้อมูลเพิ่มเติมแล้ว");
-        }
-        notifyCeo(summary, PricingRequestEventKind.MORE_INFO_RESPONDED,
-            "คำขอราคา " + summary.requestCode() + " ได้รับข้อมูลเพิ่มเติมจาก Sales");
-        return detail(id);
-    }
-
-    @Transactional
     public PricingRequestDetailDto cancel(long id, CancelPricingRequestRequest request, UserPrincipal actor) {
         PricingRequestSummaryDto summary = requireViewable(id, actor);
-        // Deliberately NO requireTicket/requireActive here (unlike updateDraft/
-        // requestInformation/respondInformation): a request on a dead deal
+        // Deliberately NO requireTicket/requireActive here (unlike updateDraft): a
+        // request on a dead deal
         // (ON_HOLD/DORMANT/etc.) must still be cancellable — that is the one
         // mutation that should always be available on a stalled deal, not blocked
         // by it. Do not add a lifecycle gate to this method.
@@ -431,8 +367,8 @@ public class PricingRequestService {
         requests.cancelOpenStep2Children(id, request.reason(), actor.id());
         // Step 5 (V75, review follow-up): defensive, currently unreachable in practice —
         // PricingRequestStatus.canTransition only allows cancel() from pre-costing-submission
-        // statuses (DRAFT/SUBMITTED/IMPORT_REVIEWING/AWAITING_FACTORY_RESPONSE/
-        // COSTING_IN_PROGRESS/MORE_INFO_REQUIRED), none of which can co-exist with an open
+        // statuses (DRAFT/SUBMITTED/IMPORT_REVIEWING/AWAITING_FACTORY_RESPONSE — V140 retired
+        // COSTING_IN_PROGRESS and MORE_INFO_REQUIRED), none of which can co-exist with an open
         // pricing_decision (that requires READY_FOR_CEO_REVIEW+). Kept anyway, at zero cost (a
         // no-op UPDATE today), so a future widening of that map cannot silently reintroduce
         // design correction 1's bug. See cancelOpenForTicket below for the path that DOES need
@@ -508,8 +444,9 @@ public class PricingRequestService {
 
     // --- Pricing Request attachments (V69, review remediation COMMIT 4) ---
     //
-    // Sales may optionally attach supporting files to the Pricing Request while it is DRAFT or
-    // MORE_INFO_REQUIRED; zero attachments remains valid (no gate anywhere requires at least
+    // Sales may optionally attach supporting files to the Pricing Request while it is DRAFT
+    // (see ATTACHMENT_EDITABLE_STATUSES, narrowed to DRAFT alone by V140); zero attachments
+    // remains valid (no gate anywhere requires at least
     // one). Import can mark which of those to include when it sends the factory email —
     // FactoryQuoteService.attemptSend reads that flag fresh at actual-send time, not here.
     //
@@ -528,7 +465,7 @@ public class PricingRequestService {
         }
         if (!ATTACHMENT_EDITABLE_STATUSES.contains(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "แนบไฟล์ได้เฉพาะเมื่อคำขอราคาอยู่ในสถานะ DRAFT หรือ MORE_INFO_REQUIRED เท่านั้น");
+                "แนบไฟล์ได้เฉพาะเมื่อคำขอราคายังเป็นแบบร่างเท่านั้น");
         }
         TicketSummaryDto ticket = requireTicket(summary.ticketId());
         requireActive(ticket);
@@ -578,7 +515,7 @@ public class PricingRequestService {
         }
         if (!ATTACHMENT_EDITABLE_STATUSES.contains(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ลบไฟล์แนบได้เฉพาะเมื่อคำขอราคาอยู่ในสถานะ DRAFT หรือ MORE_INFO_REQUIRED เท่านั้น");
+                "ลบไฟล์แนบได้เฉพาะเมื่อคำขอราคายังเป็นแบบร่างเท่านั้น");
         }
         String path = requests.findAttachmentFilePath(attachmentId);
         requests.deleteAttachment(attachmentId);
