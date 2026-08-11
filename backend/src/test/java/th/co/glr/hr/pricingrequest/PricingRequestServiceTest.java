@@ -1262,7 +1262,7 @@ class PricingRequestServiceTest {
      * {@code PricingRequestFlowIntegrationTest} for that behavior. A non-draft status isolates
      * THIS method's own explicit ownership re-check.
      *
-     * <p>The status used to be MORE_INFO_REQUIRED, which V139 retired; AWAITING_FACTORY_RESPONSE
+     * <p>The status used to be MORE_INFO_REQUIRED, which V140 retired; AWAITING_FACTORY_RESPONSE
      * replaces it and preserves the property that matters. The 403 asserted here is genuinely the
      * ownership guard's and not the status guard's: uploadAttachment checks ownership BEFORE
      * ATTACHMENT_EDITABLE_STATUSES, so a status guard firing first would surface as a 409 and turn

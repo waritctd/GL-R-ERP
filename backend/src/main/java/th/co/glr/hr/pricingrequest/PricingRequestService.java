@@ -71,7 +71,7 @@ public class PricingRequestService {
      * moved into Import/CEO territory and its attachment set should stop changing out from under
      * whatever email draft or costing review is already in flight.
      *
-     * <p>V139 narrowed this from {DRAFT, MORE_INFO_REQUIRED} to {DRAFT} — a consequence of
+     * <p>V140 narrowed this from {DRAFT, MORE_INFO_REQUIRED} to {DRAFT} — a consequence of
      * removing the ขอข้อมูลเพิ่มเติม round-trip, not a separate decision. That was the one state
      * where Sales was expected to add material AFTER submitting; with it gone, Sales attaches
      * while drafting or creates a revision.
@@ -367,7 +367,7 @@ public class PricingRequestService {
         requests.cancelOpenStep2Children(id, request.reason(), actor.id());
         // Step 5 (V75, review follow-up): defensive, currently unreachable in practice —
         // PricingRequestStatus.canTransition only allows cancel() from pre-costing-submission
-        // statuses (DRAFT/SUBMITTED/IMPORT_REVIEWING/AWAITING_FACTORY_RESPONSE — V139 retired
+        // statuses (DRAFT/SUBMITTED/IMPORT_REVIEWING/AWAITING_FACTORY_RESPONSE — V140 retired
         // COSTING_IN_PROGRESS and MORE_INFO_REQUIRED), none of which can co-exist with an open
         // pricing_decision (that requires READY_FOR_CEO_REVIEW+). Kept anyway, at zero cost (a
         // no-op UPDATE today), so a future widening of that map cannot silently reintroduce
@@ -445,7 +445,7 @@ public class PricingRequestService {
     // --- Pricing Request attachments (V69, review remediation COMMIT 4) ---
     //
     // Sales may optionally attach supporting files to the Pricing Request while it is DRAFT
-    // (see ATTACHMENT_EDITABLE_STATUSES, narrowed to DRAFT alone by V139); zero attachments
+    // (see ATTACHMENT_EDITABLE_STATUSES, narrowed to DRAFT alone by V140); zero attachments
     // remains valid (no gate anywhere requires at least
     // one). Import can mark which of those to include when it sends the factory email —
     // FactoryQuoteService.attemptSend reads that flag fresh at actual-send time, not here.

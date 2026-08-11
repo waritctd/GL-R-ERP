@@ -583,7 +583,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const pricingRequestAttachments = attachmentsQuery.data ?? [];
   // Mirrors PricingRequestService.ATTACHMENT_EDITABLE_STATUSES: Sales may only upload/delete its
   // own Pricing Request attachments while the request is DRAFT, and only on the request it owns.
-  // V139 narrowed that set from {DRAFT, MORE_INFO_REQUIRED} to {DRAFT} when the ขอข้อมูลเพิ่มเติม
+  // V140 narrowed that set from {DRAFT, MORE_INFO_REQUIRED} to {DRAFT} when the ขอข้อมูลเพิ่มเติม
   // round-trip left the product. Offering the controls on any wider set would just produce a 409
   // from uploadAttachment/deleteAttachment.
   const canEditPricingRequestAttachments = isSales(user)

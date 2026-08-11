@@ -47,7 +47,7 @@ describe('canTransition', () => {
     expect(canTransition('DRAFT', 'CANCELLED')).toBe(true);
     expect(canTransition('DRAFT', 'DRAFT')).toBe(false);
     expect(canTransition('SUBMITTED', 'IMPORT_REVIEWING')).toBe(true);
-    // V139: Import's three states, and the two retired ones must now be unreachable.
+    // V140: Import's three states, and the two retired ones must now be unreachable.
     expect(canTransition('IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE')).toBe(true);
     expect(canTransition('AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW')).toBe(true);
     expect(canTransition('IMPORT_REVIEWING', 'CANCELLED')).toBe(true);

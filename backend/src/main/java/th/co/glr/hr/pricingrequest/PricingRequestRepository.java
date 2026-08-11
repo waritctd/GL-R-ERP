@@ -198,8 +198,8 @@ public class PricingRequestRepository {
                    -- IMPORT_REVIEWING must preserve the ORIGINAL pickup time, or the
                    -- "how long has Import held this" metric resets. The round-trip that
                    -- used to re-enter IMPORT_REVIEWING (MORE_INFO_REQUIRED -> resume) was
-                   -- retired by V139, so today only pickup reaches this branch and the
-                   -- COALESCE is belt-and-braces — keep it: V139's own data migration
+                   -- retired by V140, so today only pickup reaches this branch and the
+                   -- COALESCE is belt-and-braces — keep it: V140's own data migration
                    -- relies on exactly these semantics when it resumes parked rows.
                    picked_up_at = CASE WHEN :next = 'IMPORT_REVIEWING'
                                        THEN COALESCE(picked_up_at, now()) ELSE picked_up_at END,

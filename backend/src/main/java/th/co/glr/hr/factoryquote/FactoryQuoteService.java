@@ -279,7 +279,7 @@ public class FactoryQuoteService {
         }
 
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
-        // V139 merged COSTING_IN_PROGRESS into AWAITING_FACTORY_RESPONSE, so the only status
+        // V140 merged COSTING_IN_PROGRESS into AWAITING_FACTORY_RESPONSE, so the only status
         // still needing promotion here is IMPORT_REVIEWING.
         if (PricingRequestStatus.IMPORT_REVIEWING.equals(summary.status())) {
             int transitioned = pricingRequests.transition(summary.id(), summary.status(),

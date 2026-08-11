@@ -110,7 +110,7 @@ public final class PricingRequestDtos {
      * Sales-level supporting attachment on the Pricing Request itself (V69, review remediation
      * COMMIT 4) — distinct from a factory quote's raw supplier evidence
      * ({@code FactoryQuoteDtos.FactoryQuoteAttachmentDto}). Uploaded by Sales while the request is
-     * still {@code DRAFT} (V139 narrowed that from {@code DRAFT}/{@code MORE_INFO_REQUIRED} when
+     * still {@code DRAFT} (V140 narrowed that from {@code DRAFT}/{@code MORE_INFO_REQUIRED} when
      * the ขอข้อมูลเพิ่มเติม round-trip left the product); Import may mark {@code includeInFactoryEmail}
      * so a later factory email carries it. Deliberately has no local file path field — that stays
      * server-internal (see {@code PricingRequestRepository.PricingRequestEmailAttachmentFile}, used

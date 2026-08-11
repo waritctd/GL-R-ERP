@@ -11,7 +11,7 @@ public final class PricingRequestStatus {
      * Import is working the price with the factory — asking, negotiating, and costing. Displayed
      * throughout as "เจรจาราคากับโรงงาน".
      *
-     * <p>V139 (owner ruling 2026-08-11) MERGED the former {@code COSTING_IN_PROGRESS} into this
+     * <p>V140 (owner ruling 2026-08-11) MERGED the former {@code COSTING_IN_PROGRESS} into this
      * status. Import's workflow is now exactly three user-visible states — รับเรื่อง
      * ({@link #IMPORT_REVIEWING}), เจรจาราคากับโรงงาน (this), and รอ CEO อนุมัติราคา
      * ({@link #READY_FOR_CEO_REVIEW}) — and splitting "waiting for the factory" from "costing what
@@ -62,7 +62,7 @@ public final class PricingRequestStatus {
 
     /**
      * Exactly the set the DB's chk_pricing_request_status constraint accepts (V59+V61+V72,
-     * narrowed by V139 which dropped COSTING_IN_PROGRESS and MORE_INFO_REQUIRED).
+     * narrowed by V140 which dropped COSTING_IN_PROGRESS and MORE_INFO_REQUIRED).
      */
     public static final Set<String> VALUES = Set.of(
         DRAFT, SUBMITTED, IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE,
@@ -77,7 +77,7 @@ public final class PricingRequestStatus {
     private static final Map<String, Set<String>> ALLOWED = Map.ofEntries(
         Map.entry(DRAFT,               Set.of(SUBMITTED, CANCELLED)),
         Map.entry(SUBMITTED,           Set.of(IMPORT_REVIEWING, CANCELLED)),
-        // V139: Import's three states, in order. IMPORT_REVIEWING -> AWAITING_FACTORY_RESPONSE
+        // V140: Import's three states, in order. IMPORT_REVIEWING -> AWAITING_FACTORY_RESPONSE
         // -> READY_FOR_CEO_REVIEW. The old COSTING_IN_PROGRESS hop is gone (merged into
         // AWAITING_FACTORY_RESPONSE) and so is MORE_INFO_REQUIRED — the ขอข้อมูลเพิ่มเติม
         // round-trip was removed from the product entirely, since in practice Import and Sales

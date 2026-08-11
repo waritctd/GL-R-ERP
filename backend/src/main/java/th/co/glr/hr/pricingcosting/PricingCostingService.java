@@ -101,7 +101,7 @@ public class PricingCostingService {
             }
             return existing;
         }
-        // V139: costing no longer has a status of its own. Starting one settles the request into
+        // V140: costing no longer has a status of its own. Starting one settles the request into
         // AWAITING_FACTORY_RESPONSE (เจรจาราคากับโรงงาน) when it is not already there — i.e. when
         // Import creates a costing straight from IMPORT_REVIEWING, or reopens one the CEO returned
         // (COSTING_REVISION_REQUIRED). Both edges are in PricingRequestStatus.ALLOWED.

@@ -513,7 +513,7 @@ export function buildDemoSalesSeed() {
   });
 
   // PR5 — ticket 3 — AWAITING_FACTORY_RESPONSE (FactoryQuote RESPONSE_RECEIVED, Costing DRAFT).
-  // V139 merged COSTING_IN_PROGRESS into AWAITING_FACTORY_RESPONSE and dropped it from the DB
+  // V140 merged COSTING_IN_PROGRESS into AWAITING_FACTORY_RESPONSE and dropped it from the DB
   // constraint, so the seed moves with it — exactly what the migration does to a live row. The
   // demo state this row exists to cover (a costing in DRAFT) is unchanged; only the status the
   // request carries while that costing is open has.
@@ -701,13 +701,13 @@ export function buildDemoSalesSeed() {
 
   // PR12 — ticket 8 — IMPORT_REVIEWING.
   //
-  // This row used to seed at MORE_INFO_REQUIRED. V139 retired that status: it is no longer in
+  // This row used to seed at MORE_INFO_REQUIRED. V140 retired that status: it is no longer in
   // PricingRequestStatus.VALUES or the chk_pricing_request_status constraint, so a demo row
   // sitting in it represented a state the real backend can no longer hold. IMPORT_REVIEWING is
-  // exactly where V139's data migration sends such a row when no resume_status was recorded,
+  // exactly where V140's data migration sends such a row when no resume_status was recorded,
   // which is this row's case — so the seed now mirrors what the migration actually does.
   //
-  // The MORE_INFO_REQUESTED event below is KEPT on purpose. V139 deliberately does not rewrite
+  // The MORE_INFO_REQUESTED event below is KEPT on purpose. V140 deliberately does not rewrite
   // pricing_request_event history, and PricingRequestEventKind still accepts that kind, so a
   // demo request whose timeline shows a question once asked is faithful, not stale.
   const pr12 = makePr({
@@ -855,7 +855,7 @@ export function buildDemoSalesSeed() {
   makeDepositNotice({ id: 18, customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด' }, quotation20, { status: 'DRAFT', createdAt: daysAgoIso(4) });
 
   // PR21 — ticket 18 — AWAITING_FACTORY_RESPONSE with a CALCULATED (not yet submitted) costing.
-  // Same V139 status merge as PR5 above.
+  // Same V140 status merge as PR5 above.
   const pr21 = makePr({
     ticketId: 18, recipientType: 'OWNER', recipientLabel: 'เจ้าของศูนย์การค้า Fashion Island',
     status: 'AWAITING_FACTORY_RESPONSE', requestedBy: SALES1, assignedImport: IMPORT1,

@@ -335,7 +335,7 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
 
         pricingRequestService.submit(id, salesActor);
         pricingRequestService.pickup(id, importActor);
-        // V139: this used to walk on to MORE_INFO_REQUIRED before re-asserting the scoping below.
+        // V140: this used to walk on to MORE_INFO_REQUIRED before re-asserting the scoping below.
         // That status no longer exists, so IMPORT_REVIEWING is the post-pickup state — what the
         // block below actually cares about is that a NON-OWNER sales rep is refused once the
         // request has left DRAFT, which is equally true here.
@@ -366,7 +366,7 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
      */
     @Test
     void importCannotUploadOrDeletePricingRequestAttachments_evenWhileSalesStillCan() {
-        // V139: this used to reach MORE_INFO_REQUIRED first, because that was the one post-submit
+        // V140: this used to reach MORE_INFO_REQUIRED first, because that was the one post-submit
         // status where Sales could still attach. With that round-trip removed,
         // ATTACHMENT_EDITABLE_STATUSES is {DRAFT} — so DRAFT is now the only status where the
         // role split is observable at all, and it is where the assertion belongs. The claim is

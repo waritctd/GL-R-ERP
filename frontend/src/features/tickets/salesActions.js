@@ -72,7 +72,7 @@ export function followUpStatus(deal, todayIso = bangkokTodayIso()) {
 // the cascade below (SUBMITTED, IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE,
 // READY_FOR_CEO_REVIEW, CEO_REVIEWING, QUOTATION_ISSUED,
 // COSTING_REVISION_REQUIRED) falls through to the follow-up/activity buckets,
-// same as a deal with no pending pricing-request action at all. V139 retired
+// same as a deal with no pending pricing-request action at all. V140 retired
 // COSTING_IN_PROGRESS and MORE_INFO_REQUIRED; the latter was the one genuine
 // sales action in that list ("answer import's question"), and with the
 // ขอข้อมูลเพิ่มเติม round-trip removed there is no longer a sixth CTA bucket

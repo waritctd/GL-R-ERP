@@ -1,4 +1,4 @@
--- V139 — Import's pricing workflow collapses to THREE user-visible statuses.
+-- V140 — Import's pricing workflow collapses to THREE user-visible statuses.
 --
 -- Owner ruling 2026-08-11. Import's job is to keep Sales informed, and it needs exactly three
 -- states to do that:

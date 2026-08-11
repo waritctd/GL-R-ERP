@@ -231,7 +231,7 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
         assertThat(requests.findSummary(id).orElseThrow().assignedImportId()).isEqualTo(importA);
 
         // A second Import user attempting to claim the request on a later transition;
-        // assignedImportId must NOT change to importB. V139 retired the MORE_INFO_REQUIRED
+        // assignedImportId must NOT change to importB. V140 retired the MORE_INFO_REQUIRED
         // round-trip this used to simulate, so it walks Import's real path instead — the subject
         // is the first-writer-wins column, not which statuses it passes through.
         requests.transition(id, PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);

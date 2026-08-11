@@ -286,7 +286,7 @@ describe('PricingRequestPanel', () => {
   });
 
 
-  // V139 deleted the ขอข้อมูลเพิ่มเติม round-trip from the product — the service methods,
+  // V140 deleted the ขอข้อมูลเพิ่มเติม round-trip from the product — the service methods,
   // the API surface, the canRequestInformation/canRespondInformation predicates and both
   // modals are gone.
   //
@@ -294,7 +294,7 @@ describe('PricingRequestPanel', () => {
   // deal owner", and two ตอบข้อมูลเพิ่มเติม ones) that pinned WHO got each button. Those
   // discriminated on role and ownership; with the buttons gone for everyone they passed no
   // matter which user was rendered, so they had stopped testing their own subject. Two of
-  // them also drove a MORE_INFO_REQUIRED fixture, a status V139 removed from the DB
+  // them also drove a MORE_INFO_REQUIRED fixture, a status V140 removed from the DB
   // constraint entirely.
   //
   // What replaces them is deliberately a removal guard, not a permission test: it asserts

@@ -21,7 +21,7 @@ import { canPickupPricingRequest, pricingRequestRecipientLabel } from './pricing
 // "ทั้งหมด" still lets import/ceo/sales_manager see the full picture.
 //
 // `statuses` is a LIST, not a string, because เจรจาราคากับโรงงาน still has to
-// match TWO stored values. V139 merged COSTING_IN_PROGRESS into
+// match TWO stored values. V140 merged COSTING_IN_PROGRESS into
 // AWAITING_FACTORY_RESPONSE and dropped it from the DB constraint, but rows sit
 // in the old value for the whole window between this code deploying and the
 // migration running — so the chip keeps matching both ON PURPOSE. Do not
@@ -34,7 +34,7 @@ import { canPickupPricingRequest, pricingRequestRecipientLabel } from './pricing
 // anything that is not one valid status — and COSTING_IN_PROGRESS is no longer
 // one), so a two-status chip cannot be expressed server-side at all. It
 // therefore fetches everything (status=undefined) and narrows the rows below.
-// Once V139 has run everywhere, this entry can collapse to a single-value chip
+// Once V140 has run everywhere, this entry can collapse to a single-value chip
 // and the client-side filter can go with it.
 //
 // Labels are read from pricingRequestStatusLabel (utils/format.js), the

@@ -35,11 +35,11 @@ import { nextFulfilmentActionCode, nextImportAction } from '../tickets/importAct
 // of the queue for import); QUOTATION_ACCEPTED/QUOTATION_ISSUED/SUPERSEDED/
 // CANCELLED are excluded because pricing is resolved (or dead) by then.
 //
-// COSTING_IN_PROGRESS and MORE_INFO_REQUIRED are retired statuses (V139 merged the first into
+// COSTING_IN_PROGRESS and MORE_INFO_REQUIRED are retired statuses (V140 merged the first into
 // AWAITING_FACTORY_RESPONSE and deleted the second along with the ขอข้อมูลเพิ่มเติม round-trip),
 // and they are kept in this list ON PURPOSE — same reasoning as the queue page's merged
 // เจรจาราคากับโรงงาน chip and utils/format.js's label map. The frontend and backend deploy
-// separately, so a new frontend can be live against rows V139 has not migrated yet; dropping the
+// separately, so a new frontend can be live against rows V140 has not migrated yet; dropping the
 // two values would silently undercount this gauge for that whole window. They are inert once the
 // migration has run everywhere, at which point all three places can drop them together.
 const PRICING_IN_FLIGHT_STATUSES = [

@@ -826,7 +826,7 @@ function scheduleMockFactoryQuoteDispatch(quote, actor) {
     current.dispatchStatus = 'SENT';
     const pr = findPricingRequestRaw(current.pricingRequestId);
     const fromStatus = pr.status;
-    // Mirrors FactoryQuoteService.attemptSend: V139 merged COSTING_IN_PROGRESS into
+    // Mirrors FactoryQuoteService.attemptSend: V140 merged COSTING_IN_PROGRESS into
     // AWAITING_FACTORY_RESPONSE, so IMPORT_REVIEWING is the only status still needing promotion.
     if (pr.status === 'IMPORT_REVIEWING') pr.status = 'AWAITING_FACTORY_RESPONSE';
     pushPricingRequestEvent(pr, actor, 'FACTORY_EMAIL_SENT', fromStatus, pr.status);
@@ -7797,13 +7797,13 @@ export const api = {
       // request, plus sales is scoped to only its own created tickets.
       if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       // The real gate is PricingRequestStatus.isValid (PricingRequestService.list 400s anything
-      // else). V139 removed COSTING_IN_PROGRESS and MORE_INFO_REQUIRED from that set, so they are
+      // else). V140 removed COSTING_IN_PROGRESS and MORE_INFO_REQUIRED from that set, so they are
       // removed here too — a mock that still accepted them would be MORE permissive than
       // production, which is the direction CLAUDE.md calls out as the dangerous one. This list is
       // still a strict SUBSET of PricingRequestStatus.VALUES (the Step 3/4/5 statuses —
       // CEO_REVIEWING, APPROVED_FOR_QUOTATION, COSTING_REVISION_REQUIRED, QUOTATION_ISSUED,
       // QUOTATION_ACCEPTED — were never mirrored here); stricter than production is the safe
-      // direction, and closing that pre-existing gap is out of scope for V139.
+      // direction, and closing that pre-existing gap is out of scope for V140.
       if (params.status && ![
         'DRAFT',
         'SUBMITTED',
@@ -8064,7 +8064,7 @@ export const api = {
     async generateFactoryEmailDrafts(id) {
       const user = hasRole('import');
       const pr = findPricingRequestRaw(id);
-      // Mirrors FactoryQuoteService.DRAFT_STATUSES (V139 dropped COSTING_IN_PROGRESS from it).
+      // Mirrors FactoryQuoteService.DRAFT_STATUSES (V140 dropped COSTING_IN_PROGRESS from it).
       if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE'].includes(pr.status)) {
         fail('คำขอราคาต้องอยู่ระหว่างการตรวจสอบของฝ่ายนำเข้าก่อนจึงจะสร้างร่างอีเมลราคาโรงงานได้', 409);
       }
@@ -8362,7 +8362,7 @@ export const api = {
       // Mirrors PricingCostingService.COSTING_CREATE_STATUSES (Step 3, design corrections 3+4):
       // READY_FOR_CEO_REVIEW/CEO_REVIEWING are deliberately excluded — a submitted costing is
       // frozen until the CEO explicitly returns the request (-> COSTING_REVISION_REQUIRED).
-      // V139 also dropped COSTING_IN_PROGRESS from this set — costing no longer has a status of
+      // V140 also dropped COSTING_IN_PROGRESS from this set — costing no longer has a status of
       // its own, so the status Import creates a costing FROM is now also the status it stays in.
       if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_REVISION_REQUIRED'].includes(pr.status)) {
         fail('คำขอราคานี้ยังไม่พร้อมสำหรับการคำนวณต้นทุน', 409);
@@ -8373,7 +8373,7 @@ export const api = {
       if (existing) return delay({ costing: existing });
       const costing = { id: mockPricingCostingSeq++, costingCode: `PCO-2026-${String(mockPricingCostingSeq).padStart(4, '0')}`, pricingRequestId: pr.id, versionNo: mockPricingCostingSeq, status: 'DRAFT', stale: false, staleReason: null, note: payload.note ?? null, createdBy: user.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), calculatedAt: null, submittedBy: null, submittedAt: null, totalLandedCostThb: null, items: [] };
       mockPricingCostings.push(costing);
-      // Mirrors PricingCostingService.createDraft after V139: starting a costing settles the
+      // Mirrors PricingCostingService.createDraft after V140: starting a costing settles the
       // request into AWAITING_FACTORY_RESPONSE when it is not already there (Import creating one
       // straight from IMPORT_REVIEWING, or reopening one the CEO returned via
       // COSTING_REVISION_REQUIRED). It never moves a request that is already there.
@@ -8458,7 +8458,7 @@ export const api = {
       costing.submittedAt = new Date().toISOString();
       costing.note = payload.note ?? costing.note;
       pr.status = 'READY_FOR_CEO_REVIEW';
-      // Mirrors PricingCostingService.submit after V139: the request leaves
+      // Mirrors PricingCostingService.submit after V140: the request leaves
       // AWAITING_FACTORY_RESPONSE (not the retired COSTING_IN_PROGRESS) for READY_FOR_CEO_REVIEW.
       pushPricingRequestEvent(pr, user, 'PRICING_COSTING_SUBMITTED', 'AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW');
       return delay({ costing });
@@ -9212,7 +9212,7 @@ export const api = {
 
     async uploadAttachment(id, file) {
       // Mirrors PricingRequestService.uploadAttachment: owner sales only, and
-      // ATTACHMENT_EDITABLE_STATUSES — which V139 narrowed to {DRAFT} alone when the
+      // ATTACHMENT_EDITABLE_STATUSES — which V140 narrowed to {DRAFT} alone when the
       // ขอข้อมูลเพิ่มเติม round-trip left the product. requirePricingRequestViewable already 404s a
       // non-owner on a DRAFT (draft privacy) and 403s a non-owner once the request is
       // visible-but-not-owned — see that helper.
@@ -9251,7 +9251,7 @@ export const api = {
 
     async deleteAttachment(id) {
       // Mirrors PricingRequestService.deleteAttachment: owner sales only, and
-      // ATTACHMENT_EDITABLE_STATUSES = {DRAFT} after V139.
+      // ATTACHMENT_EDITABLE_STATUSES = {DRAFT} after V140.
       const user = hasRole('sales');
       const owningPr = mockPricingRequests.find((p) => (p.attachments ?? []).some((a) => a.id === Number(id)));
       if (!owningPr) fail('ไม่พบไฟล์แนบของคำขอราคานี้', 404);
