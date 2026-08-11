@@ -512,10 +512,14 @@ export function buildDemoSalesSeed() {
     createdAt: daysAgoIso(10),
   });
 
-  // PR5 — ticket 3 — COSTING_IN_PROGRESS (FactoryQuote RESPONSE_RECEIVED, Costing DRAFT)
+  // PR5 — ticket 3 — AWAITING_FACTORY_RESPONSE (FactoryQuote RESPONSE_RECEIVED, Costing DRAFT).
+  // V140 merged COSTING_IN_PROGRESS into AWAITING_FACTORY_RESPONSE and dropped it from the DB
+  // constraint, so the seed moves with it — exactly what the migration does to a live row. The
+  // demo state this row exists to cover (a costing in DRAFT) is unchanged; only the status the
+  // request carries while that costing is open has.
   const pr5 = makePr({
     ticketId: 3, recipientType: 'OWNER', recipientLabel: 'เจ้าของโครงการ XYZ',
-    status: 'COSTING_IN_PROGRESS', requestedBy: SALES1, assignedImport: IMPORT1,
+    status: 'AWAITING_FACTORY_RESPONSE', requestedBy: SALES1, assignedImport: IMPORT1,
     submittedAt: daysAgoIso(20), pickedUpAt: daysAgoIso(19), createdAt: daysAgoIso(21), clientRequestSeed: 5,
     items: [{ sourceTicketItemId: 5, brand: 'Duragres', model: 'Wood Texture', color: 'ขาว', texture: 'ลายไม้', size: '20x100 ซม.', factory: 'Duragres Thailand', requestedQty: 50, requestedUnit: 'แผ่น', requestedUnitBasis: 'PER_PIECE', quantityType: 'ESTIMATE', catalogBasePrice: 200 }],
   });
@@ -695,10 +699,20 @@ export function buildDemoSalesSeed() {
   makeDepositNotice(ticket7, q11, { status: 'ISSUED', createdAt: daysAgoIso(18), issueDate: daysAgoIso(17), version: 2 });
   void dn11Old;
 
-  // PR12 — ticket 8 — MORE_INFO_REQUIRED
+  // PR12 — ticket 8 — IMPORT_REVIEWING.
+  //
+  // This row used to seed at MORE_INFO_REQUIRED. V140 retired that status: it is no longer in
+  // PricingRequestStatus.VALUES or the chk_pricing_request_status constraint, so a demo row
+  // sitting in it represented a state the real backend can no longer hold. IMPORT_REVIEWING is
+  // exactly where V140's data migration sends such a row when no resume_status was recorded,
+  // which is this row's case — so the seed now mirrors what the migration actually does.
+  //
+  // The MORE_INFO_REQUESTED event below is KEPT on purpose. V140 deliberately does not rewrite
+  // pricing_request_event history, and PricingRequestEventKind still accepts that kind, so a
+  // demo request whose timeline shows a question once asked is faithful, not stale.
   const pr12 = makePr({
     ticketId: 8, recipientType: 'DESIGNER', recipientLabel: 'ผู้ออกแบบ Siam Mall',
-    status: 'MORE_INFO_REQUIRED', requestedBy: SALES1, assignedImport: IMPORT1,
+    status: 'IMPORT_REVIEWING', requestedBy: SALES1, assignedImport: IMPORT1,
     submittedAt: daysAgoIso(40), pickedUpAt: daysAgoIso(39), createdAt: daysAgoIso(41), clientRequestSeed: 12,
     items: [{ sourceTicketItemId: 11, brand: 'Cotto', model: 'Basic White', color: 'ขาว', texture: 'ด้าน', size: '30x30 ซม.', factory: 'Cotto Industry', requestedQty: 800, requestedUnit: 'แผ่น', requestedUnitBasis: 'PER_PIECE', quantityType: 'ESTIMATE', catalogBasePrice: 50 }],
   });
@@ -840,10 +854,11 @@ export function buildDemoSalesSeed() {
   const quotation20 = makeQuotation(pr20, decision20, { docStatus: 'ACCEPTED', createdAt: daysAgoIso(10), issuedAt: daysAgoIso(10), sentAt: daysAgoIso(10), acceptedAt: daysAgoIso(9) });
   makeDepositNotice({ id: 18, customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด' }, quotation20, { status: 'DRAFT', createdAt: daysAgoIso(4) });
 
-  // PR21 — ticket 18 — COSTING_IN_PROGRESS with a CALCULATED (not yet submitted) costing.
+  // PR21 — ticket 18 — AWAITING_FACTORY_RESPONSE with a CALCULATED (not yet submitted) costing.
+  // Same V140 status merge as PR5 above.
   const pr21 = makePr({
     ticketId: 18, recipientType: 'OWNER', recipientLabel: 'เจ้าของศูนย์การค้า Fashion Island',
-    status: 'COSTING_IN_PROGRESS', requestedBy: SALES1, assignedImport: IMPORT1,
+    status: 'AWAITING_FACTORY_RESPONSE', requestedBy: SALES1, assignedImport: IMPORT1,
     submittedAt: '2026-06-25T09:33:00Z', pickedUpAt: '2026-06-26T08:15:00Z',
     createdAt: '2026-06-25T09:03:00Z', clientRequestSeed: 21,
     items: [{ sourceTicketItemId: 23, brand: 'Panaria', model: 'Trilogy', color: 'Ivory', texture: 'Lappato', size: '60x120 cm', factory: 'Panaria SpA', requestedQty: 120, requestedUnit: 'แผ่น', requestedUnitBasis: 'PER_PIECE', quantityType: 'ESTIMATE', catalogBasePrice: 1400 }],

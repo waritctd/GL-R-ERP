@@ -60,15 +60,6 @@ public final class PricingRequestRequests {
         String specialRequirement
     ) {}
 
-    public record RequestMoreInformationRequest(
-        @NotBlank String message,
-        LocalDate dueDate
-    ) {}
-
-    public record RespondMoreInformationRequest(
-        @NotBlank String response
-    ) {}
-
     public record CancelPricingRequestRequest(
         @NotBlank String reason
     ) {}

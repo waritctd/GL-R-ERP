@@ -24,7 +24,7 @@ class PricingRequestStatusTest {
         // CEO_REVIEWING -> COSTING_REVISION_REQUIRED -> COSTING_IN_PROGRESS (the CEO must
         // explicitly return it) — see the next two tests.
         assertThat(PricingRequestStatus.canTransition(
-            PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.COSTING_IN_PROGRESS)).isFalse();
+            PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.AWAITING_FACTORY_RESPONSE)).isFalse();
     }
 
     @Test
@@ -48,7 +48,7 @@ class PricingRequestStatusTest {
         // The single named return-to-Import state (design correction 4) — Import calling
         // PricingCostingService.createDraft is what actually performs this transition.
         assertThat(PricingRequestStatus.canTransition(
-            PricingRequestStatus.COSTING_REVISION_REQUIRED, PricingRequestStatus.COSTING_IN_PROGRESS)).isTrue();
+            PricingRequestStatus.COSTING_REVISION_REQUIRED, PricingRequestStatus.AWAITING_FACTORY_RESPONSE)).isTrue();
     }
 
     // Step 4 (Customer Quotation Generation and Issuance) deliberately extends this map:
@@ -115,7 +115,7 @@ class PricingRequestStatusTest {
         // Sanity check the map wasn't accidentally widened globally: a DRAFT can never jump
         // straight to COSTING_IN_PROGRESS.
         assertThat(PricingRequestStatus.canTransition(
-            PricingRequestStatus.DRAFT, PricingRequestStatus.COSTING_IN_PROGRESS)).isFalse();
+            PricingRequestStatus.DRAFT, PricingRequestStatus.AWAITING_FACTORY_RESPONSE)).isFalse();
     }
 
     @Test

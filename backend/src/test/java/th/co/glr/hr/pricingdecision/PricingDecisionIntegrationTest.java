@@ -609,7 +609,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
             new CreateCostingRequest("v2", null), importActor);
         assertThat(v2.versionNo()).isEqualTo(2);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.COSTING_IN_PROGRESS);
+            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
         costingService.recalculate(v2.id(), new RecalculateCostingRequest("v2 pass 1"), importActor);
         PricingCostingDto v2Calculated = costingService.recalculate(v2.id(), new RecalculateCostingRequest("v2 pass 2"), importActor);
         PricingCostingDto v2Submitted = costingService.submit(v2Calculated.id(), new SubmitCostingRequest("resubmit"), importActor);

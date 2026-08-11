@@ -10,16 +10,15 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
 import {
-  canCancelPricingRequest, canCreatePricingRequest, canRequestInformation, canRespondInformation,
+  canCancelPricingRequest, canCreatePricingRequest,
   canSubmitPricingRequest, canUpdatePricingRequest, pricingRequestRecipientLabel,
 } from './pricingRequestMeta.js';
 import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 
 /**
  * Every action in this panel is a react-query mutation whose failure used to go NOWHERE: none of
- * submit/cancel/respond/requestInformation had an onError or rendered `.error`, so a rejected call
- * left the button looking like it simply did nothing, with the reason visible only in the browser
- * console. That is how a real backend 422 ("ต้องเลือกสินค้าจาก Price Catalog…") reached a UAT user
+ * them had an onError or rendered `.error`, so a rejected call left the button looking like it
+ * simply did nothing, with the reason visible only in the browser console. That is how a real backend 422 ("ต้องเลือกสินค้าจาก Price Catalog…") reached a UAT user
  * as silence. The service already returns a Thai, user-facing message for every one of these
  * failures, so showing it is all that was missing.
  */
@@ -71,9 +70,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
   const [createOpen, setCreateOpen] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
   const [editingId, setEditingId] = useState(null); // pricing request id being edited (Fix 2), or null
-  const [respondDraft, setRespondDraft] = useState(null); // { id, response }
   const [cancelDraft, setCancelDraft] = useState(null); // { id, reason }
-  const [requestInfoDraft, setRequestInfoDraft] = useState(null); // { id, message, dueDate }
 
   const listQuery = useQuery({
     queryKey: queryKeys.pricingRequestsByTicket(ticketId),
@@ -110,14 +107,6 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
   const cancelMutation = useMutation({
     mutationFn: ({ id, reason }) => api.pricingRequests.cancel(id, { reason }),
     onSuccess: () => { invalidate(); setCancelDraft(null); },
-  });
-  const respondMutation = useMutation({
-    mutationFn: ({ id, response }) => api.pricingRequests.respondInformation(id, { response }),
-    onSuccess: () => { invalidate(); setRespondDraft(null); },
-  });
-  const requestInfoMutation = useMutation({
-    mutationFn: ({ id, message, dueDate }) => api.pricingRequests.requestInformation(id, { message, dueDate }),
-    onSuccess: () => { invalidate(); setRequestInfoDraft(null); },
   });
 
   const canCreate = canCreatePricingRequest(user, deal);
@@ -169,7 +158,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                   </span>
                 </button>
 
-                {(canUpdatePricingRequest(user, pr) || canSubmitPricingRequest(user, pr) || canRequestInformation(user, pr) || canRespondInformation(user, pr) || canCancelPricingRequest(user, pr)) ? (
+                {(canUpdatePricingRequest(user, pr) || canSubmitPricingRequest(user, pr) || canCancelPricingRequest(user, pr)) ? (
                   <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2">
                     {canUpdatePricingRequest(user, pr) ? (
                       <Button type="button" variant="secondary" onClick={() => setEditingId(pr.id)}>
@@ -186,16 +175,6 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                         ส่งให้ฝ่ายนำเข้า
                       </Button>
                     ) : null}
-                    {canRequestInformation(user, pr) ? (
-                      <Button type="button" variant="secondary" onClick={() => setRequestInfoDraft({ id: pr.id, message: '', dueDate: '' })}>
-                        ขอข้อมูลเพิ่มเติม
-                      </Button>
-                    ) : null}
-                    {canRespondInformation(user, pr) ? (
-                      <Button type="button" variant="secondary" onClick={() => setRespondDraft({ id: pr.id, response: '' })}>
-                        ตอบข้อมูลเพิ่มเติม
-                      </Button>
-                    ) : null}
                     {canCancelPricingRequest(user, pr) ? (
                       <Button
                         type="button"
@@ -206,9 +185,9 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                         ยกเลิก
                       </Button>
                     ) : null}
-                    {/* Cancel/respond/requestInformation each render their own error inside the
-                        modal that stays open on failure; submit is the only action fired straight
-                        from this row, so it is the only one that reports here. */}
+                    {/* Cancel renders its own error inside the modal that stays open on failure;
+                        submit is the only action fired straight from this row, so it is the only
+                        one that reports here. */}
                     <MutationError mutation={submitMutation} match={submitMutation.variables === pr.id} />
                   </div>
                 ) : null}
@@ -286,80 +265,6 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
             <p className="text-xs text-text-muted">กำลังโหลดร่างคำขอราคา…</p>
           </Modal>
         )
-      ) : null}
-
-      {respondDraft ? (
-        <Modal
-          title="ตอบข้อมูลเพิ่มเติม"
-          onClose={() => setRespondDraft(null)}
-          footer={(
-            <>
-              <Button type="button" variant="secondary" onClick={() => setRespondDraft(null)}>ยกเลิก</Button>
-              <Button
-                type="button"
-                variant="primary"
-                disabled={!respondDraft.response.trim() || respondMutation.isPending}
-                onClick={() => respondMutation.mutate({ id: respondDraft.id, response: respondDraft.response.trim() })}
-              >
-                บันทึก
-              </Button>
-            </>
-          )}
-        >
-          <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-            คำตอบ *
-            <textarea
-              className="min-h-24"
-              value={respondDraft.response}
-              onChange={(e) => setRespondDraft((d) => ({ ...d, response: e.target.value }))}
-            />
-          </label>
-          <MutationError mutation={respondMutation} />
-        </Modal>
-      ) : null}
-
-      {requestInfoDraft ? (
-        <Modal
-          title="ขอข้อมูลเพิ่มเติม"
-          onClose={() => setRequestInfoDraft(null)}
-          footer={(
-            <>
-              <Button type="button" variant="secondary" onClick={() => setRequestInfoDraft(null)}>ยกเลิก</Button>
-              <Button
-                type="button"
-                variant="primary"
-                disabled={!requestInfoDraft.message.trim() || requestInfoMutation.isPending}
-                onClick={() => requestInfoMutation.mutate({
-                  id: requestInfoDraft.id,
-                  message: requestInfoDraft.message.trim(),
-                  dueDate: requestInfoDraft.dueDate || null,
-                })}
-              >
-                ส่งคำขอ
-              </Button>
-            </>
-          )}
-        >
-          <div className="flex flex-col gap-3">
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-              ข้อมูลที่ต้องการเพิ่มเติม *
-              <textarea
-                className="min-h-24"
-                value={requestInfoDraft.message}
-                onChange={(e) => setRequestInfoDraft((d) => ({ ...d, message: e.target.value }))}
-              />
-            </label>
-            <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-              ต้องการภายในวันที่ (ไม่บังคับ)
-              <input
-                type="date"
-                value={requestInfoDraft.dueDate}
-                onChange={(e) => setRequestInfoDraft((d) => ({ ...d, dueDate: e.target.value }))}
-              />
-            </label>
-            <MutationError mutation={requestInfoMutation} />
-          </div>
-        </Modal>
       ) : null}
 
       {cancelDraft ? (

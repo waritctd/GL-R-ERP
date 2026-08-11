@@ -39,8 +39,6 @@ vi.mock('../../api/index.js', () => ({
       createCosting: vi.fn(),
       recalculateCosting: vi.fn(),
       submitCosting: vi.fn(),
-      requestInformation: vi.fn(),
-      respondInformation: vi.fn(),
       uploadFactoryQuoteAttachment: vi.fn(),
       uploadAttachment: vi.fn(),
       deleteAttachment: vi.fn(),
@@ -197,11 +195,10 @@ function setApiDefaults() {
   api.pricingRequests.receiveFactoryQuote.mockResolvedValue({});
   api.pricingRequests.startFactoryNegotiation.mockResolvedValue({});
   api.pricingRequests.markFactoryQuoteReady.mockResolvedValue({});
-  api.pricingRequests.createCosting.mockResolvedValue({});
+  // submitToCeo chains createCosting -> recalculate -> submit and needs the new row's id.
+  api.pricingRequests.createCosting.mockResolvedValue({ costing: { id: 21 } });
   api.pricingRequests.recalculateCosting.mockResolvedValue({});
   api.pricingRequests.submitCosting.mockResolvedValue({});
-  api.pricingRequests.requestInformation.mockResolvedValue({});
-  api.pricingRequests.respondInformation.mockResolvedValue({});
   api.pricingRequests.uploadFactoryQuoteAttachment.mockResolvedValue({});
   api.pricingRequests.uploadAttachment.mockResolvedValue({ attachment: null });
   api.pricingRequests.deleteAttachment.mockResolvedValue({});
@@ -567,7 +564,7 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
   // dedupes instead of minting a fresh, always-distinct key that could never replay. The button's
   // onClick only regenerates the id when dispatchStatus is FAILED (a permanently exhausted key) —
   // otherwise it must reuse whatever is already cached in state for this quote.
-  it('keeps the same clientRequestId across repeated "ส่ง" clicks (open/cancel/reopen) — it must not regenerate per click', async () => {
+  it('keeps the same clientRequestId across repeated "ส่งแล้ว" clicks (open/cancel/reopen) — it must not regenerate per click', async () => {
     const quote = buildFactoryQuote();
     const uuidSpy = vi.spyOn(globalThis.crypto, 'randomUUID');
     renderDetailPage({ user: importUser, factoryQuotes: [quote] });
@@ -578,14 +575,14 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     const callsBeforeAnySend = uuidSpy.mock.calls.length;
 
     // First open: mints and caches a clientRequestId for this quote.
-    fireEvent.click(screen.getByRole('button', { name: 'ส่ง' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ส่งแล้ว' }));
     expect(await screen.findByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' })).not.toBeNull();
     expect(uuidSpy).toHaveBeenCalledTimes(callsBeforeAnySend + 1);
 
     // Cancel without confirming, then reopen: must reuse the cached id, not mint a new one.
     fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' })).toBeNull());
-    fireEvent.click(screen.getByRole('button', { name: 'ส่ง' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ส่งแล้ว' }));
     expect(await screen.findByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' })).not.toBeNull();
     // Still no new call — reused the cached id, not regenerated.
     expect(uuidSpy).toHaveBeenCalledTimes(callsBeforeAnySend + 1);
@@ -603,58 +600,72 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
+    // Import types ONE thing: the price. เลขอ้างอิงใบเสนอราคา / เงื่อนไขการชำระเงิน /
+    // ระยะเวลาผลิต-ส่งมอบ were removed from this form (owner ruling 2026-08-11) — all three are
+    // optional in ReceiveFactoryQuoteRequest, so the payload simply carries null for them.
     const priceInput = screen.getByLabelText(/^ราคาโรงงาน/);
     fireEvent.change(priceInput, { target: { value: '55.5' } });
-    const refInput = screen.getByLabelText('เลขอ้างอิงใบเสนอราคา');
-    fireEvent.change(refInput, { target: { value: 'QT-9001' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกคำตอบ/รอบแก้ไข' }));
 
     await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
       quote.id,
       expect.objectContaining({
-        supplierQuoteRef: 'QT-9001',
+        supplierQuoteRef: null,
         clientRequestId: expect.stringMatching(/^[0-9a-f-]{36}$/i),
         items: [expect.objectContaining({ pricingRequestItemId: 1, rawUnitPrice: 55.5 })],
       }),
     ));
+    // The removed fields must not be resurrected as inputs.
+    expect(screen.queryByLabelText('เลขอ้างอิงใบเสนอราคา')).toBeNull();
+    expect(screen.queryByLabelText('เงื่อนไขการชำระเงิน')).toBeNull();
+    expect(screen.queryByLabelText('ระยะเวลาผลิต/ส่งมอบ')).toBeNull();
   });
 });
 
 describe('PricingRequestDetailPage Import costing workflow', () => {
-  it('recalculates a costing draft and, once CALCULATED and not stale, submits it to the CEO after confirmation', async () => {
-    const costing = buildCosting({ status: 'CALCULATED', stale: false });
-    renderDetailPage({ user: importUser, costings: [costing] });
+  // Owner ruling 2026-08-11: Import keys in the price and submits — it never touches the costing
+  // aggregate. The old per-step buttons (คำนวณใหม่ / ส่งให้ CEO ตรวจ, and the สร้างร่างต้นทุน that
+  // preceded them) are gone; ONE button now runs the whole chain. Asserted in call ORDER because
+  // each backend step rejects being run out of sequence: createDraft refuses a quote that is not
+  // READY_FOR_COSTING, and submit refuses a costing that is still DRAFT or stale.
+  it('runs markReady -> createCosting -> recalculate -> submit from the single ส่งให้ CEO อนุมัติราคา action', async () => {
+    const quote = buildFactoryQuote({ status: 'RESPONSE_RECEIVED' });
+    renderDetailPage({ user: importUser, factoryQuotes: [quote] });
     await waitForLoaded();
-    await screen.findByText('COST-2026-0001');
+    await screen.findByText('SCG Ceramics');
 
-    fireEvent.click(screen.getByRole('button', { name: 'คำนวณใหม่' }));
-    await waitFor(() => expect(api.pricingRequests.recalculateCosting).toHaveBeenCalledWith(
-      costing.id,
-      expect.any(Object),
-    ));
+    fireEvent.click(screen.getByRole('button', { name: 'ส่งให้ CEO อนุมัติราคา' }));
 
-    const submitButton = screen.getByRole('button', { name: 'ส่งให้ CEO ตรวจ' });
-    expect(submitButton.disabled).toBe(false);
-    fireEvent.click(submitButton);
+    await waitFor(() => expect(api.pricingRequests.submitCosting).toHaveBeenCalledWith(21, expect.any(Object)));
+    expect(api.pricingRequests.markFactoryQuoteReady).toHaveBeenCalledWith(quote.id);
+    expect(api.pricingRequests.createCosting).toHaveBeenCalledWith(501, expect.objectContaining({
+      clientRequestId: expect.stringMatching(/^[0-9a-f-]{36}$/i),
+    }));
+    expect(api.pricingRequests.recalculateCosting).toHaveBeenCalledWith(21, expect.any(Object));
 
-    const dialog = await screen.findByRole('dialog', { name: 'ส่งต้นทุนให้ CEO ตรวจ' });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'ส่งให้ CEO ตรวจ' }));
-
-    await waitFor(() => expect(api.pricingRequests.submitCosting).toHaveBeenCalledWith(
-      costing.id,
-      expect.any(Object),
-    ));
+    const order = (fn) => fn.mock.invocationCallOrder[0];
+    expect(order(api.pricingRequests.markFactoryQuoteReady)).toBeLessThan(order(api.pricingRequests.createCosting));
+    expect(order(api.pricingRequests.createCosting)).toBeLessThan(order(api.pricingRequests.recalculateCosting));
+    expect(order(api.pricingRequests.recalculateCosting)).toBeLessThan(order(api.pricingRequests.submitCosting));
   });
 
-  it('disables "ส่งให้ CEO ตรวจ" while the costing is stale — a factory revision must be recalculated first', async () => {
-    const costing = buildCosting({ status: 'CALCULATED', stale: true });
-    renderDetailPage({ user: importUser, costings: [costing] });
-    await waitForLoaded();
-    await screen.findByText('COST-2026-0001');
+  // Wrong-way-round: the point is that these surfaces are ABSENT for Import, not merely different.
+  it('shows Import no costing, CEO-decision, customer-quotation or ask-Sales surface', async () => {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+    renderDetailPage({ user: importUser, request, factoryQuotes: [buildFactoryQuote()], costings: [buildCosting()] });
+    await waitForLoaded(request);
+    await screen.findByText('SCG Ceramics');
 
-    expect(screen.getByRole('button', { name: 'ส่งให้ CEO ตรวจ' }).disabled).toBe(true);
-    expect(api.pricingRequests.submitCosting).not.toHaveBeenCalled();
+    expect(screen.queryByText('ต้นทุนนำเข้า')).toBeNull();
+    expect(screen.queryByText('การพิจารณาราคาขายของ CEO')).toBeNull();
+    expect(screen.queryByText('ใบเสนอราคาลูกค้า')).toBeNull();
+    // The ขอข้อมูลเพิ่มเติม feature was removed from the product entirely.
+    expect(screen.queryByText('ขอข้อมูลจาก Sales')).toBeNull();
+    expect(screen.queryByText('ตอบข้อมูลเพิ่มเติม')).toBeNull();
+    // COST-2026-0001 is the costing code — absent because the whole panel is.
+    expect(screen.queryByText('COST-2026-0001')).toBeNull();
   });
 });
 
@@ -710,7 +721,7 @@ describe('PricingRequestDetailPage pricing-request attachments (COMMIT 4)', () =
     await waitFor(() => expect(api.pricingRequests.uploadAttachment).toHaveBeenCalledWith(request.summary.id, file));
   });
 
-  it('does not offer upload/delete once the request is past DRAFT/MORE_INFO_REQUIRED', async () => {
+  it('does not offer upload/delete once the request is past DRAFT', async () => {
     const request = buildRequest({ summary: { status: 'IMPORT_REVIEWING' } });
     renderDetailPage({
       user: salesOwner,
@@ -747,7 +758,7 @@ describe('PricingRequestDetailPage pricing-request attachments (COMMIT 4)', () =
 
   it('lets the owner delete their own attachment while editable, via deleteAttachment', async () => {
     const attachment = { id: 7, fileName: 'spec.pdf', includeInFactoryEmail: false };
-    const request = buildRequest({ summary: { status: 'MORE_INFO_REQUIRED' } });
+    const request = buildRequest({ summary: { status: 'DRAFT' } });
     renderDetailPage({ user: salesOwner, request, attachments: [attachment] });
     await waitForLoaded(request);
 
@@ -854,13 +865,15 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     ));
   });
 
-  it('shows Import the raw decision read-only — no margin/price editing controls', async () => {
+  // Was: "shows Import the raw decision read-only". Import's job now ends at ส่งให้ CEO อนุมัติราคา,
+  // so it is shown NO decision surface at all — a strictly narrower view than before, never wider.
+  it('shows Import no CEO decision surface at all', async () => {
     const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
     api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
     renderDetailPage({ user: importUser, request });
     await waitForLoaded(request);
 
-    expect(await screen.findByText('PCD-2026-0001')).not.toBeNull();
+    expect(screen.queryByText('PCD-2026-0001')).toBeNull();
     expect(screen.queryByPlaceholderText('อัตรากำไร เช่น 0.20 = 20%')).toBeNull();
     expect(screen.queryByRole('button', { name: 'อนุมัติราคาขาย' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).toBeNull();
@@ -913,7 +926,7 @@ describe('PricingRequestDetailPage mobile layout', () => {
     });
   }
 
-  it('renders the full page (overview, items, factory quotes, costing) under a mobile viewport', async () => {
+  it('renders the full Import page (overview, items, factory quotes) under a mobile viewport', async () => {
     stubMobileViewport();
     renderDetailPage({
       user: importUser,
@@ -926,12 +939,14 @@ describe('PricingRequestDetailPage mobile layout', () => {
     expect(screen.getByText('รายการสินค้าและราคาตั้งต้น')).not.toBeNull();
     // Item identity renders brand+model ("SCG A1") ahead of productDescription per the
     // component's own fallback chain (catalogBrand/brand + catalogModel/model first).
-    expect(screen.getByText('SCG A1')).not.toBeNull();
+    // getAllByText, not getByText: the ราคาโรงงาน response row now echoes the same product name
+    // back as read-only context ("ที่ Sales ขอ: …"), so this string legitimately appears twice.
+    expect(screen.getAllByText('SCG A1').length).toBeGreaterThan(0);
     // By role, not text: "ราคาโรงงาน" now also names a column in the
     // response-entry grid, so a bare text query can match more than one node.
     // The assertion here is that the SECTION is present.
     expect(await screen.findByRole('heading', { name: 'ราคาโรงงาน' })).not.toBeNull();
-    expect(screen.getByText('ต้นทุนนำเข้า')).not.toBeNull();
+    // ต้นทุนนำเข้า is deliberately absent for Import — see the hiding test above.
   });
 });
 
@@ -949,7 +964,6 @@ describe('PricingRequestDetailPage accessibility: no nested interactive controls
     });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
-    await screen.findByText('COST-2026-0001');
 
     const buttons = container.querySelectorAll('button');
     expect(buttons.length).toBeGreaterThan(0);
