@@ -64,6 +64,35 @@ function daysFromToday(days) {
   return base.toISOString().slice(0, 10);
 }
 
+/**
+ * `daysFromToday`, then rolled forward to the next Mon–Fri.
+ *
+ * WHY THIS EXISTS. A leave request whose range contains no working day is rejected 400 by
+ * LeaveService#workingDaysBetween ("ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน"), so a single-day
+ * request landing on a weekend fails for a reason that has nothing to do with what these tests
+ * assert. A FIXED offset lands on a weekend roughly two days in every seven, which made this file
+ * fail on a rolling ~2-day-a-week schedule — and the failure moved with the clock, not the code.
+ *
+ * The Bangkok base is what makes that non-obvious: after 17:00 UTC the Bangkok date is already
+ * tomorrow, so the same CI job picks a different weekday depending on the hour it happens to run.
+ * On 2026-08-11 the runs before 17:00Z chose Fri 25 Sep and passed; the runs after chose Sat 26
+ * Sep and failed, with no code change between them. Confirmed against PRs #690, #691 and #692.
+ *
+ * Weekends only. Public holidays are NOT skipped: they live in hr.holiday, vary by year, and
+ * would need an API round-trip to resolve. If this ever fails on a Mon–Fri, check the calendar
+ * before assuming the gate under test broke — and prefer fixing it here over widening the
+ * assertion below.
+ */
+function workingDayFromToday(days) {
+  let iso = daysFromToday(days);
+  for (let i = 0; i < 7; i += 1) {
+    const dow = new Date(`${iso}T00:00:00Z`).getUTCDay();
+    if (dow !== 0 && dow !== 6) return iso;
+    iso = daysFromToday(days + i + 1);
+  }
+  throw new Error(`no weekday found within 7 days of +${days}`);
+}
+
 /** The seeded SUBMITTED request, read through HR (who can see every employee's). */
 async function seededSubmittedRequest(hrSession) {
   const response = await hrSession.get('/api/leave?status=SUBMITTED');
@@ -97,7 +126,7 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
     // the request failed closed with no quota. It now lands APPROVED, which is #submit's normal
     // outcome for a request that breaks no rule (there is no SUBMITTED path — see this file's
     // header). Cancelled immediately so the run leaves no live rows behind.
-    const day = daysFromToday(45);
+    const day = workingDayFromToday(45);
     const response = await apiWrite(sessions[OWNER], 'post', '/api/leave', {
       leaveTypeCode: 'VACATION',
       startDate: day,
@@ -105,12 +134,24 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
       reason: 'e2e-real: V139 hire-date quota guard',
     });
 
+    // Read the body BEFORE asserting: on a 400 the assertion below is what fails the test, and
+    // without this the response is discarded unread, which is why no run ever logged why.
+    const body = await response.text();
+
     expect(
       response.status(),
-      'a 400 here means the hire_date backfill is missing and the prorated quota is zero again'
+      // The message reports the SERVER's reason rather than guessing one. The previous version
+      // asserted "the hire_date backfill is missing and the prorated quota is zero again" — a
+      // single hypothesis stated as fact. When this test began failing for an unrelated reason
+      // (the date landed on a Saturday, see workingDayFromToday), that message sent three separate
+      // investigations after a backfill the CI logs showed had applied correctly. A failure
+      // message that names the wrong cause is worse than one that names none.
+      `POST /api/leave expected 200, got ${response.status()}: ${body}`
     ).toBe(200);
 
-    const { request: created } = await response.json();
+    // Parsed from the text already read above rather than a second response.json() — one read,
+    // one source of truth for what the server actually returned.
+    const { request: created } = JSON.parse(body);
     expect(created.status).toBe('APPROVED');
     expect(
       Number(created.quotaRemainingBefore),
