@@ -1748,7 +1748,7 @@ describe('TicketDetailPage', () => {
 
     it('renders nothing when no pricing request has reached APPROVED_FOR_QUOTATION', async () => {
       api.pricingRequests.listForTicket.mockResolvedValue({
-        items: [{ ...approvedPr, status: 'COSTING_IN_PROGRESS' }],
+        items: [{ ...approvedPr, status: 'AWAITING_FACTORY_RESPONSE' }],
       });
 
       renderTicketDetailPage(salesOwnerUser);

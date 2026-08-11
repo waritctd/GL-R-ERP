@@ -271,7 +271,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             new CreateCostingRequest("draft", null), importActor);
         assertThat(draft.status()).isEqualTo(PricingCostingStatus.DRAFT);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.COSTING_IN_PROGRESS);
+            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
 
         PricingCostingDto calculated1 = costingService.recalculate(draft.id(),
             new RecalculateCostingRequest("first pass"), importActor);
@@ -279,7 +279,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             new RecalculateCostingRequest("second pass"), importActor);
         assertThat(calculated2.status()).isEqualTo(PricingCostingStatus.CALCULATED);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.COSTING_IN_PROGRESS);
+            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
         assertThat(calculated1.submittedAt()).isNull();
         assertThat(calculated2.submittedAt()).isNull();
 
@@ -783,7 +783,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
         assertThat(draft.status()).isEqualTo(PricingCostingStatus.DRAFT);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.COSTING_IN_PROGRESS);
+            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
     }
 
     @Test
@@ -1212,7 +1212,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
         jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
-            Map.of("status", PricingRequestStatus.COSTING_IN_PROGRESS, "id", pricingRequestId));
+            Map.of("status", PricingRequestStatus.AWAITING_FACTORY_RESPONSE, "id", pricingRequestId));
 
         assertThat(factoryQuoteRepository.existsSubmittedCostingReferencingQuote(revision1.id())).isTrue();
 

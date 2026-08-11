@@ -154,10 +154,10 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
         // DRAFT -> COSTING_IN_PROGRESS is not, and has never been, a real transition — no code
         // path attempts it; it exists purely to prove the guard fires for a nonsense pair.
         assertThatThrownBy(() -> requests.transition(
-            id, PricingRequestStatus.DRAFT, PricingRequestStatus.COSTING_IN_PROGRESS, null, null))
+            id, PricingRequestStatus.DRAFT, PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null))
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("DRAFT")
-            .hasMessageContaining("COSTING_IN_PROGRESS");
+            .hasMessageContaining("AWAITING_FACTORY_RESPONSE");
 
         PricingRequestSummaryDto unchanged = requests.findSummary(id).orElseThrow();
         assertThat(unchanged.status()).isEqualTo(PricingRequestStatus.DRAFT);
@@ -176,7 +176,7 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
             Map.of("status", PricingRequestStatus.READY_FOR_CEO_REVIEW, "id", id));
 
         assertThatThrownBy(() -> requests.transition(id, PricingRequestStatus.READY_FOR_CEO_REVIEW,
-            PricingRequestStatus.COSTING_IN_PROGRESS, null, null))
+            PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null))
             .isInstanceOf(IllegalStateException.class);
 
         assertThat(requests.findSummary(id).orElseThrow().status()).isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
@@ -192,10 +192,10 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
             Map.of("status", PricingRequestStatus.COSTING_REVISION_REQUIRED, "id", id));
 
         int rows = requests.transition(id, PricingRequestStatus.COSTING_REVISION_REQUIRED,
-            PricingRequestStatus.COSTING_IN_PROGRESS, null, null);
+            PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
 
         assertThat(rows).isEqualTo(1);
-        assertThat(requests.findSummary(id).orElseThrow().status()).isEqualTo(PricingRequestStatus.COSTING_IN_PROGRESS);
+        assertThat(requests.findSummary(id).orElseThrow().status()).isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
     }
 
     @Test
@@ -219,26 +219,6 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
         assertThat(cancelled.cancelledAt()).isNotNull();
     }
 
-    @Test
-    void transition_pickedUpAt_isPreservedByteIdenticalAcrossReviewingMoreInfoReviewingRoundTrip() throws InterruptedException {
-        long importId = createEmployee("นำเข้า ทดสอบ", "import@glr.co.th");
-        long id = createDraft();
-        requests.transition(id, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
-        requests.transition(id, PricingRequestStatus.SUBMITTED, PricingRequestStatus.IMPORT_REVIEWING, importId, null);
-
-        var firstPickedUpAt = requests.findSummary(id).orElseThrow().pickedUpAt();
-        assertThat(firstPickedUpAt).isNotNull();
-
-        // Force a real clock tick so a bug that resets picked_up_at to now() would be
-        // observable (not masked by two now() calls landing in the same microsecond).
-        Thread.sleep(5);
-
-        requests.transition(id, PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.MORE_INFO_REQUIRED, null, null);
-        requests.transition(id, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.IMPORT_REVIEWING, null, null);
-
-        var pickedUpAtAfterRoundTrip = requests.findSummary(id).orElseThrow().pickedUpAt();
-        assertThat(pickedUpAtAfterRoundTrip).isEqualTo(firstPickedUpAt);
-    }
 
     @Test
     void transition_assignedImportId_firstWriterWins_notOverwrittenByLaterPickupAttempt() {
@@ -250,10 +230,12 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
 
         assertThat(requests.findSummary(id).orElseThrow().assignedImportId()).isEqualTo(importA);
 
-        // Simulate a second Import user attempting to pick the request back up after a
-        // MORE_INFO_REQUIRED round-trip; assignedImportId must NOT change to importB.
-        requests.transition(id, PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.MORE_INFO_REQUIRED, null, null);
-        requests.transition(id, PricingRequestStatus.MORE_INFO_REQUIRED, PricingRequestStatus.IMPORT_REVIEWING, importB, null);
+        // A second Import user attempting to claim the request on a later transition;
+        // assignedImportId must NOT change to importB. V139 retired the MORE_INFO_REQUIRED
+        // round-trip this used to simulate, so it walks Import's real path instead — the subject
+        // is the first-writer-wins column, not which statuses it passes through.
+        requests.transition(id, PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
+        requests.transition(id, PricingRequestStatus.AWAITING_FACTORY_RESPONSE, PricingRequestStatus.READY_FOR_CEO_REVIEW, importB, null);
 
         assertThat(requests.findSummary(id).orElseThrow().assignedImportId()).isEqualTo(importA);
     }

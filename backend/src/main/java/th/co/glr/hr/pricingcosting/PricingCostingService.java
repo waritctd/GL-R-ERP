@@ -55,7 +55,6 @@ public class PricingCostingService {
     private static final Set<String> COSTING_CREATE_STATUSES = Set.of(
         PricingRequestStatus.IMPORT_REVIEWING,
         PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
-        PricingRequestStatus.COSTING_IN_PROGRESS,
         PricingRequestStatus.COSTING_REVISION_REQUIRED);
 
     private final PricingCostingRepository costings;
@@ -102,15 +101,19 @@ public class PricingCostingService {
             }
             return existing;
         }
-        if (!PricingRequestStatus.COSTING_IN_PROGRESS.equals(summary.status())) {
+        // V139: costing no longer has a status of its own. Starting one settles the request into
+        // AWAITING_FACTORY_RESPONSE (เจรจาราคากับโรงงาน) when it is not already there — i.e. when
+        // Import creates a costing straight from IMPORT_REVIEWING, or reopens one the CEO returned
+        // (COSTING_REVISION_REQUIRED). Both edges are in PricingRequestStatus.ALLOWED.
+        if (!PricingRequestStatus.AWAITING_FACTORY_RESPONSE.equals(summary.status())) {
             int transitioned = pricingRequests.transition(summary.id(), summary.status(),
-                PricingRequestStatus.COSTING_IN_PROGRESS, null, null);
+                PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
             if (transitioned == 0) {
                 throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
             }
         }
         addEvent(summary, actor, PricingRequestEventKind.PRICING_COSTING_STARTED, summary.status(),
-            PricingRequestStatus.COSTING_IN_PROGRESS, "Costing draft created");
+            PricingRequestStatus.AWAITING_FACTORY_RESPONSE, "Costing draft created");
         notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_STARTED,
             "คำขอราคา " + summary.requestCode() + " เริ่มร่างต้นทุน");
         return requireCosting(costingId);
@@ -135,8 +138,8 @@ public class PricingCostingService {
             throw new ApiException(HttpStatus.CONFLICT, "การคำนวณต้นทุนที่ส่งไปแล้วไม่สามารถแก้ไขได้");
         }
         PricingRequestSummaryDto summary = requirePricingRequest(costing.pricingRequestId());
-        if (!PricingRequestStatus.COSTING_IN_PROGRESS.equals(summary.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาต้องอยู่ในสถานะ COSTING_IN_PROGRESS ก่อนจึงจะคำนวณใหม่ได้");
+        if (!PricingRequestStatus.AWAITING_FACTORY_RESPONSE.equals(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาต้องอยู่ในสถานะเจรจาราคากับโรงงาน ก่อนจึงจะคำนวณใหม่ได้");
         }
         requireActiveDeal(summary.ticketId());
         CalculationResult result = calculate(summary);
@@ -165,8 +168,8 @@ public class PricingCostingService {
             throw new ApiException(HttpStatus.CONFLICT, "ส่งได้เฉพาะการคำนวณต้นทุนที่คำนวณเสร็จแล้วเท่านั้น");
         }
         PricingRequestSummaryDto summary = requirePricingRequest(costing.pricingRequestId());
-        if (!PricingRequestStatus.COSTING_IN_PROGRESS.equals(summary.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาต้องอยู่ในสถานะ COSTING_IN_PROGRESS ก่อนจึงจะส่งให้ CEO ได้");
+        if (!PricingRequestStatus.AWAITING_FACTORY_RESPONSE.equals(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาต้องอยู่ในสถานะเจรจาราคากับโรงงาน ก่อนจึงจะส่งให้ CEO ได้");
         }
         requireActiveDeal(summary.ticketId());
         CalculationResult result = calculate(summary);
@@ -175,13 +178,13 @@ public class PricingCostingService {
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "การคำนวณต้นทุนถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
-        int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.COSTING_IN_PROGRESS,
+        int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
             PricingRequestStatus.READY_FOR_CEO_REVIEW, null, null);
         if (transitioned == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         addEvent(summary, actor, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
-            PricingRequestStatus.COSTING_IN_PROGRESS, PricingRequestStatus.READY_FOR_CEO_REVIEW,
+            PricingRequestStatus.AWAITING_FACTORY_RESPONSE, PricingRequestStatus.READY_FOR_CEO_REVIEW,
             "Costing submitted to CEO");
         notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
             "คำขอราคา " + summary.requestCode() + " ส่งต้นทุนให้ CEO แล้ว");

@@ -335,8 +335,6 @@ export const API_ROUTES = {
     depositNoticeFromQuotation: (id) => `/api/pricing-requests/${id}/deposit-notice`,
     submit: (id) => `/api/pricing-requests/${id}/submit`,
     pickup: (id) => `/api/pricing-requests/${id}/pickup`,
-    requestInformation: (id) => `/api/pricing-requests/${id}/request-information`,
-    respondInformation: (id) => `/api/pricing-requests/${id}/respond-information`,
     customerChangeRevision: (id) => `/api/pricing-requests/${id}/customer-change-revision`,
     cancel: (id) => `/api/pricing-requests/${id}/cancel`,
     // Sales-level supporting attachments on the Pricing Request itself (V69, review remediation

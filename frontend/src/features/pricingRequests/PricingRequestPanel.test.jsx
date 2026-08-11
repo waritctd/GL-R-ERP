@@ -19,8 +19,6 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         update: vi.fn(),
         submit: vi.fn(),
         cancel: vi.fn(),
-        respondInformation: vi.fn(),
-        requestInformation: vi.fn(),
         // PricingRequestCreateModal (V69, review remediation COMMIT 4) fetches attachments
         // whenever it has a persisted id — including edit mode, which this file's "seed the
         // modal from request detail" test exercises.
@@ -32,7 +30,6 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 
 const salesOwner = { id: 1, name: 'พนักงานขาย', role: 'sales' };
 const importUser = { id: 5, name: 'ฝ่ายนำเข้า', role: 'import' };
-const otherImportUser = { id: 6, name: 'ฝ่ายนำเข้าอีกคน', role: 'import' };
 const deal = { createdById: 1, lifecycle: 'ACTIVE' };
 
 function renderPanel(overrides = {}) {
@@ -288,126 +285,41 @@ describe('PricingRequestPanel', () => {
     expect(screen.getByRole('button', { name: 'ยกเลิก' })).not.toBeNull();
   });
 
-  it('lets the ASSIGNED import user request more information while IMPORT_REVIEWING', async () => {
-    api.pricingRequests.listForTicket.mockResolvedValue({
-      items: [summary({ status: 'IMPORT_REVIEWING', assignedImportId: 5, assignedImportName: importUser.name })],
-    });
-    api.pricingRequests.requestInformation.mockResolvedValue({
-      pricingRequest: { summary: summary({ status: 'MORE_INFO_REQUIRED' }), items: [], events: [] },
-    });
-    renderPanel({ user: importUser });
 
-    const requestInfoButton = await screen.findByRole('button', { name: 'ขอข้อมูลเพิ่มเติม' });
-    fireEvent.click(requestInfoButton);
-
-    const saveButton = await screen.findByRole('button', { name: 'ส่งคำขอ' });
-    // Required message — the save action stays disabled until something is typed.
-    expect(saveButton.disabled).toBe(true);
-
-    const textarea = screen.getByRole('dialog').querySelector('textarea');
-    fireEvent.change(textarea, { target: { value: 'ขอแบบ CAD เพิ่มเติม' } });
-    expect(saveButton.disabled).toBe(false);
-
-    fireEvent.click(saveButton);
-
-    await waitFor(() => expect(api.pricingRequests.requestInformation).toHaveBeenCalledWith(
-      1,
-      { message: 'ขอแบบ CAD เพิ่มเติม', dueDate: null },
-    ));
-  });
-
-  // canRequestInformation (pricingRequestMeta.js) is deliberately department-wide —
-  // "Mirrors PricingRequestService.requestInformation: any import user in active
-  // Step 2 statuses" — matching the real backend's requireRole(actor, IMPORT_ROLES)
-  // with no assignedImportId check (PricingRequestService.requestInformation,
-  // backend/src/main/java/th/co/glr/hr/pricingrequest/PricingRequestService.java).
-  // This is a stated business rule in the branch handoff ("Import department users
-  // can request and resume Sales information loops ... without relying on a single
-  // assigned Import user"), not an oversight — an unassigned import user must still
-  // see the button. This test previously asserted the opposite (assigned-only) and
-  // was stale relative to that deliberate design; renamed and inverted to match.
+  // V139 deleted the ขอข้อมูลเพิ่มเติม round-trip from the product — the service methods,
+  // the API surface, the canRequestInformation/canRespondInformation predicates and both
+  // modals are gone.
   //
-  // UI-level only per CLAUDE.md ("Mock API contract" / "Authz verify against Java,
-  // not the mock"): this proves the button-visibility predicate against mockApi,
-  // not the authoritative Java role gate above, which is what actually enforces it.
-  it('offers "ขอข้อมูลเพิ่มเติม" to any import user, not only the one assigned', async () => {
-    api.pricingRequests.listForTicket.mockResolvedValue({
-      items: [summary({ status: 'IMPORT_REVIEWING', assignedImportId: 5, assignedImportName: importUser.name })],
-    });
-    renderPanel({ user: otherImportUser });
+  // This REPLACES three earlier tests ("does not offer ขอข้อมูลเพิ่มเติม to sales, even the
+  // deal owner", and two ตอบข้อมูลเพิ่มเติม ones) that pinned WHO got each button. Those
+  // discriminated on role and ownership; with the buttons gone for everyone they passed no
+  // matter which user was rendered, so they had stopped testing their own subject. Two of
+  // them also drove a MORE_INFO_REQUIRED fixture, a status V139 removed from the DB
+  // constraint entirely.
+  //
+  // What replaces them is deliberately a removal guard, not a permission test: it asserts
+  // the surface is ABSENT for every role that could ever have reached it, and it still goes
+  // red if anyone re-adds either button. IMPORT_REVIEWING is the status the request-side
+  // button used to appear in, so the fixture is the one most likely to bring it back.
+  it('offers no ขอข้อมูลเพิ่มเติม surface to any role — the whole round-trip was removed', async () => {
+    const roles = [
+      salesOwner,
+      { id: 2, name: 'อื่น', role: 'sales' },
+      importUser,
+      { id: 9, name: 'CEO', role: 'ceo' },
+    ];
 
-    expect(await screen.findByRole('button', { name: 'ขอข้อมูลเพิ่มเติม' })).not.toBeNull();
+    for (const user of roles) {
+      api.pricingRequests.listForTicket.mockResolvedValue({
+        items: [summary({ status: 'IMPORT_REVIEWING', assignedImportId: 5, assignedImportName: importUser.name })],
+      });
+      const { unmount } = renderPanel({ user });
+
+      await screen.findByText('PCR-2026-0001');
+      expect(screen.queryByRole('button', { name: 'ขอข้อมูลเพิ่มเติม' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'ตอบข้อมูลเพิ่มเติม' })).toBeNull();
+      unmount();
+    }
   });
 
-  it('does not offer "ขอข้อมูลเพิ่มเติม" to sales, even the deal owner', async () => {
-    api.pricingRequests.listForTicket.mockResolvedValue({
-      items: [summary({ status: 'IMPORT_REVIEWING', assignedImportId: 5, assignedImportName: importUser.name })],
-    });
-    renderPanel();
-
-    await screen.findByText('PCR-2026-0001');
-    expect(screen.queryByRole('button', { name: 'ขอข้อมูลเพิ่มเติม' })).toBeNull();
-  });
-
-  // Gap 1 (review-remediation Commit F): the respond-information round trip had
-  // zero frontend coverage — canRespondInformation existed and the modal was
-  // wired, but nothing exercised either. Mirrors the request-information tests
-  // above, on the sales side of the MORE_INFO_REQUIRED loop.
-
-  it('shows "ตอบข้อมูลเพิ่มเติม" to the owning sales rep while MORE_INFO_REQUIRED', async () => {
-    api.pricingRequests.listForTicket.mockResolvedValue({
-      items: [summary({ status: 'MORE_INFO_REQUIRED', assignedImportId: 5, assignedImportName: importUser.name })],
-    });
-    renderPanel();
-
-    expect(await screen.findByRole('button', { name: 'ตอบข้อมูลเพิ่มเติม' })).not.toBeNull();
-  });
-
-  it('does not offer "ตอบข้อมูลเพิ่มเติม" to a non-owner sales rep', async () => {
-    api.pricingRequests.listForTicket.mockResolvedValue({
-      items: [summary({ status: 'MORE_INFO_REQUIRED', assignedImportId: 5, assignedImportName: importUser.name })],
-    });
-    renderPanel({ user: { id: 2, name: 'อื่น', role: 'sales' } });
-
-    await screen.findByText('PCR-2026-0001');
-    expect(screen.queryByRole('button', { name: 'ตอบข้อมูลเพิ่มเติม' })).toBeNull();
-  });
-
-  it('does not offer "ตอบข้อมูลเพิ่มเติม" to import, even the assigned reviewer', async () => {
-    api.pricingRequests.listForTicket.mockResolvedValue({
-      items: [summary({ status: 'MORE_INFO_REQUIRED', assignedImportId: 5, assignedImportName: importUser.name })],
-    });
-    renderPanel({ user: importUser });
-
-    await screen.findByText('PCR-2026-0001');
-    expect(screen.queryByRole('button', { name: 'ตอบข้อมูลเพิ่มเติม' })).toBeNull();
-  });
-
-  it('requires response text before saving, then calls respondInformation with the typed text', async () => {
-    api.pricingRequests.listForTicket.mockResolvedValue({
-      items: [summary({ status: 'MORE_INFO_REQUIRED', assignedImportId: 5, assignedImportName: importUser.name })],
-    });
-    api.pricingRequests.respondInformation.mockResolvedValue({
-      pricingRequest: { summary: summary({ status: 'IMPORT_REVIEWING' }), items: [], events: [] },
-    });
-    renderPanel();
-
-    const respondButton = await screen.findByRole('button', { name: 'ตอบข้อมูลเพิ่มเติม' });
-    fireEvent.click(respondButton);
-
-    const saveButton = await screen.findByRole('button', { name: 'บันทึก' });
-    // Required response text — the save action stays disabled until something is typed.
-    expect(saveButton.disabled).toBe(true);
-
-    const textarea = screen.getByRole('dialog').querySelector('textarea');
-    fireEvent.change(textarea, { target: { value: 'ขนาด 60x60' } });
-    expect(saveButton.disabled).toBe(false);
-
-    fireEvent.click(saveButton);
-
-    await waitFor(() => expect(api.pricingRequests.respondInformation).toHaveBeenCalledWith(
-      1,
-      { response: 'ขนาด 60x60' },
-    ));
-  });
 });

@@ -669,8 +669,8 @@ export const api = {
     }),
   },
   // Mirrors PricingRequestController + PricingRequestService (pricingrequest/).
-  // Detail-shaped responses (create/get/update/submit/pickup/requestInformation/
-  // respondInformation/cancel) come back wrapped as { pricingRequest }; list-shaped
+  // Detail-shaped responses (create/get/update/submit/pickup/cancel) come back
+  // wrapped as { pricingRequest }; list-shaped
   // responses (listForTicket/queue) come back as { items }.
   pricingRequests: {
     listForTicket: (ticketId) => apiRequest(API_ROUTES.pricingRequests.listForTicket(ticketId)),
@@ -727,8 +727,6 @@ export const api = {
     },
     submit: (id) => apiRequest(API_ROUTES.pricingRequests.submit(id), { method: 'POST' }),
     pickup: (id) => apiRequest(API_ROUTES.pricingRequests.pickup(id), { method: 'POST' }),
-    requestInformation: (id, payload) => apiRequest(API_ROUTES.pricingRequests.requestInformation(id), { method: 'POST', body: payload }),
-    respondInformation: (id, payload) => apiRequest(API_ROUTES.pricingRequests.respondInformation(id), { method: 'POST', body: payload }),
     createCustomerChangeRevision: (id, payload) => apiRequest(API_ROUTES.pricingRequests.customerChangeRevision(id), { method: 'POST', body: payload }),
     uploadFactoryQuoteAttachment: async (id, file) => {
       const formData = new FormData();

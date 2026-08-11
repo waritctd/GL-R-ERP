@@ -194,14 +194,17 @@ public class PricingRequestRepository {
                SET status       = :next,
                    submitted_at = CASE WHEN :next = 'SUBMITTED'
                                        THEN COALESCE(submitted_at, now()) ELSE submitted_at END,
-                   -- COALESCE(picked_up_at, now()) is what makes MORE_INFO_REQUIRED ->
-                   -- IMPORT_REVIEWING preserve the ORIGINAL pickup time. A bare now()
-                   -- would reset it on every info round-trip and destroy the
-                   -- "how long has Import held this" metric.
+                   -- COALESCE(picked_up_at, now()), not a bare now(): any later arrival at
+                   -- IMPORT_REVIEWING must preserve the ORIGINAL pickup time, or the
+                   -- "how long has Import held this" metric resets. The round-trip that
+                   -- used to re-enter IMPORT_REVIEWING (MORE_INFO_REQUIRED -> resume) was
+                   -- retired by V139, so today only pickup reaches this branch and the
+                   -- COALESCE is belt-and-braces — keep it: V139's own data migration
+                   -- relies on exactly these semantics when it resumes parked rows.
                    picked_up_at = CASE WHEN :next = 'IMPORT_REVIEWING'
                                        THEN COALESCE(picked_up_at, now()) ELSE picked_up_at END,
-                   -- First-writer-wins: respond-information passes assignImportId=null and
-                   -- the existing assignee survives; a second Import user cannot steal an
+                   -- First-writer-wins: a caller passing assignImportId=null leaves the
+                   -- existing assignee intact, so a second Import user cannot steal an
                    -- already-assigned request by picking it up again.
                    assigned_import_id = COALESCE(assigned_import_id, :assignImportId),
                    cancelled_at = CASE WHEN :next = 'CANCELLED' THEN now() ELSE cancelled_at END,
@@ -244,49 +247,6 @@ public class PricingRequestRepository {
                 .addValue("id", id)
                 .addValue("expected", expected)
                 .addValue("cancelledBy", cancelledBy));
-    }
-
-    public int requestMoreInformation(long id, String expectedResumeStatus) {
-        return jdbc.update("""
-            UPDATE sales.pricing_request
-               SET status = 'MORE_INFO_REQUIRED',
-                   resume_status = :resumeStatus,
-                   updated_at = now()
-             WHERE pricing_request_id = :id
-               AND status = :resumeStatus
-            """,
-            new MapSqlParameterSource()
-                .addValue("id", id)
-                .addValue("resumeStatus", expectedResumeStatus));
-    }
-
-    public Optional<String> findResumeStatus(long id) {
-        try {
-            return Optional.ofNullable(jdbc.queryForObject("""
-                SELECT resume_status
-                  FROM sales.pricing_request
-                 WHERE pricing_request_id = :id
-                """, Map.of("id", id), String.class));
-        } catch (EmptyResultDataAccessException e) {
-            return Optional.empty();
-        }
-    }
-
-    public int resumeFromMoreInformation(long id, String nextStatus) {
-        return jdbc.update("""
-            UPDATE sales.pricing_request
-               SET status = :nextStatus,
-                   resume_status = NULL,
-                   picked_up_at = CASE WHEN :nextStatus = 'IMPORT_REVIEWING'
-                                       THEN COALESCE(picked_up_at, now()) ELSE picked_up_at END,
-                   updated_at = now()
-             WHERE pricing_request_id = :id
-               AND status = 'MORE_INFO_REQUIRED'
-               AND COALESCE(resume_status, 'IMPORT_REVIEWING') = :nextStatus
-            """,
-            new MapSqlParameterSource()
-                .addValue("id", id)
-                .addValue("nextStatus", nextStatus));
     }
 
     /**

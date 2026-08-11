@@ -46,17 +46,14 @@ public class FactoryQuoteService {
     private static final Set<String> IMPORT_ROLES = Set.of("import");
     private static final Set<String> DRAFT_STATUSES = Set.of(
         PricingRequestStatus.IMPORT_REVIEWING,
-        PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
-        PricingRequestStatus.COSTING_IN_PROGRESS);
+        PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
     private static final Set<String> RESPONSE_STATUSES = Set.of(
         PricingRequestStatus.IMPORT_REVIEWING,
         PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
-        PricingRequestStatus.COSTING_IN_PROGRESS,
         PricingRequestStatus.READY_FOR_CEO_REVIEW);
     private static final Set<String> MUTABLE_STATUSES = Set.of(
         PricingRequestStatus.IMPORT_REVIEWING,
         PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
-        PricingRequestStatus.COSTING_IN_PROGRESS,
         PricingRequestStatus.READY_FOR_CEO_REVIEW);
     // Review remediation (COMMIT 4): deliberately NARROWER than MUTABLE_STATUSES —
     // READY_FOR_CEO_REVIEW is excluded on purpose. Uploading new supplementary evidence while
@@ -67,8 +64,7 @@ public class FactoryQuoteService {
     // and a SUBMITTED costing referencing this exact quote revision).
     private static final Set<String> ATTACHMENT_DELETE_STATUSES = Set.of(
         PricingRequestStatus.IMPORT_REVIEWING,
-        PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
-        PricingRequestStatus.COSTING_IN_PROGRESS);
+        PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
 
     private final FactoryQuoteRepository quotes;
     private final PricingRequestRepository pricingRequests;
@@ -283,8 +279,9 @@ public class FactoryQuoteService {
         }
 
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
-        if (PricingRequestStatus.IMPORT_REVIEWING.equals(summary.status())
-                || PricingRequestStatus.COSTING_IN_PROGRESS.equals(summary.status())) {
+        // V139 merged COSTING_IN_PROGRESS into AWAITING_FACTORY_RESPONSE, so the only status
+        // still needing promotion here is IMPORT_REVIEWING.
+        if (PricingRequestStatus.IMPORT_REVIEWING.equals(summary.status())) {
             int transitioned = pricingRequests.transition(summary.id(), summary.status(),
                 PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
             if (transitioned == 0) {

@@ -826,7 +826,9 @@ function scheduleMockFactoryQuoteDispatch(quote, actor) {
     current.dispatchStatus = 'SENT';
     const pr = findPricingRequestRaw(current.pricingRequestId);
     const fromStatus = pr.status;
-    if (['IMPORT_REVIEWING', 'COSTING_IN_PROGRESS'].includes(pr.status)) pr.status = 'AWAITING_FACTORY_RESPONSE';
+    // Mirrors FactoryQuoteService.attemptSend: V139 merged COSTING_IN_PROGRESS into
+    // AWAITING_FACTORY_RESPONSE, so IMPORT_REVIEWING is the only status still needing promotion.
+    if (pr.status === 'IMPORT_REVIEWING') pr.status = 'AWAITING_FACTORY_RESPONSE';
     pushPricingRequestEvent(pr, actor, 'FACTORY_EMAIL_SENT', fromStatus, pr.status);
   }, 700);
 }
@@ -7794,14 +7796,20 @@ export const api = {
       // Mirrors PricingRequestService.list: same viewer roles as a single
       // request, plus sales is scoped to only its own created tickets.
       if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      // The real gate is PricingRequestStatus.isValid (PricingRequestService.list 400s anything
+      // else). V139 removed COSTING_IN_PROGRESS and MORE_INFO_REQUIRED from that set, so they are
+      // removed here too — a mock that still accepted them would be MORE permissive than
+      // production, which is the direction CLAUDE.md calls out as the dangerous one. This list is
+      // still a strict SUBSET of PricingRequestStatus.VALUES (the Step 3/4/5 statuses —
+      // CEO_REVIEWING, APPROVED_FOR_QUOTATION, COSTING_REVISION_REQUIRED, QUOTATION_ISSUED,
+      // QUOTATION_ACCEPTED — were never mirrored here); stricter than production is the safe
+      // direction, and closing that pre-existing gap is out of scope for V139.
       if (params.status && ![
         'DRAFT',
         'SUBMITTED',
         'IMPORT_REVIEWING',
         'AWAITING_FACTORY_RESPONSE',
-        'COSTING_IN_PROGRESS',
         'READY_FOR_CEO_REVIEW',
-        'MORE_INFO_REQUIRED',
         'CANCELLED',
         'SUPERSEDED',
       ].includes(params.status)) {
@@ -8056,7 +8064,8 @@ export const api = {
     async generateFactoryEmailDrafts(id) {
       const user = hasRole('import');
       const pr = findPricingRequestRaw(id);
-      if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS'].includes(pr.status)) {
+      // Mirrors FactoryQuoteService.DRAFT_STATUSES (V139 dropped COSTING_IN_PROGRESS from it).
+      if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE'].includes(pr.status)) {
         fail('คำขอราคาต้องอยู่ระหว่างการตรวจสอบของฝ่ายนำเข้าก่อนจึงจะสร้างร่างอีเมลราคาโรงงานได้', 409);
       }
       const byFactory = new Map();
@@ -8353,7 +8362,9 @@ export const api = {
       // Mirrors PricingCostingService.COSTING_CREATE_STATUSES (Step 3, design corrections 3+4):
       // READY_FOR_CEO_REVIEW/CEO_REVIEWING are deliberately excluded — a submitted costing is
       // frozen until the CEO explicitly returns the request (-> COSTING_REVISION_REQUIRED).
-      if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS', 'COSTING_REVISION_REQUIRED'].includes(pr.status)) {
+      // V139 also dropped COSTING_IN_PROGRESS from this set — costing no longer has a status of
+      // its own, so the status Import creates a costing FROM is now also the status it stays in.
+      if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_REVISION_REQUIRED'].includes(pr.status)) {
         fail('คำขอราคานี้ยังไม่พร้อมสำหรับการคำนวณต้นทุน', 409);
       }
       const readyFactories = new Set(mockFactoryQuotes.filter((q) => q.pricingRequestId === pr.id && q.current && q.status === 'READY_FOR_COSTING').map((q) => q.factoryName));
@@ -8362,8 +8373,13 @@ export const api = {
       if (existing) return delay({ costing: existing });
       const costing = { id: mockPricingCostingSeq++, costingCode: `PCO-2026-${String(mockPricingCostingSeq).padStart(4, '0')}`, pricingRequestId: pr.id, versionNo: mockPricingCostingSeq, status: 'DRAFT', stale: false, staleReason: null, note: payload.note ?? null, createdBy: user.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), calculatedAt: null, submittedBy: null, submittedAt: null, totalLandedCostThb: null, items: [] };
       mockPricingCostings.push(costing);
-      pr.status = 'COSTING_IN_PROGRESS';
-      pushPricingRequestEvent(pr, user, 'PRICING_COSTING_STARTED', null, 'COSTING_IN_PROGRESS');
+      // Mirrors PricingCostingService.createDraft after V139: starting a costing settles the
+      // request into AWAITING_FACTORY_RESPONSE when it is not already there (Import creating one
+      // straight from IMPORT_REVIEWING, or reopening one the CEO returned via
+      // COSTING_REVISION_REQUIRED). It never moves a request that is already there.
+      const costingFromStatus = pr.status;
+      if (pr.status !== 'AWAITING_FACTORY_RESPONSE') pr.status = 'AWAITING_FACTORY_RESPONSE';
+      pushPricingRequestEvent(pr, user, 'PRICING_COSTING_STARTED', costingFromStatus, 'AWAITING_FACTORY_RESPONSE');
       return delay({ costing });
     },
 
@@ -8442,7 +8458,9 @@ export const api = {
       costing.submittedAt = new Date().toISOString();
       costing.note = payload.note ?? costing.note;
       pr.status = 'READY_FOR_CEO_REVIEW';
-      pushPricingRequestEvent(pr, user, 'PRICING_COSTING_SUBMITTED', 'COSTING_IN_PROGRESS', 'READY_FOR_CEO_REVIEW');
+      // Mirrors PricingCostingService.submit after V139: the request leaves
+      // AWAITING_FACTORY_RESPONSE (not the retired COSTING_IN_PROGRESS) for READY_FOR_CEO_REVIEW.
+      pushPricingRequestEvent(pr, user, 'PRICING_COSTING_SUBMITTED', 'AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW');
       return delay({ costing });
     },
 
@@ -9101,46 +9119,6 @@ export const api = {
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });
     },
 
-    async requestInformation(id, payload) {
-      // Mirrors PricingRequestService.requestInformation: only the ASSIGNED
-      // import user, IMPORT_REVIEWING only.
-      const user = hasRole('import');
-      const pr = findPricingRequestRaw(id);
-      if (pr.assignedImportId == null || pr.assignedImportId !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (pr.status !== 'IMPORT_REVIEWING') fail(`ต้องเป็นคำขอราคาที่อยู่ในสถานะ 'IMPORT_REVIEWING' เท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
-      // Mirrors RequestMoreInformationRequest's @NotBlank message.
-      if (!payload.message?.trim()) fail('ต้องระบุข้อความ', 400);
-      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      const now = new Date().toISOString();
-      pr.status = 'MORE_INFO_REQUIRED';
-      pr.updatedAt = now;
-      pushPricingRequestEvent(
-        pr, user, 'MORE_INFO_REQUESTED', 'IMPORT_REVIEWING', 'MORE_INFO_REQUIRED',
-        payload.message, payload.dueDate ? JSON.stringify({ dueDate: payload.dueDate }) : null,
-      );
-      addNotification(pr.requestedById, pr.ticketId, ticket?.code, 'MORE_INFO_REQUIRED', `คำขอราคา ${pr.requestCode} ต้องการข้อมูลเพิ่มเติม`);
-      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
-    },
-
-    async respondInformation(id, payload) {
-      // Mirrors PricingRequestService.respondInformation: owner sales,
-      // MORE_INFO_REQUIRED only. Goes back to IMPORT_REVIEWING, not SUBMITTED —
-      // Import already owns this request; assignedImportId/pickedUpAt survive.
-      const user = hasRole('sales');
-      const pr = findPricingRequestRaw(id);
-      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (pr.status !== 'MORE_INFO_REQUIRED') fail(`ต้องเป็นคำขอราคาที่อยู่ในสถานะ 'MORE_INFO_REQUIRED' เท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
-      const now = new Date().toISOString();
-      pr.status = 'IMPORT_REVIEWING';
-      pr.updatedAt = now;
-      pushPricingRequestEvent(pr, user, 'MORE_INFO_RESPONDED', 'MORE_INFO_REQUIRED', 'IMPORT_REVIEWING', payload.response);
-      if (pr.assignedImportId != null) {
-        addNotification(pr.assignedImportId, pr.ticketId, ticket?.code, 'MORE_INFO_RESPONDED', `คำขอราคา ${pr.requestCode} ได้รับข้อมูลเพิ่มเติมแล้ว`);
-      }
-      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
-    },
-
     async createCustomerChangeRevision(id, payload) {
       const user = hasRole('sales');
       const parent = requirePricingRequestViewable(id, user);
@@ -9233,15 +9211,17 @@ export const api = {
     // attachmentFilePath/deleteAttachment/setAttachmentIncludeInFactoryEmail.
 
     async uploadAttachment(id, file) {
-      // Mirrors PricingRequestService.uploadAttachment: owner sales only, DRAFT/MORE_INFO_REQUIRED
-      // only. requirePricingRequestViewable already 404s a non-owner on a DRAFT (draft privacy)
-      // and 403s a non-owner once the request is visible-but-not-owned — see that helper.
+      // Mirrors PricingRequestService.uploadAttachment: owner sales only, and
+      // ATTACHMENT_EDITABLE_STATUSES — which V139 narrowed to {DRAFT} alone when the
+      // ขอข้อมูลเพิ่มเติม round-trip left the product. requirePricingRequestViewable already 404s a
+      // non-owner on a DRAFT (draft privacy) and 403s a non-owner once the request is
+      // visible-but-not-owned — see that helper.
       const user = hasRole('sales');
       const pr = requirePricingRequestViewable(id, user);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (!['DRAFT', 'MORE_INFO_REQUIRED'].includes(pr.status)) {
-        fail('แนบไฟล์ได้เฉพาะเมื่อคำขอราคาอยู่ในสถานะ DRAFT หรือ MORE_INFO_REQUIRED เท่านั้น', 409);
+      if (pr.status !== 'DRAFT') {
+        fail('แนบไฟล์ได้เฉพาะเมื่อคำขอราคายังเป็นแบบร่างเท่านั้น', 409);
       }
       requirePricingRequestDealActive(ticket);
       const attachment = {
@@ -9270,15 +9250,15 @@ export const api = {
     },
 
     async deleteAttachment(id) {
-      // Mirrors PricingRequestService.deleteAttachment: owner sales only,
-      // DRAFT/MORE_INFO_REQUIRED only.
+      // Mirrors PricingRequestService.deleteAttachment: owner sales only, and
+      // ATTACHMENT_EDITABLE_STATUSES = {DRAFT} after V139.
       const user = hasRole('sales');
       const owningPr = mockPricingRequests.find((p) => (p.attachments ?? []).some((a) => a.id === Number(id)));
       if (!owningPr) fail('ไม่พบไฟล์แนบของคำขอราคานี้', 404);
       const ticket = db.tickets.find((t) => t.id === owningPr.ticketId);
       if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (!['DRAFT', 'MORE_INFO_REQUIRED'].includes(owningPr.status)) {
-        fail('ลบไฟล์แนบได้เฉพาะเมื่อคำขอราคาอยู่ในสถานะ DRAFT หรือ MORE_INFO_REQUIRED เท่านั้น', 409);
+      if (owningPr.status !== 'DRAFT') {
+        fail('ลบไฟล์แนบได้เฉพาะเมื่อคำขอราคายังเป็นแบบร่างเท่านั้น', 409);
       }
       owningPr.attachments = (owningPr.attachments ?? []).filter((a) => a.id !== Number(id));
       return delay({ ok: true });

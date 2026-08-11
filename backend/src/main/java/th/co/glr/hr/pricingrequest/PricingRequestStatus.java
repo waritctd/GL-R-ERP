@@ -7,8 +7,23 @@ public final class PricingRequestStatus {
     public static final String DRAFT               = "DRAFT";
     public static final String SUBMITTED            = "SUBMITTED";
     public static final String IMPORT_REVIEWING      = "IMPORT_REVIEWING";
+    /**
+     * Import is working the price with the factory — asking, negotiating, and costing. Displayed
+     * throughout as "เจรจาราคากับโรงงาน".
+     *
+     * <p>V139 (owner ruling 2026-08-11) MERGED the former {@code COSTING_IN_PROGRESS} into this
+     * status. Import's workflow is now exactly three user-visible states — รับเรื่อง
+     * ({@link #IMPORT_REVIEWING}), เจรจาราคากับโรงงาน (this), and รอ CEO อนุมัติราคา
+     * ({@link #READY_FOR_CEO_REVIEW}) — and splitting "waiting for the factory" from "costing what
+     * the factory said" described an internal step nobody outside Import could act on. Costing
+     * still happens; it simply no longer moves the request to a status of its own.
+     *
+     * <p>NOTE ON THE NAME: this constant is deliberately NOT renamed. It now covers costing as
+     * well as awaiting a reply, so the literal reads narrower than its meaning — but renaming it
+     * would rewrite the status string in every historical {@code pricing_request_event} row, and
+     * the display label is what users actually read. Renaming is recorded as a follow-up.
+     */
     public static final String AWAITING_FACTORY_RESPONSE = "AWAITING_FACTORY_RESPONSE";
-    public static final String COSTING_IN_PROGRESS  = "COSTING_IN_PROGRESS";
     public static final String READY_FOR_CEO_REVIEW = "READY_FOR_CEO_REVIEW";
     // Step 3 (CEO Selling Price Decision): the CEO has explicitly opened a
     // READY_FOR_CEO_REVIEW request (PricingDecisionService.startReview creates a DRAFT
@@ -42,15 +57,17 @@ public final class PricingRequestStatus {
     // which no longer permits reopening a submitted costing; see COSTING_CREATE_STATUSES) and
     // that createDraft call is what actually moves the request on to COSTING_IN_PROGRESS.
     public static final String COSTING_REVISION_REQUIRED = "COSTING_REVISION_REQUIRED";
-    public static final String MORE_INFO_REQUIRED    = "MORE_INFO_REQUIRED";
     public static final String CANCELLED             = "CANCELLED";
     public static final String SUPERSEDED            = "SUPERSEDED";
 
-    /** Exactly the set the DB's chk_pricing_request_status constraint (V59+V61+V72) accepts. */
+    /**
+     * Exactly the set the DB's chk_pricing_request_status constraint accepts (V59+V61+V72,
+     * narrowed by V139 which dropped COSTING_IN_PROGRESS and MORE_INFO_REQUIRED).
+     */
     public static final Set<String> VALUES = Set.of(
-        DRAFT, SUBMITTED, IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE, COSTING_IN_PROGRESS,
+        DRAFT, SUBMITTED, IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE,
         READY_FOR_CEO_REVIEW, CEO_REVIEWING, APPROVED_FOR_QUOTATION, COSTING_REVISION_REQUIRED,
-        QUOTATION_ISSUED, QUOTATION_ACCEPTED, MORE_INFO_REQUIRED, CANCELLED, SUPERSEDED);
+        QUOTATION_ISSUED, QUOTATION_ACCEPTED, CANCELLED, SUPERSEDED);
 
     /**
      * Allowed forward/lateral transitions. DRAFT -> DRAFT is deliberately absent:
@@ -60,10 +77,13 @@ public final class PricingRequestStatus {
     private static final Map<String, Set<String>> ALLOWED = Map.ofEntries(
         Map.entry(DRAFT,               Set.of(SUBMITTED, CANCELLED)),
         Map.entry(SUBMITTED,           Set.of(IMPORT_REVIEWING, CANCELLED)),
-        Map.entry(IMPORT_REVIEWING,    Set.of(AWAITING_FACTORY_RESPONSE, COSTING_IN_PROGRESS, MORE_INFO_REQUIRED, CANCELLED, SUPERSEDED)),
-        Map.entry(AWAITING_FACTORY_RESPONSE, Set.of(COSTING_IN_PROGRESS, MORE_INFO_REQUIRED, CANCELLED, SUPERSEDED)),
-        Map.entry(COSTING_IN_PROGRESS, Set.of(AWAITING_FACTORY_RESPONSE, READY_FOR_CEO_REVIEW, MORE_INFO_REQUIRED, CANCELLED, SUPERSEDED)),
-        Map.entry(MORE_INFO_REQUIRED,  Set.of(IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE, COSTING_IN_PROGRESS, CANCELLED)),
+        // V139: Import's three states, in order. IMPORT_REVIEWING -> AWAITING_FACTORY_RESPONSE
+        // -> READY_FOR_CEO_REVIEW. The old COSTING_IN_PROGRESS hop is gone (merged into
+        // AWAITING_FACTORY_RESPONSE) and so is MORE_INFO_REQUIRED — the ขอข้อมูลเพิ่มเติม
+        // round-trip was removed from the product entirely, since in practice Import and Sales
+        // just message each other directly.
+        Map.entry(IMPORT_REVIEWING,    Set.of(AWAITING_FACTORY_RESPONSE, CANCELLED, SUPERSEDED)),
+        Map.entry(AWAITING_FACTORY_RESPONSE, Set.of(READY_FOR_CEO_REVIEW, CANCELLED, SUPERSEDED)),
         // Step 3 (review remediation, "one return-to-Import path"): a submitted costing must
         // stay genuinely immutable once it reaches READY_FOR_CEO_REVIEW — the previous
         // READY_FOR_CEO_REVIEW -> COSTING_IN_PROGRESS entry (Costing v2 path, commit 5) let
@@ -80,7 +100,7 @@ public final class PricingRequestStatus {
         // that COSTING_REVISION_REQUIRED — not READY_FOR_CEO_REVIEW — is in
         // COSTING_CREATE_STATUSES) transitions here to COSTING_IN_PROGRESS, and
         // PricingCostingService.submit() carries it back to READY_FOR_CEO_REVIEW as before.
-        Map.entry(COSTING_REVISION_REQUIRED, Set.of(COSTING_IN_PROGRESS)),
+        Map.entry(COSTING_REVISION_REQUIRED, Set.of(AWAITING_FACTORY_RESPONSE)),
         // Step 4: the ONLY forward exit from APPROVED_FOR_QUOTATION is issuing a customer
         // quotation (CustomerQuotationService.issue). No transition is needed for creating a
         // DRAFT quotation (rule 6: drafts do not move the deal stage OR the pricing request

@@ -36,8 +36,6 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CancelPricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
-import th.co.glr.hr.pricingrequest.PricingRequestRequests.RequestMoreInformationRequest;
-import th.co.glr.hr.pricingrequest.PricingRequestRequests.RespondMoreInformationRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestAttachmentRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 import th.co.glr.hr.ticket.DealLifecycle;
@@ -1063,8 +1061,6 @@ class PricingRequestServiceTest {
         assertForbidden(() -> service.updateDraft(20L, sampleUpdateRequest(), accountActor));
         assertForbidden(() -> service.submit(20L, accountActor));
         assertForbidden(() -> service.pickup(20L, accountActor));
-        assertForbidden(() -> service.requestInformation(20L, moreInfoRequest(), accountActor));
-        assertForbidden(() -> service.respondInformation(20L, respondRequest(), accountActor));
         assertForbidden(() -> service.cancel(20L, cancelRequest(), accountActor));
 
         verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
@@ -1130,167 +1126,15 @@ class PricingRequestServiceTest {
         verifyNoMoreInteractions(ticketRepo);
     }
 
-    // ── requestInformation ──────────────────────────────────────────────────
-
-    @Test
-    void requestInformation_rejectsNonImportRoles() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, 3L);
-        assertForbidden(() -> service.requestInformation(20L, moreInfoRequest(), salesActor));
-        assertForbidden(() -> service.requestInformation(20L, moreInfoRequest(), ceoActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
-    void requestInformation_allowsUnassignedImport() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, null);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.requestMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING)).thenReturn(1);
-        when(requestRepo.findItems(20L)).thenReturn(List.of());
-        when(requestRepo.findEvents(20L)).thenReturn(List.of());
-        service.requestInformation(20L, moreInfoRequest(), importActor);
-        verify(requestRepo).requestMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING);
-    }
-
-    @Test
-    void requestInformation_allowsDifferentAssignedImport() {
-        long anotherImportId = 99L;
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, anotherImportId);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.requestMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING)).thenReturn(1);
-        when(requestRepo.findItems(20L)).thenReturn(List.of());
-        when(requestRepo.findEvents(20L)).thenReturn(List.of());
-        service.requestInformation(20L, moreInfoRequest(), importActor);
-        verify(requestRepo).requestMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING);
-    }
-
-    @Test
-    void requestInformation_rejectsWrongStatus() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED, 3L);
-        assertConflict(() -> service.requestInformation(20L, moreInfoRequest(), importActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
-    void requestInformation_rejectsWhenTransitionRowsZero() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, 3L);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.requestMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING)).thenReturn(0);
-        assertConflict(() -> service.requestInformation(20L, moreInfoRequest(), importActor));
-        verify(notifRepo, never()).notifyEmployee(anyLong(), anyLong(), any(), any());
-    }
-
-    @Test
-    void requestInformation_rejectsNonActiveDeal() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, 3L);
-        stubTicket(10L, 1L, DealLifecycle.ON_HOLD);
-        assertConflict(() -> service.requestInformation(20L, moreInfoRequest(), importActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
-    void requestInformation_assignedImportSucceedsAndNotifiesRequester() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, 3L);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.requestMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING)).thenReturn(1);
-        when(requestRepo.findItems(20L)).thenReturn(List.of());
-        when(requestRepo.findEvents(20L)).thenReturn(List.of());
-
-        service.requestInformation(20L, moreInfoRequest(), importActor);
-
-        verify(requestRepo).requestMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING);
-        verify(requestRepo).addEvent(eq(20L), eq(10L), eq(3L), any(),
-            eq(PricingRequestEventKind.MORE_INFO_REQUESTED), eq(PricingRequestStatus.IMPORT_REVIEWING),
-            eq(PricingRequestStatus.MORE_INFO_REQUIRED), eq("กรุณาระบุขนาดสินค้าเพิ่มเติม"), any());
-        verify(notifRepo).notifyEmployeeForPricingRequest(eq(1L), eq(20L), eq("MORE_INFO_REQUIRED"), any());
-        verify(notifRepo).notifyByRoleForPricingRequest(
-            eq("ceo"), eq(20L), eq(PricingRequestEventKind.MORE_INFO_REQUESTED), any());
-    }
-
-    // ── respondInformation ──────────────────────────────────────────────────
-
-    @Test
-    void respondInformation_rejectsImportRole() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, 3L);
-        assertForbidden(() -> service.respondInformation(20L, respondRequest(), importActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
-    void respondInformation_rejectsNonOwnerSales() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, 3L);
-        assertForbidden(() -> service.respondInformation(20L, respondRequest(), otherSales));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
-    void respondInformation_rejectsWrongStatus() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING, 3L);
-        assertConflict(() -> service.respondInformation(20L, respondRequest(), salesActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
-    void respondInformation_rejectsWhenTransitionRowsZero() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, 3L);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findResumeStatus(20L)).thenReturn(java.util.Optional.of(PricingRequestStatus.IMPORT_REVIEWING));
-        when(requestRepo.resumeFromMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING)).thenReturn(0);
-        assertConflict(() -> service.respondInformation(20L, respondRequest(), salesActor));
-    }
-
-    @Test
-    void respondInformation_rejectsNonActiveDeal() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, 3L);
-        stubTicket(10L, 1L, DealLifecycle.ON_HOLD);
-        assertConflict(() -> service.respondInformation(20L, respondRequest(), salesActor));
-        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
-    }
-
-    @Test
-    void respondInformation_goesToImportReviewingNotSubmittedAndNotifiesAssignedImport() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, 3L);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findResumeStatus(20L)).thenReturn(java.util.Optional.of(PricingRequestStatus.IMPORT_REVIEWING));
-        when(requestRepo.resumeFromMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING)).thenReturn(1);
-        when(requestRepo.findItems(20L)).thenReturn(List.of());
-        when(requestRepo.findEvents(20L)).thenReturn(List.of());
-
-        service.respondInformation(20L, respondRequest(), salesActor);
-
-        // The critical assertion: NOT back to SUBMITTED.
-        verify(requestRepo).resumeFromMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING);
-        verify(requestRepo, never()).transition(eq(20L), any(), eq(PricingRequestStatus.SUBMITTED), any(), any());
-        verify(requestRepo).addEvent(eq(20L), eq(10L), eq(1L), any(),
-            eq(PricingRequestEventKind.MORE_INFO_RESPONDED), eq(PricingRequestStatus.MORE_INFO_REQUIRED),
-            eq(PricingRequestStatus.IMPORT_REVIEWING), any(), eq(null));
-        verify(notifRepo).notifyEmployeeForPricingRequest(eq(3L), eq(20L), eq("MORE_INFO_RESPONDED"), any());
-        verify(notifRepo).notifyByRoleForPricingRequest(
-            eq("ceo"), eq(20L), eq(PricingRequestEventKind.MORE_INFO_RESPONDED), any());
-    }
-
-    @Test
-    void respondInformation_guardsAgainstNullAssignedImport() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED, null);
-        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        when(requestRepo.findResumeStatus(20L)).thenReturn(java.util.Optional.of(PricingRequestStatus.IMPORT_REVIEWING));
-        when(requestRepo.resumeFromMoreInformation(20L, PricingRequestStatus.IMPORT_REVIEWING)).thenReturn(1);
-        when(requestRepo.findItems(20L)).thenReturn(List.of());
-        when(requestRepo.findEvents(20L)).thenReturn(List.of());
-
-        service.respondInformation(20L, respondRequest(), salesActor);
-
-        verify(notifRepo, never()).notifyEmployee(anyLong(), anyLong(), any(), any());
-    }
-
-    // ── cancelOpenForTicket (internal dead-deal cascade) ──────────────────────
+    // ── cancelOpenForTicket ─────────────────────────────────────────────────
 
     @Test
     void cancelOpenForTicket_cancelsAllOpenRequests() {
         when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(20L, 21L));
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
-        stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED);
+        stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
         when(requestRepo.cancelForDeadDeal(20L, PricingRequestStatus.SUBMITTED, 4L)).thenReturn(1);
-        when(requestRepo.cancelForDeadDeal(21L, PricingRequestStatus.MORE_INFO_REQUIRED, 4L)).thenReturn(1);
+        when(requestRepo.cancelForDeadDeal(21L, PricingRequestStatus.AWAITING_FACTORY_RESPONSE, 4L)).thenReturn(1);
 
         PricingRequestService.CancelOpenForTicketResult result =
             service.cancelOpenForTicket(10L, "PROJECT_ON_HOLD", ceoActor);
@@ -1302,7 +1146,7 @@ class PricingRequestServiceTest {
             eq(PricingRequestEventKind.PRICING_REQUEST_CANCELLED), eq(PricingRequestStatus.SUBMITTED),
             eq(PricingRequestStatus.CANCELLED), eq("PROJECT_ON_HOLD"), any());
         verify(requestRepo).addEvent(eq(21L), eq(10L), eq(4L), any(),
-            eq(PricingRequestEventKind.PRICING_REQUEST_CANCELLED), eq(PricingRequestStatus.MORE_INFO_REQUIRED),
+            eq(PricingRequestEventKind.PRICING_REQUEST_CANCELLED), eq(PricingRequestStatus.AWAITING_FACTORY_RESPONSE),
             eq(PricingRequestStatus.CANCELLED), eq("PROJECT_ON_HOLD"), any());
     }
 
@@ -1412,22 +1256,28 @@ class PricingRequestServiceTest {
     }
 
     /**
-     * Deliberately status = MORE_INFO_REQUIRED, not DRAFT: requireViewable's own draft-privacy
-     * check (a different, pre-existing guard) would otherwise fire FIRST and produce a 404 for a
-     * non-owner reaching a DRAFT — see {@code aSecondSalesRep_cannotReadTheFirstReps_pricingRequest}
-     * in {@code PricingRequestFlowIntegrationTest} for that behavior. MORE_INFO_REQUIRED isolates
+     * Deliberately a NON-DRAFT status: requireViewable's own draft-privacy check (a different,
+     * pre-existing guard) would otherwise fire FIRST and produce a 404 for a non-owner reaching a
+     * DRAFT — see {@code aSecondSalesRep_cannotReadTheFirstReps_pricingRequest} in
+     * {@code PricingRequestFlowIntegrationTest} for that behavior. A non-draft status isolates
      * THIS method's own explicit ownership re-check.
+     *
+     * <p>The status used to be MORE_INFO_REQUIRED, which V139 retired; AWAITING_FACTORY_RESPONSE
+     * replaces it and preserves the property that matters. The 403 asserted here is genuinely the
+     * ownership guard's and not the status guard's: uploadAttachment checks ownership BEFORE
+     * ATTACHMENT_EDITABLE_STATUSES, so a status guard firing first would surface as a 409 and turn
+     * this assertion red rather than silently passing for the wrong reason.
      */
     @Test
     void uploadAttachment_rejectsNonOwnerSalesRep() {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED);
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
         assertForbidden(() -> service.uploadAttachment(20L, sampleFile(), otherSales));
         verifyNoInteractions(fileStorage);
     }
 
     @Test
-    void uploadAttachment_rejectsWhenStatusIsNotDraftOrMoreInfoRequired() {
+    void uploadAttachment_rejectsWhenStatusIsNotDraft() {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
         assertConflict(() -> service.uploadAttachment(20L, sampleFile(), salesActor));
@@ -1454,10 +1304,10 @@ class PricingRequestServiceTest {
             eq(PricingRequestStatus.DRAFT), any(), any());
     }
 
-    /** Same DRAFT-vs-MORE_INFO_REQUIRED reasoning as {@code uploadAttachment_rejectsNonOwnerSalesRep}. */
+    /** Same non-draft-status reasoning as {@code uploadAttachment_rejectsNonOwnerSalesRep}. */
     @Test
     void deleteAttachment_rejectsNonOwnerSalesRep() {
-        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.MORE_INFO_REQUIRED);
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
         when(requestRepo.findAttachment(90L)).thenReturn(Optional.of(
             new PricingRequestAttachmentDto(90L, 20L, "f.pdf", "application/pdf", 1L, false, 1L, Instant.now())));
 
@@ -1466,7 +1316,7 @@ class PricingRequestServiceTest {
     }
 
     @Test
-    void deleteAttachment_rejectsWhenStatusIsNotDraftOrMoreInfoRequired() {
+    void deleteAttachment_rejectsWhenStatusIsNotDraft() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.IMPORT_REVIEWING);
         when(requestRepo.findAttachment(90L)).thenReturn(Optional.of(
             new PricingRequestAttachmentDto(90L, 20L, "f.pdf", "application/pdf", 1L, false, 1L, Instant.now())));
@@ -1543,7 +1393,7 @@ class PricingRequestServiceTest {
         return summary;
     }
 
-    /** Variant for pickup/requestInformation/respondInformation: carries assignedImportId. */
+    /** Variant for pickup: carries assignedImportId. */
     private PricingRequestSummaryDto stubPricingRequest(long id, long ticketId, long ticketCreatedById, String status,
                                                          Long assignedImportId) {
         PricingRequestSummaryDto summary = new PricingRequestSummaryDto(
@@ -1554,14 +1404,6 @@ class PricingRequestServiceTest {
             1, 1, null, null, null, null, Instant.now(), Instant.now(), null);
         when(requestRepo.findSummary(id)).thenReturn(java.util.Optional.of(summary));
         return summary;
-    }
-
-    private static RequestMoreInformationRequest moreInfoRequest() {
-        return new RequestMoreInformationRequest("กรุณาระบุขนาดสินค้าเพิ่มเติม", null);
-    }
-
-    private static RespondMoreInformationRequest respondRequest() {
-        return new RespondMoreInformationRequest("ขนาด 60x60");
     }
 
     /**

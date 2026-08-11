@@ -11,8 +11,6 @@ import {
   canManageCustomerQuotation,
   canPickupPricingRequest,
   canRecordCustomerQuotationOutcome,
-  canRequestInformation,
-  canRespondInformation,
   canSeePricingDecisionSalesView,
   canSeeRawPricingDecision,
   canStartCeoReview,
@@ -29,7 +27,6 @@ const salesOwner = { id: 1, role: 'sales' };
 const otherSales = { id: 2, role: 'sales' };
 const ceo = { id: 9, role: 'ceo' };
 const importUser = { id: 5, role: 'import' };
-const otherImport = { id: 6, role: 'import' };
 
 const activeDeal = { createdById: 1, lifecycle: 'ACTIVE' };
 const closedDeal = { createdById: 1, lifecycle: 'CLOSED_LOST' };
@@ -50,13 +47,15 @@ describe('canTransition', () => {
     expect(canTransition('DRAFT', 'CANCELLED')).toBe(true);
     expect(canTransition('DRAFT', 'DRAFT')).toBe(false);
     expect(canTransition('SUBMITTED', 'IMPORT_REVIEWING')).toBe(true);
-    expect(canTransition('IMPORT_REVIEWING', 'MORE_INFO_REQUIRED')).toBe(true);
+    // V139: Import's three states, and the two retired ones must now be unreachable.
     expect(canTransition('IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE')).toBe(true);
-    expect(canTransition('AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS')).toBe(true);
-    expect(canTransition('COSTING_IN_PROGRESS', 'READY_FOR_CEO_REVIEW')).toBe(true);
+    expect(canTransition('AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW')).toBe(true);
     expect(canTransition('IMPORT_REVIEWING', 'CANCELLED')).toBe(true);
-    expect(canTransition('MORE_INFO_REQUIRED', 'IMPORT_REVIEWING')).toBe(true);
-    expect(canTransition('MORE_INFO_REQUIRED', 'CANCELLED')).toBe(true);
+    // Wrong-way-round: the retired statuses are dead ends in both directions.
+    expect(canTransition('IMPORT_REVIEWING', 'MORE_INFO_REQUIRED')).toBe(false);
+    expect(canTransition('MORE_INFO_REQUIRED', 'IMPORT_REVIEWING')).toBe(false);
+    expect(canTransition('AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS')).toBe(false);
+    expect(canTransition('COSTING_IN_PROGRESS', 'READY_FOR_CEO_REVIEW')).toBe(false);
     expect(canTransition('READY_FOR_CEO_REVIEW', 'SUPERSEDED')).toBe(true);
     // Step 3 (CEO Selling Price Decision, "one return-to-Import path"): the old direct
     // READY_FOR_CEO_REVIEW -> COSTING_IN_PROGRESS entry (Costing v2 path, commit 5) is removed —
@@ -67,7 +66,7 @@ describe('canTransition', () => {
     expect(canTransition('CEO_REVIEWING', 'APPROVED_FOR_QUOTATION')).toBe(true);
     expect(canTransition('CEO_REVIEWING', 'COSTING_REVISION_REQUIRED')).toBe(true);
     // The single named return-to-Import state — Import reopening costing goes through here.
-    expect(canTransition('COSTING_REVISION_REQUIRED', 'COSTING_IN_PROGRESS')).toBe(true);
+    expect(canTransition('COSTING_REVISION_REQUIRED', 'AWAITING_FACTORY_RESPONSE')).toBe(true);
     expect(canTransition('APPROVED_FOR_QUOTATION', 'COSTING_IN_PROGRESS')).toBe(false);
     expect(canTransition('READY_FOR_CEO_REVIEW', 'CANCELLED')).toBe(false);
     expect(canTransition('CANCELLED', 'DRAFT')).toBe(false);
@@ -123,30 +122,6 @@ describe('canPickupPricingRequest', () => {
   });
   it('rejects a request not in SUBMITTED', () => {
     expect(canPickupPricingRequest(importUser, pr({ status: 'DRAFT' }))).toBe(false);
-  });
-});
-
-describe('canRequestInformation', () => {
-  it('allows any import user while IMPORT_REVIEWING', () => {
-    const reviewing = pr({ status: 'IMPORT_REVIEWING', assignedImportId: 5 });
-    expect(canRequestInformation(importUser, reviewing)).toBe(true);
-    expect(canRequestInformation(otherImport, reviewing)).toBe(true);
-  });
-  it('allows an unassigned request', () => {
-    expect(canRequestInformation(importUser, pr({ status: 'IMPORT_REVIEWING', assignedImportId: null }))).toBe(true);
-  });
-  it('allows Step 2 in-progress statuses', () => {
-    expect(canRequestInformation(importUser, pr({ status: 'AWAITING_FACTORY_RESPONSE' }))).toBe(true);
-    expect(canRequestInformation(importUser, pr({ status: 'COSTING_IN_PROGRESS' }))).toBe(true);
-  });
-});
-
-describe('canRespondInformation', () => {
-  it('allows the owner while MORE_INFO_REQUIRED', () => {
-    expect(canRespondInformation(salesOwner, pr({ status: 'MORE_INFO_REQUIRED' }))).toBe(true);
-  });
-  it('rejects any other status', () => {
-    expect(canRespondInformation(salesOwner, pr({ status: 'IMPORT_REVIEWING' }))).toBe(false);
   });
 });
 
@@ -328,7 +303,7 @@ describe('canCancelPricingRequest', () => {
     expect(canCancelPricingRequest(salesOwner, pr({ status: 'SUBMITTED' }))).toBe(true);
   });
   it('allows the CEO regardless of ownership', () => {
-    expect(canCancelPricingRequest(ceo, pr({ status: 'MORE_INFO_REQUIRED' }))).toBe(true);
+    expect(canCancelPricingRequest(ceo, pr({ status: 'AWAITING_FACTORY_RESPONSE' }))).toBe(true);
   });
   it('rejects a non-owner, non-ceo actor', () => {
     expect(canCancelPricingRequest(otherSales, pr({ status: 'DRAFT' }))).toBe(false);
