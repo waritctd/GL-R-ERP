@@ -32,14 +32,13 @@ import {
   canCreateDepositNoticeFromQuotation,
   canManageCustomerQuotation,
   canRecordCustomerQuotationOutcome,
-  canRequestInformation,
-  canRespondInformation,
   canSeePricingDecisionSalesView,
   canSeeRawPricingDecision,
   canStartCeoReview,
   canViewCustomerQuotation,
   isCustomerQuotationEditable,
   pricingRequestRecipientLabel,
+  unitBasisLabel,
 } from './pricingRequestMeta.js';
 import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 import { buttonVariants } from '../../components/common/Button.jsx';
@@ -56,13 +55,6 @@ function isSales(user) {
 function canSeeRaw(user) {
   return user?.role === 'import' || user?.role === 'ceo';
 }
-
-const UNIT_OPTIONS = [
-  { code: 'PER_SQM', label: 'ตร.ม.' },
-  { code: 'PER_PIECE', label: 'แผ่น' },
-  { code: 'PER_BOX', label: 'กล่อง' },
-  { code: 'PER_LINEAR_M', label: 'เมตร' },
-];
 
 const DISPATCH_STATUS_LABEL = {
   PENDING: 'รอส่ง',
@@ -113,23 +105,38 @@ function apiStatus(error) {
   return typeof error?.status === 'number' ? error.status : null;
 }
 
-function defaultResponseItems(quote) {
-  return (quote?.items ?? []).map((item) => ({
+/**
+ * Seeds the "record the factory's answer" draft. Owner ruling 2026-08-11: Import types the PRICE
+ * and nothing else — quantity, unit and currency all come from what Sales already requested, so
+ * they are carried in this state (the backend still requires them) but never rendered as inputs.
+ *
+ * `requestItem` is the sales-side PricingRequestItem this quote line was generated from, looked up
+ * by pricingRequestItemId. The currency fallback chain matters: `catalogCurrency` is the currency
+ * of the catalog row Sales picked (EUR for the European factories), and it must win over the old
+ * hardcoded 'THB'. That default was a real defect — CDE trades in EUR, so a price typed as 46 was
+ * being stored as ฿46 instead of €46, a 38.5x error straight into the landed cost.
+ */
+function defaultResponseItems(quote, requestItemById = new Map()) {
+  return (quote?.items ?? []).map((item) => {
+    const requestItem = requestItemById.get(item.pricingRequestItemId) ?? {};
+    const unit = item.unitBasis ?? item.quotedUnit ?? requestItem.requestedUnitBasis ?? 'PER_PIECE';
+    return {
     pricingRequestItemId: item.pricingRequestItemId,
     supplierProductCode: item.supplierProductCode ?? '',
     supplierProductDescription: item.supplierProductDescription ?? '',
-    quotedQuantity: item.quotedQuantity ?? 1,
-    quotedUnit: item.quotedUnit ?? 'PER_PIECE',
-    unitBasis: item.unitBasis ?? item.quotedUnit ?? 'PER_PIECE',
+    quotedQuantity: item.quotedQuantity ?? requestItem.requestedQty ?? 1,
+    quotedUnit: unit,
+    unitBasis: unit,
     rawUnitPrice: item.rawUnitPrice ?? '',
-    currency: item.currency ?? quote.defaultCurrency ?? 'THB',
+    currency: item.currency ?? quote.defaultCurrency ?? requestItem.catalogCurrency ?? 'THB',
     minimumOrderQuantity: item.minimumOrderQuantity ?? '',
     sqmPerUnit: item.sqmPerUnit ?? '',
     piecesPerBox: item.piecesPerBox ?? '',
     leadTimeText: item.leadTimeText ?? '',
     availabilityNote: item.availabilityNote ?? '',
     lineNote: item.lineNote ?? '',
-  }));
+    };
+  });
 }
 
 function cleanNumber(value) {
@@ -150,7 +157,9 @@ function formatCurrency(value, currency = 'THB') {
 function cleanResponsePayload(draft) {
   return {
     supplierQuoteRef: draft.supplierQuoteRef || null,
-    defaultCurrency: draft.defaultCurrency || 'THB',
+    // Falls back to the first line's currency (itself sourced from the catalog row Sales picked)
+    // rather than a hardcoded 'THB' — see defaultResponseItems for why that default was a defect.
+    defaultCurrency: draft.defaultCurrency || draft.items?.[0]?.currency || 'THB',
     paymentTerms: draft.paymentTerms || null,
     leadTimeText: draft.leadTimeText || null,
     revisionReason: draft.revisionReason || null,
@@ -174,8 +183,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const [responseDrafts, setResponseDrafts] = useState({});
   const [costingNote, setCostingNote] = useState('');
   const [costingClientRequestId] = useState(() => generateClientRequestId());
-  const [infoMessage, setInfoMessage] = useState('');
-  const [salesResponse, setSalesResponse] = useState('');
   const [emailDrafts, setEmailDrafts] = useState({});
   const [sendClientRequestIds, setSendClientRequestIds] = useState({});
   const [receiveClientRequestIds, setReceiveClientRequestIds] = useState({});
@@ -307,12 +314,45 @@ export function PricingRequestDetailPage({ user, showToast }) {
     onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
   });
   const negotiateQuote = useActionMutation((quote) => api.pricingRequests.startFactoryNegotiation(quote.id, { note: quote.negotiationNote || 'Negotiation in progress' }), 'เริ่มเจรจาแล้ว');
-  const readyQuote = useActionMutation((quote) => api.pricingRequests.markFactoryQuoteReady(quote.id), 'พร้อมคำนวณต้นทุนแล้ว');
+  /**
+   * The whole Import -> CEO handoff as ONE action (owner ruling 2026-08-11: "import just have to
+   * key in the price and submit to ceo"). Import no longer sees the costing aggregate at all; the
+   * landed cost is still computed from the real freight/duty tables, just never surfaced here.
+   *
+   * Four backend calls, in the order the services require:
+   *   1. markFactoryQuoteReady — PricingCostingService.createDraft rejects anything whose current
+   *      factory quote is not READY_FOR_COSTING, so this cannot be skipped. Idempotent-ish:
+   *      skipped when the quote is already there.
+   *   2. createCosting  -> DRAFT
+   *   3. recalculateCosting -> CALCULATED   (submit() refuses a DRAFT or a stale costing)
+   *   4. submitCosting  -> READY_FOR_CEO_REVIEW
+   * Sequential on purpose — each step needs the previous one's row. A failure part-way leaves the
+   * request in a legal intermediate state that this same button can resume from.
+   */
+  const submitToCeo = useMutation({
+    mutationFn: async (quote) => {
+      if (quote && quote.status !== 'READY_FOR_COSTING') {
+        await api.pricingRequests.markFactoryQuoteReady(quote.id);
+      }
+      const created = await api.pricingRequests.createCosting(pricingRequestId, {
+        note: null,
+        clientRequestId: generateClientRequestId(),
+      });
+      const costingId = created?.costing?.id;
+      if (!costingId) throw new Error('สร้างต้นทุนไม่สำเร็จ');
+      await api.pricingRequests.recalculateCosting(costingId, {});
+      await api.pricingRequests.submitCosting(costingId, {});
+    },
+    onSuccess: () => {
+      showToast?.('success', 'ส่งให้ CEO อนุมัติราคาแล้ว');
+      invalidate();
+    },
+    onError: (error) => showToast?.('error', error.message || 'ส่งให้ CEO ไม่สำเร็จ'),
+  });
+
   const createCosting = useActionMutation(() => api.pricingRequests.createCosting(pricingRequestId, { note: costingNote || null, clientRequestId: costingClientRequestId }), 'สร้างร่างต้นทุนแล้ว');
   const recalculateCosting = useActionMutation((costing) => api.pricingRequests.recalculateCosting(costing.id, { note: costingNote || null }), 'คำนวณต้นทุนแล้ว');
   const submitCosting = useActionMutation((costing) => api.pricingRequests.submitCosting(costing.id, { note: costingNote || null }), 'ส่งให้ CEO แล้ว');
-  const requestInfo = useActionMutation(() => api.pricingRequests.requestInformation(pricingRequestId, { message: infoMessage }), 'ส่งคำขอข้อมูลแล้ว');
-  const respondInfo = useActionMutation(() => api.pricingRequests.respondInformation(pricingRequestId, { response: salesResponse }), 'ส่งข้อมูลเพิ่มเติมแล้ว');
   const uploadQuoteAttachment = useActionMutation(({ quote, file }) => api.pricingRequests.uploadFactoryQuoteAttachment(quote.id, file), 'แนบไฟล์ราคาโรงงานแล้ว');
   const uploadPricingRequestAttachment = useActionMutation((file) => api.pricingRequests.uploadAttachment(pricingRequestId, file), 'แนบไฟล์แล้ว');
   const deletePricingRequestAttachment = useActionMutation((attachmentId) => api.pricingRequests.deleteAttachment(attachmentId), 'ลบไฟล์แนบแล้ว');
@@ -467,6 +507,28 @@ export function PricingRequestDetailPage({ user, showToast }) {
     },
     onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
   });
+  /**
+   * Copies the generated factory message so Import can paste it into its own mail client.
+   * `navigator.clipboard` is absent in jsdom and on non-secure origins, so the failure path
+   * reports honestly rather than pretending the copy happened — a silent no-op here would have
+   * Import paste stale content without knowing.
+   */
+  async function copyFactoryEmail(emailDraft) {
+    const text = [
+      emailDraft.emailTo ? `To: ${emailDraft.emailTo}` : null,
+      emailDraft.emailSubject ? `Subject: ${emailDraft.emailSubject}` : null,
+      '',
+      emailDraft.emailBody ?? '',
+    ].filter((line) => line !== null).join('\n');
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+      await navigator.clipboard.writeText(text);
+      showToast?.('success', 'คัดลอกข้อความแล้ว');
+    } catch {
+      showToast?.('error', 'คัดลอกไม่สำเร็จ — กรุณาเลือกข้อความแล้วคัดลอกเอง');
+    }
+  }
+
   async function handleDownloadCustomerQuotation(quotation, format) {
     setDownloadingQuotationFormat(format);
     try {
@@ -483,6 +545,14 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const request = detailQuery.data;
   const summary = request?.summary;
   const status = pricingRequestStatusLabel(summary?.status);
+  // pricingRequestItemId -> the sales-side item it came from. Feeds both defaultResponseItems'
+  // autofill and the read-only "what Sales asked for" echo on each response row. Declared here
+  // rather than beside the mutations above because it reads `request`, which is assigned just
+  // above this line — and there are no early returns between, so hook order stays stable.
+  const requestItemById = useMemo(
+    () => new Map((request?.items ?? []).map((item) => [item.id, item])),
+    [request],
+  );
   const factoryQuotes = useMemo(() => factoryQuery.data ?? [], [factoryQuery.data]);
   const costings = useMemo(() => costingQuery.data ?? [], [costingQuery.data]);
   const latestOpenCosting = useMemo(
@@ -512,11 +582,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
     && !['DRAFT', 'CANCELLED', 'SUPERSEDED'].includes(summary?.status);
   const pricingRequestAttachments = attachmentsQuery.data ?? [];
   // Mirrors PricingRequestService.ATTACHMENT_EDITABLE_STATUSES: Sales may only upload/delete its
-  // own Pricing Request attachments while the request is DRAFT or MORE_INFO_REQUIRED, and only
-  // on the request it owns.
+  // own Pricing Request attachments while the request is DRAFT, and only on the request it owns.
+  // V140 narrowed that set from {DRAFT, MORE_INFO_REQUIRED} to {DRAFT} when the ขอข้อมูลเพิ่มเติม
+  // round-trip left the product. Offering the controls on any wider set would just produce a 409
+  // from uploadAttachment/deleteAttachment.
   const canEditPricingRequestAttachments = isSales(user)
     && summary?.ticketCreatedById === user?.employeeId
-    && ['DRAFT', 'MORE_INFO_REQUIRED'].includes(summary?.status);
+    && summary?.status === 'DRAFT';
   const detailErrorStatus = apiStatus(detailQuery.error);
 
   if (detailQuery.isLoading) {
@@ -700,32 +772,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
         </div>
       </Panel>
 
-      {canRequestInformation(user, summary) ? (
-        <Panel flush title="ขอข้อมูลจาก Sales">
-          <div className="flex flex-wrap gap-2 p-4">
-            {/* aria-label rather than a visible one: the section heading above
-                already names this field on screen, so a label would just repeat
-                it — but the heading is not programmatically associated with the
-                input, so a screen reader still needs the name spelled out. */}
-            <input className="form-input min-w-64" aria-label="ข้อความถึง Sales" value={infoMessage} onChange={(e) => setInfoMessage(e.target.value)} placeholder="ข้อความถึง Sales" />
-            <Button type="button" variant="secondary" disabled={!infoMessage || requestInfo.isPending} onClick={() => requestInfo.mutate()}>
-              ส่งคำขอ
-            </Button>
-          </div>
-        </Panel>
-      ) : null}
-
-      {canRespondInformation(user, summary) ? (
-        <Panel flush title="ตอบข้อมูลเพิ่มเติม">
-          <div className="flex flex-wrap gap-2 p-4">
-            <input className="form-input min-w-64" aria-label="ข้อมูลเพิ่มเติม" value={salesResponse} onChange={(e) => setSalesResponse(e.target.value)} placeholder="ข้อมูลเพิ่มเติม" />
-            <Button type="button" variant="secondary" disabled={!salesResponse || respondInfo.isPending} onClick={() => respondInfo.mutate()}>
-              ส่งข้อมูล
-            </Button>
-          </div>
-        </Panel>
-      ) : null}
-
       {canCreateCustomerRevision ? (
         <Panel flush title="รอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า">
           <div className="flex flex-wrap gap-2 p-4">
@@ -762,7 +808,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 leadTimeText: quote.leadTimeText ?? '',
                 revisionReason: '',
                 negotiationNote: quote.negotiationNote ?? '',
-                items: defaultResponseItems(quote),
+                items: defaultResponseItems(quote, requestItemById),
               };
               return (
                 <div key={quote.id} className="rounded-md border border-border bg-surface p-3">
@@ -771,22 +817,41 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     <StatusBadge tone="neutral">ครั้งที่ {quote.revisionNo}</StatusBadge>
                     <StatusBadge tone={quote.current ? quoteStatus.tone : 'neutral'}>{quoteStatus.label}</StatusBadge>
                     {dispatchStatusBadge(quote)}
+                    {/* Owner ruling 2026-08-11: the app does not send this mail. Import mails the
+                        factory from its own client, so this generates text to copy and then
+                        records that it went out. Two separate buttons on purpose — copying is not
+                        sending, and the audit trail should only ever claim what a human confirmed.
+                        The underlying sendFactoryQuote call is unchanged; it is what advances the
+                        quote to REQUESTED and the request to เจรจาราคากับโรงงาน. */}
                     {isImport(user) && quote.status === 'DRAFT' && quote.dispatchStatus !== 'PENDING' && quote.dispatchStatus !== 'SENDING' ? (
-                      <Button type="button" variant="secondary" onClick={() => {
-                        // A FAILED dispatch has permanently exhausted its own clientRequestId (the
-                        // backend's unique (created_by, client_request_id) index would just replay
-                        // that same dead row), so a manual retry must mint a fresh idempotency key
-                        // rather than reuse whatever was cached for this quote.
-                        const clientRequestId = quote.dispatchStatus === 'FAILED'
-                          ? generateClientRequestId()
-                          : (sendClientRequestIds[quote.id] ?? generateClientRequestId());
-                        setSendClientRequestIds((cur) => ({ ...cur, [quote.id]: clientRequestId }));
-                        setConfirmAction({ type: 'sendQuote', quote, emailDraft });
-                      }}>
-                        {quote.dispatchStatus === 'FAILED' ? 'ส่งอีกครั้ง' : 'ส่ง'}
+                      <>
+                        <Button type="button" variant="secondary" data-testid="pcr-copy-factory-email" onClick={() => copyFactoryEmail(emailDraft)}>
+                          คัดลอกข้อความ
+                        </Button>
+                        <Button type="button" variant="secondary" data-testid="pcr-mark-factory-email-sent" onClick={() => {
+                          // A FAILED dispatch has permanently exhausted its own clientRequestId (the
+                          // backend's unique (created_by, client_request_id) index would just replay
+                          // that same dead row), so a manual retry must mint a fresh idempotency key
+                          // rather than reuse whatever was cached for this quote.
+                          const clientRequestId = quote.dispatchStatus === 'FAILED'
+                            ? generateClientRequestId()
+                            : (sendClientRequestIds[quote.id] ?? generateClientRequestId());
+                          setSendClientRequestIds((cur) => ({ ...cur, [quote.id]: clientRequestId }));
+                          setConfirmAction({ type: 'sendQuote', quote, emailDraft });
+                        }}>
+                          {quote.dispatchStatus === 'FAILED' ? 'บันทึกว่าส่งแล้วอีกครั้ง' : 'ส่งแล้ว'}
+                        </Button>
+                      </>
+                    ) : null}
+                    {/* พร้อมคำนวณต้นทุน + สร้างร่างต้นทุน + คำนวณใหม่ + ส่งให้ CEO ตรวจ collapse into
+                        this one button — see submitToCeo. เจรจา stays: re-quoting a factory is
+                        real Import work, and it is what keeps the request in เจรจาราคากับโรงงาน. */}
+                    {isImport(user) && ['RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(quote.status) && quote.current ? (
+                      <Button type="button" variant="primary" disabled={submitToCeo.isPending}
+                        onClick={() => submitToCeo.mutate(quote)} data-testid="pcr-submit-to-ceo">
+                        ส่งให้ CEO อนุมัติราคา
                       </Button>
                     ) : null}
-                    {isImport(user) && ['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) && quote.current ? <Button type="button" variant="secondary" onClick={() => readyQuote.mutate(quote)} data-testid="pcr-quote-ready">พร้อมคำนวณต้นทุน</Button> : null}
                     {isImport(user) && quote.status === 'RESPONSE_RECEIVED' && quote.current ? <Button type="button" variant="secondary" onClick={() => negotiateQuote.mutate(quote)}>เจรจา</Button> : null}
                   </div>
                   <div className="mt-2 text-xs text-text-muted">{quote.emailTo ?? '-'} · {quote.supplierQuoteRef ?? '-'}</div>
@@ -872,85 +937,49 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   ) : null}
                   {isImport(user) && quote.current && ['DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(quote.status) ? (
                     <div className="mt-3 flex flex-col gap-2 border-t border-border-subtle pt-3">
-                      <div className="grid gap-2 md:grid-cols-4">
-                        <FormField label="เลขอ้างอิงใบเสนอราคา" htmlFor={`pcr-quote-ref-${quote.id}`}>
-                          <input
-                            id={`pcr-quote-ref-${quote.id}`}
-                            className="form-input"
-                            value={draft.supplierQuoteRef}
-                            onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, supplierQuoteRef: e.target.value } })}
-                          />
-                        </FormField>
-                        <FormField label="สกุลเงิน" htmlFor={`pcr-quote-currency-${quote.id}`}>
-                          <input
-                            id={`pcr-quote-currency-${quote.id}`}
-                            className="form-input"
-                            value={draft.defaultCurrency}
-                            onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, defaultCurrency: e.target.value } })}
-                          />
-                        </FormField>
-                        <FormField label="เงื่อนไขการชำระเงิน" htmlFor={`pcr-quote-terms-${quote.id}`}>
-                          <input
-                            id={`pcr-quote-terms-${quote.id}`}
-                            className="form-input"
-                            value={draft.paymentTerms}
-                            onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, paymentTerms: e.target.value } })}
-                          />
-                        </FormField>
-                        <FormField label="ระยะเวลาผลิต/ส่งมอบ" htmlFor={`pcr-quote-leadtime-${quote.id}`}>
-                          <input
-                            id={`pcr-quote-leadtime-${quote.id}`}
-                            className="form-input"
-                            value={draft.leadTimeText}
-                            onChange={(e) => setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, leadTimeText: e.target.value } })}
-                          />
-                        </FormField>
-                      </div>
-                      {/* The per-line rows are a grid, so the column names are
-                          stated once as a header rather than repeated as a
-                          visible label on every row — four labels per row
-                          across N items would bury the values. Each control
-                          still carries its own `aria-label` naming the column
-                          AND the item, because a screen reader reads these
-                          linearly with no column header to fall back on: it
-                          announces "ราคาโรงงาน รายการ #6", not "edit text". */}
-                      {draft.items.length ? (
-                        <div
-                          aria-hidden="true"
-                          className="hidden gap-2 px-1 text-2xs font-bold uppercase tracking-wide text-text-muted md:grid md:grid-cols-4"
-                        >
-                          <span>ราคาโรงงาน</span>
-                          <span>สกุลเงิน</span>
-                          <span>หน่วยที่เสนอ</span>
-                          <span>ตร.ม./หน่วย</span>
-                        </div>
-                      ) : null}
+                      {/* เลขอ้างอิงใบเสนอราคา / เงื่อนไขการชำระเงิน / ระยะเวลาผลิต-ส่งมอบ and the
+                          quote-level สกุลเงิน were removed here (owner ruling 2026-08-11): Import
+                          keys in the price and nothing else. All four are optional in
+                          ReceiveFactoryQuoteRequest, so nothing is sent as null that the backend
+                          required; currency now rides on each line, autofilled from the catalog
+                          row Sales picked. */}
+                      {/* One input per line: the factory's price. Everything else on the row is a
+                          READ-ONLY echo of what Sales requested — quantity, unit and currency are
+                          held in `draft.items` (the backend still requires all three) but are not
+                          Import's to retype. Re-keying them was the single biggest source of
+                          friction here, and the currency field in particular was a live defect:
+                          it defaulted to THB against factories that trade in EUR. */}
                       {draft.items.map((line, index) => {
                         const itemRef = `รายการ #${line.pricingRequestItemId}`;
+                        const requested = requestItemById.get(line.pricingRequestItemId);
+                        const productName = [requested?.catalogBrand ?? requested?.brand, requested?.catalogModel ?? requested?.model]
+                          .filter(Boolean).join(' ') || requested?.productDescription || itemRef;
                         return (
-                          <div key={line.pricingRequestItemId} className="grid gap-2 md:grid-cols-4">
-                            <input className="form-input" aria-label={`ราคาโรงงาน ${itemRef}`} value={line.rawUnitPrice} onChange={(e) => {
-                              const items = [...draft.items];
-                              items[index] = { ...line, rawUnitPrice: e.target.value };
-                              setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
-                            }} placeholder="ราคาโรงงาน" />
-                            <input className="form-input" aria-label={`สกุลเงิน ${itemRef}`} value={line.currency} onChange={(e) => {
-                              const items = [...draft.items];
-                              items[index] = { ...line, currency: e.target.value };
-                              setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
-                            }} placeholder="สกุลเงิน" />
-                            <select className="form-input" aria-label={`หน่วยที่เสนอ ${itemRef}`} value={line.unitBasis} onChange={(e) => {
-                              const items = [...draft.items];
-                              items[index] = { ...line, quotedUnit: e.target.value, unitBasis: e.target.value };
-                              setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
-                            }}>
-                              {UNIT_OPTIONS.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}
-                            </select>
-                            <input className="form-input" aria-label={`ตร.ม./หน่วย ${itemRef}`} value={line.sqmPerUnit} onChange={(e) => {
-                              const items = [...draft.items];
-                              items[index] = { ...line, sqmPerUnit: e.target.value };
-                              setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
-                            }} placeholder="ตร.ม./หน่วย" />
+                          <div key={line.pricingRequestItemId} className="grid items-end gap-2 md:grid-cols-[1fr_auto]">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-bold text-text">{productName}</div>
+                              <div className="text-2xs text-text-muted">
+                                ที่ Sales ขอ: {requested?.requestedQty ?? line.quotedQuantity} {requested?.requestedUnit ?? unitBasisLabel(line.unitBasis)}
+                                {' · '}สกุลเงิน {line.currency}
+                              </div>
+                            </div>
+                            <FormField label={`ราคาโรงงาน (${line.currency})`} htmlFor={`pcr-quote-price-${quote.id}-${line.pricingRequestItemId}`}>
+                              <input
+                                id={`pcr-quote-price-${quote.id}-${line.pricingRequestItemId}`}
+                                className="form-input md:w-48"
+                                type="number"
+                                min="0"
+                                step="0.0001"
+                                inputMode="decimal"
+                                aria-label={`ราคาโรงงาน ${itemRef}`}
+                                value={line.rawUnitPrice}
+                                onChange={(e) => {
+                                  const items = [...draft.items];
+                                  items[index] = { ...line, rawUnitPrice: e.target.value };
+                                  setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
+                                }}
+                              />
+                            </FormField>
                           </div>
                         );
                       })}
@@ -971,7 +1000,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
         </Panel>
       ) : null}
 
-      {canSeeRaw(user) ? (
+      {/* Import no longer sees the costing aggregate — submitToCeo runs it end to end. CEO keeps
+          the full view (canSeeRaw is import+ceo; only the ceo half is wanted here). */}
+      {canSeeRaw(user) && !isImport(user) ? (
         <Panel
           flush
           title="ต้นทุนนำเข้า"
@@ -1019,7 +1050,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
         </Panel>
       ) : null}
 
-      {canSeeRawPricingDecision(user) ? (
+      {/* Import's job ends at ส่งให้ CEO อนุมัติราคา (owner ruling 2026-08-11), so the
+          CEO's own selling-price decision is no longer on Import's page — canSeeRawPricingDecision
+          covers import+ceo, and only the CEO half is wanted here. The predicate itself is
+          unchanged (it still governs cost/margin visibility elsewhere); this render site adds the
+          role narrowing rather than editing the shared gate. */}
+      {canSeeRawPricingDecision(user) && !isImport(user) ? (
         <Panel flush title="การพิจารณาราคาขายของ CEO">
           <div className="flex flex-col gap-3 p-4">
             {!currentDecision && canStartCeoReview(user, summary) ? (
@@ -1179,7 +1215,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
         </Panel>
       ) : null}
 
-      {canViewCustomerQuotation(user, summary) ? (
+      {/* Same ruling: the customer-facing quotation is Sales' surface. canViewCustomerQuotation
+          still grants import read access at the API (unchanged), but the panel is hidden here —
+          Import was only ever shown an empty-state telling it to wait for APPROVED_FOR_QUOTATION. */}
+      {canViewCustomerQuotation(user, summary) && !isImport(user) ? (
         <Panel
           flush
           title="ใบเสนอราคาลูกค้า"
@@ -1406,7 +1445,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
           the quotation (Step 5's terminal status). Bridges into the existing, already-tested
           dual-track payment pipeline (TicketService.confirmCustomer/DepositNoticeService) rather
           than inventing a new one — see OrderConfirmationService's own class Javadoc. */}
-      {summary.status === 'QUOTATION_ACCEPTED' ? (
+      {/* This block carried a status check and NO role gate, so Import saw Sales'
+          order-confirm/deposit controls once the customer accepted. Same ruling as the two
+          panels above — the actions were already server-gated to the ticket owner, so this
+          only stops rendering controls Import could never successfully use. */}
+      {summary.status === 'QUOTATION_ACCEPTED' && !isImport(user) ? (
         <Panel flush title="ยืนยันคำสั่งซื้อและออกใบแจ้งยอดเงินรับมัดจำ">
           <div className="flex flex-col gap-3 p-4">
             {canConfirmOrder(user, summary) ? (

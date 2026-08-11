@@ -70,13 +70,13 @@ export function followUpStatus(deal, todayIso = bangkokTodayIso()) {
 // Pricing-request statuses that mean "this request is with import/CEO right
 // now" — nothing here for sales to click. Anything not explicitly matched by
 // the cascade below (SUBMITTED, IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE,
-// COSTING_IN_PROGRESS, READY_FOR_CEO_REVIEW, CEO_REVIEWING,
-// MORE_INFO_REQUIRED, QUOTATION_ISSUED, COSTING_REVISION_REQUIRED) falls
-// through to the follow-up/activity buckets, same as a deal with no pending
-// pricing-request action at all. (MORE_INFO_REQUIRED is a genuine sales
-// action too — answer import's question — but is not one of this Overview's
-// 5 CTA buckets; it is left for a future iteration rather than overloading
-// one of the five with an inaccurate label.)
+// READY_FOR_CEO_REVIEW, CEO_REVIEWING, QUOTATION_ISSUED,
+// COSTING_REVISION_REQUIRED) falls through to the follow-up/activity buckets,
+// same as a deal with no pending pricing-request action at all. V140 retired
+// COSTING_IN_PROGRESS and MORE_INFO_REQUIRED; the latter was the one genuine
+// sales action in that list ("answer import's question"), and with the
+// ขอข้อมูลเพิ่มเติม round-trip removed there is no longer a sixth CTA bucket
+// waiting to be built here.
 const LIVE_PR_STATUSES = new Set(['DRAFT', 'CANCELLED', 'SUPERSEDED']);
 
 // Ticket statuses that prove a customer-facing price already went out. NOT

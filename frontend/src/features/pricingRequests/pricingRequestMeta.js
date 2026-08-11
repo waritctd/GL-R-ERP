@@ -15,7 +15,6 @@ export const PRICING_REQUEST_STATUSES = [
   'SUBMITTED',
   'IMPORT_REVIEWING',
   'AWAITING_FACTORY_RESPONSE',
-  'COSTING_IN_PROGRESS',
   'READY_FOR_CEO_REVIEW',
   'CEO_REVIEWING',
   'APPROVED_FOR_QUOTATION',
@@ -24,7 +23,6 @@ export const PRICING_REQUEST_STATUSES = [
   // QUOTATION_ACCEPTED, since both values are otherwise unrepresented anywhere in this array).
   'QUOTATION_ISSUED',
   'QUOTATION_ACCEPTED',
-  'MORE_INFO_REQUIRED',
   'CANCELLED',
   'SUPERSEDED',
 ];
@@ -35,9 +33,10 @@ export const PRICING_REQUEST_STATUSES = [
 const ALLOWED_TRANSITIONS = {
   DRAFT: ['SUBMITTED', 'CANCELLED'],
   SUBMITTED: ['IMPORT_REVIEWING', 'CANCELLED'],
-  IMPORT_REVIEWING: ['AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS', 'MORE_INFO_REQUIRED', 'CANCELLED', 'SUPERSEDED'],
-  AWAITING_FACTORY_RESPONSE: ['COSTING_IN_PROGRESS', 'MORE_INFO_REQUIRED', 'CANCELLED', 'SUPERSEDED'],
-  COSTING_IN_PROGRESS: ['AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW', 'MORE_INFO_REQUIRED', 'CANCELLED', 'SUPERSEDED'],
+  // V140: Import's three states. COSTING_IN_PROGRESS merged into AWAITING_FACTORY_RESPONSE
+  // (เจรจาราคากับโรงงาน) and MORE_INFO_REQUIRED left the product — mirrors PricingRequestStatus.
+  IMPORT_REVIEWING: ['AWAITING_FACTORY_RESPONSE', 'CANCELLED', 'SUPERSEDED'],
+  AWAITING_FACTORY_RESPONSE: ['READY_FOR_CEO_REVIEW', 'CANCELLED', 'SUPERSEDED'],
   // Step 3 (CEO Selling Price Decision, "one return-to-Import path"): the old
   // READY_FOR_CEO_REVIEW -> COSTING_IN_PROGRESS direct reopen entry (Costing v2 path, commit 5)
   // let Import silently reopen a SUBMITTED costing without any CEO action — removed, since that
@@ -47,7 +46,7 @@ const ALLOWED_TRANSITIONS = {
   // PricingRequestStatus.ALLOWED.
   READY_FOR_CEO_REVIEW: ['CEO_REVIEWING', 'SUPERSEDED'],
   CEO_REVIEWING: ['APPROVED_FOR_QUOTATION', 'COSTING_REVISION_REQUIRED'],
-  COSTING_REVISION_REQUIRED: ['COSTING_IN_PROGRESS'],
+  COSTING_REVISION_REQUIRED: ['AWAITING_FACTORY_RESPONSE'],
   // Step 4: the ONLY forward exit is issuing a customer quotation
   // (CustomerQuotationService.issue) — this entry was missing (stale from before Step 4 landed),
   // fixed alongside adding Step 5's QUOTATION_ISSUED -> QUOTATION_ACCEPTED below.
@@ -57,7 +56,6 @@ const ALLOWED_TRANSITIONS = {
   // do NOT transition the pricing request at all.
   QUOTATION_ISSUED: ['QUOTATION_ACCEPTED'],
   QUOTATION_ACCEPTED: [],
-  MORE_INFO_REQUIRED: ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS', 'CANCELLED'],
   SUPERSEDED: [],
   CANCELLED: [],
 };
@@ -125,19 +123,6 @@ export function canSubmitPricingRequest(user, pr) {
 /** Mirrors PricingRequestService.pickup: any import user, SUBMITTED only. */
 export function canPickupPricingRequest(user, pr) {
   return user?.role === 'import' && pr?.status === 'SUBMITTED';
-}
-
-/** Mirrors PricingRequestService.requestInformation: any import user in active Step 2 statuses. */
-export function canRequestInformation(user, pr) {
-  return user?.role === 'import'
-    && ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS'].includes(pr?.status);
-}
-
-/** Mirrors PricingRequestService.respondInformation: owner sales, MORE_INFO_REQUIRED only. */
-export function canRespondInformation(user, pr) {
-  return user?.role === 'sales' && pr?.ticketCreatedById != null
-    && Number(pr.ticketCreatedById) === Number(user.id)
-    && pr?.status === 'MORE_INFO_REQUIRED';
 }
 
 // ── Step 3: CEO Selling Price Decision. Mirrors PricingDecisionService. ──────────────────

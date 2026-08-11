@@ -39,8 +39,6 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestDetailDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
-import th.co.glr.hr.pricingrequest.PricingRequestRequests.RequestMoreInformationRequest;
-import th.co.glr.hr.pricingrequest.PricingRequestRequests.RespondMoreInformationRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
@@ -268,25 +266,6 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
 
     // ── 5. The information loop preserves ownership ────────────────────────
 
-    @Test
-    void informationLoop_returnsToImportReviewingAndPreservesPickupOwnership() {
-        long designerId = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
-        pricingRequestService.submit(designerId, salesActor);
-        pricingRequestService.pickup(designerId, importActor);
-
-        PricingRequestSummaryDto beforeLoop = pricingRequestService.get(designerId, importActor).summary();
-        Instant pickedUpAtBefore = beforeLoop.pickedUpAt();
-        assertThat(pickedUpAtBefore).isNotNull();
-
-        pricingRequestService.requestInformation(designerId,
-            new RequestMoreInformationRequest("กรุณาระบุขนาดสินค้าเพิ่มเติม", null), importActor);
-        PricingRequestDetailDto responded = pricingRequestService.respondInformation(designerId,
-            new RespondMoreInformationRequest("ขนาด 60x60 ซม."), salesActor);
-
-        assertThat(responded.summary().status()).isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
-        assertThat(responded.summary().pickedUpAt()).isEqualTo(pickedUpAtBefore);
-        assertThat(responded.summary().assignedImportId()).isEqualTo(importUserId);
-    }
 
     // ── 6. Gap 2 (review-remediation Commit F): the full pickup -> request-info ──
     // -> respond sequence, driven through the real services with a status
@@ -296,53 +275,6 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
     // pickedUpAt/assignedImportId survived the whole round trip byte-identical,
     // per the task brief.
 
-    @Test
-    void fullSequence_pickupThenRequestInformationThenRespond_assertsStatusAtEveryStepAndPreservesPickupFields() {
-        PricingRequestDetailDto draft = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor);
-        long id = draft.summary().id();
-        assertThat(draft.summary().status()).isEqualTo(PricingRequestStatus.DRAFT);
-
-        PricingRequestDetailDto submitted = pricingRequestService.submit(id, salesActor);
-        assertThat(submitted.summary().status()).isEqualTo(PricingRequestStatus.SUBMITTED);
-        assertThat(submitted.summary().pickedUpAt()).isNull();
-        assertThat(submitted.summary().assignedImportId()).isNull();
-
-        PricingRequestDetailDto pickedUp = pricingRequestService.pickup(id, importActor);
-        assertThat(pickedUp.summary().status()).isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
-        assertThat(pickedUp.summary().assignedImportId()).isEqualTo(importUserId);
-        Instant pickedUpAt = pickedUp.summary().pickedUpAt();
-        assertThat(pickedUpAt).isNotNull();
-
-        PricingRequestDetailDto infoRequested = pricingRequestService.requestInformation(id,
-            new RequestMoreInformationRequest("กรุณาระบุขนาดสินค้าเพิ่มเติม", null), importActor);
-        assertThat(infoRequested.summary().status()).isEqualTo(PricingRequestStatus.MORE_INFO_REQUIRED);
-        // The COALESCE-preserving transition() must not touch either field just
-        // because the status moved away from IMPORT_REVIEWING.
-        assertThat(infoRequested.summary().pickedUpAt()).isEqualTo(pickedUpAt);
-        assertThat(infoRequested.summary().assignedImportId()).isEqualTo(importUserId);
-
-        PricingRequestDetailDto responded = pricingRequestService.respondInformation(id,
-            new RespondMoreInformationRequest("ขนาด 60x60 ซม."), salesActor);
-        assertThat(responded.summary().status()).isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
-
-        // picked_up_at and assigned_import_id survived the entire pickup ->
-        // request-info -> respond round trip unchanged (byte-identical, not
-        // just "still non-null").
-        assertThat(responded.summary().pickedUpAt()).isEqualTo(pickedUpAt);
-        assertThat(responded.summary().assignedImportId()).isEqualTo(importUserId);
-
-        // Read straight from Postgres too — not just the DTO the service handed
-        // back — so a bug that resets the column but not the in-memory object
-        // (or vice versa) cannot hide behind the assertions above.
-        Instant persistedPickedUpAt = jdbc.queryForObject(
-            "SELECT picked_up_at FROM sales.pricing_request WHERE pricing_request_id = :id",
-            Map.of("id", id), Instant.class);
-        Long persistedAssignedImportId = jdbc.queryForObject(
-            "SELECT assigned_import_id FROM sales.pricing_request WHERE pricing_request_id = :id",
-            Map.of("id", id), Long.class);
-        assertThat(persistedPickedUpAt).isEqualTo(pickedUpAt);
-        assertThat(persistedAssignedImportId).isEqualTo(importUserId);
-    }
 
     // ── extra: a second sales rep cannot discover draft, then cannot read submitted ──
 
@@ -403,10 +335,12 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
 
         pricingRequestService.submit(id, salesActor);
         pricingRequestService.pickup(id, importActor);
-        pricingRequestService.requestInformation(id,
-            new RequestMoreInformationRequest("กรุณาระบุขนาดสินค้าเพิ่มเติม", null), importActor);
+        // V140: this used to walk on to MORE_INFO_REQUIRED before re-asserting the scoping below.
+        // That status no longer exists, so IMPORT_REVIEWING is the post-pickup state — what the
+        // block below actually cares about is that a NON-OWNER sales rep is refused once the
+        // request has left DRAFT, which is equally true here.
         assertThat(pricingRequestService.get(id, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.MORE_INFO_REQUIRED);
+            .isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
 
         assertThatThrownBy(() -> pricingRequestService.uploadAttachment(id, sampleFile(), secondSalesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
@@ -431,12 +365,13 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
      * Pricing Request whose attachments are meant to be Sales-authored evidence.
      */
     @Test
-    void importCannotUploadOrDeletePricingRequestAttachments_evenWhileMoreInfoRequired() {
+    void importCannotUploadOrDeletePricingRequestAttachments_evenWhileSalesStillCan() {
+        // V140: this used to reach MORE_INFO_REQUIRED first, because that was the one post-submit
+        // status where Sales could still attach. With that round-trip removed,
+        // ATTACHMENT_EDITABLE_STATUSES is {DRAFT} — so DRAFT is now the only status where the
+        // role split is observable at all, and it is where the assertion belongs. The claim is
+        // unchanged: even where SALES may attach, IMPORT may not.
         long id = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
-        pricingRequestService.submit(id, salesActor);
-        pricingRequestService.pickup(id, importActor);
-        pricingRequestService.requestInformation(id,
-            new RequestMoreInformationRequest("ขอข้อมูลเพิ่มเติม", null), importActor);
 
         assertThatThrownBy(() -> pricingRequestService.uploadAttachment(id, sampleFile(), importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
@@ -532,28 +467,6 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
             .isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
     }
 
-    @Test
-    void informationLoop_recordsBothTurnsAndAllowsDepartmentWideImport() {
-        long id = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
-        pricingRequestService.submit(id, salesActor);
-        pricingRequestService.pickup(id, importActor);
-
-        PricingRequestDetailDto infoRequested = pricingRequestService.requestInformation(id,
-            new RequestMoreInformationRequest("กรุณาระบุขนาดสินค้าเพิ่มเติม", null), secondImportActor);
-        assertThat(infoRequested.summary().status()).isEqualTo(PricingRequestStatus.MORE_INFO_REQUIRED);
-
-        assertThatThrownBy(() -> pricingRequestService.respondInformation(id,
-            new RespondMoreInformationRequest("ไม่ใช่เจ้าของดีล"), secondSalesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        PricingRequestDetailDto responded = pricingRequestService.respondInformation(id,
-            new RespondMoreInformationRequest("ขนาด 60x60 ซม."), salesActor);
-        assertThat(responded.summary().status()).isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
-        assertThat(responded.events()).extracting(event -> event.eventKind())
-            .contains(PricingRequestEventKind.MORE_INFO_REQUESTED, PricingRequestEventKind.MORE_INFO_RESPONDED);
-        assertThat(responded.events()).extracting(event -> event.message())
-            .contains("กรุณาระบุขนาดสินค้าเพิ่มเติม", "ขนาด 60x60 ซม.");
-    }
 
     @Test
     void accountingCanReadDealPaymentInfoButCannotReadPricingRequests() {
