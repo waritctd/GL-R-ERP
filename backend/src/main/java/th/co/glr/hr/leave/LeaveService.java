@@ -2396,3 +2396,5 @@ public class LeaveService {
         return value.stripTrailingZeros().toPlainString();
     }
 }
+
+// e2e-real baseline probe — no behaviour change. Delete this branch after the run.
