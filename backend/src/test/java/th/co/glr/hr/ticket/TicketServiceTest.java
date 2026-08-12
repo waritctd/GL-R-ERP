@@ -1819,6 +1819,33 @@ class TicketServiceTest {
         assertThat(withoutItems).doesNotContain("SUBMIT");
     }
 
+    /**
+     * canReserveStock (the actions() advertiser) and reserveStock's own gate must stay in step —
+     * both now read canDeclareStockCoverage, so the API can never hide an action the caller may
+     * actually perform, nor offer one that would 403 on click (the inverse of the "never advertise
+     * a dead action" rule canIssueImportRequest documents). Without this test the advertiser's
+     * half of the 2026-08-13 widening would be an unmutatable line.
+     */
+    @Test
+    void actions_offersReserveStockToTheDealOwner_butNotToAnotherRep() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
+        stubDeal(40L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
+
+        assertThat(actionCodes(40L, salesActor)).contains("RESERVE_STOCK");
+        assertThat(actionCodes(40L, importActor)).contains("RESERVE_STOCK");
+        // otherSales cannot even read this deal (requireViewAccess is owner-scoped for sales),
+        // so the advertiser is exercised through the roles that CAN see it and still must not
+        // be offered it.
+        assertThat(actionCodes(40L, accountActor)).doesNotContain("RESERVE_STOCK");
+        assertThat(actionCodes(40L, salesManagerActor)).doesNotContain("RESERVE_STOCK");
+    }
+
+    private List<String> actionCodes(long ticketId, UserPrincipal actor) {
+        return service.actions(ticketId, actor).availableActions().stream()
+            .map(TicketResponses.TicketActionDto::action).toList();
+    }
+
     @Test
     void actions_neverOffersRetiredLegacyPricingVerbs() {
         // Slice S1 "engine collapse" (feat/deal-workspace-unification): PICKUP/PROPOSE_PRICE/
