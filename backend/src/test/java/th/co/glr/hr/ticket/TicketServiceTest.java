@@ -1126,6 +1126,60 @@ class TicketServiceTest {
             new StockReservationRequest.Line(1L, new BigDecimal("101.00"), null))), importActor));
     }
 
+    // ── who may declare stock coverage (owner ruling 2026-08-13) ──────────────
+    //
+    // Requirement 1 of CLAUDE.md's "permission changes must ship evidence": these pin which
+    // BRANCH of canDeclareStockCoverage is taken per role. They are NOT the evidence — a mocked
+    // TicketRepository cannot prove the decision reaches the UPDATE. That is
+    // StockDeclarationAuthzIntegrationTest's job, against real Postgres.
+
+    @Test
+    void reserveStock_dealOwner_mayDeclare() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
+        // createdById 1L == salesActor's id: this is the owning rep's own deal.
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
+
+        service.reserveStock(10L, new StockReservationRequest(List.of(
+            new StockReservationRequest.Line(1L, new BigDecimal("40.00"), null))), salesActor);
+
+        verify(ticketRepo).reserveStock(eq(10L), argThat(lines ->
+            lines.size() == 1 && lines.get(0).qtyFromStock().compareTo(new BigDecimal("40.00")) == 0));
+    }
+
+    @Test
+    void reserveStock_salesRepWhoIsNotTheDealOwner_isForbiddenAndWritesNothing() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
+        // Owned by rep 1; otherSales is rep 2 — a sales role, but not THIS deal's.
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
+
+        assertForbidden(() -> service.reserveStock(10L, new StockReservationRequest(List.of(
+            new StockReservationRequest.Line(1L, new BigDecimal("100.00"), null))), otherSales));
+
+        verify(ticketRepo, never()).reserveStock(anyLong(), any());
+        verify(ticketRepo, never()).updateFulfillmentStatus(anyLong(), any());
+        verify(ticketRepo, never()).updateSalesStage(anyLong(), any());
+    }
+
+    @Test
+    void reserveStock_roleWithNeitherOwnershipNorFulfilment_isForbiddenAndWritesNothing() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
+        StockReservationRequest request = new StockReservationRequest(List.of(
+            new StockReservationRequest.Line(1L, new BigDecimal("100.00"), null)));
+
+        assertForbidden(() -> service.reserveStock(10L, request, accountActor));
+        assertForbidden(() -> service.reserveStock(10L, request, hrActor));
+        assertForbidden(() -> service.reserveStock(10L, request, employeeActor));
+        // sales_manager is deliberately excluded even though requireDealOwnership grants it:
+        // the ruling is "Sales declares", and this writes the OWNING rep's STOCK_BONUS input.
+        assertForbidden(() -> service.reserveStock(10L, request, salesManagerActor));
+
+        verify(ticketRepo, never()).reserveStock(anyLong(), any());
+    }
+
     @Test
     void recordPartialDelivery_updatesLineProgressAndStatus() {
         TicketItemDto initialItem = deliveryItem(1L, "100.00", "0.00", "0.00");
@@ -1763,6 +1817,33 @@ class TicketServiceTest {
         List<String> withoutItems = service.actions(21L, salesActor)
             .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
         assertThat(withoutItems).doesNotContain("SUBMIT");
+    }
+
+    /**
+     * canReserveStock (the actions() advertiser) and reserveStock's own gate must stay in step —
+     * both now read canDeclareStockCoverage, so the API can never hide an action the caller may
+     * actually perform, nor offer one that would 403 on click (the inverse of the "never advertise
+     * a dead action" rule canIssueImportRequest documents). Without this test the advertiser's
+     * half of the 2026-08-13 widening would be an unmutatable line.
+     */
+    @Test
+    void actions_offersReserveStockToTheDealOwner_butNotToAnotherRep() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
+        stubDeal(40L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
+
+        assertThat(actionCodes(40L, salesActor)).contains("RESERVE_STOCK");
+        assertThat(actionCodes(40L, importActor)).contains("RESERVE_STOCK");
+        // otherSales cannot even read this deal (requireViewAccess is owner-scoped for sales),
+        // so the advertiser is exercised through the roles that CAN see it and still must not
+        // be offered it.
+        assertThat(actionCodes(40L, accountActor)).doesNotContain("RESERVE_STOCK");
+        assertThat(actionCodes(40L, salesManagerActor)).doesNotContain("RESERVE_STOCK");
+    }
+
+    private List<String> actionCodes(long ticketId, UserPrincipal actor) {
+        return service.actions(ticketId, actor).availableActions().stream()
+            .map(TicketResponses.TicketActionDto::action).toList();
     }
 
     @Test
