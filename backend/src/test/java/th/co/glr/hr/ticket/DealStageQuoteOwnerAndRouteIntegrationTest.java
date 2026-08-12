@@ -243,6 +243,14 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
     @Test
     void skippingAMandatoryStage_isStillRefusedWithoutANoteAndTheStageDoesNotMove() {
         long ticketId = readyToAdvanceFrom(DealStage.QUOTE_BUYER);
+        // ORDER_RECEIVED is fact-gated as of the stage-fact-gate branch, and that gate runs BEFORE
+        // the note rule — without a verified customer order this call would now 409 on the fact and
+        // never reach the rule under test. CUSTOMER_CONFIRMED is what confirmCustomer writes, so
+        // seeding it leaves the missing NOTE as the only thing wrong with the call below.
+        // (StageFactGateIntegrationTest owns the fact gate's own coverage.)
+        jdbc.update("UPDATE sales.ticket SET payment_status = :status WHERE ticket_id = :id",
+            new MapSqlParameterSource()
+                .addValue("status", PaymentTrack.CUSTOMER_CONFIRMED).addValue("id", ticketId));
 
         assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.ORDER_RECEIVED, null, ownerRep))
             .isInstanceOfSatisfying(ApiException.class, e -> {
