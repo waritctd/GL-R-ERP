@@ -599,11 +599,13 @@ public class PricingRequestRepository {
              WHERE pricing_request_id = :pricingRequestId
                AND status IN ('DRAFT', 'REQUESTED')
             """, params);
+        // V141: stale/stale_reason are retired (dropped from sales.pricing_costing) along with
+        // Import's costing-draft step — see PricingRequestStatus / V141's own header. A costing
+        // reachable from here is CANCELLED outright, same as before, just without the two columns
+        // that no longer exist.
         jdbc.update("""
             UPDATE sales.pricing_costing
                SET status = 'CANCELLED',
-                   stale = FALSE,
-                   stale_reason = :reason,
                    updated_at = now()
              WHERE pricing_request_id = :pricingRequestId
                AND status IN ('DRAFT', 'CALCULATED')

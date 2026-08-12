@@ -15,6 +15,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesViewDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.RecalculatePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
@@ -77,6 +78,23 @@ public class PricingDecisionController {
     ) {
         UserPrincipal user = sessions.requireUser(session);
         return Map.of("decision", decisions.recalculate(decisionId, request, user));
+    }
+
+    @PostMapping("/pricing-decisions/{decisionId}/recalculate-cost")
+    Map<String, PricingDecisionDto> recalculateCost(@PathVariable long decisionId, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("decision", decisions.recalculateCost(decisionId, user));
+    }
+
+    @PutMapping("/pricing-decisions/{decisionId}/items/{itemId}/cost-override")
+    Map<String, PricingDecisionDto> overrideItemCost(
+        @PathVariable long decisionId,
+        @PathVariable long itemId,
+        @RequestBody CostOverrideRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("decision", decisions.overrideItemCost(decisionId, itemId, request, user));
     }
 
     @PostMapping("/pricing-decisions/{decisionId}/approve")

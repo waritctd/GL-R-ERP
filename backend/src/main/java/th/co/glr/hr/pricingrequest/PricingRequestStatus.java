@@ -27,10 +27,9 @@ public final class PricingRequestStatus {
     public static final String READY_FOR_CEO_REVIEW = "READY_FOR_CEO_REVIEW";
     // Step 3 (CEO Selling Price Decision): the CEO has explicitly opened a
     // READY_FOR_CEO_REVIEW request (PricingDecisionService.startReview creates a DRAFT
-    // pricing_decision and makes this transition). Factory-quote and costing mutations are
-    // frozen from here onward (FactoryQuoteService's RESPONSE_STATUSES/MUTABLE_STATUSES/
-    // DRAFT_STATUSES and PricingCostingService.COSTING_CREATE_STATUSES all deliberately exclude
-    // this status) until the request is returned to Import.
+    // pricing_decision and makes this transition). Factory-quote mutations are frozen from here
+    // onward (FactoryQuoteService's RESPONSE_STATUSES/MUTABLE_STATUSES/DRAFT_STATUSES
+    // deliberately exclude this status) until the request is returned to Import.
     public static final String CEO_REVIEWING         = "CEO_REVIEWING";
     // Terminal for Step 3's purposes: a customer-facing selling price now exists
     // (sales.pricing_decision, status APPROVED). Step 4 (quotation generation) picks up from
@@ -51,22 +50,19 @@ public final class PricingRequestStatus {
     // revision, or a separate ticket-level lost-deal action outside this step's scope). Same for
     // EXPIRED (sweep-only, never rolls the pricing request back).
     public static final String QUOTATION_ACCEPTED = "QUOTATION_ACCEPTED";
-    // The CEO returned the request to Import for a new costing version
-    // (PricingDecisionService.returnToImport). This is the ONE named "return to Import" state —
-    // PricingCostingService.createDraft is reachable from here (not from READY_FOR_CEO_REVIEW,
-    // which no longer permits reopening a submitted costing; see COSTING_CREATE_STATUSES) and
-    // that createDraft call is what actually moves the request on to COSTING_IN_PROGRESS.
-    public static final String COSTING_REVISION_REQUIRED = "COSTING_REVISION_REQUIRED";
     public static final String CANCELLED             = "CANCELLED";
     public static final String SUPERSEDED            = "SUPERSEDED";
 
     /**
      * Exactly the set the DB's chk_pricing_request_status constraint accepts (V59+V61+V72,
-     * narrowed by V140 which dropped COSTING_IN_PROGRESS and MORE_INFO_REQUIRED).
+     * narrowed by V140 which dropped COSTING_IN_PROGRESS and MORE_INFO_REQUIRED, and by V141
+     * which dropped COSTING_REVISION_REQUIRED — see V141's header for why: the CEO owns costing
+     * now, computed fresh at review time, so there is no more standalone "revise the costing"
+     * step for the CEO to send a request back to).
      */
     public static final Set<String> VALUES = Set.of(
         DRAFT, SUBMITTED, IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE,
-        READY_FOR_CEO_REVIEW, CEO_REVIEWING, APPROVED_FOR_QUOTATION, COSTING_REVISION_REQUIRED,
+        READY_FOR_CEO_REVIEW, CEO_REVIEWING, APPROVED_FOR_QUOTATION,
         QUOTATION_ISSUED, QUOTATION_ACCEPTED, CANCELLED, SUPERSEDED);
 
     /**
@@ -83,24 +79,29 @@ public final class PricingRequestStatus {
         // round-trip was removed from the product entirely, since in practice Import and Sales
         // just message each other directly.
         Map.entry(IMPORT_REVIEWING,    Set.of(AWAITING_FACTORY_RESPONSE, CANCELLED, SUPERSEDED)),
+        // V141 ("CEO owns costing"): FactoryQuoteService.markReadyForCosting auto-advances a
+        // request straight to READY_FOR_CEO_REVIEW the moment every item's factory quote is
+        // ready (LandedCostCalculator.isFullyResolvable) — there is no more Import-driven costing
+        // draft/submit step in between.
         Map.entry(AWAITING_FACTORY_RESPONSE, Set.of(READY_FOR_CEO_REVIEW, CANCELLED, SUPERSEDED)),
-        // Step 3 (review remediation, "one return-to-Import path"): a submitted costing must
-        // stay genuinely immutable once it reaches READY_FOR_CEO_REVIEW — the previous
-        // READY_FOR_CEO_REVIEW -> COSTING_IN_PROGRESS entry (Costing v2 path, commit 5) let
-        // Import silently reopen a SUBMITTED costing without any CEO action, which is exactly
-        // what made "submitted costing is immutable" false. That direct edge is removed; the
-        // CEO must explicitly start review, then either approve or return it. SUPERSEDED (a
-        // customer-change revision superseding a request under CEO review) is preserved.
-        Map.entry(READY_FOR_CEO_REVIEW, Set.of(CEO_REVIEWING, SUPERSEDED)),
+        // V141: TWO ways back to AWAITING_FACTORY_RESPONSE now exist from a request the CEO has
+        // not yet started reviewing — one live-system edge (below) and one CEO action (see
+        // CEO_REVIEWING's own comment):
+        //   - FactoryQuoteService.receive()'s revision branch: a factory sends a revised price
+        //     while the request already sits at READY_FOR_CEO_REVIEW. The cost the CEO would be
+        //     about to review is computed fresh at review time (there is no submitted-costing
+        //     row sitting around to go "stale" any more), so the correct response is to pull the
+        //     REQUEST back — Import must re-mark the revised quote ready before the CEO can open
+        //     review again.
+        // CEO starting review (-> CEO_REVIEWING) and a customer-change revision superseding this
+        // request (-> SUPERSEDED) are the other two live exits.
+        Map.entry(READY_FOR_CEO_REVIEW, Set.of(CEO_REVIEWING, AWAITING_FACTORY_RESPONSE, SUPERSEDED)),
         // CEO_REVIEWING's two live-user exits: approve (produces a selling price, terminal for
-        // Step 3) or return (the one named state PricingCostingService.createDraft reopens
-        // costing from — see COSTING_REVISION_REQUIRED below).
-        Map.entry(CEO_REVIEWING,       Set.of(APPROVED_FOR_QUOTATION, COSTING_REVISION_REQUIRED)),
-        // The single reopen path: Import calls PricingCostingService.createDraft, which (now
-        // that COSTING_REVISION_REQUIRED — not READY_FOR_CEO_REVIEW — is in
-        // COSTING_CREATE_STATUSES) transitions here to COSTING_IN_PROGRESS, and
-        // PricingCostingService.submit() carries it back to READY_FOR_CEO_REVIEW as before.
-        Map.entry(COSTING_REVISION_REQUIRED, Set.of(AWAITING_FACTORY_RESPONSE)),
+        // Step 3) or return (PricingDecisionService.returnToImport) — which V141 sends straight
+        // to AWAITING_FACTORY_RESPONSE, not to a dedicated "revise the costing" status, since
+        // Import's only remaining job after a return is to renegotiate/re-mark the factory
+        // quote(s) ready; the CEO's next startReview recomputes the cost from scratch.
+        Map.entry(CEO_REVIEWING,       Set.of(APPROVED_FOR_QUOTATION, AWAITING_FACTORY_RESPONSE)),
         // Step 4: the ONLY forward exit from APPROVED_FOR_QUOTATION is issuing a customer
         // quotation (CustomerQuotationService.issue). No transition is needed for creating a
         // DRAFT quotation (rule 6: drafts do not move the deal stage OR the pricing request

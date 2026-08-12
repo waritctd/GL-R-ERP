@@ -26,6 +26,11 @@ public final class PricingRequestEventKind {
     public static final String PRICING_DECISION_UPDATED   = "PRICING_DECISION_UPDATED";
     public static final String PRICING_DECISION_APPROVED  = "PRICING_DECISION_APPROVED";
     public static final String PRICING_DECISION_RETURNED  = "PRICING_DECISION_RETURNED";
+    // V141 ("CEO owns costing"): the CEO overrode (or cleared an override of) one line's landed
+    // cost on the costing bound to their in-review decision. The event trail carries the reason
+    // (mandatory in both directions — see PricingDecisionRequests.CostOverrideRequest) since an
+    // override is an input to price = cost x margin, not mere metadata.
+    public static final String PRICING_COSTING_ITEM_COST_OVERRIDDEN = "PRICING_COSTING_ITEM_COST_OVERRIDDEN";
     // Step 4: Customer Quotation Generation and Issuance.
     public static final String CUSTOMER_QUOTATION_CREATED  = "CUSTOMER_QUOTATION_CREATED";
     public static final String CUSTOMER_QUOTATION_UPDATED  = "CUSTOMER_QUOTATION_UPDATED";
@@ -60,7 +65,7 @@ public final class PricingRequestEventKind {
         FACTORY_RESPONSE_READY_FOR_COSTING, FACTORY_RESPONSE_REVISED,
         FACTORY_NOT_AVAILABLE, PRICING_COSTING_STARTED, PRICING_COSTING_CALCULATED,
         PRICING_COSTING_SUBMITTED, PRICING_DECISION_STARTED, PRICING_DECISION_UPDATED,
-        PRICING_DECISION_APPROVED, PRICING_DECISION_RETURNED,
+        PRICING_DECISION_APPROVED, PRICING_DECISION_RETURNED, PRICING_COSTING_ITEM_COST_OVERRIDDEN,
         CUSTOMER_QUOTATION_CREATED, CUSTOMER_QUOTATION_UPDATED, CUSTOMER_QUOTATION_ISSUED,
         CUSTOMER_QUOTATION_CANCELLED, CUSTOMER_QUOTATION_REVISED, CUSTOMER_QUOTATION_ACCEPTED,
         CUSTOMER_QUOTATION_REJECTED, CUSTOMER_QUOTATION_REVISION_REQUESTED, CUSTOMER_QUOTATION_EXPIRED,

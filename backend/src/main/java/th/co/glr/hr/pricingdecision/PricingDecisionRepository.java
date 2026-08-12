@@ -188,6 +188,52 @@ public class PricingDecisionRepository {
         return total;
     }
 
+    /**
+     * V141 ("CEO owns costing"): re-derives a DRAFT decision item's FROZEN cost columns —
+     * previously write-once at {@code insertItems} time, never touched again by any repository
+     * method. Now needed twice: {@code PricingDecisionService#recalculateCost} (the bound costing
+     * was just recomputed) and {@code #overrideItemCost} (one line's effective cost just changed).
+     * Deliberately does NOT touch {@code proposed_margin_pct}/{@code approved_*} — a cost-driven
+     * recompute never overwrites a margin the CEO already set, or anything {@code approve()} froze.
+     * Same DRAFT-only guard shape as {@link #updateItems}.
+     */
+    public record FrozenCostUpdate(
+        long itemId, BigDecimal frozenLandedCostPerPieceThb, BigDecimal frozenLandedCostPerRequestedUnitThb,
+        BigDecimal proposedSellingPrice) {}
+
+    public int updateFrozenCosts(long decisionId, List<FrozenCostUpdate> updates) {
+        if (updates.isEmpty()) {
+            return 0;
+        }
+        MapSqlParameterSource[] batch = new MapSqlParameterSource[updates.size()];
+        for (int i = 0; i < updates.size(); i++) {
+            FrozenCostUpdate u = updates.get(i);
+            batch[i] = new MapSqlParameterSource()
+                .addValue("decisionId", decisionId)
+                .addValue("itemId", u.itemId())
+                .addValue("frozenPerPiece", u.frozenLandedCostPerPieceThb())
+                .addValue("frozenPerRequestedUnit", u.frozenLandedCostPerRequestedUnitThb())
+                .addValue("sellingPrice", u.proposedSellingPrice());
+        }
+        int[] counts = jdbc.batchUpdate("""
+            UPDATE sales.pricing_decision_item
+               SET frozen_landed_cost_per_piece_thb = :frozenPerPiece,
+                   frozen_landed_cost_per_requested_unit_thb = :frozenPerRequestedUnit,
+                   proposed_selling_price_per_requested_unit = :sellingPrice,
+                   updated_at = now()
+             WHERE pricing_decision_item_id = :itemId
+               AND pricing_decision_id = :decisionId
+               AND EXISTS (
+                   SELECT 1 FROM sales.pricing_decision pd
+                    WHERE pd.pricing_decision_id = :decisionId AND pd.status = 'DRAFT')
+            """, batch);
+        int total = 0;
+        for (int c : counts) {
+            total += c;
+        }
+        return total;
+    }
+
     public int updateDefaultMargin(long decisionId, BigDecimal defaultMarginPct) {
         return jdbc.update("""
             UPDATE sales.pricing_decision

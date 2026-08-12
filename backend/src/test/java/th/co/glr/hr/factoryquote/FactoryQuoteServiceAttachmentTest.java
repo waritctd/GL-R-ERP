@@ -52,8 +52,14 @@ class FactoryQuoteServiceAttachmentTest {
     private final FactoryEmailService factoryEmail = mock(FactoryEmailService.class);
     private final NotificationRepository notifications = mock(NotificationRepository.class);
     private final FileStorageService fileStorage = mock(FileStorageService.class);
+    // V141 ("CEO owns costing"): FactoryQuoteService now takes a LandedCostCalculator too (used
+    // only by markReadyForCosting's auto-advance check) — mocked, since no test in this
+    // deleteAttachment-only class ever calls markReadyForCosting.
+    private final th.co.glr.hr.pricingcosting.LandedCostCalculator landedCosts =
+        mock(th.co.glr.hr.pricingcosting.LandedCostCalculator.class);
     private final FactoryQuoteService service = new FactoryQuoteService(
-        quotes, pricingRequests, tickets, factoryConfigs, factoryEmail, notifications, fileStorage, new AppProperties());
+        quotes, pricingRequests, tickets, factoryConfigs, factoryEmail, notifications, fileStorage,
+        new AppProperties(), landedCosts);
 
     private final UserPrincipal importActor = actor(1L, "import");
     private final UserPrincipal salesActor = actor(2L, "sales");

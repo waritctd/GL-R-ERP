@@ -95,13 +95,20 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
             notifications, new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers,
             new CustomerQuotationRepository(jdbc));
 
+        // V141 ("CEO owns costing"): shared by FactoryQuoteService (markReadyForCosting's
+        // auto-advance check) and, in production, PricingDecisionService — this file only reads
+        // through PricingCostingService (see pricingCostingService.get below), so the calculator
+        // is wired but never exercised beyond satisfying the constructor.
+        th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
+            new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests,
+                new FxRateRepository(jdbc), new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), new FactoryEmailService(mock(JavaMailSender.class), "test@glr.co.th"),
-            notifications, fileStorage, new AppProperties());
+            notifications, fileStorage, new AppProperties(), landedCostCalculator);
 
-        pricingCostingService = new PricingCostingService(pricingCostings, pricingRequests, factoryQuotes,
-            tickets, new FxRateRepository(jdbc), new PriceCalcConfigRepository(jdbc),
-            new FactoryConfigRepository(jdbc), notifications);
+        // V141: PricingCostingService is READ-ONLY now (list/get) — the 8-arg convenience
+        // constructor that assembled its own LandedCostCalculator is gone.
+        pricingCostingService = new PricingCostingService(pricingCostings, pricingRequests, tickets);
 
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));

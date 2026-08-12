@@ -182,6 +182,24 @@ public class LandedCostCalculator {
     }
 
     /**
+     * True when {@link #resolveSources} would succeed — the single definition of "ready to cost".
+     * {@code FactoryQuoteService.markReadyForCosting} calls this to decide whether the LAST
+     * outstanding factory quote just became ready (and therefore whether the pricing request
+     * should auto-advance to {@code READY_FOR_CEO_REVIEW}); {@link #calculate} 422s via the same
+     * {@link #resolveSources} check if it is ever called when this would return false. Sharing
+     * one predicate for both is deliberate — "we said ready" and "the calculator can run" must
+     * never be able to drift apart.
+     */
+    public boolean isFullyResolvable(PricingRequestSummaryDto summary) {
+        try {
+            resolveSources(summary);
+            return true;
+        } catch (ApiException e) {
+            return false;
+        }
+    }
+
+    /**
      * Delegates to {@link th.co.glr.hr.pricing.FxResolver#resolve} (Step 3 extraction — see that
      * class's Javadoc). Behaviour unchanged from before the extraction.
      */
