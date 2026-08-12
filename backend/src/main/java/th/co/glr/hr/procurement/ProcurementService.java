@@ -28,6 +28,7 @@ import th.co.glr.hr.procurement.ProcurementRequests.RecordSupplierProformaReques
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.TicketRepository;
+import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
 /**
@@ -63,13 +64,24 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  * package) is the strictest available reading of that instruction: a PO cannot exist before
  * Import has actually issued the import request for this deal.
  *
- * <p><strong>Independent of {@code markIrSent}/{@code markShipping}/{@code markGoodsReceived}.
- * </strong> Those three existing {@code TicketService} methods are NOT modified and gain NO new
- * precondition from this branch — they remain reachable purely off {@code
- * sales.ticket.fulfillment_status}, exactly as before. This factory-PO record is an optional
- * detail layer alongside that ticket-level flag sequence, not a replacement or a new gate on it —
- * see this class's own package Javadoc note in the branch handoff for the explicit reasoning
- * ("prefer not weakening any existing gate").
+ * <p><strong>The PO rollup is now the source of truth for the ticket's IMPORT axis.</strong> Every
+ * PO-progressing call here ({@link #recordShippingDetail}, {@link #recordGoodsReceived}, {@link
+ * #cancel}) ends by calling {@code TicketService#applyPurchaseOrderRollup}, which derives {@code
+ * SHIPPING}/{@code GOODS_RECEIVED} from this deal's live (non-CANCELLED) PO statuses and writes it
+ * onto {@code sales.ticket.fulfillment_status} when doing so is safe (import axis, monotonic —
+ * see that method's own Javadoc). As a consequence, {@code TicketService#markShipping} and {@code
+ * #markGoodsReceived} now REFUSE with 409 on any deal that has at least one live PO — a
+ * ticket-level click cannot say which factory shipped or received, so it cannot legitimately
+ * "delegate" to the PO record it doesn't reference, and refusing is the only option that invents
+ * no data (see those two methods' own comments for the fuller reasoning). {@code
+ * TicketService#markIrSent} and {@code #issueImportRequest} are UNAFFECTED — POs cannot exist
+ * before {@code issueImportRequest} runs (they require {@code DealStage.PROCUREMENT}, which only
+ * that method sets), and IR_SENT is a pre-shipment milestone the POs say nothing about, so neither
+ * can ever be contradicted by the PO rollup. The DELIVERY axis ({@code reserveStock}/{@code
+ * recordPartialDelivery}/{@code completeDelivery}, {@code FROM_STOCK}/{@code
+ * PARTIALLY_DELIVERED}/{@code FULLY_DELIVERED}) is untouched by any of this — the rollup only ever
+ * writes while the ticket is still on the import axis, by design (the delivery-axis firewall in
+ * {@code applyPurchaseOrderRollup}).
  *
  * <p><strong>Confidentiality.</strong> Raw supplier PO detail (price, proforma reference, payment
  * schedule) is Import/CEO territory, reusing the {@code RAW_QUOTE_ROLES}/{@code
@@ -87,13 +99,16 @@ public class ProcurementService {
     private final PricingRequestRepository pricingRequests;
     private final TicketRepository tickets;
     private final NotificationRepository notifications;
+    private final TicketService ticketService;
 
     public ProcurementService(ProcurementRepository purchaseOrders, PricingRequestRepository pricingRequests,
-                              TicketRepository tickets, NotificationRepository notifications) {
+                              TicketRepository tickets, NotificationRepository notifications,
+                              TicketService ticketService) {
         this.purchaseOrders = purchaseOrders;
         this.pricingRequests = pricingRequests;
         this.tickets = tickets;
         this.notifications = notifications;
+        this.ticketService = ticketService;
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -205,6 +220,7 @@ public class ProcurementService {
             throw new ApiException(HttpStatus.CONFLICT, "ใบสั่งซื้อนี้ปิดแล้ว ไม่สามารถแก้ไขได้");
         }
         logEvent(po, PricingRequestEventKind.FACTORY_PO_SHIPPING_RECORDED, actor, "บันทึกรายละเอียดการขนส่ง");
+        ticketService.applyPurchaseOrderRollup(po.ticketId(), actor);
         return requirePo(id);
     }
 
@@ -272,6 +288,7 @@ public class ProcurementService {
         }
         logEvent(po, PricingRequestEventKind.FACTORY_PO_GOODS_RECEIVED, actor,
             "รับสินค้าแล้ว ต้นทุนนำเข้าจริง " + request.actualLandedCostThb());
+        ticketService.applyPurchaseOrderRollup(po.ticketId(), actor);
         return requirePo(id);
     }
 
@@ -284,6 +301,11 @@ public class ProcurementService {
             throw new ApiException(HttpStatus.CONFLICT, "ใบสั่งซื้อนี้ปิดแล้ว ไม่สามารถยกเลิกได้");
         }
         logEvent(po, PricingRequestEventKind.FACTORY_PO_CANCELLED, actor, "ยกเลิกใบสั่งซื้อโรงงาน: " + request.reason());
+        // Cancelling the last not-yet-received PO can itself COMPLETE the rollup — e.g. PO A
+        // RECEIVED + PO B just CANCELLED now means every remaining LIVE PO is RECEIVED. Do not
+        // skip this call on the cancel path just because "cancel" sounds like it only ever
+        // subtracts.
+        ticketService.applyPurchaseOrderRollup(po.ticketId(), actor);
         return requirePo(id);
     }
 
