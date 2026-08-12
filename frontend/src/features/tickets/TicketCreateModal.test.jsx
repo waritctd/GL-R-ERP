@@ -377,12 +377,11 @@ describe('TicketCreateModal validation', () => {
     await selectCustomerAndProject();
     submitForm();
 
-    // No explicit goToSection here: entryChannel is the only invalid field once
+    // No explicit goToSection here, deliberately: entryChannel is the only invalid field once
     // customer+project are set and there are no items, so the failed submit's own
-    // jumpToField('entryChannel') (viewForFieldKey → 'contact') already lands us here. Deviation
-    // from the plan's literal test code — a goToSection('ผู้ติดต่อ & ช่องทางดีล') call at this point
-    // tries to click a hub-row button that is no longer on screen once the jump has fired, and
-    // throws "Unable to find role=button" instead of testing anything.
+    // jumpToField('entryChannel') (viewForFieldKey → 'contact') has already navigated here. Adding
+    // a goToSection('ผู้ติดต่อ & ช่องทางดีล') at this point would look harmless but throws — the
+    // hub row it clicks is no longer rendered once the jump has fired.
     const group = await screen.findByRole('radiogroup', { name: 'ช่องทางดีล' });
     await waitFor(() => expect(group.getAttribute('aria-invalid')).toBe('true'));
     expect(group.getAttribute('aria-describedby')).toBe('entry-channel-error');
