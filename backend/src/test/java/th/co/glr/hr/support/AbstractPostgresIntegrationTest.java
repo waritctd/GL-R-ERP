@@ -1,5 +1,7 @@
 package th.co.glr.hr.support;
 
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
 import java.util.Arrays;
 import java.util.List;
@@ -12,7 +14,6 @@ import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
 import org.springframework.transaction.interceptor.TransactionInterceptor;
@@ -44,7 +45,34 @@ import th.co.glr.hr.payroll.PayrollTaxTreatment;
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")
 public abstract class AbstractPostgresIntegrationTest {
-    private static DataSource dataSource;
+    /**
+     * A real connection <b>pool</b>, not a {@code DriverManagerDataSource}.
+     *
+     * <p>This was the single dominant cost of the backend suite in CI, and it is worth stating
+     * plainly because the old choice looked harmless: {@code DriverManagerDataSource} is not a pool
+     * — it opens a <b>brand-new physical connection for every JDBC call</b> and closes it again.
+     * Each of those connections paid a full PostgreSQL SCRAM-SHA-256 handshake, whose client side is
+     * PBKDF2 with 4096 HMAC-SHA-256 iterations. A JFR profile of one test class
+     * ({@code CustomerQuotationIntegrationTest}) showed PBKDF2 + SHA dominating every CPU sample and
+     * 9,607 socket reads blocking for 19.2s of a 75s run — all of it spent re-authenticating, none
+     * of it testing anything. Pooling took that class from 83.8s to 11.7s (-86%).
+     *
+     * <p><b>Why this does not change what the tests mean.</b> Reusing a connection could in principle
+     * leak session state between statements that previously each got a virgin connection. It cannot
+     * here, and that was checked rather than assumed: the codebase uses no session-scoped
+     * {@code pg_advisory_lock} (only {@code pg_advisory_xact_lock}, which is transaction-scoped and
+     * released at the end of its own auto-committed statement either way), no {@code SET}, no temp
+     * tables, and no {@code search_path} juggling — every query is schema-qualified. Autocommit stays
+     * on, matching the old behaviour. If anything this is <i>more</i> production-faithful, because
+     * production runs HikariCP too (Spring Boot's default pool).
+     *
+     * <p>{@code maximumPoolSize} is 8 against a measured maximum demand of 2 (the optimistic-locking
+     * and advisory-lock tests use {@code newFixedThreadPool(2)}); the headroom means a test that
+     * leaks a connection still runs. {@code connectionTimeout} is deliberately short so exhaustion
+     * fails loudly in seconds instead of wedging the build — this repo has lost builds to hangs
+     * before, and a fast red is worth more than a slow mystery.
+     */
+    private static HikariDataSource dataSource;
 
     protected NamedParameterJdbcTemplate jdbc;
 
@@ -65,6 +93,14 @@ public abstract class AbstractPostgresIntegrationTest {
         if (PostgresTestSupport.usesContainer()) {
             // Fast path: clone the pre-migrated golden template. Must run before dataSource() first
             // connects, since it (re)creates the working database this test connects to.
+            //
+            // The pool has to go FIRST, and only on this path: resetToGolden() issues
+            // `DROP DATABASE wrk_it WITH (FORCE)`, which terminates every connection to it
+            // server-side. A pool that survived the drop would keep handing out sockets to a
+            // database that no longer exists. The external TEST_DB_URL path never drops the
+            // database (Flyway clean+migrate on objects, not the DB), so its pool is kept — it
+            // holds no locks while idle in autocommit, and clean() proceeds normally.
+            closePool();
             PostgresTestSupport.resetToGolden();
         } else {
             // External TEST_DB_URL: replay clean + migrate, so we never drop a DB we don't own.
@@ -103,14 +139,31 @@ public abstract class AbstractPostgresIntegrationTest {
 
     private static DataSource dataSource() {
         if (dataSource == null) {
-            DriverManagerDataSource ds = new DriverManagerDataSource(
-                PostgresTestSupport.workingJdbcUrl(),
-                PostgresTestSupport.username(),
-                PostgresTestSupport.password());
-            ds.setDriverClassName("org.postgresql.Driver");
-            dataSource = ds;
+            HikariConfig config = new HikariConfig();
+            config.setJdbcUrl(PostgresTestSupport.workingJdbcUrl());
+            config.setUsername(PostgresTestSupport.username());
+            config.setPassword(PostgresTestSupport.password());
+            config.setDriverClassName("org.postgresql.Driver");
+            config.setPoolName("integration-test-pool");
+            // See the field Javadoc: 8 against a measured demand of 2, and a short timeout so a
+            // leaked connection surfaces as a fast failure rather than a 30s stall per acquisition.
+            config.setMaximumPoolSize(8);
+            config.setMinimumIdle(1);
+            config.setConnectionTimeout(10_000);
+            dataSource = new HikariDataSource(config);
         }
         return dataSource;
+    }
+
+    /**
+     * Tears the pool down so the working database can be dropped out from under it. Idempotent, and
+     * safe to call before the pool has ever been built.
+     */
+    private static void closePool() {
+        if (dataSource != null) {
+            dataSource.close();
+            dataSource = null;
+        }
     }
 
     /**

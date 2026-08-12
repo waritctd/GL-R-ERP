@@ -162,9 +162,17 @@ class TransactionalHarnessIntegrationTest extends AbstractPostgresIntegrationTes
         }
     }
 
-    /** A brand-new physical connection (DriverManagerDataSource hands out a fresh one per {@code
-     * getConnection()} call, never joining any Spring-managed transaction) trying to take {@link
-     * #LOCK_KEY} without blocking. Closed via try-with-resources — never left to the per-test
+    /** A second, independent physical connection trying to take {@link #LOCK_KEY} without blocking,
+     * obtained straight from the DataSource so it never joins any Spring-managed transaction.
+     *
+     * <p>Both callers below invoke this while their own connection is still checked out, and that is
+     * what makes "independent" true: the pool ({@code AbstractPostgresIntegrationTest} runs on
+     * HikariCP, size 8) cannot hand back a connection that nobody has returned yet, so this is
+     * necessarily a different physical connection from the holder's. Do not "simplify" either caller
+     * by closing its connection first — the second acquisition would then be free to hand back the
+     * very same socket, and both assertions would quietly stop proving anything.
+     *
+     * <p>Closed via try-with-resources — never left to the per-test
      * {@code DROP DATABASE ... WITH (FORCE)} to clean up. */
     private boolean tryAdvisoryLockFromSecondConnection() throws SQLException {
         try (Connection second = jdbc.getJdbcTemplate().getDataSource().getConnection();
