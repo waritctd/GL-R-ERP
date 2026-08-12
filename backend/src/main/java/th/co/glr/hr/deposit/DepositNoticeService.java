@@ -173,7 +173,9 @@ public class DepositNoticeService {
         // (Phase 1 lifecycle gate; mirrors TicketService.requireActive).
         requireActiveLifecycle(s);
 
-        String docNumber = docs.issue(docId, actor.id(), actor.name());
+        String docNumber = docs.issue(docId, actor.id(), actor.name())
+            .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT,
+                "ใบแจ้งรับมัดจำนี้ถูกออกไปแล้วโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง"));
 
         // Render downloadable files at issue time. For now the DB stores render flags; bytes
         // remain regenerable from the persisted document snapshot.

@@ -190,12 +190,31 @@ public class DepositNoticeRepository {
         }
     }
 
+    /**
+     * Assigns the doc number and flips the row to {@code ISSUED} — but only if it is still
+     * {@code DRAFT} at the moment this UPDATE runs. {@code DepositNoticeService.issue} calls
+     * {@code requireDraft} first, but that is a plain read: roughly 20 lines (ticket lookup,
+     * status check, paymentStatus check, lifecycle check) run between that read and this UPDATE,
+     * so two concurrent {@code issue()} calls on the same DRAFT row can both pass {@code
+     * requireDraft} and both reach here. Without {@code AND status = 'DRAFT'} in the WHERE, the
+     * second UPDATE would re-mint a fresh {@code doc_number} in place on an already-issued
+     * document — the read-then-write race this predicate closes. It is the only thing that closes
+     * it; the service-level check alone cannot, since it reads before either write commits.
+     *
+     * <p>An empty return means the row was no longer DRAFT when this UPDATE ran (already issued,
+     * superseded, etc.) — the caller MUST treat that as a refusal, not silently ignore it. Note
+     * that on a refusal the {@code sales.document_sequence} number minted by {@link
+     * #nextDocNumber} just above is NOT wasted in production: it rolls back with the enclosing
+     * {@code @Transactional} transaction along with everything else in this method.
+     *
+     * @return the new doc number, or {@link Optional#empty()} if the row was not DRAFT.
+     */
     @Transactional
-    public String issue(long docId, long actorId, String actorName) {
+    public Optional<String> issue(long docId, long actorId, String actorName) {
         int thaiYear = Year.now().getValue() + 543;
         String docNumber = nextDocNumber("DEPOSIT_NOTICE", thaiYear);
 
-        jdbc.update("""
+        int rows = jdbc.update("""
             UPDATE sales.deposit_notice SET
                 doc_number     = :num,
                 issue_date     = CURRENT_DATE,
@@ -204,8 +223,13 @@ public class DepositNoticeRepository {
                 issued_by_name = :actorName,
                 updated_at     = now()
              WHERE deposit_notice_id = :id
+               AND status = 'DRAFT'
             """,
             Map.of("num", docNumber, "actorId", actorId, "actorName", actorName, "id", docId));
+
+        if (rows == 0) {
+            return Optional.empty();
+        }
 
         // Supersede all older versions for same ticket
         jdbc.update("""
@@ -215,7 +239,7 @@ public class DepositNoticeRepository {
                AND status = 'ISSUED'
             """, Map.of("id", docId));
 
-        return docNumber;
+        return Optional.of(docNumber);
     }
 
     public void setFilePaths(long docId, String pdfPath, String xlsxPath) {

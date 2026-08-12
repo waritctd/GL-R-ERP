@@ -413,13 +413,43 @@ public class FactoryQuoteRepository {
         return id == null ? 0L : id;
     }
 
-    public void supersede(long quoteId) {
-        jdbc.update("""
+    /**
+     * Refuses to supersede a quote that has already left the live/negotiable lifecycle. Owner
+     * ruling: a LIVE quote may be superseded (that's the normal revision path), a DEAD one may
+     * not. The three excluded statuses are each terminal — no repository method in this file
+     * transitions OUT of any of them: {@code NOT_AVAILABLE} (set by {@link #markNotAvailable}),
+     * {@code SUPERSEDED} (set by this method itself — so a second call is an idempotent no-op,
+     * not an error), {@code CANCELLED} (set by {@link #cancelOpenForPricingRequest}).
+     *
+     * <p>Uses a POSITIVE allowlist rather than the pricing-request's negative {@code status <>
+     * 'SUPERSEDED' AND status <> 'CANCELLED'} guard ({@code
+     * PricingRequestRepository#supersedeForCustomerRevision}, this method's sibling on the
+     * PricingRequest aggregate) to match every OTHER status-guarded method already in this file
+     * ({@link #updateDraft}, {@link #markRequested}, {@link #updateFirstResponse}, {@link
+     * #startNegotiation}, {@link #markReady}, {@link #markNotAvailable}, {@link
+     * #cancelOpenForPricingRequest}), which all use a positive {@code status IN (...)}/{@code
+     * status = '...'}. An allowlist also fails safe: a 9th {@code FactoryQuoteStatus} added later
+     * is non-supersedable until someone deliberately opts it in, where a denylist would silently
+     * admit it. (No separate {@code is_current} check is needed: {@code
+     * chk_factory_quote_current_terminal} already guarantees {@code is_current = TRUE} for every
+     * status in this allowlist.)
+     *
+     * <p>The only production caller ({@code FactoryQuoteService#receive}) already restricts itself
+     * to {@code RESPONSE_RECEIVED}/{@code NEGOTIATING}/{@code READY_FOR_COSTING} before calling
+     * this — this predicate is the hardening for any FUTURE caller that reaches the repository
+     * directly without that same service-level check.
+     *
+     * @return rows affected: 1 on a successful supersede, 0 when the quote was not in a
+     *     supersedable status. The caller MUST treat 0 as a refusal, not silently ignore it.
+     */
+    public int supersede(long quoteId) {
+        return jdbc.update("""
             UPDATE sales.factory_quote
                SET status = 'SUPERSEDED',
                    is_current = FALSE,
                    updated_at = now()
              WHERE factory_quote_id = :quoteId
+               AND status IN ('DRAFT','REQUESTED','RESPONSE_RECEIVED','NEGOTIATING','READY_FOR_COSTING')
             """, Map.of("quoteId", quoteId));
     }
 
