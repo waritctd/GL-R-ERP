@@ -246,8 +246,12 @@ public class TicketRepository {
                 .addValue("projectId", request.projectId())
                 .addValue("contactId", request.contactId())
                 .addValue("note", request.note())
+                // V144: an omitted channel lands UNSPECIFIED ("not stated"), not DESIGNER_LED.
+                // Defaulting to a real route made every unattended row assert one, so a deliberate
+                // DESIGNER_LED was indistinguishable from silence — see EntryChannel's Javadoc and
+                // V144__ticket_entry_channel_unspecified.sql for the pre-V144 data cutoff.
                 .addValue("entryChannel", request.entryChannel() != null && !request.entryChannel().isBlank()
-                    ? request.entryChannel() : EntryChannel.DESIGNER_LED),
+                    ? request.entryChannel() : EntryChannel.UNSPECIFIED),
             keyHolder, new String[]{"ticket_id"});
         long ticketId = keyHolder.getKey().longValue();
         if (hasItems) insertItems(ticketId, request.items());

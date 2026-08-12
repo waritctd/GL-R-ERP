@@ -1670,14 +1670,23 @@ public class TicketService {
 
     @Transactional
     public TicketDto setEntryChannel(long ticketId, String value, String note, UserPrincipal actor) {
-        if (!EntryChannel.isValid(value)) {
+        // UNSPECIFIED is valid as STORED but never as INPUT: once a channel has been stated it must
+        // not be possible to un-state it. Same guard shape as generateQuotation's
+        // QuotationRecipient.UNSPECIFIED check above — see EntryChannel's Javadoc and V144.
+        if (!EntryChannel.isValid(value) || EntryChannel.UNSPECIFIED.equals(value)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับช่องทางรับงาน '" + value + "'");
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         requireActive(s);
+        // "Changing a STATED channel needs a reason." Both DESIGNER_LED and UNSPECIFIED count as
+        // unstated here and neither requires a note: UNSPECIFIED is the V144 default, and
+        // DESIGNER_LED is the pre-V144 default that was never backfilled (V144's data cutoff), so
+        // an untouched deal reads one or the other purely by age. Dropping UNSPECIFIED from this
+        // list would make the FIRST statement of a channel on every new deal demand a reason.
         boolean changingExistingNonDefault = s.entryChannel() != null
             && !EntryChannel.DESIGNER_LED.equals(s.entryChannel())
+            && !EntryChannel.UNSPECIFIED.equals(s.entryChannel())
             && !s.entryChannel().equals(value);
         if (changingExistingNonDefault && (note == null || note.isBlank())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "การเปลี่ยน entry channel ต้องระบุเหตุผล");
