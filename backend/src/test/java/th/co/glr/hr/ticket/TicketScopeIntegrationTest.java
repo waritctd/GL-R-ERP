@@ -186,7 +186,7 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void accountListPage_depositNoticeIssuedPending_isReturned() {
         long ticketId = createTicket(DealStage.DEPOSIT_RECEIVED);
-        tickets.updatePaymentStatus(ticketId, "DEPOSIT_NOTICE_ISSUED");
+        tickets.updatePaymentStatusUnchecked(ticketId, "DEPOSIT_NOTICE_ISSUED");
 
         assertThat(idsIn(listPage(accountUser))).contains(ticketId);
     }
@@ -194,7 +194,7 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void accountListPage_awaitingFinalPaymentPending_isReturned() {
         long ticketId = createTicket(DealStage.DELIVERED);
-        tickets.updatePaymentStatus(ticketId, "AWAITING_FINAL_PAYMENT");
+        tickets.updatePaymentStatusUnchecked(ticketId, "AWAITING_FINAL_PAYMENT");
 
         assertThat(idsIn(listPage(accountUser))).contains(ticketId);
     }

@@ -17,6 +17,8 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.common.ApiException;
+import org.springframework.http.HttpStatus;
 
 @Repository
 public class TicketRepository {
@@ -1525,7 +1527,85 @@ public class TicketRepository {
             """, Map.of("id", ticketId));
     }
 
-    public void updatePaymentStatus(long ticketId, String paymentStatus) {
+    /**
+     * Validated payment-track advance. Walks EVERY hop from {@code expected} to {@code next}
+     * through {@link PaymentTrack#stepsBetween}, so an illegal edge throws {@link
+     * IllegalStateException} BEFORE any SQL runs (mirrors {@code
+     * PricingRequestRepository.transition}). The final UPDATE is a compare-and-set on {@code
+     * payment_status = :expected}; a 0 rowcount means a concurrent writer moved the row and the
+     * SERVICE must turn that into a 409 — do NOT re-SELECT to build a nicer message (same
+     * discipline as {@code PricingRequestRepository.transition}'s own Javadoc).
+     *
+     * <p>Multi-hop is a WALK, not a SKIP: intermediate states are traversed and validated by
+     * {@link PaymentTrack#stepsBetween}, never jumped over. The whole walk is inside the caller's
+     * transaction, so no observer ever sees an intermediate value — the UPDATE below still moves
+     * the row straight from {@code expected} to {@code next} in one statement; only the
+     * VALIDATION is multi-hop.
+     *
+     * <p>{@code IS NOT DISTINCT FROM}, not a plain {@code =}: {@code expected == null} is the
+     * entry case ({@code null -> CUSTOMER_CONFIRMED}), and a plain {@code = :expected} never
+     * matches a NULL column value.
+     *
+     * @return the rowcount (0 or 1) — 0 means the compare-and-set lost a race; never re-SELECT to
+     *     build a nicer error, per the discipline above.
+     */
+    public int advancePaymentStatus(long ticketId, String policy, String expected, String next) {
+        // stepsBetween throws IllegalStateException for an illegal edge, BEFORE any SQL runs.
+        // The design intent is "a programming error to catch at the source", which is right — but
+        // IllegalStateException is unmapped in ApiExceptionHandler, so anything that does reach it
+        // surfaces as an opaque HTTP 500 rather than something a caller can act on. Adversarial
+        // review found three legacy-data routes that reached it. Those are fixed at source (the
+        // gate in reconcilePaymentStatus, and V142's backfill), so this is defence in depth:
+        // convert to a 409 so a residual illegal edge is a legible conflict, not a 500.
+        // Deliberately NOT a global @ExceptionHandler(IllegalStateException) — that would swallow
+        // genuine programming errors across the whole app.
+        try {
+            PaymentTrack.stepsBetween(policy, expected, next);
+        } catch (IllegalStateException e) {
+            throw new ApiException(HttpStatus.CONFLICT, "สถานะการชำระเงินของดีลนี้ไม่ถูกต้อง กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
+        // WALK, and PERSIST every hop (owner ruling): a multi-hop advance writes each intermediate
+        // state in turn rather than jumping straight to the target. confirmFinalPayment on a
+        // REQUIRED deal goes DEPOSIT_PAID -> AWAITING_FINAL_PAYMENT -> FULLY_PAID, and the row
+        // genuinely sits at AWAITING_FINAL_PAYMENT in between so the deal's history shows it.
+        // A single jump-write would leave no trace that the state was ever reached.
+        //
+        // Each hop is its own compare-and-set chained off the previous one, so a lost race stops
+        // the walk immediately and returns 0 for the caller to turn into a 409 — it never
+        // continues writing from a state it did not actually observe. All hops run inside the
+        // caller's transaction, so a failure part-way rolls the whole walk back in production.
+        // NOTE: @Transactional is inert in this repo's hand-wired integration tests, so the suite
+        // does NOT prove that atomicity — see the finding on the integration harness.
+        List<String> hops = PaymentTrack.stepsBetween(policy, expected, next);
+        String from = expected;
+        int rows = 0;
+        for (String hop : hops) {
+            rows = jdbc.update("""
+                UPDATE sales.ticket
+                   SET payment_status = :next, updated_at = now()
+                 WHERE ticket_id = :id AND payment_status IS NOT DISTINCT FROM :expected
+                """,
+                new MapSqlParameterSource()
+                    .addValue("next", hop)
+                    .addValue("id", ticketId)
+                    .addValue("expected", from));
+            if (rows == 0) {
+                return 0;
+            }
+            from = hop;
+        }
+        return rows;
+    }
+
+    /**
+     * Test-seed / migration use only — bypasses {@link PaymentTrack} entirely (a blind, unguarded
+     * UPDATE: no compare-and-set, no validated edge, no {@code updated_at} touch). No production
+     * code may call this; every real write goes through {@link #advancePaymentStatus}. Renamed
+     * from the original unqualified {@code updatePaymentStatus} — kept because {@code
+     * TicketScopeIntegrationTest} seeds {@code payment_status} directly to build fixture state
+     * without driving it through the state machine.
+     */
+    public void updatePaymentStatusUnchecked(long ticketId, String paymentStatus) {
         jdbc.update(
             "UPDATE sales.ticket SET payment_status = :s WHERE ticket_id = :id",
             new MapSqlParameterSource().addValue("s", paymentStatus).addValue("id", ticketId));
