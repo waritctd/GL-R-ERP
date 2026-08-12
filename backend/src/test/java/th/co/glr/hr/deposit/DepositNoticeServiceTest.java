@@ -61,7 +61,7 @@ class DepositNoticeServiceTest {
     void issue_advancesPaymentTrackAndKeepsTicketStatus() {
         stubDraft(99L, 10L);
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        when(docs.issue(99L, 1L, "Sales")).thenReturn("GLRD69001");
+        when(docs.issue(99L, 1L, "Sales")).thenReturn(Optional.of("GLRD69001"));
 
         service.issue(99L, owner);
 

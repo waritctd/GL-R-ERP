@@ -6,9 +6,7 @@ import java.util.Set;
 public final class FulfilmentStatus {
     public static final String IR_ISSUED = "IR_ISSUED";
     public static final String IR_SENT = "IR_SENT";
-    public static final String PICKED_UP = "PICKED_UP";
     public static final String SHIPPING = "SHIPPING";
-    public static final String CUSTOMS_CLEARANCE = "CUSTOMS_CLEARANCE";
     public static final String GOODS_RECEIVED = "GOODS_RECEIVED";
     public static final String FROM_STOCK = "FROM_STOCK";
     public static final String PARTIALLY_DELIVERED = "PARTIALLY_DELIVERED";
@@ -17,12 +15,13 @@ public final class FulfilmentStatus {
     public static final Set<String> DELIVERY_COMPLETE = Set.of(GOODS_RECEIVED, FULLY_DELIVERED);
 
     /**
-     * The import axis, in progression order. Deliberately does NOT include {@code PICKED_UP} or
-     * {@code CUSTOMS_CLEARANCE} — both are dead constants (zero references anywhere) and are not
-     * part of any real sequence; adding them here would let {@link #importRank} assign them a
-     * misleading position. Used by the factory-PO rollup ({@code TicketRepository#deriveImportStatus},
-     * {@code TicketService#applyPurchaseOrderRollup}) to tell "further along" from "further behind"
-     * and to tell the import axis apart from the delivery axis below.
+     * The import axis, in progression order — exactly these four values, no more. Used by the
+     * factory-PO rollup ({@code TicketRepository#deriveImportStatus}, {@code
+     * TicketService#applyPurchaseOrderRollup}) to tell "further along" from "further behind" and
+     * to tell the import axis apart from the delivery axis below. Do not add a value here unless
+     * it is a real, live step of that sequence: any entry in this list is assigned a position by
+     * {@link #importRank}, and a value that is not a genuine sequence step would be given a
+     * misleading rank.
      */
     public static final List<String> IMPORT_SEQUENCE = List.of(IR_ISSUED, IR_SENT, SHIPPING, GOODS_RECEIVED);
 
