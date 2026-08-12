@@ -1126,6 +1126,60 @@ class TicketServiceTest {
             new StockReservationRequest.Line(1L, new BigDecimal("101.00"), null))), importActor));
     }
 
+    // ── who may declare stock coverage (owner ruling 2026-08-13) ──────────────
+    //
+    // Requirement 1 of CLAUDE.md's "permission changes must ship evidence": these pin which
+    // BRANCH of canDeclareStockCoverage is taken per role. They are NOT the evidence — a mocked
+    // TicketRepository cannot prove the decision reaches the UPDATE. That is
+    // StockDeclarationAuthzIntegrationTest's job, against real Postgres.
+
+    @Test
+    void reserveStock_dealOwner_mayDeclare() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
+        // createdById 1L == salesActor's id: this is the owning rep's own deal.
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
+
+        service.reserveStock(10L, new StockReservationRequest(List.of(
+            new StockReservationRequest.Line(1L, new BigDecimal("40.00"), null))), salesActor);
+
+        verify(ticketRepo).reserveStock(eq(10L), argThat(lines ->
+            lines.size() == 1 && lines.get(0).qtyFromStock().compareTo(new BigDecimal("40.00")) == 0));
+    }
+
+    @Test
+    void reserveStock_salesRepWhoIsNotTheDealOwner_isForbiddenAndWritesNothing() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
+        // Owned by rep 1; otherSales is rep 2 — a sales role, but not THIS deal's.
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
+
+        assertForbidden(() -> service.reserveStock(10L, new StockReservationRequest(List.of(
+            new StockReservationRequest.Line(1L, new BigDecimal("100.00"), null))), otherSales));
+
+        verify(ticketRepo, never()).reserveStock(anyLong(), any());
+        verify(ticketRepo, never()).updateFulfillmentStatus(anyLong(), any());
+        verify(ticketRepo, never()).updateSalesStage(anyLong(), any());
+    }
+
+    @Test
+    void reserveStock_roleWithNeitherOwnershipNorFulfilment_isForbiddenAndWritesNothing() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
+        StockReservationRequest request = new StockReservationRequest(List.of(
+            new StockReservationRequest.Line(1L, new BigDecimal("100.00"), null)));
+
+        assertForbidden(() -> service.reserveStock(10L, request, accountActor));
+        assertForbidden(() -> service.reserveStock(10L, request, hrActor));
+        assertForbidden(() -> service.reserveStock(10L, request, employeeActor));
+        // sales_manager is deliberately excluded even though requireDealOwnership grants it:
+        // the ruling is "Sales declares", and this writes the OWNING rep's STOCK_BONUS input.
+        assertForbidden(() -> service.reserveStock(10L, request, salesManagerActor));
+
+        verify(ticketRepo, never()).reserveStock(anyLong(), any());
+    }
+
     @Test
     void recordPartialDelivery_updatesLineProgressAndStatus() {
         TicketItemDto initialItem = deliveryItem(1L, "100.00", "0.00", "0.00");

@@ -7,6 +7,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import th.co.glr.hr.pricing.PriceBreakdownItemDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,6 +38,15 @@ public class TicketService {
     private static final Set<String> IMPORT_ROLES = Set.of("import");
     private static final Set<String> CEO_ROLES    = Set.of("ceo");
     private static final Set<String> FULFILMENT_ROLES = Set.of("import", "ceo");
+    // Coarse pre-filter for the stock-coverage declaration only (owner ruling 2026-08-13,
+    // "Sales declares, Import can correct" — see reserveStock). DERIVED from the two sets
+    // canDeclareStockCoverage actually tests, never hand-written, so it cannot silently drift
+    // from them if either is ever changed. It is only the first of two gates: passing this set
+    // says "your role could declare on SOME deal", not "on THIS one" — a sales rep still has to
+    // own the deal. See requireViewAccess for the same two-stage role-then-row shape.
+    private static final Set<String> STOCK_DECLARATION_ROLES =
+        Stream.concat(FULFILMENT_ROLES.stream(), SALES_ROLES.stream())
+            .collect(Collectors.toUnmodifiableSet());
     // Money-receipt confirmations belong to ฝ่ายบัญชี (accounting), with CEO as fallback.
     private static final Set<String> ACCOUNT_ROLES = Set.of("account", "ceo");
     // Step 1 of the three-party close. Deliberately EXCLUDES ceo, unlike ACCOUNT_ROLES:
@@ -150,11 +161,14 @@ public class TicketService {
      * file download) to re-check. Every other viewer role gets the DTO unchanged.
      *
      * <p>NOTE: mutation responses built via {@code requireTicket} directly (e.g. import's
-     * own procurement actions — reserveStock, recordDelivery, markGoodsReceived) do NOT
-     * go through this projection and so still embed quotations in their return value.
-     * That is a narrower, accepted residual gap (transient, tied to import legitimately
-     * performing its own action) recorded in the branch handoff rather than silently
-     * closed by touching every one of those call sites.
+     * own procurement actions — recordDelivery, markGoodsReceived, and reserveStock when
+     * import is the declarer) do NOT go through this projection and so still embed
+     * quotations in their return value. That is a narrower, accepted residual gap
+     * (transient, tied to import legitimately performing its own action) recorded in the
+     * branch handoff rather than silently closed by touching every one of those call sites.
+     * The 2026-08-13 widening of {@link #reserveStock} to the deal owner does not enlarge
+     * it: this projection only ever strips anything for {@link #IMPORT_ROLES}, and a sales
+     * rep may already read their own deal's quotations through {@link #requireViewAccess}.
      */
     private TicketDto projectForRole(TicketDto ticket, String role) {
         if (!IMPORT_ROLES.contains(role)) {
@@ -907,11 +921,41 @@ public class TicketService {
         return tickets.findDeliveriesByTicket(ticketId);
     }
 
+    /**
+     * Declares which line quantities on this deal are covered from stock. A declaration, not an
+     * inventory movement — there is no stock ledger here and nothing is decremented (V54 says the
+     * same thing on the column itself).
+     *
+     * <p><strong>Deliberate authorisation change — owner ruling 2026-08-13, "Sales declares,
+     * Import can correct."</strong> This was gated to {@link #FULFILMENT_ROLES} alone, so the one
+     * person whose money depends on the number could not supply it: {@code
+     * CommissionRepository#sumActiveStockActualReceived} computes the rep's STOCK_BONUS input as
+     * {@code SUM(actual_received × SUM(qty_from_stock)/SUM(qty))}, i.e. entirely from what another
+     * department typed in. The deal owner may now declare what they know about their own deal;
+     * import and ceo keep the identical ability and can correct a rep's figure afterwards, since
+     * they are the ones who know what is actually on the shelf.
+     *
+     * <p><strong>Only the gate moved.</strong> The commission formula is untouched — this changes
+     * who may supply its input, never how it is computed. Everything below the gate is
+     * deliberately identical whoever declares: the same per-line write, the same {@code
+     * STOCK_RESERVED} event, the same {@code allCovered → FROM_STOCK → DELIVERY_SCHEDULING}
+     * routing, the same {@link #requireActive} guard. One code path and one meaning for the
+     * field: routing follows the facts, not the declarer.
+     *
+     * <p>Two gates, in the order {@link #requireViewAccess} uses. The coarse {@link
+     * #STOCK_DECLARATION_ROLES} check runs BEFORE the ticket is loaded so that widening this
+     * endpoint cannot turn it into an existence probe — a role that can never declare (hr,
+     * employee, account, sales_manager) still gets 403 without a row being read, exactly as
+     * before. {@link #canDeclareStockCoverage} then applies the per-row rule.
+     */
     @Transactional
     public TicketDto reserveStock(long ticketId, StockReservationRequest request, UserPrincipal actor) {
-        requireRole(actor, FULFILMENT_ROLES);
+        requireRole(actor, STOCK_DECLARATION_ROLES);
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
+        if (!canDeclareStockCoverage(s, actor)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
         requireActive(s);
         List<StockReservationRequest.Line> lines = request == null ? List.of() : request.lines();
         if (lines == null || lines.isEmpty()) {
@@ -2078,8 +2122,27 @@ public class TicketService {
             && !PaymentStage.FULLY_PAID.equals(s.paymentStage());
     }
 
-    private boolean canReserveStock(TicketDto ticket, UserPrincipal actor) {
+    /**
+     * Who may declare stock coverage on THIS deal — the single source of truth for {@link
+     * #reserveStock}'s gate and for whether {@link #actions} advertises RESERVE_STOCK, so the two
+     * cannot drift into offering an action that immediately 403s (the same discipline {@link
+     * #canIssueImportRequest} documents for 409s).
+     *
+     * <p>Ownership is expressed exactly as {@link #requireDealOwnership}, {@link
+     * #canManageQuotation} and {@link #canConfirmCustomer} express it: a {@code sales} role that
+     * created this deal. {@code sales_manager} is deliberately NOT included even though {@link
+     * #requireDealOwnership} grants it — the ruling is "Sales declares", and the declaration feeds
+     * the owning rep's own STOCK_BONUS input, so letting oversight write another rep's commission
+     * input is a wider grant than was asked for. {@code ceo} keeps access through {@link
+     * #FULFILMENT_ROLES}, not through ownership.
+     */
+    private boolean canDeclareStockCoverage(TicketSummaryDto s, UserPrincipal actor) {
         return FULFILMENT_ROLES.contains(actor.role())
+            || (SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id());
+    }
+
+    private boolean canReserveStock(TicketDto ticket, UserPrincipal actor) {
+        return canDeclareStockCoverage(ticket.summary(), actor)
             && !ticket.items().isEmpty()
             && hasRemainingDelivery(ticket)
             && !FulfilmentStatus.FULLY_DELIVERED.equals(ticket.summary().fulfillmentStatus());
