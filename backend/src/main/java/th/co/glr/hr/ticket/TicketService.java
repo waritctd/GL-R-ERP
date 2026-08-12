@@ -1131,9 +1131,23 @@ public class TicketService {
             // promote payment_status straight to FULLY_PAID — it stays null until confirmCustomer
             // eventually runs. Deliberate behaviour change; see the branch report.
             if (s.paymentStatus() != null && !"FULLY_PAID".equals(s.paymentStatus())) {
+                // The walk PERSISTS every hop, so a REQUIRED deal jumping from DEPOSIT_PAID goes
+                // through AWAITING_FINAL_PAYMENT on the way. The column moves on immediately, so
+                // without an event nothing durable records that the state was ever reached —
+                // emit one per intermediate hop so the deal's payment history shows the passage
+                // rather than appearing to leap. The final hop keeps its own FULLY_PAID event
+                // below, so intermediates are every hop except the last.
+                List<String> hops = PaymentTrack.stepsBetween(
+                    s.depositPolicy(), s.paymentStatus(), PaymentTrack.FULLY_PAID);
                 int rows = tickets.advancePaymentStatus(
                     ticketId, s.depositPolicy(), s.paymentStatus(), PaymentTrack.FULLY_PAID);
                 requirePaymentAdvanced(rows);
+                for (String hop : hops.subList(0, Math.max(0, hops.size() - 1))) {
+                    if (PaymentTrack.AWAITING_FINAL_PAYMENT.equals(hop)) {
+                        tickets.addEvent(ticketId, actor.id(), actor.name(),
+                            TicketEventKind.AWAITING_FINAL_PAYMENT, s.status(), s.status(), null);
+                    }
+                }
                 tickets.addEvent(ticketId, actor.id(), actor.name(),
                     TicketEventKind.FULLY_PAID, s.status(), s.status(), null);
                 maybeAdvanceClosedPaid(s, true, actor);

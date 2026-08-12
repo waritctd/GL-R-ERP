@@ -375,6 +375,52 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasSize(2);
     }
 
+    /**
+     * Owner ruling: a multi-hop advance must WALK, and the intermediate state must SHOW. A
+     * REQUIRED deal paying in full from DEPOSIT_PAID goes DEPOSIT_PAID -> AWAITING_FINAL_PAYMENT
+     * -> FULLY_PAID. The column ends at FULLY_PAID either way, so asserting only the end state
+     * cannot tell a walk from a jump — this asserts the AWAITING_FINAL_PAYMENT ticket_event,
+     * which is the only durable trace that the state was ever reached.
+     */
+    @Test
+    void requiredDeal_payingInFullFromDepositPaid_walksThroughAwaitingFinalPayment_andItShows() {
+        Deal deal = buildDealToQuotationAccepted("walkshow");
+        orderConfirmation.confirmOrder(
+            deal.pricingRequestId(), new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+        DepositNoticeDto walkDraft = orderConfirmation.createDepositNoticeFromQuotation(
+            deal.pricingRequestId(), new CreateDepositNoticeFromQuotationRequest(null), salesActor);
+        depositNoticeService.issue(walkDraft.id(), salesActor);
+        assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.DEPOSIT_NOTICE_ISSUED);
+
+        ticketService.confirmDepositPaid(deal.ticketId(), accountActor);
+        assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.DEPOSIT_PAID);
+
+        long awaitingEventsBefore = countEvents(deal.ticketId(), TicketEventKind.AWAITING_FINAL_PAYMENT);
+
+        // Pay the whole remaining balance in one go — the jump the walk has to decompose.
+        BigDecimal outstanding = tickets.payableAmount(deal.ticketId())
+            .subtract(nullToZeroLocal(tickets.sumPaid(deal.ticketId())));
+        assertThat(outstanding.signum()).as("fixture must leave a balance").isPositive();
+        ticketService.recordPayment(deal.ticketId(),
+            new RecordPaymentRequest("BALANCE", outstanding, null, "ชำระเต็มจำนวน", null, null, false),
+            accountActor);
+
+        assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.FULLY_PAID);
+        assertThat(countEvents(deal.ticketId(), TicketEventKind.AWAITING_FINAL_PAYMENT))
+            .as("the walk must leave a trace that AWAITING_FINAL_PAYMENT was reached")
+            .isGreaterThan(awaitingEventsBefore);
+    }
+
+    private long countEvents(long ticketId, String kind) {
+        return jdbc.queryForObject(
+            "SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = :k",
+            java.util.Map.of("id", ticketId, "k", kind), Long.class);
+    }
+
+    private static BigDecimal nullToZeroLocal(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
+    }
+
     private List<Long> accountVisibleTicketIds() {
         return ticketService.listPage(null, accountActor, PageRequest.resolve(0, 200)).items()
             .stream().map(TicketSummaryDto::id).toList();

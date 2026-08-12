@@ -1564,15 +1564,37 @@ public class TicketRepository {
         } catch (IllegalStateException e) {
             throw new ApiException(HttpStatus.CONFLICT, "สถานะการชำระเงินของดีลนี้ไม่ถูกต้อง กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
-        return jdbc.update("""
-            UPDATE sales.ticket
-               SET payment_status = :next, updated_at = now()
-             WHERE ticket_id = :id AND payment_status IS NOT DISTINCT FROM :expected
-            """,
-            new MapSqlParameterSource()
-                .addValue("next", next)
-                .addValue("id", ticketId)
-                .addValue("expected", expected));
+        // WALK, and PERSIST every hop (owner ruling): a multi-hop advance writes each intermediate
+        // state in turn rather than jumping straight to the target. confirmFinalPayment on a
+        // REQUIRED deal goes DEPOSIT_PAID -> AWAITING_FINAL_PAYMENT -> FULLY_PAID, and the row
+        // genuinely sits at AWAITING_FINAL_PAYMENT in between so the deal's history shows it.
+        // A single jump-write would leave no trace that the state was ever reached.
+        //
+        // Each hop is its own compare-and-set chained off the previous one, so a lost race stops
+        // the walk immediately and returns 0 for the caller to turn into a 409 — it never
+        // continues writing from a state it did not actually observe. All hops run inside the
+        // caller's transaction, so a failure part-way rolls the whole walk back in production.
+        // NOTE: @Transactional is inert in this repo's hand-wired integration tests, so the suite
+        // does NOT prove that atomicity — see the finding on the integration harness.
+        List<String> hops = PaymentTrack.stepsBetween(policy, expected, next);
+        String from = expected;
+        int rows = 0;
+        for (String hop : hops) {
+            rows = jdbc.update("""
+                UPDATE sales.ticket
+                   SET payment_status = :next, updated_at = now()
+                 WHERE ticket_id = :id AND payment_status IS NOT DISTINCT FROM :expected
+                """,
+                new MapSqlParameterSource()
+                    .addValue("next", hop)
+                    .addValue("id", ticketId)
+                    .addValue("expected", from));
+            if (rows == 0) {
+                return 0;
+            }
+            from = hop;
+        }
+        return rows;
     }
 
     /**
