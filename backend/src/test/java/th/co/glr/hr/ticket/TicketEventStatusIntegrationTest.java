@@ -85,13 +85,49 @@ class TicketEventStatusIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(columnOf(ticketId, "status")).isEqualTo(TicketStatus.QUOTATION_ISSUED);
     }
 
+    /**
+     * The contract this test pins INVERTED with the status machine, so it is worth stating plainly.
+     *
+     * <p>It used to assert that an event whose {@code toStatus} was a real ticket status wrote that
+     * status onto the row — {@code addEventInternal}'s side effect, gated only by
+     * {@link TicketStatus#isValid}, a membership check with no from-state guard at all. That is
+     * exactly the conflation the machine removes: logging an event is now purely logging an event,
+     * and the status is moved only by {@link TicketRepository#transitionStatus}.
+     *
+     * <p>Written wrong-way-round on purpose: the assertion is that the status did NOT move.
+     */
     @Test
-    void genuineStatusTransitionEvent_stillUpdatesTicketStatus() {
+    void genuineStatusTransitionEvent_noLongerWritesTicketStatus() {
         long ticketId = insertTicket(TicketStatus.QUOTATION_ISSUED, DealStage.DELIVERED);
 
         tickets.addEvent(ticketId, actorId, "เทสเตอร์ ขาย",
             TicketEventKind.CLOSED, TicketStatus.QUOTATION_ISSUED, TicketStatus.CLOSED, null);
 
+        assertThat(columnOf(ticketId, "status")).isEqualTo(TicketStatus.QUOTATION_ISSUED);
+    }
+
+    /**
+     * …and the side effect that DOES still key off {@code toStatus} keeps working unchanged.
+     * {@code closed_at} is written by the event, not by the transition, so a caller that
+     * transitions and then logs gets the same row it always did — the two halves together must
+     * still produce a closed row with both {@code status} and {@code closed_at} set.
+     */
+    @Test
+    void transitionThenEvent_togetherProduceTheSameRowAsTheOldSingleStatement() {
+        long ticketId = insertTicket(TicketStatus.QUOTATION_ISSUED, DealStage.DELIVERED);
+        assertThat(closedAt(ticketId)).isNull();
+
+        assertThat(tickets.transitionStatus(ticketId, TicketStatus.QUOTATION_ISSUED, TicketStatus.CLOSED))
+            .isEqualTo(1);
+        tickets.addEvent(ticketId, actorId, "เทสเตอร์ ขาย",
+            TicketEventKind.CLOSED, TicketStatus.QUOTATION_ISSUED, TicketStatus.CLOSED, null);
+
         assertThat(columnOf(ticketId, "status")).isEqualTo(TicketStatus.CLOSED);
+        assertThat(closedAt(ticketId)).isNotNull();
+    }
+
+    private java.sql.Timestamp closedAt(long id) {
+        return jdbc.queryForObject("SELECT closed_at FROM sales.ticket WHERE ticket_id = :id",
+            Map.of("id", id), java.sql.Timestamp.class);
     }
 }

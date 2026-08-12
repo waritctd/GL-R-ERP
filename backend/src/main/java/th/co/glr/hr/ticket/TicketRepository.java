@@ -284,28 +284,31 @@ public class TicketRepository {
                                    String message, String itemSnapshotJson,
                                    String documentType, Long documentId) {
         if (toStatus != null) {
-            // toStatus doubles as the event's "to" timeline label AND, for genuine
-            // status transitions, the ticket's new status. Deal-pipeline events
-            // (STAGE_CHANGED, MARKED_LOST, ON_HOLD, POLICY_CHANGED, …) reuse the same
-            // from/to slots to carry a sales_stage / lifecycle value — write it onto
-            // sales.ticket.status ONLY when it is a real ticket status, otherwise a
-            // stage code (e.g. QUOTE_BUYER) would violate chk_ticket_status. The
-            // updated_at / closed_at / pickup side-effects still fire for every event.
-            boolean writeStatus = TicketStatus.isValid(toStatus);
-            boolean closing = writeStatus
-                && (TicketStatus.CLOSED.equals(toStatus) || TicketStatus.CANCELLED.equals(toStatus));
+            // Logging an event NO LONGER WRITES sales.ticket.status. It used to: the column was
+            // set to toStatus whenever TicketStatus.isValid(toStatus), which is a MEMBERSHIP
+            // check, not a transition guard — so any event carrying any valid status silently
+            // overwrote the column from any current state, while DepositNoticeService and
+            // TicketService.requireClosePrerequisites read that same column as a guard. Every
+            // genuine transition now goes through #transitionStatus, which validates the edge
+            // against TicketStatus.ALLOWED and compare-and-sets on the expected value.
+            //
+            // The updated_at / closed_at / pickup side-effects deliberately STAY here and fire
+            // for every event exactly as before — including closed_at, which keys off toStatus
+            // being CLOSED/CANCELLED rather than off the row's current value, so a caller that
+            // transitions then logs gets the same closed_at it always did. (isValid is no longer
+            // consulted for `closing`: CLOSED and CANCELLED are members of VALUES by
+            // construction, so the old `writeStatus &&` conjunct could never change the result.)
+            boolean closing =
+                TicketStatus.CLOSED.equals(toStatus) || TicketStatus.CANCELLED.equals(toStatus);
             boolean isPickup = TicketEventKind.PICKED_UP.equals(kind);
             jdbc.update("""
                 UPDATE sales.ticket
-                   SET status = CASE WHEN :writeStatus THEN :status ELSE status END,
-                       updated_at = now(),
+                   SET updated_at = now(),
                        closed_at = CASE WHEN :closing THEN now() ELSE closed_at END,
                        assigned_to = CASE WHEN :isPickup THEN :actorId ELSE assigned_to END
                  WHERE ticket_id = :id
                 """,
                 new MapSqlParameterSource()
-                    .addValue("status", toStatus)
-                    .addValue("writeStatus", writeStatus)
                     .addValue("closing", closing)
                     .addValue("isPickup", isPickup)
                     .addValue("actorId", actorId)
@@ -1508,6 +1511,47 @@ public class TicketRepository {
     }
 
     /**
+     * Validated ticket-status transition — the ONE way {@code sales.ticket.status} is written
+     * (ticket creation's INSERT sets the initial {@code draft} and is not a transition). Mirrors
+     * {@code PricingRequestRepository.transition} and {@link #advancePaymentStatus}:
+     *
+     * <ol>
+     *   <li>the edge is asserted against {@link TicketStatus#canTransition} BEFORE any SQL runs,
+     *       throwing {@link IllegalStateException} — an undeclared {@code expected -> next} pair
+     *       means the CALLING CODE asked for a transition the machine does not recognise, a
+     *       programming error to catch at the source, not a user-visible race;
+     *   <li>the UPDATE is a compare-and-set on {@code status = :expected}, so a 0 rowcount means a
+     *       concurrent writer moved the row between the caller's read and this write. The SERVICE
+     *       must turn that into a 409 — never re-SELECT to build a nicer message, which would
+     *       reintroduce the very race the {@code WHERE} clause closes.
+     * </ol>
+     *
+     * <p>Single-hop only, deliberately: unlike the payment track there is no multi-state walk to
+     * perform, because every write site knows both ends of its own transition.
+     *
+     * <p>{@code closed_at} is NOT set here — it is written by {@link #addEventInternal} for every
+     * CLOSED/CANCELLED event, exactly as it was before the status write was separated out, so the
+     * two halves together produce byte-for-byte the same row as the old single statement.
+     *
+     * @return the rowcount (0 or 1).
+     */
+    public int transitionStatus(long ticketId, String expected, String next) {
+        if (!TicketStatus.canTransition(expected, next)) {
+            throw new IllegalStateException(
+                "Illegal ticket status transition: " + expected + " -> " + next);
+        }
+        return jdbc.update("""
+            UPDATE sales.ticket
+               SET status = :next, updated_at = now()
+             WHERE ticket_id = :id AND status = :expected
+            """,
+            new MapSqlParameterSource()
+                .addValue("id", ticketId)
+                .addValue("expected", expected)
+                .addValue("next", next));
+    }
+
+    /**
      * Step 6 (V76): the ONE deliberate bridge write outside the legacy ticket status state
      * machine — see {@code th.co.glr.hr.orderconfirmation.OrderConfirmationService}'s class
      * Javadoc for the full reasoning. Since {@link th.co.glr.hr.ticket.TicketService#submit}
@@ -1518,13 +1562,15 @@ public class TicketRepository {
      * never silently overwritten — 0 rows signals "not eligible", which the caller turns into a
      * 409 unless the current status already happens to be {@code quotation_issued} (an idempotent
      * replay of this same bridge).
+     *
+     * <p>Now expressed as a {@link #transitionStatus} call rather than its own hand-written SQL,
+     * so this bridge is subject to the same machine as every other write and {@code draft ->
+     * quotation_issued} is a DECLARED edge instead of an untracked exception. Behaviour is
+     * unchanged: the {@code expected} value is hardcoded to {@code draft}, so the edge check is
+     * a constant that always passes and a non-draft row still yields 0 rows, never a throw.
      */
     public int markQuotationIssuedForOrderConfirmation(long ticketId) {
-        return jdbc.update("""
-            UPDATE sales.ticket
-               SET status = 'quotation_issued', updated_at = now()
-             WHERE ticket_id = :id AND status = 'draft'
-            """, Map.of("id", ticketId));
+        return transitionStatus(ticketId, TicketStatus.DRAFT, TicketStatus.QUOTATION_ISSUED);
     }
 
     /**

@@ -65,6 +65,14 @@ class TicketServiceTest {
         // would read as a lost race and throw a 409. any() (untyped) matches null too, so the
         // null "expected" entry edge (confirmCustomer) is covered by this same stub.
         when(ticketRepo.advancePaymentStatus(anyLong(), anyString(), any(), anyString())).thenReturn(1);
+        // Same shape, same reason, for the ticket-status machine's compare-and-set: an unstubbed
+        // int-returning mock answers 0, which requireStatusAdvanced reads as a lost race and turns
+        // into a 409. This stub says nothing about the CAS itself — a mocked repository cannot
+        // prove a WHERE clause. Both halves of that guard (an illegal edge throws before any SQL
+        // runs; a stale `expected` updates zero rows instead of overwriting) are proven against
+        // real Postgres in TicketStatusMachineIntegrationTest. What this file still checks is the
+        // SERVICE composition: which (expected -> next) pair each write site asks for.
+        when(ticketRepo.transitionStatus(anyLong(), any(), any())).thenReturn(1);
     }
     private final TicketService service = new TicketService(
         ticketRepo, notifRepo, priceCalcService, new ObjectMapper(), customerRepo, quotationRenderer,
@@ -584,7 +592,11 @@ class TicketServiceTest {
 
         verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0009"), eq(1L), eq(new BigDecimal("120.00")),
             eq(QuotationRecipient.OWNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
-        verify(ticketRepo).updateSalesStage(10L, DealStage.QUOTE_DESIGN_SIDE);
+        // Part B, written wrong-way-round: an OWNER quotation must land on QUOTE_OWNER (S5) and
+        // must NOT land on QUOTE_DESIGN_SIDE (S4), which is where this assertion pointed while the
+        // two recipients shared one stage.
+        verify(ticketRepo).updateSalesStage(10L, DealStage.QUOTE_OWNER);
+        verify(ticketRepo, never()).updateSalesStage(10L, DealStage.QUOTE_DESIGN_SIDE);
     }
 
     @Test
@@ -1482,14 +1494,30 @@ class TicketServiceTest {
         assertBadRequest(() -> service.updateStage(11L, DealStage.SPEC_APPROVED, null, salesActor));
     }
 
+    /**
+     * Rewritten with Part C: this move used to demand a note purely because the index gap exceeded
+     * 1. PRESENTATION (S2) -> OWNER_SIGNOFF (S6) steps over SPEC_APPROVED, QUOTE_DESIGN_SIDE and
+     * QUOTE_OWNER — all route-dependent, and skipping exactly those three IS the owner-buys-direct
+     * route (Case B). Demanding a written justification for it was friction on a normal path.
+     */
     @Test
-    void updateStage_multiStepForwardRequiresNote() {
+    void updateStage_forwardSkipOverRouteDependentStagesOnly_needsNoNote() {
         stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.PRESENTATION, null);
 
-        assertBadRequest(() -> service.updateStage(10L, DealStage.OWNER_SIGNOFF, null, salesActor));
-        service.updateStage(10L, DealStage.OWNER_SIGNOFF, "ลูกค้าอนุมัติสเปคและเจ้าของเซ็นแล้ว", salesActor);
+        service.updateStage(10L, DealStage.OWNER_SIGNOFF, null, salesActor);
 
         verify(ticketRepo).updateSalesStage(10L, DealStage.OWNER_SIGNOFF);
+    }
+
+    /** …and the relaxation stops at the mandatory stages: stepping over NEGOTIATION still needs a reason. */
+    @Test
+    void updateStage_forwardSkipCrossingAMandatoryStage_stillRequiresNote() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.QUOTE_BUYER, null);
+
+        assertBadRequest(() -> service.updateStage(10L, DealStage.ORDER_RECEIVED, null, salesActor));
+        service.updateStage(10L, DealStage.ORDER_RECEIVED, "ลูกค้าสั่งซื้อทันทีโดยไม่ต่อรอง", salesActor);
+
+        verify(ticketRepo).updateSalesStage(10L, DealStage.ORDER_RECEIVED);
     }
 
     // ── deal pipeline: lost / reopen (V50) ────────────────────────────────

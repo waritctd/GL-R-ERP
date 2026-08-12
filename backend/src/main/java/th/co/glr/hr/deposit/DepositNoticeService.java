@@ -334,6 +334,26 @@ public class DepositNoticeService {
             case NEW_ITEM      -> TicketStatus.IN_REVIEW;         // Import re-prices
         };
 
+        // The status move is now an EXPLICIT transition rather than a side effect of logging the
+        // event below. It used to ride on TicketRepository.addEvent, which wrote whatever toStatus
+        // it was handed as long as TicketStatus.isValid(toStatus) — a membership check, not a
+        // transition guard. addEvent no longer touches the column at all, so without this call the
+        // revision would log its event and leave the deal sitting where it was.
+        //
+        // Two of these three edges deliberately move the deal BACKWARDS (approved/document_issued
+        // -> price_proposed for the CEO to re-approve, -> in_review for Import to re-price) and one
+        // is the approved -> approved self-edge; all six from/to pairs reachable from the guard
+        // above are declared in TicketStatus.ALLOWED as intentional. Converging this flow onto the
+        // pricing-request revision path is a separate, later piece of work.
+        int rows = tickets.transitionStatus(ticketId, st, toStatus);
+        if (rows == 0) {
+            // Lost compare-and-set: another writer moved sales.ticket.status between the read above
+            // and this write. A conflict, never a re-SELECT for a nicer message — see
+            // TicketRepository.transitionStatus's own Javadoc.
+            throw new ApiException(HttpStatus.CONFLICT,
+                "สถานะดีลถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
+
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.REVISION_REQUESTED, st, toStatus,
             "[" + req.scope().name() + "] " + req.reason());
