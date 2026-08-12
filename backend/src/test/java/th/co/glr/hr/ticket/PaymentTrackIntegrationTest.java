@@ -333,6 +333,48 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(accountVisibleTicketIds()).contains(deal.ticketId());
     }
 
+    /**
+     * Regression for the blocker adversarial review found: a SECOND partial payment on a
+     * bypass-policy deal used to throw. reconcilePaymentStatus gated its idempotency check on the
+     * hardcoded DEPOSIT_PAID literal while the write target had become policy-dependent, so on a
+     * bypass deal the guard never matched, the block re-entered, and PaymentTrack was asked for an
+     * AWAITING_FINAL_PAYMENT -> AWAITING_FINAL_PAYMENT self-loop it correctly refuses. Because
+     * recordPayment is @Transactional the receipt insert rolled back too, so the instalment could
+     * not be recorded at all — an outright regression, surfacing as HTTP 500.
+     *
+     * The pre-existing bypassDeal_partiallyPaid test records exactly ONE payment, which is why the
+     * whole suite stayed green. This one records TWO. It fails without the fix.
+     */
+    @Test
+    void bypassDeal_secondPartialPayment_isRecorded_andPaymentStatusStaysOnPath() {
+        Deal deal = buildDealToQuotationAccepted("twopay");
+        ticketService.waiveDeposit(deal.ticketId(), DepositPolicy.WAIVED, "ทดสอบชำระสองงวด", accountActor);
+        orderConfirmation.confirmOrder(
+            deal.pricingRequestId(), new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        BigDecimal payable = tickets.payableAmount(deal.ticketId());
+        assertThat(payable.signum()).as("fixture must have a positive payable amount").isPositive();
+        BigDecimal instalment = payable.multiply(new BigDecimal("0.30"));
+
+        ticketService.recordPayment(deal.ticketId(),
+            new RecordPaymentRequest("DEPOSIT", instalment, null, "งวดที่ 1", null, null, false),
+            accountActor);
+        assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.AWAITING_FINAL_PAYMENT);
+
+        // The second instalment is the one that used to blow up.
+        ticketService.recordPayment(deal.ticketId(),
+            new RecordPaymentRequest("BALANCE", instalment, null, "งวดที่ 2", null, null, false),
+            accountActor);
+
+        // Still on the bypass path, and NOT advanced to FULLY_PAID (60% of payable is not full).
+        assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.AWAITING_FINAL_PAYMENT);
+
+        // And the receipt actually persisted — the rollback was the real damage, not just the 500.
+        assertThat(tickets.findReceiptsByTicket(deal.ticketId()))
+            .as("both instalments must be recorded")
+            .hasSize(2);
+    }
+
     private List<Long> accountVisibleTicketIds() {
         return ticketService.listPage(null, accountActor, PageRequest.resolve(0, 200)).items()
             .stream().map(TicketSummaryDto::id).toList();
@@ -354,7 +396,11 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThatThrownBy(() -> tickets.advancePaymentStatus(
                 ticketId, DepositPolicy.REQUIRED, PaymentTrack.CUSTOMER_CONFIRMED, "NOT_A_REAL_STATUS"))
-            .isInstanceOf(IllegalStateException.class);
+            // Converted from IllegalStateException to a 409 at the source: an illegal edge is a
+            // conflict the caller can act on, not an opaque 500. The row must still be untouched,
+            // which is what the assertion below proves — the throw happens before any SQL.
+            .isInstanceOf(ApiException.class)
+            .extracting(e -> ((ApiException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT);
 
         assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
     }
@@ -370,7 +416,11 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThatThrownBy(() -> tickets.advancePaymentStatus(
                 ticketId, DepositPolicy.REQUIRED, PaymentTrack.FULLY_PAID, PaymentTrack.DEPOSIT_PAID))
-            .isInstanceOf(IllegalStateException.class);
+            // Converted from IllegalStateException to a 409 at the source: an illegal edge is a
+            // conflict the caller can act on, not an opaque 500. The row must still be untouched,
+            // which is what the assertion below proves — the throw happens before any SQL.
+            .isInstanceOf(ApiException.class)
+            .extracting(e -> ((ApiException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT);
 
         assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.FULLY_PAID);
     }
@@ -456,7 +506,11 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThatThrownBy(() -> tickets.advancePaymentStatus(
                 ticketId, DepositPolicy.WAIVED, PaymentTrack.CUSTOMER_CONFIRMED, PaymentTrack.DEPOSIT_NOTICE_ISSUED))
-            .isInstanceOf(IllegalStateException.class);
+            // Converted from IllegalStateException to a 409 at the source: an illegal edge is a
+            // conflict the caller can act on, not an opaque 500. The row must still be untouched,
+            // which is what the assertion below proves — the throw happens before any SQL.
+            .isInstanceOf(ApiException.class)
+            .extracting(e -> ((ApiException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT);
 
         assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
     }

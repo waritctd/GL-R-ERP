@@ -17,6 +17,8 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.common.ApiException;
+import org.springframework.http.HttpStatus;
 
 @Repository
 public class TicketRepository {
@@ -1548,7 +1550,20 @@ public class TicketRepository {
      *     build a nicer error, per the discipline above.
      */
     public int advancePaymentStatus(long ticketId, String policy, String expected, String next) {
-        PaymentTrack.stepsBetween(policy, expected, next); // throws IllegalStateException before any SQL
+        // stepsBetween throws IllegalStateException for an illegal edge, BEFORE any SQL runs.
+        // The design intent is "a programming error to catch at the source", which is right — but
+        // IllegalStateException is unmapped in ApiExceptionHandler, so anything that does reach it
+        // surfaces as an opaque HTTP 500 rather than something a caller can act on. Adversarial
+        // review found three legacy-data routes that reached it. Those are fixed at source (the
+        // gate in reconcilePaymentStatus, and V142's backfill), so this is defence in depth:
+        // convert to a 409 so a residual illegal edge is a legible conflict, not a 500.
+        // Deliberately NOT a global @ExceptionHandler(IllegalStateException) — that would swallow
+        // genuine programming errors across the whole app.
+        try {
+            PaymentTrack.stepsBetween(policy, expected, next);
+        } catch (IllegalStateException e) {
+            throw new ApiException(HttpStatus.CONFLICT, "สถานะการชำระเงินของดีลนี้ไม่ถูกต้อง กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
         return jdbc.update("""
             UPDATE sales.ticket
                SET payment_status = :next, updated_at = now()

@@ -1154,7 +1154,18 @@ public class TicketService {
                 && ("CUSTOMER_CONFIRMED".equals(s.paymentStatus())
                     || "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
                     || DepositPolicy.bypassesDepositNotice(s.depositPolicy()));
-        if (eligibleForDepositAdvance && !"DEPOSIT_PAID".equals(s.paymentStatus())) {
+        // The idempotency guard MUST compare against the policy-resolved target, not the
+        // DEPOSIT_PAID literal. On a bypass policy the target is AWAITING_FINAL_PAYMENT, so a
+        // literal comparison never matches and a SECOND partial payment re-enters this block,
+        // asking PaymentTrack for an AWAITING_FINAL_PAYMENT -> AWAITING_FINAL_PAYMENT self-loop
+        // it correctly refuses -> IllegalStateException -> 500, and because recordPayment is
+        // @Transactional the receipt insert rolls back too, so the instalment cannot be recorded
+        // at all. Found by adversarial review; the pre-existing test records only ONE partial
+        // payment, which is why the suite was green.
+        String depositTarget = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
+            ? PaymentTrack.AWAITING_FINAL_PAYMENT
+            : PaymentTrack.DEPOSIT_PAID;
+        if (eligibleForDepositAdvance && !depositTarget.equals(s.paymentStatus())) {
             // ⚠ Semantic change (site 6): the bypass path has no DEPOSIT_PAID state at all — a
             // bypass deal's first payment now targets AWAITING_FINAL_PAYMENT, the corresponding
             // state on that path, instead of the DEPOSIT_PAID literal PaymentTrack now refuses
@@ -1168,9 +1179,6 @@ public class TicketService {
             // fires regardless of which literal the walk actually targets, since the business
             // event is the same ("the deposit-equivalent first payment arrived"); only the
             // persisted payment_status value differs by policy.
-            String depositTarget = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
-                ? PaymentTrack.AWAITING_FINAL_PAYMENT
-                : PaymentTrack.DEPOSIT_PAID;
             int rows = tickets.advancePaymentStatus(
                 ticketId, s.depositPolicy(), s.paymentStatus(), depositTarget);
             requirePaymentAdvanced(rows);

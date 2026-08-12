@@ -25,6 +25,33 @@
 -- carries a value outside this set, this migration is SUPPOSED to fail loudly on apply so that
 -- row is investigated, not silently coerced or grandfathered in past a constraint meant to catch
 -- exactly that class of bug.
+-- ─────────────────────────────────────────────────────────────────────────────────────────
+-- BACKFILL — legacy bypass-policy rows stranded off their own path.
+--
+-- Before the PaymentTrack machine existed, reconcilePaymentStatus wrote the DEPOSIT_PAID
+-- literal for EVERY deposit policy. So (deposit_policy IN NON_REQUIRED) + DEPOSIT_PAID is the
+-- normal historical state of any waived / not-required / credit-customer deal that ever took a
+-- payment — not an exotic edge case.
+--
+-- PaymentTrack's bypass path has no DEPOSIT_PAID state at all, so those rows are OFF-PATH. The
+-- CHECK below still permits them (it constrains the five literals, not path membership), but
+-- three separate user actions would walk into PaymentTrack.stepsBetween's "not on the path"
+-- throw and surface as an opaque HTTP 500: confirmFinalPayment (via canConfirmFinalPaymentNow),
+-- applyGoodsReceived, and reconcilePaymentStatus's full-payment branch.
+--
+-- Move them to AWAITING_FINAL_PAYMENT — the state that DOES exist on the bypass path and
+-- carries the same meaning ("the deposit-equivalent payment has landed, the balance has not").
+-- That is exactly where the fixed code now writes such a payment, so this makes history and
+-- present agree rather than inventing a state.
+--
+-- Idempotent and safe on an empty table: production currently has no deals, but UAT and any
+-- restored snapshot may. Fixing the DATA is preferred over teaching three call sites to
+-- tolerate an invalid state, which would leave the invariant permanently untrue.
+UPDATE sales.ticket
+   SET payment_status = 'AWAITING_FINAL_PAYMENT'
+ WHERE payment_status = 'DEPOSIT_PAID'
+   AND deposit_policy IN ('NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER');
+
 ALTER TABLE sales.ticket
     ADD CONSTRAINT chk_ticket_payment_status CHECK (
         payment_status IS NULL OR payment_status IN (
