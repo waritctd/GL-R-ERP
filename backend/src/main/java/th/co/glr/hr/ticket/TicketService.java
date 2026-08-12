@@ -922,9 +922,34 @@ public class TicketService {
     }
 
     /**
-     * Declares which line quantities on this deal are covered from stock. A declaration, not an
-     * inventory movement — there is no stock ledger here and nothing is decremented (V54 says the
-     * same thing on the column itself).
+     * Declares which line quantities on this deal are covered from stock.
+     *
+     * <p><strong>NOTHING IS RESERVED.</strong> The name, {@link StockReservationRequest}, {@link
+     * TicketEventKind#STOCK_RESERVED} and the {@code stock_note} column all read as inventory
+     * reservation, and none of them is. This records a <em>sales declaration</em>: the rep (or
+     * import, or the CEO) states how many of each line they believe can be supplied from stock.
+     * There is no stock ledger, no on-hand quantity and no availability check anywhere in this
+     * codebase — nothing is decremented (V54 says the same thing on the column itself) and nothing
+     * validates the declared quantity against real availability. The sole constraint is the
+     * V-migration CHECK {@code qty_from_stock >= 0 AND qty_from_stock <= qty}, i.e. "no more than
+     * was ordered", which is arithmetic on this deal and says nothing about a warehouse.
+     *
+     * <p><strong>Why it exists at all:</strong> the number is a commission input. {@code
+     * CommissionRepository#sumActiveStockActualReceived} computes the owning rep's STOCK_BONUS as
+     * {@code SUM(actual_received × SUM(qty_from_stock)/SUM(qty))}, so this field is the {@code
+     * stockShare} half of that formula and nothing else reads it as inventory.
+     *
+     * <p><strong>Inventory tracking is deliberately out of scope</strong> (owner ruling) — a future
+     * reader must not "fix" this by building a stock ledger, and must not assume the declaration
+     * has been corroborated against one. The dangerous version of the misreading is exactly that
+     * assumption; it has already caused two wrong readings of this codebase. Nothing is renamed
+     * because the method name is on the API contract ({@link TicketController}) and mirrored in
+     * {@code frontend/src/api/mockApi.js} under a contract test.
+     *
+     * <p><strong>Stage floor (2026-08-13).</strong> Because nothing corroborates the claim, and
+     * because full coverage reroutes the deal (below: {@code FROM_STOCK} plus a jump to {@code
+     * DELIVERY_SCHEDULING}, which in turn blocks {@link #issueImportRequest}), a declaration is
+     * refused below {@link DealStage#ORDER_RECEIVED} — see {@link #stockCoverageStageReached}.
      *
      * <p><strong>Deliberate authorisation change — owner ruling 2026-08-13, "Sales declares,
      * Import can correct."</strong> This was gated to {@link #FULFILMENT_ROLES} alone, so the one
@@ -957,6 +982,10 @@ public class TicketService {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         requireActive(s);
+        if (!stockCoverageStageReached(s)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ประกาศสินค้าจากสต็อกได้หลังจากยืนยันคำสั่งซื้อของลูกค้าแล้วเท่านั้น (ตั้งแต่ขั้นตอน ORDER_RECEIVED)");
+        }
         List<StockReservationRequest.Line> lines = request == null ? List.of() : request.lines();
         if (lines == null || lines.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุรายการสินค้า");
@@ -1415,6 +1444,12 @@ public class TicketService {
         if (targetStage.equals(s.salesStage())) {
             throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้อยู่ในขั้นตอน " + targetStage + " อยู่แล้ว");
         }
+        // The fact gate. Deliberately BEFORE the note and tracking-field rules below: those two ask
+        // "has the rep done the paperwork?", and a deal whose facts do not support the target stage
+        // must be refused whatever the paperwork says. Ordering it after them would have produced
+        // the misleading pair "write a note" -> "…now the fact is missing", and would have let a
+        // reader mistake the note rule for the thing doing the work.
+        requireStageFactsHold(s, targetStage);
         // ONE decision, two messages. This used to be two independent rules — a backward check
         // with an isRoutineBackwardMove exception bolted on, and a raw `indexOf(target) -
         // indexOf(current) > 1` skip check. The second one demanded a written justification for
@@ -1452,6 +1487,143 @@ public class TicketService {
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.STAGE_CHANGED, s.salesStage(), targetStage, blankToNull(note));
         return requireTicket(ticketId);
+    }
+
+    /**
+     * The four back-half stages a MANUAL {@link #updateStage} may not claim unless the deal's own
+     * recorded fact already holds.
+     *
+     * <p><strong>Why a fact gate and not a transition table.</strong> {@code updateStage} validated
+     * membership only ({@link DealStage#isValid}), so any stage could reach any other — {@code
+     * LEAD_APPROACH -> CLOSED_PAID} in one call cost a note, a follow-up date and one logged
+     * activity, and nothing about the deal's actual state was consulted. A transition table cannot
+     * fix that: the business's real routes branch heavily (the owner buys direct and S3/S4/S7/S8
+     * never happen; a contractor arrives with a BOQ and the deal OPENS at S8; everything ships from
+     * stock and PROCUREMENT is skipped), so a table faithful to them has to permit almost every
+     * forward edge in the front half, including the long jumps. Gating on the fact behind the stage
+     * does what the table cannot, and stays correct when the next route is discovered.
+     *
+     * <p><strong>Exactly four stages, and only these four.</strong> Each already auto-advances FROM
+     * its fact, so the fact is recorded state, not a new concept:
+     *
+     * <ul>
+     *   <li>{@link DealStage#ORDER_RECEIVED} — {@link #confirmCustomer} writes {@code
+     *       CUSTOMER_CONFIRMED}, see {@link #customerOrderVerified};
+     *   <li>{@link DealStage#DEPOSIT_RECEIVED} — {@code reconcilePaymentStatus} advances the
+     *       payment track when money first lands, see {@link #depositReceived};
+     *   <li>{@link DealStage#DELIVERED} — {@code recordDeliveryInternal} advances on
+     *       {@code FULLY_DELIVERED}, i.e. {@link #deliveryGateComplete};
+     *   <li>{@link DealStage#CLOSED_PAID} — {@code FULLY_PAID} <em>and</em> {@code FULLY_DELIVERED},
+     *       see {@link #closedPaidFactsHold}.
+     * </ul>
+     *
+     * <p><strong>Each gate is the same bar its automatic counterpart clears — never a lower one.</strong>
+     * {@link #maybeAdvanceClosedPaid} requires payment AND delivery, so this does too; a manual path
+     * able to claim a stage the automatic path would refuse would invert the whole point.
+     *
+     * <p>{@link DealStage#NEGOTIATION}, {@link DealStage#PROCUREMENT} and {@link
+     * DealStage#DELIVERY_SCHEDULING} stay ungated on purpose: they are operational stages where the
+     * manual fallback is genuinely useful and a wrong value misreports nothing financial. The four
+     * above are the ones where a wrong stage misstates revenue or fulfilment.
+     *
+     * <p><strong>{@link #autoAdvanceStage} is NOT routed through here</strong>, and must never be:
+     * it is the path that fires <em>because</em> the fact just became true, so gating it would be
+     * circular and would break every automatic advance. Only the manual path is affected.
+     *
+     * <p><strong>Keyed on the TARGET only, in both directions.</strong> Landing on {@code DELIVERED}
+     * with nothing delivered misstates fulfilment whether the deal arrived from below or is being
+     * corrected from above, so this does not consult {@code from}. A deal that needs walking back
+     * out of a wrong stage can still be moved to any of the eleven ungated ones.
+     *
+     * <p><strong>Accepted cost:</strong> the manual fallback for these four stages is gone. A deal
+     * whose automation genuinely did not fire can no longer be nudged into them by hand — the
+     * underlying fact has to be recorded first. That is the intended trade, and there is
+     * deliberately no CEO break-glass override: it was not asked for, and it would be a new
+     * capability rather than a repair.
+     */
+    private void requireStageFactsHold(TicketSummaryDto s, String targetStage) {
+        if (DealStage.ORDER_RECEIVED.equals(targetStage) && !customerOrderVerified(s)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "เลื่อนไปขั้นตอน ORDER_RECEIVED ไม่ได้: ยังไม่ได้ยืนยันคำสั่งซื้อของลูกค้า");
+        }
+        if (DealStage.DEPOSIT_RECEIVED.equals(targetStage) && !depositReceived(s)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "เลื่อนไปขั้นตอน DEPOSIT_RECEIVED ไม่ได้: ยังไม่ได้รับชำระมัดจำ");
+        }
+        if (DealStage.DELIVERED.equals(targetStage) && !deliveryGateComplete(s)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "เลื่อนไปขั้นตอน DELIVERED ไม่ได้: ยังส่งมอบสินค้าไม่ครบ");
+        }
+        if (DealStage.CLOSED_PAID.equals(targetStage) && !closedPaidFactsHold(s)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "เลื่อนไปขั้นตอน CLOSED_PAID ไม่ได้: ต้องรับชำระเงินครบและส่งมอบสินค้าครบก่อน");
+        }
+    }
+
+    /**
+     * The fact behind {@link DealStage#ORDER_RECEIVED} (S10): the customer's order is verified.
+     *
+     * <p>There was no existing predicate for this — {@link #canConfirmCustomer} asks the opposite
+     * question ("may this deal still BE confirmed?") — so it is derived from the write the
+     * auto-advance itself keys off: {@link #confirmCustomer} is the one method that both advances
+     * the deal to ORDER_RECEIVED and moves {@code payment_status} to {@code CUSTOMER_CONFIRMED}.
+     *
+     * <p>A non-null payment track is therefore the fact, not merely a correlate of it:
+     * {@code payment_status} starts NULL (V6/V39/V44) and {@link PaymentTrack#canTransition}
+     * admits exactly one edge out of null — to {@code CUSTOMER_CONFIRMED} — on either policy path,
+     * a rule {@code reconcilePaymentStatus} re-states explicitly so a payment recorded before the
+     * customer was confirmed cannot promote the column either. Deliberately expressed through
+     * {@link PaymentTrack#isValid} rather than a bare {@code != null} so that only the five real
+     * states count.
+     */
+    private static boolean customerOrderVerified(TicketSummaryDto s) {
+        return PaymentTrack.isValid(s.paymentStatus());
+    }
+
+    /**
+     * The fact behind {@link DealStage#CLOSED_PAID} (S20), and deliberately the SAME test {@link
+     * #maybeAdvanceClosedPaid} makes: paid in full <em>and</em> the goods actually delivered to the
+     * customer.
+     *
+     * <p>Both halves are required because both halves are what the stage claims. An earlier draft
+     * of this gate tested {@code FULLY_PAID} alone, which left the manual path able to claim a
+     * stage the automatic path would have refused — a fully-paid deal with goods still undelivered.
+     * That inverted the principle this whole gate rests on: a manual move must clear the bar the
+     * automatic move already clears, never a lower one.
+     *
+     * <p>The delivery half is {@link #deliveryGateComplete}, reused rather than re-tested against
+     * the status literal, so this and {@link #requireClosePrerequisites}'s close gate cannot drift
+     * apart on what "delivered" means — the exact drift that predicate was tightened to end.
+     */
+    private boolean closedPaidFactsHold(TicketSummaryDto s) {
+        return PaymentTrack.FULLY_PAID.equals(s.paymentStatus()) && deliveryGateComplete(s);
+    }
+
+    /**
+     * The payment-track states that mean the deposit (or, on a bypass policy, the first money
+     * against the deal) has actually been received — the fact behind {@link
+     * DealStage#DEPOSIT_RECEIVED} (S11).
+     *
+     * <p>Read off the auto-advance site rather than invented: {@code reconcilePaymentStatus}
+     * advances the stage immediately after writing {@code depositTarget}, which is {@code
+     * DEPOSIT_PAID} on the REQUIRED path and {@code AWAITING_FINAL_PAYMENT} on a bypass policy
+     * (that path has no DEPOSIT_PAID state at all). {@code FULLY_PAID} is included because it is
+     * strictly later on both paths — a deal paid in full has necessarily passed this point.
+     *
+     * <p>{@code DEPOSIT_NOTICE_ISSUED} is deliberately absent: issuing the notice is a document,
+     * not a receipt, and {@code confirmDepositPaid} exists precisely because the money is a
+     * separate event.
+     */
+    private static final Set<String> DEPOSIT_RECEIVED_STATES = Set.of(
+        PaymentTrack.DEPOSIT_PAID, PaymentTrack.AWAITING_FINAL_PAYMENT, PaymentTrack.FULLY_PAID);
+
+    /**
+     * See {@link #DEPOSIT_RECEIVED_STATES}. Null-checked before the lookup: {@code Set.of(...)}
+     * is an immutable set whose {@code contains(null)} throws NPE rather than returning false —
+     * the same trap {@link DealStage#requiresJustification} documents for {@code List.of().indexOf}.
+     */
+    private static boolean depositReceived(TicketSummaryDto s) {
+        return s.paymentStatus() != null && DEPOSIT_RECEIVED_STATES.contains(s.paymentStatus());
     }
 
     // ── Deal tracking + activity (V83, Slice B1 "kill the weekly report" — handoff 103) ──────
@@ -2150,8 +2322,42 @@ public class TicketService {
             || (SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id());
     }
 
+    /**
+     * The stage floor a stock-coverage declaration must clear, and the single source of truth for
+     * it — {@link #reserveStock}'s 409 and {@link #canReserveStock} (which decides whether {@link
+     * #actions} advertises RESERVE_STOCK) both read this one predicate, exactly as they both read
+     * {@link #canDeclareStockCoverage} for the authorisation half. Applying the floor to only one
+     * of them would put the capability back in the state the widening was careful to avoid: live
+     * but invisible, or advertised and then refused on click.
+     *
+     * <p><strong>Why ORDER_RECEIVED (S10), and why a floor is needed at all.</strong> The
+     * declaration is uncorroborated (see {@link #reserveStock}), yet a full-coverage one reroutes
+     * the deal: {@code fulfillment_status} becomes {@code FROM_STOCK} and {@link #autoAdvanceStage}
+     * — which checks only lifecycle and stage index — jumps it to {@code DELIVERY_SCHEDULING} from
+     * wherever it was, {@code LEAD_APPROACH} included. That also blocks {@link
+     * #issueImportRequest}, whose own guard requires {@code fulfillmentStatus == null}. So on one
+     * rep's word an untouched lead could skip the entire import journey.
+     *
+     * <p>S10 is not an invented threshold: it is where the owner's own flows put the declaration.
+     * The all-from-stock route runs {@code S8 -> S9 -> S10 PO verified -> (deposit?) -> declare
+     * stock -> S18}, and the mixed route runs {@code S10 PO verified -> stock check -> declare or
+     * IR}. Both declare only after the order is verified, which is the substantive reason as well
+     * as the procedural one — before S10 the quantities are not final, so a coverage declaration
+     * is meaningless.
+     *
+     * <p>Nothing above the floor changes: a full-coverage declaration still sets {@code FROM_STOCK}
+     * and still advances to {@code DELIVERY_SCHEDULING}, whoever declares.
+     *
+     * <p>Fails closed on an unknown or null stage ({@link DealStage#indexOf} returns -1), which
+     * {@code sales_stage NOT NULL} since V50 should already make unreachable.
+     */
+    private static boolean stockCoverageStageReached(TicketSummaryDto s) {
+        return DealStage.indexOf(s.salesStage()) >= DealStage.indexOf(DealStage.ORDER_RECEIVED);
+    }
+
     private boolean canReserveStock(TicketDto ticket, UserPrincipal actor) {
         return canDeclareStockCoverage(ticket.summary(), actor)
+            && stockCoverageStageReached(ticket.summary())
             && !ticket.items().isEmpty()
             && hasRemainingDelivery(ticket)
             && !FulfilmentStatus.FULLY_DELIVERED.equals(ticket.summary().fulfillmentStatus());
