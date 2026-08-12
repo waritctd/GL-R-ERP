@@ -14,8 +14,6 @@ public final class PricingCostingDtos {
         long pricingRequestId,
         int versionNo,
         String status,
-        boolean stale,
-        String staleReason,
         String note,
         Long createdBy,
         Instant createdAt,
@@ -70,6 +68,28 @@ public final class PricingCostingDtos {
         BigDecimal landedCostPerUnitThb,
         BigDecimal totalLandedCostThb,
         Instant calculatedAt,
-        String calculationSnapshot
+        String calculationSnapshot,
+        // ── CEO cost override (V141, "CEO owns costing") ─────────────────────────────────────
+        // Sits BESIDE landedCostPerUnitThb/totalLandedCostThb above, which keep holding the
+        // COMPUTED figures forever — an override never overwrites them. manualLandedCostPerUnitThb
+        // null means "no override, use the computed figure"; non-null mirrors
+        // landedCostPerUnitThb's own PER-PIECE basis. overrideReason is mandatory whenever the
+        // manual value is set OR cleared (PricingDecisionService.overrideItemCost) — clearing is
+        // money-affecting too.
+        BigDecimal manualLandedCostPerUnitThb,
+        String overrideReason,
+        Long overriddenBy,
+        Instant overriddenAt,
+        // Snapshotted from THIS row's fxRate/calculationConfigVersion at the moment the override
+        // was entered — compared against the row's live values to derive overrideStale below.
+        // Re-confirming the same manual value after a recalculate re-stamps these to the new
+        // current values, which is exactly how staleness clears (the CEO's escape hatch).
+        BigDecimal overrideFxRate,
+        Integer overrideCalcConfigVersion,
+        // ── Derived, never stored (so none of the three can drift out of sync with the row they
+        // describe — PricingCostingRepository#mapItem recomputes them on every read) ───────────
+        BigDecimal effectiveLandedCostPerUnitThb,
+        BigDecimal effectiveTotalLandedCostThb,
+        boolean overrideStale
     ) {}
 }

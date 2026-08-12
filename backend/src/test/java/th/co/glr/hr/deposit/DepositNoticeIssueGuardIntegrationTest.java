@@ -79,6 +79,7 @@ import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
+import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 
 /**
  * Change 1 (guard hardening plan): {@code DepositNoticeRepository.issue} must refuse a
@@ -135,17 +136,24 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
         dispatchProperties.getFactoryQuoteDispatch().setMaxAttempts(3);
         dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
         dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
-        factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties);
-
+        // Costing moved from Import to CEO: the landed-cost calculation is now a shared
+        // LandedCostCalculator that FactoryQuoteService and PricingDecisionService both take,
+        // and PricingCostingService no longer owns the repositories it used to compute from.
         PricingCostingRepository costingRepository = new PricingCostingRepository(jdbc);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
-        costingService = new PricingCostingService(costingRepository, pricingRequests, factoryQuotes, tickets,
-            fxRates, new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc), notifications);
+        LandedCostCalculator landedCostCalculator = new LandedCostCalculator(factoryQuotes,
+            pricingRequests, fxRates, new PriceCalcConfigRepository(jdbc),
+            new FactoryConfigRepository(jdbc));
+
+        factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
+            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage,
+            dispatchProperties, landedCostCalculator);
+
+        costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
 
         PricingDecisionRepository decisionRepository = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
-            tickets, fxRates, notifications);
+            tickets, fxRates, notifications, landedCostCalculator);
 
         PriceCalcService priceCalcMock = mock(PriceCalcService.class);
         ticketService = new TicketService(tickets, notifications, priceCalcMock,
@@ -315,12 +323,9 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
 
-        PricingCostingDto costingDraft = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("guard1 costing", null), importActor);
-        costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 1"), importActor);
-        PricingCostingDto calculated = costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 2"), importActor);
-        costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
-
+        // V141 ("CEO owns costing"): Import's last act is markReadyForCosting above. The three
+        // costing write calls that used to sit here are severed (@Deprecated, 409) — startReview
+        // now computes the landed cost itself when the CEO opens the review.
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
         List<UpdatePricingDecisionItemRequest> updates = decision.items().stream()

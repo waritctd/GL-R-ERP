@@ -51,16 +51,16 @@ import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PriceCalcConfigRepository;
+import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
+import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingItemDto;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.CreateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.RecalculateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.SubmitCostingRequest;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesViewDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.RecalculatePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
@@ -147,15 +147,21 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         dispatchProperties.getFactoryQuoteDispatch().setMaxAttempts(3);
         dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
         dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
-        factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties);
-        costingRepository = new PricingCostingRepository(jdbc);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
-        costingService = new PricingCostingService(costingRepository, pricingRequests, factoryQuotes, tickets,
-            fxRates, new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc), notifications);
+        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
+        // auto-advance check and PricingDecisionService's startReview/recalculateCost.
+        LandedCostCalculator landedCostCalculator = new LandedCostCalculator(factoryQuotes, pricingRequests,
+            fxRates, new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
+        factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
+            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
+            landedCostCalculator);
+        costingRepository = new PricingCostingRepository(jdbc);
+        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
+        // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
+        costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
         decisionRepository = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
-            tickets, fxRates, notifications);
+            tickets, fxRates, notifications, landedCostCalculator);
         th.co.glr.hr.pricing.PriceCalcService priceCalcMock = mock(th.co.glr.hr.pricing.PriceCalcService.class);
         TicketService ticketService = new TicketService(tickets, notifications, priceCalcMock,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
@@ -440,6 +446,10 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void salesAndSalesManager_cannotReachRawPricingCosting() {
         long pricingRequestId = twoItemSubmittedCosting();
+        // V141 ("CEO owns costing"): a costing only exists once the CEO opens review — there is
+        // no more standalone Import-created costing to fetch before that.
+        decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
         long costingId = costingService.list(pricingRequestId, importActor).get(0).id();
 
         assertThatThrownBy(() -> costingService.get(costingId, salesActor))
@@ -511,17 +521,15 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
      * empty afterwards.
      */
     @Test
-    void ceo_cannotMutateFactoryQuoteOrCosting_importOnlyRemainsAbleTo() {
+    void ceo_cannotMutateFactoryQuote_importOnlyRemainsAbleTo() {
         long pricingRequestId = twoItemSubmittedCosting();
         FactoryQuoteDto quoteBefore = factoryQuoteRepository.findCurrentByFactory(pricingRequestId, "Factory A3").orElseThrow();
         long quoteId = quoteBefore.id();
-        long costingId = costingService.list(pricingRequestId, importActor).get(0).id();
-        int costingCountBefore = costingService.list(pricingRequestId, importActor).size();
 
         // ceo cannot mutate the factory quote — requireRole runs before any state lookup, so this
         // is provably a role check, not a side effect of the quote's current status (already
-        // READY_FOR_COSTING, with a SUBMITTED costing on top, by the time twoItemSubmittedCosting()
-        // returns).
+        // READY_FOR_COSTING, with the request auto-advanced to READY_FOR_CEO_REVIEW, by the time
+        // twoItemSubmittedCosting() returns).
         assertThatThrownBy(() -> factoryQuoteService.send(quoteId,
                 new SendFactoryQuoteRequest("ceo-attempt@example.com", null, null, UUID.randomUUID().toString()), ceoActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
@@ -542,29 +550,22 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(quoteAfter.status()).isEqualTo(quoteBefore.status());
         assertThat(quoteAfter.updatedAt()).isEqualTo(quoteBefore.updatedAt());
 
-        // ceo cannot mutate costing either.
-        assertThatThrownBy(() -> costingService.createDraft(pricingRequestId,
-                new CreateCostingRequest("ceo-attempt", UUID.randomUUID().toString()), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> costingService.recalculate(costingId, new RecalculateCostingRequest("ceo-attempt"), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThatThrownBy(() -> costingService.submit(costingId, new SubmitCostingRequest("ceo-attempt"), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-
-        // DB re-read: no new/changed costing rows from any of the ceo attempts.
-        assertThat(costingService.list(pricingRequestId, importActor)).hasSize(costingCountBefore);
+        // V141 ("CEO owns costing"): Import's costing create/recalculate/submit endpoints are
+        // gone entirely — there is no "ceo attempts the Import costing path" left to test here.
+        // The CEO-only recalculateCost/overrideItemCost wrong-way-round checks (import, sales,
+        // sales_manager, account all refused) live in PricingCostingAuthzIntegrationTest.
 
         // Positive control: import (IMPORT_ROLES) still can — proven by twoItemSubmittedCosting()
-        // itself already having driven this exact pricing request's factory quote and costing
-        // through send/receive/markReadyForCosting/createDraft/recalculate/submit as importActor.
+        // itself already having driven this exact pricing request's factory quote through
+        // send/receive/markReadyForCosting as importActor.
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Design correction 3: freeze factory/costing mutations from CEO_REVIEWING
+    // Design correction 3: freeze factory-quote mutations from CEO_REVIEWING
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
-    void ceoReviewing_freezesFactoryQuoteAndCostingMutations() {
+    void ceoReviewing_freezesFactoryQuoteMutations() {
         long pricingRequestId = twoItemSubmittedCosting();
         long anyQuoteId = factoryQuoteRepository.findCurrentByFactory(pricingRequestId, "Factory A3").orElseThrow().id();
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
@@ -581,9 +582,10 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThatThrownBy(() -> factoryQuoteService.uploadAttachment(anyQuoteId,
             new MockMultipartFile("file", "x.pdf", "application/pdf", "x".getBytes()), importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        assertThatThrownBy(() -> costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("v2", null), importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        // V141: there is no Import-side costing endpoint left to attempt from CEO_REVIEWING (see
+        // ceo_cannotMutateFactoryQuote_importOnlyRemainsAbleTo above) — what "freezing" now
+        // protects is exactly what CEO_REVIEWING unlocks for the CEO instead: recalculateCost/
+        // overrideItemCost, both gated on this same DRAFT decision (requireOpenDecisionForMutation).
 
         assertThat(decision.status()).isEqualTo(PricingDecisionStatus.DRAFT);
     }
@@ -593,7 +595,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
-    void returnToImport_reachesCostingRevisionRequired_andImportCanReopenCosting() {
+    void returnToImport_movesToAwaitingFactoryResponse_andImportCanRenegotiateBackToReadyForCeoReview() {
         long pricingRequestId = twoItemSubmittedCosting();
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
@@ -601,28 +603,35 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         PricingDecisionDto returned = decisionService.returnToImport(decision.id(),
             new ReturnPricingDecisionRequest("ราคาต้นทุนคลาดเคลื่อน กรุณาคำนวณใหม่"), ceoActor);
         assertThat(returned.status()).isEqualTo(PricingDecisionStatus.RETURNED);
-        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.COSTING_REVISION_REQUIRED);
-
-        // Import can now reopen costing — the single named return path.
-        PricingCostingDto v2 = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("v2", null), importActor);
-        assertThat(v2.versionNo()).isEqualTo(2);
+        // V141 ("CEO owns costing"): there is no COSTING_REVISION_REQUIRED any more — a returned
+        // request goes straight back to AWAITING_FACTORY_RESPONSE (Import's only remaining job is
+        // to renegotiate/re-mark the factory quote(s) ready; the CEO's next startReview recomputes
+        // the cost from scratch).
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-        costingService.recalculate(v2.id(), new RecalculateCostingRequest("v2 pass 1"), importActor);
-        PricingCostingDto v2Calculated = costingService.recalculate(v2.id(), new RecalculateCostingRequest("v2 pass 2"), importActor);
-        PricingCostingDto v2Submitted = costingService.submit(v2Calculated.id(), new SubmitCostingRequest("resubmit"), importActor);
-        assertThat(v2Submitted.status()).isEqualTo(th.co.glr.hr.pricingcosting.PricingCostingStatus.SUBMITTED);
+
+        // Both quotes are already READY_FOR_COSTING (unchanged by returnToImport — it never
+        // touches factory quotes) — FactoryQuoteRepository.markReady only accepts a
+        // RESPONSE_RECEIVED/NEGOTIATING quote, so Import must submit a fresh revision on EACH
+        // before either can be re-marked ready.
+        for (FactoryQuoteDto quote : List.of(
+                factoryQuoteRepository.findCurrentByFactory(pricingRequestId, "Factory A3").orElseThrow(),
+                factoryQuoteRepository.findCurrentByFactory(pricingRequestId, "Factory B3").orElseThrow())) {
+            FactoryQuoteDto revised = factoryQuoteService.receive(quote.id(),
+                response("REF-" + quote.factoryName() + "-v2", "THB", "95.00",
+                    quote.items().get(0).pricingRequestItemId()), importActor);
+            factoryQuoteService.markReadyForCosting(revised.id(), importActor);
+        }
+        // The LAST re-marked-ready revision auto-advances the request back to READY_FOR_CEO_REVIEW.
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
 
-        // CEO can start a SECOND decision version against the new costing; the first RETURNED
-        // decision stays readable as history.
+        // CEO can start a SECOND decision version against a freshly computed costing; the first
+        // RETURNED decision stays readable as history.
         PricingDecisionDto decisionV2 = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.15"), "THB", null, null), ceoActor);
         assertThat(decisionV2.decisionVersionNo()).isEqualTo(2);
-        assertThat(decisionV2.pricingCostingId()).isEqualTo(v2Submitted.id());
+        assertThat(decisionV2.pricingCostingId()).isNotEqualTo(decision.pricingCostingId());
         List<PricingDecisionDto> history = decisionService.list(pricingRequestId, ceoActor);
         assertThat(history).hasSize(2);
         assertThat(history.get(0).status()).isEqualTo(PricingDecisionStatus.RETURNED);
@@ -816,11 +825,256 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
+    // V141 ("CEO owns costing"): CEO cost override + staleness (owner's explicit requirement).
+    // A cost override is an INPUT to price = cost x margin, so it must not silently outlive the
+    // FX rate or calc-config version that justified it — see PricingDecisionService#approve's own
+    // stale-override guard and PricingCostingRepository#mapItem's overrideStale derivation.
+    //
+    // recalculateCost itself is covered first: PricingCostingRepository
+    // #replaceItemsPreservingOverrides used to unconditionally DELETE-then-INSERT every
+    // sales.pricing_costing_item row for the costing, which violated the NOT NULL ... ON DELETE
+    // RESTRICT FK from sales.pricing_decision_item (V72 L110) into those exact rows the moment a
+    // decision existed — i.e. on literally every real call (a DRAFT decision only ever comes to
+    // exist via startReview, which is what wrote that FK in the first place). That method is now
+    // an UPSERT keyed on the V62 unique index uq_pricing_costing_item_request_item, so every
+    // pricing_costing_item_id PRIMARY KEY stays stable across a recalculation and the FK never
+    // breaks — see PricingCostingRepository#replaceItemsPreservingOverrides's own javadoc for the
+    // full account. Every test below now drives the real, fixed recalculateCost path — none of
+    // them route around it any more.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Regression guard for the fixed FK-violation bug (formerly pinned here as {@code
+     * recalculateCost_onADecisionWithExistingItems_currentlyThrowsForeignKeyViolation_
+     * productionBugNotFixed} — retired now that the bug is fixed). A real end-to-end
+     * recalculateCost call on a DRAFT decision with existing items must SUCCEED, refresh the
+     * computed figures, and — critically — leave every {@code pricing_costing_item_id} PRIMARY
+     * KEY bound to the decision's items UNCHANGED: a delete+reinsert would issue fresh PKs and
+     * break {@code pricing_decision_item}'s {@code NOT NULL ... ON DELETE RESTRICT} FK into them.
+     * Moves the world (the CEO's monthly FX update) between {@code startReview} and {@code
+     * recalculateCost} so the refresh is proven genuine, not a same-numbers no-op.
+     */
+    @Test
+    void recalculateCost_onADecisionWithExistingItems_succeedsAndPreservesCostingItemPrimaryKeys() {
+        long pricingRequestId = twoItemSubmittedCosting();
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
+        Map<Long, Long> costingItemIdByDecisionItemId = decision.items().stream()
+            .collect(java.util.stream.Collectors.toMap(PricingDecisionItemDto::id, PricingDecisionItemDto::pricingCostingItemId));
+
+        // Move the world (see overrideItemCost_thenTheWorldChanges_... below for why mutating
+        // sales.fx_rates — the source of truth — rather than the frozen per-item snapshot is the
+        // legitimate way to do this) so the recalculation is a genuine refresh, not a no-op.
+        jdbc.update("UPDATE sales.fx_rates SET rate_to_thb = rate_to_thb + 0.05 WHERE currency = 'THB'", Map.of());
+
+        PricingDecisionDto recalculated = decisionService.recalculateCost(decision.id(), ceoActor);
+
+        assertThat(recalculated.status()).isEqualTo(PricingDecisionStatus.DRAFT);
+        assertThat(recalculated.items()).hasSize(2);
+        for (PricingDecisionItemDto item : recalculated.items()) {
+            // Same pricing_costing_item_id as before the recalculation — proves the UPSERT, not a
+            // delete+reinsert, is what actually ran.
+            assertThat(item.pricingCostingItemId()).isEqualTo(costingItemIdByDecisionItemId.get(item.id()));
+            // A genuine refresh, not a no-op — the frozen cost moved with the fx_rate change.
+            assertThat(item.frozenLandedCostPerPieceThb())
+                .isNotEqualByComparingTo(itemById(decision, item.id()).frozenLandedCostPerPieceThb());
+        }
+
+        // The FK from pricing_decision_item into pricing_costing_item never broke: every decision
+        // item's bound costing_item_id still resolves to a live row with a populated figure.
+        PricingCostingDto refreshedCosting = costingService.get(recalculated.pricingCostingId(), ceoActor);
+        assertThat(refreshedCosting.items()).hasSize(2);
+        for (PricingCostingItemDto costingItem : refreshedCosting.items()) {
+            assertThat(costingItem.landedCostPerUnitThb()).isNotNull();
+        }
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.pricing_decision_item pdi
+             JOIN sales.pricing_costing_item pci ON pci.pricing_costing_item_id = pdi.pricing_costing_item_id
+             WHERE pdi.pricing_decision_id = :decisionId
+            """, Map.of("decisionId", decision.id()), Long.class)).isEqualTo(2L);
+
+        // recalculateCost never transitions status — still DRAFT / CEO_REVIEWING.
+        assertThat(decisionService.get(decision.id(), ceoActor).status()).isEqualTo(PricingDecisionStatus.DRAFT);
+        assertThat(pricingRequestService.get(pricingRequestId, ceoActor).summary().status())
+            .isEqualTo(PricingRequestStatus.CEO_REVIEWING);
+    }
+
+    /**
+     * Proves the UPSERT is genuinely idempotent-SAFE across repeated calls — the thing the old
+     * delete+insert could never do (its very FIRST write, on any decision with items, already hit
+     * the FK violation regression-guarded above). Calls recalculateCost TWICE in a row with
+     * nothing in the world changing between the two calls: both must succeed, agree on the
+     * recomputed figures, and keep every {@code pricing_costing_item_id} PRIMARY KEY stable
+     * across BOTH calls, not just the first.
+     */
+    @Test
+    void recalculateCost_calledTwiceInARow_bothCallsSucceedAndPrimaryKeysStayStable() {
+        long pricingRequestId = twoItemSubmittedCosting();
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
+        Map<Long, Long> originalCostingItemIdByDecisionItemId = decision.items().stream()
+            .collect(java.util.stream.Collectors.toMap(PricingDecisionItemDto::id, PricingDecisionItemDto::pricingCostingItemId));
+
+        PricingDecisionDto firstRecalc = decisionService.recalculateCost(decision.id(), ceoActor);
+        PricingDecisionDto secondRecalc = decisionService.recalculateCost(decision.id(), ceoActor);
+
+        assertThat(secondRecalc.status()).isEqualTo(PricingDecisionStatus.DRAFT);
+        assertThat(secondRecalc.items()).hasSize(2);
+        for (PricingDecisionItemDto item : secondRecalc.items()) {
+            assertThat(item.pricingCostingItemId()).isEqualTo(originalCostingItemIdByDecisionItemId.get(item.id()));
+            // Nothing in the world moved between the two calls, so the recomputed figures agree.
+            assertThat(item.frozenLandedCostPerPieceThb())
+                .isEqualByComparingTo(itemById(firstRecalc, item.id()).frozenLandedCostPerPieceThb());
+        }
+
+        // The trailing DELETE inside replaceItemsPreservingOverrides (drops lines the
+        // recalculation no longer produces) did not fire against either item on the second pass
+        // either — still exactly the same 2 pricing_costing_item rows.
+        assertThat(costingService.get(secondRecalc.pricingCostingId(), ceoActor).items()).hasSize(2);
+    }
+
+    /**
+     * Full lifecycle, driven through the REAL {@link PricingDecisionService#recalculateCost} now
+     * that it is fixed: override a line -&gt; the world's FX rate moves -&gt; recalculateCost ->
+     * the override is PRESERVED (not cleared) and the computed figure is REFRESHED -&gt; approve
+     * is REFUSED (409) because the override is now stale -&gt; re-confirming the SAME override
+     * value re-stamps its provenance to the CURRENT fx_rate, clearing staleness -&gt; approve
+     * succeeds and freezes a selling price built on the OVERRIDE, not the (now-refreshed)
+     * computed figure.
+     *
+     * <p>The direct SQL below mutates {@code sales.fx_rates} — the actual source-of-truth table a
+     * CEO's monthly FX update writes to ({@link th.co.glr.hr.pricing.FxRateRepository#upsert}) —
+     * rather than the frozen {@code pricing_costing_item.fx_rate} snapshot the old, worked-around
+     * version of this test poked directly: a real {@code recalculateCost} call recomputes {@code
+     * fx_rate} fresh from {@code sales.fx_rates} on every call, so mutating only the snapshot
+     * would just get silently overwritten back to the unchanged "real" rate the moment
+     * recalculateCost actually ran — it would no longer simulate anything once the method it used
+     * to route around was driven for real.
+     */
+    @Test
+    void overrideItemCost_thenTheWorldChanges_recalculateCostRefreshesIt_approveIsRefusedUntilOverrideReconfirmed() {
+        long pricingRequestId = twoItemSubmittedCosting();
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
+        for (PricingDecisionItemDto item : decision.items()) {
+            decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
+                new UpdatePricingDecisionItemRequest(item.id(), null, null, new BigDecimal("1.00"), null))), ceoActor);
+        }
+        PricingDecisionItemDto itemA = decision.items().get(0);
+        BigDecimal manualCost = itemA.frozenLandedCostPerPieceThb().add(new BigDecimal("5.0000"));
+
+        PricingDecisionDto overridden = decisionService.overrideItemCost(decision.id(), itemA.id(),
+            new CostOverrideRequest(manualCost, "negotiated a better price directly with the factory"), ceoActor);
+        assertThat(itemById(overridden, itemA.id()).frozenLandedCostPerPieceThb()).isEqualByComparingTo(manualCost);
+
+        // Simulate the world moving since the override was entered — see this test's own javadoc
+        // for why mutating sales.fx_rates itself, not the frozen per-item snapshot, is required.
+        jdbc.update("UPDATE sales.fx_rates SET rate_to_thb = rate_to_thb + 0.05 WHERE currency = 'THB'", Map.of());
+
+        // The real production path: the CEO pulls the current FX rate/calc-config via
+        // recalculateCost — no longer routed around.
+        decisionService.recalculateCost(decision.id(), ceoActor);
+
+        PricingCostingItemDto costingItemA = costingItemFor(
+            costingService.get(decision.pricingCostingId(), ceoActor), itemA.pricingRequestItemId());
+        assertThat(costingItemA.overrideStale())
+            .as("fx_rate moved since the override snapshotted the OLD rate — must read stale")
+            .isTrue();
+        // The override is PRESERVED (owner ruling: never clear it on a cost-affecting change) and
+        // the COMPUTED figure is REFRESHED, not destroyed — it now reflects the new fx_rate,
+        // sitting BESIDE the (unchanged) override.
+        assertThat(costingItemA.manualLandedCostPerUnitThb()).isEqualByComparingTo(manualCost);
+        assertThat(costingItemA.landedCostPerUnitThb()).isNotNull();
+
+        assertThatThrownBy(() -> decisionService.approve(decision.id(),
+                new ApprovePricingDecisionRequest(null, null), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        // Refused BEFORE any approval write — nothing in the decision or the pricing request
+        // moved as a side effect of the refused attempt.
+        assertThat(decisionService.get(decision.id(), importActor).status()).isEqualTo(PricingDecisionStatus.DRAFT);
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.CEO_REVIEWING);
+
+        // Re-confirming the SAME override value re-stamps override_fx_rate to the CURRENT rate —
+        // the CEO's escape hatch — which clears staleness.
+        PricingDecisionDto reconfirmed = decisionService.overrideItemCost(decision.id(), itemA.id(),
+            new CostOverrideRequest(manualCost, "re-confirming after the FX update"), ceoActor);
+        assertThat(itemById(reconfirmed, itemA.id()).frozenLandedCostPerPieceThb()).isEqualByComparingTo(manualCost);
+        PricingCostingItemDto costingItemAReconfirmed = costingItemFor(
+            costingService.get(reconfirmed.pricingCostingId(), ceoActor), itemA.pricingRequestItemId());
+        assertThat(costingItemAReconfirmed.overrideStale()).isFalse();
+
+        PricingDecisionDto approved = decisionService.approve(decision.id(),
+            new ApprovePricingDecisionRequest(null, null), ceoActor);
+        assertThat(approved.status()).isEqualTo(PricingDecisionStatus.APPROVED);
+        PricingDecisionItemDto approvedItemA = itemById(approved, itemA.id());
+        // The frozen cost approve() froze in is the OVERRIDE, and the approved selling price is
+        // built on it — never the (fx-refreshed) computed figure.
+        assertThat(approvedItemA.frozenLandedCostPerPieceThb()).isEqualByComparingTo(manualCost);
+        BigDecimal expectedSellingPrice = approvedItemA.frozenLandedCostPerRequestedUnitThb()
+            .multiply(BigDecimal.ONE.add(approvedItemA.approvedMarginPct())).setScale(4, java.math.RoundingMode.HALF_UP);
+        assertThat(approvedItemA.approvedSellingPricePerRequestedUnit()).isEqualByComparingTo(expectedSellingPrice);
+    }
+
+    /**
+     * Isolates the PRESERVATION contract itself, now driven through the REAL {@link
+     * PricingDecisionService#recalculateCost} (the FK bug that used to force this test to
+     * construct a standalone, decision-less costing via direct repository calls is fixed — see
+     * {@link PricingCostingRepository#replaceItemsPreservingOverrides}'s own javadoc): a SECOND
+     * write to the SAME costing (the "recalculate" shape) must carry an existing override
+     * forward, never destroy the computed figure sitting beside it, and — because NOTHING in the
+     * world actually changes between the two calls in this test, unlike the
+     * overrideItemCost_thenTheWorldChanges_... test above — must never manufacture false
+     * staleness either.
+     */
+    @Test
+    void recalculateCost_preservesAnExistingOverride_andNeverDestroysTheComputedFigure_norFalselyFlagsStaleness() {
+        long pricingRequestId = twoItemSubmittedCosting();
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
+
+        PricingDecisionItemDto itemA = decision.items().get(0);
+        PricingCostingItemDto costingItemABefore = costingItemFor(
+            costingService.get(decision.pricingCostingId(), ceoActor), itemA.pricingRequestItemId());
+        BigDecimal manualCost = costingItemABefore.landedCostPerUnitThb().add(new BigDecimal("3.0000"));
+        decisionService.overrideItemCost(decision.id(), itemA.id(),
+            new CostOverrideRequest(manualCost, "renegotiated directly with the factory"), ceoActor);
+
+        // The "recalculate" shape, for real: a SECOND write to the SAME pricing_costing_id, with
+        // NOTHING in the world having moved since startReview (same factory quote, same fx_rate,
+        // same calc-config version) — the UPSERT's steady-state case.
+        decisionService.recalculateCost(decision.id(), ceoActor);
+
+        PricingCostingItemDto afterRecalc = costingItemFor(
+            costingService.get(decision.pricingCostingId(), ceoActor), itemA.pricingRequestItemId());
+        // The override is PRESERVED (owner ruling: never clear on recalculate).
+        assertThat(afterRecalc.manualLandedCostPerUnitThb()).isEqualByComparingTo(manualCost);
+        assertThat(afterRecalc.effectiveLandedCostPerUnitThb()).isEqualByComparingTo(manualCost);
+        // The COMPUTED figure is never destroyed — it is still present beside the override.
+        assertThat(afterRecalc.landedCostPerUnitThb()).isNotNull();
+        // Nothing in the world changed, so the override must NOT be flagged stale — staleness is
+        // a genuine drift signal, not a side effect of recalculating at all.
+        assertThat(afterRecalc.overrideStale())
+            .as("fx_rate/calc-config version are unchanged across this recalculateCost call")
+            .isFalse();
+        // Same pricing_costing_item PRIMARY KEY across the recalculation — the UPSERT, not a
+        // delete+reinsert, is what ran; the inbound FK from pricing_decision_item (and, once a PO
+        // exists, factory_purchase_order_item) never had a chance to break.
+        assertThat(afterRecalc.id()).isEqualTo(costingItemABefore.id());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     private PricingDecisionItemDto itemById(PricingDecisionDto decision, long itemId) {
         return decision.items().stream().filter(i -> i.id() == itemId).findFirst().orElseThrow();
+    }
+
+    private PricingCostingItemDto costingItemFor(PricingCostingDto costing, long pricingRequestItemId) {
+        return costing.items().stream()
+            .filter(i -> i.pricingRequestItemId() == pricingRequestItemId)
+            .findFirst().orElseThrow();
     }
 
     private PricingDecisionDto approveWithFlatMargin(long pricingRequestId, BigDecimal marginPct) {
@@ -833,8 +1087,12 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         return decisionService.approve(decision.id(), new ApprovePricingDecisionRequest("อนุมัติ", null), ceoActor);
     }
 
-    /** Two-item, two-factory scenario driven to a SUBMITTED costing (Step 2's own flow), the
-     * precondition every Step 3 operation starts from. */
+    /** Two-item, two-factory scenario driven to READY_FOR_CEO_REVIEW (Step 2's own flow), the
+     * precondition every Step 3 operation starts from. V141 ("CEO owns costing"): unlike the
+     * pre-V141 name, this no longer creates any {@code sales.pricing_costing} row itself —
+     * markReadyForCosting's auto-advance (once the LAST factory quote resolves) is what gets the
+     * request here; {@code decisionService.startReview}, called separately by every test below,
+     * is what computes and persists the costing. */
     private long twoItemSubmittedCosting() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId, twoItemPricingRequest(), salesActor)
             .summary().id();
@@ -847,19 +1105,15 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
                 importActor);
             factoryQuoteService.markReadyForCosting(responded.id(), importActor);
         }
-        PricingCostingDto draft = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("draft", null), importActor);
-        costingService.recalculate(draft.id(), new RecalculateCostingRequest("pass 1"), importActor);
-        PricingCostingDto calculated = costingService.recalculate(draft.id(), new RecalculateCostingRequest("pass 2"), importActor);
-        costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
         return pricingRequestId;
     }
 
-    /** Single-item, single-factory (zero-cost-config "Factory C3") scenario, mirroring
-     * {@code PricingFactoryQuoteCostingIntegrationTest#singleItemCosting} but driven all the way
-     * to a SUBMITTED costing. */
+    /** Single-item, single-factory (zero-cost-config "Factory C3") scenario driven to
+     * READY_FOR_CEO_REVIEW, mirroring {@code PricingFactoryQuoteCostingIntegrationTest
+     * #singleItemCosting}. V141: no standalone costing is created here either — see
+     * {@link #twoItemSubmittedCosting()}'s own javadoc. */
     private long singleItemSubmittedCosting(
         BigDecimal requestedQty, String requestedUnitBasis, String quotedUnitBasis, BigDecimal quotedQuantity,
         String rawPrice, BigDecimal sqmPerUnit, BigDecimal piecesPerBox, BigDecimal linearMPerUnit
@@ -883,11 +1137,8 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
             UUID.randomUUID().toString());
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-        PricingCostingDto costingDraft = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("unit test", UUID.randomUUID().toString()), importActor);
-        costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 1"), importActor);
-        PricingCostingDto calculated = costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 2"), importActor);
-        costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
         return pricingRequestId;
     }
 

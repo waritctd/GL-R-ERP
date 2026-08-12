@@ -35,4 +35,10 @@ public final class PricingDecisionRequests {
     public record ApprovePricingDecisionRequest(String ceoNote, String clientRequestId) {}
 
     public record ReturnPricingDecisionRequest(String returnReason) {}
+
+    /** V141 ("CEO owns costing"): {@code manualLandedCostPerUnitThb} null CLEARS the override
+     * (back to "use the computed figure"). {@code reason} is mandatory in BOTH directions —
+     * clearing is money-affecting too, exactly like setting one (mirrors {@link
+     * ReturnPricingDecisionRequest}'s own mandatory-reason precedent). */
+    public record CostOverrideRequest(BigDecimal manualLandedCostPerUnitThb, String reason) {}
 }

@@ -30,6 +30,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRequests.SendFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.StartNegotiationRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.UpdateFactoryQuoteDraftRequest;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestEventKind;
@@ -74,11 +75,13 @@ public class FactoryQuoteService {
     private final NotificationRepository notifications;
     private final FileStorageService fileStorage;
     private final AppProperties properties;
+    private final LandedCostCalculator landedCosts;
 
     public FactoryQuoteService(FactoryQuoteRepository quotes, PricingRequestRepository pricingRequests,
                                TicketRepository tickets, FactoryConfigRepository factoryConfigs,
                                FactoryEmailService factoryEmail, NotificationRepository notifications,
-                               FileStorageService fileStorage, AppProperties properties) {
+                               FileStorageService fileStorage, AppProperties properties,
+                               LandedCostCalculator landedCosts) {
         this.quotes = quotes;
         this.pricingRequests = pricingRequests;
         this.tickets = tickets;
@@ -87,6 +90,7 @@ public class FactoryQuoteService {
         this.notifications = notifications;
         this.fileStorage = fileStorage;
         this.properties = properties;
+        this.landedCosts = landedCosts;
     }
 
     @Transactional
@@ -538,21 +542,25 @@ public class FactoryQuoteService {
             long newId = quotes.createRevision(current, request.supplierQuoteRef(), request.defaultCurrency(),
                 request.paymentTerms(), request.leadTimeText(), request.revisionReason(), request.negotiationNote(), actor.id());
             quotes.replaceResponseItems(newId, normalizedItems);
-            quotes.markOpenCostingsStale(summary.id(), "Factory quote revision changed");
-            // Step 3 (design corrections 3+4, "submitted costing is immutable... actually
-            // true" / "one return-to-Import path"): this used to auto-transition
-            // READY_FOR_CEO_REVIEW -> COSTING_IN_PROGRESS directly, a SECOND place (besides the
-            // old PricingCostingService.createDraft path) that silently reopened a SUBMITTED
-            // costing with no CEO action. It no longer does — a factory quote revision received
-            // while READY_FOR_CEO_REVIEW is recorded (superseding the current quote,
-            // markOpenCostingsStale above — a no-op here since there is no open DRAFT/CALCULATED
-            // costing at this point, the current one is already SUBMITTED) but the pricing
-            // request status is left exactly where it was. The submitted costing itself is
-            // unaffected; if the CEO wants the new factory price reflected, they return the
-            // request via PricingDecisionService.returnToImport (-> COSTING_REVISION_REQUIRED),
-            // and Import's next costing draft naturally picks up this latest revision (
-            // PricingCostingService.resolveSources always reads the CURRENT factory quote).
+            // CEO-owns-costing (plan 2.3): there is no submitted costing row sitting around any
+            // more for a revision to mark "stale" (markOpenCostingsStale, deleted) — cost is
+            // computed fresh, once, at CEO-review time, from whichever quote is CURRENT then. So
+            // what a revision arriving here can invalidate instead is READINESS: if the request
+            // already sits at READY_FOR_CEO_REVIEW, that status asserted every item's factory
+            // quote was ready — this revision just un-readied one of them (the new revision is
+            // RESPONSE_RECEIVED, not READY_FOR_COSTING, until Import re-marks it). Pull the
+            // request back so the CEO cannot open a review whose price is about to change under
+            // them; Import must re-mark this revision ready to re-advance (FactoryQuoteService.
+            // markReadyForCosting). See PricingRequestStatus's READY_FOR_CEO_REVIEW ->
+            // AWAITING_FACTORY_RESPONSE back-edge for the state-machine side of this.
             String toStatus = summary.status();
+            if (PricingRequestStatus.READY_FOR_CEO_REVIEW.equals(summary.status())) {
+                int pulledBack = pricingRequests.transition(summary.id(), PricingRequestStatus.READY_FOR_CEO_REVIEW,
+                    PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
+                if (pulledBack == 1) {
+                    toStatus = PricingRequestStatus.AWAITING_FACTORY_RESPONSE;
+                }
+            }
             respondedQuoteId = newId;
             saved = requireQuote(newId);
             addEvent(summary, actor, PricingRequestEventKind.FACTORY_RESPONSE_REVISED, summary.status(), toStatus,
@@ -604,6 +612,15 @@ public class FactoryQuoteService {
     public FactoryQuoteDto markReadyForCosting(long quoteId, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
         FactoryQuoteDto quote = requireQuote(quoteId);
+        // Serialize concurrent mark-ready calls on the SAME pricing request, so the
+        // "is every quote ready now?" check below cannot be run by two callers who each see only
+        // their own uncommitted markReady. Without this, two Import users marking the LAST two
+        // factories ready simultaneously would BOTH evaluate isFullyResolvable to false under
+        // READ COMMITTED, neither would advance, and the request would sit at
+        // AWAITING_FACTORY_RESPONSE with every quote ready — recoverable only by re-negotiating a
+        // quote to get it back out of READY_FOR_COSTING (markReady 409s on an already-ready one).
+        // Same pg_advisory_xact_lock key every other step in this chain uses.
+        pricingRequests.lockPricingRequest(quote.pricingRequestId());
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
         requireMutablePricingRequest(summary, RESPONSE_STATUSES);
         requireActiveDeal(summary.ticketId());
@@ -613,8 +630,32 @@ public class FactoryQuoteService {
         }
         addEvent(summary, actor, PricingRequestEventKind.FACTORY_RESPONSE_READY_FOR_COSTING, summary.status(), summary.status(),
             "Factory response ready for costing: " + quote.factoryName());
-        notifyCeo(summary, PricingRequestEventKind.FACTORY_RESPONSE_READY_FOR_COSTING,
-            "คำขอราคา " + summary.requestCode() + " พร้อมคำนวณต้นทุนสำหรับ " + quote.factoryName());
+        // CEO-owns-costing (plan 2.2): push the request forward the moment EVERY item's factory
+        // quote is ready — LandedCostCalculator.isFullyResolvable is the SAME predicate
+        // LandedCostCalculator.calculate() itself requires, so "we said ready" and "the
+        // calculator can run" cannot drift apart. A multi-factory request does not advance until
+        // the LAST factory's quote is marked ready; re-reading summary is unnecessary since
+        // quotes.markReady above did not touch the pricing_request row itself. No advisory lock
+        // guards this check (unlike PricingDecisionService.startReview) — the worst case of two
+        // quotes being marked ready in the same instant is a missed auto-advance, not an illegal
+        // state, and the plan does not call for locking here.
+        if (PricingRequestStatus.AWAITING_FACTORY_RESPONSE.equals(summary.status())
+                && landedCosts.isFullyResolvable(summary)) {
+            int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
+                PricingRequestStatus.READY_FOR_CEO_REVIEW, null, null);
+            if (transitioned == 1) {
+                // Reuses PRICING_COSTING_SUBMITTED: historically the event marking exactly this
+                // transition (AWAITING_FACTORY_RESPONSE -> READY_FOR_CEO_REVIEW), back when
+                // PricingCostingService.submit() drove it instead of this auto-advance. Keeping
+                // the same kind preserves one consistent "became ready for CEO review" trail
+                // across both eras of the workflow.
+                addEvent(summary, actor, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
+                    PricingRequestStatus.AWAITING_FACTORY_RESPONSE, PricingRequestStatus.READY_FOR_CEO_REVIEW,
+                    "All factory quotes ready for costing — request advanced for CEO review");
+                notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
+                    "คำขอราคา " + summary.requestCode() + " พร้อมให้ CEO พิจารณาราคาแล้ว");
+            }
+        }
         return requireQuote(quoteId);
     }
 
