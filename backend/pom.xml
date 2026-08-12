@@ -22,8 +22,14 @@
         <!-- Number of parallel test JVMs. Each fork is a separate process, so on the Testcontainers
              path it gets its OWN throwaway Postgres (and its own golden/wrk clone) — tests stay fully
              isolated with no test-code changes. Override with -Dtest.fork.count=1 when running against
-             an external TEST_DB_URL: forks would otherwise share and clobber that single database. -->
-        <test.fork.count>2</test.fork.count>
+             an external TEST_DB_URL: forks would otherwise share and clobber that single database.
+
+             3, not 2, since #699: pooling the integration-test datasource removed the per-JDBC-call
+             SCRAM handshake that used to dominate the suite, which cut the Maven step from 1013s to
+             223s and left the runner with idle capacity rather than saturated cores. The GitHub
+             runner has 4 vCPU, so 3 forks (3 JVMs + 3 Postgres containers) is the last step that
+             still leaves a core for the daemon; 4 would over-subscribe it. -->
+        <test.fork.count>3</test.fork.count>
     </properties>
 
     <dependencies>
