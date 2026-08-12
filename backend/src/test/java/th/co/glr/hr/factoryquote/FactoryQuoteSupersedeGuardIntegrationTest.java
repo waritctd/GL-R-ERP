@@ -73,7 +73,7 @@ class FactoryQuoteSupersedeGuardIntegrationTest extends AbstractPostgresIntegrat
         FileStorageService fileStorage = new FileStorageService("/tmp/glr-factoryquote-supersede-guard-test-uploads");
 
         PricingRequestService pricingRequestService = new PricingRequestService(
-            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage);
+            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
         factoryQuotes = new FactoryQuoteRepository(jdbc);
         TicketService ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);

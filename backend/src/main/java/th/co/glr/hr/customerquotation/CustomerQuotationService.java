@@ -217,6 +217,27 @@ public class CustomerQuotationService {
             if (discount.compareTo(BigDecimal.ZERO) < 0) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "ส่วนลดต้องไม่ติดลบ");
             }
+            // Reissue-through-CEO-chain (owner ruling 2026-08-13): a REVISION draft may not carry
+            // any discount at all. Removing createRevision's discount carry-forward on its own
+            // would have closed nothing — the revision it produces is a DRAFT, and this very
+            // method is what Sales would call next to put the discount straight back. The two
+            // changes only close the loophole together.
+            //
+            // Scoped to revisions (parentQuotationId != null) on purpose. Discount Policy B on a
+            // FIRST quotation is untouched: there the CEO's own decision supplied
+            // discount_ceiling_pct / minimum_selling_price_per_requested_unit, so discounting down
+            // to that floor is authority the CEO granted, not authority Sales took. The ruling is
+            // about moving a price AFTER the customer has been given one.
+            //
+            // The check is on the RESOLVED discount, not on req.salesDiscount(), so it cannot be
+            // slipped past by omitting the field and relying on a non-zero value already sitting
+            // on the row.
+            if (quotation.parentQuotationId() != null && discount.compareTo(BigDecimal.ZERO) != 0) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "ใบเสนอราคาฉบับแก้ไขให้ส่วนลดไม่ได้ — การเปลี่ยนแปลงราคาหรือจำนวนหลังออกใบเสนอราคาแล้ว "
+                        + "ต้องสร้าง revision จากการเปลี่ยนแปลงของลูกค้า (customer-change revision) "
+                        + "เพื่อให้ CEO อนุมัติราคาใหม่");
+            }
             BigDecimal finalUnitPrice = money4(current.approvedUnitPrice().subtract(discount));
             if (finalUnitPrice.compareTo(BigDecimal.ZERO) < 0) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "ส่วนลดต้องไม่เกินราคาที่อนุมัติ");
@@ -289,6 +310,13 @@ public class CustomerQuotationService {
         }
 
         PricingRequestSummaryDto summary = requirePricingRequest(quotation.pricingRequestId());
+        // Reissue-through-CEO-chain (owner ruling 2026-08-13): the replacement offer now exists,
+        // so the offers it replaces stop being live. Until this point the parent chain's issued
+        // quotation stayed ISSUED and valid on purpose — the customer held a real offer for the
+        // whole time the new chain ran, and if the CEO had refused the new price there was
+        // something to fall back to. Deliberately placed AFTER the issue compare-and-set above:
+        // a failed issue must not retire the old offer.
+        quotations.supersedeSupersededChainQuotations(summary.id());
         // Only the FIRST issue moves the pricing request — a revision's re-issue is a no-op
         // transition (the request is already QUOTATION_ISSUED); see PricingRequestStatus's own
         // Javadoc on QUOTATION_ISSUED.
@@ -379,14 +407,22 @@ public class CustomerQuotationService {
 
         List<NewItem> items = new ArrayList<>();
         for (PricingDecisionSalesItemDto item : salesView.items()) {
-            // Preserve the prior revision's own discount per line where the same
-            // pricing_request_item still exists, so a correction defaults to "same price,
-            // edited description/notes" rather than silently resetting every discount to zero.
-            BigDecimal priorDiscount = source.items().stream()
-                .filter(i -> i.pricingRequestItemId() == item.pricingRequestItemId())
-                .map(CustomerQuotationItemDto::salesDiscount)
-                .findFirst().orElse(BigDecimal.ZERO);
-            items.add(buildItem(item, priorDiscount));
+            // Reissue-through-CEO-chain (owner ruling 2026-08-13): EVERY line is rebuilt at the
+            // CEO-approved price, discount ZERO. This method used to carry the prior revision's
+            // per-line discount forward, and that carry-forward — together with a follow-up
+            // update() on the new draft — was the loophole that let Sales move a customer-facing
+            // price after issue on their own authority, entirely outside the pricing chain. A
+            // price or quantity change after issue must now go through
+            // PricingRequestService#createCustomerChangeRevision, which ends in a fresh CEO
+            // decision. What survives here is genuinely non-commercial: validity date, terms,
+            // contact details, typos.
+            //
+            // The visible consequence, stated rather than hidden: if the superseded revision
+            // carried a discount, the correction reissues at the CEO-approved price, i.e. HIGHER
+            // than what the customer was last shown. That is the ruling — Sales cannot keep a
+            // price concession alive through a "typo fix". Re-granting it is a
+            // createCustomerChangeRevision away.
+            items.add(buildItem(item, BigDecimal.ZERO));
         }
         BigDecimal subtotal = sumOf(items, NewItem::lineSubtotal);
 
@@ -589,9 +625,13 @@ public class CustomerQuotationService {
         }
         // Discount Policy B, enforced at creation too (a client cannot pre-seed a
         // below-minimum discount by any path — there is currently no create-time discount
-        // input, so this branch is unreachable via create() today but stays as defense in
-        // depth since buildItem is shared with createRevision, which DOES carry forward a
-        // prior discount).
+        // input, so this branch is unreachable today: buildItem's only two callers are create()
+        // and createRevision(), and BOTH now pass ZERO. It stays as defence in depth for any
+        // future caller that does supply one.
+        //
+        // NOTE for anyone editing this method: it is shared by create() and createRevision(), so
+        // a change here alters FIRST-ISSUE behaviour too, not just revisions. (It is NOT shared
+        // with issue(), which never calls it.)
         if (item.minimumSellingPricePerRequestedUnit() != null
                 && finalUnitPrice.compareTo(item.minimumSellingPricePerRequestedUnit()) < 0) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,

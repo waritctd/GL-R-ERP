@@ -23,6 +23,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
+import th.co.glr.hr.factoryquote.FactoryQuoteCarryForward;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestDetailDto;
@@ -85,16 +86,19 @@ public class PricingRequestService {
     private final ObjectMapper objectMapper;
     private final ContactRepository contacts;
     private final FileStorageService fileStorage;
+    private final FactoryQuoteCarryForward factoryQuoteCarryForward;
 
     public PricingRequestService(PricingRequestRepository requests, TicketRepository tickets,
                                  NotificationRepository notifications, ObjectMapper objectMapper,
-                                 ContactRepository contacts, FileStorageService fileStorage) {
+                                 ContactRepository contacts, FileStorageService fileStorage,
+                                 FactoryQuoteCarryForward factoryQuoteCarryForward) {
         this.requests      = requests;
         this.tickets       = tickets;
         this.notifications = notifications;
         this.objectMapper  = objectMapper;
         this.contacts      = contacts;
         this.fileStorage   = fileStorage;
+        this.factoryQuoteCarryForward = factoryQuoteCarryForward;
     }
 
     @Transactional
@@ -300,11 +304,61 @@ public class PricingRequestService {
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_SUBMITTED, PricingRequestStatus.DRAFT,
             PricingRequestStatus.SUBMITTED, null, null);
+        if (carryFactoryQuotesForwardOnSubmit(summary, actor)) {
+            return detail(id);
+        }
         notifications.notifyByRoleForPricingRequest("import", summary.id(), "PRICING_REQUEST_SUBMITTED",
             "คำขอราคา " + summary.requestCode() + " รอการรับเรื่อง");
         notifyCeo(summary, PricingRequestEventKind.PRICING_REQUEST_SUBMITTED,
             "คำขอราคา " + summary.requestCode() + " ถูกส่งเข้าสู่ Pricing workflow");
         return detail(id);
+    }
+
+    /**
+     * Reissue-through-CEO-chain (owner ruling 2026-08-13): a customer-change revision that changes
+     * only the commercial terms — same products, same requested quantities — reuses its parent's
+     * factory quotes and goes straight to the CEO instead of round-tripping through Import for
+     * prices nobody disputed.
+     *
+     * <p>Runs at SUBMIT time, not at revision-creation time, and that timing is load-bearing:
+     * {@code sales.factory_quote_item.pricing_request_item_id} is {@code ON DELETE RESTRICT}, while
+     * {@code updateDraft} replaces a draft's items with a DELETE + re-INSERT. Copying quotes onto a
+     * still-DRAFT child would therefore make the child's own items undeletable and turn the next
+     * {@code updateDraft} into a raw constraint violation. After submit the items are frozen, so
+     * there is nothing to collide with.
+     *
+     * <p>Deliberately fails OPEN, in the sense that every "no" lands the request on the ordinary
+     * Import path rather than raising: the shortcut is an optimisation, and refusing to take it is
+     * always safe. It is also placed AFTER the submit event above, so the audit trail reads
+     * submitted-then-advanced rather than inventing a submit that never happened.
+     *
+     * @return true when the request was advanced to READY_FOR_CEO_REVIEW.
+     */
+    private boolean carryFactoryQuotesForwardOnSubmit(PricingRequestSummaryDto summary, UserPrincipal actor) {
+        PricingRequestSummaryDto submitted = requests.findSummary(summary.id()).orElse(null);
+        if (submitted == null || !factoryQuoteCarryForward.carryForwardOnSubmit(submitted, actor.id())) {
+            return false;
+        }
+        // The advance itself. SUBMITTED -> READY_FOR_CEO_REVIEW is declared in
+        // PricingRequestStatus.ALLOWED specifically for this path. A compare-and-set miss here is
+        // not a user-facing error: the request is validly SUBMITTED either way, so fall back to
+        // the Import path rather than failing a submit that already succeeded.
+        int transitioned = requests.transition(summary.id(), PricingRequestStatus.SUBMITTED,
+            PricingRequestStatus.READY_FOR_CEO_REVIEW, null, null);
+        if (transitioned == 0) {
+            return false;
+        }
+        // Same event kind FactoryQuoteService.markReadyForCosting emits for the same transition,
+        // so "became ready for CEO review" reads as one consistent trail regardless of which path
+        // produced it.
+        requests.addEvent(summary.id(), summary.ticketId(), actor.id(), actor.name(),
+            PricingRequestEventKind.PRICING_COSTING_SUBMITTED, PricingRequestStatus.SUBMITTED,
+            PricingRequestStatus.READY_FOR_CEO_REVIEW,
+            "Factory quotes carried forward unchanged from the superseded pricing request "
+                + "— advanced for CEO review without a new Import round-trip", null);
+        notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
+            "คำขอราคา " + summary.requestCode() + " พร้อมให้ CEO พิจารณาราคาแล้ว (ใช้ราคาโรงงานเดิม)");
+        return true;
     }
 
     @Transactional
@@ -391,8 +445,23 @@ public class PricingRequestService {
         if (parent.ticketCreatedById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        if (Set.of(PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, PricingRequestStatus.SUPERSEDED)
-                .contains(parent.status())) {
+        // Reissue-through-CEO-chain (owner ruling 2026-08-13): the state machine is now the ONLY
+        // authority on which statuses a customer-change revision may start from, replacing the
+        // hand-maintained {DRAFT, CANCELLED, SUPERSEDED} denylist that used to live here. That
+        // denylist and PricingRequestStatus.ALLOWED had drifted apart in both directions, and
+        // PricingRequestRepository.supersedeForCustomerRevision consulted neither. Deriving the
+        // gate from canTransition means this 409 and the repository's IllegalStateException can
+        // never disagree about what is legal.
+        //
+        // QUOTATION_ACCEPTED gets its own message because it is the case that CHANGED: it used to
+        // be reachable and is now refused. Once the customer has accepted, changing the deal is an
+        // order amendment, not a quotation revision.
+        if (PricingRequestStatus.QUOTATION_ACCEPTED.equals(parent.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ลูกค้ายอมรับใบเสนอราคาแล้ว จึงแก้ไขผ่าน revision ของคำขอราคาไม่ได้ "
+                    + "— การเปลี่ยนแปลงหลังลูกค้ายอมรับต้องทำเป็นการแก้ไขคำสั่งซื้อ");
+        }
+        if (!PricingRequestStatus.canTransition(parent.status(), PricingRequestStatus.SUPERSEDED)) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "สร้าง revision จากการเปลี่ยนแปลงของลูกค้าได้เฉพาะจากคำขอราคาที่ยื่นและยังดำเนินการอยู่เท่านั้น");
         }
@@ -422,15 +491,29 @@ public class PricingRequestService {
             }
             throw new ApiException(HttpStatus.CONFLICT, "clientRequestId นี้ถูกใช้ไปแล้ว");
         }
-        int superseded = requests.supersedeForCustomerRevision(parent.id(), newId);
+        int superseded = requests.supersedeForCustomerRevision(parent.id(), parent.status(), newId);
         if (superseded == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         requests.cancelOpenStep2Children(parent.id(), "Customer change revision created", actor.id());
         // Step 5 (V75, design correction 1): also supersede any DRAFT/APPROVED pricing_decision
-        // and any non-terminal quotation left over from Steps 3/4 — cancelOpenStep2Children above
-        // predates both and does not touch them.
-        requests.supersedeOpenPricingDecisionAndQuotation(parent.id());
+        // left over from Step 3 — cancelOpenStep2Children above predates it and does not touch it.
+        //
+        // Reissue-through-CEO-chain (owner ruling 2026-08-13): this deliberately no longer
+        // supersedes the parent's QUOTATION. It used to (the method was
+        // supersedeOpenPricingDecisionAndQuotation, and it flipped an ISSUED quotation to
+        // SUPERSEDED the instant a revision was created), which meant the customer was left with
+        // no live offer for the whole time the new chain ran — and if the CEO ultimately refused
+        // the new price there was nothing to fall back to. The owner's ruling is that the already
+        // issued quotation STAYS ISSUED and valid while the replacement chain runs, and is
+        // superseded only when the replacement quotation is actually issued
+        // (CustomerQuotationService#issue -> supersedeSupersededChainQuotations).
+        //
+        // The DECISION half stays eager on purpose: it is internal pricing state, not the
+        // customer-facing offer, and the issued quotation carries its own frozen price snapshot
+        // (sales.quotation_item), so superseding the decision cannot change what the customer was
+        // quoted.
+        requests.supersedeOpenPricingDecision(parent.id());
         requests.addEvent(parent.id(), parent.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_REVISED, parent.status(), PricingRequestStatus.SUPERSEDED,
             request.revisionReason(), toRevisionMetadataJson(newId));

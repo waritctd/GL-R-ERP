@@ -110,7 +110,7 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
         ObjectMapper objectMapper = new ObjectMapper();
         pricingRequestService = new PricingRequestService(
             pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc),
-            new FileStorageService("/tmp/glr-pricing-flow-test-uploads"));
+            new FileStorageService("/tmp/glr-pricing-flow-test-uploads"), factoryQuoteCarryForward());
         // PriceCalcService is genuinely awkward business logic unrelated to this walk
         // (no price is ever proposed/calculated here) — mocked, per the task brief.
         // Every other collaborator is real and cheap to construct.
@@ -503,7 +503,7 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
         var racingRequests = new RacingPricingRequestRepository(jdbc, salesRepId, clientRequestId);
         var racingService = new PricingRequestService(
             racingRequests, tickets, notifications, new ObjectMapper(), new ContactRepository(jdbc),
-            new FileStorageService("/tmp/glr-pricing-flow-test-uploads"));
+            new FileStorageService("/tmp/glr-pricing-flow-test-uploads"), factoryQuoteCarryForward());
         CreatePricingRequestRequest request = new CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             new BigDecimal("1000.00"), "THB", "race request", clientRequestId,
