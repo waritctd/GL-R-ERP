@@ -218,6 +218,8 @@ public class TicketService {
         requireRole(actor, IMPORT_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.SUBMITTED);
         requireActive(s);
+        requireStatusAdvanced(
+            tickets.transitionStatus(ticketId, TicketStatus.SUBMITTED, TicketStatus.IN_REVIEW));
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.PICKED_UP, TicketStatus.SUBMITTED, TicketStatus.IN_REVIEW, null);
         return requireTicket(ticketId);
@@ -249,6 +251,10 @@ public class TicketService {
         String snapshot = buildItemSnapshot(request.items());
         boolean isRevision = !TicketStatus.IN_REVIEW.equals(currentStatus);
         String eventKind = isRevision ? TicketEventKind.PRICE_REVISED : TicketEventKind.PRICE_PROPOSED;
+        // PROPOSE_ALLOWED_STATUSES is exactly {in_review, price_proposed, approved}; the middle
+        // one is the declared price_proposed -> price_proposed self-edge (a re-proposal).
+        requireStatusAdvanced(
+            tickets.transitionStatus(ticketId, currentStatus, TicketStatus.PRICE_PROPOSED));
         tickets.addEventWithSnapshot(ticketId, actor.id(), actor.name(),
             eventKind, currentStatus, TicketStatus.PRICE_PROPOSED, request.note(), snapshot);
         notifications.notifyByRole("ceo", ticketId, "PRICE_PROPOSED",
@@ -284,6 +290,8 @@ public class TicketService {
         requireActive(s);
         tickets.approveItemPrices(ticketId);
         tickets.setHasEdits(ticketId, false);
+        requireStatusAdvanced(
+            tickets.transitionStatus(ticketId, TicketStatus.PRICE_PROPOSED, TicketStatus.APPROVED));
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.APPROVED, TicketStatus.PRICE_PROPOSED, TicketStatus.APPROVED, null);
         notifications.notifyEmployee(s.createdById(), ticketId, "APPROVED",
@@ -303,6 +311,8 @@ public class TicketService {
         requireRole(actor, CEO_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.PRICE_PROPOSED);
         requireActive(s);
+        requireStatusAdvanced(
+            tickets.transitionStatus(ticketId, TicketStatus.PRICE_PROPOSED, TicketStatus.IN_REVIEW));
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.REJECTED, TicketStatus.PRICE_PROPOSED, TicketStatus.IN_REVIEW, request.reason());
         notifications.notifyByRole("import", ticketId, "REJECTED",
@@ -385,13 +395,16 @@ public class TicketService {
             + (request.amendmentReason() != null && !request.amendmentReason().isBlank()
                 ? " — amendment: " + request.amendmentReason().trim()
                 : "");
+        // QUOTATION_ALLOWED_STATUSES is exactly {approved, quotation_issued}; the latter is the
+        // declared quotation_issued -> quotation_issued self-edge (an amended re-issue).
+        requireStatusAdvanced(
+            tickets.transitionStatus(ticketId, fromStatus, TicketStatus.QUOTATION_ISSUED));
         tickets.addEventWithDocument(ticketId, actor.id(), actor.name(),
             TicketEventKind.QUOTATION_ISSUED, fromStatus, TicketStatus.QUOTATION_ISSUED, eventMessage,
             RelatedDocumentType.QUOTATION, created.id());
-        if (QuotationRecipient.DESIGNER.equals(recipientType) || QuotationRecipient.OWNER.equals(recipientType)) {
-            autoAdvanceStage(s, DealStage.QUOTE_DESIGN_SIDE, actor);
-        } else if (QuotationRecipient.BUYER.equals(recipientType)) {
-            autoAdvanceStage(s, DealStage.QUOTE_BUYER, actor);
+        String stage = stageForQuotationRecipient(recipientType);
+        if (stage != null) {
+            autoAdvanceStage(s, stage, actor);
         }
         return requireTicket(ticketId);
     }
@@ -620,6 +633,9 @@ public class TicketService {
                 "ปิดงานไม่ได้: ต้องให้ฝ่ายบัญชียืนยันก่อน");
         }
         requireClosePrerequisites(s);
+        // requireClosePrerequisites admits exactly {quotation_issued, document_issued}, which are
+        // the only two states TicketStatus.ALLOWED lets reach CLOSED.
+        requireStatusAdvanced(tickets.transitionStatus(ticketId, s.status(), TicketStatus.CLOSED));
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.CLOSED, s.status(), TicketStatus.CLOSED, "CEO ตรวจสอบและปิดงาน");
         tickets.updateLifecycle(ticketId, DealLifecycle.COMPLETED);
@@ -667,6 +683,22 @@ public class TicketService {
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ขั้นตอนการรับชำระเงินถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
+    }
+
+    /**
+     * Turns a lost ticket-status compare-and-set race into a 409, mirroring
+     * {@link #requirePaymentAdvanced}. {@code transitionStatus}'s 0 rowcount means a concurrent
+     * writer moved {@code sales.ticket.status} out from under this request between the read that
+     * chose {@code expected} and the write — per that method's Javadoc the correct response is a
+     * conflict, never a re-SELECT to build a nicer message. (An UNDECLARED edge is a different
+     * thing entirely and throws {@link IllegalStateException} inside the repository before any
+     * SQL runs; it never reaches here.)
+     */
+    private void requireStatusAdvanced(int rows) {
+        if (rows == 0) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "สถานะดีลถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
     }
 
@@ -1298,12 +1330,22 @@ public class TicketService {
     // are the deliberate, user-approved exception — following up the team's deals
     // is exactly this role's job. Never extend it beyond these three methods.
 
-    /** Stages whose manual fallback belongs to the deal owner / sales_manager / ceo. */
+    /**
+     * Stages whose manual fallback belongs to the deal owner / sales_manager / ceo.
+     *
+     * <p>{@link DealStage#QUOTE_OWNER} joins the set (V143) for the same reason
+     * {@link DealStage#QUOTE_DESIGN_SIDE} is in it: quoting the owner is a sales action, so when
+     * the automatic advance at quotation-issue time did not happen (a quotation raised outside
+     * the PCR chain, or a stage corrected after the fact) the fallback must belong to the same
+     * three principals — not to account or import, whose money/import stages are separate sets
+     * below. This IS a permission surface: {@link #requireStageWriteAccess} keys off exactly
+     * these three sets, and membership here is what makes the difference between 403 and a write.
+     */
     private static final Set<String> SALES_TARGET_STAGES = Set.of(
         DealStage.LEAD_APPROACH, DealStage.PRESENTATION, DealStage.SPEC_APPROVED,
-        DealStage.QUOTE_DESIGN_SIDE, DealStage.OWNER_SIGNOFF, DealStage.AWAITING_BUYER,
-        DealStage.QUOTE_BUYER, DealStage.NEGOTIATION, DealStage.ORDER_RECEIVED,
-        DealStage.DELIVERY_SCHEDULING, DealStage.DELIVERED);
+        DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER, DealStage.OWNER_SIGNOFF,
+        DealStage.AWAITING_BUYER, DealStage.QUOTE_BUYER, DealStage.NEGOTIATION,
+        DealStage.ORDER_RECEIVED, DealStage.DELIVERY_SCHEDULING, DealStage.DELIVERED);
     /** Money stages — manual fallback for account/ceo (normally auto from payment track). */
     private static final Set<String> ACCOUNT_TARGET_STAGES = Set.of(
         DealStage.DEPOSIT_RECEIVED, DealStage.CLOSED_PAID);
@@ -1329,25 +1371,30 @@ public class TicketService {
         if (targetStage.equals(s.salesStage())) {
             throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้อยู่ในขั้นตอน " + targetStage + " อยู่แล้ว");
         }
-        boolean backward = DealStage.indexOf(targetStage) < DealStage.indexOf(s.salesStage())
-            && !DealStage.isRoutineBackwardMove(s.salesStage(), targetStage);
-        boolean skipForward = DealStage.indexOf(targetStage) - DealStage.indexOf(s.salesStage()) > 1;
-        if (backward && (note == null || note.isBlank())) {
+        // ONE decision, two messages. This used to be two independent rules — a backward check
+        // with an isRoutineBackwardMove exception bolted on, and a raw `indexOf(target) -
+        // indexOf(current) > 1` skip check. The second one demanded a written justification for
+        // three of the business's four normal routes (an owner buying direct skips S3/S4/S7/S8; a
+        // contractor arriving with a BOQ starts at S8; an in-stock deal skips PROCUREMENT), i.e.
+        // friction on the default path — the same defect isRoutineBackwardMove had already been
+        // patched by hand to fix for exactly one pair. DealStage.requiresJustification now owns
+        // both directions, so there is no second mechanism to keep in step.
+        boolean backward = DealStage.indexOf(targetStage) < DealStage.indexOf(s.salesStage());
+        if (DealStage.requiresJustification(s.salesStage(), targetStage)
+                && (note == null || note.isBlank())) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
-                "การย้อนสถานะกลับต้องระบุเหตุผล");
-        }
-        if (skipForward && (note == null || note.isBlank())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST,
-                "การข้ามขั้นตอนต้องระบุเหตุผล");
+                backward ? "การย้อนสถานะกลับต้องระบุเหตุผล" : "การข้ามขั้นตอนต้องระบุเหตุผล");
         }
         // Slice B1 "kill the weekly report" gate (handoff 103): real forward progress on a MANUAL
         // updateStage — genuinely advancing (target index strictly greater than current) — is
         // blocked unless the rep has kept the deal's tracking fields current. Deliberately keyed
-        // off "forward" rather than "!backward": the routine QUOTE_DESIGN_SIDE -> SPEC_APPROVED
-        // move is index-wise backward and so is already excluded by `backward` being false for it,
-        // but it is also not forward progress, so this condition alone (not "!backward") is what
-        // correctly excludes it too. autoAdvanceStage (the system-driven path) is a separate
-        // method entirely and never runs through here, so it is never gated by this block.
+        // off a strictly-greater index and nothing else: `backward` above is now purely a message
+        // selector (it no longer carries the isRoutineBackwardMove exception, which moved inside
+        // DealStage.requiresJustification), so this gate must not be expressed as "!backward" —
+        // that would flip the routine QUOTE_DESIGN_SIDE -> SPEC_APPROVED move into the gate. It is
+        // index-wise backward and therefore not forward progress, which is exactly what excludes
+        // it here. autoAdvanceStage (the system-driven path) is a separate method entirely and
+        // never runs through here, so it is never gated by this block.
         boolean forward = DealStage.indexOf(targetStage) > DealStage.indexOf(s.salesStage());
         if (forward) {
             boolean hasFollowUp = s.nextFollowUpAt() != null;
@@ -1470,11 +1517,34 @@ public class TicketService {
     @Transactional
     public void advanceStageForCustomerQuotationIssue(long ticketId, String recipientType, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
-        if (QuotationRecipient.DESIGNER.equals(recipientType) || QuotationRecipient.OWNER.equals(recipientType)) {
-            autoAdvanceStage(s, DealStage.QUOTE_DESIGN_SIDE, actor);
-        } else if (QuotationRecipient.BUYER.equals(recipientType)) {
-            autoAdvanceStage(s, DealStage.QUOTE_BUYER, actor);
+        String stage = stageForQuotationRecipient(recipientType);
+        if (stage != null) {
+            autoAdvanceStage(s, stage, actor);
         }
+    }
+
+    /**
+     * The one recipient → {@link DealStage} mapping, shared by {@link #generateQuotation} and
+     * {@link #advanceStageForCustomerQuotationIssue}. Those two used to carry a hand-copied
+     * {@code if/else if} each — the second one's Javadoc even claimed they "share one
+     * implementation and can never drift apart", which was not true of duplicated literals.
+     *
+     * <p>V143 splits the recipients that used to collapse together: {@code DESIGNER -> S4},
+     * {@code OWNER -> S5}, {@code BUYER -> S8}. Returns {@code null} for {@code UNSPECIFIED} and
+     * for anything unrecognised — the same "advance nothing" behaviour the old {@code else if}
+     * chain produced by falling off the end.
+     */
+    private static String stageForQuotationRecipient(String recipientType) {
+        if (QuotationRecipient.DESIGNER.equals(recipientType)) {
+            return DealStage.QUOTE_DESIGN_SIDE;
+        }
+        if (QuotationRecipient.OWNER.equals(recipientType)) {
+            return DealStage.QUOTE_OWNER;
+        }
+        if (QuotationRecipient.BUYER.equals(recipientType)) {
+            return DealStage.QUOTE_BUYER;
+        }
+        return null;
     }
 
     private void autoAdvanceStage(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
@@ -1674,6 +1744,10 @@ public class TicketService {
         String message = blankToNull(note) == null
             ? "ยกเลิกดีล (" + reason + ")"
             : "ยกเลิกดีล (" + reason + ") — " + note.trim();
+        // The guard above already excluded the two terminal statuses, which are the only two
+        // TicketStatus.ALLOWED does not let reach CANCELLED.
+        requireStatusAdvanced(
+            tickets.transitionStatus(ticketId, currentStatus, TicketStatus.CANCELLED));
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.CANCELLED, currentStatus, TicketStatus.CANCELLED, message);
         tickets.updateLifecycle(ticketId, DealLifecycle.CANCELLED);
