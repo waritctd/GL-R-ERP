@@ -242,19 +242,21 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
      * Two deals in the same starting state, full coverage declared on one by the owner and on the
      * other by import — both must land on exactly the same fulfilment status and sales stage.
      *
-     * <p>Both start at {@code LEAD_APPROACH}, which is deliberate and is also the residual risk
-     * this change carries: {@code autoAdvanceStage} has no stage precondition, so a full-coverage
-     * declaration jumps the deal straight to {@code DELIVERY_SCHEDULING} from wherever it was.
-     * That was already true for import/ceo; widening the gate means a rep can now trigger it on
-     * their own early-stage deal. Pinned here as observed behaviour so the next reader sees it
-     * asserted rather than merely described.
+     * <p>Both start at {@code ORDER_RECEIVED}. They used to start at {@code LEAD_APPROACH}, and
+     * this Javadoc used to record the residual risk that came with it: {@code autoAdvanceStage} has
+     * no stage precondition, so a full-coverage declaration jumped the deal straight to
+     * {@code DELIVERY_SCHEDULING} from wherever it was — including an untouched lead — which also
+     * blocked {@code ISSUE_IMPORT_REQUEST}. That risk is now closed by {@code reserveStock}'s stage
+     * floor (see {@code TicketService.stockCoverageStageReached} and
+     * {@code StageFactGateIntegrationTest}); the ROUTING above the floor is deliberately unchanged,
+     * which is what this test still pins.
      */
     @Test
     void fullCoverage_routesIdenticallyWhicheverRoleDeclares() {
         long ownerDeclared = createTicketWithOneItem();
         long importDeclared = createTicketWithOneItem();
-        assertThat(salesStage(ownerDeclared)).isEqualTo(DealStage.LEAD_APPROACH);
-        assertThat(salesStage(importDeclared)).isEqualTo(DealStage.LEAD_APPROACH);
+        assertThat(salesStage(ownerDeclared)).isEqualTo(DealStage.ORDER_RECEIVED);
+        assertThat(salesStage(importDeclared)).isEqualTo(DealStage.ORDER_RECEIVED);
 
         ticketService.reserveStock(ownerDeclared, declare(onlyItemId(ownerDeclared), "100.00"), owner);
         ticketService.reserveStock(importDeclared, declare(onlyItemId(importDeclared), "100.00"), importUser);
@@ -303,7 +305,7 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(qtyFromStock(itemId)).isEqualByComparingTo("0.00");
         assertThat(stockNote(itemId)).isNull();
         assertThat(fulfillmentStatus(ticketId)).isNull();
-        assertThat(salesStage(ticketId)).isEqualTo(DealStage.LEAD_APPROACH);
+        assertThat(salesStage(ticketId)).isEqualTo(DealStage.ORDER_RECEIVED);
         assertThat(stockReservedEvents(ticketId)).isZero();
     }
 
@@ -312,12 +314,21 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
             new StockReservationRequest.Line(itemId, new BigDecimal(qtyFromStock), "มีของในสต็อก")));
     }
 
+    /**
+     * A deal parked at {@link DealStage#ORDER_RECEIVED} — the stage floor a stock declaration must
+     * clear since the stage-fact-gate branch (below it every call 409s regardless of role, which
+     * would make every case in this class pass for the wrong reason). Seeded through the real
+     * {@code updateSalesStage} writer; this class is about WHO may declare, and
+     * {@code StageFactGateIntegrationTest} owns the floor's own coverage.
+     */
     private long createTicketWithOneItem() {
         CreateTicketRequest request = new CreateTicketRequest(
             "ดีลทดสอบสต็อก", "NORMAL", "ลูกค้าทดสอบ", null, null, null, null, null,
             List.of(new TicketItemRequest("Brand", "Model", null, null, "60x60", "Factory A",
                 new BigDecimal("100.00"), null, "PIECE", null, null, null, null, "THB")));
-        return tickets.create(request, tickets.nextTicketCode(), ownerId, "เจ้าของดีล ทดสอบ");
+        long ticketId = tickets.create(request, tickets.nextTicketCode(), ownerId, "เจ้าของดีล ทดสอบ");
+        tickets.updateSalesStage(ticketId, DealStage.ORDER_RECEIVED);
+        return ticketId;
     }
 
     private long onlyItemId(long ticketId) {
