@@ -41,11 +41,8 @@ import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PriceCalcConfigRepository;
-import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
+import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.CreateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.RecalculateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.SubmitCostingRequest;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
@@ -76,8 +73,9 @@ import th.co.glr.hr.ticket.TicketService;
  * <p>This goes one step further than the Commission precedent: instead of driving the service
  * through the test's own {@code TransactionTemplate} (which proves rollback but, by the Commission
  * test class's own admission, would NOT go red if {@code @Transactional} were deleted — see that
- * class's Javadoc), {@link #transactionalProxy} builds a REAL Spring AOP transactional proxy driven
- * by {@link org.springframework.transaction.annotation.AnnotationTransactionAttributeSource}, so the
+ * class's Javadoc), {@link AbstractPostgresIntegrationTest#transactional} (PR #695) builds a REAL
+ * Spring AOP transactional proxy driven by {@link
+ * org.springframework.transaction.annotation.AnnotationTransactionAttributeSource}, so the
  * transaction genuinely comes from the {@code @Transactional} annotation on {@code startReview}
  * itself. Deleting the annotation removes the advice's transaction attribute entirely, so the proxy
  * stops opening a transaction and the rollback test below must go red for the right reason — see the
@@ -99,6 +97,7 @@ class PricingDecisionStartReviewRollbackIntegrationTest extends AbstractPostgres
     private PricingDecisionRepository decisionRepository;
     private NotificationRepository notifications;
     private FxRateRepository fxRates;
+    private LandedCostCalculator landedCostCalculator;
 
     private long salesRepId;
     private long importUserId;
@@ -135,12 +134,18 @@ class PricingDecisionStartReviewRollbackIntegrationTest extends AbstractPostgres
         dispatchProperties.getFactoryQuoteDispatch().setMaxAttempts(3);
         dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
         dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
-        factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties);
-        costingRepository = new PricingCostingRepository(jdbc);
         fxRates = new FxRateRepository(jdbc);
-        costingService = new PricingCostingService(costingRepository, pricingRequests, factoryQuotes, tickets,
-            fxRates, new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc), notifications);
+        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
+        // auto-advance check and PricingDecisionService's startReview (see buildDecisionService).
+        landedCostCalculator = new LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
+            new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
+        factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
+            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
+            landedCostCalculator);
+        costingRepository = new PricingCostingRepository(jdbc);
+        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
+        // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
+        costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
         decisionRepository = new PricingDecisionRepository(jdbc);
         th.co.glr.hr.pricing.PriceCalcService priceCalcMock = mock(th.co.glr.hr.pricing.PriceCalcService.class);
         TicketService ticketService = new TicketService(tickets, notifications, priceCalcMock,
@@ -192,18 +197,38 @@ class PricingDecisionStartReviewRollbackIntegrationTest extends AbstractPostgres
         PricingRequestRepository faulty = org.mockito.Mockito.spy(new PricingRequestRepository(jdbc));
         org.mockito.Mockito.doThrow(new DataIntegrityViolationException("injected failure"))
             .when(faulty).addEvent(anyLong(), anyLong(), any(), any(), any(), any(), any(), any(), any());
-        PricingDecisionService faultyService = transactionalProxy(buildDecisionService(faulty));
+        PricingDecisionService faultyService = transactional(buildDecisionService(faulty));
 
         assertThatThrownBy(() -> faultyService.startReview(pricingRequestId,
                 new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()),
                 ceoActor))
             .isInstanceOf(DataIntegrityViolationException.class);
 
+        // V141 ("CEO owns costing"): startReview now computes+persists the costing itself, BEFORE
+        // the pricing_decision insert — steps 1-2 of 6, ahead of the pricing_decision/
+        // pricing_decision_item/status/event writes the pre-V141 assertions below already covered.
+        // twoItemSubmittedCosting() leaves ZERO costing rows behind (no standalone Import draft
+        // exists any more), so a non-zero count here can only be an orphan from THIS failed call.
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM sales.pricing_costing WHERE pricing_request_id = :id",
+                Map.of("id", pricingRequestId), Long.class))
+            .as("startReview inserts sales.pricing_costing (step 1 of 6) BEFORE the injected "
+                + "addEvent failure (step 6) — a non-zero count here means the @Transactional "
+                + "boundary let an orphan costing row survive a later failure")
+            .isZero();
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM sales.pricing_costing_item pci
+                  JOIN sales.pricing_costing pc ON pc.pricing_costing_id = pci.pricing_costing_id
+                 WHERE pc.pricing_request_id = :id
+                """, Map.of("id", pricingRequestId), Long.class))
+            .as("sales.pricing_costing_item rows (step 2) must not survive either — same "
+                + "transaction boundary as the pricing_costing row above")
+            .isZero();
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM sales.pricing_decision WHERE pricing_request_id = :id",
                 Map.of("id", pricingRequestId), Long.class))
-            .as("startReview inserts sales.pricing_decision (step 2 of 5) BEFORE the injected "
-                + "addEvent failure (step 5) — a non-zero count here means the @Transactional "
+            .as("startReview inserts sales.pricing_decision (step 3 of 6) BEFORE the injected "
+                + "addEvent failure (step 6) — a non-zero count here means the @Transactional "
                 + "boundary let a partial CEO-review survive a later failure")
             .isZero();
         assertThat(jdbc.queryForObject("""
@@ -211,13 +236,13 @@ class PricingDecisionStartReviewRollbackIntegrationTest extends AbstractPostgres
                   JOIN sales.pricing_decision pd ON pd.pricing_decision_id = pdi.pricing_decision_id
                  WHERE pd.pricing_request_id = :id
                 """, Map.of("id", pricingRequestId), Long.class))
-            .as("sales.pricing_decision_item rows (step 3) must not survive either — same "
+            .as("sales.pricing_decision_item rows (step 4) must not survive either — same "
                 + "transaction boundary as the pricing_decision row above")
             .isZero();
         assertThat(jdbc.queryForObject(
                 "SELECT status FROM sales.pricing_request WHERE pricing_request_id = :id",
                 Map.of("id", pricingRequestId), String.class))
-            .as("the status UPDATE (step 4, READY_FOR_CEO_REVIEW -> CEO_REVIEWING) must roll back "
+            .as("the status UPDATE (step 5, READY_FOR_CEO_REVIEW -> CEO_REVIEWING) must roll back "
                 + "too, or this pricing request would be stuck showing 'under CEO review' with no "
                 + "reviewable pricing_decision row behind it")
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
@@ -225,7 +250,7 @@ class PricingDecisionStartReviewRollbackIntegrationTest extends AbstractPostgres
                 SELECT COUNT(*) FROM sales.pricing_request_event
                  WHERE pricing_request_id = :id AND event_kind = 'PRICING_DECISION_STARTED'
                 """, Map.of("id", pricingRequestId), Long.class))
-            .as("the event insert is exactly where the fault was injected (step 5) — it must not "
+            .as("the event insert is exactly where the fault was injected (step 6) — it must not "
                 + "have left a lone committed event row behind either")
             .isZero();
     }
@@ -235,13 +260,27 @@ class PricingDecisionStartReviewRollbackIntegrationTest extends AbstractPostgres
     @Test
     void successfulStartReviewCommits_throughTheSameProxy() {
         long pricingRequestId = twoItemSubmittedCosting();
-        PricingDecisionService realService = transactionalProxy(buildDecisionService(pricingRequests));
+        PricingDecisionService realService = transactional(buildDecisionService(pricingRequests));
 
         PricingDecisionDto decision = realService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()),
             ceoActor);
 
         assertThat(decision.status()).isEqualTo(PricingDecisionStatus.DRAFT);
+        // V141: a genuinely successful startReview, through the same proxy as the rollback test,
+        // must commit its pricing_costing row(s) too — proves the zero counts above mean "rolled
+        // back", not "startReview never writes a costing".
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM sales.pricing_costing WHERE pricing_request_id = :id",
+                Map.of("id", pricingRequestId), Long.class))
+            .isEqualTo(1L);
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM sales.pricing_costing_item pci
+                  JOIN sales.pricing_costing pc ON pc.pricing_costing_id = pci.pricing_costing_id
+                 WHERE pc.pricing_request_id = :id
+                """, Map.of("id", pricingRequestId), Long.class))
+            .as("both two-item pricing_costing_item rows must commit")
+            .isEqualTo(2L);
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM sales.pricing_decision WHERE pricing_request_id = :id",
                 Map.of("id", pricingRequestId), Long.class))
@@ -295,32 +334,16 @@ class PricingDecisionStartReviewRollbackIntegrationTest extends AbstractPostgres
 
     private PricingDecisionService buildDecisionService(PricingRequestRepository pricingRequestsForDecision) {
         return new PricingDecisionService(decisionRepository, pricingRequestsForDecision, costingRepository,
-            tickets, fxRates, notifications);
+            tickets, fxRates, notifications, landedCostCalculator);
     }
 
-    /**
-     * Builds a REAL Spring AOP transactional proxy around {@code target}, driven by {@link
-     * org.springframework.transaction.annotation.AnnotationTransactionAttributeSource} reading the
-     * {@code @Transactional} annotation straight off {@link PricingDecisionService#startReview} —
-     * unlike {@code AbstractPostgresIntegrationTest}'s hand-wired services (no Spring context, so
-     * {@code @Transactional} is normally inert), this proxy makes the transaction boundary come
-     * from the annotation itself, so deleting it genuinely removes the transaction rather than just
-     * removing documentation.
-     */
-    private PricingDecisionService transactionalProxy(PricingDecisionService target) {
-        org.springframework.aop.framework.ProxyFactory factory =
-            new org.springframework.aop.framework.ProxyFactory(target);
-        factory.setProxyTargetClass(true);
-        factory.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(
-            new org.springframework.jdbc.datasource.DataSourceTransactionManager(
-                jdbc.getJdbcTemplate().getDataSource()),
-            new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource()));
-        return (PricingDecisionService) factory.getProxy();
-    }
-
-    /** Two-item, two-factory scenario driven to a SUBMITTED costing, mirroring {@code
+    /** Two-item, two-factory scenario driven to READY_FOR_CEO_REVIEW, mirroring {@code
      * PricingDecisionIntegrationTest#twoItemSubmittedCosting()} — the precondition {@code
-     * startReview} requires (a pricing request at READY_FOR_CEO_REVIEW with a SUBMITTED costing). */
+     * startReview} requires. V141 ("CEO owns costing"): unlike the pre-V141 name, this no longer
+     * creates any {@code sales.pricing_costing} row itself — markReadyForCosting's auto-advance
+     * (once the LAST factory quote resolves) is what gets the request to READY_FOR_CEO_REVIEW;
+     * {@code startReview} is what computes and persists the costing, which is exactly the
+     * transactional write this test class exists to prove rolls back atomically. */
     private long twoItemSubmittedCosting() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId, twoItemPricingRequest(), salesActor)
             .summary().id();
@@ -333,11 +356,6 @@ class PricingDecisionStartReviewRollbackIntegrationTest extends AbstractPostgres
                 importActor);
             factoryQuoteService.markReadyForCosting(responded.id(), importActor);
         }
-        PricingCostingDto draft = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("draft", null), importActor);
-        costingService.recalculate(draft.id(), new RecalculateCostingRequest("pass 1"), importActor);
-        PricingCostingDto calculated = costingService.recalculate(draft.id(), new RecalculateCostingRequest("pass 2"), importActor);
-        costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
         return pricingRequestId;

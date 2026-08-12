@@ -165,33 +165,41 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
     }
 
     @Test
-    void transition_readyForCeoReviewToCostingInProgress_isNoLongerPermitted() {
-        // Step 3 (design corrections 3+4): a submitted costing must be genuinely immutable once
-        // READY_FOR_CEO_REVIEW, so this direct reopen (Costing v2 path, commit 5) is removed —
-        // the only route back to COSTING_IN_PROGRESS now goes through the CEO explicitly
-        // returning the request (CEO_REVIEWING -> COSTING_REVISION_REQUIRED -> COSTING_IN_PROGRESS,
-        // see the next test).
+    void transition_readyForCeoReviewToAwaitingFactoryResponse_isPermittedByTheCanonicalMap() {
+        // V141 ("CEO owns costing"): this exact edge existed once before (Costing v2 path, commit
+        // 5) and was removed because it let Import silently reopen a SUBMITTED costing with no
+        // CEO action. V141 reintroduces it for a different reason — there is no submitted-costing
+        // row sitting around any more for a factory-quote revision to mark "stale"
+        // (markOpenCostingsStale, deleted); FactoryQuoteService.receive()'s revision branch pulls
+        // the REQUEST back here instead when a revision arrives while READY_FOR_CEO_REVIEW.
+        // Repository-level proof that transition() actually persists this against a real Postgres
+        // row — PricingRequestStatusTest pins the same edge at the pure-function level.
         long id = createDraft();
         jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
             Map.of("status", PricingRequestStatus.READY_FOR_CEO_REVIEW, "id", id));
 
-        assertThatThrownBy(() -> requests.transition(id, PricingRequestStatus.READY_FOR_CEO_REVIEW,
-            PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null))
-            .isInstanceOf(IllegalStateException.class);
+        int rows = requests.transition(id, PricingRequestStatus.READY_FOR_CEO_REVIEW,
+            PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
 
-        assertThat(requests.findSummary(id).orElseThrow().status()).isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
+        assertThat(rows).isEqualTo(1);
+        assertThat(requests.findSummary(id).orElseThrow().status()).isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
     }
 
     @Test
-    void transition_costingRevisionRequiredToCostingInProgress_isPermittedByTheCanonicalMap() {
-        // The Step 3 replacement: repository-level proof that the single named return-to-Import
-        // state (COSTING_REVISION_REQUIRED) can transition on to COSTING_IN_PROGRESS, the same
-        // way READY_FOR_CEO_REVIEW used to before this branch's change.
+    void transition_ceoReviewingToAwaitingFactoryResponse_isPermittedByTheCanonicalMap() {
+        // V141 ("CEO owns costing"): the single named return-to-Import edge now
+        // (PricingDecisionService.returnToImport) — repository-level proof that transition()
+        // persists it, replacing the retired CEO_REVIEWING -> COSTING_REVISION_REQUIRED edge this
+        // test used to pin (COSTING_REVISION_REQUIRED itself is gone — see
+        // PricingRequestStatusTest#costingRevisionRequired_statusNoLongerExists). There is no
+        // standalone costing draft any more for Import to revise once returned here; its only
+        // remaining job is to renegotiate/re-mark a factory quote ready, and the CEO's next
+        // startReview recomputes the cost from scratch.
         long id = createDraft();
         jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
-            Map.of("status", PricingRequestStatus.COSTING_REVISION_REQUIRED, "id", id));
+            Map.of("status", PricingRequestStatus.CEO_REVIEWING, "id", id));
 
-        int rows = requests.transition(id, PricingRequestStatus.COSTING_REVISION_REQUIRED,
+        int rows = requests.transition(id, PricingRequestStatus.CEO_REVIEWING,
             PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
 
         assertThat(rows).isEqualTo(1);
@@ -201,9 +209,9 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
     @Test
     void cancelForDeadDeal_cancelsFromReadyForCeoReview_aStatusTheCanonicalMapForbidsANormalCancelFrom() {
         // The one intentional bypass of PricingRequestStatus.canTransition: a dead-deal cascade
-        // must be able to cancel from READY_FOR_CEO_REVIEW even though transition() would now
-        // reject READY_FOR_CEO_REVIEW -> CANCELLED as illegal (only SUPERSEDED/COSTING_IN_PROGRESS
-        // are reachable from there for a live user action).
+        // must be able to cancel from READY_FOR_CEO_REVIEW even though transition() rejects
+        // READY_FOR_CEO_REVIEW -> CANCELLED as illegal (only SUPERSEDED/CEO_REVIEWING/
+        // AWAITING_FACTORY_RESPONSE are reachable from there for a live user action, per V141).
         long id = createDraft();
         jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
             Map.of("status", PricingRequestStatus.READY_FOR_CEO_REVIEW, "id", id));

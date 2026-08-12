@@ -596,17 +596,6 @@ public class FactoryQuoteRepository {
         return inserted.stream().findFirst();
     }
 
-    public void markOpenCostingsStale(long pricingRequestId, String reason) {
-        jdbc.update("""
-            UPDATE sales.pricing_costing
-               SET stale = TRUE,
-                   stale_reason = :reason,
-                   updated_at = now()
-             WHERE pricing_request_id = :pricingRequestId
-               AND status IN ('DRAFT', 'CALCULATED')
-            """, Map.of("pricingRequestId", pricingRequestId, "reason", reason));
-    }
-
     public Optional<FactoryQuoteDto> find(long quoteId) {
         try {
             FactoryQuoteDto quote = jdbc.queryForObject(baseSelect() + " WHERE fq.factory_quote_id = :quoteId",

@@ -15,16 +15,19 @@ import org.junit.jupiter.api.Test;
 class PricingRequestStatusTest {
 
     @Test
-    void readyForCeoReview_toCostingInProgress_isNoLongerAllowed() {
-        // Step 3 (CEO Selling Price Decision, "one return-to-Import path"): the direct
-        // READY_FOR_CEO_REVIEW -> COSTING_IN_PROGRESS entry (added by the commit this test used to
-        // document) let Import silently reopen a SUBMITTED costing without any CEO action, which
-        // made "submitted costing is immutable" false. It is removed; the only way back to
-        // COSTING_IN_PROGRESS from a submitted-to-CEO request is now
-        // CEO_REVIEWING -> COSTING_REVISION_REQUIRED -> COSTING_IN_PROGRESS (the CEO must
-        // explicitly return it) — see the next two tests.
+    void readyForCeoReview_toAwaitingFactoryResponse_isAllowedAgain_forADifferentReason() {
+        // V140-era history: the direct READY_FOR_CEO_REVIEW -> AWAITING_FACTORY_RESPONSE (then
+        // named "...toCostingInProgress...") entry let Import silently reopen a SUBMITTED costing
+        // without any CEO action, so it was removed ("submitted costing is immutable"). V141
+        // ("CEO owns costing") reintroduces the SAME edge for a DIFFERENT reason: there is no
+        // submitted-costing row sitting around any more for a factory-quote revision to mark
+        // "stale" (markOpenCostingsStale, deleted) — the cost is computed fresh, once, at
+        // CEO-review time. So FactoryQuoteService.receive()'s revision branch now pulls the
+        // REQUEST back here instead when a revision arrives while READY_FOR_CEO_REVIEW: the price
+        // the CEO would be about to review is about to change under them. Import must re-mark the
+        // revised quote ready to re-advance (FactoryQuoteService.markReadyForCosting).
         assertThat(PricingRequestStatus.canTransition(
-            PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.AWAITING_FACTORY_RESPONSE)).isFalse();
+            PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.AWAITING_FACTORY_RESPONSE)).isTrue();
     }
 
     @Test
@@ -36,19 +39,34 @@ class PricingRequestStatusTest {
     }
 
     @Test
-    void ceoReviewing_toApprovedForQuotationOrCostingRevisionRequired_isAllowed() {
+    void ceoReviewing_toApprovedForQuotationOrAwaitingFactoryResponse_isAllowed() {
         assertThat(PricingRequestStatus.canTransition(
             PricingRequestStatus.CEO_REVIEWING, PricingRequestStatus.APPROVED_FOR_QUOTATION)).isTrue();
+        // V141 ("CEO owns costing"): PricingDecisionService.returnToImport now sends a returned
+        // request straight to AWAITING_FACTORY_RESPONSE — the replacement for the retired
+        // COSTING_REVISION_REQUIRED (see the next test). There is no standalone costing draft any
+        // more for Import to revise; its only remaining job is to renegotiate/re-mark a factory
+        // quote ready, and the CEO's next startReview recomputes the cost from scratch.
         assertThat(PricingRequestStatus.canTransition(
-            PricingRequestStatus.CEO_REVIEWING, PricingRequestStatus.COSTING_REVISION_REQUIRED)).isTrue();
+            PricingRequestStatus.CEO_REVIEWING, PricingRequestStatus.AWAITING_FACTORY_RESPONSE)).isTrue();
     }
 
     @Test
-    void costingRevisionRequired_toCostingInProgress_isAllowed() {
-        // The single named return-to-Import state (design correction 4) — Import calling
-        // PricingCostingService.createDraft is what actually performs this transition.
+    void costingRevisionRequired_statusNoLongerExists() {
+        // V141 ("CEO owns costing"): COSTING_REVISION_REQUIRED is RETIRED — a submitted costing
+        // used to be "revised" by sending the pricing request back to Import for a brand-new
+        // DRAFT/CALCULATED/SUBMITTED cycle; now there is no draft cycle to send it back TO (see
+        // the two tests above for what replaced both of its edges). The constant itself is
+        // deleted from PricingRequestStatus, so this test uses the literal string — the DB's own
+        // chk_pricing_request_status CHECK constraint was narrowed the same way by V141.
+        assertThat(PricingRequestStatus.VALUES).doesNotContain("COSTING_REVISION_REQUIRED");
+        assertThat(PricingRequestStatus.isValid("COSTING_REVISION_REQUIRED")).isFalse();
+        // A status that no longer exists can transition neither from nor to anywhere.
+        for (String to : PricingRequestStatus.VALUES) {
+            assertThat(PricingRequestStatus.canTransition("COSTING_REVISION_REQUIRED", to)).isFalse();
+        }
         assertThat(PricingRequestStatus.canTransition(
-            PricingRequestStatus.COSTING_REVISION_REQUIRED, PricingRequestStatus.AWAITING_FACTORY_RESPONSE)).isTrue();
+            PricingRequestStatus.CEO_REVIEWING, "COSTING_REVISION_REQUIRED")).isFalse();
     }
 
     // Step 4 (Customer Quotation Generation and Issuance) deliberately extends this map:
