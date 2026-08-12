@@ -220,6 +220,59 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageChangedEvents(ticketId)).isZero();
     }
 
+    /**
+     * The case an earlier draft of this gate let through, and the reason it now tests BOTH halves:
+     * the money is all in, but the customer does not have the goods. {@code maybeAdvanceClosedPaid}
+     * has always required payment AND delivery, so a manual move that needed only {@code FULLY_PAID}
+     * could claim a stage the automatic path would have refused — a manual bar lower than the
+     * automatic one, which inverts the principle the whole gate rests on.
+     *
+     * <p>Driven across the fulfilment states a fully-paid deal can really be sitting in, including
+     * {@code GOODS_RECEIVED} (goods at GLR's warehouse, customer has nothing) and {@code null} (a
+     * deal never tracked for delivery at all).
+     */
+    @Test
+    void closedPaid_fullyPaidButNotFullyDelivered_isRefused_andTheDealDoesNotMove() {
+        for (String fulfilment : new String[] {null, FulfilmentStatus.FROM_STOCK,
+                FulfilmentStatus.PARTIALLY_DELIVERED, FulfilmentStatus.GOODS_RECEIVED}) {
+            long ticketId = readyToAdvanceFrom(DealStage.DELIVERY_SCHEDULING);
+            tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.FULLY_PAID);
+            if (fulfilment != null) {
+                tickets.updateFulfillmentStatus(ticketId, fulfilment);
+            }
+
+            assertThatThrownBy(() ->
+                ticketService.updateStage(ticketId, DealStage.CLOSED_PAID, "รับเงินครบแล้ว", accountActor))
+                .describedAs("paid in full with fulfilment=%s must not reach CLOSED_PAID", fulfilment)
+                .isInstanceOfSatisfying(ApiException.class,
+                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+            assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
+            assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.FULLY_PAID);
+            assertThat(fulfilmentOf(ticketId)).isEqualTo(fulfilment);
+            assertThat(stageChangedEvents(ticketId)).isZero();
+        }
+    }
+
+    /**
+     * …and the manual gate now matches {@link TicketService} {@code maybeAdvanceClosedPaid} exactly:
+     * with delivery completed as well, the move is accepted.
+     *
+     * <p>Walked from {@code DELIVERED} rather than {@code DELIVERY_SCHEDULING} on purpose — that is
+     * the adjacent move, so no MANDATORY stage is stepped over and no note is required. The facts
+     * are then the only thing that can be permitting this, which is what the test is for.
+     */
+    @Test
+    void closedPaid_isAcceptedOnceBothPaymentAndDeliveryAreComplete() {
+        long ticketId = readyToAdvanceFrom(DealStage.DELIVERED);
+        tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.FULLY_PAID);
+        tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.FULLY_DELIVERED);
+
+        ticketService.updateStage(ticketId, DealStage.CLOSED_PAID, null, accountActor);
+
+        assertThat(stageOf(ticketId)).isEqualTo(DealStage.CLOSED_PAID);
+    }
+
     /** Keyed on the target, so a backward correction into a gated stage is gated identically. */
     @Test
     void aBackwardMoveIntoAGatedStage_isRefusedToo_andTheDealDoesNotMove() {
@@ -254,8 +307,12 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         ticketService.updateStage(delivered, DealStage.DELIVERED, null, ownerRep);
         assertThat(stageOf(delivered)).isEqualTo(DealStage.DELIVERED);
 
+        // CLOSED_PAID is the one stage with TWO facts behind it — payment AND delivery, exactly as
+        // maybeAdvanceClosedPaid requires. See closedPaid_fullyPaidButNotFullyDelivered_… for the
+        // half-satisfied case.
         long closed = readyToAdvanceFrom(DealStage.DELIVERED);
         tickets.updatePaymentStatusUnchecked(closed, PaymentTrack.FULLY_PAID);
+        tickets.updateFulfillmentStatus(closed, FulfilmentStatus.FULLY_DELIVERED);
         ticketService.updateStage(closed, DealStage.CLOSED_PAID, null, accountActor);
         assertThat(stageOf(closed)).isEqualTo(DealStage.CLOSED_PAID);
     }

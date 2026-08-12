@@ -1513,9 +1513,13 @@ public class TicketService {
      *       payment track when money first lands, see {@link #depositReceived};
      *   <li>{@link DealStage#DELIVERED} — {@code recordDeliveryInternal} advances on
      *       {@code FULLY_DELIVERED}, i.e. {@link #deliveryGateComplete};
-     *   <li>{@link DealStage#CLOSED_PAID} — the payment track reaches {@code FULLY_PAID}, the same
-     *       test {@link #requireClosePrerequisites} makes.
+     *   <li>{@link DealStage#CLOSED_PAID} — {@code FULLY_PAID} <em>and</em> {@code FULLY_DELIVERED},
+     *       see {@link #closedPaidFactsHold}.
      * </ul>
+     *
+     * <p><strong>Each gate is the same bar its automatic counterpart clears — never a lower one.</strong>
+     * {@link #maybeAdvanceClosedPaid} requires payment AND delivery, so this does too; a manual path
+     * able to claim a stage the automatic path would refuse would invert the whole point.
      *
      * <p>{@link DealStage#NEGOTIATION}, {@link DealStage#PROCUREMENT} and {@link
      * DealStage#DELIVERY_SCHEDULING} stay ungated on purpose: they are operational stages where the
@@ -1550,10 +1554,9 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "เลื่อนไปขั้นตอน DELIVERED ไม่ได้: ยังส่งมอบสินค้าไม่ครบ");
         }
-        if (DealStage.CLOSED_PAID.equals(targetStage)
-                && !PaymentTrack.FULLY_PAID.equals(s.paymentStatus())) {
+        if (DealStage.CLOSED_PAID.equals(targetStage) && !closedPaidFactsHold(s)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "เลื่อนไปขั้นตอน CLOSED_PAID ไม่ได้: ยังรับชำระเงินไม่ครบ");
+                "เลื่อนไปขั้นตอน CLOSED_PAID ไม่ได้: ต้องรับชำระเงินครบและส่งมอบสินค้าครบก่อน");
         }
     }
 
@@ -1575,6 +1578,25 @@ public class TicketService {
      */
     private static boolean customerOrderVerified(TicketSummaryDto s) {
         return PaymentTrack.isValid(s.paymentStatus());
+    }
+
+    /**
+     * The fact behind {@link DealStage#CLOSED_PAID} (S20), and deliberately the SAME test {@link
+     * #maybeAdvanceClosedPaid} makes: paid in full <em>and</em> the goods actually delivered to the
+     * customer.
+     *
+     * <p>Both halves are required because both halves are what the stage claims. An earlier draft
+     * of this gate tested {@code FULLY_PAID} alone, which left the manual path able to claim a
+     * stage the automatic path would have refused — a fully-paid deal with goods still undelivered.
+     * That inverted the principle this whole gate rests on: a manual move must clear the bar the
+     * automatic move already clears, never a lower one.
+     *
+     * <p>The delivery half is {@link #deliveryGateComplete}, reused rather than re-tested against
+     * the status literal, so this and {@link #requireClosePrerequisites}'s close gate cannot drift
+     * apart on what "delivered" means — the exact drift that predicate was tightened to end.
+     */
+    private boolean closedPaidFactsHold(TicketSummaryDto s) {
+        return PaymentTrack.FULLY_PAID.equals(s.paymentStatus()) && deliveryGateComplete(s);
     }
 
     /**

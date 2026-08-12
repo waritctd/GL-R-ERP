@@ -1732,6 +1732,31 @@ class TicketServiceTest {
         verify(ticketRepo).updateSalesStage(12L, DealStage.DELIVERY_SCHEDULING);
     }
 
+    /**
+     * CLOSED_PAID needs BOTH halves — the same bar {@code maybeAdvanceClosedPaid} clears. Paid in
+     * full with the goods still undelivered is the case a FULLY_PAID-only gate let through, i.e. a
+     * manual path claiming a stage the automatic path would have refused.
+     */
+    @Test
+    void updateStage_closedPaid_needsDeliveryAsWellAsPayment() {
+        stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.FULLY_PAID,
+            FulfilmentStatus.GOODS_RECEIVED, DealStage.DELIVERY_SCHEDULING, null);
+        assertConflict(() -> service.updateStage(10L, DealStage.CLOSED_PAID, "รับเงินครบ", accountActor));
+
+        stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.FULLY_PAID, null,
+            DealStage.DELIVERY_SCHEDULING, null);
+        assertConflict(() -> service.updateStage(11L, DealStage.CLOSED_PAID, "รับเงินครบ", accountActor));
+
+        verify(ticketRepo, never()).updateSalesStage(anyLong(), anyString());
+
+        // Both halves in place -> accepted. From DELIVERED, the adjacent move: nothing MANDATORY is
+        // stepped over, so no note is needed and the facts are the only thing permitting it.
+        stubDeal(12L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.FULLY_PAID,
+            FulfilmentStatus.FULLY_DELIVERED, DealStage.DELIVERED, null);
+        service.updateStage(12L, DealStage.CLOSED_PAID, null, accountActor);
+        verify(ticketRepo).updateSalesStage(12L, DealStage.CLOSED_PAID);
+    }
+
     /** The fact gate is keyed on the TARGET, so a backward correction into it is gated too. */
     @Test
     void updateStage_backwardIntoAGatedStage_isAlsoRefusedWhenTheFactIsMissing() {
