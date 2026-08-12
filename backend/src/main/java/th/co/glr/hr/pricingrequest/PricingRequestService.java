@@ -553,6 +553,13 @@ public class PricingRequestService {
         TicketSummaryDto ticket = requireTicket(summary.ticketId());
         requireActive(ticket);
         FileStorageService.StoredFile stored = fileStorage.store("pricing-request", id, file, Set.of());
+        // The disk copy above is NOT part of this transaction. saveAttachment and addEvent below
+        // can both still fail, rolling this method back and leaving the file on disk with no
+        // sales.pricing_request_attachment row referencing it. deleteOnRollback ties it to the
+        // transaction's outcome and is a no-op when the method commits. The store deliberately
+        // stays BELOW the authorization/status gates above (see deleteOnRollback's Javadoc):
+        // hoisting it out of the transaction would mean storing before authorizing.
+        fileStorage.deleteOnRollback(stored);
         PricingRequestAttachmentDto attachment = requests.saveAttachment(id, stored.fileName(), stored.filePath(),
             stored.mimeType(), stored.fileSize(), actor.id());
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),

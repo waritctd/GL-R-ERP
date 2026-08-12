@@ -153,6 +153,14 @@ public class CommissionService {
                 invoiceAttachment,
                 COMMISSION_INVOICE_MIME_TYPES
             );
+            // The disk copy above is NOT part of this transaction — Postgres cannot undo it. Every
+            // write below (attachment row, attachInvoiceFile, commission record, audit) can still
+            // fail and roll the whole method back, which would leave that file on disk forever with
+            // no row referencing it. deleteOnRollback ties it to the transaction's outcome; on the
+            // success path it does nothing at all. See its Javadoc for why the write stays here
+            // rather than being hoisted out of the transaction (invoiceId is generated above, in
+            // this same transaction).
+            fileStorage.deleteOnRollback(storedFile);
             long attachmentId = commissionAttachments.saveWithContent(
                 invoiceId,
                 storedFile.fileName(),
@@ -289,6 +297,11 @@ public class CommissionService {
                 invoiceAttachment,
                 COMMISSION_INVOICE_MIME_TYPES
             );
+            // Same non-transactional disk write as #submit above, with one more row riding on it:
+            // this path also registers the SAME file_path into sales.attachment below, so a
+            // rollback here strands the one physical file that two separate rows pointed at.
+            // Registered once — the file is one file, and deleting it once undoes both references.
+            fileStorage.deleteOnRollback(storedFile);
             long attachmentId = commissionAttachments.saveWithContent(
                 invoiceId,
                 storedFile.fileName(),

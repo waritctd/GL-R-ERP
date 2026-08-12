@@ -11,15 +11,21 @@ import java.nio.file.StandardCopyOption;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.common.ApiException;
 
 @Service
 public class FileStorageService {
+    private static final Logger log = LoggerFactory.getLogger(FileStorageService.class);
+
     private final Path uploadsDir;
     private final long maxUploadBytes;
 
@@ -69,6 +75,79 @@ public class FileStorageService {
             throw new UncheckedIOException(exception);
         }
         return new StoredFile(validated.originalName(), dest.toString(), validated.mime(), file.getSize());
+    }
+
+    /**
+     * Ties a file {@link #store} has just written to the OUTCOME of the transaction the caller is
+     * running in: if that transaction rolls back, the file is deleted; if it commits, nothing
+     * happens. Call it immediately after {@code store(...)} at any site that stores inside a
+     * {@code @Transactional} method.
+     *
+     * <p><b>The problem this exists to solve.</b> A disk write is not transactional. {@link #store}
+     * copies bytes to disk the moment it is called, and Postgres knows nothing about it — so when
+     * the surrounding transaction rolls back, the database row that referenced the file disappears
+     * while the file itself stays on disk forever. Nothing references it and no sweeper exists to
+     * collect it: unbounded growth on the uploads volume, plus a quiet data-leak surface, because
+     * the orphan can be a customer invoice or a pricing attachment.
+     *
+     * <p><b>Why a synchronization rather than moving the write out of the transaction.</b> Both
+     * commission call sites derive the storage path from an {@code invoiceId} that
+     * {@code CommissionRepository#createInvoice} generates INSIDE the transaction, so there is no
+     * "outside" to hoist the write to without changing the stored path. {@code
+     * PricingRequestService#uploadAttachment} knows its id up front but runs every authorization
+     * and status gate before storing, and hoisting the write above those gates would store first
+     * and authorize second — the exact hole {@code SpecialMoneyController#addAttachment} already
+     * carries a comment warning about (any session could fill the uploads volume by POSTing to
+     * someone else's record). Keeping the write where it is and cleaning up on rollback leaves the
+     * success path byte-for-byte identical and preserves authorize-before-store everywhere.
+     *
+     * <p>Follows {@code NotificationService#sendEmailAfterCommit}, the existing solution to the
+     * same shape in this codebase: guard on {@link
+     * TransactionSynchronizationManager#isSynchronizationActive()}, then register a {@link
+     * TransactionSynchronization}. With no transaction active there is nothing that can roll back,
+     * so the file is the caller's to keep and this is a no-op — that is what makes it safe to call
+     * unconditionally, and why the two non-transactional controller upload paths ({@code
+     * AttachmentController#upload}, {@code SpecialMoneyController#addAttachment}) would be
+     * unaffected if they ever adopted it.
+     *
+     * <p><b>Deletes on {@code STATUS_ROLLED_BACK} only — deliberately not on {@code
+     * STATUS_UNKNOWN}.</b> The two failure directions are not symmetric. Leaving a file behind
+     * after a commit-outcome we could not determine costs disk space and is recoverable by hand;
+     * deleting a file whose row DID commit produces a permanently broken reference and a
+     * user-visible "file missing" download. When the outcome is genuinely unknown, the safe answer
+     * is to keep the bytes.
+     */
+    public void deleteOnRollback(StoredFile stored) {
+        if (stored == null || stored.filePath() == null || stored.filePath().isBlank()) {
+            return;
+        }
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            return;
+        }
+        String path = stored.filePath();
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status == STATUS_ROLLED_BACK) {
+                    deleteQuietly(path);
+                }
+            }
+        });
+    }
+
+    /**
+     * Best-effort delete that can never throw. Tolerant of an already-absent file by design: this
+     * runs from {@code afterCompletion}, where the transaction has already failed, and an
+     * exception escaping here would replace the real rollback cause in the logs with a cleanup
+     * error. A file we could not remove is a bounded, visible problem (one WARN, one orphan); a
+     * masked root cause is not.
+     */
+    private void deleteQuietly(String storedPath) {
+        try {
+            Files.deleteIfExists(resolveDiskPath(storedPath));
+        } catch (Exception exception) {
+            log.warn("Could not delete orphaned upload after rollback: {}", storedPath, exception);
+        }
     }
 
     /**
