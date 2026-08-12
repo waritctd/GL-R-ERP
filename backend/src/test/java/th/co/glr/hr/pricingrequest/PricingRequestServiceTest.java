@@ -29,6 +29,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
+import th.co.glr.hr.factoryquote.FactoryQuoteCarryForward;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
@@ -54,8 +55,18 @@ class PricingRequestServiceTest {
     private final NotificationRepository notifRepo = mock(NotificationRepository.class);
     private final ContactRepository contactRepo = mock(ContactRepository.class);
     private final FileStorageService fileStorage = mock(FileStorageService.class);
+    /**
+     * Mocked here, and only here: this class's whole point is that every collaborator is a mock,
+     * and its default {@code false} from {@code carryForwardOnSubmit} is the ordinary
+     * not-a-revision answer, so submit() behaves exactly as it did. The carry-forward branch
+     * itself is therefore NOT covered by this class — it is proved against a real database in
+     * {@code PricingFactoryQuoteCostingIntegrationTest}, which is the only place a mocked
+     * repository could not fake the answer.
+     */
+    private final FactoryQuoteCarryForward carryForward = mock(FactoryQuoteCarryForward.class);
     private final PricingRequestService service =
-        new PricingRequestService(requestRepo, ticketRepo, notifRepo, new ObjectMapper(), contactRepo, fileStorage);
+        new PricingRequestService(requestRepo, ticketRepo, notifRepo, new ObjectMapper(), contactRepo, fileStorage,
+            carryForward);
 
     private final UserPrincipal salesActor        = actor(1L, "sales");
     private final UserPrincipal otherSales        = actor(2L, "sales");

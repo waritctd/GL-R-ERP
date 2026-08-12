@@ -124,7 +124,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         FileStorageService fileStorage = new FileStorageService("/tmp/glr-customer-quotation-test-uploads");
         pricingRequestService = new PricingRequestService(
-            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage);
+            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
         factoryQuoteRepository = factoryQuotes;
         FactoryEmailService factoryEmail = mock(FactoryEmailService.class);
@@ -573,8 +573,24 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(oldAfter.docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
     }
 
+    /**
+     * Renamed and re-pointed by the reissue-through-CEO-chain ruling (owner, 2026-08-13), which
+     * SPLIT this cascade in two rather than weakening it.
+     *
+     * <p>It used to assert that createCustomerChangeRevision superseded the old pricing request,
+     * the old decision AND the old quotation, all at creation time. The quotation half was the
+     * problem: it left the customer holding no live offer for the entire time the replacement
+     * chain ran, and nothing to fall back to if the CEO refused the new price. The decision half
+     * stays eager — it is internal pricing state, not the customer-facing offer, and the issued
+     * quotation carries its own frozen price snapshot in sales.quotation_item, so superseding the
+     * decision cannot change what the customer was quoted.
+     *
+     * <p>The quotation's retirement is not untested, it moved: it now happens when the REPLACEMENT
+     * quotation is issued, which is proved end to end by
+     * {@code ReissueThroughCeoChainIntegrationTest#parentQuotationStaysIssuedWhileTheChainRuns_andRetiresWhenTheReplacementIssues}.
+     */
     @Test
-    void recordOutcome_revisionRequested_thenCostAffectingRevision_supersedesOldDecisionAndQuotation() {
+    void recordOutcome_revisionRequested_thenCostAffectingRevision_supersedesOldDecisionButLeavesTheQuotationLive() {
         long pricingRequestId = approvedPricingRequest();
         CustomerQuotationDto draft = quotationService.create(pricingRequestId,
             new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
@@ -596,15 +612,17 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             List.of(pricingItem("SCG", "Tile A4", "Factory A4", new BigDecimal("99"))));
         var revisionDetail = pricingRequestService.createCustomerChangeRevision(pricingRequestId, changeRequest, salesActor);
 
-        // Design correction 1: the OLD pricing request, OLD decision, and OLD quotation are all
-        // now SUPERSEDED — none of them silently reads as current any more.
+        // Design correction 1, still in force for the INTERNAL state: the OLD pricing request and
+        // OLD decision are SUPERSEDED — neither silently reads as current any more.
         assertThat(pricingRequestService.get(pricingRequestId, salesActor).summary().status())
             .isEqualTo(PricingRequestStatus.SUPERSEDED);
         assertThat(jdbc.queryForObject(
             "SELECT status FROM sales.pricing_decision WHERE pricing_request_id = :id",
             Map.of("id", pricingRequestId), String.class)).isEqualTo("SUPERSEDED");
+        // Reissue-through-CEO-chain: the CUSTOMER-FACING document is deliberately NOT retired here.
+        // The customer's offer stays exactly as it was until a replacement actually issues.
         CustomerQuotationDto oldQuotation = quotationService.get(revisionRequested.id(), salesActor);
-        assertThat(oldQuotation.docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
+        assertThat(oldQuotation.docStatus()).isEqualTo(QuotationStatus.REVISION_REQUESTED);
 
         // The NEW pricing request revision is a fresh DRAFT, untouched by the cascade.
         assertThat(revisionDetail.summary().status()).isEqualTo(PricingRequestStatus.DRAFT);

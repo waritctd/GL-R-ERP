@@ -619,6 +619,126 @@ public class FactoryQuoteRepository {
             });
     }
 
+    /**
+     * Copies every CURRENT, {@code READY_FOR_COSTING} quote of {@code fromPricingRequestId} onto
+     * {@code toPricingRequestId}, remapping each quote item's {@code pricing_request_item_id}
+     * through {@code itemIdMapping} (parent item id -&gt; child item id).
+     *
+     * <p>Reissue-through-CEO-chain (owner ruling 2026-08-13): when a customer-change revision
+     * renegotiates only the commercial terms — every product and every requested quantity
+     * identical to the parent's — Import is not made to re-ask the factory for prices that did not
+     * change. {@code FactoryQuoteCarryForward} is the only caller and owns the decision about
+     * WHEN this is safe; this method owns only the copy.
+     *
+     * <p>Copies are fresh roots, not revisions: {@code root_factory_quote_id}/
+     * {@code parent_factory_quote_id} are left NULL and {@code revision_no} is 1, because the
+     * chain key {@code uq_factory_quote_chain_revision} is
+     * {@code (COALESCE(root_factory_quote_id, factory_quote_id), revision_no)} — pointing the copy
+     * at the parent's root would collide with the parent's own revision numbering, and the two
+     * quotes belong to different pricing requests anyway. Each copy gets its own
+     * {@code quote_code}.
+     *
+     * <p>{@code email_*}/{@code sent_by}/{@code requested_at} are copied verbatim so the audit
+     * trail still shows which factory email actually produced these prices; {@code received_at} is
+     * likewise the ORIGINAL receipt time, not now(). Nothing here fabricates a second conversation
+     * with the factory that never happened.
+     *
+     * @return the ids of the quotes created, in factory-name order.
+     */
+    public List<Long> copyReadyQuotesToRevision(long fromPricingRequestId, long toPricingRequestId,
+                                                Map<Long, Long> itemIdMapping, long actorId) {
+        List<Long> sourceQuoteIds = jdbc.query("""
+            SELECT factory_quote_id
+              FROM sales.factory_quote
+             WHERE pricing_request_id = :from
+               AND is_current = TRUE
+               AND status = 'READY_FOR_COSTING'
+             ORDER BY factory_name_snapshot
+            """, Map.of("from", fromPricingRequestId), (rs, rowNum) -> rs.getLong("factory_quote_id"));
+        List<Long> created = new java.util.ArrayList<>();
+        for (Long sourceQuoteId : sourceQuoteIds) {
+            Long newQuoteId = jdbc.queryForObject("""
+                INSERT INTO sales.factory_quote
+                    (quote_code, pricing_request_id, factory_id, factory_name_snapshot, status,
+                     email_to, email_subject, email_body, email_provider_message_id, email_sent_at,
+                     sent_by, supplier_quote_ref, default_currency, payment_terms, lead_time_text,
+                     note, negotiation_note, requested_at, received_at, revision_no,
+                     revision_reason, is_current, created_by)
+                SELECT :quoteCode, :to, factory_id, factory_name_snapshot, 'READY_FOR_COSTING',
+                       email_to, email_subject, email_body, email_provider_message_id, email_sent_at,
+                       sent_by, supplier_quote_ref, default_currency, payment_terms, lead_time_text,
+                       note, negotiation_note, requested_at, received_at, 1,
+                       'Carried forward from pricing request ' || :from, TRUE, :actorId
+                  FROM sales.factory_quote
+                 WHERE factory_quote_id = :sourceQuoteId
+                RETURNING factory_quote_id
+                """,
+                new MapSqlParameterSource()
+                    .addValue("quoteCode", nextQuoteCode())
+                    .addValue("to", toPricingRequestId)
+                    .addValue("from", fromPricingRequestId)
+                    .addValue("actorId", actorId)
+                    .addValue("sourceQuoteId", sourceQuoteId),
+                Long.class);
+            // Item-by-item rather than INSERT ... SELECT with a join: the remapping lives in a Java
+            // Map (built by the item-equivalence check that authorised this copy in the first
+            // place), and an item whose parent id is absent from that map must be SKIPPED, not
+            // silently inserted with a dangling reference. In practice the map is total — the
+            // caller only reaches here when every item matched — so a skip would mean the caller's
+            // own precondition broke, and the isFullyResolvable re-check it performs afterwards is
+            // what catches that.
+            for (FactoryQuoteItemDto item : findItems(sourceQuoteId)) {
+                Long childItemId = itemIdMapping.get(item.pricingRequestItemId());
+                if (childItemId == null) {
+                    continue;
+                }
+                jdbc.update("""
+                    INSERT INTO sales.factory_quote_item
+                        (factory_quote_id, pricing_request_item_id, catalog_product_id_snapshot,
+                         supplier_product_code, supplier_product_description, quoted_quantity,
+                         quoted_unit, unit_basis, raw_unit_price, currency, minimum_order_quantity,
+                         sqm_per_unit, pieces_per_box, linear_m_per_unit, lead_time_text,
+                         availability_note, line_note, sort_order)
+                    SELECT :newQuoteId, :childItemId, catalog_product_id_snapshot,
+                           supplier_product_code, supplier_product_description, quoted_quantity,
+                           quoted_unit, unit_basis, raw_unit_price, currency, minimum_order_quantity,
+                           sqm_per_unit, pieces_per_box, linear_m_per_unit, lead_time_text,
+                           availability_note, line_note, sort_order
+                      FROM sales.factory_quote_item
+                     WHERE factory_quote_item_id = :sourceItemId
+                    """,
+                    new MapSqlParameterSource()
+                        .addValue("newQuoteId", newQuoteId)
+                        .addValue("childItemId", childItemId)
+                        .addValue("sourceItemId", item.id()));
+            }
+            created.add(newQuoteId);
+        }
+        return created;
+    }
+
+    /**
+     * Compensating delete for {@link #copyReadyQuotesToRevision}, used when the copy turns out not
+     * to satisfy {@code LandedCostCalculator.isFullyResolvable} after all.
+     *
+     * <p>Deliberately NOT left to a transaction rollback. Every integration test in this repo
+     * hand-wires its services with {@code new}, so {@code @Transactional} is inert there and a
+     * test asserting "the copy was undone" would be asserting a rollback that never happens (see
+     * {@code AbstractPostgresIntegrationTest}'s own Javadoc). An explicit delete behaves
+     * identically in production and under test, which is the point.
+     *
+     * <p>Safe as a hard delete: these rows were created moments earlier by the copy and nothing
+     * can reference them yet. {@code factory_quote_item} goes via ON DELETE CASCADE.
+     */
+    public int deleteQuotes(List<Long> factoryQuoteIds) {
+        if (factoryQuoteIds.isEmpty()) {
+            return 0;
+        }
+        return jdbc.update("""
+            DELETE FROM sales.factory_quote WHERE factory_quote_id IN (:ids)
+            """, new MapSqlParameterSource().addValue("ids", factoryQuoteIds));
+    }
+
     public Optional<FactoryQuoteDto> findCurrentByFactory(long pricingRequestId, String factoryName) {
         try {
             FactoryQuoteDto quote = jdbc.queryForObject(baseSelect() + """

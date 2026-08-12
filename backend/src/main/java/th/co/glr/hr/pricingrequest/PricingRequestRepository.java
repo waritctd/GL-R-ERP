@@ -368,7 +368,40 @@ public class PricingRequestRepository {
         }
     }
 
-    public int supersedeForCustomerRevision(long id, long supersededByPricingRequestId) {
+    /**
+     * Supersedes a pricing request in favour of a customer-change revision.
+     *
+     * <p><strong>Reissue-through-CEO-chain (2026-08-13): this used to bypass the state machine
+     * entirely.</strong> The previous implementation was a raw {@code jdbc.update} guarded by
+     * {@code status <> 'SUPERSEDED' AND status <> 'CANCELLED'} — a NEGATIVE guard that never
+     * consulted {@link PricingRequestStatus#ALLOWED}, so it happily superseded a request from any
+     * status the map did not declare, including {@code QUOTATION_ACCEPTED} (declared terminal).
+     * Sales could therefore rewrite the pricing behind a quotation the customer had already
+     * accepted, silently, with no CEO involvement and no transition check.
+     *
+     * <p>It now takes the caller's {@code expected} status and asserts {@code expected ->
+     * SUPERSEDED} against {@link PricingRequestStatus#canTransition} first — the same invariant
+     * guard, with the same {@link IllegalStateException} semantics and for the same reason, as
+     * {@link #transition} (see that method's Javadoc: an illegal edge is a programming error at
+     * the call site, not a user-facing race). The service layer is expected to check
+     * {@code canTransition} itself and 409 before ever getting here, so reaching this throw means
+     * a caller skipped that check.
+     *
+     * <p>The compare-and-set semantics the caller depends on are preserved and, in fact,
+     * tightened: {@code WHERE status = :expected} replaces the old negative guard, so a
+     * concurrent writer that moved the row between the service's read and this update now yields
+     * rowcount 0 (which {@code PricingRequestService#createCustomerChangeRevision} turns into a
+     * 409) instead of silently superseding from a status the caller never saw. The
+     * {@code superseded_at}/{@code superseded_by_pricing_request_id} writes are unchanged.
+     *
+     * @return rowcount (0 or 1); 0 means the lost-update race, exactly as before.
+     */
+    public int supersedeForCustomerRevision(long id, String expected, long supersededByPricingRequestId) {
+        if (!PricingRequestStatus.canTransition(expected, PricingRequestStatus.SUPERSEDED)) {
+            throw new IllegalStateException(
+                "Illegal pricing request status transition: " + expected + " -> "
+                    + PricingRequestStatus.SUPERSEDED);
+        }
         return jdbc.update("""
             UPDATE sales.pricing_request
                SET status = 'SUPERSEDED',
@@ -376,10 +409,10 @@ public class PricingRequestRepository {
                    superseded_by_pricing_request_id = :supersededBy,
                    updated_at = now()
              WHERE pricing_request_id = :id
-               AND status <> 'SUPERSEDED'
-               AND status <> 'CANCELLED'
+               AND status = :expected
             """, new MapSqlParameterSource()
                 .addValue("id", id)
+                .addValue("expected", expected)
                 .addValue("supersededBy", supersededByPricingRequestId));
     }
 
@@ -630,18 +663,35 @@ public class PricingRequestRepository {
      * tables, not every downstream aggregate.
      */
     public void supersedeOpenPricingDecisionAndQuotation(long pricingRequestId) {
+        supersedeOpenPricingDecision(pricingRequestId);
+        jdbc.update("""
+            UPDATE sales.quotation
+               SET doc_status = 'SUPERSEDED'
+             WHERE pricing_request_id = :pricingRequestId
+               AND doc_status IN ('ISSUED', 'READY_TO_ISSUE', 'SENT', 'REVISION_REQUESTED')
+            """, Map.of("pricingRequestId", pricingRequestId));
+    }
+
+    /**
+     * The pricing-decision half of {@link #supersedeOpenPricingDecisionAndQuotation}, split out by
+     * the reissue-through-CEO-chain change (owner ruling 2026-08-13) so a customer-change revision
+     * can supersede the internal decision WITHOUT touching the customer-facing quotation.
+     *
+     * <p>The two halves genuinely differ in when they should fire.
+     * {@code PricingRequestService#cancel} kills the deal outright, so both the decision and the
+     * quotation must go. A customer-change revision does not: the already-issued quotation stays
+     * ISSUED and valid until the REPLACEMENT quotation is issued, because the customer still holds
+     * a live offer and the CEO may refuse the new price. See
+     * {@code CustomerQuotationRepository#supersedeSupersededChainQuotations} for the other half of
+     * that flow.
+     */
+    public void supersedeOpenPricingDecision(long pricingRequestId) {
         jdbc.update("""
             UPDATE sales.pricing_decision
                SET status = 'SUPERSEDED',
                    updated_at = now()
              WHERE pricing_request_id = :pricingRequestId
                AND status IN ('DRAFT', 'APPROVED')
-            """, Map.of("pricingRequestId", pricingRequestId));
-        jdbc.update("""
-            UPDATE sales.quotation
-               SET doc_status = 'SUPERSEDED'
-             WHERE pricing_request_id = :pricingRequestId
-               AND doc_status IN ('ISSUED', 'READY_TO_ISSUE', 'SENT', 'REVISION_REQUESTED')
             """, Map.of("pricingRequestId", pricingRequestId));
     }
 

@@ -72,7 +72,27 @@ public final class PricingRequestStatus {
      */
     private static final Map<String, Set<String>> ALLOWED = Map.ofEntries(
         Map.entry(DRAFT,               Set.of(SUBMITTED, CANCELLED)),
-        Map.entry(SUBMITTED,           Set.of(IMPORT_REVIEWING, CANCELLED)),
+        // SUPERSEDED (reissue-through-CEO-chain, owner ruling 2026-08-13): a customer-change
+        // revision is legitimate from EVERY non-terminal status, so every one of them now
+        // declares the edge. Before this change the map declared SUPERSEDED from only three
+        // statuses while PricingRequestRepository.supersedeForCustomerRevision reached the row
+        // with a raw `status <> 'SUPERSEDED' AND status <> 'CANCELLED'` UPDATE that never
+        // consulted this table at all — so the declared machine and the actual behaviour
+        // disagreed in both directions (SUBMITTED/CEO_REVIEWING/APPROVED_FOR_QUOTATION/
+        // QUOTATION_ISSUED were reachable but undeclared, and QUOTATION_ACCEPTED was reachable
+        // AND forbidden). That method is now routed through the same canTransition assertion as
+        // every other transition, which is what makes these entries load-bearing rather than
+        // decorative.
+        //
+        // SUBMITTED -> READY_FOR_CEO_REVIEW is the factory-quote carry-forward edge: when a
+        // customer-change revision's items are IDENTICAL to its parent's (same products, same
+        // requested quantities — only the commercial terms are being renegotiated), the parent's
+        // factory quotes are copied onto the child and there is nothing left for Import to do,
+        // so the child skips straight to the CEO. See
+        // PricingRequestService#carryFactoryQuotesForwardOnSubmit, which is the ONLY caller and
+        // which refuses to make this hop unless LandedCostCalculator.isFullyResolvable agrees the
+        // copied quotes can actually be costed.
+        Map.entry(SUBMITTED,           Set.of(IMPORT_REVIEWING, READY_FOR_CEO_REVIEW, CANCELLED, SUPERSEDED)),
         // V140: Import's three states, in order. IMPORT_REVIEWING -> AWAITING_FACTORY_RESPONSE
         // -> READY_FOR_CEO_REVIEW. The old COSTING_IN_PROGRESS hop is gone (merged into
         // AWAITING_FACTORY_RESPONSE) and so is MORE_INFO_REQUIRED — the ขอข้อมูลเพิ่มเติม
@@ -101,18 +121,25 @@ public final class PricingRequestStatus {
         // to AWAITING_FACTORY_RESPONSE, not to a dedicated "revise the costing" status, since
         // Import's only remaining job after a return is to renegotiate/re-mark the factory
         // quote(s) ready; the CEO's next startReview recomputes the cost from scratch.
-        Map.entry(CEO_REVIEWING,       Set.of(APPROVED_FOR_QUOTATION, AWAITING_FACTORY_RESPONSE)),
+        Map.entry(CEO_REVIEWING,       Set.of(APPROVED_FOR_QUOTATION, AWAITING_FACTORY_RESPONSE, SUPERSEDED)),
         // Step 4: the ONLY forward exit from APPROVED_FOR_QUOTATION is issuing a customer
         // quotation (CustomerQuotationService.issue). No transition is needed for creating a
         // DRAFT quotation (rule 6: drafts do not move the deal stage OR the pricing request
         // status) — only the first successful issue moves the pricing request on.
-        Map.entry(APPROVED_FOR_QUOTATION, Set.of(QUOTATION_ISSUED)),
+        Map.entry(APPROVED_FOR_QUOTATION, Set.of(QUOTATION_ISSUED, SUPERSEDED)),
         // Step 5: the customer's ACCEPTED outcome is the one forward exit from QUOTATION_ISSUED
         // (CustomerQuotationService.recordOutcome). REJECTED/REVISION_REQUESTED/EXPIRED
         // deliberately do NOT transition the pricing request at all — see QUOTATION_ACCEPTED's
         // own Javadoc above for why.
-        Map.entry(QUOTATION_ISSUED,    Set.of(QUOTATION_ACCEPTED)),
-        // Terminal.
+        Map.entry(QUOTATION_ISSUED,    Set.of(QUOTATION_ACCEPTED, SUPERSEDED)),
+        // Terminal — and deliberately WITHOUT a SUPERSEDED edge, which is the one place this
+        // change REMOVES a capability rather than declaring an existing one. Owner ruling
+        // 2026-08-13: once the customer has accepted, the deal is moving to PO and fulfilment;
+        // amending it there is an ORDER amendment, not a quotation revision, and it must not go
+        // back through the pricing chain. Until now the raw UPDATE in
+        // supersedeForCustomerRevision reached this status happily — see
+        // InventoryDeliveryFulfilmentIntegrationTest, whose fixtures were built on exactly that
+        // and have been rewritten to revise from QUOTATION_ISSUED instead.
         Map.entry(QUOTATION_ACCEPTED,  Set.<String>of()),
         Map.entry(SUPERSEDED,          Set.<String>of()),
         Map.entry(CANCELLED,           Set.<String>of()));

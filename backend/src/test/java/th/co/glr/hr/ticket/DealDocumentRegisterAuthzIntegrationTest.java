@@ -125,7 +125,7 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
 
         FileStorageService fileStorage = new FileStorageService("/tmp/glr-deal-document-register-authz-test-uploads");
         pricingRequestService = new PricingRequestService(
-            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage);
+            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
 
         // PriceCalcService prices item lines, unrelated to every gate under test here — mocked
         // exactly as TicketIaAuthzMatrixIntegrationTest and CustomerQuotationIntegrationTest do.
