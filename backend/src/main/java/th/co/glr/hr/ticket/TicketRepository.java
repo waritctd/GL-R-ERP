@@ -1018,6 +1018,77 @@ public class TicketRepository {
         return outstanding.signum() > 0 ? PaymentStage.BALANCE_PENDING : PaymentStage.NOT_REQUIRED;
     }
 
+    /** Live (non-CANCELLED) PO counts for one deal — the raw input to the import-status rollup. */
+    public record PurchaseOrderRollup(int live, int received, int pastOpen) {}
+
+    /**
+     * One query, three filtered counts — everything {@link #deriveImportStatus} needs from {@code
+     * sales.factory_purchase_order}. CANCELLED is excluded from every count: a cancelled PO is how
+     * Import backs out of a factory order, so it must behave as if it never existed for rollup
+     * purposes (see {@link #deriveImportStatus}'s own Javadoc for the all-cancelled-deal decision
+     * this feeds). {@code received}/{@code pastOpen} need no explicit {@code <> 'CANCELLED'} of
+     * their own — {@code RECEIVED} and {@code SHIPPING} are already disjoint from {@code
+     * CANCELLED}, so the extra predicate would be redundant, not merely omitted by oversight.
+     */
+    public PurchaseOrderRollup purchaseOrderRollup(long ticketId) {
+        return jdbc.queryForObject("""
+            SELECT COUNT(*) FILTER (WHERE status <> 'CANCELLED')              AS live,
+                   COUNT(*) FILTER (WHERE status = 'RECEIVED')                AS received,
+                   COUNT(*) FILTER (WHERE status IN ('SHIPPING', 'RECEIVED')) AS past_open
+              FROM sales.factory_purchase_order
+             WHERE ticket_id = :ticketId
+            """, Map.of("ticketId", ticketId),
+            (rs, rowNum) -> new PurchaseOrderRollup(
+                rs.getInt("live"), rs.getInt("received"), rs.getInt("past_open")));
+    }
+
+    /**
+     * Rolls this deal's live (non-CANCELLED) factory purchase orders up into a single import-axis
+     * {@link FulfilmentStatus} value, or {@code null} when the POs assert nothing about where the
+     * import journey currently stands:
+     *
+     * <ul>
+     *   <li>no live POs at all (none ever created, or every one CANCELLED) -&gt; {@code null}</li>
+     *   <li>every live PO is RECEIVED -&gt; {@link FulfilmentStatus#GOODS_RECEIVED}</li>
+     *   <li>at least one live PO has moved past OPEN (SHIPPING or RECEIVED), but not every one is
+     *       RECEIVED yet -&gt; {@link FulfilmentStatus#SHIPPING}</li>
+     *   <li>every live PO is still OPEN -&gt; {@code null} (the ticket keeps whatever IR_ISSUED /
+     *       IR_SENT flag it already carries — the POs have not started shipping yet)</li>
+     * </ul>
+     *
+     * <p><strong>All-cancelled deal, deliberately treated identically to zero POs.</strong>
+     * Cancelling every PO on a deal is how Import backs out of a factory order entirely — e.g.
+     * re-sourcing from a different factory. Returning {@code null} here (rather than inventing a
+     * terminal "cancelled" import status) hands control back to the ticket-level {@code
+     * TicketService#markShipping}/{@code #markGoodsReceived} flow, so the deal is not stranded
+     * with no way to progress. Leaving the deal frozen at whatever import-axis status it last had
+     * would be a worse outcome than trusting the ticket-level setters again.
+     */
+    public String deriveImportStatus(long ticketId) {
+        PurchaseOrderRollup r = purchaseOrderRollup(ticketId);
+        if (r.live() == 0) {
+            return null;
+        }
+        if (r.received() == r.live()) {
+            return FulfilmentStatus.GOODS_RECEIVED;
+        }
+        if (r.pastOpen() > 0) {
+            return FulfilmentStatus.SHIPPING;
+        }
+        return null;
+    }
+
+    /**
+     * Whether this deal is PO-tracked at all (&gt;= 1 live, non-CANCELLED PO) — the refusal guard
+     * {@code TicketService#markShipping}/{@code #markGoodsReceived} use to refuse a ticket-level
+     * write that would bypass the per-factory PO record. Implemented via {@link
+     * #purchaseOrderRollup}'s own {@code live} count rather than a second, independent query, so
+     * this and {@link #deriveImportStatus} can never see a different PO snapshot from one another.
+     */
+    public boolean hasLivePurchaseOrders(long ticketId) {
+        return purchaseOrderRollup(ticketId).live() > 0;
+    }
+
     public void updateSalesStage(long ticketId, String stage) {
         jdbc.update(
             "UPDATE sales.ticket SET sales_stage = :s, stage_updated_at = now() WHERE ticket_id = :id",

@@ -186,7 +186,7 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, notifications);
 
         purchaseOrders = new ProcurementRepository(jdbc);
-        procurement = new ProcurementService(purchaseOrders, pricingRequests, tickets, notifications);
+        procurement = new ProcurementService(purchaseOrders, pricingRequests, tickets, notifications, ticketService);
 
         salesRepId = createEmployee(employees, "พนักงานขาย เจ็ด", "sales-step7@glr.co.th", "SALES", "แผนกขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า เจ็ด", "import-step7@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
@@ -294,18 +294,26 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
-        // ── Composes with the EXISTING ticket-level fulfillment flow — proven independent:
-        //    markIrSent/markShipping/markGoodsReceived are untouched by this branch and remain
-        //    reachable purely off ticket.fulfillment_status, regardless of PO state above ────
-        TicketDto afterIrSent = ticketService.markIrSent(deal.ticketId, importActor);
-        assertThat(afterIrSent.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.IR_SENT);
-        TicketDto afterTicketShipping = ticketService.markShipping(deal.ticketId, importActor);
-        assertThat(afterTicketShipping.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.SHIPPING);
-        TicketDto afterTicketGoodsReceived = ticketService.markGoodsReceived(deal.ticketId, importActor);
-        assertThat(afterTicketGoodsReceived.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.GOODS_RECEIVED);
-        assertThat(afterTicketGoodsReceived.summary().salesStage()).isEqualTo(DealStage.DELIVERY_SCHEDULING);
-        // The OTHER PO (factory B) is still OPEN — the ticket-level flag sequence above advanced
-        // independently of it, proving the two really are separate layers, not coupled.
+        // ── Composes with the ticket-level fulfillment flow — but, as of the derived-fulfilment-
+        //    status branch, no longer INDEPENDENTLY of it. The PO rollup (TicketService
+        //    #applyPurchaseOrderRollup, called from every PO-progressing method above) is now the
+        //    source of truth for a PO-tracked deal's import axis: factory A's recordShippingDetail
+        //    + recordGoodsReceived already rolled the ticket forward to SHIPPING (one live PO past
+        //    OPEN, but factory B is still OPEN so not every live PO is RECEIVED yet), and the
+        //    ticket-level markShipping/markGoodsReceived setters now REFUSE (409) on any deal with
+        //    a live PO rather than risk a write that could disagree with the PO record — see those
+        //    two methods' own comments in TicketService for the refuse-not-delegate reasoning, and
+        //    DerivedFulfilmentRollupIntegrationTest for the dedicated coverage of the rollup itself
+        //    (this assertion only pins that the two compose as designed, not the rollup rules) ────
+        assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().fulfillmentStatus())
+            .isEqualTo(FulfilmentStatus.SHIPPING);
+        assertThatThrownBy(() -> ticketService.markShipping(deal.ticketId, importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThatThrownBy(() -> ticketService.markGoodsReceived(deal.ticketId, importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        // The OTHER PO (factory B) is still OPEN — receiving IT is what completes the rollup to
+        // GOODS_RECEIVED (see DerivedFulfilmentRollupIntegrationTest
+        // #rollupMovesTicketToGoodsReceivedOnlyWhenEveryLivePoIsReceived), not a ticket-level call.
         FactoryPurchaseOrderDto poB = created.stream().filter(po -> FACTORY_B.equals(po.factoryName())).findFirst().orElseThrow();
         assertThat(procurement.get(poB.id(), importActor).status()).isEqualTo(FactoryPurchaseOrderStatus.OPEN);
     }
