@@ -83,7 +83,7 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         FileStorageService fileStorage = new FileStorageService("./build/test-uploads");
 
         pricingRequestService = new PricingRequestService(
-            pricingRequests, tickets, notifications, new ObjectMapper(), contacts, fileStorage);
+            pricingRequests, tickets, notifications, new ObjectMapper(), contacts, fileStorage, factoryQuoteCarryForward());
 
         // Real TicketService, wired the same way TicketRepositoryIntegrationTest wires the
         // repository — PriceCalcService is mocked since none of the read paths under test

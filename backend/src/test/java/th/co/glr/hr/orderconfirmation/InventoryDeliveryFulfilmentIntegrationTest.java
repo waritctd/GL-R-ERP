@@ -137,7 +137,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
 
         FileStorageService fileStorage = new FileStorageService("/tmp/glr-inventory-delivery-test-uploads");
         pricingRequestService = new PricingRequestService(
-            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage);
+            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
 
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
         FactoryEmailService factoryEmail = mock(FactoryEmailService.class);
@@ -507,6 +507,16 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
      * TWO items on the same factory, so a subsequent revision can drop one of them entirely
      * (the "dropped line" bug fix tests) while keeping the other. */
     private TwoItemDeal createTwoItemDealAndDriveToQuotationAccepted(BigDecimal qtyA, BigDecimal qtyB) {
+        return createTwoItemDeal(qtyA, qtyB, true);
+    }
+
+    /** Stops at QUOTATION_ISSUED, so a revision may still be created — see
+     * {@link #createDealAndDriveFirstPricingRequestToQuotationIssued}. */
+    private TwoItemDeal createTwoItemDealAndDriveToQuotationIssued(BigDecimal qtyA, BigDecimal qtyB) {
+        return createTwoItemDeal(qtyA, qtyB, false);
+    }
+
+    private TwoItemDeal createTwoItemDeal(BigDecimal qtyA, BigDecimal qtyB, boolean recordAcceptance) {
         long catalogProductIdA = insertCatalogProduct(FACTORY, "TH",
             "TEST-INV-A-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
         long catalogProductIdB = insertCatalogProduct(FACTORY, "TH",
@@ -540,14 +550,17 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             List.of(itemA, itemB));
         long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
 
-        driveTwoItemDraftToQuotationAccepted(pricingRequestId);
+        driveTwoItemDraftToQuotationIssued(pricingRequestId);
+        if (recordAcceptance) {
+            recordAcceptanceOnCurrentQuotation(pricingRequestId);
+        }
         return new TwoItemDeal(ticketId, ticketItemAId, ticketItemBId, pricingRequestId, catalogProductIdA, catalogProductIdB);
     }
 
     /** Same as {@link #driveDraftPricingRequestToQuotationAccepted} but responds to EVERY item on
      * the (single, same-factory) draft rather than assuming exactly one — both items share
      * {@link #FACTORY}, so {@code generateDrafts} produces exactly one draft covering both. */
-    private void driveTwoItemDraftToQuotationAccepted(long pricingRequestId) {
+    private void driveTwoItemDraftToQuotationIssued(long pricingRequestId) {
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
 
@@ -585,10 +598,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         CustomerQuotationDto draftQuotation = quotationService.create(pricingRequestId,
             new CreateCustomerQuotationRequest(null, null, null, LocalDate.now().plusDays(30), null,
                 UUID.randomUUID().toString()), salesActor);
-        CustomerQuotationDto issued = quotationService.issue(
+        quotationService.issue(
             draftQuotation.id(), new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor);
-        quotationService.recordOutcome(issued.id(),
-            new RecordQuotationOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), salesActor);
     }
 
     private BigDecimal ticketItemQty(long itemId) {
@@ -606,6 +617,24 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
      * to QUOTATION_ACCEPTED via the real Steps 1-5 services — deliberately stopping there
      * (confirmOrder is left to the caller, since some tests need to withhold it). */
     private Deal createDealAndDriveFirstPricingRequestToQuotationAccepted(BigDecimal quantity) {
+        return createDealAndDriveFirstPricingRequest(quantity, true);
+    }
+
+    /**
+     * Same fixture, stopped one step earlier — at QUOTATION_ISSUED, before the customer's
+     * acceptance is recorded.
+     *
+     * <p>Reissue-through-CEO-chain (owner ruling 2026-08-13): this is now the ONLY state a
+     * customer-change revision can be created from at the end of the chain. QUOTATION_ACCEPTED is
+     * terminal and refused — see {@code PricingRequestStatus.ALLOWED} and the two
+     * {@code customerChangeRevision_from...IsRejected} tests below. Every test in this file that
+     * revises a deal therefore starts here rather than from acceptance.
+     */
+    private Deal createDealAndDriveFirstPricingRequestToQuotationIssued(BigDecimal quantity) {
+        return createDealAndDriveFirstPricingRequest(quantity, false);
+    }
+
+    private Deal createDealAndDriveFirstPricingRequest(BigDecimal quantity, boolean recordAcceptance) {
         long catalogProductId = insertCatalogProduct(FACTORY, "TH",
             "TEST-INV-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
 
@@ -630,14 +659,17 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             new BigDecimal("5000.00"), "THB", "step 8 acceptance walk", UUID.randomUUID().toString(), List.of(item));
         long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
 
-        driveDraftPricingRequestToQuotationAccepted(pricingRequestId, FACTORY, quantity);
+        driveDraftPricingRequestToQuotationIssued(pricingRequestId, FACTORY, quantity);
+        if (recordAcceptance) {
+            recordAcceptanceOnCurrentQuotation(pricingRequestId);
+        }
         return new Deal(ticketId, ticketItemId, pricingRequestId, catalogProductId);
     }
 
     /** Creates a customer-change revision on {@code deal}'s ticket item, requesting the NEW
-     * {@code quantity}, and drives IT to QUOTATION_ACCEPTED too. Reachable even though the
-     * parent pricing request already sits at QUOTATION_ACCEPTED — see
-     * OrderConfirmationService#reconcileTicketItems's own Javadoc. */
+     * {@code quantity}, and drives IT to QUOTATION_ACCEPTED. The parent must be at
+     * QUOTATION_ISSUED, NOT QUOTATION_ACCEPTED — see
+     * {@link #createDealAndDriveFirstPricingRequestToQuotationIssued}. */
     private long createRevisionAndDriveToQuotationAccepted(Deal deal, BigDecimal newQuantity) {
         PricingRequestRequests.PricingRequestItemRequest revisedItem = new PricingRequestRequests.PricingRequestItemRequest(
             deal.ticketItemId, deal.catalogProductId, null, "SCG", "Tile Inventory", "SCG Tile Inventory", null, null,
@@ -656,6 +688,26 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     }
 
     private void driveDraftPricingRequestToQuotationAccepted(long pricingRequestId, String factory, BigDecimal quantity) {
+        driveDraftPricingRequestToQuotationIssued(pricingRequestId, factory, quantity);
+        recordAcceptanceOnCurrentQuotation(pricingRequestId);
+    }
+
+    /**
+     * Records the customer's ACCEPTED outcome on whichever quotation of {@code pricingRequestId}
+     * is currently ISSUED. Split out from {@link #driveDraftPricingRequestToQuotationAccepted} so
+     * a test can stop at QUOTATION_ISSUED and revise from there — which, since the
+     * reissue-through-CEO-chain ruling, is the only point a revision is still legal.
+     */
+    private void recordAcceptanceOnCurrentQuotation(long pricingRequestId) {
+        CustomerQuotationDto issued = quotationService.listForPricingRequest(pricingRequestId, salesActor).stream()
+            .filter(q -> QuotationStatus.ISSUED.equals(q.docStatus()))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("no ISSUED quotation on pricing request " + pricingRequestId));
+        quotationService.recordOutcome(issued.id(),
+            new RecordQuotationOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), salesActor);
+    }
+
+    private void driveDraftPricingRequestToQuotationIssued(long pricingRequestId, String factory, BigDecimal quantity) {
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
 
@@ -692,10 +744,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         CustomerQuotationDto draftQuotation = quotationService.create(pricingRequestId,
             new CreateCustomerQuotationRequest(null, null, null, LocalDate.now().plusDays(30), null,
                 UUID.randomUUID().toString()), salesActor);
-        CustomerQuotationDto issued = quotationService.issue(
+        quotationService.issue(
             draftQuotation.id(), new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor);
-        quotationService.recordOutcome(issued.id(),
-            new RecordQuotationOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), salesActor);
     }
 
     private void drainDispatches() {

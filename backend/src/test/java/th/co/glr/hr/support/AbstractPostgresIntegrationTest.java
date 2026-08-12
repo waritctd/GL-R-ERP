@@ -137,6 +137,33 @@ public abstract class AbstractPostgresIntegrationTest {
         return (T) factory.getProxy();
     }
 
+    /**
+     * A REAL {@link th.co.glr.hr.factoryquote.FactoryQuoteCarryForward}, for the many tests that
+     * hand-wire a {@code PricingRequestService} and do not otherwise care about factory quotes.
+     *
+     * <p>Deliberately real rather than a mock, and deliberately a helper rather than an optional
+     * constructor argument. A mock (or a null-tolerating overload) would make every one of the
+     * ~20 hand-wired services silently skip the carry-forward branch, so the suite would be green
+     * about a code path production runs and the tests never enter — the exact failure shape
+     * {@code CLAUDE.md} catalogues. Wired against the same {@link #jdbc} everything else uses, so
+     * a test that DOES set up a revision with identical items sees the real behaviour without
+     * having to opt in.
+     *
+     * <p>Fresh repository instances are fine: they are stateless {@code NamedParameterJdbcTemplate}
+     * wrappers, so sharing an instance with the caller's own would change nothing.
+     */
+    protected th.co.glr.hr.factoryquote.FactoryQuoteCarryForward factoryQuoteCarryForward() {
+        th.co.glr.hr.pricingrequest.PricingRequestRepository pricingRequests =
+            new th.co.glr.hr.pricingrequest.PricingRequestRepository(jdbc);
+        th.co.glr.hr.factoryquote.FactoryQuoteRepository factoryQuotes =
+            new th.co.glr.hr.factoryquote.FactoryQuoteRepository(jdbc);
+        return new th.co.glr.hr.factoryquote.FactoryQuoteCarryForward(factoryQuotes, pricingRequests,
+            new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests,
+                new th.co.glr.hr.pricing.FxRateRepository(jdbc),
+                new th.co.glr.hr.pricing.PriceCalcConfigRepository(jdbc),
+                new th.co.glr.hr.factory.FactoryConfigRepository(jdbc)));
+    }
+
     private static DataSource dataSource() {
         if (dataSource == null) {
             HikariConfig config = new HikariConfig();

@@ -77,14 +77,59 @@ class PricingRequestStatusTest {
     // the old absence, per this repo's own precedent for a map change (see
     // PricingRequestStatusTest's Step 3 predecessor commit and
     // docs/agent-handoffs/92_feat-sales-ceo-pricing-decision.md's "isNoLongerAllowed" rename).
+    //
+    // Reissue-through-CEO-chain (owner ruling 2026-08-13) extends it once more: SUPERSEDED is now
+    // declared from every NON-TERMINAL status, because a customer-change revision is legitimate
+    // from all of them and PricingRequestRepository.supersedeForCustomerRevision now asserts
+    // against this map instead of bypassing it with a raw negative-guard UPDATE.
     @Test
-    void approvedForQuotation_toQuotationIssued_isNowAllowed_andNothingElseIs() {
+    void approvedForQuotation_toQuotationIssuedOrSuperseded_isNowAllowed_andNothingElseIs() {
         assertThat(PricingRequestStatus.canTransition(
             PricingRequestStatus.APPROVED_FOR_QUOTATION, PricingRequestStatus.QUOTATION_ISSUED)).isTrue();
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.APPROVED_FOR_QUOTATION, PricingRequestStatus.SUPERSEDED)).isTrue();
         for (String to : PricingRequestStatus.VALUES) {
             if (PricingRequestStatus.QUOTATION_ISSUED.equals(to)) continue;
+            if (PricingRequestStatus.SUPERSEDED.equals(to)) continue;
             assertThat(PricingRequestStatus.canTransition(PricingRequestStatus.APPROVED_FOR_QUOTATION, to)).isFalse();
         }
+    }
+
+    /**
+     * SUBMITTED's own negative space, which had no test at all before this change and now carries
+     * two new edges. READY_FOR_CEO_REVIEW is the factory-quote carry-forward shortcut (a
+     * commercial-only revision reusing its parent's quotes) and SUPERSEDED is a revision created
+     * while the request still sits in the Import queue.
+     */
+    @Test
+    void submitted_toImportReviewingReadyForCeoReviewCancelledOrSuperseded_andNothingElse() {
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.SUBMITTED, PricingRequestStatus.IMPORT_REVIEWING)).isTrue();
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.SUBMITTED, PricingRequestStatus.READY_FOR_CEO_REVIEW)).isTrue();
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.SUBMITTED, PricingRequestStatus.CANCELLED)).isTrue();
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.SUBMITTED, PricingRequestStatus.SUPERSEDED)).isTrue();
+        for (String to : PricingRequestStatus.VALUES) {
+            if (PricingRequestStatus.IMPORT_REVIEWING.equals(to)) continue;
+            if (PricingRequestStatus.READY_FOR_CEO_REVIEW.equals(to)) continue;
+            if (PricingRequestStatus.CANCELLED.equals(to)) continue;
+            if (PricingRequestStatus.SUPERSEDED.equals(to)) continue;
+            assertThat(PricingRequestStatus.canTransition(PricingRequestStatus.SUBMITTED, to)).isFalse();
+        }
+    }
+
+    /**
+     * The one status the reissue change deliberately did NOT give a SUPERSEDED edge, asserted
+     * wrong-way-round because it is the capability being REMOVED. Before this change the raw
+     * UPDATE in supersedeForCustomerRevision reached QUOTATION_ACCEPTED regardless of what this
+     * map said; now the map is what the repository enforces, so this assertion has teeth.
+     */
+    @Test
+    void quotationAccepted_toSuperseded_isNotAllowed_soAnAcceptedDealCannotBeRevised() {
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.QUOTATION_ACCEPTED, PricingRequestStatus.SUPERSEDED)).isFalse();
     }
 
     // Step 5 (Customer Decision and Commercial Revisions) deliberately extends this map again:
@@ -95,11 +140,16 @@ class PricingRequestStatusTest {
     // approvedForQuotation_toQuotationIssued_... rename above and
     // docs/agent-handoffs/92_feat-sales-ceo-pricing-decision.md's "isNoLongerAllowed" rename).
     @Test
-    void quotationIssued_toQuotationAccepted_isNowAllowed_andNothingElseIs() {
+    void quotationIssued_toQuotationAcceptedOrSuperseded_isNowAllowed_andNothingElseIs() {
         assertThat(PricingRequestStatus.canTransition(
             PricingRequestStatus.QUOTATION_ISSUED, PricingRequestStatus.QUOTATION_ACCEPTED)).isTrue();
+        // The reissue window: the customer has an issued quotation and comes back to haggle. This
+        // is the status the whole "every reissue goes through the CEO chain" flow starts from.
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.QUOTATION_ISSUED, PricingRequestStatus.SUPERSEDED)).isTrue();
         for (String to : PricingRequestStatus.VALUES) {
             if (PricingRequestStatus.QUOTATION_ACCEPTED.equals(to)) continue;
+            if (PricingRequestStatus.SUPERSEDED.equals(to)) continue;
             assertThat(PricingRequestStatus.canTransition(PricingRequestStatus.QUOTATION_ISSUED, to)).isFalse();
         }
     }

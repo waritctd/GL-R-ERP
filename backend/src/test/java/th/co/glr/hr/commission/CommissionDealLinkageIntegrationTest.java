@@ -145,7 +145,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
 
         FileStorageService fileStorage = new FileStorageService("/tmp/glr-commission-linkage-test-uploads");
         pricingRequestService = new PricingRequestService(
-            pricingRequests, tickets, notificationRepository, objectMapper, new ContactRepository(jdbc), fileStorage);
+            pricingRequests, tickets, notificationRepository, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
 
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
         FactoryEmailService factoryEmail = mock(FactoryEmailService.class);

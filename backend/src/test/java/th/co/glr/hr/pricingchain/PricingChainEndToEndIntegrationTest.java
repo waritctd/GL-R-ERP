@@ -144,7 +144,7 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
 
         FileStorageService fileStorage = new FileStorageService("/tmp/glr-pricing-chain-test-uploads");
         pricingRequestService = new PricingRequestService(
-            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage);
+            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
 
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
         factoryQuoteRepository = factoryQuotes;
