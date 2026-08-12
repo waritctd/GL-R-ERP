@@ -712,6 +712,10 @@ public class TicketService {
         requireRole(actor, FULFILMENT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
+        // Deliberately NOT guarded by hasLivePurchaseOrders (unlike markShipping/markGoodsReceived
+        // below): IR_SENT is a pre-shipment milestone the POs say nothing about yet —
+        // TicketRepository#deriveImportStatus returns null while every live PO is still OPEN — so
+        // a ticket-level IR_SENT can never contradict the PO rollup.
         if (!FulfilmentStatus.IR_ISSUED.equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องออกใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าส่ง IR แล้วได้");
         }
@@ -726,12 +730,21 @@ public class TicketService {
         requireRole(actor, FULFILMENT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
+        // Refuse, don't delegate. A ticket-level "start shipping" click cannot say WHICH factory
+        // shipped — container ref, ETD/ETA are per-factory PO detail that only the PO aggregate
+        // (ProcurementService) legitimately owns, so "delegating" this click would mean fabricating
+        // that detail. On a PO-tracked deal the PO rollup (applyPurchaseOrderRollup below) is the
+        // source of truth for this axis; refusing is the only option that invents no data.
+        // Unconditional on PO presence — not merely "when they disagree" — because a ticket-level
+        // write that happens to already agree with the PO rollup would still have bypassed it.
+        if (tickets.hasLivePurchaseOrders(ticketId)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลนี้ติดตามการนำเข้าด้วยใบสั่งซื้อโรงงาน — ต้องบันทึกการขนส่งที่ใบสั่งซื้อของแต่ละโรงงาน");
+        }
         if (!FulfilmentStatus.IR_SENT.equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องส่งใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าเริ่มจัดส่งได้");
         }
-        tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.SHIPPING);
-        tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.SHIPPING, s.status(), s.status(), null);
+        applyShipping(s, actor);
         return requireTicket(ticketId);
     }
 
@@ -740,23 +753,92 @@ public class TicketService {
         requireRole(actor, FULFILMENT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
+        // Same refuse-not-delegate reasoning as markShipping above: a ticket-level "goods
+        // received" click cannot say which factory's shipment arrived, and on a PO-tracked deal
+        // the PO rollup is the source of truth for this axis, not this button.
+        if (tickets.hasLivePurchaseOrders(ticketId)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลนี้ติดตามการนำเข้าด้วยใบสั่งซื้อโรงงาน — ต้องบันทึกรับสินค้าที่ใบสั่งซื้อของแต่ละโรงงาน");
+        }
         if (!FulfilmentStatus.SHIPPING.equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "ดีลต้องอยู่ในขั้นตอนจัดส่งก่อนจึงจะทำเครื่องหมายว่าได้รับสินค้าได้");
         }
-        tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.GOODS_RECEIVED);
+        applyGoodsReceived(s, actor);
+        return requireTicket(ticketId);
+    }
+
+    /**
+     * The GOODS_RECEIVED side-effects, factored out of {@link #markGoodsReceived} so that method
+     * and {@link #applyPurchaseOrderRollup} (the PO-tracked path, called from {@code
+     * ProcurementService}) share exactly one implementation and can never drift apart on what
+     * "goods received" means. Behaviour is byte-for-byte what {@code markGoodsReceived} always did
+     * after its status guard — only the guard itself stayed behind in the caller.
+     */
+    private void applyGoodsReceived(TicketSummaryDto s, UserPrincipal actor) {
+        tickets.updateFulfillmentStatus(s.id(), FulfilmentStatus.GOODS_RECEIVED);
         // Also advance payment track to AWAITING_FINAL_PAYMENT if deposit was paid
         if ("DEPOSIT_PAID".equals(s.paymentStatus())) {
-            tickets.updatePaymentStatus(ticketId, "AWAITING_FINAL_PAYMENT");
-            tickets.addEvent(ticketId, actor.id(), actor.name(),
+            tickets.updatePaymentStatus(s.id(), "AWAITING_FINAL_PAYMENT");
+            tickets.addEvent(s.id(), actor.id(), actor.name(),
                 TicketEventKind.AWAITING_FINAL_PAYMENT, s.status(), s.status(), null);
         }
-        tickets.addEvent(ticketId, actor.id(), actor.name(),
+        tickets.addEvent(s.id(), actor.id(), actor.name(),
             TicketEventKind.GOODS_RECEIVED, s.status(), s.status(), null);
         // Goods are at the warehouse (S17) — advance to DELIVERY_SCHEDULING (S18)
         // so the "schedule delivery / collect balance" step is reached before
         // DELIVERED, instead of the pipeline jumping PROCUREMENT → DELIVERED.
         autoAdvanceStage(s, DealStage.DELIVERY_SCHEDULING, actor);
-        return requireTicket(ticketId);
+    }
+
+    /**
+     * The SHIPPING write + event, factored out of {@link #markShipping} for the same reason as
+     * {@link #applyGoodsReceived} just above.
+     */
+    private void applyShipping(TicketSummaryDto s, UserPrincipal actor) {
+        tickets.updateFulfillmentStatus(s.id(), FulfilmentStatus.SHIPPING);
+        tickets.addEvent(s.id(), actor.id(), actor.name(),
+            TicketEventKind.SHIPPING, s.status(), s.status(), null);
+    }
+
+    /**
+     * Rolls this deal's live factory-PO statuses up into {@code fulfillment_status}. Called by
+     * {@code ProcurementService} at the end of every PO mutation ({@code recordShippingDetail},
+     * {@code recordGoodsReceived}, {@code cancel}) so a PO-tracked deal's ticket-level flag tracks
+     * the PO aggregate automatically — the ticket-level setters above refuse for exactly this
+     * class of deal, so nothing else advances this axis for it.
+     *
+     * <p><strong>Not a controller entry point.</strong> No {@link #requireRole} call here —
+     * authorisation already happened inside {@code ProcurementService} ({@code RAW_PO_ROLES =
+     * {import, ceo}}), and this method is reachable only from that service, never from any
+     * controller. A future reader adding a controller endpoint onto this method directly must add
+     * its own authorisation check first — do not mistake the absence of one here for "no check
+     * needed".
+     */
+    @Transactional
+    public void applyPurchaseOrderRollup(long ticketId, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        String target = tickets.deriveImportStatus(ticketId);
+        if (target == null) {
+            return;
+        }
+        // Delivery-axis firewall: once the ticket has left the import axis (a delivery has
+        // started, or the deal was always a stock deal) a late PO mutation must never write here
+        // again — this is what protects the FULLY_DELIVERED close gate (deliveryGateComplete
+        // above) from being clobbered back down to GOODS_RECEIVED by a straggling PO.
+        if (!FulfilmentStatus.isImportAxis(s.fulfillmentStatus())) {
+            return;
+        }
+        // Monotonic: only ever advance, never downgrade. importRank is -1 for anything not on the
+        // import axis, but that case is already excluded by the firewall above, so both ranks here
+        // are real positions on IMPORT_SEQUENCE.
+        if (FulfilmentStatus.importRank(target) <= FulfilmentStatus.importRank(s.fulfillmentStatus())) {
+            return;
+        }
+        if (FulfilmentStatus.GOODS_RECEIVED.equals(target)) {
+            applyGoodsReceived(s, actor);
+        } else {
+            applyShipping(s, actor);
+        }
     }
 
     public List<DeliveryRecordDto> listDeliveries(long ticketId, UserPrincipal actor) {
