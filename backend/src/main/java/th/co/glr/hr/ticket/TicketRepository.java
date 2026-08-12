@@ -1525,7 +1525,50 @@ public class TicketRepository {
             """, Map.of("id", ticketId));
     }
 
-    public void updatePaymentStatus(long ticketId, String paymentStatus) {
+    /**
+     * Validated payment-track advance. Walks EVERY hop from {@code expected} to {@code next}
+     * through {@link PaymentTrack#stepsBetween}, so an illegal edge throws {@link
+     * IllegalStateException} BEFORE any SQL runs (mirrors {@code
+     * PricingRequestRepository.transition}). The final UPDATE is a compare-and-set on {@code
+     * payment_status = :expected}; a 0 rowcount means a concurrent writer moved the row and the
+     * SERVICE must turn that into a 409 — do NOT re-SELECT to build a nicer message (same
+     * discipline as {@code PricingRequestRepository.transition}'s own Javadoc).
+     *
+     * <p>Multi-hop is a WALK, not a SKIP: intermediate states are traversed and validated by
+     * {@link PaymentTrack#stepsBetween}, never jumped over. The whole walk is inside the caller's
+     * transaction, so no observer ever sees an intermediate value — the UPDATE below still moves
+     * the row straight from {@code expected} to {@code next} in one statement; only the
+     * VALIDATION is multi-hop.
+     *
+     * <p>{@code IS NOT DISTINCT FROM}, not a plain {@code =}: {@code expected == null} is the
+     * entry case ({@code null -> CUSTOMER_CONFIRMED}), and a plain {@code = :expected} never
+     * matches a NULL column value.
+     *
+     * @return the rowcount (0 or 1) — 0 means the compare-and-set lost a race; never re-SELECT to
+     *     build a nicer error, per the discipline above.
+     */
+    public int advancePaymentStatus(long ticketId, String policy, String expected, String next) {
+        PaymentTrack.stepsBetween(policy, expected, next); // throws IllegalStateException before any SQL
+        return jdbc.update("""
+            UPDATE sales.ticket
+               SET payment_status = :next, updated_at = now()
+             WHERE ticket_id = :id AND payment_status IS NOT DISTINCT FROM :expected
+            """,
+            new MapSqlParameterSource()
+                .addValue("next", next)
+                .addValue("id", ticketId)
+                .addValue("expected", expected));
+    }
+
+    /**
+     * Test-seed / migration use only — bypasses {@link PaymentTrack} entirely (a blind, unguarded
+     * UPDATE: no compare-and-set, no validated edge, no {@code updated_at} touch). No production
+     * code may call this; every real write goes through {@link #advancePaymentStatus}. Renamed
+     * from the original unqualified {@code updatePaymentStatus} — kept because {@code
+     * TicketScopeIntegrationTest} seeds {@code payment_status} directly to build fixture state
+     * without driving it through the state machine.
+     */
+    public void updatePaymentStatusUnchecked(long ticketId, String paymentStatus) {
         jdbc.update(
             "UPDATE sales.ticket SET payment_status = :s WHERE ticket_id = :id",
             new MapSqlParameterSource().addValue("s", paymentStatus).addValue("id", ticketId));

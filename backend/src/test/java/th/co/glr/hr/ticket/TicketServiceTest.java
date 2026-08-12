@@ -59,6 +59,12 @@ class TicketServiceTest {
         // against real SQL) is covered by DealTrackingAndActivityIntegrationTest — this file
         // stays focused on role/ownership/backward-move logic, per its own existing header.
         when(ticketRepo.hasActivitySinceLastStageChange(anyLong())).thenReturn(true);
+        // Default stub so every payment-track write in this file (advancePaymentStatus's
+        // compare-and-set) reads as "succeeded" unless a specific test overrides it — Mockito's
+        // default answer for an unstubbed int-returning method is 0, which requirePaymentAdvanced
+        // would read as a lost race and throw a 409. any() (untyped) matches null too, so the
+        // null "expected" entry edge (confirmCustomer) is covered by this same stub.
+        when(ticketRepo.advancePaymentStatus(anyLong(), anyString(), any(), anyString())).thenReturn(1);
     }
     private final TicketService service = new TicketService(
         ticketRepo, notifRepo, priceCalcService, new ObjectMapper(), customerRepo, quotationRenderer,
@@ -888,7 +894,7 @@ class TicketServiceTest {
 
         service.confirmCustomer(10L, salesActor);
 
-        verify(ticketRepo).updatePaymentStatus(10L, "CUSTOMER_CONFIRMED");
+        verify(ticketRepo).advancePaymentStatus(10L, DepositPolicy.REQUIRED, null, PaymentTrack.CUSTOMER_CONFIRMED);
     }
 
     @Test
@@ -946,9 +952,11 @@ class TicketServiceTest {
         verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("DEPOSIT"),
             argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
             eq(5L), isNull(), eq("ยืนยันรับมัดจำ"), isNull(), isNull());
-        verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_PAID");
+        verify(ticketRepo).advancePaymentStatus(
+            10L, DepositPolicy.REQUIRED, "DEPOSIT_NOTICE_ISSUED", PaymentTrack.DEPOSIT_PAID);
         // Fulfillment hasn't reached GOODS_RECEIVED — no early advance.
-        verify(ticketRepo, never()).updatePaymentStatus(10L, "AWAITING_FINAL_PAYMENT");
+        verify(ticketRepo, never()).advancePaymentStatus(
+            10L, DepositPolicy.REQUIRED, "DEPOSIT_PAID", PaymentTrack.AWAITING_FINAL_PAYMENT);
     }
 
     @Test
@@ -960,7 +968,8 @@ class TicketServiceTest {
         verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("DEPOSIT"),
             argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
             eq(4L), isNull(), eq("ยืนยันรับมัดจำ"), isNull(), isNull());
-        verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_PAID");
+        verify(ticketRepo).advancePaymentStatus(
+            10L, DepositPolicy.REQUIRED, "DEPOSIT_NOTICE_ISSUED", PaymentTrack.DEPOSIT_PAID);
     }
 
     @Test
@@ -989,8 +998,12 @@ class TicketServiceTest {
         verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("DEPOSIT"),
             argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
             eq(5L), isNull(), eq("ยืนยันรับมัดจำ"), isNull(), isNull());
-        verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_PAID");
-        verify(ticketRepo).updatePaymentStatus(10L, "AWAITING_FINAL_PAYMENT");
+        verify(ticketRepo).advancePaymentStatus(
+            10L, DepositPolicy.REQUIRED, "DEPOSIT_NOTICE_ISSUED", PaymentTrack.DEPOSIT_PAID);
+        // site 7: "expected" is DEPOSIT_PAID — the value site 6 just wrote in the same
+        // reconcilePaymentStatus call — never the stale DEPOSIT_NOTICE_ISSUED read at its start.
+        verify(ticketRepo).advancePaymentStatus(
+            10L, DepositPolicy.REQUIRED, "DEPOSIT_PAID", PaymentTrack.AWAITING_FINAL_PAYMENT);
         verify(ticketRepo).addEvent(eq(10L), eq(5L), anyString(),
             eq(TicketEventKind.AWAITING_FINAL_PAYMENT), anyString(), anyString(), isNull());
     }
@@ -1057,7 +1070,8 @@ class TicketServiceTest {
         service.markGoodsReceived(10L, importActor);
 
         verify(ticketRepo).updateFulfillmentStatus(10L, "GOODS_RECEIVED");
-        verify(ticketRepo).updatePaymentStatus(10L, "AWAITING_FINAL_PAYMENT");
+        verify(ticketRepo).advancePaymentStatus(
+            10L, DepositPolicy.REQUIRED, "DEPOSIT_PAID", PaymentTrack.AWAITING_FINAL_PAYMENT);
     }
 
     @Test
@@ -1067,7 +1081,7 @@ class TicketServiceTest {
         service.markGoodsReceived(10L, importActor);
 
         verify(ticketRepo).updateFulfillmentStatus(10L, "GOODS_RECEIVED");
-        verify(ticketRepo, never()).updatePaymentStatus(eq(10L), anyString());
+        verify(ticketRepo, never()).advancePaymentStatus(eq(10L), any(), any(), any());
     }
 
     @Test
@@ -1220,7 +1234,8 @@ class TicketServiceTest {
         verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("BALANCE"),
             argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
             eq(5L), isNull(), eq("ยืนยันชำระส่วนที่เหลือ"), isNull(), isNull());
-        verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
+        verify(ticketRepo).advancePaymentStatus(
+            10L, DepositPolicy.REQUIRED, "AWAITING_FINAL_PAYMENT", PaymentTrack.FULLY_PAID);
     }
 
     @Test
@@ -1233,7 +1248,8 @@ class TicketServiceTest {
         verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("BALANCE"),
             argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
             eq(4L), isNull(), eq("ยืนยันชำระส่วนที่เหลือ"), isNull(), isNull());
-        verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
+        verify(ticketRepo).advancePaymentStatus(
+            10L, DepositPolicy.REQUIRED, "AWAITING_FINAL_PAYMENT", PaymentTrack.FULLY_PAID);
     }
 
     @Test
@@ -1253,7 +1269,10 @@ class TicketServiceTest {
         verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("BALANCE"),
             argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
             eq(5L), isNull(), eq("ยืนยันชำระส่วนที่เหลือ"), isNull(), isNull());
-        verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
+        // Multi-hop walk (DEPOSIT_PAID -> AWAITING_FINAL_PAYMENT -> FULLY_PAID) — the ONE
+        // compare-and-set still moves the row straight from "expected" to "next" here.
+        verify(ticketRepo).advancePaymentStatus(
+            10L, DepositPolicy.REQUIRED, "DEPOSIT_PAID", PaymentTrack.FULLY_PAID);
     }
 
     @Test
@@ -1268,7 +1287,8 @@ class TicketServiceTest {
 
         verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("BALANCE"), eq(new BigDecimal("500.00")),
             eq(5L), isNull(), eq("โอนครบ"), isNull(), eq("RC-1"));
-        verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
+        verify(ticketRepo).advancePaymentStatus(
+            10L, DepositPolicy.REQUIRED, "DEPOSIT_PAID", PaymentTrack.FULLY_PAID);
     }
 
     @Test
@@ -1611,10 +1631,19 @@ class TicketServiceTest {
         assertForbidden(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, "sales ขอเอง", salesActor));
         assertBadRequest(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, " ", accountActor));
 
+        // Rule 5 (payment-track state machine): null no longer qualifies as "deposit bypassed" on
+        // its own — a bypass-policy deal must have actually reached CUSTOMER_CONFIRMED first (via
+        // confirmCustomer). This used to succeed straight from null; it is now refused, and the
+        // CUSTOMER_CONFIRMED case below is what still proves "issueImportRequest can bypass
+        // notice" for a WAIVED/NOT_REQUIRED/CREDIT_CUSTOMER deal.
         stubDeal(11L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
             DealStage.ORDER_RECEIVED, null, DealLifecycle.ACTIVE, DepositPolicy.WAIVED);
-        service.issueImportRequest(11L, importActor);
-        verify(ticketRepo).updateFulfillmentStatus(11L, "IR_ISSUED");
+        assertConflict(() -> service.issueImportRequest(11L, importActor));
+
+        stubDeal(13L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "CUSTOMER_CONFIRMED", null,
+            DealStage.ORDER_RECEIVED, null, DealLifecycle.ACTIVE, DepositPolicy.WAIVED);
+        service.issueImportRequest(13L, importActor);
+        verify(ticketRepo).updateFulfillmentStatus(13L, "IR_ISSUED");
 
         stubDeal(12L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
             DealStage.ORDER_RECEIVED, null, DealLifecycle.ACTIVE, DepositPolicy.REQUIRED);
@@ -1794,7 +1823,8 @@ class TicketServiceTest {
         when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("500.00"), new BigDecimal("500.00"),
             new BigDecimal("1000.00"));
         service.confirmFinalPayment(10L, accountActor);
-        verify(ticketRepo).updatePaymentStatus(10L, "FULLY_PAID");
+        verify(ticketRepo).advancePaymentStatus(
+            10L, DepositPolicy.REQUIRED, "AWAITING_FINAL_PAYMENT", PaymentTrack.FULLY_PAID);
         verify(ticketRepo, never()).updateSalesStage(10L, DealStage.CLOSED_PAID);
     }
 

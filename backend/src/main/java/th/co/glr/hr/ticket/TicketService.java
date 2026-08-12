@@ -640,12 +640,34 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ขั้นตอนการรับชำระเงินผ่านสถานะ CUSTOMER_CONFIRMED ไปแล้ว");
         }
-        tickets.updatePaymentStatus(ticketId, "CUSTOMER_CONFIRMED");
-        tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.CUSTOMER_CONFIRMED, s.status(), s.status(), null);
+        // Idempotent no-op when already CUSTOMER_CONFIRMED: PaymentTrack has no
+        // CUSTOMER_CONFIRMED -> CUSTOMER_CONFIRMED self-loop (unlike DEPOSIT_NOTICE_ISSUED's one
+        // legal revision loop), so re-confirming must skip the write and the event entirely
+        // rather than attempt an edge the machine does not recognise. This preserves the prior
+        // observable behaviour (a harmless re-click) without adding a new edge to the machine.
+        if (!"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
+            int rows = tickets.advancePaymentStatus(
+                ticketId, s.depositPolicy(), s.paymentStatus(), PaymentTrack.CUSTOMER_CONFIRMED);
+            requirePaymentAdvanced(rows);
+            tickets.addEvent(ticketId, actor.id(), actor.name(),
+                TicketEventKind.CUSTOMER_CONFIRMED, s.status(), s.status(), null);
+        }
         // Deal pipeline (V50): a confirmed PO advances the deal — guarded no-op inside.
         autoAdvanceStage(s, DealStage.ORDER_RECEIVED, actor);
         return requireTicket(ticketId);
+    }
+
+    /**
+     * Turns a lost payment-track compare-and-set race into a 409. {@code advancePaymentStatus}'s
+     * 0 rowcount means a concurrent writer moved {@code payment_status} out from under this
+     * request between the read and the write — per that method's own Javadoc, the correct
+     * response is a conflict, never a re-SELECT to build a nicer message.
+     */
+    private void requirePaymentAdvanced(int rows) {
+        if (rows == 0) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ขั้นตอนการรับชำระเงินถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
     }
 
     // NOTE: the former issueDepositNotice endpoint (advance payment track with no
@@ -683,8 +705,13 @@ public class TicketService {
         // DEPOSIT_PAID is also acceptable: the customer often pays (and accounting
         // confirms) before import gets to the IR — requiring DEPOSIT_NOTICE_ISSUED
         // exactly deadlocked the fulfillment track in that ordering.
+        //
+        // Rule 5 (payment-track state machine): null is no longer treated as "deposit bypassed"
+        // here — null may only ever advance to CUSTOMER_CONFIRMED, so a bypass-policy deal must
+        // have actually reached CUSTOMER_CONFIRMED (via confirmCustomer) before an IR can issue.
+        // This is a deliberate behaviour change; see the branch report.
         boolean depositPolicyBypassesNotice = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
-            && (s.paymentStatus() == null || "CUSTOMER_CONFIRMED".equals(s.paymentStatus()));
+            && "CUSTOMER_CONFIRMED".equals(s.paymentStatus());
         boolean depositReady = "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
             || "DEPOSIT_PAID".equals(s.paymentStatus())
             || depositPolicyBypassesNotice;
@@ -778,7 +805,9 @@ public class TicketService {
         tickets.updateFulfillmentStatus(s.id(), FulfilmentStatus.GOODS_RECEIVED);
         // Also advance payment track to AWAITING_FINAL_PAYMENT if deposit was paid
         if ("DEPOSIT_PAID".equals(s.paymentStatus())) {
-            tickets.updatePaymentStatus(s.id(), "AWAITING_FINAL_PAYMENT");
+            int rows = tickets.advancePaymentStatus(
+                s.id(), s.depositPolicy(), s.paymentStatus(), PaymentTrack.AWAITING_FINAL_PAYMENT);
+            requirePaymentAdvanced(rows);
             tickets.addEvent(s.id(), actor.id(), actor.name(),
                 TicketEventKind.AWAITING_FINAL_PAYMENT, s.status(), s.status(), null);
         }
@@ -1003,7 +1032,12 @@ public class TicketService {
         BigDecimal outstanding = payableAmount(ticket).subtract(nullToZero(tickets.sumPaid(ticketId)));
         if (outstanding.signum() <= 0) {
             if (!"FULLY_PAID".equals(s.paymentStatus())) {
-                tickets.updatePaymentStatus(ticketId, "FULLY_PAID");
+                // Multi-hop walk: DEPOSIT_PAID -> AWAITING_FINAL_PAYMENT -> FULLY_PAID (REQUIRED)
+                // or CUSTOMER_CONFIRMED -> AWAITING_FINAL_PAYMENT -> FULLY_PAID (bypass) — both
+                // admitted by canConfirmFinalPaymentNow below, both walked in one call.
+                int rows = tickets.advancePaymentStatus(
+                    ticketId, s.depositPolicy(), s.paymentStatus(), PaymentTrack.FULLY_PAID);
+                requirePaymentAdvanced(rows);
                 tickets.addEvent(ticketId, actor.id(), actor.name(),
                     TicketEventKind.FULLY_PAID, s.status(), s.status(), null);
                 maybeAdvanceClosedPaid(s, true, actor);
@@ -1092,8 +1126,14 @@ public class TicketService {
         BigDecimal payable = payableAmount(ticket);
         BigDecimal paid = nullToZero(tickets.sumPaid(ticketId));
         if (payable.signum() > 0 && paid.compareTo(payable) >= 0) {
-            if (!"FULLY_PAID".equals(s.paymentStatus())) {
-                tickets.updatePaymentStatus(ticketId, "FULLY_PAID");
+            // Rule 4/5 tightening: null may only advance to CUSTOMER_CONFIRMED. A payment
+            // recorded (by account) before the customer was ever confirmed must not silently
+            // promote payment_status straight to FULLY_PAID — it stays null until confirmCustomer
+            // eventually runs. Deliberate behaviour change; see the branch report.
+            if (s.paymentStatus() != null && !"FULLY_PAID".equals(s.paymentStatus())) {
+                int rows = tickets.advancePaymentStatus(
+                    ticketId, s.depositPolicy(), s.paymentStatus(), PaymentTrack.FULLY_PAID);
+                requirePaymentAdvanced(rows);
                 tickets.addEvent(ticketId, actor.id(), actor.name(),
                     TicketEventKind.FULLY_PAID, s.status(), s.status(), null);
                 maybeAdvanceClosedPaid(s, true, actor);
@@ -1103,18 +1143,51 @@ public class TicketService {
         if (paid.signum() <= 0 || "FULLY_PAID".equals(s.paymentStatus())) {
             return;
         }
+        // Rule 5: null is no longer a valid starting point for anything but CUSTOMER_CONFIRMED.
+        // A bare drop of the old "s.paymentStatus() == null ||" leading clause would NOT be
+        // enough on its own: the bypass-policy clause below is unconditional on paymentStatus, so
+        // it would silently re-admit a null paymentStatus for any bypass-policy deal (an account
+        // payment recorded before confirmCustomer ever ran) straight into an illegal
+        // null -> AWAITING_FINAL_PAYMENT call below. Guarded explicitly instead.
         boolean eligibleForDepositAdvance =
-            s.paymentStatus() == null
-                || "CUSTOMER_CONFIRMED".equals(s.paymentStatus())
-                || "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
-                || DepositPolicy.bypassesDepositNotice(s.depositPolicy());
+            s.paymentStatus() != null
+                && ("CUSTOMER_CONFIRMED".equals(s.paymentStatus())
+                    || "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
+                    || DepositPolicy.bypassesDepositNotice(s.depositPolicy()));
         if (eligibleForDepositAdvance && !"DEPOSIT_PAID".equals(s.paymentStatus())) {
-            tickets.updatePaymentStatus(ticketId, "DEPOSIT_PAID");
+            // ⚠ Semantic change (site 6): the bypass path has no DEPOSIT_PAID state at all — a
+            // bypass deal's first payment now targets AWAITING_FINAL_PAYMENT, the corresponding
+            // state on that path, instead of the DEPOSIT_PAID literal PaymentTrack now refuses
+            // for a bypass policy. This makes a partially-paid bypass deal visible to the
+            // account role's list scope (ACCOUNT_PENDING_PAYMENT_STATUSES contains
+            // AWAITING_FINAL_PAYMENT, not DEPOSIT_PAID) where it previously was not — see
+            // PaymentTrackIntegrationTest for the real-DB proof. Deliberate; see the branch report.
+            //
+            // Event emission is UNCHANGED from before this branch (per the branch plan: "event
+            // emission stays exactly as it is today at all 7 sites") — TicketEventKind.DEPOSIT_PAID
+            // fires regardless of which literal the walk actually targets, since the business
+            // event is the same ("the deposit-equivalent first payment arrived"); only the
+            // persisted payment_status value differs by policy.
+            String depositTarget = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
+                ? PaymentTrack.AWAITING_FINAL_PAYMENT
+                : PaymentTrack.DEPOSIT_PAID;
+            int rows = tickets.advancePaymentStatus(
+                ticketId, s.depositPolicy(), s.paymentStatus(), depositTarget);
+            requirePaymentAdvanced(rows);
             tickets.addEvent(ticketId, actor.id(), actor.name(),
                 TicketEventKind.DEPOSIT_PAID, s.status(), s.status(), null);
             autoAdvanceStage(s, DealStage.DEPOSIT_RECEIVED, actor);
-            if ("GOODS_RECEIVED".equals(s.fulfillmentStatus())) {
-                tickets.updatePaymentStatus(ticketId, "AWAITING_FINAL_PAYMENT");
+            // Site 7: only reachable when site 6 targeted DEPOSIT_PAID (REQUIRED policy) — a
+            // bypass deal already landed on AWAITING_FINAL_PAYMENT above, and PaymentTrack has no
+            // AWAITING_FINAL_PAYMENT -> AWAITING_FINAL_PAYMENT self-loop, so this block must not
+            // run again for it. "expected" below is depositTarget — the value JUST written above
+            // in this same method — never the stale s.paymentStatus() read before it (a stale
+            // expected would make the compare-and-set return 0 and wrongly 409 a legitimate flow).
+            if (PaymentTrack.DEPOSIT_PAID.equals(depositTarget)
+                    && "GOODS_RECEIVED".equals(s.fulfillmentStatus())) {
+                int rows2 = tickets.advancePaymentStatus(
+                    ticketId, s.depositPolicy(), depositTarget, PaymentTrack.AWAITING_FINAL_PAYMENT);
+                requirePaymentAdvanced(rows2);
                 tickets.addEvent(ticketId, actor.id(), actor.name(),
                     TicketEventKind.AWAITING_FINAL_PAYMENT, s.status(), s.status(), null);
             }
@@ -1185,8 +1258,13 @@ public class TicketService {
     }
 
     private boolean canConfirmFinalPaymentNow(TicketSummaryDto s) {
+        // Rule 4/5 (payment-track state machine): null may only advance to CUSTOMER_CONFIRMED —
+        // it no longer qualifies as "deposit bypassed" here, even on a bypass policy. A bypass
+        // deal must have confirmCustomer's CUSTOMER_CONFIRMED write behind it before final
+        // payment can walk it on to AWAITING_FINAL_PAYMENT -> FULLY_PAID. Deliberate behaviour
+        // change; see the branch report.
         boolean depositBypassed = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
-            && (s.paymentStatus() == null || "CUSTOMER_CONFIRMED".equals(s.paymentStatus()));
+            && "CUSTOMER_CONFIRMED".equals(s.paymentStatus());
         return "AWAITING_FINAL_PAYMENT".equals(s.paymentStatus())
             || "DEPOSIT_PAID".equals(s.paymentStatus())
             || depositBypassed;
@@ -1487,6 +1565,15 @@ public class TicketService {
         requireRole(actor, ACCOUNT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
+        // Rule 4 (payment-track state machine): once a deposit invoice has actually been issued
+        // (or paid, or further), waiving the deposit policy after the fact is no longer a policy
+        // change a rep/account can make retroactively — the customer already has a real document
+        // in hand quoting a deposit; undoing that is a credit note, not a policy flip. Only a
+        // not-yet-started payment track (null) or one still at CUSTOMER_CONFIRMED may waive.
+        if (s.paymentStatus() != null && !PaymentTrack.CUSTOMER_CONFIRMED.equals(s.paymentStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ยกเลิกนโยบายมัดจำไม่ได้: มีการออกใบแจ้งรับมัดจำแล้ว — การแก้ไขต้องออกเป็นใบลดหนี้ ไม่ใช่การเปลี่ยนนโยบาย");
+        }
         tickets.updateDepositPolicy(ticketId, policy, reason.trim(), actor.id());
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(),
@@ -1871,9 +1958,17 @@ public class TicketService {
             && !DepositPolicy.bypassesDepositNotice(s.depositPolicy());
     }
 
+    /**
+     * Mirrors {@link #issueImportRequest}'s own deposit-readiness check EXACTLY (down to the
+     * rule-5 null tightening) — this predicate exists only to decide whether to advertise
+     * ISSUE_IMPORT_REQUEST in {@link #actions}. Letting the two drift would advertise an action
+     * that immediately 409s on click, which is worse than not offering it at all (same "never
+     * offer a dead action" discipline {@link #addOperationalActions} already documents for the
+     * removed legacy actions).
+     */
     private boolean canIssueImportRequest(TicketSummaryDto s) {
         boolean depositPolicyBypassesNotice = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
-            && (s.paymentStatus() == null || "CUSTOMER_CONFIRMED".equals(s.paymentStatus()));
+            && "CUSTOMER_CONFIRMED".equals(s.paymentStatus());
         boolean depositReady = "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
             || "DEPOSIT_PAID".equals(s.paymentStatus())
             || depositPolicyBypassesNotice;

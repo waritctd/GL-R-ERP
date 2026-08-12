@@ -16,6 +16,8 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.ticket.DealLifecycle;
+import th.co.glr.hr.ticket.DepositPolicy;
+import th.co.glr.hr.ticket.PaymentTrack;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketEventKind;
@@ -164,8 +166,25 @@ public class DepositNoticeService {
         TicketSummaryDto s = tickets.findById(doc.ticketId())
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
             .summary();
-        if (!TicketStatus.QUOTATION_ISSUED.equals(s.status())
-                || !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
+        // Loosened precondition (payment-track state machine, site 2): a deposit notice may be
+        // (re-)issued from CUSTOMER_CONFIRMED (first issue) OR from DEPOSIT_NOTICE_ISSUED itself
+        // (a revision — PaymentTrack's one legal self-loop; PR #698's own "AND status='DRAFT'"
+        // guard on docs.issue is what makes a revision safe to mint a fresh doc number here).
+        //
+        // The explicit !bypassesDepositNotice(...) guard matters beyond the paymentStatus check
+        // above: DEPOSIT_NOTICE_ISSUED is not on a bypass policy's PaymentTrack path AT ALL, so a
+        // WAIVED/NOT_REQUIRED/CREDIT_CUSTOMER deal that somehow reached CUSTOMER_CONFIRMED (the
+        // paymentStatus check alone would pass) must still be refused HERE, with a clean 409 —
+        // not left to fall through to advancePaymentStatus below, which would throw an uncaught
+        // IllegalStateException (ApiExceptionHandler has no handler for it, so it would surface as
+        // an opaque 500, not a controlled conflict). Found while writing PaymentTrackIntegrationTest's
+        // off-path case; a bypass-policy deal CAN reach a DRAFT deposit notice today (createDraft
+        // does not check deposit_policy), so this is a genuinely reachable path, not hypothetical.
+        // On a bypass policy, issuing a deposit notice now throws — a deliberate behaviour change
+        // from rule 4; see the branch report.
+        boolean paymentTrackReady = !DepositPolicy.bypassesDepositNotice(s.depositPolicy())
+            && ("CUSTOMER_CONFIRMED".equals(s.paymentStatus()) || "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()));
+        if (!TicketStatus.QUOTATION_ISSUED.equals(s.status()) || !paymentTrackReady) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ออกใบแจ้งรับมัดจำได้เฉพาะเมื่อออกใบเสนอราคาแล้วและลูกค้ายืนยันคำสั่งซื้อแล้วเท่านั้น");
         }
@@ -188,7 +207,14 @@ public class DepositNoticeService {
             // Non-fatal: files can be regenerated on download.
         }
 
-        tickets.updatePaymentStatus(doc.ticketId(), "DEPOSIT_NOTICE_ISSUED");
+        // expected = s.paymentStatus(), which by the guard above is exactly CUSTOMER_CONFIRMED
+        // (first issue, single hop) or DEPOSIT_NOTICE_ISSUED (revision, the one legal self-loop).
+        int rows = tickets.advancePaymentStatus(doc.ticketId(), s.depositPolicy(), s.paymentStatus(),
+            PaymentTrack.DEPOSIT_NOTICE_ISSUED);
+        if (rows == 0) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ขั้นตอนการรับชำระเงินถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
         tickets.addEvent(doc.ticketId(), actor.id(), actor.name(),
             TicketEventKind.DEPOSIT_NOTICE_ISSUED,
             s.status(), s.status(),
