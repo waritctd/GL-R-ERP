@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -526,6 +527,176 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(jdbc.queryForObject(
             "SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id", Map.of("id", ticketId), Long.class))
             .isZero();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Transaction-harness coverage (test/transaction-harness): confirmOrder's write sequence is
+    // lockPricingRequest -> replay check -> markOrderConfirmed (1) ->
+    // markQuotationIssuedForOrderConfirmation (2) -> tickets.addEvent (3) -> reconcileTicketItems
+    // (4) -> ticketService.confirmCustomer (5-6) -> pricingRequests.addEvent ORDER_CONFIRMED (7)
+    // -> notifications.notifyByRoleForPricingRequest (8, last). Every hand-wired integration test
+    // in this suite — including every OTHER test in this very file — drives orderConfirmation
+    // with `new OrderConfirmationService(...)`, which has NO Spring AOP proxy, so @Transactional
+    // on confirmOrder does nothing for them: every JDBC statement auto-commits independently.
+    // These two tests close that gap.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Real proxy, real rollback: fails at the LAST write (the notification) and proves all seven
+     * writes before it are undone. Built via {@link AbstractPostgresIntegrationTest#transactional}
+     * so {@code confirmOrder}'s own {@code @Transactional} — not a test-supplied transaction — is
+     * what has to do the work; see {@link
+     * #confirmOrder_withoutTheProxy_strandsTheDealHalfConfirmed_theHarnessDefectItself()} for the
+     * vacuity control proving this assertion is not trivially true.
+     */
+    @Test
+    void confirmOrder_failingAfterEveryWrite_rollsBackAllOfThem_whenProxied() {
+        long pricingRequestId = driveToQuotationAccepted();
+        List<Map<String, Object>> itemsBefore = ticketItemSnapshot();
+
+        OrderConfirmationService failing = wireFailingOrderConfirmationService();
+
+        assertThatThrownBy(() -> transactional(failing).confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor))
+            .isInstanceOf(IllegalStateException.class);
+
+        assertThat(jdbc.queryForObject(
+            "SELECT order_confirmed_at IS NOT NULL FROM sales.pricing_request WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId), Boolean.class))
+            .as("markOrderConfirmed's write (1 of 8) must not survive a rollback triggered by the "
+                + "8th write failing")
+            .isFalse();
+        assertThat(jdbc.queryForObject(
+            "SELECT status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
+            .as("markQuotationIssuedForOrderConfirmation's write (2) must not survive")
+            .isEqualTo(TicketStatus.DRAFT);
+        assertThat(jdbc.queryForObject(
+            "SELECT payment_status IS NULL FROM sales.ticket WHERE ticket_id = :id",
+            Map.of("id", ticketId), Boolean.class))
+            .as("confirmCustomer's updatePaymentStatus write (5) must not survive")
+            .isTrue();
+        assertThat(countTicketEventsOfKind("ORDER_CONFIRMED_FROM_QUOTATION"))
+            .as("tickets.addEvent's write (3) must not survive")
+            .isZero();
+        assertThat(countTicketEventsOfKind("CUSTOMER_CONFIRMED"))
+            .as("confirmCustomer's own ticket_event write (6) must not survive")
+            .isZero();
+        assertThat(countPricingRequestEventsOfKind(pricingRequestId, "ORDER_CONFIRMED"))
+            .as("pricingRequests.addEvent ORDER_CONFIRMED (7) must not survive")
+            .isZero();
+        assertThat(countPricingRequestEventsOfKind(pricingRequestId, "TICKET_ITEMS_RECONCILED"))
+            .as("reconcileTicketItems's own event (part of write 4) must not survive")
+            .isZero();
+        assertThat(ticketItemSnapshot())
+            .as("reconcileTicketItems's UPDATE/INSERT on sales.ticket_item (write 4) must not survive")
+            .isEqualTo(itemsBefore);
+
+        // The deal must not be stuck: a subsequent confirm through the REAL (non-failing) service
+        // — the retry production depends on — succeeds.
+        OrderConfirmationDtos.OrderConfirmationResultDto retried = orderConfirmation.confirmOrder(
+            pricingRequestId, new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor);
+        assertThat(retried.ticket().summary().status()).isEqualTo(TicketStatus.QUOTATION_ISSUED);
+        assertThat(retried.pricingRequest().orderConfirmedAt()).isNotNull();
+    }
+
+    /**
+     * The vacuity control, and the reason the assertions above are not passing for a trivial
+     * reason. Same injected failure, but calls the RAW un-proxied service exactly as all other
+     * integration tests in this suite do — no {@link AbstractPostgresIntegrationTest#transactional}
+     * wrapping. Because {@code @Transactional} does nothing without a real AOP proxy, every write
+     * before the injected failure COMMITS independently, stranding the deal half-confirmed:
+     * {@code order_confirmed_at} is set, the ticket sits at {@code quotation_issued}, {@code
+     * confirmCustomer}'s payment/stage writes landed, and the reconciliation write(s) survive
+     * independently of everything after them — and a retry now 409s, because {@code
+     * markOrderConfirmed}'s own compare-and-set already fired. The deal is confirmed but the
+     * notification the accepted order depends on never fired, and nothing will ever re-drive it;
+     * only hand-written SQL frees it in production today.
+     *
+     * <p>(Reviewer's note: an earlier draft of this Javadoc claimed {@code confirmCustomer} "never
+     * ran, paymentStatus stays NULL". That was wrong — {@code confirmCustomer} is writes 5-6, i.e.
+     * strictly BEFORE the injected 8th-write failure, so its writes commit like all the others.
+     * The claim is now pinned by an assertion below rather than asserted only in prose.)
+     *
+     * <p>Documents today's broken auto-commit behaviour deliberately — it asserts the DEFECT, not
+     * a desired outcome, and should be DELETED the day the base test harness itself runs inside a
+     * real Spring context with proxied beans (at which point every plain, hand-wired service in
+     * this suite would roll back correctly and this divergent-behaviour test would no longer
+     * describe reality).
+     */
+    @Test
+    void confirmOrder_withoutTheProxy_strandsTheDealHalfConfirmed_theHarnessDefectItself() {
+        long pricingRequestId = driveToQuotationAccepted();
+        List<Map<String, Object>> itemsBefore = ticketItemSnapshot();
+
+        OrderConfirmationService failing = wireFailingOrderConfirmationService();
+
+        assertThatThrownBy(() -> failing.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor))
+            .isInstanceOf(IllegalStateException.class);
+
+        assertThat(jdbc.queryForObject(
+            "SELECT order_confirmed_at IS NOT NULL FROM sales.pricing_request WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId), Boolean.class))
+            .as("without a proxy, markOrderConfirmed's write commits on its own and survives — the "
+                + "harness defect this test documents")
+            .isTrue();
+        assertThat(jdbc.queryForObject(
+            "SELECT status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
+            .isEqualTo(TicketStatus.QUOTATION_ISSUED);
+        assertThat(ticketItemSnapshot())
+            .as("reconcileTicketItems's write also survives independently of everything after it")
+            .isNotEqualTo(itemsBefore);
+        // Pins the corrected claim in this method's Javadoc: confirmCustomer (writes 5-6) runs
+        // strictly BEFORE the injected 8th-write failure, so its writes commit too. The exact
+        // mirror image of the proxied test's "payment_status IS NULL / zero CUSTOMER_CONFIRMED
+        // events" assertions — which is what makes those two non-vacuous.
+        assertThat(jdbc.queryForObject(
+            "SELECT payment_status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
+            .as("confirmCustomer's updatePaymentStatus write (5) survives without a proxy")
+            .isEqualTo("CUSTOMER_CONFIRMED");
+        assertThat(countTicketEventsOfKind("CUSTOMER_CONFIRMED"))
+            .as("confirmCustomer's own ticket_event write (6) survives without a proxy")
+            .isOne();
+
+        // The consequence that matters: the deal is confirmed but never fully processed, and a
+        // retry 409s because markOrderConfirmed's compare-and-set already fired.
+        assertThatThrownBy(() -> orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    /** Identical to the fixture's {@code orderConfirmation} except its {@code
+     * NotificationRepository} is a mock that throws on the LAST write of confirmOrder's sequence
+     * — every other dependency (pricingRequests, tickets, ticketService, quotationRepository,
+     * depositNoticeService) stays REAL, so everything before that last write is genuinely
+     * exercised against real Postgres. */
+    private OrderConfirmationService wireFailingOrderConfirmationService() {
+        NotificationRepository failingNotifications = mock(NotificationRepository.class);
+        doThrow(new IllegalStateException("injected failure after every confirmOrder write"))
+            .when(failingNotifications)
+            .notifyByRoleForPricingRequest(anyString(), anyLong(), anyString(), anyString());
+        return new OrderConfirmationService(
+            pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, failingNotifications);
+    }
+
+    private List<Map<String, Object>> ticketItemSnapshot() {
+        return jdbc.queryForList(
+            "SELECT item_id, qty, qty_sqm FROM sales.ticket_item WHERE ticket_id = :id ORDER BY item_id",
+            Map.of("id", ticketId));
+    }
+
+    private long countTicketEventsOfKind(String kind) {
+        Long count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = :kind",
+            Map.of("id", ticketId, "kind", kind), Long.class);
+        return count == null ? 0 : count;
+    }
+
+    private long countPricingRequestEventsOfKind(long pricingRequestId, String eventKind) {
+        Long count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM sales.pricing_request_event WHERE pricing_request_id = :id AND event_kind = :kind",
+            Map.of("id", pricingRequestId, "kind", eventKind), Long.class);
+        return count == null ? 0 : count;
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

@@ -8,9 +8,15 @@ import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.condition.EnabledIf;
+import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
+import org.springframework.transaction.interceptor.TransactionInterceptor;
+import org.springframework.transaction.support.TransactionTemplate;
 import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentSsoInclusionUpsertRequest;
 import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentTaxTreatmentUpsertRequest;
 import th.co.glr.hr.payroll.PayrollComponent;
@@ -42,6 +48,18 @@ public abstract class AbstractPostgresIntegrationTest {
 
     protected NamedParameterJdbcTemplate jdbc;
 
+    /**
+     * A real {@link PlatformTransactionManager}/{@link TransactionTemplate} pair on the same
+     * {@link DataSource} {@link #jdbc} uses. Every integration test in this suite hand-wires its
+     * services with {@code new} (no Spring context, no AOP proxy), so a bare {@code @Transactional}
+     * on the production method does nothing by itself — see {@link #transactional} below for why
+     * that matters, and this class's own Javadoc for the consequences (no rollback ever exercised,
+     * {@code pg_advisory_xact_lock} released at the end of its own statement instead of held for
+     * the transaction).
+     */
+    protected PlatformTransactionManager transactionManager;
+    protected TransactionTemplate transactionTemplate;
+
     @BeforeEach
     void resetSchema() {
         if (PostgresTestSupport.usesContainer()) {
@@ -55,6 +73,32 @@ public abstract class AbstractPostgresIntegrationTest {
             flyway.migrate();
         }
         jdbc = new NamedParameterJdbcTemplate(dataSource());
+        DataSourceTransactionManager txManager = new DataSourceTransactionManager(dataSource());
+        transactionManager = txManager;
+        transactionTemplate = new TransactionTemplate(txManager);
+    }
+
+    /**
+     * Wraps a hand-wired service in a REAL transactional AOP proxy, so its own {@code @Transactional}
+     * annotations are honoured exactly as they are in production.
+     *
+     * <p><strong>Why this matters, and why {@link #transactionTemplate} alone is not enough:</strong>
+     * a test that wraps its call in {@code transactionTemplate.execute(...)} creates the transaction
+     * *itself* — so deleting {@code @Transactional} from the method under test would NOT turn that
+     * test red; the test's own template would silently supply the transaction the annotation was
+     * supposed to. Only a call through a proxy built from the annotation proves the annotation is
+     * doing the work: {@code transactionTemplate} tests rollback *SQL*, {@link #transactional} tests
+     * the *annotation*. Note also that, exactly as in production, self-invocation inside the
+     * wrapped service (one method calling another {@code @Transactional} method on {@code this})
+     * bypasses the proxy — CGLIB proxies the entry point, not internal calls.
+     */
+    @SuppressWarnings("unchecked")
+    protected <T> T transactional(T service) {
+        ProxyFactory factory = new ProxyFactory(service);
+        factory.setProxyTargetClass(true);
+        factory.addAdvice(new TransactionInterceptor(
+            transactionManager, new AnnotationTransactionAttributeSource()));
+        return (T) factory.getProxy();
     }
 
     private static DataSource dataSource() {
