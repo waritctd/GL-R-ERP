@@ -126,12 +126,20 @@ jobs:
           echo "Changed files:"
           echo "$CHANGED"
 
-          # Controllers are in scope even though they are backend files:
-          # src/api/serverContract.test.js parses them and fails when the served surface and
-          # hrApi.js disagree. Without this line that guard would not run on the one kind of
+          # Backend paths are in scope even though they are not frontend files, because
+          # src/api/serverContract.test.js reconciles hrApi.js against the served surface and
+          # fails when they disagree. Without them that guard would not run on the one kind of
           # diff that can break it — a backend-only PR renaming or removing an endpoint — and
           # would only report on the next PR that happened to touch frontend/.
-          if echo "$CHANGED" | grep -qE '^(frontend/|backend/src/main/java/.*Controller\.java$|\.github/workflows/frontend-ci\.yml$)'; then
+          #
+          # docs/api/ is the load-bearing one now. The guard used to parse *Controller.java
+          # directly; it now reads docs/api/api-surface.json, which ApiSurfaceContractTest
+          # regenerates from springdoc. So a backend-only PR that changes the surface shows up
+          # here as a docs/api/ diff, and MUST trigger this job so the new endpoint gets
+          # triaged into SERVER_ONLY rather than silently landing unreachable.
+          # The Controller.java clause is kept as belt-and-braces: it costs one CI run and
+          # catches the case where someone edits a controller without regenerating the digest.
+          if echo "$CHANGED" | grep -qE '^(frontend/|docs/api/|backend/src/main/java/.*Controller\.java$|\.github/workflows/frontend-ci\.yml$)'; then
             echo "frontend=true" >> "$GITHUB_OUTPUT"
           else
             echo "frontend=false" >> "$GITHUB_OUTPUT"
