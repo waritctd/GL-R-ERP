@@ -193,8 +193,9 @@ public class PricingRequestRepository {
      * <p>The one intentional bypass of this assertion is {@link #cancelForDeadDeal} — used
      * exclusively by {@code PricingRequestService#cancelOpenForTicket}'s dead-deal cascade, which
      * must be able to cancel a request from ANY open status (including one, like {@code
-     * READY_FOR_CEO_REVIEW}, that is not normally cancellable by a live user action) once the deal
-     * itself has gone terminal. Use that method, never this one, for that cascade.
+     * QUOTATION_ISSUED}, that a live user action may NOT cancel from — see the cancel cutoff in
+     * {@link PricingRequestStatus}) once the deal itself has gone terminal. Use that method, never
+     * this one, for that cascade.
      */
     public int transition(long id, String expected, String next, Long assignImportId, Long cancelledBy) {
         if (!PricingRequestStatus.canTransition(expected, next)) {
@@ -236,11 +237,17 @@ public class PricingRequestRepository {
      * Cancels a pricing request as part of {@code PricingRequestService#cancelOpenForTicket}'s
      * dead-deal cascade (review remediation COMMIT 5) — the one place a status transition must
      * bypass {@link PricingRequestStatus#canTransition}, since a deal reaching a terminal
-     * lifecycle state must be able to cancel a pricing request from ANY open status, including
-     * {@code READY_FOR_CEO_REVIEW} (which {@link PricingRequestStatus#ALLOWED} does not permit a
-     * live user to cancel directly — only {@code SUPERSEDED}/{@code COSTING_IN_PROGRESS} are
-     * reachable from there for a normal in-flight workflow). Do not call this from anywhere else;
-     * every other caller must use {@link #transition} so the state machine stays authoritative.
+     * lifecycle state must be able to cancel a pricing request from ANY open status, including the
+     * two past the cancel cutoff — {@code QUOTATION_ISSUED} and {@code QUOTATION_ACCEPTED} — which
+     * {@link PricingRequestStatus#ALLOWED} does not permit a live user to cancel directly, because
+     * the customer already holds an offer there. That is precisely the case this method exists for:
+     * a deal marked lost after a quotation went out must still close its pricing request. Do not
+     * call this from anywhere else; every other caller must use {@link #transition} so the state
+     * machine stays authoritative.
+     *
+     * <p>Before the cancel cutoff (owner ruling 2026-08-13) this Javadoc cited READY_FOR_CEO_REVIEW
+     * as its example. That status is now cancellable by a live user action, so it no longer
+     * illustrates a bypass of anything.
      *
      * <p>Same compare-and-set shape as {@link #transition}, deliberately narrowed to only the
      * columns a cancellation actually touches (no {@code assignImportId}/{@code submitted_at}/
