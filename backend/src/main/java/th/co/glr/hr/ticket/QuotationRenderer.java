@@ -567,9 +567,4 @@ public class QuotationRenderer {
 
     private String nullSafe(String s) { return s != null ? s : ""; }
     private String nullSafe(String s, String fallback) { return (s != null && !s.isBlank()) ? s : fallback; }
-
-    private String fmt2(BigDecimal v) {
-        if (v == null) return "-";
-        return String.format(Locale.US, "%,.2f", v);
-    }
 }

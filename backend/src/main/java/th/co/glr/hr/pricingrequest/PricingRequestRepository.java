@@ -1,6 +1,5 @@
 package th.co.glr.hr.pricingrequest;
 
-import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
