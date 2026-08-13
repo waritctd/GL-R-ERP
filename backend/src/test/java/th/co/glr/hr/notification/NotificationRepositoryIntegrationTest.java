@@ -16,7 +16,7 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
 
     @BeforeEach
     void wireRepository() {
-        repository = new NotificationRepository(jdbc);
+        repository = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
     }
 
     @Test

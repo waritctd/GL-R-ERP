@@ -18,6 +18,7 @@ import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.payroll.PayrollService;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.LorYor01AddressPayload;
@@ -68,7 +69,7 @@ class TaxAllowanceHeaderWriteBackIntegrationTest extends AbstractPostgresIntegra
             mock(AuditService.class),
             mock(FileStorageService.class),
             mock(PayrollService.class),
-            new NotificationRepository(jdbc),
+            new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
             new AppProperties(), new LorYor01Renderer());
 
         employeeA = seedEmployee("TWB-A");

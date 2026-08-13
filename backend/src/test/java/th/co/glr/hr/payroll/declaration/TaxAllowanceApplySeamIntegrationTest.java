@@ -23,6 +23,7 @@ import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
@@ -108,7 +109,7 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             // The REAL PayrollService, wired above — this class's byte-for-byte pinning test needs
             // estimateAllowanceEffect to run the SAME calculator instance #preview does.
             payrollService,
-            new NotificationRepository(jdbc),
+            new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
             new AppProperties(), new LorYor01Renderer());
 
         employeeId = seedEmployee("SEAM-EMP", new BigDecimal("50000.00"));

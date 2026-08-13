@@ -14,6 +14,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.payroll.PayrollService;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceApplyRequest;
@@ -60,7 +61,7 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
             mock(FileStorageService.class),
             mock(PayrollService.class),
             // Real, not mocked: the whole point is which employee_id reaches the INSERT.
-            new NotificationRepository(jdbc),
+            new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
             new AppProperties(), new LorYor01Renderer());
 
         employeeA = seedEmployee("TAN-A");
