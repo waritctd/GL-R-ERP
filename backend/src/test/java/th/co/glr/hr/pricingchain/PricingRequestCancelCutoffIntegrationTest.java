@@ -274,6 +274,16 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
      * deal — must not be able to cancel it. Asserted at APPROVED_FOR_QUOTATION specifically: that is
      * a status the cutoff NEWLY admits, so this is where a widened map could quietly widen who may
      * act as well as when.
+     *
+     * <p><b>What this test does and does not pin, established by mutation-check.</b> Deleting the
+     * ownership half of {@code PricingRequestService.cancel}'s own gate leaves this test GREEN: a
+     * {@code sales} actor who does not own the ticket is already refused one step earlier, by
+     * {@code requireViewable}'s own-deals-only scope filter. So this asserts the observable rule
+     * (defence in depth — two independent guards agree) but is NOT evidence about cancel()'s gate.
+     * {@link #cancel_byImport_isRefused_eventThoughImportDrivesTheRequestsWholeMiddleLife} is the
+     * test that pins that line, because Import passes {@code requireViewable} and only the
+     * ownership check stops them. Keep both: if the scope filter is ever relaxed, this one starts
+     * carrying real weight, and the pair documents which guard is load-bearing today.
      */
     @Test
     void cancel_byASalesRepWhoDoesNotOwnTheDeal_isRefused_andTheRequestIsUntouched() {
