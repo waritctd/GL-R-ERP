@@ -26,9 +26,18 @@ spring:
     # Bounded retry so a momentarily-cold DB doesn't hang the migration step.
     connect-retries: 3
     connect-retries-interval: 5
-    # The hosted Render demo DB has lived through several pre-release migration renumberings and
-    # edited historical SQL files. Keep validation enabled elsewhere; this profile is the public
-    # showcase DB and needs forward-only recovery migrations to run despite that history drift.
+    # This default is load-bearing for BOTH real production AND this showcase DB -- not just the
+    # showcase, despite what an earlier version of this comment implied. Verified 2026-08-13 by
+    # reading real prod's hr.flyway_schema_history directly (read-only): real production ALSO
+    # has Flyway history drift, on three separate counts:
+    #   - Checksum drift (a migration file edited after being applied): V12, V17, V21, V40, V41, V42
+    #   - Applied in prod, not resolvable locally: V11 (the repo ships V11.1 / V11.2 instead)
+    #   - Resolved locally, never applied, below prod's current max (V138): V11.1, V11.2
+    # Flipping this to true would hard-fail the NEXT REAL-PROD DEPLOY on all three counts -- this
+    # is not only the showcase's already-documented renumbering history. Re-enabling validation
+    # requires an owner-approved `flyway repair` covering the 6 checksum mismatches, plus
+    # resolving the V11-vs-V11.1/V11.2 split, before this default can safely become true. Until
+    # that happens, it stays false everywhere the `prod` profile runs, real deploy or showcase.
     validate-on-migrate: ${APP_FLYWAY_VALIDATE_ON_MIGRATE:false}
     # This profile carries ONLY the real production schema (db/migration) — no demo seed.
     #

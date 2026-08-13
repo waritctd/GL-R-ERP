@@ -44,6 +44,11 @@ services:
         value: classpath:db/migration,classpath:db/migration-demo
       - key: APP_FLYWAY_ENABLED
         value: "true"
+      # Explicit rather than relying on application-prod.yml's default -- real production (not
+      # just this showcase) has Flyway history drift too; see that file's comment on
+      # validate-on-migrate for the specific versions and what re-enabling would require.
+      - key: APP_FLYWAY_VALIDATE_ON_MIGRATE
+        value: "false"
       # Frontend origin is only needed as a CORS fallback; the Vercel proxy keeps calls
       # same-origin so CORS normally isn't exercised.
       - key: APP_CORS_ALLOWED_ORIGINS
