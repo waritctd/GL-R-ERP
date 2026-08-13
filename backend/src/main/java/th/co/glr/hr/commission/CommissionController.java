@@ -21,6 +21,7 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.commission.CommissionResponses.CommissionDetailResponse;
 import th.co.glr.hr.commission.CommissionResponses.CommissionListResponse;
+import th.co.glr.hr.commission.CommissionResponses.CommissionMonthlySummaryResponse;
 import th.co.glr.hr.commission.CommissionResponses.CommissionSimulationResponse;
 import th.co.glr.hr.commission.CommissionResponses.PayrollSummaryResponse;
 import th.co.glr.hr.common.ApiException;
@@ -214,6 +215,24 @@ public class CommissionController {
     public PayrollSummaryResponse payrollReady(@RequestParam(required = false) String payrollMonth, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new PayrollSummaryResponse(commissionService.payrollReadySummary(parseMonth(payrollMonth), user));
+    }
+
+    /**
+     * A sales rep's own live monthly commission estimate — server-computed by {@link
+     * CommissionService#monthlySummary} from the same tier/incentive config a real payroll run
+     * uses, replacing the frontend's former client-side re-implementation of this math. Same role
+     * gate as {@link #list} (SALES, SALES_MANAGER, CEO).
+     */
+    @GetMapping("/monthly-summary")
+    @PreAuthorize("hasAnyRole('SALES','SALES_MANAGER','CEO')")
+    public CommissionMonthlySummaryResponse monthlySummary(
+        @RequestParam(required = false) String payrollMonth,
+        @RequestParam(required = false) Long salesRepId,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new CommissionMonthlySummaryResponse(
+            commissionService.monthlySummary(salesRepId, parseMonth(payrollMonth), user));
     }
 
     private LocalDate parseMonth(String value) {

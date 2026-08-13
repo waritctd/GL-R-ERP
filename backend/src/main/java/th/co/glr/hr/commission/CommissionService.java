@@ -678,6 +678,122 @@ public class CommissionService {
         );
     }
 
+    /**
+     * A sales rep's own live monthly commission estimate — {@code GET
+     * /api/commissions/monthly-summary}. Replaces the frontend's former JS re-implementation of
+     * this same math (the deleted {@code commissionCalc.js}): tiers/incentive ladder are read from
+     * {@code sales.tier_config}/{@code sales.commission_incentive_tier} at call time via the same
+     * {@link #tiers()} / {@link CommissionRepository#findIncentiveTiers} a real payroll run uses,
+     * so a DB tier change can never desynchronise what a rep sees from what payroll pays (the V81
+     * tier-13 rate correction is the case on record).
+     *
+     * <p>Role gate is the SAME as {@link #list} ({@link #LIST_VIEWER_ROLES}) — this is a read of
+     * the same money surface, just aggregated instead of itemised. {@link #resolveSalesRep} gives
+     * this the identical row-scope {@code list()}/{@code simulate()} already have: a {@code sales}
+     * actor may only ever see their own figures, {@code sales_manager}/{@code ceo} may pass any
+     * rep's id.
+     *
+     * <p>The tier base uses the SAME broader {@code NOT IN ('VOID','REJECTED')} filter {@link
+     * #simulate} uses ({@link CommissionRepository#sumActiveWeightedActualReceived}), not the
+     * APPROVED-only filter {@link #computeRepPayrollCommissions}/payroll use — this endpoint is the
+     * rep's live ESTIMATE, exactly what the page showed before this endpoint existed. Manual
+     * entries carry {@code actual_received = 0} (see {@link CommissionRepository
+     * #createManualCommission}), so they contribute nothing to this sum regardless of status.
+     *
+     * <p>{@code manualTotal}/the INCENTIVE-suppression check reuse {@link
+     * CommissionRepository#findRecords} (no new SQL needed) filtered to this rep/month's APPROVED
+     * {@link #MANUAL_KINDS} records — mirroring {@link #computeRepPayrollCommissions}'s
+     * manualTotals/manualIncentiveTotals maps exactly, including its 2026-08-02 reworked rule: the
+     * auto-computed incentive limb is suppressed only when the rep's summed APPROVED manual {@link
+     * CommissionKind#INCENTIVE} is STRICTLY POSITIVE (a replacement) — zero/negative is a
+     * correction layered on top and must NOT suppress. The "before 2026-08" fix-forward gate needs
+     * no code of its own here: {@link CommissionRepository#findIncentiveTiers} returns an empty
+     * ladder for a month before the seeded {@code effective_from}, and {@link
+     * CommissionCalculator#monthlyIncentive} treats an empty ladder as ZERO.
+     *
+     * <p>{@code belowFloor} is DERIVED, not re-declared: {@link CommissionCalculator}'s monthly
+     * floor constant is private and that class must stay unmodified. For a positive base the only
+     * way {@link CommissionCalculator#progressiveCommission} returns zero is the floor (tier 1
+     * starts at {@code 0} with a positive rate), so this check is exact.
+     *
+     * <p>KNOWN GAP, deliberate (see {@link CommissionMonthlySummaryDto}): STOCK_BONUS is not
+     * included — the page this replaces never showed it, it ships config-gated OFF, and adding a
+     * new rendered figure is out of scope for a "who computes the number" change.
+     */
+    public CommissionMonthlySummaryDto monthlySummary(Long salesRepId, LocalDate payrollMonth, UserPrincipal actor) {
+        if (!LIST_VIEWER_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        long repId = resolveSalesRep(salesRepId, actor);
+        LocalDate month = payrollMonth == null ? currentPayrollMonth() : payrollMonth(payrollMonth);
+
+        BigDecimal weighted = commissions.sumActiveWeightedActualReceived(repId, month).max(BigDecimal.ZERO);
+        BigDecimal base = calculator.monthlyTierBase(weighted);
+        List<TierConfig> tiers = tiers();
+        BigDecimal tierCommission = calculator.progressiveCommission(base, tiers);
+
+        BigDecimal zero = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        BigDecimal manualTotal = zero;
+        BigDecimal manualIncentiveTotal = zero;
+        for (CommissionRecord record : commissions.findRecords(repId, month)) {
+            if (!MANUAL_KINDS.contains(record.kind()) || !CommissionStatus.APPROVED.equals(record.status())) {
+                continue;
+            }
+            BigDecimal amount = record.manualAmount() == null ? BigDecimal.ZERO : record.manualAmount();
+            manualTotal = manualTotal.add(amount);
+            if (CommissionKind.INCENTIVE.equals(record.kind())) {
+                manualIncentiveTotal = manualIncentiveTotal.add(amount);
+            }
+        }
+
+        BigDecimal incentiveAmount = manualIncentiveTotal.signum() > 0
+            ? zero
+            : calculator.monthlyIncentive(base, commissions.findIncentiveTiers(month));
+
+        boolean belowFloor = base.signum() > 0 && tierCommission.signum() == 0;
+
+        return new CommissionMonthlySummaryDto(
+            month, repId,
+            base.setScale(2, RoundingMode.HALF_UP),
+            tierCommission, incentiveAmount, manualTotal,
+            tierCommission.add(incentiveAmount).add(manualTotal),
+            belowFloor,
+            tierRows(base, tiers));
+    }
+
+    /**
+     * Per-tier breakdown of {@code base} WITHOUT re-implementing the bracket math {@link
+     * CommissionCalculator#progressiveCommission} already owns (and which must stay byte-identical
+     * per CLAUDE.md — its per-tier split is private). Each row's commission is the CUMULATIVE
+     * difference over the unmodified public {@code progressiveCommission}: the commission through
+     * a given tier equals the calculator's own answer for {@code base} capped at that tier's upper
+     * bound (every higher tier then contributes nothing, every lower tier contributes exactly what
+     * it contributes at the real base), so the running difference between consecutive capped calls
+     * is that tier's own share. Rows therefore sum EXACTLY to {@code progressiveCommission(base)} —
+     * composed entirely from the audited calculator, with no second copy of the bracket arithmetic
+     * anywhere.
+     *
+     * <p>Caveat: the attribution assumes upper bounds ascend with {@code tierNumber} and that tier
+     * 1's upper bound is at or above the monthly floor (true for the seeded config). If a future
+     * config broke that, the TOTAL would still be exact (the differences telescope regardless);
+     * only the per-row attribution would shift.
+     */
+    private List<CommissionTierRowDto> tierRows(BigDecimal base, List<TierConfig> tiers) {
+        List<TierConfig> ordered = tiers.stream()
+            .sorted(Comparator.comparingInt(TierConfig::tierNumber)).toList();
+        List<CommissionTierRowDto> rows = new ArrayList<>();
+        BigDecimal running = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        for (TierConfig tier : ordered) {
+            BigDecimal cappedBase = (tier.highRoller() || tier.upperBound() == null)
+                ? base : base.min(tier.upperBound());
+            BigDecimal cumulative = calculator.progressiveCommission(cappedBase, ordered);
+            rows.add(new CommissionTierRowDto(tier.tierNumber(), tier.lowerBound(), tier.upperBound(),
+                tier.ratePercent(), tier.highRoller(), cumulative.subtract(running)));
+            running = cumulative;
+        }
+        return rows;
+    }
+
     public PayrollCommissionSummaryDto payrollReadySummary(LocalDate payrollMonth, UserPrincipal actor) {
         if (!PAYROLL_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");

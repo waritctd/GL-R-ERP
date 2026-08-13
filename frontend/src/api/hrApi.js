@@ -424,6 +424,10 @@ export const api = {
     clawback: (id, payload) => apiRequest(API_ROUTES.commissions.clawback(id), { method: 'POST', body: payload }),
     simulate: (payload) => apiRequest(API_ROUTES.commissions.simulator, { method: 'POST', body: payload }),
     payrollReady: (params) => apiRequest(withQuery(API_ROUTES.commissions.payrollReady, params)),
+    // fix/commission-figures-from-backend: a rep's own live monthly commission estimate --
+    // { payrollMonth, salesRepId } query params, both optional (defaults to the caller's own rep
+    // id / the current payroll month server-side). Mirrors CommissionController#monthlySummary.
+    monthlySummary: (params) => apiRequest(withQuery(API_ROUTES.commissions.monthlySummary, params)),
   },
   payroll: {
     current: (params) => apiRequest(withQuery(API_ROUTES.payroll.current, params)),
