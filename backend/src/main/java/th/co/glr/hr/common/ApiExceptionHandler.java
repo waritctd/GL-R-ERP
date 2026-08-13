@@ -2,6 +2,7 @@ package th.co.glr.hr.common;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
+import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -9,17 +10,22 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.AuthenticationCredentialsNotFoundException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
@@ -48,7 +54,12 @@ public class ApiExceptionHandler {
     @ExceptionHandler({
         HttpMessageNotReadableException.class,
         MissingServletRequestParameterException.class,
-        MethodArgumentTypeMismatchException.class
+        MethodArgumentTypeMismatchException.class,
+        // A multipart request that arrived without the file part the handler declares. Spring
+        // raises this (not MissingServletRequestParameterException) for an absent
+        // @RequestParam MultipartFile, so without it here an empty multipart envelope fell
+        // through to handleUnexpected and was reported as a server error.
+        MissingServletRequestPartException.class
     })
     ResponseEntity<ErrorResponse> handleBadRequest(Exception exception) {
         return ResponseEntity
@@ -102,6 +113,59 @@ public class ApiExceptionHandler {
         }
         return response.body(
             new ErrorResponse("เมธอดนี้ไม่รองรับสำหรับรายการนี้", HttpStatus.METHOD_NOT_ALLOWED.value()));
+    }
+
+    // The request reached a known handler with a Content-Type that handler does not consume —
+    // typically application/json posted to one of the five multipart endpoints that declare
+    // `consumes = MULTIPART_FORM_DATA_VALUE`.
+    //
+    // Same defect shape as handleMethodNotSupported above, and found the same way: without this
+    // handler the exception reaches handleUnexpected and the client is told 500 "เกิดข้อผิดพลาด
+    // ภายในระบบ" — the server reporting itself broken for a request the caller malformed. The
+    // audit that found it measured all nine roles hitting this on every upload endpoint, because
+    // content negotiation runs before any role gate.
+    //
+    // RFC 9110 §15.5.16 recommends an Accept header advertising what the resource does support;
+    // getSupportedMediaTypes() is populated from the handler mapping but is empty when no
+    // candidate handler was resolved, so it is only set when actually present.
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    ResponseEntity<ErrorResponse> handleMediaTypeNotSupported(HttpMediaTypeNotSupportedException exception) {
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE);
+        List<MediaType> supported = exception.getSupportedMediaTypes();
+        if (supported != null && !supported.isEmpty()) {
+            // No BodyBuilder.accept(..) exists — allow(..) is the only such shortcut — so the
+            // Accept header is set through the HttpHeaders callback.
+            response.headers(headers -> headers.setAccept(supported));
+        }
+        return response.body(
+            new ErrorResponse("ชนิดเนื้อหาของคำขอนี้ไม่รองรับ", HttpStatus.UNSUPPORTED_MEDIA_TYPE.value()));
+    }
+
+    // The upload exceeded spring.servlet.multipart.max-file-size / max-request-size
+    // (${APP_MAX_FILE_SIZE:10MB} / ${APP_MAX_REQUEST_SIZE:12MB} in application.yml).
+    //
+    // Declared BEFORE the MultipartException handler below matters only for readability — Spring
+    // resolves the most specific handler by class hierarchy, and this is a MultipartException
+    // subclass, so it wins regardless of order. It is separate because "your file is too large"
+    // is 413 and recoverable by sending a smaller one; collapsing it into the generic 400 would
+    // tell the caller their request was malformed when it was merely too big.
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    ResponseEntity<ErrorResponse> handleUploadTooLarge(MaxUploadSizeExceededException exception) {
+        return ResponseEntity
+            .status(HttpStatus.CONTENT_TOO_LARGE)
+            .body(new ErrorResponse("ไฟล์ที่อัปโหลดมีขนาดใหญ่เกินกำหนด",
+                HttpStatus.CONTENT_TOO_LARGE.value()));
+    }
+
+    // A non-multipart request to an upload endpoint that does NOT declare `consumes` — the
+    // multipart resolver raises "Current request is not a multipart request" once binding starts.
+    // The six endpoints in that shape answered 500 for the same reason as the 415 case above.
+    @ExceptionHandler(MultipartException.class)
+    ResponseEntity<ErrorResponse> handleMultipart(MultipartException exception) {
+        return ResponseEntity
+            .status(HttpStatus.BAD_REQUEST)
+            .body(new ErrorResponse("ต้องส่งคำขอนี้แบบ multipart/form-data",
+                HttpStatus.BAD_REQUEST.value()));
     }
 
     @ExceptionHandler(DataAccessException.class)
