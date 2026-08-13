@@ -110,7 +110,7 @@ for (const t of db.tickets) {
   t.tenderRequirement = t.tenderRequirement ?? 'UNKNOWN';
   t.depositPolicy = t.depositPolicy ?? 'REQUIRED';
   t.depositPolicyReason = t.depositPolicyReason ?? null;
-  t.entryChannel = t.entryChannel ?? 'DESIGNER_LED';
+  t.entryChannel = t.entryChannel ?? 'UNSPECIFIED';
   const existingQuotations = t.quotations ?? (t.quotation ? [t.quotation] : []);
   t.quotations = existingQuotations.map((q, index) => normalizeQuotation(q, t, index));
   if (t.id === 6 && t.quotations.length === 1) {
@@ -2528,7 +2528,7 @@ function buildTicketDetail(ticket) {
       tenderRequirement: ticket.tenderRequirement ?? 'UNKNOWN',
       depositPolicy: ticket.depositPolicy ?? 'REQUIRED',
       depositPolicyReason: ticket.depositPolicyReason ?? null,
-      entryChannel: ticket.entryChannel ?? 'DESIGNER_LED',
+      entryChannel: ticket.entryChannel ?? 'UNSPECIFIED',
       cancelReason: ticket.cancelReason ?? null,
       cancelledAt: ticket.cancelledAt ?? null,
       closeConfirmedAt: ticket.closeConfirmedAt ?? null,
@@ -4009,7 +4009,7 @@ export const api = {
         tenderRequirement: t.tenderRequirement ?? 'UNKNOWN',
         depositPolicy: t.depositPolicy ?? 'REQUIRED',
         depositPolicyReason: t.depositPolicyReason ?? null,
-        entryChannel: t.entryChannel ?? 'DESIGNER_LED',
+        entryChannel: t.entryChannel ?? 'UNSPECIFIED',
         // Mock-parity fix (role-views-account + role-views-ceo, same underlying
         // gap, landed independently on both branches — collapsed here into one):
         // the real TicketSummaryDto (see TicketService.java / TicketRepository.java)
@@ -4242,7 +4242,11 @@ export const api = {
         tenderRequirement: 'UNKNOWN',
         depositPolicy: 'REQUIRED',
         depositPolicyReason: null,
-        entryChannel: payload.entryChannel || 'DESIGNER_LED',
+        // Mirrors TicketRepository.create (V144): an omitted channel means "nobody said", not
+        // "designer-led". Defaulting to a real route made every unattended row assert one, so a
+        // deliberate DESIGNER_LED was indistinguishable from silence. UNSPECIFIED is legal as
+        // STORED but never as a setEntryChannel INPUT — see th.co.glr.hr.ticket.EntryChannel.
+        entryChannel: payload.entryChannel || 'UNSPECIFIED',
         createdAt: now.slice(0, 10), updatedAt: now.slice(0, 10), closedAt: null,
         items: (payload.items || []).map((item, i) => ({
           id: nextId * 100 + i, ticketId: nextId,
@@ -4696,7 +4700,13 @@ export const api = {
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
       if (!['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].includes(payload.value)) fail(`ไม่รองรับช่องทางรับงาน '${payload.value}'`, 400);
-      if (ticket.entryChannel && ticket.entryChannel !== 'DESIGNER_LED' && ticket.entryChannel !== payload.value && !(payload.note || '').trim()) {
+      // Mirrors TicketService.setEntryChannel's changingExistingNonDefault: both DESIGNER_LED and
+      // UNSPECIFIED count as UNSTATED and neither needs a reason to move off. UNSPECIFIED is the
+      // V144 default; DESIGNER_LED is the pre-V144 default that was never backfilled, so an
+      // untouched deal reads one or the other purely by age. Dropping UNSPECIFIED here would make
+      // the FIRST statement of a channel on every new deal demand a reason.
+      const stated = ticket.entryChannel && ticket.entryChannel !== 'DESIGNER_LED' && ticket.entryChannel !== 'UNSPECIFIED';
+      if (stated && ticket.entryChannel !== payload.value && !(payload.note || '').trim()) {
         fail('การเปลี่ยน entry channel ต้องระบุเหตุผล', 400);
       }
       ticket.entryChannel = payload.value;
