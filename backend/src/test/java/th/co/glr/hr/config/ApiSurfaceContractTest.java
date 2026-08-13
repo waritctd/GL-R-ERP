@@ -18,7 +18,6 @@ import java.nio.file.Paths;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -58,7 +57,7 @@ import th.co.glr.hr.support.PostgresTestSupport;
  * 2026-08-14: 276 operations, identical in both directions, zero difference.
  *
  * <p><b>What is committed is a digest, not the whole document.</b> {@code docs/api/api-surface.json}
- * holds the sorted {@code "VERB /path"} list and nothing else. The full 237KB OpenAPI document
+ * holds the sorted {@code "VERB /path"} list plus the {@code @Deprecated} subset. The full 237KB document
  * churns whenever any DTO gains a field, and an artifact that churns for unrelated reasons trains
  * everyone to regenerate it without reading the diff — which is the guard failing quietly. This
  * digest changes if and only if the surface changes, so <b>its diff IS the API contract change</b>,
@@ -101,12 +100,12 @@ class ApiSurfaceContractTest {
 
     @Test
     void committedApiSurfaceMatchesWhatTheApplicationServes() throws Exception {
-        List<String> live = liveSurface();
+        Surface live = readSurface();
 
         // A surface that came back empty means the fetch or the parse broke, not that the app
         // serves nothing. Without this the next assertion would "pass" against a rewritten-empty
         // digest and the guard would be gone.
-        assertThat(live)
+        assertThat(live.operations())
             .as("springdoc returned no operations — the fetch or parse is broken, not the app")
             .hasSizeGreaterThan(150);
 
@@ -120,50 +119,82 @@ class ApiSurfaceContractTest {
             .as("%s is missing — regenerate with -D%s=true", digest, UPDATE_PROPERTY)
             .isTrue();
 
-        assertThat(live)
+        assertThat(live.operations())
             .as("The API surface changed. This is a contract change: regenerate with"
                 + " `./mvnw -Dtest=ApiSurfaceContractTest -D%s=true test`, commit %s, and state the"
                 + " change in the PR body.", UPDATE_PROPERTY, digest.getFileName())
-            .containsExactlyElementsOf(readCommitted(digest));
+            .containsExactlyElementsOf(readCommitted(digest, "operations"));
+
+        // Deprecation is tracked separately because it changes without the surface changing: a
+        // route severed in place (V141/#702 kept three costing writes routed, @Deprecated and
+        // throwing) keeps its verb and path. Comparing only `operations` would miss that
+        // entirely, and the frontend guard reads this list to assert nothing newly calls one.
+        assertThat(live.deprecated())
+            .as("The set of @Deprecated endpoints changed. Regenerate as above, and check whether"
+                + " any frontend caller now needs to move off a severed route.")
+            .containsExactlyElementsOf(readCommitted(digest, "deprecated"));
     }
 
-    /** Every {@code "VERB /path"} springdoc reports, sorted and de-duplicated. */
-    private List<String> liveSurface() throws Exception {
+    /**
+     * Reads springdoc once and splits out the deprecated subset.
+     *
+     * <p>springdoc sets {@code deprecated: true} on an operation whose handler carries
+     * {@code @Deprecated}, which is how V141 (#702) severed the three costing write routes: kept
+     * routed and throwing unconditionally rather than deleted, the house pattern from
+     * {@code TicketService.submit}. Publishing that here lets the frontend guard assert nothing
+     * newly starts calling a severed route WITHOUT a second Java parser to keep in step.
+     */
+    private Surface readSurface() throws Exception {
         String body = mvc.perform(get("/v3/api-docs").session(sessionFor("employee")))
             .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         JsonNode paths = mapper.readTree(body).path("paths");
 
         List<String> operations = new ArrayList<>();
-        for (Iterator<Map.Entry<String, JsonNode>> it = paths.fields(); it.hasNext(); ) {
-            Map.Entry<String, JsonNode> entry = it.next();
-            for (Iterator<String> verbs = entry.getValue().fieldNames(); verbs.hasNext(); ) {
-                String verb = verbs.next();
-                if (HTTP_METHODS.contains(verb)) {
-                    operations.add(verb.toUpperCase(Locale.ROOT) + " " + entry.getKey());
+        List<String> deprecated = new ArrayList<>();
+        // properties(), not the deprecated fields() — #724 cleared the Spring 7 / Boot 4
+        // deprecation warnings and this file should not reintroduce any.
+        for (Map.Entry<String, JsonNode> entry : paths.properties()) {
+            for (Map.Entry<String, JsonNode> operation : entry.getValue().properties()) {
+                if (!HTTP_METHODS.contains(operation.getKey())) {
+                    continue;
+                }
+                String key = operation.getKey().toUpperCase(Locale.ROOT) + " " + entry.getKey();
+                operations.add(key);
+                if (operation.getValue().path("deprecated").asBoolean(false)) {
+                    deprecated.add(key);
                 }
             }
         }
         // Sorted so the committed file has one canonical form — otherwise the digest would churn
         // on springdoc's iteration order and every unrelated PR would show a diff here.
-        return operations.stream().distinct().sorted(Comparator.naturalOrder()).toList();
+        return new Surface(
+            operations.stream().distinct().sorted(Comparator.naturalOrder()).toList(),
+            deprecated.stream().distinct().sorted(Comparator.naturalOrder()).toList());
     }
 
-    private List<String> readCommitted(Path digest) throws IOException {
+    private record Surface(List<String> operations, List<String> deprecated) {
+    }
+
+    private List<String> readCommitted(Path digest, String field) throws IOException {
         JsonNode root = mapper.readTree(Files.readString(digest, StandardCharsets.UTF_8));
-        List<String> operations = new ArrayList<>();
-        root.path("operations").forEach(node -> operations.add(node.asText()));
-        return operations;
+        List<String> values = new ArrayList<>();
+        root.path(field).forEach(node -> values.add(node.asText()));
+        return values;
     }
 
-    private void write(Path digest, List<String> operations) throws IOException {
+    private void write(Path digest, Surface surface) throws IOException {
+        List<String> operations = surface.operations();
         ObjectNode root = mapper.createObjectNode();
         root.put("$comment", "GENERATED by ApiSurfaceContractTest — do not hand-edit."
             + " Regenerate: cd backend && ./mvnw -Dtest=ApiSurfaceContractTest"
             + " -Dapi.surface.update=true test");
         root.put("source", "springdoc /v3/api-docs, generated from Spring's handler mappings");
         root.put("count", operations.size());
+        root.put("deprecatedCount", surface.deprecated().size());
         ArrayNode array = root.putArray("operations");
         operations.forEach(array::add);
+        ArrayNode deprecated = root.putArray("deprecated");
+        surface.deprecated().forEach(deprecated::add);
 
         // One operation per line. Jackson's default pretty printer puts array elements inline,
         // which renders the whole surface as a single 20KB line — and a one-line diff is exactly
