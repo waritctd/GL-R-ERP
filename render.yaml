@@ -4,30 +4,39 @@
 #   https://gl-r-erp.onrender.com
 # which is what the Vercel frontend proxies /api to (see frontend/vercel.json).
 #
-# ── BUILDS FROM SOURCE. THE FONT CAVEAT IS REAL AND UNRESOLVED (#666) ────────────────────
-# #670 switched this service to `runtime: image` so the licensed Thai fonts could be baked in
-# where they exist. Reverted here under a UAT phase-1 deadline: the image URL was a placeholder,
-# so every deploy would have failed, and building+pushing an image needs Docker and the licensed
-# font files. Deployability today beat font fidelity today — an explicit owner call, not a
-# retraction of the finding.
+# ── RUNS A PRE-BUILT IMAGE, SO THE LICENSED THAI FONTS ARE ACTUALLY PRESENT (#666) ───────
+# Render builds from a fresh git clone, and the licensed Thai fonts are proprietary and git-ignored,
+# so an image Render builds itself can NEVER contain them. Building from source here is what made
+# every customer-facing quotation and deposit notice render in substitute fonts — with no Thai
+# coverage at all, the text came out as empty boxes, not merely mis-metricked.
 #
-# WHAT THAT MEANS, PLAINLY: `backend/fonts/` is always empty in a fresh clone, so this service
-# renders customer-facing quotations and deposit notices in SUBSTITUTE fonts — wider glyphs,
-# header text overflowing the certification badges. That is the status quo of the last several
-# months, not a regression introduced here.
+# The image is therefore built where the fonts are reachable and pushed to a private registry:
 #
-# The build no longer fails on an empty fonts/ (see backend/Dockerfile) so this path works, but
-# the substitution guard added by #670 is kept: if fonts ARE supplied and fontconfig substitutes
-# one anyway, the build still fails loudly.
+#     ./scripts/build-push-backend-image.sh v2026-08-14
 #
-# To finish #666 properly, restore `runtime: image` with a real image.url and use
-# scripts/build-push-backend-image.sh, which is left in place and working.
+# That script builds --platform linux/amd64 (Render is amd64; this repo is developed on Apple
+# Silicon, where the default build produces an arm64 image Render cannot start) and with
+# ALLOW_MISSING_FONTS=false, so a missing or substituted font face fails the build instead of
+# shipping. backend/Dockerfile checks each required family AND STYLE — a family-only check passes
+# while a bold face silently substitutes, which is exactly how this shipped for months.
+#
+# #670 tried this and was reverted because image.url was a PLACEHOLDER, so every deploy failed.
+# The URL below is real and pushed. Two preconditions before this file is merged or deployed:
+#   1. The tag below exists in the registry and is PRIVATE (the image embeds licensed fonts).
+#   2. A Render registry credential named `ghcr-glr` exists (Dashboard → Settings → Registry
+#      Credentials) holding a GitHub PAT with read:packages. Without it the pull 401s.
+#
+# Bumping the deployed version = push a new tag, change image.url here, deploy. autoDeploy is off,
+# so nothing rolls out until someone chooses to.
 services:
   - type: web
     name: gl-r-erp
-    runtime: docker
-    rootDir: backend
-    dockerfilePath: ./Dockerfile
+    runtime: image
+    image:
+      url: ghcr.io/waritctd/glr-hr-backend:v2026-08-14
+      creds:
+        fromRegistryCreds:
+          name: ghcr-glr
     region: singapore          # closest Render region to the Supabase ap-northeast-1 DB
     plan: starter              # free tier is CPU-throttled (slow startup races the port scan) and cold-starts; starter avoids both
     # Owner ruling 2026-08-03: auto-deploy off. This is UAT sitting on the same DB as HR/sales
