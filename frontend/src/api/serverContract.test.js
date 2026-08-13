@@ -487,6 +487,34 @@ const CALLS_DEPRECATED = {
 // The assertions
 // ─────────────────────────────────────────────────────────────────────────────
 
+// The whole reconciliation, on demand:
+//   cd frontend && API_SURFACE_REPORT=1 npx vitest run src/api/serverContract.test.js
+// Printed rather than committed as a checked-in table, deliberately: a static 278-row list is a
+// hand-maintained mirror of exactly the kind this file exists to guard against, and it would be
+// stale the first time someone added an endpoint. See docs/api-surface-reconciliation.md.
+if (process.env.API_SURFACE_REPORT) {
+  const callersFor = (key) => CLIENT_CALLS
+    .filter((c) => clientKey(c) === key)
+    .map((c) => `${c.namespace}.${c.name}`);
+  const lines = [
+    `controllers: ${controllerFiles().length}`,
+    `server mappings: ${SERVER_ENDPOINTS.length} (unique verb+path: ${SERVER_KEYS.size})`,
+    `hrApi call sites: ${CLIENT_CALLS.length} (unique verb+path: ${CLIENT_KEYS.size})`,
+    '',
+    '| Verb | Path | Controller#handler | hrApi caller |',
+    '|---|---|---|---|',
+  ];
+  for (const e of [...SERVER_ENDPOINTS].sort((a, b) =>
+    (a.controller + a.path + a.verb).localeCompare(b.controller + b.path + b.verb))) {
+    const callers = [...new Set(callersFor(endpointKey(e)))];
+    lines.push(`| ${e.verb} | \`${normaliseServerPath(e.path)}\` | ${e.controller}#${e.handler}`
+      + `${e.deprecated ? ' **@Deprecated**' : ''} | ${callers.join('<br>') || '**— none —**'} |`);
+  }
+  // process.stdout directly, not console.log: vitest buffers module-level console output during
+  // collection and the report never appears.
+  process.stdout.write(`${lines.join('\n')}\n`);
+}
+
 describe('controller surface / hrApi.js contract — parser sanity', () => {
   // Every assertion below is trivially true against an empty extraction. These run first so a
   // rotted regex, a moved backend directory or a harness that stopped driving hrApi fails LOUDLY

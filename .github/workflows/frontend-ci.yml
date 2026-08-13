@@ -126,7 +126,12 @@ jobs:
           echo "Changed files:"
           echo "$CHANGED"
 
-          if echo "$CHANGED" | grep -qE '^(frontend/|\.github/workflows/frontend-ci\.yml$)'; then
+          # Controllers are in scope even though they are backend files:
+          # src/api/serverContract.test.js parses them and fails when the served surface and
+          # hrApi.js disagree. Without this line that guard would not run on the one kind of
+          # diff that can break it — a backend-only PR renaming or removing an endpoint — and
+          # would only report on the next PR that happened to touch frontend/.
+          if echo "$CHANGED" | grep -qE '^(frontend/|backend/src/main/java/.*Controller\.java$|\.github/workflows/frontend-ci\.yml$)'; then
             echo "frontend=true" >> "$GITHUB_OUTPUT"
           else
             echo "frontend=false" >> "$GITHUB_OUTPUT"
