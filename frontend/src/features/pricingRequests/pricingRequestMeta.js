@@ -12,39 +12,60 @@
 
 // There is deliberately no bare PRICING_REQUEST_STATUSES array here. One existed until it was
 // removed as dead: nothing in the repo ever imported it, and ALLOWED_TRANSITIONS below already
-// carries the identical twelve statuses as its key set — but is actually read, by canTransition.
+// carries the identical status set as its key set — but is actually read, by canTransition.
+// (That sentence said "twelve statuses" until issue #743; there are ELEVEN. The twelfth was
+// COSTING_REVISION_REQUIRED, which V141 deleted — a stale count in the prose above a stale table.)
 // A second copy that nothing consumes only drifts: that array had already gone stale once and
 // needed QUOTATION_ISSUED / QUOTATION_ACCEPTED added to catch it up, silently and with no test to
 // notice. If you need the status set, take Object.keys(ALLOWED_TRANSITIONS).
 
-// Mirrors PricingRequestStatus.ALLOWED — forward/lateral transitions only.
-// DRAFT -> DRAFT is deliberately absent: editing a draft's fields is a
+// Mirrors PricingRequestStatus.ALLOWED (backend pricingrequest/PricingRequestStatus.java) — key
+// for key, value for value. DRAFT -> DRAFT is deliberately absent: editing a draft's fields is a
 // mutation guarded by status = DRAFT, not a state transition.
-const ALLOWED_TRANSITIONS = {
+//
+// GUARDED. pricingRequestMeta.test.js parses PricingRequestStatus.java out of the backend source
+// tree and asserts this object against it, the same way stageCatalog.test.js and
+// dealTrackingMeta.test.js already do for DealStage/WinProbabilityDefaults. Before that guard
+// existed this table had drifted from the Java in THREE directions at once while a suite named
+// 'mirrors PricingRequestStatus.ALLOWED' asserted every stale value by hand — see issue #743,
+// which is the reason the guard is a parse and not another re-sync.
+//
+// The three drifts the parse now makes impossible to repeat:
+//   - V141 retired COSTING_REVISION_REQUIRED entirely (the CEO owns costing; returnToImport goes
+//     straight to AWAITING_FACTORY_RESPONSE). Its key and both its edges were still declared here.
+//   - #718 widened cancel: READY_FOR_CEO_REVIEW / CEO_REVIEWING / APPROVED_FOR_QUOTATION each gained
+//     a CANCELLED edge, and cancel is refused only from QUOTATION_ISSUED onward.
+//   - Owner ruling 2026-08-13 (reissue-through-CEO-chain): every non-terminal status declares a
+//     SUPERSEDED edge, and QUOTATION_ACCEPTED deliberately does not — amending an accepted deal is
+//     an ORDER amendment, not a quotation revision.
+//
+// Exported for the guard only — pricingRequestMeta.test.js compares it against the parsed Java.
+// Application code goes through canTransition; do not read the table directly.
+export const ALLOWED_TRANSITIONS = {
   DRAFT: ['SUBMITTED', 'CANCELLED'],
-  SUBMITTED: ['IMPORT_REVIEWING', 'CANCELLED'],
-  // V140: Import's three states. COSTING_IN_PROGRESS merged into AWAITING_FACTORY_RESPONSE
-  // (เจรจาราคากับโรงงาน) and MORE_INFO_REQUIRED left the product — mirrors PricingRequestStatus.
+  // SUBMITTED -> READY_FOR_CEO_REVIEW is the factory-quote carry-forward edge: a customer-change
+  // revision whose items are identical to its parent's copies the parent's factory quotes, leaving
+  // Import nothing to do (PricingRequestService.carryFactoryQuotesForwardOnSubmit).
+  SUBMITTED: ['IMPORT_REVIEWING', 'READY_FOR_CEO_REVIEW', 'CANCELLED', 'SUPERSEDED'],
+  // V140: Import's states. COSTING_IN_PROGRESS merged into AWAITING_FACTORY_RESPONSE
+  // (เจรจาราคากับโรงงาน) and MORE_INFO_REQUIRED left the product.
   IMPORT_REVIEWING: ['AWAITING_FACTORY_RESPONSE', 'CANCELLED', 'SUPERSEDED'],
+  // V141: FactoryQuoteService.markReadyForCosting auto-advances straight to READY_FOR_CEO_REVIEW
+  // once every item's quote is resolvable — no Import-driven costing step in between.
   AWAITING_FACTORY_RESPONSE: ['READY_FOR_CEO_REVIEW', 'CANCELLED', 'SUPERSEDED'],
-  // Step 3 (CEO Selling Price Decision, "one return-to-Import path"): the old
-  // READY_FOR_CEO_REVIEW -> COSTING_IN_PROGRESS direct reopen entry (Costing v2 path, commit 5)
-  // let Import silently reopen a SUBMITTED costing without any CEO action — removed, since that
-  // is exactly what made "submitted costing is immutable" false. The CEO must now explicitly
-  // start review (-> CEO_REVIEWING); the only reopen path afterward is
-  // CEO_REVIEWING -> COSTING_REVISION_REQUIRED -> COSTING_IN_PROGRESS. Mirrors the backend fix to
-  // PricingRequestStatus.ALLOWED.
-  READY_FOR_CEO_REVIEW: ['CEO_REVIEWING', 'SUPERSEDED'],
-  CEO_REVIEWING: ['APPROVED_FOR_QUOTATION', 'COSTING_REVISION_REQUIRED'],
-  COSTING_REVISION_REQUIRED: ['AWAITING_FACTORY_RESPONSE'],
-  // Step 4: the ONLY forward exit is issuing a customer quotation
-  // (CustomerQuotationService.issue) — this entry was missing (stale from before Step 4 landed),
-  // fixed alongside adding Step 5's QUOTATION_ISSUED -> QUOTATION_ACCEPTED below.
-  APPROVED_FOR_QUOTATION: ['QUOTATION_ISSUED'],
+  // The back-edge to AWAITING_FACTORY_RESPONSE is FactoryQuoteService.receive()'s revision branch:
+  // a factory sends a revised price while the request already sits with the CEO, so the request is
+  // pulled back until Import re-marks the revised quote ready.
+  READY_FOR_CEO_REVIEW: ['CEO_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'CANCELLED', 'SUPERSEDED'],
+  // V141: PricingDecisionService.returnToImport sends the request to AWAITING_FACTORY_RESPONSE,
+  // not to a dedicated "revise the costing" status — the CEO's next startReview recomputes cost.
+  CEO_REVIEWING: ['APPROVED_FOR_QUOTATION', 'AWAITING_FACTORY_RESPONSE', 'CANCELLED', 'SUPERSEDED'],
+  // Step 4: the ONLY forward exit is issuing a customer quotation (CustomerQuotationService.issue).
+  APPROVED_FOR_QUOTATION: ['QUOTATION_ISSUED', 'CANCELLED', 'SUPERSEDED'],
   // Step 5: the customer's ACCEPTED outcome is the one forward exit from QUOTATION_ISSUED
   // (CustomerQuotationService.recordOutcome). REJECTED/REVISION_REQUESTED/EXPIRED deliberately
-  // do NOT transition the pricing request at all.
-  QUOTATION_ISSUED: ['QUOTATION_ACCEPTED'],
+  // do NOT transition the pricing request at all. No CANCELLED edge — #718's cutoff.
+  QUOTATION_ISSUED: ['QUOTATION_ACCEPTED', 'SUPERSEDED'],
   QUOTATION_ACCEPTED: [],
   SUPERSEDED: [],
   CANCELLED: [],

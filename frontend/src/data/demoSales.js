@@ -611,17 +611,22 @@ export function buildDemoSalesSeed() {
   });
   makeDecision(pr8, costing8, { status: 'APPROVED', createdAt: daysAgoIso(38), approvedAt: daysAgoIso(38) });
 
-  // PR9 — ticket 5 — COSTING_REVISION_REQUIRED (Decision RETURNED)
+  // PR9 — ticket 5 — the CEO returned the price to Import (Decision RETURNED).
+  // The request status is AWAITING_FACTORY_RESPONSE, not COSTING_REVISION_REQUIRED: V141 deleted
+  // that status from chk_pricing_request_status and PricingRequestStatus.VALUES, and
+  // PricingDecisionService.returnToImport now sends the request straight back to factory
+  // negotiation. Seeding the dead status made this fixture the ONE mock-mode deal rendering a
+  // state production can no longer produce (issue #741).
   const pr9 = makePr({
     ticketId: 5, recipientType: 'BUYER', recipientLabel: 'ผู้จัดงาน Event Organizer',
-    status: 'COSTING_REVISION_REQUIRED', requestedBy: SALES1, assignedImport: IMPORT1,
+    status: 'AWAITING_FACTORY_RESPONSE', requestedBy: SALES1, assignedImport: IMPORT1,
     submittedAt: daysAgoIso(24), pickedUpAt: daysAgoIso(23), createdAt: daysAgoIso(25), clientRequestSeed: 9,
     items: [{ sourceTicketItemId: 8, brand: 'SCG', model: 'Granite Black', color: 'ดำ', texture: 'หยาบ', size: '60x60 ซม.', factory: 'SCG Ceramics', requestedQty: 300, requestedUnit: 'แผ่น', requestedUnitBasis: 'PER_PIECE', quantityType: 'ESTIMATE', catalogBasePrice: 95 }],
   });
   pushPrEvent(pr9, SALES1, 'PRICING_REQUEST_CREATED', null, 'DRAFT', null, daysAgoIso(25));
   pushPrEvent(pr9, SALES1, 'PRICING_REQUEST_SUBMITTED', 'DRAFT', 'SUBMITTED', null, daysAgoIso(24));
   pushPrEvent(pr9, IMPORT1, 'PRICING_REQUEST_PICKED_UP', 'SUBMITTED', 'IMPORT_REVIEWING', null, daysAgoIso(23));
-  pushPrEvent(pr9, CEO, 'PRICING_DECISION_RETURNED', 'CEO_REVIEWING', 'COSTING_REVISION_REQUIRED', 'มาร์จิ้นต่ำเกินไปเทียบราคาตลาด', daysAgoIso(16));
+  pushPrEvent(pr9, CEO, 'PRICING_DECISION_RETURNED', 'CEO_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'มาร์จิ้นต่ำเกินไปเทียบราคาตลาด', daysAgoIso(16));
   const fq9 = makeFactoryQuote(pr9, {
     status: 'READY_FOR_COSTING', response: true, factoryName: 'SCG Ceramics',
     lines: [{ prItemId: pr9.items[0].id, qty: 300, unitBasis: 'PER_PIECE', rawUnitPrice: 95, sqmPerUnit: 0.36 }],

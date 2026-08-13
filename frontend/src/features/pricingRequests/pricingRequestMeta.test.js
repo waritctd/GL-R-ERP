@@ -47,6 +47,7 @@ describe('canTransition', () => {
     expect(canTransition('DRAFT', 'CANCELLED')).toBe(true);
     expect(canTransition('DRAFT', 'DRAFT')).toBe(false);
     expect(canTransition('SUBMITTED', 'IMPORT_REVIEWING')).toBe(true);
+    expect(canTransition('SUBMITTED', 'READY_FOR_CEO_REVIEW')).toBe(true);
     // V140: Import's three states, and the two retired ones must now be unreachable.
     expect(canTransition('IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE')).toBe(true);
     expect(canTransition('AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW')).toBe(true);
@@ -57,18 +58,18 @@ describe('canTransition', () => {
     expect(canTransition('AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS')).toBe(false);
     expect(canTransition('COSTING_IN_PROGRESS', 'READY_FOR_CEO_REVIEW')).toBe(false);
     expect(canTransition('READY_FOR_CEO_REVIEW', 'SUPERSEDED')).toBe(true);
-    // Step 3 (CEO Selling Price Decision, "one return-to-Import path"): the old direct
-    // READY_FOR_CEO_REVIEW -> COSTING_IN_PROGRESS entry (Costing v2 path, commit 5) is removed —
-    // it let Import silently reopen a SUBMITTED costing with no CEO action, which made
-    // "submitted costing is immutable" false. The CEO must now explicitly start review.
     expect(canTransition('READY_FOR_CEO_REVIEW', 'COSTING_IN_PROGRESS')).toBe(false);
     expect(canTransition('READY_FOR_CEO_REVIEW', 'CEO_REVIEWING')).toBe(true);
     expect(canTransition('CEO_REVIEWING', 'APPROVED_FOR_QUOTATION')).toBe(true);
-    expect(canTransition('CEO_REVIEWING', 'COSTING_REVISION_REQUIRED')).toBe(true);
-    // The single named return-to-Import state — Import reopening costing goes through here.
-    expect(canTransition('COSTING_REVISION_REQUIRED', 'AWAITING_FACTORY_RESPONSE')).toBe(true);
+    // V141 deleted COSTING_REVISION_REQUIRED. returnToImport goes straight back to factory
+    // negotiation, so the status is a dead end in BOTH directions now. These two lines asserted
+    // `true` for both until this change — see issue #741.
+    expect(canTransition('CEO_REVIEWING', 'COSTING_REVISION_REQUIRED')).toBe(false);
+    expect(canTransition('COSTING_REVISION_REQUIRED', 'AWAITING_FACTORY_RESPONSE')).toBe(false);
+    expect(canTransition('CEO_REVIEWING', 'AWAITING_FACTORY_RESPONSE')).toBe(true);
     expect(canTransition('APPROVED_FOR_QUOTATION', 'COSTING_IN_PROGRESS')).toBe(false);
-    expect(canTransition('READY_FOR_CEO_REVIEW', 'CANCELLED')).toBe(false);
+    // #718 widened cancel to the three pre-quotation review statuses.
+    expect(canTransition('READY_FOR_CEO_REVIEW', 'CANCELLED')).toBe(true);
     expect(canTransition('CANCELLED', 'DRAFT')).toBe(false);
     // Step 4 (fixed alongside Step 5 — this entry was stale/missing, see the source file's own
     // comment): issuing a customer quotation is the ONE forward exit from APPROVED_FOR_QUOTATION.

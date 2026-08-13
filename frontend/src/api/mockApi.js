@@ -8834,8 +8834,15 @@ export const api = {
       decision.returnReason = payload.returnReason;
       decision.returnedAt = new Date().toISOString();
       decision.updatedAt = new Date().toISOString();
-      pr.status = 'COSTING_REVISION_REQUIRED';
-      pushPricingRequestEvent(pr, user, 'PRICING_DECISION_RETURNED', 'CEO_REVIEWING', 'COSTING_REVISION_REQUIRED', payload.returnReason);
+      // AWAITING_FACTORY_RESPONSE, matching PricingDecisionService.returnToImport (:453-460).
+      // This wrote COSTING_REVISION_REQUIRED until issue #741 — a status V141 DELETED, from both
+      // chk_pricing_request_status and PricingRequestStatus.VALUES. There was no production
+      // symptom, which is the whole problem: the same CEO click produced 'CEO ตีกลับให้แก้ไขต้นทุน'
+      // in danger tone under VITE_USE_MOCKS=true and 'เจรจาราคากับโรงงาน' in info tone against the
+      // real backend, so anyone using mock mode as a design or QA reference for the CEO return
+      // path was looking at a state that no longer exists.
+      pr.status = 'AWAITING_FACTORY_RESPONSE';
+      pushPricingRequestEvent(pr, user, 'PRICING_DECISION_RETURNED', 'CEO_REVIEWING', 'AWAITING_FACTORY_RESPONSE', payload.returnReason);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       if (pr.assignedImportId != null) {
         addNotification(pr.assignedImportId, pr.ticketId, ticket?.code, 'PRICING_DECISION_RETURNED',
