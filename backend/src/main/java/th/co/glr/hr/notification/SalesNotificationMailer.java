@@ -6,15 +6,16 @@ import java.util.List;
  * Email delivery for the sales-pipeline notifications that {@link NotificationRepository} writes.
  *
  * <p><b>Why this hangs off the repository rather than the nine sales services.</b> Every
- * sales-pipeline in-app notification in this codebase — all 31 call sites across {@code
+ * sales-pipeline in-app notification in this codebase — 18 direct call sites across {@code
  * TicketService}, {@code PricingRequestService}, {@code PricingCostingService}, {@code
  * PricingDecisionService}, {@code FactoryQuoteService}, {@code CustomerQuotationService}, {@code
- * DepositNoticeService}, {@code OrderConfirmationService} and {@code ProcurementService} — passes
- * through exactly four {@code NotificationRepository} methods. Hanging email off those four means
- * the email set is derived from the rows that were actually inserted, so it <b>cannot drift</b>
+ * DepositNoticeService}, {@code OrderConfirmationService} and {@code ProcurementService}, and about
+ * 30 notification-raising points once each service's own {@code notifyCeo} helper is counted through
+ * — passes through exactly four {@code NotificationRepository} methods. Hanging email off those four
+ * means the email set is derived from the rows that were actually inserted, so it <b>cannot drift</b>
  * from the in-app set: a service that adds a notification tomorrow gets its email for free, and one
  * that stops raising a notification stops mailing at the same moment. Adding a parallel dispatch at
- * each call site would have been 31 places for the two channels to disagree.
+ * each call site would have been 18 places for the two channels to disagree.
  *
  * <p>The repository reports <i>what it did</i>; the implementation decides <i>who gets mail</i>.
  * Routing lives entirely in {@link SalesNotificationMailRouter} — the repository knows nothing about
