@@ -3,7 +3,9 @@ package th.co.glr.hr.pricingrequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -17,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -814,6 +817,149 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
+    }
+
+    /**
+     * How long a racer waits at the rendezvous below for the other one to reach the same point.
+     * Paid ONCE, and only on the correct (serialized) path — see the test's javadoc.
+     */
+    private static final long MARK_READY_RENDEZVOUS_MILLIS = 3_000;
+
+    /**
+     * THE GAP THIS TEST CLOSES: {@code FactoryQuoteService#markReadyForCosting} takes a
+     * {@code pg_advisory_xact_lock} on the pricing request (via {@code
+     * PricingRequestRepository#lockPricingRequest}) and its own comment explains exactly what that
+     * lock is for — "two Import users marking the LAST two factories ready simultaneously would
+     * BOTH evaluate isFullyResolvable to false under READ COMMITTED, neither would advance, and
+     * the request would sit at AWAITING_FACTORY_RESPONSE with every quote ready". Nothing
+     * exercised two callers racing, so that lock was unguarded: delete it and every existing test
+     * stays green while production acquires a stuck pricing request recoverable only by
+     * re-negotiating a quote back out of READY_FOR_COSTING.
+     *
+     * <h2>Two traps this test has to dodge, or it would be theatre</h2>
+     *
+     * <p><b>1. The lock has to actually be held.</b> {@link AbstractPostgresIntegrationTest} has no
+     * Spring context and hand-wires every service with {@code new}, so {@code @Transactional} is
+     * inert and {@code pg_advisory_xact_lock} — which is transaction-scoped — would be released at
+     * the end of its own auto-committed {@code SELECT} instead of spanning the call. A racing test
+     * written the obvious way would therefore pass with or without the lock, proving nothing. Both
+     * racers here go through {@link AbstractPostgresIntegrationTest#transactional}, the real AOP
+     * proxy built from the production annotation, so the lock genuinely spans
+     * {@code markReadyForCosting}. {@code TransactionalHarnessIntegrationTest} pins that
+     * distinction directly.
+     *
+     * <p><b>2. A bare race is not reproducible.</b> Two threads launched at the same instant only
+     * <i>sometimes</i> interleave the damaging way, so a red would be a coin flip and a green would
+     * mean nothing. The {@link CountDownLatch} rendezvous inside the spied {@code markReady} forces
+     * the interleaving instead of hoping for it: each racer, having written its own
+     * {@code READY_FOR_COSTING} but not yet committed it, waits for the other to reach the same
+     * point before evaluating {@code isFullyResolvable}.
+     *
+     * <ul>
+     *   <li><b>Lock present (production):</b> the second racer is still blocked in
+     *       {@code pg_advisory_xact_lock} and never reaches the rendezvous, so the first times out
+     *       after {@link #MARK_READY_RENDEZVOUS_MILLIS}, commits, and releases the lock; the second
+     *       then runs with the first's write COMMITTED and visible, sees every quote ready, and
+     *       advances. Cost: one bounded wait.</li>
+     *   <li><b>Lock removed (the mutation):</b> both reach the rendezvous, both proceed with the
+     *       other's write still uncommitted and invisible under READ COMMITTED, both evaluate
+     *       {@code isFullyResolvable} to false, neither advances — and the status assertion below
+     *       goes red deterministically rather than occasionally.</li>
+     * </ul>
+     *
+     * <p>The spy is a <b>rendezvous point, not the system under test</b>: it delegates to the real
+     * {@code markReady} and returns its real row count. Everything asserted is real Postgres state.
+     */
+    @Test
+    void markReadyForCostingSerializesConcurrentCallersOnTheLastTwoQuotes_soTheAutoAdvanceIsNotMissed()
+            throws Exception {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId,
+            pricingRequest("dddddddd-3333-4333-8333-dddddddddddd"), salesActor).summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+
+        List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
+        FactoryQuoteDto draftA = quoteFor(drafts, "Factory A");
+        FactoryQuoteDto draftB = quoteFor(drafts, "Factory B");
+        FactoryQuoteDto respondedA = factoryQuoteService.receive(draftA.id(),
+            response("REF-RACE-A", "THB", "100.00", draftA.items().get(0).pricingRequestItemId()), importActor);
+        FactoryQuoteDto respondedB = factoryQuoteService.receive(draftB.id(),
+            response("REF-RACE-B", "THB", "200.00", draftB.items().get(0).pricingRequestItemId()), importActor);
+        // Neither quote is ready yet, so from its own transaction's point of view EACH racer is
+        // marking "the last outstanding factory" ready — the exact situation the lock exists for.
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
+
+        CountDownLatch bothMarkedReady = new CountDownLatch(2);
+        FactoryQuoteRepository racingQuotes = spy(new FactoryQuoteRepository(jdbc));
+        doAnswer(invocation -> {
+            Object rowsUpdated = invocation.callRealMethod();
+            bothMarkedReady.countDown();
+            bothMarkedReady.await(MARK_READY_RENDEZVOUS_MILLIS, TimeUnit.MILLISECONDS);
+            return rowsUpdated;
+        }).when(racingQuotes).markReady(ArgumentMatchers.anyLong());
+        // landedCostCalculator is deliberately the UNSPIED one: isFullyResolvable must read the
+        // database exactly as production does, through this thread's own transaction.
+        FactoryQuoteService racing = transactional(new FactoryQuoteService(racingQuotes, pricingRequests, tickets,
+            new FactoryConfigRepository(jdbc), factoryEmail, notificationRepository,
+            new FileStorageService("/tmp/glr-pricing-test-uploads"), dispatchProperties, landedCostCalculator));
+
+        Callable<Long> firstImportUser = () -> racing.markReadyForCosting(respondedA.id(), importActor).id();
+        Callable<Long> secondImportUser = () -> racing.markReadyForCosting(respondedB.id(), secondImportActor).id();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        List<Long> successes = new ArrayList<>();
+        List<Throwable> failures = new ArrayList<>();
+        try {
+            Future<Long> futureA = executor.submit(firstImportUser);
+            Future<Long> futureB = executor.submit(secondImportUser);
+            for (Future<Long> future : List.of(futureA, futureB)) {
+                try {
+                    successes.add(future.get(30, TimeUnit.SECONDS));
+                } catch (ExecutionException e) {
+                    failures.add(e.getCause());
+                }
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+
+        // ── Anti-vacuity, before the claim: the race really happened, and both halves of it won ──
+        assertThat(failures)
+            .as("neither racer may fail — unlike the approve()/createCustomerChangeRevision races "
+                + "elsewhere in this suite, marking two DIFFERENT factories' quotes ready is not a "
+                + "contended write, so serialization must cost a wait and nothing else")
+            .isEmpty();
+        assertThat(successes).hasSize(2);
+        verify(racingQuotes, times(2)).markReady(ArgumentMatchers.anyLong());
+        assertThat(bothMarkedReady.getCount())
+            .as("both racers must have reached the rendezvous inside markReady — otherwise the "
+                + "interleaving was never forced and this test proves nothing about the lock")
+            .isZero();
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.factory_quote
+             WHERE pricing_request_id = :id AND is_current = TRUE AND status = 'READY_FOR_COSTING'
+            """, Map.of("id", pricingRequestId), Long.class))
+            .as("both quotes really are READY_FOR_COSTING, so the auto-advance's precondition is "
+                + "genuinely satisfied and the status below is about the lock, not about the data")
+            .isEqualTo(2L);
+
+        // ── The claim ────────────────────────────────────────────────────────────────────────
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .as("the LAST quote becoming ready must advance the request. Without "
+                + "lockPricingRequest, both racers evaluate isFullyResolvable against the other's "
+                + "uncommitted write, both see false, and the request is stranded at "
+                + "AWAITING_FACTORY_RESPONSE with every quote ready — recoverable only by "
+                + "re-negotiating a quote back out of READY_FOR_COSTING")
+            .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id AND event_kind = 'PRICING_COSTING_SUBMITTED'
+            """, Map.of("id", pricingRequestId), Long.class))
+            .as("exactly one racer may advance the request: the transition is a compare-and-set on "
+                + "AWAITING_FACTORY_RESPONSE, so a second advance would mean the audit trail "
+                + "recorded a transition that never happened")
+            .isEqualTo(1L);
     }
 
     @Test

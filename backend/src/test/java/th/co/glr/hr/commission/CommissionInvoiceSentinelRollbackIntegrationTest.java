@@ -13,10 +13,8 @@ import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
@@ -63,6 +61,27 @@ import th.co.glr.hr.ticket.TicketRepository;
  *       create path turns the sentinel from transient into permanent, evidence-free data that
  *       V102's CHECK happily accepts; this test goes red the moment that happens.</li>
  * </ol>
+ *
+ * <h2>2026-08-13: the submit() rollback test could not fail its own mutation</h2>
+ *
+ * <p>The first of those two tests originally wrapped its call in the fixture's OWN {@code
+ * TransactionTemplate}, and that is the defect PR #708 named: <b>a test that supplies the
+ * transaction itself proves nothing about the annotation</b>. Measured, not assumed — deleting
+ * {@code @Transactional} from {@code CommissionService#submit} on the pre-fix tree and running this
+ * class gave <i>Tests run: 5, Failures: 1</i>, and the one red was the reflection test below. The
+ * rollback test stayed GREEN while production had lost its rollback entirely: its own template
+ * silently supplied the transaction the annotation was supposed to, so the sentinel row it asserts
+ * about was rolled back by the FIXTURE rather than by the code under test.
+ *
+ * <p>It now runs through {@link AbstractPostgresIntegrationTest#transactional}, which builds a real
+ * Spring AOP proxy from {@link org.springframework.transaction.annotation.AnnotationTransactionAttributeSource}
+ * — so the transaction genuinely comes from the production annotation and removing that annotation
+ * turns the test red. {@link
+ * #submitWithoutTheProxy_commitsTheSentinelRow_theHarnessDefectItself()} is the control that keeps
+ * it honest, in the same shape as {@code FileStorageRollbackOrphanIntegrationTest}'s: it asserts
+ * that the un-proxied path does NOT roll back, so if the proxy ever stops being what makes the
+ * difference, that control goes red instead of the rollback evidence quietly becoming vacuous
+ * again.
  */
 class CommissionInvoiceSentinelRollbackIntegrationTest extends AbstractPostgresIntegrationTest {
     /** Must match {@code CommissionRepository#PENDING_ATTACHMENT_SENTINEL} (private by design). */
@@ -70,7 +89,6 @@ class CommissionInvoiceSentinelRollbackIntegrationTest extends AbstractPostgresI
 
     private CommissionService commissionService;
     private EmployeeRepository employees;
-    private TransactionTemplate transactionTemplate;
     private UserPrincipal managerActor;
 
     @BeforeEach
@@ -86,16 +104,21 @@ class CommissionInvoiceSentinelRollbackIntegrationTest extends AbstractPostgresI
             org.mockito.Mockito.mock(NotificationService.class),
             org.mockito.Mockito.mock(TicketRepository.class),
             org.mockito.Mockito.mock(AttachmentRepository.class));
-        // The hand-wired service above has no Spring proxy, so @Transactional does nothing. Drive
-        // it through a real transaction manager on the SAME DataSource the repository uses, so the
-        // production transaction boundary is genuinely exercised rather than assumed.
-        transactionTemplate = new TransactionTemplate(
-            new DataSourceTransactionManager(jdbc.getJdbcTemplate().getDataSource()));
+        // Deliberately kept RAW here. The hand-wired service has no Spring proxy, so
+        // @Transactional does nothing to it — every test that needs the production transaction
+        // boundary wraps it in transactional(...) at the call site, and the control test below
+        // needs the un-proxied service exactly as it is.
         long managerEmployeeId = createEmployee("ผู้จัดการฝ่ายขาย เซนทิเนล", "sm-sentinel@glr.co.th");
         managerActor = new UserPrincipal(managerEmployeeId, managerEmployeeId + "@glr.co.th", "Sales Manager",
             "sales_manager", managerEmployeeId, true, LocalDate.now(), false, null, false);
     }
 
+    /**
+     * The rollback claim itself, driven through a REAL transactional AOP proxy so the transaction
+     * comes from {@code CommissionService#submit}'s own {@code @Transactional} and nowhere else.
+     * Deleting that annotation turns this red — see the class Javadoc for the measurement showing
+     * that the pre-2026-08-13 version of this test did not.
+     */
     @Test
     void submitFailingAfterTheInvoiceInsert_rollsBack_leavingNoPendingSentinelRowBehind() {
         long salesRepId = createEmployee("พนักงานขาย เซนทิเนล", "rep-sentinel@glr.co.th");
@@ -106,8 +129,8 @@ class CommissionInvoiceSentinelRollbackIntegrationTest extends AbstractPostgresI
         MultipartFile rejectedFile =
             new MockMultipartFile("invoiceAttachment", "invoice.zip", "application/zip", "zip".getBytes());
 
-        assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(status ->
-                commissionService.submit(request(salesRepId, invoiceNumber), rejectedFile, managerActor)))
+        assertThatThrownBy(() -> transactional(commissionService)
+                .submit(request(salesRepId, invoiceNumber), rejectedFile, managerActor))
             .isInstanceOf(ApiException.class);
 
         assertThat(countByInvoiceNumber(invoiceNumber))
@@ -120,6 +143,40 @@ class CommissionInvoiceSentinelRollbackIntegrationTest extends AbstractPostgresI
             .isZero();
     }
 
+    /**
+     * The vacuity control, in the shape {@code FileStorageRollbackOrphanIntegrationTest} uses.
+     * Identical failing submission, but the RAW un-proxied service — exactly how this suite's other
+     * ~123 integration tests are driven. {@code @Transactional} is inert without an AOP proxy, so
+     * {@code createInvoice}'s insert auto-commits on its own and the {@code PENDING_ATTACHMENT}
+     * sentinel really does survive: an evidence-free invoice row that V102's CHECK cannot tell from
+     * real provenance.
+     *
+     * <p>This asserts today's harness defect, not a desired outcome. Its job is to prove the
+     * proxied test above is discriminating: if this one ever starts finding zero rows, the proxy is
+     * no longer what makes the difference and the rollback evidence has quietly gone vacuous.
+     * Delete it the day the harness runs inside a real Spring context with proxied beans.
+     */
+    @Test
+    void submitWithoutTheProxy_commitsTheSentinelRow_theHarnessDefectItself() {
+        long salesRepId = createEmployee("พนักงานขาย เซนทิเนลไม่มีพรอกซี", "rep-sentinel-np@glr.co.th");
+        String invoiceNumber = "INV-SENTINEL-NOPROXY-" + UUID.randomUUID();
+        MultipartFile rejectedFile =
+            new MockMultipartFile("invoiceAttachment", "invoice.zip", "application/zip", "zip".getBytes());
+
+        assertThatThrownBy(() ->
+                commissionService.submit(request(salesRepId, invoiceNumber), rejectedFile, managerActor))
+            .isInstanceOf(ApiException.class);
+
+        assertThat(countByInvoiceNumber(invoiceNumber))
+            .as("no proxy, no transaction: createInvoice's insert auto-commits and survives the "
+                + "later failure")
+            .isOne();
+        assertThat(countSentinelRowsFor(invoiceNumber))
+            .as("and it survives carrying the '%s' sentinel — the committed, evidence-free row the "
+                + "proxied test above proves the annotation prevents", SENTINEL)
+            .isOne();
+    }
+
     @Test
     void successfulSubmitCommits_withARealAttachmentAndNoSentinelLeftOver() {
         long salesRepId = createEmployee("พนักงานขาย เซนทิเนลสำเร็จ", "rep-sentinel-ok@glr.co.th");
@@ -127,8 +184,8 @@ class CommissionInvoiceSentinelRollbackIntegrationTest extends AbstractPostgresI
         MultipartFile acceptedFile =
             new MockMultipartFile("invoiceAttachment", "invoice.pdf", "application/pdf", "pdf".getBytes());
 
-        CommissionRecord created = transactionTemplate.execute(status ->
-            commissionService.submit(request(salesRepId, invoiceNumber), acceptedFile, managerActor));
+        CommissionRecord created = transactional(commissionService)
+            .submit(request(salesRepId, invoiceNumber), acceptedFile, managerActor);
 
         // Positive control: proves the failure test above is not passing because submit() is broken
         // for every input, and that the committed row ends in the intended shape.
@@ -330,6 +387,17 @@ class CommissionInvoiceSentinelRollbackIntegrationTest extends AbstractPostgresI
         Integer count = jdbc.queryForObject(
             "SELECT COUNT(*) FROM sales.invoice_details WHERE evidence_provenance = :sentinel",
             Map.of("sentinel", SENTINEL), Integer.class);
+        return count == null ? 0 : count;
+    }
+
+    /** {@link #countSentinelRows()} narrowed to one invoice, so the control test names the exact
+     * row it claims survived rather than counting whatever else the schema happens to hold. */
+    private int countSentinelRowsFor(String invoiceNumber) {
+        Integer count = jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.invoice_details
+             WHERE invoice_number = :invoiceNumber AND evidence_provenance = :sentinel
+            """,
+            Map.of("invoiceNumber", invoiceNumber, "sentinel", SENTINEL), Integer.class);
         return count == null ? 0 : count;
     }
 
