@@ -136,6 +136,49 @@ public class FileStorageService {
     }
 
     /**
+     * The mirror of {@link #deleteOnRollback}, for the other direction: a caller that wants a file
+     * GONE, running inside a {@code @Transactional} method. Defers the disk delete until the
+     * transaction actually commits, so a rollback leaves the bytes exactly where the restored row
+     * still expects them.
+     *
+     * <p><b>Why this is needed even though {@link #deleteOnRollback} already exists.</b> Both
+     * hazards come from the same fact — a disk mutation is not transactional — but they fail in
+     * opposite directions, and #708 only closed one of them. Deleting inside a transaction that
+     * then rolls back is the worse of the two: Postgres restores the row that referenced the file
+     * and nothing restores the file, so the deal keeps advertising a document whose download is
+     * permanently broken. An orphaned file costs disk and is invisible; a dangling row is
+     * user-visible and the lost bytes are customer contracts, POs and tax invoices.
+     *
+     * <p><b>Deletes on commit, and deletes INLINE when there is no transaction.</b> That asymmetry
+     * with {@link #deleteOnRollback}'s no-op is deliberate and is the whole point of the guard:
+     * there, no transaction means nothing can roll back, so the file is the caller's to keep;
+     * here, no transaction means there is no commit to wait for, and deferring would silently leak
+     * every file a non-transactional caller ever deleted. Both branches resolve to "do what the
+     * caller asked, unless a rollback is still possible".
+     *
+     * <p>Uses {@code afterCommit} rather than {@code afterCompletion}, following {@code
+     * NotificationService#sendEmailAfterCommit}: on an outcome we could not determine the safe
+     * answer is to keep the bytes, exactly as {@link #deleteOnRollback} keeps them on {@code
+     * STATUS_UNKNOWN}. A file left behind is recoverable by hand; bytes deleted under a row that
+     * committed are not.
+     */
+    public void deleteOnCommit(String storedPath) {
+        if (storedPath == null || storedPath.isBlank()) {
+            return;
+        }
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            deleteQuietly(storedPath);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                deleteQuietly(storedPath);
+            }
+        });
+    }
+
+    /**
      * Best-effort delete that can never throw. Tolerant of an already-absent file by design: this
      * runs from {@code afterCompletion}, where the transaction has already failed, and an
      * exception escaping here would replace the real rollback cause in the logs with a cleanup
