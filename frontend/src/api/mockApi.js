@@ -42,26 +42,11 @@ import {
   RECIPIENT_OPTIONS as PRICING_REQUEST_RECIPIENT_OPTIONS,
   UNIT_BASIS_OPTIONS as PRICING_REQUEST_UNIT_BASIS_OPTIONS,
 } from '../features/pricingRequests/pricingRequestMeta.js';
-// Commission redesign (Slices A1/A2/calc-refine + A3): the calculation itself — VAT-strip
-// formula, monthly tier base, progressive tiers/floor — is shared with the UI so the mock's
-// numbers can never drift from CommissionPage's own display math. The authoritative
-// implementation is backend/.../commission/CommissionCalculator.java + TierConfig.java; this
-// mock mirrors it, per CLAUDE.md ("mock authz is not authoritative" — the calculation itself is
-// business logic, not authz, and is mirrored as exactly as this module allows).
-import {
-  invoiceCalculation as calcInvoice,
-  monthlyTierBase as calcMonthlyTierBase,
-  progressiveCommission as calcProgressiveCommission,
-  round2 as commissionRound2,
-  // Issue #405: auto-computed INCENTIVE ladder + STOCK_BONUS — mirrors
-  // CommissionService#computeRepPayrollCommissions exactly, including the fix-forward effective
-  // month gate and the manual-entry double-count suppression guard (see payrollReady below).
-  monthlyIncentive as calcMonthlyIncentive,
-  stockSaleBonus as calcStockSaleBonus,
-  INCENTIVE_LADDER,
-  STOCK_BONUS_DEFAULTS,
-  INCENTIVE_STOCK_BONUS_EFFECTIVE_MONTH,
-} from '../features/commissions/commissionCalc.js';
+// fix/commission-figures-from-backend: mock mode no longer imports the commission tier math —
+// see the fenced MOCK COMMISSION FIXTURES block near the `commissions` namespace below for why,
+// and for the small local `round2`/`mockInvoiceCalculation` helpers that replace this import
+// (neither is policy: they are generic 2dp rounding and "sum the caller's own input fields",
+// not a tier/rate/floor table).
 // Payroll/commission seed data (chore/mock-demo-seed-state-matrix) — the genuinely
 // fake-able stores only (see demoPayroll.js's own header for what's deliberately excluded).
 import {
@@ -2555,13 +2540,72 @@ function commissionMonth(value) {
   return (value || new Date().toISOString()).slice(0, 7);
 }
 
-// Slice A1/calc-refine: `invoiceCalculation` now also subtracts withholdingTax and adds
-// overpayment (before the VAT strip), and `progressiveCommission` applies the <50,000 monthly
-// floor and the V81 tier-13 rate (3.25%, not the old 7.5%) — both imported from
-// commissionCalc.js so this mock can never drift from CommissionPage's own display math or the
-// real CommissionCalculator. See that module for the exact formula.
-const invoiceCalculation = calcInvoice;
-const progressiveCommission = calcProgressiveCommission;
+// ─────────────────────────────────────────────────────────────────────────────
+// MOCK COMMISSION FIXTURES — NOT THE SOURCE OF TRUTH, NOT EVIDENCE.
+// Mock mode does NOT compute commission. The real figures come from
+// CommissionService (tiers/incentive read from sales.tier_config and
+// sales.commission_incentive_tier at runtime) and are served by
+// GET /api/commissions/monthly-summary and POST /api/commissions/simulator.
+// Nothing here tracks a DB tier change, by design: this file used to import
+// the frontend's own commission math, which pinned the mock to the display
+// layer and guaranteed both would drift from the backend together (the V81
+// tier-13 rate correction is the case on record). A green test under
+// VITE_USE_MOCKS=true says NOTHING about any commission figure.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Thai VAT strip used ONLY to fabricate a plausible commissionableBase column on demo/mock
+// records below -- named distinctly from a "policy" constant on purpose: it is not read from
+// sales.tier_config, does not represent any CEO-configurable rate, and nothing else in this file
+// may add a tier table, rate, floor, or incentive/stock-bonus config alongside it.
+const MOCK_VAT_DIVISOR = 1.07;
+
+// round2(n) already exists above (generic 2dp rounding, not commission-specific) -- reused here
+// rather than redeclared.
+
+// Mirrors ONLY CommissionCalculator.calculateInvoice's subtraction formula -- arithmetic over the
+// caller's OWN input fields (gross minus each deduction, plus overpayment), not policy. The VAT
+// strip below uses MOCK_VAT_DIVISOR (see above), not a re-import of the deleted commissionCalc.js.
+function mockInvoiceCalculation(payload) {
+  const actualReceived = round2(
+    Number(payload.grossAmount || 0)
+    - Number(payload.bankFees || 0)
+    - Number(payload.suspenseVat || 0)
+    - Number(payload.transportFee || 0)
+    - Number(payload.cutFee || 0)
+    - Number(payload.shortfall || 0)
+    - Number(payload.withholdingTax || 0)
+    + Number(payload.overpayment || 0)
+  );
+  return {
+    actualReceived,
+    commissionableBase: round2(actualReceived / MOCK_VAT_DIVISOR),
+  };
+}
+
+// Canned monthlySummary() figures -- a frozen snapshot of what the OLD client-side tier math used
+// to produce for the demo seed's mock sales user (sales@glr.co.th, August 2026), so before/after
+// screenshots of the UI stay comparable across this change; only the SOURCE of the figure moved,
+// from client math to (in mock mode) this fixture, and from real usage to the real
+// CommissionService. These three numbers will NOT move if the demo seed or the real DB tier
+// config changes -- by design, since mock mode cannot read either.
+const MOCK_MONTHLY_SUMMARY_FIXTURE = { commissionableBase: 116822.43, tierCommission: 292.06, incentiveAmount: 0 };
+
+// Canned simulate() monthly-aggregate fields -- arbitrary, clearly-fixture numbers (not derived
+// from any tier table). actualReceived/commissionableBase above them are NOT canned: those are
+// mockInvoiceCalculation's honest arithmetic over the caller's own typed-in invoice fields.
+const MOCK_SIMULATION_FIXTURE = {
+  existingMonthlyBase: 500000.00,
+  projectedMonthlyBase: 650000.00,
+  projectedMonthlyCommission: 1625.00,
+  incrementalCommission: 375.00,
+};
+
+// Canned payrollReady() per-rep tier/incentive/stock-bonus figures -- WHICH reps appear and their
+// manualAdjustmentAmount stay real (grouped from db.commissions, summed honestly; "who has
+// activity this month" and "sum their manual amounts" are not policy). commissionableBase and the
+// tier/incentive/stock-bonus portions of commissionAmount are this one fixed fixture, reused for
+// every rep -- the real per-rep math lives only in CommissionService#computeRepPayrollCommissions.
+const MOCK_PAYROLL_READY_TIER_FIXTURE = { commissionableBase: 87654.32, tierCommission: 219.14, incentiveAmount: 0, stockBonusAmount: 0 };
 
 // Step 9 cross-check threshold: flag (never block) when the hand-typed grossAmount diverges from
 // the linked deal's actual payableAmount by more than this fraction. Mirrors
@@ -2575,43 +2619,14 @@ function commissionDealMismatch(grossAmount, payable) {
 }
 
 // Manual commission entries (feat/commission-manual-adjustments, V84): a sales_manager/CEO
-// hand-typed amount, never run through invoiceCalculation/progressiveCommission, with no invoice
-// behind it. Mirrors backend/.../commission/CommissionKind.java's four manual kinds exactly —
-// ALL FOUR are hand-typed for now (owner decision: manual across the UI until the CEO-confirmed
+// hand-typed amount, never run through the commission tier calculation, with no invoice behind
+// it. Mirrors backend/.../commission/CommissionKind.java's four manual kinds exactly — ALL FOUR
+// are hand-typed for now (owner decision: manual across the UI until the CEO-confirmed
 // auto-config lands to prefill suggestions for specific ones later — not implemented here).
 const MANUAL_COMMISSION_KINDS = ['ADJUSTMENT', 'MANAGER', 'STOCK_BONUS', 'INCENTIVE'];
 
 function isManualCommissionKind(kind) {
   return MANUAL_COMMISSION_KINDS.includes(kind);
-}
-
-// Issue #405: stockShare(ticket) = SUM(item.qtyFromStock) / SUM(item.qty), 0 when the ticket has
-// no items or its items sum to 0 qty (or the ticket can't be found) — mirrors
-// CommissionRepository#sumActiveStockActualReceived's GROUP BY ticket_id subquery.
-function ticketStockShare(ticketId) {
-  const ticket = db.tickets.find((t) => t.id === Number(ticketId));
-  const items = ticket?.items ?? [];
-  const totalQty = items.reduce((sum, item) => sum + Number(item.qty || 0), 0);
-  if (totalQty === 0) return 0;
-  const stockQty = items.reduce((sum, item) => sum + Number(item.qtyFromStock || 0), 0);
-  return stockQty / totalQty;
-}
-
-// Issue #405: STOCK_BONUS's per-rep-per-month "stock receipts" input — SUM(actualReceived x
-// stockShare(ticket)) across every APPROVED commission this rep/month with a sourceTicketId.
-// Review fix (2026-08-02): mirrors the APPROVED-only records payrollReady's own reps/manualTotals
-// aggregation above already restricts itself to (NOT the broader VOID/REJECTED-exclusion
-// sumActiveWeightedActualReceived uses for the unrelated simulate() preview) -- an earlier
-// version of this used that broader filter and let a still-SUBMITTED receipt (nobody approved)
-// contribute to a paid stock bonus. Unapproved money must never reach a payroll figure. Records
-// with no sourceTicketId (every manual kind) are excluded by the filter itself.
-function stockReceiptsForRep(salesRepId, month) {
-  return db.commissions
-    .filter((item) => item.salesRepId === salesRepId
-      && item.sourceTicketId != null
-      && commissionMonth(item.payrollMonth) === month
-      && item.status === 'APPROVED')
-    .reduce((sum, item) => sum + Number(item.actualReceived || 0) * ticketStockShare(item.sourceTicketId), 0);
 }
 
 function buildCommissionRecord(record) {
@@ -5914,7 +5929,7 @@ export const api = {
       }
       const id = Math.max(0, ...db.commissions.map((item) => item.id)) + 1;
       const salesRepId = Number(payload.salesRepId || user.id);
-      const calc = invoiceCalculation(payload);
+      const calc = mockInvoiceCalculation(payload);
       const record = {
         id,
         sourceTicketId: payload.sourceTicketId ?? null,
@@ -6013,7 +6028,7 @@ export const api = {
         : dealPayableAmountSnapshot;
       const dealAmountMismatch = commissionDealMismatch(effectiveGrossAmount, dealPayableAmountSnapshot);
       const id = Math.max(0, ...db.commissions.map((item) => item.id)) + 1;
-      const calc = invoiceCalculation({ ...payload, grossAmount: effectiveGrossAmount });
+      const calc = mockInvoiceCalculation({ ...payload, grossAmount: effectiveGrossAmount });
       const record = {
         id,
         sourceTicketId: ticketId,
@@ -6080,11 +6095,12 @@ export const api = {
     },
 
     // Slice A2: the sales-manager/CEO review step may edit any invoice input (not just the
-    // three deduction fields it always could) plus the calc-refine weightMultiplier (1/2/3;
-    // only 2x is owner-confirmed policy — see commissionCalc.js / handoff 102's "3x-unconfirmed
-    // note"). Every field is value-or-existing (null leaves it unchanged), and a non-blank
-    // `reason` is required on every call, mirroring UpdateCommissionDeductionsRequest exactly.
-    // The final commission is ALWAYS recomputed here — there is no path that sets it directly.
+    // three deduction fields it always could) plus the calc-refine weightMultiplier (1/2/3; only
+    // 2x is owner-confirmed policy — see handoff 102's "3x-unconfirmed note", recoverable from git
+    // history per CLAUDE.md's "Where the old docs went"). Every field is value-or-existing (null
+    // leaves it unchanged), and a non-blank `reason` is required on every call, mirroring
+    // UpdateCommissionDeductionsRequest exactly. The final commission is ALWAYS recomputed here —
+    // there is no path that sets it directly.
     async updateDeductions(id, payload) {
       hasRole('sales_manager', 'ceo');
       if (!payload.reason || !String(payload.reason).trim()) {
@@ -6143,7 +6159,7 @@ export const api = {
         if (![1, 2, 3].includes(weight)) fail('weightMultiplier ต้องเป็น 1, 2 หรือ 3', 400);
         record.weightMultiplier = weight;
       }
-      const calc = invoiceCalculation(record.invoiceDetails);
+      const calc = mockInvoiceCalculation(record.invoiceDetails);
       db.commissions
         .filter((item) => item.invoiceDetails.id === record.invoiceDetails.id && !['VOID', 'REJECTED'].includes(item.status))
         .forEach((item) => {
@@ -6242,8 +6258,8 @@ export const api = {
     /**
      * Manual commission entries (feat/commission-manual-adjustments): sales_manager/CEO adds a
      * hand-typed, signed amount for kind ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE against
-     * salesRepId's payrollMonth — no invoice, never touches invoiceCalculation/
-     * progressiveCommission. Mirrors CommissionService#createManualCommission +
+     * salesRepId's payrollMonth — no invoice, never touches the commission tier calculation.
+     * Mirrors CommissionService#createManualCommission +
      * CommissionRepository#createManualCommission's two INSERT branches exactly.
      *
      * Authz here only APPROXIMATES the Java service (CLAUDE.md "Mock API contract") — the real
@@ -6260,7 +6276,7 @@ export const api = {
       if (payload.amount === null || payload.amount === undefined || payload.amount === '' || Number.isNaN(Number(payload.amount))) {
         fail('ต้องระบุจำนวนเงิน', 400);
       }
-      const amount = commissionRound2(Number(payload.amount));
+      const amount = round2(Number(payload.amount));
       if (!payload.reason || !String(payload.reason).trim()) {
         fail('ต้องระบุเหตุผลสำหรับรายการค่าคอมมิชชั่นแบบกรอกเอง', 400);
       }
@@ -6314,49 +6330,41 @@ export const api = {
       return delay({ commission: buildCommissionRecord(record) });
     },
 
+    // MOCK COMMISSION FIXTURE (see the header above `commissions`): actualReceived/
+    // commissionableBase below are honest arithmetic over the caller's own typed-in invoice
+    // fields (mockInvoiceCalculation). existingMonthlyBase/projectedMonthlyBase/
+    // projectedMonthlyCommission/incrementalCommission are NOT -- mock mode has no tier config to
+    // compute them from, so they are MOCK_SIMULATION_FIXTURE's canned numbers regardless of the
+    // caller's rep/month/history. The real figures come from CommissionService#simulate.
     async simulate(payload) {
       const user = requireSession();
       if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (user.role === 'sales' && (Number(payload.transportFee || 0) > 0 || Number(payload.cutFee || 0) > 0 || Number(payload.shortfall || 0) > 0)) {
         fail('ฝ่ายขายไม่มีสิทธิ์แก้ไขช่องรายการหักเงิน', 403);
       }
-      const salesRepId = user.role === 'sales' ? user.id : Number(payload.salesRepId || user.id);
       const month = commissionMonth(payload.payrollMonth || new Date().toISOString());
-      const calc = invoiceCalculation({
+      const calc = mockInvoiceCalculation({
         ...payload,
         transportFee: user.role === 'sales' ? 0 : payload.transportFee,
         cutFee: user.role === 'sales' ? 0 : payload.cutFee,
         shortfall: user.role === 'sales' ? 0 : payload.shortfall,
       });
-      // Commission redesign calc-refine: the monthly TIER BASE is the full-precision SUM(actual
-      // received x weight_multiplier) / 1.07, divided exactly once — not a sum of already-2dp
-      // commissionableBase rows. The unsaved invoice being simulated has no weight choice yet
-      // (that only happens later, at manager review), so it folds into the weighted sum at the
-      // default weight of 1. Mirrors CommissionService#simulate.
-      const existingWeightedActualReceived = db.commissions
-        .filter((item) => item.salesRepId === salesRepId
-          && commissionMonth(item.payrollMonth) === month
-          && !['VOID', 'REJECTED'].includes(item.status))
-        .reduce((sum, item) => sum + Number(item.actualReceived || 0) * Number(item.weightMultiplier || 1), 0);
-      const projectedWeightedActualReceived = existingWeightedActualReceived + calc.actualReceived;
-      const existingBase = calcMonthlyTierBase(existingWeightedActualReceived);
-      const projectedBase = calcMonthlyTierBase(projectedWeightedActualReceived);
-      const priorCommission = progressiveCommission(existingBase);
-      const projectedCommission = progressiveCommission(projectedBase);
       return delay({
         simulation: {
           payrollMonth: `${month}-01`,
           actualReceived: calc.actualReceived,
           commissionableBase: calc.commissionableBase,
-          // Display-rounded to 2dp — the unrounded value is what fed progressiveCommission above.
-          existingMonthlyBase: commissionRound2(existingBase),
-          projectedMonthlyBase: commissionRound2(projectedBase),
-          projectedMonthlyCommission: projectedCommission,
-          incrementalCommission: commissionRound2(projectedCommission - priorCommission),
+          ...MOCK_SIMULATION_FIXTURE,
         },
       });
     },
 
+    // MOCK COMMISSION FIXTURE (see the header above `commissions`): WHICH reps appear, and their
+    // manualAdjustmentAmount, are real -- grouped from db.commissions and summed honestly ("who
+    // has approved activity this month" and "sum their manual amounts" are not policy). Every
+    // tier/incentive/stock-bonus figure is MOCK_PAYROLL_READY_TIER_FIXTURE, the one fixed fixture
+    // reused for every rep -- the real per-rep math lives only in
+    // CommissionService#computeRepPayrollCommissions.
     async payrollReady(params = {}) {
       hasRole('hr');
       const month = commissionMonth(params.payrollMonth || new Date().toISOString());
@@ -6364,88 +6372,47 @@ export const api = {
       const reps = new Map();
       // Manual entries (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE, feat/commission-manual-
       // adjustments) never feed the tier calc — accumulated separately and added to each rep's
-      // FINAL commission total only, on top of the tier commission, exactly mirroring
-      // CommissionService#payrollReadySummary's manualTotals map. Only APPROVED records reach
-      // this point (the `approved` filter above), so a manual entry still sitting at
-      // MANAGER_APPROVED correctly does not count yet.
+      // FINAL commission total only, on top of the (canned) tier commission. Only APPROVED
+      // records reach this point (the `approved` filter above), so a manual entry still sitting
+      // at MANAGER_APPROVED correctly does not count yet.
       const manualTotals = new Map();
-      // Issue #405 transition safeguard, REWORKED (2026-08-02 review): summed per-kind manual
-      // amount, not just "does one exist" — mirrors
-      // CommissionService#computeRepPayrollCommissions's reworked guard exactly. A POSITIVE
-      // summed amount is a hand-typed REPLACEMENT and suppresses the auto limb; a ZERO or
-      // NEGATIVE summed amount is a CORRECTION layered on top, so the auto limb still computes
-      // and the correction (already folded into manualTotals/manualAmount below) adds to it. A
-      // negative manual INCENTIVE previously zeroed the entire auto limb instead of adding a
-      // correction on top of it — see the backend method's comment for the full rationale.
-      const manualIncentiveTotals = new Map();
-      const manualStockBonusTotals = new Map();
       approved.forEach((item) => {
         if (isManualCommissionKind(item.kind)) {
           manualTotals.set(item.salesRepId, {
             salesRepName: item.salesRepName,
             amount: (manualTotals.get(item.salesRepId)?.amount || 0) + Number(item.manualAmount || 0),
           });
-          if (item.kind === 'INCENTIVE') {
-            manualIncentiveTotals.set(item.salesRepId, (manualIncentiveTotals.get(item.salesRepId) || 0) + Number(item.manualAmount || 0));
-          }
-          if (item.kind === 'STOCK_BONUS') {
-            manualStockBonusTotals.set(item.salesRepId, (manualStockBonusTotals.get(item.salesRepId) || 0) + Number(item.manualAmount || 0));
-          }
           return;
         }
-        // Commission redesign calc-refine: accumulate the WEIGHTED actual-received (real cash x
-        // weight_multiplier), not the already-2dp-rounded commissionableBase column — mirrors
-        // CommissionService#payrollReadySummary's RepAccumulator exactly.
-        const current = reps.get(item.salesRepId) || { salesRepId: item.salesRepId, salesRepName: item.salesRepName, weightedActualReceived: 0 };
-        current.weightedActualReceived += Number(item.actualReceived || 0) * Number(item.weightMultiplier || 1);
-        reps.set(item.salesRepId, current);
+        if (!reps.has(item.salesRepId)) {
+          reps.set(item.salesRepId, { salesRepId: item.salesRepId, salesRepName: item.salesRepName });
+        }
       });
-      // Issue #405, ข้อ 12 fix-forward gate: a payroll month before 2026-08-01 has no matching
-      // config generation (see V108), so both auto-computed limbs stay at zero — mirrors
-      // CommissionRepository#findIncentiveTiers/#findStockBonusConfig's generation-selection SQL.
-      const effectiveMonth = month >= INCENTIVE_STOCK_BONUS_EFFECTIVE_MONTH;
+      const { commissionableBase, tierCommission, incentiveAmount, stockBonusAmount } = MOCK_PAYROLL_READY_TIER_FIXTURE;
       const salesReps = [...reps.values()].map((rep) => {
-        const safeWeighted = Math.max(0, rep.weightedActualReceived);
-        // Full precision here (not rounded to 2dp) — only the final commission total rounds.
-        const safeBase = calcMonthlyTierBase(safeWeighted);
-        const tierCommission = progressiveCommission(safeBase);
         const manualAmount = manualTotals.get(rep.salesRepId)?.amount || 0;
         manualTotals.delete(rep.salesRepId);
-        // Suppress the auto limb only when the summed manual amount of that kind is STRICTLY
-        // POSITIVE (a replacement) — zero/negative (a correction) leaves the auto limb computing.
-        const incentiveReplaced = (manualIncentiveTotals.get(rep.salesRepId) || 0) > 0;
-        const incentiveAmount = (!effectiveMonth || incentiveReplaced)
-          ? 0
-          : calcMonthlyIncentive(safeBase, INCENTIVE_LADDER);
-        const stockBonusReplaced = (manualStockBonusTotals.get(rep.salesRepId) || 0) > 0;
-        // Review fix (performance mirror): short-circuit before the stock-receipts scan when the
-        // config is disabled or the limb is replaced — STOCK_BONUS_DEFAULTS.enabled is false by
-        // default, so this also matches "ships config-gated OFF" for the mock.
-        const stockBonusAmount = (!effectiveMonth || stockBonusReplaced || !STOCK_BONUS_DEFAULTS.enabled)
-          ? 0
-          : calcStockSaleBonus(stockReceiptsForRep(rep.salesRepId, month), STOCK_BONUS_DEFAULTS);
         return {
           salesRepId: rep.salesRepId,
           salesRepName: rep.salesRepName,
-          commissionableBase: commissionRound2(safeBase),
-          commissionAmount: commissionRound2(tierCommission + incentiveAmount + stockBonusAmount + manualAmount),
-          manualAdjustmentAmount: commissionRound2(manualAmount),
-          incentiveAmount: commissionRound2(incentiveAmount),
-          stockBonusAmount: commissionRound2(stockBonusAmount),
+          commissionableBase,
+          commissionAmount: round2(tierCommission + incentiveAmount + stockBonusAmount + manualAmount),
+          manualAdjustmentAmount: round2(manualAmount),
+          incentiveAmount,
+          stockBonusAmount,
         };
       });
       // A rep whose ONLY approved commission this month is a manual entry (e.g. a MANAGER
-      // commission for someone with no SALE commission yet) still needs a summary row: tier
-      // base/commission are zero, the manual amount is the whole total. Issue #405: their
-      // auto-computed incentive/stock-bonus are kept explicitly zero too — mirrors
-      // CommissionService#payrollReadySummary's second loop exactly.
+      // commission for someone with no SALE commission yet) still needs a summary row: no tier
+      // activity, so commissionableBase/incentive/stockBonus are all zero and the manual amount
+      // is the whole total — mirrors CommissionService#payrollReadySummary's second loop exactly.
       manualTotals.forEach((entry, salesRepId) => {
         salesReps.push({
           salesRepId,
           salesRepName: entry.salesRepName,
           commissionableBase: 0,
-          commissionAmount: commissionRound2(entry.amount),
-          manualAdjustmentAmount: commissionRound2(entry.amount),
+          commissionAmount: round2(entry.amount),
+          manualAdjustmentAmount: round2(entry.amount),
           incentiveAmount: 0,
           stockBonusAmount: 0,
         });
@@ -6460,6 +6427,45 @@ export const api = {
           totalIncentiveAmount: salesReps.reduce((sum, item) => sum + item.incentiveAmount, 0),
           totalStockBonusAmount: salesReps.reduce((sum, item) => sum + item.stockBonusAmount, 0),
           salesReps,
+        },
+      });
+    },
+
+    /**
+     * fix/commission-figures-from-backend: a rep's own live monthly commission estimate. Mirrors
+     * CommissionController#monthlySummary's role gate exactly (SALES, SALES_MANAGER, CEO — same
+     * as list() above). MOCK COMMISSION FIXTURE (see the header above `commissions`):
+     * commissionableBase/tierCommission/incentiveAmount/belowFloor/tiers are ALL canned —
+     * MOCK_MONTHLY_SUMMARY_FIXTURE, `false`, and `[]` respectively — mock mode has no DB tier
+     * config to compute a real per-tier breakdown from, so CommissionPage's MonthlyTierPanel shows
+     * its empty-state line instead of a fabricated table. manualTotal is the one honestly-summed
+     * figure: a plain sum of this rep/month's approved manual-kind demo records, no policy
+     * involved. totalCommission is computed from these (not itself canned), so it tracks
+     * manualTotal correctly even though two of its three inputs are frozen.
+     */
+    async monthlySummary(params = {}) {
+      const user = requireSession();
+      if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const salesRepId = user.role === 'sales' ? user.id : Number(params.salesRepId || user.id);
+      const month = commissionMonth(params.payrollMonth || new Date().toISOString());
+      const manualTotal = round2(db.commissions
+        .filter((item) => item.salesRepId === salesRepId
+          && commissionMonth(item.payrollMonth) === month
+          && isManualCommissionKind(item.kind)
+          && item.status === 'APPROVED')
+        .reduce((sum, item) => sum + Number(item.manualAmount || 0), 0));
+      const { commissionableBase, tierCommission, incentiveAmount } = MOCK_MONTHLY_SUMMARY_FIXTURE;
+      return delay({
+        summary: {
+          payrollMonth: `${month}-01`,
+          salesRepId,
+          commissionableBase,
+          tierCommission,
+          incentiveAmount,
+          manualTotal,
+          totalCommission: round2(tierCommission + incentiveAmount + manualTotal),
+          belowFloor: false,
+          tiers: [],
         },
       });
     },

@@ -16,7 +16,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     api: {
       tickets: { list: vi.fn() },
       pricingRequests: { queue: vi.fn() },
-      commissions: { list: vi.fn() },
+      commissions: { monthlySummary: vi.fn() },
     },
   };
 });
@@ -63,9 +63,19 @@ const pricingRequests = [
   // Deal 601 deliberately has no pricing request at all.
 ];
 
-const commissionRecords = [
-  { id: 1, kind: 'SALE', status: 'APPROVED', actualReceived: 107000, weightMultiplier: 1, manualAmount: null },
-];
+// Default monthlySummary fixture for tests that don't care about the commission KPI figures —
+// see the two dedicated cases below for the ones that do.
+const defaultCommissionSummary = {
+  payrollMonth: null,
+  salesRepId: 1,
+  commissionableBase: 0,
+  tierCommission: 0,
+  incentiveAmount: 0,
+  manualTotal: 0,
+  totalCommission: 0,
+  belowFloor: false,
+  tiers: [],
+};
 
 function renderOverview() {
   const queryClient = new QueryClient({
@@ -93,7 +103,7 @@ describe('SalesOverview', () => {
     vi.clearAllMocks();
     api.tickets.list.mockResolvedValue({ tickets: deals });
     api.pricingRequests.queue.mockResolvedValue({ items: pricingRequests });
-    api.commissions.list.mockResolvedValue({ commissions: commissionRecords });
+    api.commissions.monthlySummary.mockResolvedValue({ summary: defaultCommissionSummary });
   });
 
   it('greets the rep and requests an own-scoped deal list', async () => {
@@ -171,14 +181,68 @@ describe('SalesOverview', () => {
     ]);
   });
 
-  it('renders the read-only commission KPI mirrored from commissionCalc.js', async () => {
+  it('renders the read-only commission KPI from the server-computed monthly summary', async () => {
+    api.commissions.monthlySummary.mockResolvedValue({
+      summary: { ...defaultCommissionSummary, commissionableBase: 100000, totalCommission: 250 },
+    });
+
     renderOverview();
 
-    // actualReceived 107000 / 1.07 = 100000 exactly -> tier 1 (0.25%) = ฿250.00.
     // findByText (not getByText) because the commissions query resolves async.
     expect(await screen.findByText('฿250.00')).not.toBeNull();
     expect(screen.getByText('฿100,000.00')).not.toBeNull();
-    expect(api.commissions.list).toHaveBeenCalledWith({ payrollMonth: THIS_MONTH });
+    expect(api.commissions.monthlySummary).toHaveBeenCalledWith({ payrollMonth: THIS_MONTH });
+  });
+
+  // fix/commission-figures-from-backend (#548-style V81 regression guard): the commission KPI
+  // above is now driven entirely by the SERVER-computed monthly summary (CommissionService
+  // #monthlySummary), replacing a former client-side re-implementation of the tier math that
+  // could silently desynchronise from a DB tier-config change (the V81 tier-13 rate correction is
+  // the case on record — see CLAUDE.md). This case stubs a figure deliberately unreachable by any
+  // tier table (no combination of the seeded 0.25%-3.25% bands on any base yields exactly
+  // 99,999.99) and asserts the panel renders that exact server figure — not a client-recomputed
+  // one. On unmodified (pre-refactor) code this failed: the panel rendered a client-recomputed
+  // number derived from api.commissions.list() instead — see the C1 baseline evidence in the PR.
+  it('renders the server-computed monthly summary, not a client-recomputed figure', async () => {
+    api.commissions.monthlySummary.mockResolvedValue({
+      summary: {
+        payrollMonth: THIS_MONTH,
+        salesRepId: 1,
+        commissionableBase: 1200000,
+        tierCommission: 99999.99,
+        incentiveAmount: 0,
+        manualTotal: 0,
+        totalCommission: 99999.99,
+        belowFloor: false,
+        tiers: [],
+      },
+    });
+
+    renderOverview();
+
+    expect(await screen.findByText('฿99,999.99')).not.toBeNull();
+    expect(screen.getByText('฿1,200,000.00')).not.toBeNull();
+  });
+
+  it('follows the server figure when it changes -- proves the render is wired to the DTO, not a frozen snapshot', async () => {
+    api.commissions.monthlySummary.mockResolvedValue({
+      summary: {
+        payrollMonth: THIS_MONTH,
+        salesRepId: 1,
+        commissionableBase: 654321.09,
+        tierCommission: 4567.89,
+        incentiveAmount: 0,
+        manualTotal: 0,
+        totalCommission: 4567.89,
+        belowFloor: false,
+        tiers: [],
+      },
+    });
+
+    renderOverview();
+
+    expect(await screen.findByText('฿4,567.89')).not.toBeNull();
+    expect(screen.getByText('฿654,321.09')).not.toBeNull();
   });
 
   it('renders the follow-up-due list, sorted soonest first', async () => {

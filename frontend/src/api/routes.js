@@ -204,6 +204,10 @@ export const API_ROUTES = {
     manual: '/api/commissions/manual',
     simulator: '/api/commissions/simulator',
     payrollReady: '/api/commissions/payroll-ready',
+    // fix/commission-figures-from-backend: a rep's own live monthly commission estimate, computed
+    // server-side from the same tier/incentive config a real payroll run uses. Mirrors
+    // CommissionController#monthlySummary.
+    monthlySummary: '/api/commissions/monthly-summary',
   },
   payroll: {
     current: '/api/payroll',
