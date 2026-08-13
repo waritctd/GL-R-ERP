@@ -207,19 +207,27 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
     }
 
     @Test
-    void cancelForDeadDeal_cancelsFromReadyForCeoReview_aStatusTheCanonicalMapForbidsANormalCancelFrom() {
-        // The one intentional bypass of PricingRequestStatus.canTransition: a dead-deal cascade
-        // must be able to cancel from READY_FOR_CEO_REVIEW even though transition() rejects
-        // READY_FOR_CEO_REVIEW -> CANCELLED as illegal (only SUPERSEDED/CEO_REVIEWING/
-        // AWAITING_FACTORY_RESPONSE are reachable from there for a live user action, per V141).
+    void cancelForDeadDeal_cancelsFromQuotationIssued_aStatusTheCanonicalMapForbidsANormalCancelFrom() {
+        // The one intentional bypass of PricingRequestStatus.canTransition: a dead-deal cascade must
+        // be able to cancel a pricing request from a status no live user action may cancel from.
+        //
+        // This test used to make that point with READY_FOR_CEO_REVIEW. The cancel cutoff (owner
+        // ruling 2026-08-13) made READY_FOR_CEO_REVIEW legitimately cancellable — cancel is now
+        // allowed everywhere up to and including APPROVED_FOR_QUOTATION — so that status no longer
+        // demonstrates a bypass of anything. QUOTATION_ISSUED replaces it, and is the stronger
+        // example: it is exactly where the two paths must diverge. A live user may NOT cancel a
+        // request whose quotation is in the customer's hands (retracting an offer is a commercial
+        // act, routed through the deal or through a revision) — but when the DEAL itself is marked
+        // lost, the cascade must still be able to close the request out. Both halves are asserted
+        // here, in that order.
         long id = createDraft();
         jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
-            Map.of("status", PricingRequestStatus.READY_FOR_CEO_REVIEW, "id", id));
+            Map.of("status", PricingRequestStatus.QUOTATION_ISSUED, "id", id));
         assertThatThrownBy(() -> requests.transition(
-            id, PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.CANCELLED, null, salesActorId))
+            id, PricingRequestStatus.QUOTATION_ISSUED, PricingRequestStatus.CANCELLED, null, salesActorId))
             .isInstanceOf(IllegalStateException.class);
 
-        int rows = requests.cancelForDeadDeal(id, PricingRequestStatus.READY_FOR_CEO_REVIEW, salesActorId);
+        int rows = requests.cancelForDeadDeal(id, PricingRequestStatus.QUOTATION_ISSUED, salesActorId);
 
         assertThat(rows).isEqualTo(1);
         PricingRequestSummaryDto cancelled = requests.findSummary(id).orElseThrow();
