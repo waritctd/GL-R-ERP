@@ -460,6 +460,8 @@ export function entryChannelLabel(value) {
     DESIGNER_LED: 'ผู้ออกแบบนำดีล',
     OWNER_DIRECT: 'เจ้าของติดต่อโดยตรง',
     BUYER_DIRECT: 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง',
+    // Stored-only (V144 default): no channel was ever stated. Never offered as a choice.
+    UNSPECIFIED: 'ยังไม่ระบุช่องทาง',
   };
   return { label: map[value] ?? value ?? '-', tone: 'neutral' };
 }
