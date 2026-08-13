@@ -359,7 +359,7 @@ public class CommissionService {
         String salesStage = tickets.findSalesStage(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
         if (!DealStage.CLOSED_PAID.equals(salesStage)) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "ดีลนี้ยังไม่ถึงขั้นตอนรับชำระเงินครบถ้วน (CLOSED_PAID) จึงยังยื่นค่าคอมมิชชั่นไม่ได้");
         }
         BigDecimal payable = tickets.payableAmount(ticketId);

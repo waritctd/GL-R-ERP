@@ -52,7 +52,7 @@ public class PriceImportService {
         try {
             result = engine.parse(fileStream, prof, factoryId);
         } catch (Exception e) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "อ่านไฟล์ไม่สำเร็จ: " + e.getMessage());
         }
 
@@ -622,7 +622,7 @@ public class PriceImportService {
         try {
             result = engine.parse(fileStream, prof, factoryId);
         } catch (Exception e) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "อ่านไฟล์ไม่สำเร็จ: " + e.getMessage());
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "อ่านไฟล์ไม่สำเร็จ: " + e.getMessage());
         }
 
         long versionId = createDraftVersion(factoryId, label, originalFilename,

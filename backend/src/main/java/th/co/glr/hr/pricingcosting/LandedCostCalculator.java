@@ -75,15 +75,15 @@ public class LandedCostCalculator {
         Instant calculatedAt = Instant.now();
         for (ResolvedSource source : sources) {
             FactoryConfigDto factoryConfig = factoryConfigs.findByName(source.quote().factoryName())
-                .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "ไม่พบ factory config สำหรับโรงงาน: " + source.quote().factoryName()));
             String country = firstText(factoryConfig.country(), null);
             if (country == null) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "factory config ของ " + source.quote().factoryName() + " ไม่มีประเทศ");
             }
             PriceCalcConfigDto config = priceConfigs.findCurrentByCountry(country)
-                .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "ไม่พบ price config สำหรับประเทศ: " + country));
             FxSnapshot fx = resolveFx(source.quoteItem().currency());
 
@@ -156,24 +156,24 @@ public class LandedCostCalculator {
         for (PricingRequestItemDto item : pricingRequests.findItems(summary.id())) {
             String factoryName = firstText(item.resolvedFactoryName(), item.factory());
             if (factoryName == null) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "รายการที่ " + item.id() + " ในคำขอราคายังไม่ได้ระบุโรงงาน");
             }
             FactoryQuoteDto quote = factoryQuotes.findCurrentByFactory(summary.id(), factoryName)
-                .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "ยังไม่มีใบเสนอราคาโรงงานสำหรับ " + factoryName));
             if (!FactoryQuoteStatus.READY_FOR_COSTING.equals(quote.status())) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "ใบเสนอราคาของโรงงาน " + factoryName + " ยังไม่พร้อมสำหรับการคำนวณต้นทุน");
             }
             FactoryQuoteItemDto quoteItem = quote.items().stream()
                 .filter(candidate -> candidate.pricingRequestItemId() == item.id())
                 .findFirst()
-                .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "ใบเสนอราคาของโรงงาน " + factoryName + " ไม่ครอบคลุมรายการที่ " + item.id()));
             if (quoteItem.rawUnitPrice() == null || quoteItem.currency() == null
                     || quoteItem.quotedUnit() == null || quoteItem.unitBasis() == null) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "รายการที่ " + quoteItem.id() + " ในใบเสนอราคาโรงงานยังไม่มีราคา สกุลเงิน หรือหน่วยนับ");
             }
             result.add(new ResolvedSource(item, quote, quoteItem));
@@ -247,7 +247,7 @@ public class LandedCostCalculator {
                 8, RoundingMode.HALF_UP);
             case UnitBasis.PER_SQM -> rawThb.multiply(requireFactor(sqmPerPiece, requestItem, "sqmPerUnit"));
             case UnitBasis.PER_LINEAR_M -> rawThb.multiply(requireFactor(linearMPerUnit, requestItem, "linearMPerUnit"));
-            default -> throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+            default -> throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "ไม่รองรับหน่วยนับของใบเสนอราคาโรงงาน '" + quoteUnitBasis + "'");
         };
     }
@@ -271,7 +271,7 @@ public class LandedCostCalculator {
                 8, RoundingMode.HALF_UP);
             case UnitBasis.PER_LINEAR_M -> requestedQty.divide(requireFactor(linearMPerUnit, requestItem, "linearMPerUnit"),
                 8, RoundingMode.HALF_UP);
-            default -> throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+            default -> throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "ไม่รองรับหน่วยนับที่ขอ '" + requestedUnitBasis + "'");
         };
     }
@@ -285,7 +285,7 @@ public class LandedCostCalculator {
 
     /** Names both the item and the missing factor, per the financial-integrity review's requirement. */
     private ApiException missingFactor(PricingRequestItemDto requestItem, String factorName) {
-        return new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+        return new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
             "รายการที่ " + requestItem.id()
                 + " ในคำขอราคายังไม่มีค่าแปลงหน่วย " + factorName + " ที่จำเป็นสำหรับคำนวณราคา/จำนวน");
     }

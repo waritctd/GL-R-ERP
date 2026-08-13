@@ -682,7 +682,7 @@ public class FactoryQuoteService {
         for (PricingRequestItemDto item : items.stream().sorted(Comparator.comparingInt(PricingRequestItemDto::sortOrder)).toList()) {
             String factoryName = firstText(item.resolvedFactoryName(), item.factory());
             if (factoryName == null) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "รายการที่ " + item.id() + " ในคำขอราคายังไม่ได้ระบุโรงงาน");
             }
             byFactory.computeIfAbsent(factoryName, ignored -> new ArrayList<>()).add(item);
@@ -721,15 +721,15 @@ public class FactoryQuoteService {
             String unitBasis = UnitBasis.canonicalize(responseItem.unitBasis(), "Factory quote unit");
             String quotedUnit = UnitBasis.canonicalize(responseItem.quotedUnit(), "Factory quote unit");
             if (UnitBasis.PER_BOX.equals(unitBasis) && responseItem.piecesPerBox() == null) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "รายการตอบกลับแบบ PER_BOX ต้องระบุ piecesPerBox");
             }
             if (UnitBasis.PER_SQM.equals(unitBasis) && responseItem.sqmPerUnit() == null) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "รายการตอบกลับแบบ PER_SQM ต้องระบุ sqmPerUnit");
             }
             if (UnitBasis.PER_LINEAR_M.equals(unitBasis) && responseItem.linearMPerUnit() == null) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "รายการตอบกลับแบบ PER_LINEAR_M ต้องระบุ linearMPerUnit");
             }
             normalized.add(new ReceiveFactoryQuoteItemRequest(

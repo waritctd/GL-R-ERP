@@ -388,7 +388,7 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
                 ticketId, "INV-A2-NOTREADY-" + UUID.randomUUID().toString().substring(0, 8), LocalDate.of(2026, 6, 15),
                 null, null, null, null, null, null, null, null, invoiceFile(), accountActor))
             .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
 
         assertThat(countCommissionRecords()).isEqualTo(before);
     }

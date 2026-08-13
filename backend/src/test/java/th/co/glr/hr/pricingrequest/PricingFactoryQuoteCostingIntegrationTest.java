@@ -1449,7 +1449,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             UUID.randomUUID().toString());
 
         assertThatThrownBy(() -> factoryQuoteService.receive(draft.id(), badBox, importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -1508,7 +1508,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             salesActor).summary().id();
 
         assertThatThrownBy(() -> pricingRequestService.submit(pricingRequestId, salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
         assertThat(jdbc.queryForObject(
             "SELECT status FROM sales.pricing_request WHERE pricing_request_id = :id",
             Map.of("id", pricingRequestId), String.class))
@@ -1666,7 +1666,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             UnitBasis.PER_PIECE, new BigDecimal("200.00"), "50.00",
             new BigDecimal("0.5"), null, null))
             .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
                 assertThat(e.getMessage()).contains("piecesPerBox");
             });
     }

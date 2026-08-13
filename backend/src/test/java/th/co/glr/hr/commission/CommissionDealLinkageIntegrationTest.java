@@ -250,7 +250,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
 
         assertThatThrownBy(() -> commissionService.submit(request, invoiceFile(), accountActor))
             .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
         assertThat(countCommissionRecords()).isEqualTo(before);
     }
 

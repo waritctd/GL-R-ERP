@@ -27,7 +27,7 @@ public class AttendanceDatParser {
 
         String[] lines = request.content().split("\\R", -1);
         if (lines.length > MAX_ROWS) {
-            throw new ApiException(HttpStatus.PAYLOAD_TOO_LARGE,
+            throw new ApiException(HttpStatus.CONTENT_TOO_LARGE,
                 "ไฟล์ DAT มีจำนวนแถวเกิน " + MAX_ROWS + " แถวที่รองรับ");
         }
         for (int index = 0; index < lines.length; index++) {

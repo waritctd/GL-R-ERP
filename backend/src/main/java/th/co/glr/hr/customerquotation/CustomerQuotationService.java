@@ -247,7 +247,7 @@ public class CustomerQuotationService {
             // step — a below-minimum request is a hard 422, full stop.
             if (current.minimumSellingPricePerRequestedUnit() != null
                     && finalUnitPrice.compareTo(current.minimumSellingPricePerRequestedUnit()) < 0) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "ราคาหลังหักส่วนลดของรายการ " + req.quotationItemId() + " ต่ำกว่าราคาขั้นต่ำที่ CEO อนุมัติ ("
                         + current.minimumSellingPricePerRequestedUnit() + " " + "ต่อหน่วย)");
             }
@@ -299,7 +299,7 @@ public class CustomerQuotationService {
         for (CustomerQuotationItemDto item : quotation.items()) {
             if (item.minimumSellingPricePerRequestedUnit() != null
                     && item.finalUnitPrice().compareTo(item.minimumSellingPricePerRequestedUnit()) < 0) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "ไม่สามารถออกใบเสนอราคาได้ — รายการ " + item.id() + " ต่ำกว่าราคาขั้นต่ำ");
             }
         }
@@ -634,7 +634,7 @@ public class CustomerQuotationService {
         // with issue(), which never calls it.)
         if (item.minimumSellingPricePerRequestedUnit() != null
                 && finalUnitPrice.compareTo(item.minimumSellingPricePerRequestedUnit()) < 0) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "ราคาหลังหักส่วนลดของรายการ " + item.pricingRequestItemId() + " ต่ำกว่าราคาขั้นต่ำที่ CEO อนุมัติ");
         }
         // Unit basis (highest financial risk on this task): finalUnitPrice is per requested
