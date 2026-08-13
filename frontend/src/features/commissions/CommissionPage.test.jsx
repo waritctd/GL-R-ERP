@@ -22,6 +22,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         list: vi.fn(),
         payrollReady: vi.fn(),
         createFromDeal: vi.fn(),
+        monthlySummary: vi.fn(),
+        simulate: vi.fn(),
       },
       tickets: {
         list: vi.fn().mockResolvedValue({ tickets: [] }),
@@ -221,13 +223,35 @@ describe('CommissionPage — HR payroll-ready table (issue #405)', () => {
   });
 });
 
-describe('CommissionPage — sales rep monthly incentive line (issue #405)', () => {
+// fix/commission-figures-from-backend: the incentive line's SUPPRESSION rule (an approved manual
+// INCENTIVE, or a payroll month before the 2026-08-01 fix-forward effective date, both zero the
+// auto-computed limb) used to be re-implemented client-side and was exercised here by feeding raw
+// commission records through it. That computation now lives entirely in
+// CommissionService#monthlySummary, proven by the real-DB CommissionMonthlySummaryIntegrationTest
+// (backend) and, for the underlying ladder/suppression math itself, by
+// CommissionIncentiveStockBonusIntegrationTest and CommissionCalculatorTest. What remains here is
+// purely a RENDERING contract: the panel shows the incentive line when the server reports a
+// positive incentiveAmount, and hides it when the server reports zero (for any reason).
+describe('CommissionPage — sales rep monthly incentive line renders the server-reported amount (issue #405)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('shows the auto-computed incentive line once the rep reaches the first threshold in August 2026', async () => {
+  it('shows the incentive line when the server reports a positive incentiveAmount', async () => {
     api.commissions.list.mockResolvedValue({ commissions: [saleRecord()] });
+    api.commissions.monthlySummary.mockResolvedValue({
+      summary: {
+        payrollMonth: '2026-08-01',
+        salesRepId: 10,
+        commissionableBase: 3000000,
+        tierCommission: 48750,
+        incentiveAmount: 15000,
+        manualTotal: 0,
+        totalCommission: 63750,
+        belowFloor: false,
+        tiers: [],
+      },
+    });
 
     renderPage(salesUser);
 
@@ -240,8 +264,21 @@ describe('CommissionPage — sales rep monthly incentive line (issue #405)', () 
     expect(screen.getAllByText('฿15,000.00').length).toBeGreaterThan(0);
   });
 
-  it('suppresses the auto-computed incentive line when an approved manual INCENTIVE already exists for the month', async () => {
+  it('hides the incentive line when the server reports incentiveAmount as zero', async () => {
     api.commissions.list.mockResolvedValue({ commissions: [saleRecord(), manualIncentiveRecord()] });
+    api.commissions.monthlySummary.mockResolvedValue({
+      summary: {
+        payrollMonth: '2026-08-01',
+        salesRepId: 10,
+        commissionableBase: 3000000,
+        tierCommission: 48750,
+        incentiveAmount: 0,
+        manualTotal: 15000,
+        totalCommission: 63750,
+        belowFloor: false,
+        tiers: [],
+      },
+    });
 
     renderPage(salesUser);
 
@@ -253,19 +290,116 @@ describe('CommissionPage — sales rep monthly incentive line (issue #405)', () 
     expect(await screen.findByText('ขั้นบันไดค่าคอมเดือนนี้ (ประมาณการ)')).not.toBeNull();
     expect(screen.queryByText('อินเซนทีฟ (นอกขั้นบันได)')).toBeNull();
   });
+});
 
-  it('stays at zero incentive for a payroll month before the 2026-08-01 effective date (fix-forward)', async () => {
-    api.commissions.list.mockResolvedValue({
-      commissions: [saleRecord({ payrollMonth: '2026-07-01' })],
+// fix/commission-figures-from-backend (#548-style V81 regression guard): the monthly tier panel
+// is now driven entirely by the SERVER-computed monthly summary (CommissionService
+// #monthlySummary), replacing a former client-side re-implementation of the tier math that could
+// silently desynchronise from a DB tier-config change (the V81 tier-13 rate correction is the
+// case on record — see CLAUDE.md). These two cases stub figures deliberately unreachable by any
+// tier table (no combination of the seeded 0.25%-3.25% bands on any base yields exactly
+// 99,999.99), and assert the panel renders that exact server figure — not one recomputed
+// client-side from `records`. On unmodified (pre-refactor) code these failed: the panel rendered
+// a JS-recomputed figure derived from `saleRecord()` instead — see the C1 baseline evidence in
+// the PR.
+describe('CommissionPage — monthly tier summary comes from the server, not client math (regression guard)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders the server-computed monthly summary, not a client-recomputed figure', async () => {
+    api.commissions.list.mockResolvedValue({ commissions: [saleRecord()] });
+    api.commissions.monthlySummary.mockResolvedValue({
+      summary: {
+        payrollMonth: '2026-08-01',
+        salesRepId: 10,
+        commissionableBase: 1200000,
+        tierCommission: 99999.99,
+        incentiveAmount: 0,
+        manualTotal: 0,
+        totalCommission: 99999.99,
+        belowFloor: false,
+        tiers: [],
+      },
     });
 
     renderPage(salesUser);
 
     await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
-    await setMonthInput('2026-07');
+    await setMonthInput('2026-08');
+
+    expect(await screen.findByText('฿99,999.99')).not.toBeNull();
+    expect(screen.getByText('฿1,200,000.00')).not.toBeNull();
+  });
+
+  it('follows the server figure when it changes -- proves the render is wired to the DTO, not a frozen snapshot', async () => {
+    api.commissions.list.mockResolvedValue({ commissions: [saleRecord()] });
+    api.commissions.monthlySummary.mockResolvedValue({
+      summary: {
+        payrollMonth: '2026-08-01',
+        salesRepId: 10,
+        commissionableBase: 654321.09,
+        tierCommission: 4567.89,
+        incentiveAmount: 0,
+        manualTotal: 0,
+        totalCommission: 4567.89,
+        belowFloor: false,
+        tiers: [],
+      },
+    });
+
+    renderPage(salesUser);
+
+    await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
+    await setMonthInput('2026-08');
+
+    expect(await screen.findByText('฿4,567.89')).not.toBeNull();
+    expect(screen.getByText('฿654,321.09')).not.toBeNull();
+  });
+
+  // The three cases above all stub `tiers: []` (what mock mode returns, since it has no DB tier
+  // config), which means they never exercise the per-tier TABLE itself. Against the real backend
+  // `tiers` is always populated from sales.tier_config, so that render path needs its own cover --
+  // in particular `Number(row.ratePercent).toFixed(2)`, which exists because a Java BigDecimal can
+  // reach JSON as either a number or a string, and the string form would throw on a bare
+  // `.toFixed`. Both forms are asserted here on purpose.
+  it('renders the server-supplied per-tier rows, with a numeric AND a string ratePercent', async () => {
+    api.commissions.list.mockResolvedValue({ commissions: [saleRecord()] });
+    api.commissions.monthlySummary.mockResolvedValue({
+      summary: {
+        payrollMonth: '2026-08-01',
+        salesRepId: 10,
+        commissionableBase: 300000,
+        tierCommission: 875.5,
+        incentiveAmount: 0,
+        manualTotal: 0,
+        totalCommission: 875.5,
+        belowFloor: false,
+        tiers: [
+          { tierNumber: 1, lowerBound: 0, upperBound: 250000, ratePercent: 0.25, highRoller: false, commission: 625 },
+          // ratePercent as a STRING, and the open-ended top tier (upperBound null -> "ขึ้นไป").
+          { tierNumber: 2, lowerBound: 250000, upperBound: null, ratePercent: '0.5000', highRoller: true, commission: 250.5 },
+        ],
+      },
+    });
+
+    renderPage(salesUser);
+
+    await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
+    await setMonthInput('2026-08');
 
     expect(await screen.findByText('ขั้นบันไดค่าคอมเดือนนี้ (ประมาณการ)')).not.toBeNull();
-    expect(screen.queryByText('อินเซนทีฟ (นอกขั้นบันได)')).toBeNull();
+    fireEvent.click(screen.getByTitle('ขยาย'));
+
+    // Rates come straight from the server rows, formatted but never recomputed.
+    expect(await screen.findByText('0.25%')).not.toBeNull();
+    expect(screen.getByText('0.50%')).not.toBeNull();
+    expect(screen.getByText('฿625.00')).not.toBeNull();
+    expect(screen.getByText('฿250.50')).not.toBeNull();
+    // The open-ended top tier renders its bound as "ขึ้นไป", not "null".
+    expect(screen.getByText(/ขึ้นไป/)).not.toBeNull();
+    // The mock-mode empty state must NOT appear when the server did supply rows.
+    expect(screen.queryByText('ไม่มีรายละเอียดขั้นบันไดค่าคอมให้แสดงในขณะนี้')).toBeNull();
   });
 });
 
