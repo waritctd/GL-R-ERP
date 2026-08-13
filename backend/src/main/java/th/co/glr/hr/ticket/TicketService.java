@@ -1931,14 +1931,15 @@ public class TicketService {
         // DESIGNER_LED is the pre-V144 default that was never backfilled (V144's data cutoff), so
         // an untouched deal reads one or the other purely by age. Dropping UNSPECIFIED from this
         // list would make the FIRST statement of a channel on every new deal demand a reason.
-        boolean changingExistingNonDefault = s.entryChannel() != null
-            && !EntryChannel.DESIGNER_LED.equals(s.entryChannel())
-            && !EntryChannel.UNSPECIFIED.equals(s.entryChannel())
-            && !s.entryChannel().equals(value);
+        boolean changingExistingNonDefault =
+            entryChannelIsStated(s) && !s.entryChannel().equals(value);
         if (changingExistingNonDefault && (note == null || note.isBlank())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "การเปลี่ยน entry channel ต้องระบุเหตุผล");
         }
         tickets.updateEntryChannel(ticketId, value);
+        // Do not inline this back into setEntryChannel: addPolicyActions reads the SAME predicate
+        // to tell the client whether SET_ENTRY_CHANNEL needs a note, so the advertisement and the
+        // 400 cannot disagree. See entryChannelIsStated.
         String message = "entry_channel → " + value
             + (note != null && !note.isBlank() ? " — " + note.trim() : "");
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -2339,10 +2340,36 @@ public class TicketService {
         }
     }
 
+    /**
+     * "A channel has actually been STATED on this deal" — the state half of
+     * {@link #setEntryChannel}'s {@code changingExistingNonDefault} rule, extracted so the rule has
+     * exactly one definition.
+     *
+     * <p>Both {@link EntryChannel#DESIGNER_LED} and {@link EntryChannel#UNSPECIFIED} count as
+     * UNSTATED: UNSPECIFIED is the V144 column default, and DESIGNER_LED is the pre-V144 default
+     * that was deliberately never backfilled, so an untouched deal reads one or the other purely by
+     * age (see {@link EntryChannel}'s data-cutoff note).
+     *
+     * <p>{@link #addPolicyActions} reads this to advertise whether {@code SET_ENTRY_CHANNEL} needs
+     * a {@code note}, which is the point of extracting it: the client is TOLD the rule instead of
+     * keeping its own copy, and the advertisement cannot drift from the 400 that enforces it.
+     */
+    private static boolean entryChannelIsStated(TicketSummaryDto s) {
+        return s.entryChannel() != null
+            && !EntryChannel.DESIGNER_LED.equals(s.entryChannel())
+            && !EntryChannel.UNSPECIFIED.equals(s.entryChannel());
+    }
+
     private void addPolicyActions(List<TicketActionDto> actions, TicketSummaryDto s, UserPrincipal actor) {
         if (canDealOwnership(s, actor)) {
             actions.add(new TicketActionDto("SET_TENDER_REQUIREMENT", "policy", "ตั้งค่าสถานะประมูล", List.of("value")));
-            actions.add(new TicketActionDto("SET_ENTRY_CHANNEL", "policy", "ตั้งค่า entry channel", List.of("value")));
+            // requiredFields is how this action tells the client what setEntryChannel will demand.
+            // A deal whose channel was never stated (UNSPECIFIED, or the pre-V144 DESIGNER_LED
+            // default) may be corrected without a reason; changing a channel someone actually chose
+            // needs one. Advertising it means the UI does not need — and must not keep — its own
+            // copy of that rule. Issue #740.
+            actions.add(new TicketActionDto("SET_ENTRY_CHANNEL", "policy", "ตั้งค่า entry channel",
+                entryChannelIsStated(s) ? List.of("value", "note") : List.of("value")));
         }
         if (ACCOUNT_ROLES.contains(actor.role())) {
             actions.add(new TicketActionDto("WAIVE_DEPOSIT", "policy", "นโยบายมัดจำ", List.of("policy", "reason")));

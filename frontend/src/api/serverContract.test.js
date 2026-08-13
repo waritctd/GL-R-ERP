@@ -537,7 +537,9 @@ const UNREACHABLE_FROM_UI = new Set([
   'POST /api/price-import/upload',
   'POST /api/price-import/validate/{}',
   'POST /api/pricing-decisions/{}/recalculate',
-  'POST /api/tickets/{}/entry-channel',
+  // 'POST /api/tickets/{}/entry-channel' was here until issue #740 wired DealStagePanel's
+  // ช่องทางรับงาน control. The `UNREACHABLE_FROM_UI entry is real and still unreachable` test is
+  // what demanded this deletion — it is not an optional tidy-up.
   'POST /api/tickets/{}/factory-emails/send',
   'PUT /api/payroll/deduction-obligations/{}',
   'PUT /api/payroll/tax-allowances',

@@ -2433,6 +2433,24 @@ function mockCanWriteStage(user, ticket, code) {
   return user.role === gate;
 }
 
+/**
+ * Mirrors TicketService.entryChannelIsStated — "a channel was actually CHOSEN on this deal".
+ *
+ * Both DESIGNER_LED and UNSPECIFIED count as UNSTATED and neither needs a reason to move off:
+ * UNSPECIFIED is the V144 column default, DESIGNER_LED is the pre-V144 default that was never
+ * backfilled, so an untouched deal reads one or the other purely by age. Dropping UNSPECIFIED here
+ * would make the FIRST statement of a channel on every new deal demand a reason.
+ *
+ * Read by BOTH the action advertisement and setEntryChannel's own 400, the same single-definition
+ * discipline the Java service uses — so the mock cannot advertise a note-free change and then
+ * refuse it.
+ */
+function mockEntryChannelIsStated(ticket) {
+  return Boolean(ticket?.entryChannel)
+    && ticket.entryChannel !== 'DESIGNER_LED'
+    && ticket.entryChannel !== 'UNSPECIFIED';
+}
+
 /** Mirrors TicketService.requireDealOwnership (lost / reopen / hold / tracking). NOT authoritative. */
 function mockCanDealOwnership(user, ticket) {
   return user?.role === 'ceo' || user?.role === 'sales_manager'
@@ -4221,7 +4239,13 @@ export const api = {
           add('PLACE_ON_HOLD', 'lifecycle', 'พักดีลไว้');
           add('MARK_DORMANT', 'lifecycle', 'พัก dormant');
           add('SET_TENDER_REQUIREMENT', 'policy', 'ตั้งค่าสถานะประมูล', { requiredFields: ['value'] });
-          add('SET_ENTRY_CHANNEL', 'policy', 'ตั้งค่า entry channel', { requiredFields: ['value'] });
+          // requiredFields carries the note rule, exactly as TicketService.addPolicyActions does:
+          // a channel that was actually STATED needs a reason to change, an unstated one (the V144
+          // UNSPECIFIED default, or the never-backfilled pre-V144 DESIGNER_LED) does not. Same
+          // predicate as setEntryChannel below — see TicketService.entryChannelIsStated.
+          add('SET_ENTRY_CHANNEL', 'policy', 'ตั้งค่า entry channel', {
+            requiredFields: mockEntryChannelIsStated(ticket) ? ['value', 'note'] : ['value'],
+          });
         }
         if (['account', 'ceo'].includes(user.role)) add('WAIVE_DEPOSIT', 'policy', 'นโยบายมัดจำ', { requiredFields: ['policy', 'reason'] });
       } else if (['ON_HOLD', 'DORMANT'].includes(ticket.lifecycle) && dealOwner) {
@@ -4729,13 +4753,7 @@ export const api = {
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
       if (!['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].includes(payload.value)) fail(`ไม่รองรับช่องทางรับงาน '${payload.value}'`, 400);
-      // Mirrors TicketService.setEntryChannel's changingExistingNonDefault: both DESIGNER_LED and
-      // UNSPECIFIED count as UNSTATED and neither needs a reason to move off. UNSPECIFIED is the
-      // V144 default; DESIGNER_LED is the pre-V144 default that was never backfilled, so an
-      // untouched deal reads one or the other purely by age. Dropping UNSPECIFIED here would make
-      // the FIRST statement of a channel on every new deal demand a reason.
-      const stated = ticket.entryChannel && ticket.entryChannel !== 'DESIGNER_LED' && ticket.entryChannel !== 'UNSPECIFIED';
-      if (stated && ticket.entryChannel !== payload.value && !(payload.note || '').trim()) {
+      if (mockEntryChannelIsStated(ticket) && ticket.entryChannel !== payload.value && !(payload.note || '').trim()) {
         fail('การเปลี่ยน entry channel ต้องระบุเหตุผล', 400);
       }
       ticket.entryChannel = payload.value;

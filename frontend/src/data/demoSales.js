@@ -395,7 +395,13 @@ export function buildDemoSalesSeed() {
       salesStage: 'LEAD_APPROACH', lostReason: null, lostAt: null,
       stageUpdatedAt: daysAgoIso(5),
       lifecycle: 'ACTIVE', tenderRequirement: 'UNKNOWN', depositPolicy: 'REQUIRED',
-      depositPolicyReason: null, entryChannel: 'DESIGNER_LED',
+      // UNSPECIFIED on purpose (issue #740). Every seeded deal used to hardcode DESIGNER_LED, so
+      // NO mock-mode deal ever showed the V144 stored default — which is precisely the state the
+      // ช่องทางรับงาน correction control exists for, and precisely why clicking through mocks did
+      // not reveal that no such control existed. A fresh lead nobody has classified yet is the
+      // honest place for it. Its channel is settable WITHOUT a reason (unstated), so this deal
+      // exercises the no-reason branch.
+      depositPolicyReason: null, entryChannel: 'UNSPECIFIED',
       paymentStatus: null, fulfillmentStatus: null,
       quotations: [], quotation: null,
       items: [
@@ -440,7 +446,12 @@ export function buildDemoSalesSeed() {
       salesStage: 'QUOTE_BUYER', lostReason: null, lostAt: null,
       stageUpdatedAt: daysAgoIso(6),
       lifecycle: 'ACTIVE', tenderRequirement: 'UNKNOWN', depositPolicy: 'REQUIRED',
-      depositPolicyReason: null, entryChannel: 'DESIGNER_LED',
+      // BUYER_DIRECT, not the blanket DESIGNER_LED this used to carry: this deal SITS at
+      // QUOTE_BUYER (S8) with no earlier stage history, which is the owner's route C — a
+      // contractor arriving with a BOQ already in hand. Labelling it designer-led contradicted its
+      // own stage. It is also the one seeded deal with a STATED channel, so it exercises the
+      // reason-required branch of the ช่องทางรับงาน control (issue #740).
+      depositPolicyReason: null, entryChannel: 'BUYER_DIRECT',
       paymentStatus: null, fulfillmentStatus: null,
       quotations: [], quotation: null,
       items: [
