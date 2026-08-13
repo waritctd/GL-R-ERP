@@ -2,6 +2,7 @@ package th.co.glr.hr.pricingrequest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -82,14 +83,23 @@ class PricingRequestStatusTest {
     // declared from every NON-TERMINAL status, because a customer-change revision is legitimate
     // from all of them and PricingRequestRepository.supersedeForCustomerRevision now asserts
     // against this map instead of bypassing it with a raw negative-guard UPDATE.
+    //
+    // The cancel cutoff (owner ruling 2026-08-13) extends it a third time: CANCELLED is now
+    // declared here too. APPROVED_FOR_QUOTATION is the LAST status from which cancel is legal —
+    // a selling price exists but nothing has been shown to the customer, so abandoning it is
+    // still purely internal. See PricingRequestStatus.ALLOWED's own Javadoc for where the line
+    // is drawn and why QUOTATION_ISSUED is on the other side of it.
     @Test
-    void approvedForQuotation_toQuotationIssuedOrSuperseded_isNowAllowed_andNothingElseIs() {
+    void approvedForQuotation_toQuotationIssuedCancelledOrSuperseded_isNowAllowed_andNothingElseIs() {
         assertThat(PricingRequestStatus.canTransition(
             PricingRequestStatus.APPROVED_FOR_QUOTATION, PricingRequestStatus.QUOTATION_ISSUED)).isTrue();
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.APPROVED_FOR_QUOTATION, PricingRequestStatus.CANCELLED)).isTrue();
         assertThat(PricingRequestStatus.canTransition(
             PricingRequestStatus.APPROVED_FOR_QUOTATION, PricingRequestStatus.SUPERSEDED)).isTrue();
         for (String to : PricingRequestStatus.VALUES) {
             if (PricingRequestStatus.QUOTATION_ISSUED.equals(to)) continue;
+            if (PricingRequestStatus.CANCELLED.equals(to)) continue;
             if (PricingRequestStatus.SUPERSEDED.equals(to)) continue;
             assertThat(PricingRequestStatus.canTransition(PricingRequestStatus.APPROVED_FOR_QUOTATION, to)).isFalse();
         }
@@ -169,13 +179,47 @@ class PricingRequestStatusTest {
             PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.SUPERSEDED)).isTrue();
     }
 
+    /**
+     * The cancel cutoff (owner ruling 2026-08-13), asserted across the whole internal stretch. This
+     * test used to be {@code readyForCeoReview_toCancelled_isStillNotAllowedForANormalCaller} and
+     * asserted the exact opposite — that only {@code cancelForDeadDeal}'s bypass could cancel from
+     * here. That was the gap: a deal that died while the CEO held the request could not be
+     * cancelled at all without killing the whole ticket. Renamed and inverted per this file's own
+     * precedent for a deliberate map change (see the two
+     * {@code ..._isNowAllowed_andNothingElseIs} renames above).
+     *
+     * <p>{@code cancelForDeadDeal} still bypasses this map and still must — it has to reach
+     * QUOTATION_ISSUED, which a live user action deliberately may not.
+     */
     @Test
-    void readyForCeoReview_toCancelled_isStillNotAllowedForANormalCaller() {
-        // A live user action may not cancel a request straight out of READY_FOR_CEO_REVIEW — only
-        // PricingRequestRepository.cancelForDeadDeal's dead-deal cascade may, and that method
-        // deliberately bypasses this map rather than being added to it (see its own Javadoc).
+    void cancel_isAllowedThroughEveryInternalStatus_upToApprovedForQuotation() {
+        for (String from : List.of(
+                PricingRequestStatus.DRAFT,
+                PricingRequestStatus.SUBMITTED,
+                PricingRequestStatus.IMPORT_REVIEWING,
+                PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
+                PricingRequestStatus.READY_FOR_CEO_REVIEW,
+                PricingRequestStatus.CEO_REVIEWING,
+                PricingRequestStatus.APPROVED_FOR_QUOTATION)) {
+            assertThat(PricingRequestStatus.canTransition(from, PricingRequestStatus.CANCELLED))
+                .as("cancel must be allowed from %s — nothing has reached the customer yet", from)
+                .isTrue();
+        }
+    }
+
+    /**
+     * The guard itself, wrong-way-round: the cutoff is only worth anything if it REFUSES. Once a
+     * quotation has been issued the customer holds an offer, and retracting an offer is a
+     * different commercial act from cancelling internal work — it goes through the deal
+     * (markLost/cancel, whose cascade uses the cancelForDeadDeal bypass), or through a
+     * customer-change revision, not through this map.
+     */
+    @Test
+    void cancel_isRefusedOnceAQuotationHasReachedTheCustomer() {
         assertThat(PricingRequestStatus.canTransition(
-            PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.CANCELLED)).isFalse();
+            PricingRequestStatus.QUOTATION_ISSUED, PricingRequestStatus.CANCELLED)).isFalse();
+        assertThat(PricingRequestStatus.canTransition(
+            PricingRequestStatus.QUOTATION_ACCEPTED, PricingRequestStatus.CANCELLED)).isFalse();
     }
 
     @Test

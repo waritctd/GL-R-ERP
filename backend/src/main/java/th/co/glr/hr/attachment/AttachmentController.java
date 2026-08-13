@@ -1,9 +1,6 @@
 package th.co.glr.hr.attachment;
 
 import jakarta.servlet.http.HttpSession;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -120,9 +117,12 @@ public class AttachmentController {
         }
         attachments.delete(id);
         auditService.record(user, "DELETE_ATTACHMENT", "attachment", id, dto, null);
-        if (filePath != null) {
-            try { Files.deleteIfExists(Paths.get(filePath)); } catch (IOException ignored) {}
-        }
+        // Deferred to commit, not done here: this method is @Transactional, and a disk delete is
+        // not. Removing the bytes inline meant a rollback restored the sales.attachment row while
+        // the file it points at stayed gone — a document the deal still lists and nobody can ever
+        // download again. See FileStorageService#deleteOnCommit, the mirror of the deleteOnRollback
+        // guard PR #708 added for the storing direction.
+        fileStorage.deleteOnCommit(filePath);
         return Map.of("ok", true);
     }
 
