@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -300,6 +301,51 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(tickets.countSummaries(null, null)).isEqualTo(3);
         assertThat(tickets.findSummaries(null, actorId)).hasSize(3);
         assertThat(firstPage.get(0).itemCount()).isEqualTo(1);
+    }
+
+    /**
+     * Paging must not duplicate or skip a row when the sort key ties.
+     *
+     * <p>The test above only ever fetches page 0, so it cannot see this: it passed throughout the
+     * period when {@code findSummaries} ordered by {@code created_at DESC} alone. Against a
+     * database where every ticket shared one timestamp, paging {@code size=1} returned ticket 1 on
+     * both page 0 and page 1 and never returned ticket 2 — five runs out of five.
+     *
+     * <p>The tie is forced rather than hoped for. Each {@code create} lands in its own transaction,
+     * so the timestamps would otherwise differ by microseconds and the regression would only
+     * reproduce on a machine whose clock resolution happened to be coarse enough — a test that
+     * passes for the wrong reason. Pinning {@code created_at} makes the ordering the only variable.
+     *
+     * <p><b>The row count is load-bearing — do not reduce it.</b> An earlier version of this test
+     * created 3 tickets and passed <em>with the tiebreaker removed</em>: at that size Postgres
+     * plans a trivially stable sort and returns the same arbitrary order every time, so the test
+     * could not fail and guarded nothing. At 25 the planner reorders between OFFSETs and the
+     * mutation is caught — verified by deleting {@code , t.ticket_id DESC} and watching this test,
+     * and only this test, go red with "Found duplicate(s): [24L, 1L]".
+     *
+     * <p>Asserted wrong-way-round: what matters is that no id comes back twice and none goes
+     * missing, not that page 0 has a row.
+     */
+    @Test
+    void summariesDoNotDuplicateOrSkipRowsWhenCreatedAtTies() {
+        List<Long> created = new ArrayList<>();
+        for (int i = 0; i < 25; i++) {
+            created.add(tickets.create(sampleTicket(item("Brand" + i, "Model", "Red", "Matte", "S")),
+                tickets.nextTicketCode(), actorId, "พนักงานขาย"));
+        }
+        jdbc.update(
+            "UPDATE sales.ticket SET created_at = timestamptz '2026-01-01 00:00:00+00' "
+                + "WHERE ticket_id IN (:ids)",
+            new MapSqlParameterSource("ids", created));
+
+        List<Long> pagedIds = new ArrayList<>();
+        for (int page = 0; page < created.size(); page++) {
+            tickets.findSummaries(null, null, PageRequest.resolve(page, 1))
+                .forEach(summary -> pagedIds.add(summary.id()));
+        }
+
+        assertThat(pagedIds).doesNotHaveDuplicates();
+        assertThat(pagedIds).containsExactlyInAnyOrderElementsOf(created);
     }
 
     @Test

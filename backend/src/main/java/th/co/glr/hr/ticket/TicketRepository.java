@@ -111,12 +111,19 @@ public class TicketRepository {
             .addValue("salesStage", salesStage)
             .addValue("createdBy", createdByFilter);
         appendRoleScope(sql, params, actorRole);
+        // The ticket_id tiebreaker is load-bearing, not decoration: created_at alone is not a
+        // total order, and this query is paged with LIMIT/OFFSET below. Ties make each page a
+        // separate arbitrary slice, so a row can appear on two pages while another never appears
+        // at all. Measured before the tiebreaker, against a seed where every ticket shares one
+        // created_at: paging size=1 returned ticket 1 on both page 0 and page 1 and NEVER
+        // returned ticket 2 — reproducibly, five runs out of five. Ties are not a seed artefact;
+        // tickets created in one batch tie the same way in production.
         sql.append("""
              GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
                       ea.first_name_th, ea.last_name_th,
                       p.name, ct.first_name, ct.last_name,
                       ecc.first_name_th, ecc.last_name_th
-             ORDER BY t.created_at DESC
+             ORDER BY t.created_at DESC, t.ticket_id DESC
             """);
         if (page != null) {
             sql.append(" LIMIT :limit OFFSET :offset");
