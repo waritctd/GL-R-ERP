@@ -111,3 +111,8 @@ frontend/UX Agents.md
 # artifacts are already covered by the "Playwright e2e (Stage K2)" block
 # above rather than needing a dedicated entry here.)
 frontend/e2e-visual/*.spec.js-snapshots/
+
+# Local knowledgebase export (19M directory + 17M zip) — untracked but NOT previously ignored,
+# so a bare `git add -A` would have staged both into this PUBLIC repo. Not source; keep local.
+ERP-Knowledgebase/
+ERP-Knowledgebase.zip
