@@ -2019,6 +2019,59 @@ describe('TicketDetailPage', () => {
       expect(section.queryByRole('button', { name: 'จองสินค้าจากสต็อก' })).toBeNull();
     });
 
+    // ── Issue #730: a from-stock deal must not claim import milestones ────────
+    //
+    // SubstepChips walked a FLAT list and marked every entry before the current
+    // one done. FROM_STOCK sat at index 4, after the whole import sequence, so a
+    // from-stock deal rendered four milestones it never performed — and, per
+    // issueImportRequest's own guard (fulfillmentStatus must be null), never
+    // could have.
+    it('renders no import milestones on a deal fulfilled FROM_STOCK', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({
+          summary: { status: 'quotation_issued', salesStage: 'DELIVERY_SCHEDULING', fulfillmentStatus: 'FROM_STOCK' },
+          items: [{ id: 70101, brand: 'SCG', model: 'A1', qty: 10, qtyDelivered: 0, qtyFromStock: 10, approvedPrice: 150 }],
+        }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'DELIVERY_SCHEDULING', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: 'FROM_STOCK', status: 'quotation_issued' },
+        availableActions: [],
+      });
+
+      renderTicketDetailPage(ceoUser);
+      const section = await fulfilmentSection();
+
+      // findAllByText: the from-stock label appears twice on purpose — once as the
+      // fulfilmentStatus badge, once as the single chip of the from-stock path.
+      expect((await section.findAllByText('สินค้าจากสต็อก')).length).toBeGreaterThan(0);
+      for (const label of ['ออกใบขอซื้อ (IR) แล้ว', 'สั่งซื้อไปยังผู้ผลิตแล้ว', 'สินค้าอยู่ระหว่างเดินทาง', 'สินค้าถึงโกดังแล้ว']) {
+        expect(section.queryByText(label)).toBeNull();
+      }
+    });
+
+    // The other half: the import journey must still render in full for a deal
+    // that is actually on it — the fix must not have narrowed both paths.
+    it('still renders the full import sequence on a deal that issued an import request', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({
+          summary: { status: 'quotation_issued', salesStage: 'PROCUREMENT', fulfillmentStatus: 'SHIPPING' },
+          items: [{ id: 70101, brand: 'SCG', model: 'A1', qty: 10, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: 150 }],
+        }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: 'SHIPPING', status: 'quotation_issued' },
+        availableActions: [],
+      });
+
+      renderTicketDetailPage(ceoUser);
+      const section = await fulfilmentSection();
+
+      for (const label of ['ออกใบขอซื้อ (IR) แล้ว', 'สั่งซื้อไปยังผู้ผลิตแล้ว', 'สินค้าอยู่ระหว่างเดินทาง', 'สินค้าถึงโกดังแล้ว']) {
+        expect(await section.findByText(label)).not.toBeNull();
+      }
+      expect(section.queryByText('สินค้าจากสต็อก')).toBeNull();
+    });
+
   });
 
   // Slice A "chip diet": DealStateHeader's stat-chip set is now role-aware
