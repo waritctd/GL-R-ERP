@@ -2,9 +2,6 @@ package th.co.glr.hr.pricingrequest;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -610,13 +607,17 @@ public class PricingRequestService {
         }
         String path = requests.findAttachmentFilePath(attachmentId);
         requests.deleteAttachment(attachmentId);
-        if (path != null) {
-            try {
-                Files.deleteIfExists(Paths.get(path));
-            } catch (IOException ignored) {
-                // Metadata removal is authoritative; a missing local file should not fail the workflow.
-            }
-        }
+        // Deferred to commit, not done here: this method is @Transactional, and a disk delete is
+        // not. Removing the bytes inline meant a rollback restored the
+        // sales.pricing_request_attachment row while the file it points at stayed gone — a document
+        // the pricing request still lists and nobody can ever download again. Identical to the
+        // hazard PR #719 fixed in AttachmentController#delete, and the mirror of the
+        // deleteOnRollback guard PR #708 added to uploadAttachment just above.
+        //
+        // deleteOnCommit also replaces the swallowed-IOException block that used to live here: it
+        // is best-effort and cannot throw either (it logs a WARN instead), so metadata removal
+        // stays authoritative and a file that is already gone still does not fail the workflow.
+        fileStorage.deleteOnCommit(path);
     }
 
     /**

@@ -6,6 +6,8 @@ import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.CustomerDto;
@@ -199,16 +201,28 @@ public class DepositNoticeService {
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT,
                 "ใบแจ้งรับมัดจำนี้ถูกออกไปแล้วโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง"));
 
-        // Render downloadable files at issue time. For now the DB stores render flags; bytes
-        // remain regenerable from the persisted document snapshot.
-        try {
-            DepositNoticeDto issued = docs.findById(docId).orElseThrow();
-            renderer.toPdf(issued);
-            renderer.toXlsx(issued);
-            docs.setFilePaths(docId, "rendered", "rendered");
-        } catch (Exception e) {
-            // Non-fatal: files can be regenerated on download.
-        }
+        // Render downloadable files at issue time — but AFTER this transaction commits, never
+        // inside it. toPdf shells out to LibreOffice (LibreOfficePdfConverter forks soffice and
+        // blocks on proc.waitFor(120, SECONDS)), and at this point the transaction is holding a
+        // pooled connection plus a row lock on the single sales.document_sequence row for
+        // (DEPOSIT_NOTICE, this Thai year) that nextDocNumber incremented inside docs.issue above.
+        // That row is the serialization point for EVERY deposit notice issued in the whole year, so
+        // holding it across an external process turns one slow render into a queue nobody can see:
+        // the next rep to issue simply blocks until the first rep's soffice exits.
+        //
+        // Safe to defer because the render participates in no invariant here. Both renders return
+        // byte[] that this method DISCARDS, nothing durable is written (LibreOfficePdfConverter
+        // deletes its temp files in a finally), and setFilePaths only stores the literal flags
+        // "rendered"/"rendered" — surfacing as DepositNoticeDto.hasPdf/hasXlsx, which no production
+        // frontend code reads; getPdf/getXlsx re-render from the persisted snapshot and never
+        // consult those columns. The doc number and the DRAFT->ISSUED compare-and-set both stay
+        // exactly where they were, in this transaction, so neither the sequence race nor the
+        // double-issue race DepositNoticeRepository#issue guards is affected.
+        //
+        // One deliberate, API-observable consequence: the DTO returned below is built before this
+        // runs, so an issue() response now reports hasPdf/hasXlsx false and a subsequent read
+        // reports them true.
+        renderAfterCommit(docId);
 
         // expected = s.paymentStatus(), which by the guard above is exactly CUSTOMER_CONFIRMED
         // (first issue, single hop) or DEPOSIT_NOTICE_ISSUED (revision, the one legal self-loop).
@@ -373,6 +387,49 @@ public class DepositNoticeService {
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * Renders the issued document once the transaction that issued it has COMMITTED — or
+     * immediately when no transaction is active. See {@link #issue}'s own comment for why the
+     * render must not run inside the transaction.
+     *
+     * <p>Follows {@code FileStorageService#deleteOnCommit} and {@code
+     * NotificationService#sendEmailAfterCommit}, the codebase's existing answer to "a non-database
+     * side effect inside a {@code @Transactional} method", including the asymmetry: with no
+     * transaction active there is no commit to wait for, so deferring would mean never rendering at
+     * all. Both branches resolve to "do the work, unless a rollback could still take the row away".
+     *
+     * <p><b>The try/catch has to live in here, not around the call site.</b> An exception escaping a
+     * {@link TransactionSynchronization#afterCommit} callback propagates to whoever called {@code
+     * commit} — so a LibreOffice timeout would start failing an {@code issue()} that had already
+     * durably succeeded. The swallow is therefore load-bearing now in a way it was not before, and
+     * it preserves the pre-existing contract exactly: rendering is non-fatal, the flags are left
+     * unset, and the bytes are regenerable on download.
+     */
+    private void renderAfterCommit(long docId) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            renderIssuedDocuments(docId);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                renderIssuedDocuments(docId);
+            }
+        });
+    }
+
+    /** Best-effort render + flag write that can never throw — see {@link #renderAfterCommit}. */
+    private void renderIssuedDocuments(long docId) {
+        try {
+            DepositNoticeDto issued = docs.findById(docId).orElseThrow();
+            renderer.toPdf(issued);
+            renderer.toXlsx(issued);
+            docs.setFilePaths(docId, "rendered", "rendered");
+        } catch (Exception e) {
+            // Non-fatal: files can be regenerated on download.
+        }
+    }
 
     private TicketSummaryDto requireApprovedTicket(long ticketId, UserPrincipal actor) {
         TicketDto t = tickets.findById(ticketId)
