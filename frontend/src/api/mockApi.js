@@ -2404,6 +2404,14 @@ function addNotification(userId, ticketId, ticketCode, type, message) {
 //     complete-delivery, final-payment), each of which calls autoAdvanceStage below. Before this,
 //     the mock let a manual move into all four unconditionally — more permissive than production,
 //     which is the dangerous direction and is the exact hazard CLAUDE.md names.
+//
+//     ⚠️ That "stricter, never looser" claim was FALSE until issue #742, because this set was
+//     derived from the catalog's `auto` field — i.e. from DealStage.AUTO_ADVANCED, which is a
+//     DIFFERENT set from the one requireStageFactsHold gates, differing in both directions:
+//         AUTO_ADVANCED         ORDER_RECEIVED, DEPOSIT_RECEIVED, PROCUREMENT, CLOSED_PAID
+//         requireStageFactsHold ORDER_RECEIVED, DEPOSIT_RECEIVED, DELIVERED,   CLOSED_PAID
+//     So mock mode ALLOWED a manual move to DELIVERED on an undelivered deal — production answers
+//     409 ยังส่งมอบสินค้าไม่ครบ — and REFUSED a move to PROCUREMENT that production permits.
 //   * THE NOTE RULE (DealStage.requiresJustification) — NOT reimplemented, and deliberately not
 //     approximated either. The mock's old copy was the pre-#704 rule and demanded a written reason
 //     for three of the business's four normal routes; a corrected copy would just be a fresh
@@ -2413,9 +2421,26 @@ function addNotification(userId, ticketId, ticketCode, type, message) {
 //     rendering of it is covered by UpdateStageModal.test.jsx driving a hand-built payload.
 //
 // Mirrors TicketService.stageDecisions / requireStageMoveAllowed (backend ticket/).
-const MOCK_FACT_GATED_STAGES = new Set(
-  DEAL_STAGE_CATALOG.stages.filter((stage) => stage.auto).map((stage) => stage.code),
-);
+/**
+ * The stages a manual move is closed to in mock mode — a literal mirror of the four
+ * `DealStage.X.equals(targetStage)` guards in TicketService.requireStageFactsHold, NOT a
+ * derivation from any other field.
+ *
+ * It has to be a literal because there is no named set on the Java side to derive from: the gates
+ * are four `if` statements inside one private method. Reaching for the nearest available set
+ * (`auto` / DealStage.AUTO_ADVANCED) is exactly the mistake issue #742 records, and it produced a
+ * mock LOOSER than production on DELIVERED.
+ *
+ * Exported ONLY for the guard: features/tickets/stageCatalog.test.js parses
+ * requireStageFactsHold's body out of TicketService.java and asserts this set against it, so the
+ * literal cannot drift the way the derivation did. Do not import it for behaviour.
+ */
+export const MOCK_FACT_GATED_STAGES = new Set([
+  'ORDER_RECEIVED',   // customerOrderVerified — payment track started
+  'DEPOSIT_RECEIVED', // depositReceived
+  'DELIVERED',        // deliveryGateComplete — the one AUTO_ADVANCED omits
+  'CLOSED_PAID',      // closedPaidFactsHold — FULLY_PAID *and* fully delivered
+]);
 
 function dealStageIndex(code) {
   return DEAL_STAGE_CATALOG.stages.findIndex((stage) => stage.code === code);
