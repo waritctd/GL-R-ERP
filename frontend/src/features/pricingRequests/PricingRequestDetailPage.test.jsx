@@ -626,10 +626,15 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
 describe('PricingRequestDetailPage Import costing workflow', () => {
   // Owner ruling 2026-08-11: Import keys in the price and submits — it never touches the costing
   // aggregate. The old per-step buttons (คำนวณใหม่ / ส่งให้ CEO ตรวจ, and the สร้างร่างต้นทุน that
-  // preceded them) are gone; ONE button now runs the whole chain. Asserted in call ORDER because
-  // each backend step rejects being run out of sequence: createDraft refuses a quote that is not
-  // READY_FOR_COSTING, and submit refuses a costing that is still DRAFT or stale.
-  it('runs markReady -> createCosting -> recalculate -> submit from the single ส่งให้ CEO อนุมัติราคา action', async () => {
+  // preceded them) are gone; ONE button does the hand-off.
+  //
+  // This test used to assert a four-call chain in invocation ORDER
+  // (markReady -> createCosting -> recalculate -> submit). V141/PR #702 severed the last three —
+  // PricingCostingService's createDraft/recalculate/submit are @Deprecated shells that throw
+  // 409 COSTING_MOVED_TO_CEO — but this suite mocks `api`, so every severed call resolved happily
+  // and the test stayed green over a button that always errored in production (issue #729). The
+  // assertions are now wrong-way-round on purpose: the severed calls must NOT be made.
+  it('sends the factory quote to the CEO with markFactoryQuoteReady alone, and touches no severed costing endpoint', async () => {
     const quote = buildFactoryQuote({ status: 'RESPONSE_RECEIVED' });
     renderDetailPage({ user: importUser, factoryQuotes: [quote] });
     await waitForLoaded();
@@ -637,17 +642,22 @@ describe('PricingRequestDetailPage Import costing workflow', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'ส่งให้ CEO อนุมัติราคา' }));
 
-    await waitFor(() => expect(api.pricingRequests.submitCosting).toHaveBeenCalledWith(21, expect.any(Object)));
-    expect(api.pricingRequests.markFactoryQuoteReady).toHaveBeenCalledWith(quote.id);
-    expect(api.pricingRequests.createCosting).toHaveBeenCalledWith(501, expect.objectContaining({
-      clientRequestId: expect.stringMatching(/^[0-9a-f-]{36}$/i),
-    }));
-    expect(api.pricingRequests.recalculateCosting).toHaveBeenCalledWith(21, expect.any(Object));
+    await waitFor(() => expect(api.pricingRequests.markFactoryQuoteReady).toHaveBeenCalledWith(quote.id));
+    expect(api.pricingRequests.createCosting).not.toHaveBeenCalled();
+    expect(api.pricingRequests.recalculateCosting).not.toHaveBeenCalled();
+    expect(api.pricingRequests.submitCosting).not.toHaveBeenCalled();
+  });
 
-    const order = (fn) => fn.mock.invocationCallOrder[0];
-    expect(order(api.pricingRequests.markFactoryQuoteReady)).toBeLessThan(order(api.pricingRequests.createCosting));
-    expect(order(api.pricingRequests.createCosting)).toBeLessThan(order(api.pricingRequests.recalculateCosting));
-    expect(order(api.pricingRequests.recalculateCosting)).toBeLessThan(order(api.pricingRequests.submitCosting));
+  // The regression the bug report called out as "clicking again is worse": on the old code a quote
+  // already at READY_FOR_COSTING re-rendered the button, skipped step 1, and fired a pure 409.
+  // markFactoryQuoteReady is not idempotent — markReady's UPDATE matches zero rows on an
+  // already-ready quote and the service 409s — so the action must not be offered there at all.
+  it('does not offer ส่งให้ CEO อนุมัติราคา on a quote that is already READY_FOR_COSTING', async () => {
+    renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote({ status: 'READY_FOR_COSTING' })] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.queryByRole('button', { name: 'ส่งให้ CEO อนุมัติราคา' })).toBeNull();
   });
 
   // Wrong-way-round: the point is that these surfaces are ABSENT for Import, not merely different.

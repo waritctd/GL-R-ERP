@@ -198,6 +198,7 @@ describe('PricingRequestStatus.ALLOWED is the state machine, and this side must 
   });
 });
 
+
 describe('canCreatePricingRequest', () => {
   it('allows the deal owner (sales) on an ACTIVE deal', () => {
     expect(canCreatePricingRequest(salesOwner, activeDeal)).toBe(true);

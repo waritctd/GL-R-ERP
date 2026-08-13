@@ -4,6 +4,9 @@ import {
   backendOperations,
   componentCalledMethods,
   normalisePath,
+  readUiReachable,
+  UI_REACHABLE_UPDATE,
+  writeUiReachable,
 } from './apiSurface.js';
 
 /**
@@ -579,6 +582,30 @@ describe('controller surface / hrApi.js contract — UI reachability', () => {
     // Without this the list rots into an excuse for endpoints someone already fixed, and the
     // count stops meaning anything.
     expect(stale).toEqual([]);
+  });
+
+  it('the published reachable set matches what the scan computes', () => {
+    // docs/api/ui-reachable.json is consumed by the backend's ResponseFieldContractTest (#727) to
+    // stop pinning response fields on schemas no screen can reach. Publishing it without a drift
+    // guard would hand that test a stale input and quietly re-introduce the over-pin it fixes.
+    //
+    // Raw form, not normalised, so it intersects directly with api-surface.json.
+    const reachable = SERVER_ENDPOINTS
+      .filter((endpoint) => UI_REACHABLE_KEYS.has(endpoint.key))
+      .map((endpoint) => endpoint.raw)
+      .sort();
+
+    if (process.env[UI_REACHABLE_UPDATE]) {
+      writeUiReachable(reachable);
+      return;
+    }
+
+    expect(
+      reachable,
+      `docs/api/ui-reachable.json is stale. Regenerate: cd frontend && ${UI_REACHABLE_UPDATE}=1 `
+      + 'npx vitest run src/api/serverContract.test.js — and say so in the PR body, because '
+      + "ResponseFieldContractTest's pin set derives from it",
+    ).toEqual(readUiReachable());
   });
 
   it('no module outside src/api builds an /api/ path itself', () => {

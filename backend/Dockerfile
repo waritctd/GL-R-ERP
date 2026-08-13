@@ -45,15 +45,23 @@ COPY fonts/ /usr/local/share/fonts/glr/
 #
 # --build-arg ALLOW_MISSING_FONTS=false makes it fatal again, for a build that SHOULD carry fonts.
 #
-# TWO checks, because the obvious one is not sufficient:
+# The check is per FAMILY+STYLE, not per family, and that distinction is the whole point.
 #
-#   1. fc-list  — is a font by this NAME registered? Catches a truncated or partial font fetch.
-#   2. fc-match — does fontconfig actually RESOLVE this family to itself, or silently fall back?
-#      This is the check that was missing, and the only one that detects substitution. fc-match
-#      never fails: asked for a font it does not have, it cheerfully returns whatever it would
-#      substitute. So "Angsana New" resolving to DejaVu Sans is exactly the production defect,
-#      and check 1 alone cannot see it — LibreOffice makes the same substitution and the wider
-#      glyphs overflow the certification badges on customer-facing documents.
+# fc-match never fails. Asked for something it does not have, it cheerfully returns whatever it
+# would substitute — and it substitutes the two halves INDEPENDENTLY:
+#
+#   fc-match "Nonexistent Font:style=Bold"  ->  Verdana|Bold        <- family fell back
+#   fc-match "BrowalliaUPC:style=Bold"      ->  BrowalliaUPC|Regular <- STYLE fell back, family held
+#
+# That second line is why a family-only check is not enough, and it is not hypothetical: this image
+# was built for months from a backend/fonts/ that had angsa.ttf but no angsab.ttf. "Angsana New"
+# was registered and resolved to itself, so the old family-only loop passed — while every BOLD
+# Angsana cell (the company header, the ใบเสนอราคา title, the totals row) rendered in a substitute.
+# Comparing the family|style PAIR is what catches it.
+#
+# The families and styles below are exactly what the three live templates reference — see the table
+# in backend/fonts/README.md. If a template is edited to use a new style, add it here too, or that
+# one style will substitute silently and nothing will say so.
 ARG ALLOW_MISSING_FONTS=true
 RUN fc-cache -f -v && \
     if ! find /usr/local/share/fonts/glr -type f \( -iname '*.ttf' -o -iname '*.ttc' -o -iname '*.otf' \) -print -quit | grep -q .; then \
@@ -64,15 +72,20 @@ RUN fc-cache -f -v && \
         exit 1; \
       fi; \
     else \
-      for f in "Arial" "Calibri" "Cambria" "Tahoma" "Angsana New" "Browallia New" "BrowalliaUPC" "Cordia New"; do \
-        fc-list | grep -qi "$f" || { echo "ERROR: font not registered: $f" >&2; exit 1; }; \
-        resolved=$(fc-match "$f" family 2>/dev/null); \
-        case "$resolved" in \
-          *"$f"*) ;; \
-          *) echo "ERROR: '$f' resolves to '$resolved' — fontconfig is SUBSTITUTING it. Customer PDFs would render wrong. See #666." >&2; exit 1;; \
-        esac; \
+      fail=0; \
+      for spec in \
+          "Arial|Regular" "Calibri|Regular" "Calibri|Bold" "Calibri|Italic" "Cambria|Bold" \
+          "Tahoma|Regular" "Angsana New|Regular" "Angsana New|Bold" \
+          "Browallia New|Regular" "Browallia New|Bold" "BrowalliaUPC|Regular" "Cordia New|Regular"; do \
+        family="${spec%|*}"; style="${spec#*|}"; \
+        got=$(fc-match --format '%{family[0]}|%{style[0]}' "$family:style=$style" 2>/dev/null); \
+        if [ "$got" != "$spec" ]; then \
+          echo "ERROR: asked fontconfig for '$spec' and got '$got' — it is SUBSTITUTING. Customer PDFs would render wrong. See #666." >&2; \
+          fail=1; \
+        fi; \
       done; \
-      echo "All 8 required font families registered and resolving to themselves."; \
+      [ "$fail" -eq 0 ] || exit 1; \
+      echo "All 12 required font faces resolve exactly (family AND style)."; \
     fi
 
 # finalName defaults to ${artifactId}-${version} -> glr-hr-backend-0.1.0.jar
