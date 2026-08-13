@@ -50,7 +50,7 @@ public class PriceCalcService {
 
             PriceCalcConfigDto config = priceConfigs.findCurrentByCountry(country)
                 .orElseGet(() -> priceConfigs.findCurrentByCountry("Thailand")
-                    .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                         "ไม่พบ price config สำหรับประเทศ: " + country)));
 
             BigDecimal fxRate = resolveFxRate(item.rawCurrency());
@@ -118,7 +118,7 @@ public class PriceCalcService {
         }
         return fxRates.findByCurrency(currency)
             .map(FxRateDto::rateToThb)
-            .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+            .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "ไม่พบอัตราแลกเปลี่ยนสำหรับสกุลเงิน " + currency + " — กรุณาตั้งค่าใน CEO Settings"));
     }
 

@@ -150,6 +150,21 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
+            <!-- Surface every deprecation + lint warning instead of letting them accumulate
+                 invisibly (this is how the Spring 7 / Boot 4 upgrade's 55 src/main warnings went
+                 unnoticed). Visibility only — deliberately NOT -Werror/failOnWarning: a warning must
+                 not fail the build here, or CI goes red on the next Spring point release for a
+                 deprecation nobody chose to take on. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <showDeprecation>true</showDeprecation>
+                    <compilerArgs>
+                        <arg>-Xlint:all</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
             <!-- Run tests in parallel JVM forks. reuseForks=true keeps each fork alive across the
                  classes assigned to it (one Testcontainers Postgres + one Spring context cache per
                  fork, not per class). argLine is left to the inherited default so jacoco's agent

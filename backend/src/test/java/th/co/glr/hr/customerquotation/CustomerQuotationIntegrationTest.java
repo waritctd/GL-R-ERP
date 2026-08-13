@@ -349,7 +349,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             null, null, null, null, null,
             List.of(new UpdateCustomerQuotationItemRequest(item.id(), null, null, tooMuchDiscount))), salesActor))
             .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
 
         // Nothing was mutated — the item's discount stays at the pre-attempt value.
         CustomerQuotationDto unchanged = quotationService.get(draft.id(), salesActor);

@@ -4,12 +4,11 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -17,6 +16,8 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * P0 fix: {@code CustomerController}'s three GETs ({@code /api/customers}, {@code
@@ -70,12 +71,18 @@ class CustomerReadAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
         ProjectRepository projects = new ProjectRepository(jdbc);
         CustomerService customerService = new CustomerService(customers, contacts, projects);
 
-        ObjectMapper objectMapper = new ObjectMapper();
-        objectMapper.findAndRegisterModules();
+        // Real HTTP responses go through Boot's Jackson-3-backed JacksonJsonHttpMessageConverter
+        // (JacksonAutoConfiguration), so the MockMvc layer is wired with the same converter type.
+        // Jackson 3 handles java.time natively (no module registration needed, unlike the old
+        // Jackson 2 ObjectMapper this replaced). accept-empty-string-as-null-object mirrors the one
+        // Jackson property this app sets (src/main/resources/application.yml).
+        JsonMapper jsonMapper = JsonMapper.builder()
+            .configure(DeserializationFeature.ACCEPT_EMPTY_STRING_AS_NULL_OBJECT, true)
+            .build();
 
         mvc = MockMvcBuilders
             .standaloneSetup(new CustomerController(customers, contacts, projects, customerService, sessions))
-            .setMessageConverters(new MappingJackson2HttpMessageConverter(objectMapper))
+            .setMessageConverters(new JacksonJsonHttpMessageConverter(jsonMapper))
             .setControllerAdvice(new ApiExceptionHandler())
             .build();
 

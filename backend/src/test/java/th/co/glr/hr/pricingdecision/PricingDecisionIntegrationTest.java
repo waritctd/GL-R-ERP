@@ -651,7 +651,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThatThrownBy(() -> decisionService.approve(decision.id(),
             new ApprovePricingDecisionRequest(null, null), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
 
         // Set margin on both items but leave minimum selling price null on one -> still rejected.
         PricingDecisionItemDto itemA = decision.items().get(0);
@@ -662,7 +662,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThatThrownBy(() -> decisionService.approve(decision.id(),
             new ApprovePricingDecisionRequest(null, null), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
 
         // Fill in the last minimum selling price -> approval now succeeds.
         decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(

@@ -389,7 +389,7 @@ public class PricingDecisionService {
             }
         }
         if (!missingMargin.isEmpty() || !missingMinimum.isEmpty()) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "ทุกรายการต้องระบุ margin และราคาขายขั้นต่ำก่อนอนุมัติ — รายการที่ยังไม่มี margin: "
                     + missingMargin + ", รายการที่ยังไม่มีราคาขายขั้นต่ำ: " + missingMinimum);
         }

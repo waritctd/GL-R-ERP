@@ -1546,7 +1546,7 @@ class PricingRequestServiceTest {
     private static void assertUnprocessable(ThrowableAssert.ThrowingCallable action, String expectedMessageFragment) {
         assertThatThrownBy(action)
             .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
                 if (expectedMessageFragment != null) {
                     assertThat(e.getMessage()).contains(expectedMessageFragment);
                 }

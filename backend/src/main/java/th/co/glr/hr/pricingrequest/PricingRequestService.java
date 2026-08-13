@@ -234,7 +234,7 @@ public class PricingRequestService {
         }
         List<Long> unresolvableCatalogItems = requests.findUnresolvableCatalogItemIds(id);
         if (!unresolvableCatalogItems.isEmpty()) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "ไม่พบสินค้าใน price catalog ที่ active สำหรับรายการ: " + unresolvableCatalogItems);
         }
         requests.snapshotCatalogSelections(id);

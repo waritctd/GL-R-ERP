@@ -6,7 +6,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -14,7 +13,7 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
-import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -22,6 +21,8 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Real-DB authz evidence for {@code /api/deal-estimate-markup} (V112), per CLAUDE.md's "Permission
@@ -43,15 +44,19 @@ class DealEstimateMarkupAuthzIntegrationTest extends AbstractPostgresIntegration
 
     @BeforeEach
     void wireRealCollaborators() {
-        ObjectMapper objectMapper = new ObjectMapper();
-        // Trap on record: DealEstimateMarkupDto carries an Instant (updatedAt) -- a bare
-        // ObjectMapper fails to serialize it, which surfaces as a bogus 500 on an authz
-        // assertion with no stack trace in the surefire report (see CLAUDE.md).
-        objectMapper.findAndRegisterModules();
+        // Real HTTP responses go through Boot's Jackson-3-backed JacksonJsonHttpMessageConverter
+        // (JacksonAutoConfiguration), so the MockMvc layer is wired with the same converter type.
+        // DealEstimateMarkupDto carries an Instant (updatedAt); Jackson 3 handles it natively (no
+        // module registration needed, unlike the old Jackson 2 ObjectMapper this replaced).
+        // accept-empty-string-as-null-object mirrors the one Jackson property this app sets
+        // (src/main/resources/application.yml).
+        JsonMapper jsonMapper = JsonMapper.builder()
+            .configure(DeserializationFeature.ACCEPT_EMPTY_STRING_AS_NULL_OBJECT, true)
+            .build();
 
         mvc = MockMvcBuilders
             .standaloneSetup(new DealEstimateMarkupController(new DealEstimateMarkupRepository(jdbc), new SessionContext()))
-            .setMessageConverters(new MappingJackson2HttpMessageConverter(objectMapper))
+            .setMessageConverters(new JacksonJsonHttpMessageConverter(jsonMapper))
             .setControllerAdvice(new ApiExceptionHandler())
             .build();
 
