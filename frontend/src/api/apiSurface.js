@@ -104,6 +104,12 @@ export function componentCalledMethods(root = SRC_ROOT()) {
     // (`api.payroll.suggestedInputs?.({...})`) so an older mock lacking the method degrades
     // instead of throwing. Matching only `(` misses those and reports their endpoints as
     // UI-unreachable — `GET /api/payroll/suggested-inputs` was a false positive on the first run.
+    //
+    // WHICH WAY THIS MUST FAIL. A miss here does not merely lose coverage: it reports a LIVE
+    // endpoint as unreachable, and the remedy someone reaches for on a "dead" endpoint is
+    // deletion. Over-reporting deadness is therefore the dangerous direction, and any change to
+    // this pattern should be checked by confirming the reachable count does not DROP
+    // unexpectedly — not just that the suite is still green.
     for (const match of code.matchAll(/\bapi\.([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\??\.?\s*\(/g)) {
       called.add(`${match[1]}.${match[2]}`);
     }
