@@ -21,13 +21,22 @@
 // — key for key, value for value. DRAFT -> DRAFT is deliberately absent: editing a draft's fields
 // is a mutation guarded by status = DRAFT, not a state transition.
 //
-// ⚠️ THIS IS A HAND-COPIED MIRROR AND NOTHING GUARDS IT. There is no served answer to copy from —
-// pricing requests have no equivalent of /api/meta/deal-stages or the ticket's `stageDecisions`
-// (allowed / requiresReason / blockedReason). Until one exists, the only protection is re-reading
-// the Java file when this changes; a vitest suite can pin these values but cannot notice that the
-// backend moved, which is precisely how it went stale before (issue #731: the suite asserted
+// ⚠️ THIS IS A HAND-COPIED MIRROR — but it is now GUARDED. pricingRequestMeta.test.js parses
+// PricingRequestStatus.java out of the backend source tree and asserts this object against it, key
+// for key and value for value, the same way stageCatalog.test.js and dealTrackingMeta.test.js
+// already guard DealStage / WinProbabilityDefaults. Issue #743.
+//
+// That guard is what this comment used to say did not exist, and its absence is exactly how the
+// table went stale: a vitest suite CAN pin these values but cannot, on its own, notice that the
+// backend moved — which is why the old suite asserted
 // canTransition('READY_FOR_CEO_REVIEW','CANCELLED') === false under a heading claiming to mirror
-// the backend, months after #718 made it true).
+// the backend, for months after #718 made it true (issue #731). Re-syncing by hand resets that
+// clock; the parse stops it.
+//
+// The durable fix is still to SERVE the verdict on the pricing-request DTO the way `stageDecisions`
+// does for deal stages — pricing requests have no equivalent of /api/meta/deal-stages — at which
+// point there is no mirror left to test. Until such a field exists, the parse is the strongest
+// guard available.
 //
 // Re-synced 2026-08-14 against the Java source, which had moved in three ways:
 //   - #718 widened cancel: READY_FOR_CEO_REVIEW / CEO_REVIEWING / APPROVED_FOR_QUOTATION all now
@@ -41,7 +50,9 @@
 //     straight to AWAITING_FACTORY_RESPONSE), so its key is gone from here too. mockApi.js still
 //     writes that status on returnToImport and demoSales.js still seeds a fixture in it — both are
 //     mock-only relics of a status production can no longer produce.
-const ALLOWED_TRANSITIONS = {
+// Exported for the guard only — pricingRequestMeta.test.js compares it against the parsed Java.
+// Application code goes through canTransition; do not read the table directly.
+export const ALLOWED_TRANSITIONS = {
   DRAFT: ['SUBMITTED', 'CANCELLED'],
   // SUBMITTED -> READY_FOR_CEO_REVIEW is the factory-quote carry-forward edge: a customer-change
   // revision whose items are identical to its parent's copies the parent's factory quotes and has

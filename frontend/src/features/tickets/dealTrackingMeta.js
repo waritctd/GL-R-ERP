@@ -50,11 +50,21 @@ export function winProbabilityDefault(salesStage) {
 
 /**
  * Mirrors TicketSummaryDto.effectiveWinProbability() / WinProbabilityDefaults.effective —
- * the rep's override when set, else the stage default. `effectiveWinProbability` is a
- * Java record *method*, not a record component, so it is NOT serialized onto the JSON
- * ticket summary by either the real backend or the mock; every consumer (UI or mock)
- * derives it client-side from `winProbabilityOverride` + `salesStage` via this function
- * instead of expecting a `summary.effectiveWinProbability` field to exist.
+ * the rep's override when set, else the stage default.
+ *
+ * ⚠️ **NOT for UI code. The only legitimate caller is mockApi.js.**
+ *
+ * The real backend now SERIALIZES this number (`TicketSummaryDto.effectiveWinProbability`, made a
+ * Jackson property in the fix for issue #738), so every consumer reads `summary.effectiveWinProbability`
+ * off the payload. What is left here exists solely so the mock can put a value in that field —
+ * a fixture has to answer the request with something, and answering with a *different* number than
+ * production would be worse than answering with a mirrored one.
+ *
+ * That mirror is safe only because it is guarded: dealTrackingMeta.test.js parses
+ * WinProbabilityDefaults.java and DealStage.java out of the backend source tree, so the table above
+ * cannot drift the way it did when V143 added QUOTE_OWNER (#714). Per CLAUDE.md, a mock that
+ * mirrors a backend computation is never independent evidence ABOUT that computation — it is only
+ * ever evidence about plumbing. Do not reintroduce a UI caller.
  */
 export function effectiveWinProbability(winProbabilityOverride, salesStage) {
   return winProbabilityOverride != null ? Number(winProbabilityOverride) : winProbabilityDefault(salesStage);

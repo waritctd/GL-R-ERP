@@ -2634,7 +2634,7 @@ class TicketServiceTest {
             EntryChannel.DESIGNER_LED, null, null, null, null, null,
             PaymentStage.FULLY_PAID, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false,
             closeConfirmedAt, closeConfirmedAt == null ? null : "Account User", invoiceOnFile,
-            null, null, null, null, null, null, false);
+            null, null, null, null, null, null, false, false);
         TicketDto ticket = new TicketDto(summary, List.of(), List.of(), null, List.of());
         when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
         return ticket;
@@ -2708,7 +2708,7 @@ class TicketServiceTest {
             // of hasActivitySinceLastStageChange() above for the same reasoning.
             LocalDate.now(),
             PaymentStage.NOT_REQUIRED, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false,
-            null, null, false, null, null, null, null, null, null, false);
+            null, null, false, null, null, null, null, null, null, false, false);
         TicketDto ticket = new TicketDto(summary, items, List.of(),
             quotations.isEmpty() ? null : quotations.get(0), quotations);
         when(ticketRepo.findById(ticketId)).thenReturn(Optional.of(ticket));
@@ -2770,7 +2770,8 @@ class TicketServiceTest {
             s.amountOutstanding(), s.overdue(),
             s.closeConfirmedAt(), s.closeConfirmedByName(), s.invoiceOnFile(),
             s.cancelReason(), s.cancelledAt(),
-            s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale());
+            s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale(),
+            s.commissionRecorded());
         return new TicketDto(summary, items, source.events(), source.quotation(), source.quotations());
     }
 

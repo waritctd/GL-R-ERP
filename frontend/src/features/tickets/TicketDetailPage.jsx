@@ -1368,6 +1368,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         onDormant={(payload) => doAction(() => api.tickets.dormant(ticketId, payload), 'พัก dormant แล้ว')}
         onResume={(payload) => doAction(() => api.tickets.resume(ticketId, payload), 'ดำเนินการต่อแล้ว')}
         onSetTenderRequirement={(payload) => doAction(() => api.tickets.setTenderRequirement(ticketId, payload), 'บันทึกสถานะประมูลแล้ว')}
+        // Issue #740: api.tickets.setEntryChannel had NO caller anywhere in frontend/src, while
+        // TicketService.addPolicyActions advertised SET_ENTRY_CHANNEL to every deal owner — so a
+        // deal stuck at ยังไม่ระบุช่องทาง (the V144 stored default) could not be corrected from this
+        // portal at all. Neither contract guard could see it: both start from hrApi.js and never
+        // trace a call from a component.
+        onSetEntryChannel={(payload) => doAction(() => api.tickets.setEntryChannel(ticketId, payload), 'บันทึกช่องทางรับงานแล้ว')}
         docActions={(can.downloadRemainingInvoice || (sections.quotation && latestQuotation)) ? (
           <>
             {/* Import/account (role-scoped views, Phase A): the view-only

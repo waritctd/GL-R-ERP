@@ -27,7 +27,6 @@ import { StageProgressBar } from './DealStageStepper.jsx';
 import { dealInScope } from './salesViewScope.js';
 import { EMPTY_STAGE_CATALOG, findStage, stageIndexIn, useStageCatalog } from './stageCatalog.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
-import { effectiveWinProbability } from './dealTrackingMeta.js';
 
 // Same selector Modal.jsx traps on — kept identical so the two overlay
 // surfaces agree on what "focusable" means.
@@ -218,7 +217,12 @@ function groupDealsForPipeline(deals, catalog) {
   }
   const sumValue = (list) => list.reduce((sum, deal) => sum + (Number(deal.amountPayable) || 0), 0);
   const forecast = expected.reduce((sum, deal) => {
-    const win = effectiveWinProbability(deal.winProbabilityOverride, deal.salesStage);
+    // The SERVER's number (TicketSummaryDto.effectiveWinProbability). This is money-shaped output —
+    // it used to be re-derived here from a hand-copied stage→% table, and #714 is what that costs:
+    // V143 added QUOTE_OWNER, the copy did not, and every S5 deal silently contributed 0 to this
+    // sum. Issue #738. `?? 0` reproduces exactly that old fallback for a row without the field, so
+    // an unserved value under-counts rather than turning the whole forecast into NaN.
+    const win = deal.effectiveWinProbability ?? 0;
     return sum + (Number(deal.amountPayable) || 0) * (win / 100);
   }, 0);
   return {

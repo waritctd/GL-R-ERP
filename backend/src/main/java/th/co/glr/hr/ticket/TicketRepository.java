@@ -951,7 +951,8 @@ public class TicketRepository {
             rs.getString("designer_name"),
             rs.getString("owner_name"),
             rs.getString("buyer_name"),
-            false // stale — recomputed by enrichSummary, which alone knows deal_activity
+            false, // stale — recomputed by enrichSummary, which alone knows deal_activity
+            false // commissionRecorded — recomputed by enrichSummary, which alone queries commission_record
         );
     }
 
@@ -981,7 +982,11 @@ public class TicketRepository {
             stage, payable, paid, outstanding, overdue,
             s.closeConfirmedAt(), s.closeConfirmedByName(), hasInvoiceAttachment(s.id()),
             s.cancelReason(), s.cancelledAt(),
-            s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), stale);
+            // commissionRecorded joins payableAmount/sumPaid/hasBalanceReceipt/isStale/
+            // hasInvoiceAttachment above as another per-row query enrichSummary runs to fill in a
+            // field mapSummary alone cannot answer from sales.ticket.
+            s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), stale,
+            hasRecordedCommission(s.id()));
     }
 
     /**
@@ -995,6 +1000,30 @@ public class TicketRepository {
              WHERE ticket_id = :id AND attach_type = 'INVOICE'
             """, Map.of("id", ticketId), Integer.class);
         return n != null && n > 0;
+    }
+
+    /**
+     * Backs {@link TicketSummaryDto#commissionRecorded} — a DELIBERATE second copy of {@code
+     * CommissionRepository.hasActiveCommissionForTicket}'s predicate, not a re-derivation.
+     * {@code TicketRepository} is hand-wired as {@code new TicketRepository(jdbc)} in ~40 places
+     * (services, controllers, tests), so injecting {@code CommissionRepository} here to call the
+     * real method would break every one of them for the sake of one boolean.
+     *
+     * <p>The copy is guarded instead of re-derived: {@code CommissionRecordedFlagIntegrationTest}
+     * asserts, against real Postgres, that this method and {@code CommissionRepository
+     * .hasActiveCommissionForTicket} always agree. If you change one predicate you MUST change the
+     * other, and that test is what catches it if you forget.
+     */
+    private boolean hasRecordedCommission(long ticketId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT EXISTS(
+                SELECT 1 FROM sales.commission_record
+                 WHERE source_ticket_id = :ticketId
+                   AND kind = 'SALE'
+                   AND status NOT IN ('VOID', 'REJECTED')
+            )
+            """, Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
     }
 
     /** ฝ่ายบัญชี signs off that the deal is ready to close; CEO verification still required. */

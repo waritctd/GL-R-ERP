@@ -73,18 +73,20 @@ function closeReady(ticket) {
  *                                                      -> "รับชำระส่วนที่เหลือ"
  *   4. close-ready (fully paid + fully delivered, not yet confirmed)
  *                                                      -> "ยืนยันพร้อมปิดงาน"
- *   5. CLOSED_PAID                                     -> "บันทึกใบกำกับ + ออกค่าคอม"
+ *   5. CLOSED_PAID, commission not yet recorded
+ *                                                      -> "บันทึกใบกำกับ + ออกค่าคอม"
  *
- * KNOWN LIMITATION (step 5): the backend has no per-ticket "commission
- * already recorded?" flag on TicketSummaryDto, and account has no route to
- * GET /api/commissions (canListCommissionRecords excludes it, see
- * api/routes.js) to check the commission list directly — CommissionPage.jsx's
- * own createFromDeal flow has the exact same gap (see its "eligibleTickets"
- * comment). So a CLOSED_PAID deal always resolves to step 5 here even if its
- * commission was already recorded; the create-from-deal form itself is what
- * catches a genuine duplicate (ticketId uniqueness), so this never lets
- * anyone double-submit — it can only over-suggest the step once it's already
- * done.
+ * Step 5 is gated on `!ticket.commissionRecorded`. The flag is now served by the backend
+ * (TicketSummaryDto.commissionRecorded, issue #736) and answers the exact same question
+ * CommissionService.createFromDeal's duplicate guard (hasActiveCommissionForTicket) asks — so the
+ * worklist and the create-from-deal form can never disagree about whether a CLOSED_PAID deal still
+ * needs a commission. The create form's ticketId uniqueness (a genuine duplicate 409s) remains the
+ * real, authoritative duplicate guard; this flag only stops the worklist from over-suggesting a
+ * step that's already done.
+ *
+ * `commissionRecorded` may be absent on an old/hand-built row (e.g. a stale cached object) —
+ * `!ticket.commissionRecorded` naturally treats `undefined` the same as `false` ("not recorded"),
+ * which is the safe default: it never hides a step that might still be needed.
  */
 export function nextAccountAction(ticket) {
   if (!ticket) return null;
@@ -102,7 +104,7 @@ export function nextAccountAction(ticket) {
   if (closeReady(ticket)) {
     return { key: 'confirmCloseReady', label: 'ยืนยันพร้อมปิดงาน', to: `/tickets/${ticket.id}`, urgent: false };
   }
-  if (ticket.salesStage === 'CLOSED_PAID') {
+  if (ticket.salesStage === 'CLOSED_PAID' && !ticket.commissionRecorded) {
     return {
       key: 'recordInvoiceCommission',
       label: 'บันทึกใบกำกับ + ออกค่าคอม',
@@ -121,6 +123,6 @@ export function accountMoneyBucket(ticket) {
   if (ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') return 'depositPending';
   if (ticket.paymentStatus === 'AWAITING_FINAL_PAYMENT') return 'finalPaymentPending';
   if (closeReady(ticket)) return 'closeReady';
-  if (ticket.salesStage === 'CLOSED_PAID') return 'commissionPending';
+  if (ticket.salesStage === 'CLOSED_PAID' && !ticket.commissionRecorded) return 'commissionPending';
   return null;
 }

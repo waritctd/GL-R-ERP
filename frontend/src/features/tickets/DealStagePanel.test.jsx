@@ -43,6 +43,9 @@ const noopHandlers = {
   onDormant: vi.fn(),
   onResume: vi.fn(),
   onSetTenderRequirement: vi.fn(),
+  // TicketDetailPage always passes this (issue #740); the panel treats a missing handler as
+  // "cannot set", so omitting it here would silently render the read-only branch everywhere.
+  onSetEntryChannel: vi.fn(),
 };
 
 function renderPanel(props = {}) {
@@ -288,5 +291,90 @@ describe('DealStagePanel Slice A "chip diet" — removed sub-status rows stay go
     // the designer alone — it used to read "เสนอราคาผู้ออกแบบ/เจ้าของ", which after the split named
     // a recipient this stage no longer covers.
     expect(screen.getByText('เสนอราคาผู้ออกแบบ')).not.toBeNull();
+  });
+});
+
+/**
+ * ช่องทางรับงาน (issue #740).
+ *
+ * The defect had two halves and these cover both: the channel was rendered NOWHERE (utils/format.js
+ * had an `entryChannelLabel` map with no caller at all), and `api.tickets.setEntryChannel` — which
+ * the server advertises to every deal owner as SET_ENTRY_CHANNEL — had no caller either, so a deal
+ * sitting on the V144 UNSPECIFIED default could not be corrected from this portal.
+ *
+ * Every gate below is read off `availableActions`, exactly as the panel does. Nothing here asserts
+ * a rule the frontend owns, because after this change it owns none: whether a reason is required
+ * comes from the action's own `requiredFields`, which TicketService.entryChannelIsStated populates.
+ */
+describe('DealStagePanel entry channel', () => {
+  const owner = [{ action: 'SET_ENTRY_CHANNEL', kind: 'policy', label: 'ตั้งค่า entry channel', requiredFields: ['value'] }];
+  const ownerStated = [{ action: 'SET_ENTRY_CHANNEL', kind: 'policy', label: 'ตั้งค่า entry channel', requiredFields: ['value', 'note'] }];
+
+  it('renders the channel read-only when the server does not offer the action', () => {
+    renderPanel({ summary: baseSummary({ entryChannel: 'OWNER_DIRECT' }), availableActions: [] });
+    expect(screen.getByText('ช่องทางรับงาน')).not.toBeNull();
+    expect(screen.getByText('เจ้าของติดต่อโดยตรง')).not.toBeNull();
+    // Read-only means read-only: no control to fire.
+    expect(screen.queryByRole('combobox')).toBeNull();
+  });
+
+  it('shows ยังไม่ระบุช่องทาง and offers a correction when the deal sits on the V144 default', () => {
+    const onSetEntryChannel = vi.fn();
+    renderPanel({
+      summary: baseSummary({ entryChannel: 'UNSPECIFIED' }),
+      availableActions: owner,
+      onSetEntryChannel,
+    });
+
+    const select = screen.getByRole('combobox');
+    expect(select.value).toBe('UNSPECIFIED');
+    // The stored-only default is visible but NOT choosable — setEntryChannel 400s on it.
+    expect(screen.getByRole('option', { name: 'ยังไม่ระบุช่องทาง' }).disabled).toBe(true);
+
+    act(() => { select.value = 'OWNER_DIRECT'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+
+    // No reason demanded: the server said requiredFields is ['value'] only, because UNSPECIFIED is
+    // an UNSTATED channel. Demanding one here would put friction on the first statement of a
+    // channel for every new deal.
+    expect(onSetEntryChannel).toHaveBeenCalledWith({ value: 'OWNER_DIRECT', note: null });
+  });
+
+  it('collects a reason BEFORE calling when the server says one is required', () => {
+    const onSetEntryChannel = vi.fn();
+    renderPanel({
+      summary: baseSummary({ entryChannel: 'BUYER_DIRECT' }),
+      availableActions: ownerStated,
+      onSetEntryChannel,
+    });
+
+    const select = screen.getByRole('combobox');
+    act(() => { select.value = 'OWNER_DIRECT'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+
+    // Wrong-way-round, and the point of the test: the call must NOT have been made yet. Firing a
+    // request the server has already told us it will refuse produces a red toast on a click the UI
+    // itself invited.
+    expect(onSetEntryChannel).not.toHaveBeenCalled();
+    const save = screen.getByRole('button', { name: 'บันทึก' });
+    expect(save.disabled).toBe(true);
+
+    const reason = screen.getByLabelText('เหตุผลที่เปลี่ยนช่องทางรับงาน');
+    act(() => {
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')
+        .set.call(reason, 'ผู้รับเหมาเข้ามาแทนเจ้าของ');
+      reason.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => { screen.getByRole('button', { name: 'บันทึก' }).click(); });
+
+    expect(onSetEntryChannel).toHaveBeenCalledWith({
+      value: 'OWNER_DIRECT', note: 'ผู้รับเหมาเข้ามาแทนเจ้าของ',
+    });
+  });
+
+  it('never offers UNSPECIFIED as a choice — it is valid stored, refused as input', () => {
+    renderPanel({ summary: baseSummary({ entryChannel: 'DESIGNER_LED' }), availableActions: owner });
+    // Not merely disabled: on a deal already off the default it is not rendered at all.
+    expect(screen.queryByRole('option', { name: 'ยังไม่ระบุช่องทาง' })).toBeNull();
+    expect(screen.getByRole('option', { name: 'ผู้ออกแบบนำดีล' })).not.toBeNull();
+    expect(screen.getByRole('option', { name: 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง' })).not.toBeNull();
   });
 });
