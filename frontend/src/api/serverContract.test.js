@@ -559,6 +559,54 @@ describe('controller surface / hrApi.js contract', () => {
     ).toEqual([]);
   });
 
+  // ── A CALL THAT MATCHES ON PATH AND VERB AND STILL ALWAYS FAILS ───────────
+  //
+  // HOW AN ALWAYS-409 ENDPOINT IS CLASSIFIED HERE, stated because getting it wrong both ways is
+  // easy. A severed route is NOT missing: it is still routed, so the two tests above see a normal
+  // match and report nothing. That is correct — answering 409 with a clear message is a deliberate
+  // design in this repo, chosen precisely so a stale caller gets an explanation instead of a 404,
+  // and flagging it as a broken call would be a false positive on an intentional pattern.
+  //
+  // Note the repo has TWO retirement shapes and only one of them lands here:
+  //   • route DELETED, service method kept @Deprecated — TicketService#submit/#pickup. No mapping
+  //     exists, so these never enter the comparison at all. Nothing to report.
+  //   • route KEPT and severed — the three V141 costing writes below. These do enter it.
+  //
+  // So this test asks the narrower question the other two cannot: is a live hrApi method pointed at
+  // a route the backend has already severed? That is not a false positive and not a design choice
+  // — it is an unfinished migration, and it is invisible under VITE_USE_MOCKS=true because mockApi
+  // never learned the route was severed.
+  it('no hrApi method calls a @Deprecated endpoint beyond the documented migration', () => {
+    const calling = [...new Set(
+      CLIENT_CALLS
+        .filter((call) => DEPRECATED_KEYS.has(clientKey(call)))
+        .map((call) => `${call.namespace}.${call.name} → ${clientKey(call)}`),
+    )].sort();
+    const documented = calling.filter((entry) => CALLS_DEPRECATED[entry.split(' → ')[1]]);
+    expect(
+      calling.filter((entry) => !documented.includes(entry)),
+      'hrApi calls a route the backend marked @Deprecated. These match on path and verb, so the '
+      + 'contract tests above pass while every one of these calls fails at runtime.',
+    ).toEqual([]);
+  });
+
+  it('every CALLS_DEPRECATED entry is still deprecated and still called', () => {
+    // Self-verifying, and it doubles as the anti-vacuity check on the @Deprecated parse: if
+    // isDeprecatedAt() stopped matching, DEPRECATED_KEYS would empty and these assertions fail.
+    for (const [key, reason] of Object.entries(CALLS_DEPRECATED)) {
+      expect(SERVER_KEYS.has(key), `CALLS_DEPRECATED lists "${key}", which no controller serves`).toBe(true);
+      expect(
+        DEPRECATED_KEYS.has(key),
+        `CALLS_DEPRECATED["${key}"] is no longer @Deprecated — delete the entry`,
+      ).toBe(true);
+      expect(
+        CLIENT_KEYS.has(key),
+        `CALLS_DEPRECATED["${key}"] is no longer called by hrApi — the migration finished, delete the entry`,
+      ).toBe(true);
+      expect(reason.length, `CALLS_DEPRECATED["${key}"] needs a reason`).toBeGreaterThan(20);
+    }
+  });
+
   it('every SERVER_ONLY entry is a real, still-uncalled endpoint with a written reason', () => {
     for (const [key, reason] of Object.entries(SERVER_ONLY)) {
       expect(SERVER_KEYS.has(key), `SERVER_ONLY lists "${key}", which no controller serves`).toBe(true);
