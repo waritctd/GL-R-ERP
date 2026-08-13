@@ -37,6 +37,8 @@ import {
   canStartCeoReview,
   canViewCustomerQuotation,
   isCustomerQuotationEditable,
+  isCustomerQuotationDiscountEditable,
+  canTransition,
   pricingRequestRecipientLabel,
   unitBasisLabel,
 } from './pricingRequestMeta.js';
@@ -319,32 +321,30 @@ export function PricingRequestDetailPage({ user, showToast }) {
    * key in the price and submit to ceo"). Import no longer sees the costing aggregate at all; the
    * landed cost is still computed from the real freight/duty tables, just never surfaced here.
    *
-   * Four backend calls, in the order the services require:
-   *   1. markFactoryQuoteReady — PricingCostingService.createDraft rejects anything whose current
-   *      factory quote is not READY_FOR_COSTING, so this cannot be skipped. Idempotent-ish:
-   *      skipped when the quote is already there.
-   *   2. createCosting  -> DRAFT
-   *   3. recalculateCosting -> CALCULATED   (submit() refuses a DRAFT or a stale costing)
-   *   4. submitCosting  -> READY_FOR_CEO_REVIEW
-   * Sequential on purpose — each step needs the previous one's row. A failure part-way leaves the
-   * request in a legal intermediate state that this same button can resume from.
+   * ONE backend call. This used to chain four —
+   * markFactoryQuoteReady -> createCosting -> recalculateCosting -> submitCosting — but V141
+   * (PR #702) moved landed costing to the CEO and SEVERED the last three: PricingCostingService's
+   * createDraft/recalculate/submit are @Deprecated shells whose entire body throws
+   * 409 COSTING_MOVED_TO_CEO. Because the routes still exist, the contract guards counted them as
+   * reached and nothing here noticed. The user-visible result was the worst possible shape: step 1
+   * really did advance the request AND notify the CEO, then step 2's 409 fired the error toast and
+   * skipped onSuccess, so invalidate() never ran and the page kept showing the stale status. See
+   * issue #729.
+   *
+   * markFactoryQuoteReady is now the whole job: FactoryQuoteService.markReadyForCosting
+   * (:612-660) marks the quote ready and, once LandedCostCalculator.isFullyResolvable agrees every
+   * item's quote can be costed, auto-advances AWAITING_FACTORY_RESPONSE -> READY_FOR_CEO_REVIEW,
+   * logs PRICING_COSTING_SUBMITTED and notifies the CEO itself.
+   *
+   * On a multi-factory request with a quote still outstanding the call still succeeds — it marks
+   * THIS quote ready — and the request stays put until the last factory's quote is marked. That is
+   * the backend's own semantics, so the success toast below is deliberately about the quote's
+   * hand-off, not a claim that the CEO now has the whole request.
    */
   const submitToCeo = useMutation({
-    mutationFn: async (quote) => {
-      if (quote && quote.status !== 'READY_FOR_COSTING') {
-        await api.pricingRequests.markFactoryQuoteReady(quote.id);
-      }
-      const created = await api.pricingRequests.createCosting(pricingRequestId, {
-        note: null,
-        clientRequestId: generateClientRequestId(),
-      });
-      const costingId = created?.costing?.id;
-      if (!costingId) throw new Error('สร้างต้นทุนไม่สำเร็จ');
-      await api.pricingRequests.recalculateCosting(costingId, {});
-      await api.pricingRequests.submitCosting(costingId, {});
-    },
+    mutationFn: (quote) => api.pricingRequests.markFactoryQuoteReady(quote.id),
     onSuccess: () => {
-      showToast?.('success', 'ส่งให้ CEO อนุมัติราคาแล้ว');
+      showToast?.('success', 'ส่งราคาให้ CEO แล้ว');
       invalidate();
     },
     onError: (error) => showToast?.('error', error.message || 'ส่งให้ CEO ไม่สำเร็จ'),
@@ -577,9 +577,21 @@ export function PricingRequestDetailPage({ user, showToast }) {
     () => customerQuotations.find((q) => isCustomerQuotationEditable(q)) ?? [...customerQuotations].reverse()[0] ?? null,
     [customerQuotations],
   );
+  // Mirrors PricingRequestService.createCustomerChangeRevision (:438-465). The status half used to
+  // be a literal `!['DRAFT','CANCELLED','SUPERSEDED'].includes(status)` denylist — verbatim the
+  // hand-maintained one PR #703 DELETED from the backend, replacing it with
+  // `canTransition(status, SUPERSEDED)` precisely because the denylist and the state machine had
+  // drifted apart in both directions. The frontend kept the copy the backend threw away, so it
+  // still offered สร้างรอบแก้ไข on a QUOTATION_ACCEPTED deal — which #703 made terminal, with its
+  // own explicit 409 ("ลูกค้ายอมรับใบเสนอราคาแล้ว..."). Issue #734.
+  //
+  // Reading the SUPERSEDED edge instead means this button and that 409 cannot disagree without the
+  // transition table itself being wrong, which is one thing to keep true rather than two.
+  // QUOTATION_ACCEPTED needs no special case here: it is terminal in the table, so it has no
+  // SUPERSEDED edge and the predicate is already false for it.
   const canCreateCustomerRevision = isSales(user)
     && summary?.ticketCreatedById === user?.employeeId
-    && !['DRAFT', 'CANCELLED', 'SUPERSEDED'].includes(summary?.status);
+    && canTransition(summary?.status, 'SUPERSEDED');
   const pricingRequestAttachments = attachmentsQuery.data ?? [];
   // Mirrors PricingRequestService.ATTACHMENT_EDITABLE_STATUSES: Sales may only upload/delete its
   // own Pricing Request attachments while the request is DRAFT, and only on the request it owns.
@@ -845,8 +857,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     ) : null}
                     {/* พร้อมคำนวณต้นทุน + สร้างร่างต้นทุน + คำนวณใหม่ + ส่งให้ CEO ตรวจ collapse into
                         this one button — see submitToCeo. เจรจา stays: re-quoting a factory is
-                        real Import work, and it is what keeps the request in เจรจาราคากับโรงงาน. */}
-                    {isImport(user) && ['RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(quote.status) && quote.current ? (
+                        real Import work, and it is what keeps the request in เจรจาราคากับโรงงาน.
+
+                        READY_FOR_COSTING is deliberately NOT in this list (issue #729): the action
+                        this button now performs is markFactoryQuoteReady, and a quote already in
+                        READY_FOR_COSTING has had it performed. markReady's own UPDATE matches zero
+                        rows there and the service 409s, so offering the button again could only
+                        ever produce an error on work that was already done. If the request has not
+                        advanced, it is because ANOTHER factory's quote is still outstanding — and
+                        that quote carries its own button. */}
+                    {isImport(user) && ['RESPONSE_RECEIVED', 'NEGOTIATING'].includes(quote.status) && quote.current ? (
                       <Button type="button" variant="primary" disabled={submitToCeo.isPending}
                         onClick={() => submitToCeo.mutate(quote)} data-testid="pcr-submit-to-ceo">
                         ส่งให้ CEO อนุมัติราคา
@@ -1249,9 +1269,20 @@ export function PricingRequestDetailPage({ user, showToast }) {
               const quotation = currentCustomerQuotation;
               const quotationStatus = quotationStatusLabel(quotation.docStatus);
               const editable = isCustomerQuotationEditable(quotation) && canManageCustomerQuotation(user, summary);
+              // Issue #733: a revision's discount is refused by CustomerQuotationService.update,
+              // so the input must not be offered on one. Narrower than `editable` on purpose —
+              // description/notes stay writable, only the money does not.
+              const discountEditable = editable && isCustomerQuotationDiscountEditable(quotation);
               return (
                 <div key={quotation.id} className="flex flex-col gap-3">
                   <div className="text-sm"><strong>เลขที่</strong> {quotation.number}</div>
+                  {editable && !discountEditable ? (
+                    <p className="rounded-md border border-warning-border bg-warning-bg p-3 text-xs text-warning-dark">
+                      ใบเสนอราคาฉบับแก้ไขให้ส่วนลดไม่ได้ — ส่วนลดทุกรายการถูกตั้งเป็น 0 และแก้ไขไม่ได้
+                      หากต้องเปลี่ยนราคาหรือจำนวนหลังออกใบเสนอราคาแล้ว ต้องสร้างรอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า
+                      (customer-change revision) เพื่อให้ CEO อนุมัติราคาใหม่
+                    </p>
+                  ) : null}
                   <div className="flex flex-col gap-2">
                     {quotation.items.map((item) => {
                       const draft = quotationItemDrafts[item.id] ?? {};
@@ -1275,7 +1306,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
                             <span>{item.requestedQuantity} ({item.requestedUnitBasis})</span>
                             <span>ราคาที่อนุมัติ: {formatCurrency(item.approvedUnitPrice, quotation.currency)}</span>
-                            {editable ? (
+                            {discountEditable ? (
                               <label className="flex items-center gap-1">
                                 ส่วนลด/หน่วย
                                 <input
@@ -1291,7 +1322,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             ) : (
                               <span>ส่วนลด/หน่วย: {formatCurrency(item.salesDiscount, quotation.currency)}</span>
                             )}
-                            <span>ราคาสุทธิ: {formatCurrency(editable ? previewFinal : item.finalUnitPrice, quotation.currency)}</span>
+                            <span>ราคาสุทธิ: {formatCurrency(discountEditable ? previewFinal : item.finalUnitPrice, quotation.currency)}</span>
                             <span>รวมรายการ: {formatCurrency(item.lineTotal, quotation.currency)}</span>
                           </div>
                           {belowMinimum ? (

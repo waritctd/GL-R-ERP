@@ -42,12 +42,22 @@ function pr(overrides = {}) {
 }
 
 describe('canTransition', () => {
+  // ⚠️ These assertions pin a hand-copied mirror of PricingRequestStatus.ALLOWED. They cannot
+  // notice that the Java file moved — they only stop THIS file changing by accident. That is
+  // exactly how the table went stale: this suite asserted
+  // canTransition('READY_FOR_CEO_REVIEW','CANCELLED') === false, under a heading claiming to
+  // mirror the backend, for months after PR #718 made it true (issue #731). If you touch
+  // PricingRequestStatus.java, re-read it here — a green run here is not evidence the mirror is
+  // current.
   it('mirrors PricingRequestStatus.ALLOWED', () => {
     expect(canTransition('DRAFT', 'SUBMITTED')).toBe(true);
     expect(canTransition('DRAFT', 'CANCELLED')).toBe(true);
     expect(canTransition('DRAFT', 'DRAFT')).toBe(false);
     expect(canTransition('SUBMITTED', 'IMPORT_REVIEWING')).toBe(true);
-    // V140: Import's three states, and the two retired ones must now be unreachable.
+    // The factory-quote carry-forward edge: an identical-items customer-change revision skips
+    // Import entirely (PricingRequestService.carryFactoryQuotesForwardOnSubmit).
+    expect(canTransition('SUBMITTED', 'READY_FOR_CEO_REVIEW')).toBe(true);
+    // V140: Import's states, and the retired ones must be unreachable.
     expect(canTransition('IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE')).toBe(true);
     expect(canTransition('AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW')).toBe(true);
     expect(canTransition('IMPORT_REVIEWING', 'CANCELLED')).toBe(true);
@@ -56,29 +66,55 @@ describe('canTransition', () => {
     expect(canTransition('MORE_INFO_REQUIRED', 'IMPORT_REVIEWING')).toBe(false);
     expect(canTransition('AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS')).toBe(false);
     expect(canTransition('COSTING_IN_PROGRESS', 'READY_FOR_CEO_REVIEW')).toBe(false);
-    expect(canTransition('READY_FOR_CEO_REVIEW', 'SUPERSEDED')).toBe(true);
-    // Step 3 (CEO Selling Price Decision, "one return-to-Import path"): the old direct
-    // READY_FOR_CEO_REVIEW -> COSTING_IN_PROGRESS entry (Costing v2 path, commit 5) is removed —
-    // it let Import silently reopen a SUBMITTED costing with no CEO action, which made
-    // "submitted costing is immutable" false. The CEO must now explicitly start review.
+    // V141 retired COSTING_REVISION_REQUIRED — the CEO owns costing and returnToImport goes
+    // straight back to AWAITING_FACTORY_RESPONSE. Dead in both directions now.
+    expect(canTransition('CEO_REVIEWING', 'COSTING_REVISION_REQUIRED')).toBe(false);
+    expect(canTransition('COSTING_REVISION_REQUIRED', 'AWAITING_FACTORY_RESPONSE')).toBe(false);
+    expect(canTransition('CEO_REVIEWING', 'AWAITING_FACTORY_RESPONSE')).toBe(true);
+    // The CEO must explicitly start review; Import cannot silently reopen a submitted costing.
     expect(canTransition('READY_FOR_CEO_REVIEW', 'COSTING_IN_PROGRESS')).toBe(false);
     expect(canTransition('READY_FOR_CEO_REVIEW', 'CEO_REVIEWING')).toBe(true);
+    // FactoryQuoteService.receive()'s revision branch pulls a request back off the CEO's desk.
+    expect(canTransition('READY_FOR_CEO_REVIEW', 'AWAITING_FACTORY_RESPONSE')).toBe(true);
     expect(canTransition('CEO_REVIEWING', 'APPROVED_FOR_QUOTATION')).toBe(true);
-    expect(canTransition('CEO_REVIEWING', 'COSTING_REVISION_REQUIRED')).toBe(true);
-    // The single named return-to-Import state — Import reopening costing goes through here.
-    expect(canTransition('COSTING_REVISION_REQUIRED', 'AWAITING_FACTORY_RESPONSE')).toBe(true);
     expect(canTransition('APPROVED_FOR_QUOTATION', 'COSTING_IN_PROGRESS')).toBe(false);
-    expect(canTransition('READY_FOR_CEO_REVIEW', 'CANCELLED')).toBe(false);
     expect(canTransition('CANCELLED', 'DRAFT')).toBe(false);
-    // Step 4 (fixed alongside Step 5 — this entry was stale/missing, see the source file's own
-    // comment): issuing a customer quotation is the ONE forward exit from APPROVED_FOR_QUOTATION.
+    // Step 4: issuing a customer quotation is the ONE forward exit from APPROVED_FOR_QUOTATION.
     expect(canTransition('APPROVED_FOR_QUOTATION', 'QUOTATION_ISSUED')).toBe(true);
     // Step 5: the customer's ACCEPTED outcome is the one forward exit from QUOTATION_ISSUED.
     expect(canTransition('QUOTATION_ISSUED', 'QUOTATION_ACCEPTED')).toBe(true);
-    expect(canTransition('QUOTATION_ISSUED', 'CANCELLED')).toBe(false);
-    // QUOTATION_ACCEPTED is terminal.
+    // QUOTATION_ACCEPTED is terminal — and deliberately WITHOUT a SUPERSEDED edge (owner ruling
+    // 2026-08-13): amending an accepted deal is an order amendment, not a quotation revision.
     expect(canTransition('QUOTATION_ACCEPTED', 'QUOTATION_ISSUED')).toBe(false);
     expect(canTransition('QUOTATION_ACCEPTED', 'CANCELLED')).toBe(false);
+    expect(canTransition('QUOTATION_ACCEPTED', 'SUPERSEDED')).toBe(false);
+  });
+
+  // PR #718 widened cancel: legal up to and including APPROVED_FOR_QUOTATION, refused from
+  // QUOTATION_ISSUED onward. These three edges were the ones missing from the mirror, and their
+  // absence is what hid the ยกเลิก button from the owning rep and the CEO (issue #731).
+  it('allows CANCELLED from every status up to APPROVED_FOR_QUOTATION, and refuses it after issue', () => {
+    for (const from of ['DRAFT', 'SUBMITTED', 'IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE',
+      'READY_FOR_CEO_REVIEW', 'CEO_REVIEWING', 'APPROVED_FOR_QUOTATION']) {
+      expect(canTransition(from, 'CANCELLED')).toBe(true);
+    }
+    // Wrong-way-round: the cutoff is the point of #718, so these must stay refused.
+    for (const from of ['QUOTATION_ISSUED', 'QUOTATION_ACCEPTED', 'SUPERSEDED', 'CANCELLED']) {
+      expect(canTransition(from, 'CANCELLED')).toBe(false);
+    }
+  });
+
+  // The SUPERSEDED edge is what gates สร้างรอบแก้ไข (issue #734): a customer-change revision is
+  // legal from every non-terminal status and from no terminal one.
+  it('allows SUPERSEDED from every non-terminal status except DRAFT, and from no terminal one', () => {
+    for (const from of ['SUBMITTED', 'IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE',
+      'READY_FOR_CEO_REVIEW', 'CEO_REVIEWING', 'APPROVED_FOR_QUOTATION', 'QUOTATION_ISSUED']) {
+      expect(canTransition(from, 'SUPERSEDED')).toBe(true);
+    }
+    // DRAFT has nothing to supersede — it was never submitted.
+    for (const from of ['DRAFT', 'QUOTATION_ACCEPTED', 'SUPERSEDED', 'CANCELLED']) {
+      expect(canTransition(from, 'SUPERSEDED')).toBe(false);
+    }
   });
 });
 
