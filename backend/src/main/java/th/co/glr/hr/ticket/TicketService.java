@@ -1533,7 +1533,15 @@ public class TicketService {
      * depend on the gates, and suppressing it would make the field's meaning conditional.
      *
      * <p>Cost: one extra {@code hasActivitySinceLastStageChange} query per {@link #actions} call,
-     * hoisted out of the loop. The gates themselves touch no repository.
+     * hoisted out of the loop. The gates themselves touch no repository — and that is now
+     * <em>enforced</em> rather than merely claimed here:
+     * {@code TicketActionsQueryCountIntegrationTest} counts the SQL a real {@code actions} call
+     * issues against a real Postgres, and fails if any statement runs twice or if the total varies
+     * with the deal's stage. Measured there, the fifteen evaluations cost ~21µs against a ~2.4ms
+     * call — under 1% of the endpoint, about a tenth of a single query round trip — so the loop is
+     * deliberately left as it is. The guard exists for the next edit: a repository call added to
+     * any gate below turns one query into fifteen on the hottest sales endpoint, and every
+     * behavioural test stays green while it happens.
      */
     private List<StageDecisionDto> stageDecisions(TicketSummaryDto s, UserPrincipal actor) {
         boolean hasRecentActivity = tickets.hasActivitySinceLastStageChange(s.id());
