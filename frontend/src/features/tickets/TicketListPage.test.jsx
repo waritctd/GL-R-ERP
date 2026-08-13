@@ -889,6 +889,57 @@ describe('TicketListPage', () => {
     });
   });
 
+  /**
+   * The win-weighted forecast, and the one property that makes issue #738's fix load-bearing:
+   * this number must come from the SERVER's `effectiveWinProbability`, never from a client-side
+   * re-derivation of it.
+   *
+   * Nothing covered this figure before — the forecast is the single most money-shaped number on
+   * the deal list and it had no assertion at all, which is why #714 (V143 adds QUOTE_OWNER, the
+   * copied table does not, every S5 deal contributes 0) could not have been caught here.
+   *
+   * The fixture is deliberately built WRONG-WAY-ROUND: `effectiveWinProbability: 25` on a
+   * NEGOTIATION deal, where the stage table says 70. Any re-derivation — from the stage, from the
+   * override, from a copy of WIN_PROBABILITY_DEFAULTS — produces a different total, so this test
+   * cannot pass unless the served field is what is actually read. A fixture where the two agreed
+   * would pass either way and be evidence of nothing.
+   */
+  it('weights the forecast by the server-sent effectiveWinProbability, not a re-derived one', async () => {
+    api.tickets.list.mockResolvedValueOnce({
+      tickets: [
+        {
+          id: 701,
+          code: 'PR-2026-0701',
+          title: 'ดีลคาดการณ์',
+          customerName: 'บริษัท คาดการณ์ จำกัด',
+          status: 'in_review',
+          createdByName: 'สมชาย ใจดี',
+          createdAt: '2026-07-06T09:00:00.000Z',
+          salesStage: 'NEGOTIATION',
+          lifecycle: 'ACTIVE',
+          lostReason: null,
+          overdue: false,
+          fulfillmentStatus: null,
+          stageUpdatedAt: '2026-07-06T09:00:00.000Z',
+          stale: false,
+          amountPayable: '1000000',
+          // 25, NOT the 70 WIN_PROBABILITY_DEFAULTS.NEGOTIATION would give. The disagreement is
+          // the assertion.
+          winProbabilityOverride: null,
+          effectiveWinProbability: 25,
+        },
+      ],
+    });
+
+    renderTicketListPage(managerUser);
+    await screen.findByText('บริษัท คาดการณ์ จำกัด');
+
+    const forecast = await screen.findByText(/คาดการณ์ถ่วงน้ำหนัก/);
+    // 1,000,000 × 25% = 250,000. A stage-derived 70% would read 700,000.
+    expect(forecast.textContent).toContain('250,000');
+    expect(forecast.textContent).not.toContain('700,000');
+  });
+
   // FIX 5: the "all phases" chip's label used to be `ดีลที่ดำเนินอยู่`
   // (`activePipelineCount`, ACTIVE-only) over an action that actually lists
   // every deal including CLOSED_LOST/CANCELLED/COMPLETED — the label

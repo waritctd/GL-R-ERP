@@ -4,7 +4,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, formatThaiDate, tenderRequirementLabel } from '../../utils/format.js';
+import { dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, entryChannelLabel, formatThaiDate, tenderRequirementLabel } from '../../utils/format.js';
 import { DealStageStepper, PhaseTracker } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
 import { EMPTY_STAGE_CATALOG, findStage, nextStageIn } from './stageCatalog.js';
@@ -14,6 +14,100 @@ import { UpdateStageModal } from './UpdateStageModal.jsx';
 function daysSince(iso) {
   if (!iso) return null;
   return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000));
+}
+
+/**
+ * The three channels EntryChannel.java accepts as INPUT. UNSPECIFIED is deliberately absent: it is
+ * valid as STORED (the V144 column default) but `TicketService.setEntryChannel` 400s on it, because
+ * once a channel has been stated it must not be possible to un-state it. Offering it would be
+ * offering an action that dies on click.
+ */
+const SETTABLE_ENTRY_CHANNELS = ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'];
+
+/**
+ * "ช่องทางรับงาน" — how this deal arrived, and the control that corrects it.
+ *
+ * Issue #740: `api.tickets.setEntryChannel` existed, `TicketService.addPolicyActions` advertised
+ * SET_ENTRY_CHANNEL to every deal owner, and NO component anywhere called it. V144 made
+ * UNSPECIFIED the stored default and #711 made the create modal demand a choice — but only
+ * client-side, so a deal created before #711, or by any other client, sat at ยังไม่ระบุช่องทาง with
+ * the server offering a correction the UI could not fire. The channel was not even DISPLAYED: the
+ * `entryChannelLabel` map in utils/format.js had no caller at all.
+ *
+ * This component decides nothing. `editable` is the server's own availableActions entry and
+ * `reasonRequired` is that entry's `requiredFields` — TicketService.entryChannelIsStated is what
+ * populates it, so the reason rule lives in exactly one place and this side is told the answer
+ * rather than keeping a copy of it. The read-only branch still renders the value, because a viewer
+ * who cannot change the channel still needs to see which route the deal came in on.
+ */
+function EntryChannelControl({ entryChannel, editable, reasonRequired, disabled, onSubmit }) {
+  const [pending, setPending] = useState(null); // the picked channel awaiting its reason
+  const [reason, setReason] = useState('');
+  const current = entryChannel ?? 'UNSPECIFIED';
+
+  if (!editable) {
+    return (
+      <span className="flex min-w-0 items-center gap-2 text-xs font-bold text-text-muted">
+        ช่องทางรับงาน
+        <span className="font-normal text-text">{entryChannelLabel(current).label}</span>
+      </span>
+    );
+  }
+
+  function pick(value) {
+    if (value === current) return;
+    // The server said a reason is required, so collect one BEFORE calling — the alternative is
+    // firing a request we have been told will 400 and surfacing it as a red toast.
+    if (reasonRequired) { setPending(value); setReason(''); return; }
+    onSubmit({ value, note: null });
+  }
+
+  return (
+    <span className="flex min-w-0 flex-wrap items-center gap-2">
+      <label className="flex min-w-0 items-center gap-2 text-xs font-bold text-text-muted">
+        ช่องทางรับงาน
+        <select
+          value={pending ?? current}
+          disabled={disabled}
+          onChange={(event) => pick(event.target.value)}
+        >
+          {/* The stored-only default is rendered as an option ONLY while the deal is still on it,
+              so the select can show where the deal actually stands. It is disabled, so it cannot
+              be chosen — picking it would 400. */}
+          {current === 'UNSPECIFIED' ? (
+            <option value="UNSPECIFIED" disabled>{entryChannelLabel('UNSPECIFIED').label}</option>
+          ) : null}
+          {SETTABLE_ENTRY_CHANNELS.map((value) => (
+            <option key={value} value={value}>{entryChannelLabel(value).label}</option>
+          ))}
+        </select>
+      </label>
+      {pending ? (
+        <span className="flex min-w-0 flex-wrap items-center gap-2">
+          <input
+            type="text"
+            className="min-w-0"
+            aria-label="เหตุผลที่เปลี่ยนช่องทางรับงาน"
+            placeholder="เหตุผลที่เปลี่ยน"
+            value={reason}
+            disabled={disabled}
+            onChange={(event) => setReason(event.target.value)}
+          />
+          <Button
+            type="button"
+            variant="primary"
+            disabled={disabled || !reason.trim()}
+            onClick={() => { onSubmit({ value: pending, note: reason.trim() }); setPending(null); setReason(''); }}
+          >
+            บันทึก
+          </Button>
+          <Button type="button" variant="ghost" onClick={() => { setPending(null); setReason(''); }}>
+            ยกเลิก
+          </Button>
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 /**
@@ -75,6 +169,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   docActions, primaryAction, actionLoading,
   advanceReady = true,
   onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement,
+  onSetEntryChannel,
 }, ref) {
   const [editOpen, setEditOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
@@ -103,6 +198,16 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   const canDormant = hasAction('MARK_DORMANT');
   const canResume = hasAction('RESUME');
   const canTender = hasAction('SET_TENDER_REQUIREMENT') && summary.salesStage === 'AWAITING_BUYER';
+  // Entry channel (issue #740). Unlike ประมูล this is NOT stage-gated — "how did this deal arrive"
+  // is true of the deal at every stage, and a deal stuck at UNSPECIFIED needs correcting wherever
+  // it happens to sit. `entryChannelAction` is the server's own advertisement; its requiredFields
+  // is what says whether a reason is needed, so nothing here re-derives that rule.
+  const entryChannelAction = availableActions.find((item) => item.action === 'SET_ENTRY_CHANNEL');
+  const canSetEntryChannel = Boolean(entryChannelAction) && Boolean(onSetEntryChannel);
+  // Shown read-only to anyone else with the deal open: the channel was previously rendered
+  // NOWHERE, so even a viewer who cannot change it had no way to see which route the deal came in
+  // on. Hidden only when there is genuinely nothing to say.
+  const showEntryChannel = canSetEntryChannel || Boolean(summary.entryChannel);
   const isDone = !lost && summary.salesStage === 'CLOSED_PAID';
 
   useImperativeHandle(ref, () => ({
@@ -293,20 +398,31 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
               </div>
             )}
 
-            {canTender ? (
-              <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
-                <label className="flex items-center gap-2 text-xs font-bold text-text-muted">
-                  ประมูล
-                  <select
-                    value={summary.tenderRequirement ?? 'UNKNOWN'}
+            {canTender || showEntryChannel ? (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-3 border-t border-border pt-3">
+                {canTender ? (
+                  <label className="flex min-w-0 items-center gap-2 text-xs font-bold text-text-muted">
+                    ประมูล
+                    <select
+                      value={summary.tenderRequirement ?? 'UNKNOWN'}
+                      disabled={actionLoading}
+                      onChange={(event) => onSetTenderRequirement({ value: event.target.value })}
+                    >
+                      {['UNKNOWN', 'REQUIRED', 'NOT_REQUIRED'].map((value) => (
+                        <option key={value} value={value}>{tenderRequirementLabel(value).label}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                {showEntryChannel ? (
+                  <EntryChannelControl
+                    entryChannel={summary.entryChannel}
+                    editable={canSetEntryChannel}
+                    reasonRequired={entryChannelAction?.requiredFields?.includes('note') ?? false}
                     disabled={actionLoading}
-                    onChange={(event) => onSetTenderRequirement({ value: event.target.value })}
-                  >
-                    {['UNKNOWN', 'REQUIRED', 'NOT_REQUIRED'].map((value) => (
-                      <option key={value} value={value}>{tenderRequirementLabel(value).label}</option>
-                    ))}
-                  </select>
-                </label>
+                    onSubmit={onSetEntryChannel}
+                  />
+                ) : null}
               </div>
             ) : null}
 

@@ -160,12 +160,17 @@ every run:
   drifts from the running application**, so the file is never a stale transcription. The sweep
   also asserts it still resolves >250 concrete `/api` paths with no unsubstituted `{param}`, so
   a broken derivation fails loudly instead of silently sweeping nothing.
-- `frontend/src/api/reconcile.test.js` (vitest, no backend needed) closes the loop from the other
-  side: every endpoint `hrApi.js` calls must exist on the backend with that verb, and every
-  backend endpoint must be reachable from the frontend or listed in `UNCALLED` **with a written
-  reason**. It also fails if any module outside `src/api/` hand-builds an `/api/` path, since such
-  a call escapes every contract guard. This is a different axis from `contract.test.js`, which
-  compares two *frontend* modules (`mockApi` vs `hrApi`) and can say nothing about the Java service.
+- `frontend/src/api/serverContract.test.js` (vitest, no backend needed) closes the loop from the
+  other side, in three directions. Every endpoint `hrApi.js` calls must exist on the backend with
+  that verb (hard fail, no allowlist). Every backend endpoint must have an `hrApi` caller or sit in
+  `SERVER_ONLY` **with a written reason**. And every endpoint must be reachable **from a screen** —
+  not merely from a declared `hrApi` method — or sit in `UNREACHABLE_FROM_UI`. That third direction
+  is what "reachable" actually means: **218 of 276** endpoints pass it, against 251 that a
+  declaration-only comparison called reached. It also fails if any module outside `src/api/`
+  hand-builds an `/api/` path, since such a call escapes every contract guard.
+
+  All of this is a different axis from `contract.test.js`, which compares two *frontend* modules
+  (`mockApi` vs `hrApi`) and can say nothing about the Java service.
 - `route-coverage.spec.js` parses `App.jsx` for its `<Route path=…>` set and fails if any route
   is neither swept nor listed in `EXCLUDED_ROUTE_PATTERNS` with a reason — and fails the other
   way too, if a route it sweeps no longer exists.

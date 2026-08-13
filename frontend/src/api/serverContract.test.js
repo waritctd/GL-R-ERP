@@ -1,6 +1,13 @@
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import {
+  apiPathBypasses,
+  backendOperations,
+  componentCalledMethods,
+  normalisePath,
+  readUiReachable,
+  UI_REACHABLE_UPDATE,
+  writeUiReachable,
+} from './apiSurface.js';
 
 /**
  * THE GUARD THIS FILE EXISTS TO ADD — hrApi.js against the SPRING CONTROLLERS.
@@ -13,7 +20,7 @@ import { describe, expect, it, vi } from 'vitest';
  * repo has been closing all week — `WIN_PROBABILITY_DEFAULTS` vs `WinProbabilityDefaults.java`,
  * `stageMeta.js` vs `DealStage` — one layer up.
  *
- * TWO DIRECTIONS, DELIBERATELY ASYMMETRIC:
+ * THREE DIRECTIONS, DELIBERATELY ASYMMETRIC:
  *
  *   1. client → server  (`hrApi calls no endpoint that does not exist`)  — HARD FAIL, no allowlist.
  *      A call with no endpoint behind it is already broken. There is no legitimate reason to have
@@ -26,6 +33,12 @@ import { describe, expect, it, vi } from 'vitest';
  *      hrApi caller" would be a production break. So this direction reports and requires a written
  *      reason rather than assuming litter.
  *
+ *   3. hrApi → the UI  (`every endpoint is reachable from a screen`) — allowlisted, and NEW.
+ *      Directions 1 and 2 both compare DECLARATIONS. An hrApi method no component ever calls still
+ *      counted as "reached", so its endpoint looked live when no user could get to it. 39 of
+ *      hrApi's 261 methods are in that state. This direction is what makes "reachable" mean
+ *      reachable; see UNREACHABLE_FROM_UI, and note that its entries are explicitly NOT verified.
+ *
  * WHY THE CLIENT SIDE IS INSTRUMENTED RATHER THAN PARSED. hrApi.js does not hold paths; it composes
  * them — `withQuery(...)`, `API_ROUTES.tickets.action(id, 'close/confirm')`, template literals with
  * an appended `?reason=`, and a dozen bare `fetch()` calls for blob downloads and multipart uploads.
@@ -36,231 +49,32 @@ import { describe, expect, it, vi } from 'vitest';
  * any method produced no observable request at all, so a method this harness cannot drive is a loud
  * error rather than a quiet omission from the comparison.
  *
- * WHY THE SERVER SIDE IS PARSED RATHER THAN INTROSPECTED. Spring's own
- * `RequestMappingHandlerMapping` would be authoritative, but it lives in the JVM, and the comparison
- * has to happen somewhere. Parsing Java from vitest is the precedent already set by
- * `dealTrackingMeta.test.js` and `stageCatalog.test.js`. The parse is kept narrow and every
- * assumption it makes is asserted (see `parser sanity`), so a rotted regex fails loudly.
- */
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Reading the backend source
-// ─────────────────────────────────────────────────────────────────────────────
-
-const CONTROLLER_ROOT = 'backend/src/main/java';
-
-/**
- * Walk up from the working directory to the repo root and resolve a backend path. Deliberately
- * THROWS when it cannot be found rather than skipping — a guard that quietly disables itself when
- * the layout moves is the same silent failure it was written to prevent. Same idiom as
- * `dealTrackingMeta.test.js#readBackendSource`.
- */
-function resolveBackendPath(relativePath) {
-  let dir = process.cwd();
-  for (let depth = 0; depth < 8; depth += 1) {
-    const candidate = resolve(dir, relativePath);
-    if (existsSync(candidate)) return candidate;
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  throw new Error(
-    `could not find ${relativePath} above ${process.cwd()} — this guard compares hrApi.js against `
-    + 'the Spring controllers and must not silently skip',
-  );
-}
-
-function controllerFiles() {
-  const root = resolveBackendPath(CONTROLLER_ROOT);
-  const found = [];
-  const walk = (dir) => {
-    for (const name of readdirSync(dir)) {
-      const path = join(dir, name);
-      if (statSync(path).isDirectory()) walk(path);
-      else if (name.endsWith('Controller.java')) found.push(path);
-    }
-  };
-  walk(root);
-  return found.sort();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Parsing the controllers
-// ─────────────────────────────────────────────────────────────────────────────
-
-const VERBS = {
-  GetMapping: 'GET',
-  PostMapping: 'POST',
-  PutMapping: 'PUT',
-  PatchMapping: 'PATCH',
-  DeleteMapping: 'DELETE',
-};
-
-/**
- * Blank out comments and preserve string literals, so an annotation quoted inside Javadoc — this
- * codebase's class comments are full of them — is never read as a live mapping.
- */
-function stripComments(source) {
-  let out = '';
-  let i = 0;
-  while (i < source.length) {
-    if (source.startsWith('/*', i)) {
-      const end = source.indexOf('*/', i + 2);
-      const stop = end === -1 ? source.length : end + 2;
-      // Keep newlines so offsets and line structure survive.
-      out += source.slice(i, stop).replace(/[^\n]/g, ' ');
-      i = stop;
-    } else if (source.startsWith('//', i)) {
-      const end = source.indexOf('\n', i);
-      const stop = end === -1 ? source.length : end;
-      out += ' '.repeat(stop - i);
-      i = stop;
-    } else if (source[i] === '"') {
-      let j = i + 1;
-      while (j < source.length && source[j] !== '"') {
-        if (source[j] === '\\') j += 1;
-        j += 1;
-      }
-      out += source.slice(i, j + 1);
-      i = j + 1;
-    } else {
-      out += source[i];
-      i += 1;
-    }
-  }
-  return out;
-}
-
-/** The balanced `(...)` starting at `open`, returned as `[argsText, closingIndex]`. */
-function readParens(source, open) {
-  let depth = 0;
-  for (let i = open; i < source.length; i += 1) {
-    const ch = source[i];
-    if (ch === '"') {
-      i += 1;
-      while (i < source.length && source[i] !== '"') {
-        if (source[i] === '\\') i += 1;
-        i += 1;
-      }
-      continue;
-    }
-    if (ch === '(') depth += 1;
-    else if (ch === ')') {
-      depth -= 1;
-      if (depth === 0) return [source.slice(open + 1, i), i];
-    }
-  }
-  return ['', open];
-}
-
-/**
- * The path out of a mapping annotation's argument list. Handles `("/x")`, `(value = "/x", ...)`,
- * `(path = "/x")` and `()`. Deliberately returns '' for an annotation whose only argument is a
- * non-path attribute — `@PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)` is a mapping on
- * the class-level path, not on a subpath.
- */
-function pathFromAnnotationArgs(args) {
-  if (!args || !args.trim()) return '';
-  const named = args.match(/(?:^|[,(\s])(?:value|path)\s*=\s*"([^"]*)"/);
-  if (named) return named[1];
-  const trimmed = args.trim();
-  if (trimmed.startsWith('"')) return trimmed.match(/^"([^"]*)"/)?.[1] ?? '';
-  return '';
-}
-
-/** The declared method name following an annotation: skip further annotations, then read the identifier before `(`. */
-function handlerNameAfter(source, from) {
-  let i = from;
-  for (;;) {
-    while (i < source.length && /\s/.test(source[i])) i += 1;
-    if (source[i] !== '@') break;
-    i += 1;
-    while (i < source.length && /[\w.]/.test(source[i])) i += 1;
-    while (i < source.length && /\s/.test(source[i])) i += 1;
-    if (source[i] === '(') i = readParens(source, i)[1] + 1;
-  }
-  let generics = 0;
-  for (let j = i; j < source.length; j += 1) {
-    if (source[j] === '<') generics += 1;
-    else if (source[j] === '>') generics -= 1;
-    else if (source[j] === '(' && generics === 0) {
-      return source.slice(i, j).match(/(\w+)\s*$/)?.[1] ?? '?';
-    }
-  }
-  return '?';
-}
-
-/**
- * Whether a `@Deprecated` annotation sits immediately before this mapping.
+ * WHY THE SERVER SIDE IS NO LONGER PARSED HERE. This file used to parse `*Controller.java` with a
+ * JS regex, on the reasoning that Spring's own `RequestMappingHandlerMapping` lives in the JVM and
+ * the comparison has to happen somewhere. That reasoning was sound and the parse was correct — it
+ * agreed exactly with springdoc on all 276 operations. But it was a second implementation of
+ * Spring's mapping resolution with nothing checking it against the real dispatcher, which is the
+ * same unguarded-mirror shape one level down.
  *
- * This matters more than it looks. V141 severed three costing write routes: they are still routed,
- * still return a well-formed response, and are `@Deprecated` stubs that throw 409 unconditionally.
- * A path-and-verb comparison sees nothing wrong — the endpoint genuinely exists — so without this
- * the guard would call a permanently-failing call site "matched". Comments are already stripped, so
- * a `{@code @Deprecated}` inside Javadoc cannot be mistaken for the real annotation.
+ * The surface now comes from `docs/api/api-surface.json`, generated by the backend's
+ * `ApiSurfaceContractTest` from springdoc's `/v3/api-docs` — the JVM introspecting itself — and
+ * that test FAILS when the committed digest drifts from the running application. So the JSON read
+ * here is not a transcription anyone maintains; it is the dispatcher's own answer, with a tripwire.
+ * It also carries the `@Deprecated` subset, which the regex could see but which no longer needs a
+ * second parser to stay in step.
+ *
+ * This consolidates two guards that briefly existed side by side — this file (PR #722, parsing
+ * Java) and `reconcile.test.js` (PR #726, reading the digest) — which asserted overlapping
+ * properties from different sources behind two separate allowlists. One endpoint, one allowlist,
+ * one source of truth.
  */
-function isDeprecatedAt(source, mappingIndex) {
-  const boundary = Math.max(
-    source.lastIndexOf(';', mappingIndex),
-    source.lastIndexOf('}', mappingIndex),
-    source.lastIndexOf('{', mappingIndex),
-  );
-  return /@Deprecated\b/.test(source.slice(boundary + 1, mappingIndex));
-}
 
-/** Every `{ verb, path, controller, handler, deprecated }` declared across the Spring controllers. */
-function parseControllers() {
-  const endpoints = [];
-  const methodLevelRequestMappings = [];
+// ─────────────────────────────────────────────────────────────────────────────
+// The server surface
+// ─────────────────────────────────────────────────────────────────────────────
 
-  for (const file of controllerFiles()) {
-    const controller = file.split('/').pop().replace('.java', '');
-    const source = stripComments(readFileSync(file, 'utf8'));
-
-    // The class declaration itself, NOT its preceding annotations — the class-level
-    // @RequestMapping sits between them, so anchoring on the annotations would skip it and
-    // every path in the file would lose its /api/... prefix.
-    const classIndex = source.match(/\bclass\s+\w+[^;{]*\{/)?.index ?? source.length;
-
-    let base = '';
-    const requestMapping = /@RequestMapping\s*(\()?/g;
-    let match;
-    while ((match = requestMapping.exec(source)) !== null) {
-      if (match.index > classIndex) {
-        // A method-level @RequestMapping would carry its verb in `method = RequestMethod.X`,
-        // which this parser does not read. None exist today; record it so the sanity test can
-        // fail loudly rather than this parser silently dropping the endpoint.
-        methodLevelRequestMappings.push(`${controller} @ offset ${match.index}`);
-        continue;
-      }
-      base = match[1] ? pathFromAnnotationArgs(readParens(source, match.index + match[0].length - 1)[0]) : '';
-    }
-
-    const verbMapping = /@(GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping)\s*(\()?/g;
-    while ((match = verbMapping.exec(source)) !== null) {
-      let sub = '';
-      let after = match.index + match[0].length;
-      if (match[2]) {
-        const [args, close] = readParens(source, match.index + match[0].length - 1);
-        sub = pathFromAnnotationArgs(args);
-        after = close + 1;
-      }
-      endpoints.push({
-        verb: VERBS[match[1]],
-        path: (`${base}${sub}`.replace(/\/+$/, '') || base || '/'),
-        controller,
-        handler: handlerNameAfter(source, after),
-        deprecated: isDeprecatedAt(source, match.index),
-      });
-    }
-  }
-  return { endpoints, methodLevelRequestMappings };
-}
-
-const { endpoints: SERVER_ENDPOINTS, methodLevelRequestMappings } = parseControllers();
-
-/** Path variables are positional; their NAMES differ between client and server by design. */
-const normaliseServerPath = (path) => path.replace(/\{[^}]*\}/g, '{}');
+const SERVER_ENDPOINTS = backendOperations();
+const normaliseServerPath = normalisePath;
 
 const endpointKey = (e) => `${e.verb} ${normaliseServerPath(e.path)}`;
 const SERVER_KEYS = new Set(SERVER_ENDPOINTS.map(endpointKey));
@@ -367,6 +181,18 @@ const { calls: CLIENT_CALLS, unprobed: UNPROBED_METHODS } = probeClient();
 /** A HEAD probe (leave.policyDocumentAvailable) is answered by the GET mapping. */
 const clientKey = ({ verb, path }) => `${verb === 'HEAD' ? 'GET' : verb} ${path}`;
 const CLIENT_KEYS = new Set(CLIENT_CALLS.map(clientKey));
+
+// Which of those calls a SCREEN can actually reach — see the Direction 3 block below. Defined
+// here, next to CLIENT_KEYS, because the API_SURFACE_REPORT block further down reads it and
+// module-level code runs top to bottom: declaring it beside its own describe() put it in the
+// temporal dead zone and the report crashed with "Cannot access before initialization". That is
+// env-gated code, so neither lint nor the suite would have caught it.
+const UI_CALLED_METHODS = componentCalledMethods();
+const UI_REACHABLE_KEYS = new Set(
+  CLIENT_CALLS
+    .filter((call) => UI_CALLED_METHODS.has(`${call.namespace}.${call.name}`))
+    .map(clientKey),
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Endpoints with no hrApi caller
@@ -497,49 +323,52 @@ if (process.env.API_SURFACE_REPORT) {
     .filter((c) => clientKey(c) === key)
     .map((c) => `${c.namespace}.${c.name}`);
   const lines = [
-    `controllers: ${controllerFiles().length}`,
     `server mappings: ${SERVER_ENDPOINTS.length} (unique verb+path: ${SERVER_KEYS.size})`,
     `hrApi call sites: ${CLIENT_CALLS.length} (unique verb+path: ${CLIENT_KEYS.size})`,
+    `reachable from a screen: ${UI_REACHABLE_KEYS.size}`,
     '',
-    '| Verb | Path | Controller#handler | hrApi caller |',
+    // The owning controller is no longer shown: the digest is verb+path only, deliberately, so
+    // that its diff stays a readable record of contract changes. springdoc's `tags` carry the
+    // controller if a triage ever needs it.
+    '| Verb | Path | hrApi caller | reachable from a screen |',
     '|---|---|---|---|',
   ];
-  for (const e of [...SERVER_ENDPOINTS].sort((a, b) =>
-    (a.controller + a.path + a.verb).localeCompare(b.controller + b.path + b.verb))) {
-    const callers = [...new Set(callersFor(endpointKey(e)))];
-    lines.push(`| ${e.verb} | \`${normaliseServerPath(e.path)}\` | ${e.controller}#${e.handler}`
-      + `${e.deprecated ? ' **@Deprecated**' : ''} | ${callers.join('<br>') || '**— none —**'} |`);
+  for (const e of SERVER_ENDPOINTS) {
+    const key = endpointKey(e);
+    const callers = [...new Set(callersFor(key))];
+    lines.push(`| ${e.verb} | \`${normaliseServerPath(e.path)}\`${e.deprecated ? ' **@Deprecated**' : ''}`
+      + ` | ${callers.join('<br>') || '**— none —**'}`
+      + ` | ${UI_REACHABLE_KEYS.has(key) ? 'yes' : '**no**'} |`);
   }
   // process.stdout directly, not console.log: vitest buffers module-level console output during
   // collection and the report never appears.
   process.stdout.write(`${lines.join('\n')}\n`);
 }
 
-describe('controller surface / hrApi.js contract — parser sanity', () => {
+describe('controller surface / hrApi.js contract — harness sanity', () => {
   // Every assertion below is trivially true against an empty extraction. These run first so a
-  // rotted regex, a moved backend directory or a harness that stopped driving hrApi fails LOUDLY
-  // instead of passing on zero matches. The floors are set well under today's real numbers
-  // (39 controllers, 278 mappings, 261 captured calls) and far above a broken parser's output.
-  it('found a plausible number of controllers and endpoints', () => {
-    expect(controllerFiles().length).toBeGreaterThan(30);
+  // digest that failed to load, or a harness that stopped driving hrApi, fails LOUDLY instead of
+  // passing on zero matches. The floors are set well under today's real numbers (276 operations,
+  // 261 captured calls) and far above a broken derivation's output.
+  it('read a plausible surface out of the committed digest', () => {
     expect(SERVER_ENDPOINTS.length).toBeGreaterThan(250);
     expect(SERVER_KEYS.size).toBeGreaterThan(250);
   });
 
-  it('resolved every endpoint against its class-level @RequestMapping', () => {
-    // The bug this catches is specific and was made once while writing this file: anchoring the
-    // class-level lookup on the annotations rather than the class declaration silently drops the
-    // base path, and all 278 endpoints come out as bare subpaths like `/deal-stages`.
-    const unprefixed = SERVER_ENDPOINTS.filter((e) => !e.path.startsWith('/api/'));
-    expect(unprefixed, 'endpoints whose class-level @RequestMapping did not resolve').toEqual([]);
-    expect(SERVER_ENDPOINTS.filter((e) => e.handler === '?')).toEqual([]);
+  it('every digest entry is a concrete /api path', () => {
+    // The digest is generated, so a malformed entry means the generator broke — which would
+    // otherwise surface as a pile of phantom "hrApi calls an endpoint that does not exist".
+    const malformed = SERVER_ENDPOINTS.filter((e) => !e.path.startsWith('/api/'));
+    expect(malformed.map((e) => e.raw), 'digest entries that are not /api paths').toEqual([]);
   });
 
-  it('sees no method-level @RequestMapping, which it would not understand', () => {
-    // This parser reads the verb from @GetMapping/@PostMapping/etc. A method-level
-    // @RequestMapping(method = RequestMethod.GET) would carry its verb somewhere this parser does
-    // not look, and the endpoint would vanish from the comparison rather than fail it.
-    expect(methodLevelRequestMappings).toEqual([]);
+  it('the digest carries the @Deprecated subset the backend publishes', () => {
+    // V141 (#702) severed three costing writes IN PLACE — still routed, still the same verb and
+    // path, throwing 409. A surface comparison cannot see that; only this list can, and
+    // CALLS_DEPRECATED below is what reads it. If it ever came back empty the deprecated-call
+    // assertion would pass while every severed route went unwatched.
+    expect(DEPRECATED_KEYS.size).toBeGreaterThan(0);
+    for (const key of DEPRECATED_KEYS) expect(SERVER_KEYS).toContain(key);
   });
 
   it('drove every hrApi method to an observable request', () => {
@@ -646,5 +475,143 @@ describe('controller surface / hrApi.js contract', () => {
       ).toBe(false);
       expect(reason.length, `SERVER_ONLY["${key}"] needs a reason`).toBeGreaterThan(20);
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Direction 3 — is the endpoint reachable from a SCREEN?
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+/**
+ * Endpoints an hrApi method reaches, but which NO SCREEN can reach — the method is declared and
+ * never called.
+ *
+ * ⛔ THIS IS NOT A DELETION LIST, and unlike SERVER_ONLY above these entries are NOT individually
+ * researched. Every one is a MEASUREMENT: `componentCalledMethods()` found no
+ * `api.<namespace>.<method>(` for the method that reaches it, anywhere outside `src/api/` and
+ * outside tests. That is evidence the UI cannot reach it. It is NOT evidence the capability is
+ * dead, and several here are near-certainly live-by-other-means or half-finished features —
+ * the whole `deduction-obligations` cluster is the frontend half of closed issue #373, and
+ * `price-import` is a five-endpoint upload flow.
+ *
+ * Verifying them one by one is issue #746's umbrella, which opens with its own "this is not a
+ * deletion list" warning and records that only twelve of the client-side methods have been
+ * hand-checked. Nothing should be removed on the strength of this list alone. This repo has been
+ * wrong in BOTH directions in a single week: `CommissionStatus.VOID` looked dead and is
+ * deliberately unreachable, and `cancelOpenForPricingRequest` looked like a missing capability and
+ * was a verbatim duplicate of live inlined SQL.
+ *
+ * What the list IS for: freezing the set so it cannot grow silently. A NEW entry means a screen
+ * stopped calling something, or an endpoint shipped behind a method nothing invokes — either way a
+ * capability just became unreachable, and that should require a decision rather than a shrug.
+ * Shrinking it (wiring a screen up, or retiring the endpoint) is the direction of travel and the
+ * stale-entry test below deletes the entry for you.
+ */
+const UNREACHABLE_FROM_UI = new Set([
+  'DELETE /api/factory-quote-attachments/{}',
+  'GET /api/catalog',
+  'GET /api/customer-quotations/{}',
+  'GET /api/deposit-notices/{}',
+  'GET /api/factory-configs',
+  'GET /api/factory-quotes/{}',
+  'GET /api/leave/policy-document',
+  'GET /api/leave/review-summary',
+  'GET /api/payroll/deduction-obligations',
+  'GET /api/payroll/deduction-obligations/me',
+  'GET /api/payroll/deduction-obligations/{}/progress',
+  'GET /api/payroll/ytd-seed',
+  'GET /api/price-import/profile/{}',
+  'GET /api/price-import/staging/{}',
+  'GET /api/pricing-costings/{}',
+  'GET /api/pricing-decisions/{}',
+  'PATCH /api/profile-requests/{}',
+  'POST /api/attendance/cards/backfill',
+  'POST /api/commissions',
+  'POST /api/customer-quotations/{}/preview',
+  'POST /api/factory-quotes/{}/not-available',
+  'POST /api/payroll/deduction-obligations',
+  'POST /api/payroll/deduction-obligations/{}/acknowledge-completion',
+  'POST /api/payroll/deduction-obligations/{}/clear-override',
+  'POST /api/payroll/deduction-obligations/{}/override-continue',
+  'POST /api/payroll/deduction-obligations/{}/stop',
+  'POST /api/payroll/tax-allowances/declarations/me/estimate',
+  'POST /api/price-import/commit/{}',
+  'POST /api/price-import/upload',
+  'POST /api/price-import/validate/{}',
+  'POST /api/pricing-decisions/{}/recalculate',
+  // 'POST /api/tickets/{}/entry-channel' was here until issue #740 wired DealStagePanel's
+  // ช่องทางรับงาน control. The `UNREACHABLE_FROM_UI entry is real and still unreachable` test is
+  // what demanded this deletion — it is not an optional tidy-up.
+  'POST /api/tickets/{}/factory-emails/send',
+  'PUT /api/payroll/deduction-obligations/{}',
+  'PUT /api/payroll/tax-allowances',
+  'PUT /api/payroll/ytd-seed',
+  'PUT /api/price-import/profile/{}',
+]);
+
+describe('controller surface / hrApi.js contract — UI reachability', () => {
+  it('drove the UI scan to a plausible result', () => {
+    // Anti-vacuity, same shape as the harness-sanity block. If the scan matched nothing —
+    // a moved src tree, a changed call idiom — every endpoint would look unreachable and the
+    // allowlist below would silently become the whole surface.
+    expect(UI_CALLED_METHODS.size).toBeGreaterThan(150);
+    expect(UI_REACHABLE_KEYS.size).toBeGreaterThan(150);
+  });
+
+  it('every endpoint a screen cannot reach is a known one', () => {
+    const newlyUnreachable = [...SERVER_KEYS]
+      .filter((key) => CLIENT_KEYS.has(key))
+      .filter((key) => !UI_REACHABLE_KEYS.has(key))
+      .filter((key) => !UNREACHABLE_FROM_UI.has(key))
+      .sort();
+
+    expect(
+      newlyUnreachable,
+      'endpoints whose only hrApi caller is a method no screen invokes. Either wire up the screen, '
+      + 'or add the endpoint to UNREACHABLE_FROM_UI — deliberately, and read that block first',
+    ).toEqual([]);
+  });
+
+  it('every UNREACHABLE_FROM_UI entry is real and still unreachable', () => {
+    const stale = [];
+    for (const key of UNREACHABLE_FROM_UI) {
+      if (!SERVER_KEYS.has(key)) stale.push(`${key} — no longer served; drop this entry`);
+      else if (UI_REACHABLE_KEYS.has(key)) stale.push(`${key} — a screen now calls it; drop this entry`);
+    }
+    // Without this the list rots into an excuse for endpoints someone already fixed, and the
+    // count stops meaning anything.
+    expect(stale).toEqual([]);
+  });
+
+  it('the published reachable set matches what the scan computes', () => {
+    // docs/api/ui-reachable.json is consumed by the backend's ResponseFieldContractTest (#727) to
+    // stop pinning response fields on schemas no screen can reach. Publishing it without a drift
+    // guard would hand that test a stale input and quietly re-introduce the over-pin it fixes.
+    //
+    // Raw form, not normalised, so it intersects directly with api-surface.json.
+    const reachable = SERVER_ENDPOINTS
+      .filter((endpoint) => UI_REACHABLE_KEYS.has(endpoint.key))
+      .map((endpoint) => endpoint.raw)
+      .sort();
+
+    if (process.env[UI_REACHABLE_UPDATE]) {
+      writeUiReachable(reachable);
+      return;
+    }
+
+    expect(
+      reachable,
+      `docs/api/ui-reachable.json is stale. Regenerate: cd frontend && ${UI_REACHABLE_UPDATE}=1 `
+      + 'npx vitest run src/api/serverContract.test.js — and say so in the PR body, because '
+      + "ResponseFieldContractTest's pin set derives from it",
+    ).toEqual(readUiReachable());
+  });
+
+  it('no module outside src/api builds an /api/ path itself', () => {
+    // A component that hand-builds a URL escapes this file, contract.test.js and the e2e sweep
+    // alike — none of them can see it. Comments are stripped first: UpcomingHolidays.jsx
+    // documents `/api/holidays` in prose precisely to explain that it does NOT call it.
+    expect(apiPathBypasses()).toEqual([]);
   });
 });

@@ -27,6 +27,7 @@ import { DEAL_STAGE_CATALOG } from '../data/dealStageCatalog.js';
 // WinProbabilityDefaults.java / DealActivityKind.java / TicketService.updateStage.
 import {
   computeStale as dealComputeStale,
+  effectiveWinProbability as dealEffectiveWinProbability,
   hasActivitySince as dealHasActivitySince,
   isReadyToAdvance as dealIsReadyToAdvance,
   isValidActivityKind as dealIsValidActivityKind,
@@ -2083,6 +2084,21 @@ function hasInvoiceAttachment(ticket) {
   return mockAttachments.some((a) => a.ticketId === ticket.id && a.attachType === 'INVOICE');
 }
 
+// Commissions live in their own store (db.commissions), not on the ticket — mirrors
+// sales.commission_record being its own table. Mirrors CommissionRepository
+// .hasActiveCommissionForTicket exactly (issue #736): a live SALE commission for this ticket,
+// i.e. kind === 'SALE' and status not in ('VOID', 'REJECTED'). Shared here rather than inlined in
+// each of the two TicketSummaryDto builders below, so the predicate exists in exactly one place —
+// createFromDeal's own duplicate guard a few hundred lines down has the same shape inline (it
+// predates this flag and already has its own 409 test coverage), but both read the same
+// db.commissions store and must never be allowed to drift from each other or from the real
+// CommissionRepository method.
+function hasRecordedCommission(ticket) {
+  return db.commissions.some((item) => item.sourceTicketId === ticket.id
+    && item.kind === 'SALE'
+    && !['VOID', 'REJECTED'].includes(item.status));
+}
+
 // Mirrors TicketService.requireClosePrerequisites. Legacy document_issued deals
 // predate the delivery and invoice tracks, so those two are waived for them —
 // requiring either would strand old data permanently.
@@ -2403,6 +2419,14 @@ function addNotification(userId, ticketId, ticketCode, type, message) {
 //     complete-delivery, final-payment), each of which calls autoAdvanceStage below. Before this,
 //     the mock let a manual move into all four unconditionally — more permissive than production,
 //     which is the dangerous direction and is the exact hazard CLAUDE.md names.
+//
+//     ⚠️ That "stricter, never looser" claim was FALSE until issue #742, because this set was
+//     derived from the catalog's `auto` field — i.e. from DealStage.AUTO_ADVANCED, which is a
+//     DIFFERENT set from the one requireStageFactsHold gates, differing in both directions:
+//         AUTO_ADVANCED         ORDER_RECEIVED, DEPOSIT_RECEIVED, PROCUREMENT, CLOSED_PAID
+//         requireStageFactsHold ORDER_RECEIVED, DEPOSIT_RECEIVED, DELIVERED,   CLOSED_PAID
+//     So mock mode ALLOWED a manual move to DELIVERED on an undelivered deal — production answers
+//     409 ยังส่งมอบสินค้าไม่ครบ — and REFUSED a move to PROCUREMENT that production permits.
 //   * THE NOTE RULE (DealStage.requiresJustification) — NOT reimplemented, and deliberately not
 //     approximated either. The mock's old copy was the pre-#704 rule and demanded a written reason
 //     for three of the business's four normal routes; a corrected copy would just be a fresh
@@ -2412,9 +2436,26 @@ function addNotification(userId, ticketId, ticketCode, type, message) {
 //     rendering of it is covered by UpdateStageModal.test.jsx driving a hand-built payload.
 //
 // Mirrors TicketService.stageDecisions / requireStageMoveAllowed (backend ticket/).
-const MOCK_FACT_GATED_STAGES = new Set(
-  DEAL_STAGE_CATALOG.stages.filter((stage) => stage.auto).map((stage) => stage.code),
-);
+/**
+ * The stages a manual move is closed to in mock mode — a literal mirror of the four
+ * `DealStage.X.equals(targetStage)` guards in TicketService.requireStageFactsHold, NOT a
+ * derivation from any other field.
+ *
+ * It has to be a literal because there is no named set on the Java side to derive from: the gates
+ * are four `if` statements inside one private method. Reaching for the nearest available set
+ * (`auto` / DealStage.AUTO_ADVANCED) is exactly the mistake issue #742 records, and it produced a
+ * mock LOOSER than production on DELIVERED.
+ *
+ * Exported ONLY for the guard: features/tickets/stageCatalog.test.js parses
+ * requireStageFactsHold's body out of TicketService.java and asserts this set against it, so the
+ * literal cannot drift the way the derivation did. Do not import it for behaviour.
+ */
+export const MOCK_FACT_GATED_STAGES = new Set([
+  'ORDER_RECEIVED',   // customerOrderVerified — payment track started
+  'DEPOSIT_RECEIVED', // depositReceived
+  'DELIVERED',        // deliveryGateComplete — the one AUTO_ADVANCED omits
+  'CLOSED_PAID',      // closedPaidFactsHold — FULLY_PAID *and* fully delivered
+]);
 
 function dealStageIndex(code) {
   return DEAL_STAGE_CATALOG.stages.findIndex((stage) => stage.code === code);
@@ -2430,6 +2471,24 @@ function mockCanWriteStage(user, ticket, code) {
       || (user.role === 'sales' && Number(ticket?.createdById) === Number(user.id));
   }
   return user.role === gate;
+}
+
+/**
+ * Mirrors TicketService.entryChannelIsStated — "a channel was actually CHOSEN on this deal".
+ *
+ * Both DESIGNER_LED and UNSPECIFIED count as UNSTATED and neither needs a reason to move off:
+ * UNSPECIFIED is the V144 column default, DESIGNER_LED is the pre-V144 default that was never
+ * backfilled, so an untouched deal reads one or the other purely by age. Dropping UNSPECIFIED here
+ * would make the FIRST statement of a channel on every new deal demand a reason.
+ *
+ * Read by BOTH the action advertisement and setEntryChannel's own 400, the same single-definition
+ * discipline the Java service uses — so the mock cannot advertise a note-free change and then
+ * refuse it.
+ */
+function mockEntryChannelIsStated(ticket) {
+  return Boolean(ticket?.entryChannel)
+    && ticket.entryChannel !== 'DESIGNER_LED'
+    && ticket.entryChannel !== 'UNSPECIFIED';
 }
 
 /** Mirrors TicketService.requireDealOwnership (lost / reopen / hold / tracking). NOT authoritative. */
@@ -2519,15 +2578,26 @@ function buildTicketDetail(ticket) {
       closeConfirmedAt: ticket.closeConfirmedAt ?? null,
       closeConfirmedByName: ticket.closeConfirmedByName ?? null,
       invoiceOnFile: hasInvoiceAttachment(ticket),
-      // Deal tracking fields (V83, Slice B1/B2 — handoff 103). effectiveWinProbability is
-      // deliberately NOT included here: it's a Java record method, not a component, so the
-      // real backend never serializes it either — see dealTrackingMeta.js's doc comment.
-      // Every consumer derives it from winProbabilityOverride + salesStage instead.
+      // Deal tracking fields (V83, Slice B1/B2 — handoff 103).
+      //
+      // effectiveWinProbability IS served now (issue #738): the real TicketSummaryDto computes it
+      // and, since it was made a Jackson property, sends it. It used to be omitted here on the
+      // correct grounds that the backend did not serialize it either — which meant the UI had to
+      // re-derive it from a copied table, and #714 is what that cost. Computed via
+      // dealTrackingMeta's mirror, which stageCatalog-style guards keep honest against
+      // WinProbabilityDefaults.java; per CLAUDE.md that makes mock-driven tests evidence about
+      // plumbing here, never about the number itself.
       winProbabilityOverride: ticket.winProbabilityOverride ?? null,
+      effectiveWinProbability: dealEffectiveWinProbability(
+        ticket.winProbabilityOverride ?? null, ticket.salesStage,
+      ),
       designerName: ticket.designerName ?? null,
       ownerName: ticket.ownerName ?? null,
       buyerName: ticket.buyerName ?? null,
       stale: dealComputeStale(ticket.lifecycle ?? 'ACTIVE', dealActivitiesForTicket(ticket.id)),
+      // Existence-only flag (issue #736) — see hasRecordedCommission's own comment. Never an
+      // amount; amounts stay behind commissions.list()'s own role gate.
+      commissionRecorded: hasRecordedCommission(ticket),
       ...paymentFields,
     },
     items: ticket.items, events: ticket.events,
@@ -4042,12 +4112,21 @@ export const api = {
         invoiceOnFile: hasInvoiceAttachment(t),
         // Deal tracking fields (V83, Slice B1/B2 — handoff 103) — same fields as
         // buildTicketDetail's summary, so the manager pipeline view (TicketListPage)
-        // has win%/stale without a per-row detail fetch.
+        // has win%/stale without a per-row detail fetch. effectiveWinProbability must be
+        // here and not only on the detail projection: TicketListPage's win-weighted
+        // forecast sums it across LIST rows (issue #738).
         winProbabilityOverride: t.winProbabilityOverride ?? null,
+        effectiveWinProbability: dealEffectiveWinProbability(
+          t.winProbabilityOverride ?? null, t.salesStage,
+        ),
         designerName: t.designerName ?? null,
         ownerName: t.ownerName ?? null,
         buyerName: t.buyerName ?? null,
         stale: dealComputeStale(t.lifecycle ?? 'ACTIVE', dealActivitiesForTicket(t.id)),
+        // Same existence-only flag as buildTicketDetail's summary — served on the LIST projection
+        // too because accountActions.js's worklist is built from list rows, not detail fetches
+        // (issue #736).
+        commissionRecorded: hasRecordedCommission(t),
         ...derivePaymentFields(t),
       }));
       return delay({ tickets });
@@ -4207,7 +4286,13 @@ export const api = {
           add('PLACE_ON_HOLD', 'lifecycle', 'พักดีลไว้');
           add('MARK_DORMANT', 'lifecycle', 'พัก dormant');
           add('SET_TENDER_REQUIREMENT', 'policy', 'ตั้งค่าสถานะประมูล', { requiredFields: ['value'] });
-          add('SET_ENTRY_CHANNEL', 'policy', 'ตั้งค่า entry channel', { requiredFields: ['value'] });
+          // requiredFields carries the note rule, exactly as TicketService.addPolicyActions does:
+          // a channel that was actually STATED needs a reason to change, an unstated one (the V144
+          // UNSPECIFIED default, or the never-backfilled pre-V144 DESIGNER_LED) does not. Same
+          // predicate as setEntryChannel below — see TicketService.entryChannelIsStated.
+          add('SET_ENTRY_CHANNEL', 'policy', 'ตั้งค่า entry channel', {
+            requiredFields: mockEntryChannelIsStated(ticket) ? ['value', 'note'] : ['value'],
+          });
         }
         if (['account', 'ceo'].includes(user.role)) add('WAIVE_DEPOSIT', 'policy', 'นโยบายมัดจำ', { requiredFields: ['policy', 'reason'] });
       } else if (['ON_HOLD', 'DORMANT'].includes(ticket.lifecycle) && dealOwner) {
@@ -4715,13 +4800,7 @@ export const api = {
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
       if (!['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].includes(payload.value)) fail(`ไม่รองรับช่องทางรับงาน '${payload.value}'`, 400);
-      // Mirrors TicketService.setEntryChannel's changingExistingNonDefault: both DESIGNER_LED and
-      // UNSPECIFIED count as UNSTATED and neither needs a reason to move off. UNSPECIFIED is the
-      // V144 default; DESIGNER_LED is the pre-V144 default that was never backfilled, so an
-      // untouched deal reads one or the other purely by age. Dropping UNSPECIFIED here would make
-      // the FIRST statement of a channel on every new deal demand a reason.
-      const stated = ticket.entryChannel && ticket.entryChannel !== 'DESIGNER_LED' && ticket.entryChannel !== 'UNSPECIFIED';
-      if (stated && ticket.entryChannel !== payload.value && !(payload.note || '').trim()) {
+      if (mockEntryChannelIsStated(ticket) && ticket.entryChannel !== payload.value && !(payload.note || '').trim()) {
         fail('การเปลี่ยน entry channel ต้องระบุเหตุผล', 400);
       }
       ticket.entryChannel = payload.value;
@@ -8802,8 +8881,15 @@ export const api = {
       decision.returnReason = payload.returnReason;
       decision.returnedAt = new Date().toISOString();
       decision.updatedAt = new Date().toISOString();
-      pr.status = 'COSTING_REVISION_REQUIRED';
-      pushPricingRequestEvent(pr, user, 'PRICING_DECISION_RETURNED', 'CEO_REVIEWING', 'COSTING_REVISION_REQUIRED', payload.returnReason);
+      // AWAITING_FACTORY_RESPONSE, matching PricingDecisionService.returnToImport (:453-460).
+      // This wrote COSTING_REVISION_REQUIRED until issue #741 — a status V141 DELETED, from both
+      // chk_pricing_request_status and PricingRequestStatus.VALUES. There was no production
+      // symptom, which is the whole problem: the same CEO click produced 'CEO ตีกลับให้แก้ไขต้นทุน'
+      // in danger tone under VITE_USE_MOCKS=true and 'เจรจาราคากับโรงงาน' in info tone against the
+      // real backend, so anyone using mock mode as a design or QA reference for the CEO return
+      // path was looking at a state that no longer exists.
+      pr.status = 'AWAITING_FACTORY_RESPONSE';
+      pushPricingRequestEvent(pr, user, 'PRICING_DECISION_RETURNED', 'CEO_REVIEWING', 'AWAITING_FACTORY_RESPONSE', payload.returnReason);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       if (pr.assignedImportId != null) {
         addNotification(pr.assignedImportId, pr.ticketId, ticket?.code, 'PRICING_DECISION_RETURNED',

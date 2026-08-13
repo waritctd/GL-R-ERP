@@ -1,5 +1,6 @@
 package th.co.glr.hr.ticket;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -69,9 +70,40 @@ public record TicketSummaryDto(
      * Computed, not stored: true when this ACTIVE deal has no {@code sales.deal_activity} row
      * logged in the last 7 days (or none ever). See {@code TicketRepository#isStale}.
      */
-    boolean stale
+    boolean stale,
+    /**
+     * A live {@code SALE} commission already exists for this deal — the same question {@code
+     * CommissionService.createFromDeal}'s duplicate guard asks ({@code
+     * CommissionRepository.hasActiveCommissionForTicket}), served here so the accountant's
+     * worklist ({@code accountActions.js#nextAccountAction}) stops guessing whether a {@code
+     * CLOSED_PAID} deal still needs its commission recorded and permanently over-counting its
+     * backlog (issue #736).
+     *
+     * <p>Deliberate disclosure decision: this exposes only the EXISTENCE of a commission to any
+     * ticket reader, never an amount — amounts stay behind {@code CommissionController's}
+     * role check, which the {@code account} role has no route through ({@code
+     * canListCommissionRecords = ['sales','sales_manager','ceo']}). {@link #invoiceOnFile} is
+     * the existing precedent for a boolean derived from a related table on this DTO.
+     */
+    boolean commissionRecorded
 ) {
-    /** Override wins when set, else the {@link DealStage}-derived default. Never a blocker. */
+    /**
+     * Override wins when set, else the {@link DealStage}-derived default. Never a blocker.
+     *
+     * <p><b>{@code @JsonProperty} is what makes this reach the client, and it is the point.</b>
+     * Jackson serializes a record's COMPONENTS; an extra method is invisible to it unless
+     * annotated. So this number was computed here and never sent, and the frontend re-derived it
+     * from a hand-copied table (`features/tickets/dealTrackingMeta.js`) to render the win-weighted
+     * pipeline forecast — the last surviving instance of the pattern #712 (commission tiers) and
+     * #713 (stage rules) removed, and #714 was a live example of it going wrong: V143 inserted
+     * QUOTE_OWNER, the copy was not updated, and every S5 deal quietly contributed 0% to a
+     * money-shaped forecast. See issue #738.
+     *
+     * <p>{@code READ_ONLY} because there is no matching record component to deserialize into:
+     * this record is serialize-only on the wire, and the access mode says so rather than relying
+     * on nobody ever pointing Jackson at it in the other direction.
+     */
+    @JsonProperty(value = "effectiveWinProbability", access = JsonProperty.Access.READ_ONLY)
     public int effectiveWinProbability() {
         return WinProbabilityDefaults.effective(winProbabilityOverride, salesStage);
     }
@@ -93,7 +125,7 @@ public record TicketSummaryDto(
             salesStage, lostReason, lostAt, stageUpdatedAt, lifecycle, tenderRequirement, depositPolicy,
             depositPolicyReason, entryChannel, null, null, null, null, null, PaymentStage.NOT_REQUIRED,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false, null, null, false, null, null,
-            null, null, null, null, false);
+            null, null, null, null, false, false);
     }
 
     /**
@@ -114,6 +146,7 @@ public record TicketSummaryDto(
             tenderRequirement, depositPolicy, depositPolicyReason, entryChannel, billingDate, dueDate,
             creditTermDays, lastFollowUpAt, nextFollowUpAt, paymentStage, amountPayable, amountPaid,
             amountOutstanding, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
-            cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale);
+            cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
+            commissionRecorded);
     }
 }

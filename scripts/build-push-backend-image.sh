@@ -69,7 +69,19 @@ fi
 echo "==> building $REPO:$TAG"
 # The Dockerfile verifies every required family is registered AND that fontconfig resolves each to
 # itself rather than substituting, so a bad font set fails here instead of in front of a customer.
-docker build -t "$REPO:$TAG" -f backend/Dockerfile backend
+#
+# --platform linux/amd64 is REQUIRED, not a preference. Render runs amd64; docker build defaults to
+# the host architecture, so running this on an Apple Silicon Mac — which is what this repo is
+# developed on — silently produces an arm64 image that Render pulls and then cannot start. The
+# failure surfaces as a deploy-time exec-format error, long after the build looked fine. Building
+# under emulation is slower; that is the cost of an image that runs where it is deployed.
+#
+# --build-arg ALLOW_MISSING_FONTS=false makes a missing or substituted family fail the build. The
+# empty-folder check above already guarantees fonts are present, but the flag also covers the case
+# this script exists for: fonts present yet WRONG (a partial fetch, or a family fontconfig
+# substitutes anyway). Shipping fonts is the whole point of this image — never build it permissive.
+docker build --platform linux/amd64 --build-arg ALLOW_MISSING_FONTS=false \
+  -t "$REPO:$TAG" -f backend/Dockerfile backend
 
 if [ "$ALSO_LATEST" = "--also-latest" ]; then
   docker tag "$REPO:$TAG" "$REPO:latest"

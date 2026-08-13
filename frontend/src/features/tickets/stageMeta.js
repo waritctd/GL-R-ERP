@@ -86,6 +86,39 @@ export const PROCUREMENT_SUBSTEPS = [
   { code: 'FULLY_DELIVERED', label: 'ส่งมอบครบแล้ว' },
 ];
 
+/**
+ * The SAME seven codes, split into the shape FulfilmentStatus.java actually publishes — because
+ * the flat list above is a lookup table, not a path, and rendering it as one caused issue #730.
+ *
+ * `IMPORT_SEQUENCE` (FulfilmentStatus.java:33) is an ordered chain. `FROM_STOCK` is a BRANCH that
+ * skips it entirely: a deal declared fully from stock never issues an import request — and cannot,
+ * since issueImportRequest's own guard requires fulfillmentStatus == null. Rendering position-as-
+ * progress over the flat list therefore painted IR-issued / ordered / shipping / goods-received
+ * green on a deal that did none of them. The delivery states are the one segment BOTH journeys
+ * end on.
+ *
+ * `procurementPath(code)` returns the ordered path a deal on `code` is actually walking, so a
+ * caller can keep using index-as-progress without that meaning being a lie. This is still a
+ * client-side split of a client-side list — the durable fix is the backend serving the path, the
+ * way PaymentTrack.path(policy) already does for payments — but it no longer claims milestones
+ * that did not happen.
+ */
+const IMPORT_SEQUENCE = ['IR_ISSUED', 'IR_SENT', 'SHIPPING', 'GOODS_RECEIVED'];
+const DELIVERY_STATES = ['PARTIALLY_DELIVERED', 'FULLY_DELIVERED'];
+
+export function procurementPath(currentCode, fromStock = null) {
+  const byCode = (code) => PROCUREMENT_SUBSTEPS.find((s) => s.code === code);
+  if (currentCode === 'FROM_STOCK' || fromStock === true) return ['FROM_STOCK', ...DELIVERY_STATES].map(byCode);
+  if (fromStock === false) return [...IMPORT_SEQUENCE, ...DELIVERY_STATES].map(byCode);
+  // fromStock unknown AND the deal has moved on to a DELIVERY state: its procurement status has
+  // been overwritten, so fulfillmentStatus alone can no longer say which journey got it here.
+  // Asserting either one would be the same false statement in a new place, so the strip narrows
+  // to the segment that is still true. Callers that can tell (the panel reads the deal's own
+  // qtyFromStock) should pass `fromStock` and get the full path back.
+  if (DELIVERY_STATES.includes(currentCode)) return DELIVERY_STATES.map(byCode);
+  return [...IMPORT_SEQUENCE, ...DELIVERY_STATES].map(byCode);
+}
+
 // Payment sub-steps (keyed by paymentStatus) — the inner journey of the back-half stages.
 // Same reason as PROCUREMENT_SUBSTEPS for staying client-side: PaymentTrack.path(policy) returns a
 // DIFFERENT sequence on a deposit-bypass policy, so "the ordered list of payment states" is not a
