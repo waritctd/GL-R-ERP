@@ -1943,10 +1943,20 @@ describe('TicketDetailPage', () => {
         currentState: { lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'SHIPPING', status: 'quotation_issued' },
         // A deliberately unrealistic payload (mirrors the "retired verbs" test
         // above) proving the role gate, not just the absence of the action.
+        //
+        // RESERVE_STOCK is deliberately NOT in this list any more. Issue #732:
+        // that action's local role check was removed on purpose, because
+        // TicketService.canDeclareStockCoverage grants it to the deal owner as
+        // well as to import/ceo, and actions() advertises it off that same
+        // predicate — so ANDing it with a frontend role set threw away the
+        // server's answer and hid the button from the one role PR #706 built
+        // it for. Feeding account an action the real service cannot produce for
+        // it would now assert a gate that intentionally does not exist. The
+        // realistic case — account is offered nothing, so account sees nothing
+        // — is asserted below instead.
         availableActions: [
           { action: 'ISSUE_IMPORT_REQUEST', kind: 'fulfillment', label: 'ออกคำขอนำเข้า' },
           { action: 'SHIPPING', kind: 'fulfillment', label: 'สินค้าเดินทาง' },
-          { action: 'RESERVE_STOCK', kind: 'fulfillment', label: 'จองสต็อก' },
           { action: 'RECORD_PARTIAL_DELIVERY', kind: 'fulfillment', label: 'บันทึกส่งมอบ' },
           { action: 'COMPLETE_DELIVERY', kind: 'fulfillment', label: 'ส่งมอบครบ' },
         ],
@@ -1959,6 +1969,54 @@ describe('TicketDetailPage', () => {
       expect(section.queryByRole('button', { name: 'จองสินค้าจากสต็อก' })).toBeNull();
       expect(section.queryByRole('button', { name: 'บันทึกการส่งสินค้า' })).toBeNull();
       expect(section.queryByRole('button', { name: 'ส่งมอบครบ' })).toBeNull();
+    });
+
+    // ── Issue #732: จองสินค้าจากสต็อก for the deal owner ──────────────────────
+    //
+    // PR #706 widened TicketService.canDeclareStockCoverage to FULFILMENT_ROLES ∪
+    // (SALES_ROLES ∧ deal owner) and actions() advertises RESERVE_STOCK off the
+    // same predicate — so the server already answers "may this viewer declare
+    // stock coverage", carrying the ownership rule, the ORDER_RECEIVED stage
+    // floor and the remaining-delivery check with it. The panel used to AND that
+    // answer with the pre-#706 role set and hide the button from sales entirely.
+    //
+    // ⚠️ These are RENDERING assertions over a mocked `api`. They pin that the
+    // frontend now honours the server's answer instead of overriding it; they say
+    // nothing about who the real service actually grants. That claim needs a
+    // real-DB test through the Java service (StockDeclarationAuthzIntegrationTest
+    // covers the backend half) — see CLAUDE.md.
+    it('shows จองสินค้าจากสต็อก to the sales deal owner when the server advertises RESERVE_STOCK', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', salesStage: 'ORDER_RECEIVED', createdById: 1 } }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'ORDER_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued' },
+        availableActions: [{ action: 'RESERVE_STOCK', kind: 'fulfillment', label: 'จองสินค้าจากสต็อก' }],
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+      const section = await fulfilmentSection();
+
+      expect(await section.findByRole('button', { name: 'จองสินค้าจากสต็อก' })).not.toBeNull();
+    });
+
+    // Wrong-way-round, and the one that matters: dropping the local role check
+    // must NOT mean the button is unconditional. When the server withholds
+    // RESERVE_STOCK — below the stage floor, not the owner, nothing left to
+    // deliver — the same sales user must still see nothing.
+    it('hides จองสินค้าจากสต็อก from a sales user the server did not offer RESERVE_STOCK to', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', salesStage: 'PROCUREMENT', createdById: 1 } }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued' },
+        availableActions: [],
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+      const section = await fulfilmentSection();
+
+      expect(section.queryByRole('button', { name: 'จองสินค้าจากสต็อก' })).toBeNull();
     });
 
   });

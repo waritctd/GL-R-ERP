@@ -187,7 +187,20 @@ export function DealFulfilmentPanel({
     markIrSent:         hasAction('IR_SENT') && fulfilmentActionCode === 'markIrSent' && isFulfilment,
     markShipping:       hasAction('SHIPPING') && fulfilmentActionCode === 'markShipping' && isFulfilment,
     markGoodsReceived:  hasAction('GOODS_RECEIVED') && fulfilmentActionCode === 'markGoodsReceived' && isFulfilment,
-    reserveStock:       hasAction('RESERVE_STOCK') && isFulfilment,
+    // The ONE entry here with no local role check, deliberately (issue #732). PR #706 widened the
+    // backend gate to the deal owner — TicketService.canDeclareStockCoverage is
+    // FULFILMENT_ROLES ∪ (SALES_ROLES ∧ createdById == actor.id) — and actions() advertises
+    // RESERVE_STOCK off that same predicate. ANDing the server's answer with the pre-#706 role set
+    // meant the server offered the action and the frontend threw it away, so the one role the
+    // workflow was built for could not start it. TicketService's own Javadoc names this failure
+    // mode: gate and advertisement are one predicate so they "cannot drift into offering an action
+    // that immediately 403s", and applying it unevenly leaves a capability "live but invisible".
+    //
+    // hasAction('RESERVE_STOCK') already carries the ownership rule, the S10 stage floor and the
+    // remaining-delivery check, because the server computed all three. Re-deriving any of them
+    // here is what rots. The other six entries KEEP isFulfilment — their backend gates really are
+    // FULFILMENT_ROLES-only, so dropping it there would offer buttons that 403.
+    reserveStock:       hasAction('RESERVE_STOCK'),
     recordDelivery:     hasAction('RECORD_PARTIAL_DELIVERY') && isFulfilment,
     completeDelivery:   hasAction('COMPLETE_DELIVERY') && isFulfilment,
   };
