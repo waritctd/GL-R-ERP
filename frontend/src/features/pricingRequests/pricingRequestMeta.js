@@ -10,22 +10,12 @@
 // authz approximates the Java service and is NOT authoritative (see
 // CLAUDE.md "Mock API contract").
 
-export const PRICING_REQUEST_STATUSES = [
-  'DRAFT',
-  'SUBMITTED',
-  'IMPORT_REVIEWING',
-  'AWAITING_FACTORY_RESPONSE',
-  'READY_FOR_CEO_REVIEW',
-  'CEO_REVIEWING',
-  'APPROVED_FOR_QUOTATION',
-  'COSTING_REVISION_REQUIRED',
-  // Step 4/5 (this list was missing both — a pre-existing gap fixed alongside adding
-  // QUOTATION_ACCEPTED, since both values are otherwise unrepresented anywhere in this array).
-  'QUOTATION_ISSUED',
-  'QUOTATION_ACCEPTED',
-  'CANCELLED',
-  'SUPERSEDED',
-];
+// There is deliberately no bare PRICING_REQUEST_STATUSES array here. One existed until it was
+// removed as dead: nothing in the repo ever imported it, and ALLOWED_TRANSITIONS below already
+// carries the identical twelve statuses as its key set — but is actually read, by canTransition.
+// A second copy that nothing consumes only drifts: that array had already gone stale once and
+// needed QUOTATION_ISSUED / QUOTATION_ACCEPTED added to catch it up, silently and with no test to
+// notice. If you need the status set, take Object.keys(ALLOWED_TRANSITIONS).
 
 // Mirrors PricingRequestStatus.ALLOWED — forward/lateral transitions only.
 // DRAFT -> DRAFT is deliberately absent: editing a draft's fields is a

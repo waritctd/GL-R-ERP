@@ -458,13 +458,20 @@ export function overdueBadgeLabel(overdue) {
     : { label: 'ยังไม่เกินกำหนด', tone: 'neutral' };
 }
 
+/**
+ * Labels for sales.ticket.fulfillment_status — exactly FulfilmentStatus.java's seven codes.
+ *
+ * `PICKED_UP` is deliberately absent, and is NOT the same thing as the `PICKED_UP` in
+ * DealHistoryPanel's event-kind map ('รับมอบหมาย' — Import took the ticket). That one is a
+ * TicketEventKind and is live; this axis is fulfillment_status, which never held it. Both
+ * `PICKED_UP` and `CUSTOMS_CLEARANCE` were deleted from FulfilmentStatus.java by 7991b9f1 as
+ * dead constants. Do not re-add either here on the strength of seeing the name elsewhere.
+ */
 export function fulfilmentStatusLabel(value) {
   const map = {
     IR_ISSUED: { label: 'ออกคำขอนำเข้าแล้ว', tone: 'info' },
     IR_SENT: { label: 'ส่งคำขอนำเข้าแล้ว', tone: 'info' },
-    PICKED_UP: { label: 'รับจากผู้ผลิตแล้ว', tone: 'info' },
     SHIPPING: { label: 'สินค้าเดินทาง', tone: 'info' },
-    CUSTOMS_CLEARANCE: { label: 'รอออกของ', tone: 'warning' },
     GOODS_RECEIVED: { label: 'สินค้าถึงโกดังแล้ว', tone: 'success' },
     FROM_STOCK: { label: 'สินค้าจากสต็อก', tone: 'success' },
     PARTIALLY_DELIVERED: { label: 'ส่งมอบบางส่วน', tone: 'warning' },

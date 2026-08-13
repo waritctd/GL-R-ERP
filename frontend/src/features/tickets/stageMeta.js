@@ -19,7 +19,7 @@
 //
 // The rule for anything added below: if the backend also decides it, it does not belong here.
 
-import { dealStageLabel, hasDealStageLabel } from '../../utils/format.js';
+import { hasDealStageLabel } from '../../utils/format.js';
 
 export const GATE_LABEL = {
   sales: 'ฝ่ายขาย',
@@ -68,12 +68,18 @@ export const CANCEL_REASON_LABEL = {
 // SEQUENCE (IR_ISSUED → IR_SENT → SHIPPING → GOODS_RECEIVED) and a delivery-complete SET, not one
 // ordered whole, so there is no single canonical list for the backend to serve and inventing one
 // would be a new defect rather than the removal of one. Known gap, stated rather than guessed at.
+//
+// The codes below are exactly FulfilmentStatus.java's seven. `PICKED_UP` and `CUSTOMS_CLEARANCE`
+// used to sit at positions 3 and 5 of this list; both were deleted from FulfilmentStatus.java by
+// 7991b9f1 as "dead constants (zero references anywhere)", and no code path has ever written
+// either into sales.ticket.fulfillment_status. Leaving them here was not inert: SubstepChips marks
+// every entry before the current one as done, so a deal on SHIPPING rendered "รับจากผู้ผลิตแล้ว"
+// as a completed step, and one on GOODS_RECEIVED rendered "รอออกของ" as completed — two steps the
+// business never performed and the column cannot express. Keep this list in step with that file.
 export const PROCUREMENT_SUBSTEPS = [
   { code: 'IR_ISSUED',      label: 'ออกใบขอซื้อ (IR) แล้ว' },
   { code: 'IR_SENT',        label: 'สั่งซื้อไปยังผู้ผลิตแล้ว' },
-  { code: 'PICKED_UP',      label: 'รับจากผู้ผลิตแล้ว' },
   { code: 'SHIPPING',       label: 'สินค้าอยู่ระหว่างเดินทาง' },
-  { code: 'CUSTOMS_CLEARANCE', label: 'รอออกของ' },
   { code: 'GOODS_RECEIVED', label: 'สินค้าถึงโกดังแล้ว' },
   { code: 'FROM_STOCK',     label: 'สินค้าจากสต็อก' },
   { code: 'PARTIALLY_DELIVERED', label: 'ส่งมอบบางส่วน' },
@@ -124,5 +130,3 @@ export function assertStageLabelsComplete(codes) {
   }
   console.error(message);
 }
-
-export { dealStageLabel };

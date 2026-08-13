@@ -224,11 +224,6 @@ public class DepositNoticeRenderer {
         getOrKeep(sh, rowIdx, colIdx).setCellValue(value);
     }
 
-    private void setNumeric(Sheet sh, int rowIdx, int colIdx, BigDecimal value) {
-        if (value == null) return;
-        getOrKeep(sh, rowIdx, colIdx).setCellValue(value.doubleValue());
-    }
-
     private Cell getOrKeep(Sheet sh, int rowIdx, int colIdx) {
         Row row = sh.getRow(rowIdx);
         if (row == null) row = sh.createRow(rowIdx);

@@ -21,14 +21,17 @@ import th.co.glr.hr.ticket.PaymentTrack;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketEventKind;
-import th.co.glr.hr.ticket.TicketItemDto;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketStatus;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
 @Service
 public class DepositNoticeService {
-    private static final String PREPARER = "จินตนา หาญมนตรี";
+    // No PREPARER constant here. One existed, holding a hardcoded staff name, and nothing read it:
+    // the preparer's name reaches a deposit notice from the DB instead, as the NOT NULL DEFAULT on
+    // sales.deposit_notice.preparer_name (V12). Deleting the Java copy leaves that default — the
+    // only live source — untouched; re-adding it would just create a second place to change a
+    // person's name and a silent way for the two to disagree.
     private static final java.util.Set<String> SALES_ROLES  = java.util.Set.of("sales");
     private static final java.util.Set<String> CEO_ROLES    = java.util.Set.of("ceo");
     private static final java.util.Set<String> IMPORT_ROLES = java.util.Set.of("import");

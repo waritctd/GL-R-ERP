@@ -774,20 +774,6 @@ public class PricingRequestService {
         }
     }
 
-    private String toDueDateMetadataJson(LocalDate dueDate) {
-        // Unlike cancel's reason (always present, @NotBlank), dueDate is optional —
-        // omit metadata entirely rather than serialising a JSON null, matching
-        // addEvent's null-metadata convention (COALESCE(...,'{}'::jsonb) on read).
-        if (dueDate == null) {
-            return null;
-        }
-        try {
-            return objectMapper.writeValueAsString(Map.of("dueDate", dueDate));
-        } catch (JsonProcessingException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "วันครบกำหนดไม่ถูกต้อง");
-        }
-    }
-
     private String toDeadDealMetadataJson(String reason) {
         try {
             return objectMapper.writeValueAsString(Map.of("reason", reason, "cause", "DEAL_TERMINAL"));
