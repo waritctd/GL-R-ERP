@@ -238,7 +238,7 @@ export function DealStateHeader({
       {/* Responsive-overflow fix (Phase 2): `.status-badge` is
           `white-space: nowrap` (styles.css:1795). FIX 4 (Opus review —
           measured truth, corrected): the widest Thai stage label is NOT
-          "เสนอราคาผู้ออกแบบ/เจ้าของ" (167px, stage 4 — the most common stage,
+          "เสนอราคาผู้ออกแบบ" (167px, stage 4 — the most common stage,
           but not the widest one) — it's "นัดส่งสินค้า / นัดรับเงินส่วนที่เหลือ" at
           190px, with "เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ" close behind at 189px.
           CORRECTED (Slice A, measured from the compiled CSS rather than

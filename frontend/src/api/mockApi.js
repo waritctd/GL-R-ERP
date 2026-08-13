@@ -13,17 +13,14 @@
 // accurate when editing — they are how the next reader finds the source of truth.
 
 import { createDemoDatabase } from '../data/demoData.js';
-// Deal pipeline (V50): stage order + write gates shared with the pages so the
-// mock's monotonic/gate behavior can't drift from the UI's; the authoritative
-// rules live in TicketService (backend ticket/).
-import {
-  canMarkLost as dealCanMarkLost,
-  canSetStage as dealCanSetStage,
-  CANCEL_REASONS as DEAL_CANCEL_REASONS,
-  isRoutineBackwardMove,
-  LOST_REASONS as DEAL_LOST_REASONS,
-  stageIndex as dealStageIndex,
-} from '../features/tickets/stageMeta.js';
+// Deal pipeline (V50, widened by V143). The mock serves the stage CATALOG as canned data — the
+// shape of GET /api/meta/deal-stages — and nothing more.
+//
+// It deliberately no longer imports a stage RULE from the pages, because there is no longer a
+// stage rule in the pages to import. The three it used to (canSetStage, canMarkLost,
+// isRoutineBackwardMove) were copies of TicketService gates that had all gone stale; see
+// mockStageDecisions below for what replaced them and what the mock now refuses to decide at all.
+import { DEAL_STAGE_CATALOG } from '../data/dealStageCatalog.js';
 // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103): win%
 // defaults, the activity-kind taxonomy, and the stage-advance-gate readiness
 // check, shared with the UI so the mock's numbers/gate can't drift from
@@ -2385,6 +2382,96 @@ function addNotification(userId, ticketId, ticketCode, type, message) {
   db.notifications.unshift({ id: nextId, userId, ticketId, ticketCode, type, message, read: false, createdAt: new Date().toISOString() });
 }
 
+// ── Deal pipeline: what this mock will and will not decide ────────────────────────────────────
+//
+// Read this before adding anything stage-shaped below.
+//
+// The catalog (DEAL_STAGE_CATALOG) is canned DATA — the shape of GET /api/meta/deal-stages, kept
+// honest against DealStage.java by features/tickets/stageCatalog.test.js, which parses the Java.
+// Index lookups over it are lookups, not rules.
+//
+// The DECISIONS are a different matter, and the mock is deliberately incomplete about them:
+//
+//   * ROLE GATE — approximated, as every namespace in this file approximates its service's authz.
+//     Driven by the catalog's own `gate` field (which comes from TicketService's three
+//     *_TARGET_STAGES sets) rather than a second list. NOT AUTHORITATIVE; verify against
+//     StageDecisionIntegrationTest.
+//   * FACT GATES (TicketService.requireStageFactsHold, #710) — NOT reimplemented. The four
+//     fact-gated stages are simply closed to a manual move in mock mode, which is STRICTER than
+//     production, never looser. They are still reachable here the way they are reached in real
+//     life: through the operational action that records the fact (confirmCustomer, deposit-paid,
+//     complete-delivery, final-payment), each of which calls autoAdvanceStage below. Before this,
+//     the mock let a manual move into all four unconditionally — more permissive than production,
+//     which is the dangerous direction and is the exact hazard CLAUDE.md names.
+//   * THE NOTE RULE (DealStage.requiresJustification) — NOT reimplemented, and deliberately not
+//     approximated either. The mock's old copy was the pre-#704 rule and demanded a written reason
+//     for three of the business's four normal routes; a corrected copy would just be a fresh
+//     mirror with no guard. `requiresReason` is therefore always false in mock mode, so mock-mode
+//     QA never exercises the note requirement. That is a stated gap, not an oversight — the rule
+//     is covered by DealStageTest and StageDecisionIntegrationTest on the backend, and the modal's
+//     rendering of it is covered by UpdateStageModal.test.jsx driving a hand-built payload.
+//
+// Mirrors TicketService.stageDecisions / requireStageMoveAllowed (backend ticket/).
+const MOCK_FACT_GATED_STAGES = new Set(
+  DEAL_STAGE_CATALOG.stages.filter((stage) => stage.auto).map((stage) => stage.code),
+);
+
+function dealStageIndex(code) {
+  return DEAL_STAGE_CATALOG.stages.findIndex((stage) => stage.code === code);
+}
+
+/** Mirrors TicketService.requireStageWriteAccess, keyed off the catalog's gate. NOT authoritative. */
+function mockCanWriteStage(user, ticket, code) {
+  const gate = DEAL_STAGE_CATALOG.stages.find((stage) => stage.code === code)?.gate;
+  if (!gate || !user) return false;
+  if (user.role === 'ceo') return true;
+  if (gate === 'sales') {
+    return user.role === 'sales_manager'
+      || (user.role === 'sales' && Number(ticket?.createdById) === Number(user.id));
+  }
+  return user.role === gate;
+}
+
+/** Mirrors TicketService.requireDealOwnership (lost / reopen / hold / tracking). NOT authoritative. */
+function mockCanDealOwnership(user, ticket) {
+  return user?.role === 'ceo' || user?.role === 'sales_manager'
+    || (user?.role === 'sales' && Number(ticket?.createdById) === Number(user.id));
+}
+
+/**
+ * The mock's answer to GET /api/tickets/{id}/actions -> stageDecisions. One entry per stage, in
+ * pipeline order, matching the real StageDecisionDto shape exactly.
+ *
+ * The single place the mock decides anything stage-shaped: mockApi.updateStage consults this
+ * rather than re-deriving, so the mock cannot advertise an option it would then refuse.
+ */
+function mockStageDecisions(ticket, user) {
+  return DEAL_STAGE_CATALOG.stages.map(({ code, no }) => {
+    let blockedReason = null;
+    if (!mockCanWriteStage(user, ticket, code)) {
+      blockedReason = 'ไม่มีสิทธิ์เข้าถึงรายการนี้';
+    } else if (ticket.lifecycle === 'CLOSED_LOST') {
+      blockedReason = 'ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ';
+    } else if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+      blockedReason = `ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงแก้ไขขั้นตอนนี้ไม่ได้`;
+    } else if (code === ticket.salesStage) {
+      blockedReason = `ดีลนี้อยู่ในขั้นตอน ${code} อยู่แล้ว`;
+    } else if (MOCK_FACT_GATED_STAGES.has(code)) {
+      // The stub, not a copy of requireStageFactsHold — see the block comment above.
+      blockedReason = `เลื่อนไปขั้นตอน ${code} ไม่ได้: ขั้นตอนนี้อัปเดตอัตโนมัติจากขั้นตอนของดีล`
+        + ' (โหมดจำลองไม่รองรับการตั้งค่าด้วยมือ)';
+    } else if (dealStageIndex(code) > dealStageIndex(ticket.salesStage)) {
+      const sinceIso = dealLastStageChangeAt(ticket.events, ticket.createdAt);
+      const hasRecentActivity = dealHasActivitySince(dealActivitiesForTicket(ticket.id), sinceIso);
+      if (!dealIsReadyToAdvance(ticket, hasRecentActivity)) {
+        blockedReason = DEAL_STAGE_ADVANCE_GATE_MESSAGE;
+      }
+    }
+    // requiresReason is deliberately always false here — see the block comment above.
+    return { stage: code, no, allowed: blockedReason === null, requiresReason: false, blockedReason };
+  });
+}
+
 // Deal pipeline (V50): mirrors TicketService.autoAdvanceStage — monotonic
 // forward-only, no-op while lost. Called from the 4 milestone transitions.
 function autoAdvanceStage(ticket, targetStage, user) {
@@ -4052,6 +4139,9 @@ export const api = {
     async actions(id) {
       const { user, ticket } = requireTicketViewer(id);
       const active = (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE';
+      // Computed once and used for both halves of the response: the ADVANCE_STAGE/UPDATE_STAGE
+      // verbs below are derived from it, and it ships to the client as stageDecisions.
+      const stageDecisions = mockStageDecisions(ticket, user);
       const availableActions = [];
       const add = (action, kind, label, extra = {}) => availableActions.push({ action, kind, label, ...extra });
       const owner = user.role === 'sales' && ticket.createdById === user.id;
@@ -4105,8 +4195,11 @@ export const api = {
         }
         if (ticket.createdById === user.id && !['closed', 'cancelled'].includes(ticket.status)) add('CANCEL', 'operational', 'ยกเลิก');
         if (owner && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(ticket.status)) add('EDIT_ITEMS', 'operational', 'แก้ไขรายการ');
-        for (const stage of ['LEAD_APPROACH','PRESENTATION','SPEC_APPROVED','QUOTE_DESIGN_SIDE','OWNER_SIGNOFF','AWAITING_BUYER','QUOTE_BUYER','NEGOTIATION','ORDER_RECEIVED','DEPOSIT_RECEIVED','PROCUREMENT','DELIVERY_SCHEDULING','DELIVERED','CLOSED_PAID']) {
-          if (stage !== ticket.salesStage && dealCanSetStage(user, ticket, stage)) add('ADVANCE_STAGE', 'stage', 'เลื่อนสถานะ', { targetStage: stage });
+        // Mirrors TicketService.addStageActions: derived from the decisions, so the mock can
+        // never advertise a stage it would then refuse. The hardcoded 14-stage array that used to
+        // live here was the third copy of DealStage.ORDER and had gone stale on QUOTE_OWNER.
+        for (const decision of stageDecisions.filter((d) => d.allowed)) {
+          add('ADVANCE_STAGE', 'stage', 'เลื่อนสถานะ', { targetStage: decision.stage });
         }
         if (availableActions.some((a) => a.kind === 'stage')) add('UPDATE_STAGE', 'stage', 'แก้ไขสถานะ', { requiredFields: ['stage'] });
         if (dealOwner) {
@@ -4132,6 +4225,7 @@ export const api = {
           status: ticket.status,
         },
         availableActions,
+        stageDecisions,
       });
     },
 
@@ -4316,7 +4410,7 @@ export const api = {
     async cancel(id, payload = {}) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!DEAL_CANCEL_REASONS.some((r) => r.code === payload.reason)) {
+      if (!DEAL_STAGE_CATALOG.cancelReasons.includes(payload.reason)) {
         fail(`ไม่รองรับเหตุผลการยกเลิก '${payload.reason}'`, 400);
       }
       if (ticket.status === 'closed' || ticket.status === 'cancelled') fail('ไม่สามารถยกเลิกได้', 409);
@@ -4519,26 +4613,17 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
       if (dealStageIndex(payload.stage) < 0) fail(`ไม่รองรับสถานะขั้นตอนการขาย '${payload.stage}'`, 400);
-      if (!dealCanSetStage(user, ticket, payload.stage)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      // Lifecycle, not lostReason: a reopened deal is ACTIVE and keeps its reason (V57).
-      if (ticket.lifecycle === 'CLOSED_LOST') fail('ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ', 409);
-      if (ticket.salesStage === payload.stage) fail(`ดีลนี้อยู่ในขั้นตอน ${payload.stage} อยู่แล้ว`, 409);
-      const backward = dealStageIndex(payload.stage) < dealStageIndex(ticket.salesStage)
-        && !isRoutineBackwardMove(ticket.salesStage, payload.stage);
-      const skipForward = dealStageIndex(payload.stage) - dealStageIndex(ticket.salesStage) > 1;
-      if (backward && !(payload.note || '').trim()) fail('การย้อนสถานะกลับต้องระบุเหตุผล', 400);
-      if (skipForward && !(payload.note || '').trim()) fail('การข้ามขั้นตอนต้องระบุเหตุผล', 400);
-      // Deal tracking (V83, Slice B1/B2 — handoff 103): mirrors TicketService.updateStage's
-      // forward-move gate exactly (strictly-greater target index, not merely "not backward" —
-      // see handoff 103's "The Gate Rule" for why that distinction matters for the routine
-      // QUOTE_DESIGN_SIDE → SPEC_APPROVED move). Approximates the Java service, per CLAUDE.md —
-      // the real enforcement is DealTrackingAndActivityIntegrationTest against the real service.
-      const forward = dealStageIndex(payload.stage) > dealStageIndex(ticket.salesStage);
-      if (forward) {
-        const sinceIso = dealLastStageChangeAt(ticket.events, ticket.createdAt);
-        const hasRecentActivity = dealHasActivitySince(dealActivitiesForTicket(ticket.id), sinceIso);
-        if (!dealIsReadyToAdvance(ticket, hasRecentActivity)) fail(DEAL_STAGE_ADVANCE_GATE_MESSAGE, 400);
+      // Enforced from the SAME decision list actions() serves, never re-derived — so an option the
+      // mock offered is an option the mock accepts, and there is one place to read. The status is
+      // approximated (403 for the permission message, 409 otherwise) because the mock's decisions
+      // carry a reason, not a status code; the real service's codes are pinned by
+      // StageDecisionIntegrationTest.
+      const decision = mockStageDecisions(ticket, user).find((d) => d.stage === payload.stage);
+      if (!decision.allowed) {
+        fail(decision.blockedReason, decision.blockedReason === 'ไม่มีสิทธิ์เข้าถึงรายการนี้' ? 403 : 409);
       }
+      // NO note requirement here. DealStage.requiresJustification is a backend decision and the
+      // mock does not mirror it — see the "what this mock will and will not decide" block above.
       const fromStage = ticket.salesStage;
       ticket.salesStage = payload.stage;
       ticket.stageUpdatedAt = new Date().toISOString();
@@ -4550,8 +4635,8 @@ export const api = {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
-      if (!DEAL_LOST_REASONS.some((r) => r.code === payload.reason)) fail(`ไม่รองรับเหตุผลการเสียงาน '${payload.reason}'`, 400);
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!DEAL_STAGE_CATALOG.lostReasons.includes(payload.reason)) fail(`ไม่รองรับเหตุผลการเสียงาน '${payload.reason}'`, 400);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (ticket.lifecycle === 'CLOSED_LOST') fail('ดีลนี้ถูกทำเครื่องหมายเสียงานไปแล้ว', 409);
       ticket.lostReason = payload.reason;
       ticket.lostAt = new Date().toISOString();
@@ -4566,7 +4651,7 @@ export const api = {
     async reopen(id, payload = {}) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (ticket.lifecycle !== 'CLOSED_LOST' || ticket.lostReason == null) fail('ดีลนี้ยังไม่ได้ถูกทำเครื่องหมายเสียงาน', 409);
       // lostReason/lostAt deliberately PRESERVED (V57): erasing them left the row
       // indistinguishable from one never lost, so "why did we lose this before we
@@ -4582,7 +4667,7 @@ export const api = {
     async hold(id, payload = {}) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
       ticket.lifecycle = 'ON_HOLD';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -4593,7 +4678,7 @@ export const api = {
     async dormant(id, payload = {}) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!['ACTIVE', 'ON_HOLD'].includes(ticket.lifecycle ?? 'ACTIVE')) fail('พัก dormant ได้เฉพาะดีลที่ active หรือ on hold', 409);
       ticket.lifecycle = 'DORMANT';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -4604,7 +4689,7 @@ export const api = {
     async resume(id, payload = {}) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!['ON_HOLD', 'DORMANT'].includes(ticket.lifecycle)) fail('ดำเนินการต่อได้เฉพาะดีลที่พักไว้', 409);
       ticket.lifecycle = 'ACTIVE';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -4615,7 +4700,7 @@ export const api = {
     async setTenderRequirement(id, payload) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
       if (!['REQUIRED', 'NOT_REQUIRED', 'UNKNOWN'].includes(payload.value)) fail(`ไม่รองรับเงื่อนไขการประมูล '${payload.value}'`, 400);
       ticket.tenderRequirement = payload.value;
@@ -4627,7 +4712,7 @@ export const api = {
     async setEntryChannel(id, payload) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
       if (!['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].includes(payload.value)) fail(`ไม่รองรับช่องทางรับงาน '${payload.value}'`, 400);
       // Mirrors TicketService.setEntryChannel's changingExistingNonDefault: both DESIGNER_LED and
@@ -4662,7 +4747,7 @@ export const api = {
 
     // ── Deal tracking + activity (V83, Slice B1/B2 "kill the weekly report" —
     // handoff 103). Mirrors TicketController's addActivity/activities/updateTracking
-    // and TicketService's requireDealOwnership gate (reuses dealCanMarkLost — the
+    // and TicketService's requireDealOwnership gate (reuses mockCanDealOwnership — the
     // same check backing markLost/reopen/hold/dormant/resume above, since the real
     // service's requireDealOwnership is one shared method too).
 
@@ -4671,7 +4756,7 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       // Deliberately NOT requireActive: a rep can still log why a deal went quiet
       // on a non-ACTIVE deal (mirrors TicketService.addActivity — see handoff 103).
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!payload?.activityDate) fail('ต้องระบุวันที่ทำกิจกรรม', 400);
       if (!dealIsValidActivityKind(payload?.kind)) fail(`ไม่รองรับประเภทกิจกรรม '${payload?.kind}'`, 400);
       const activity = {
@@ -4691,14 +4776,14 @@ export const api = {
     async listActivities(id) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       return delay({ items: dealActivitiesForTicket(ticket.id) });
     },
 
     async updateTracking(id, payload) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
       if (payload?.winProbability != null
         && (Number(payload.winProbability) < 0 || Number(payload.winProbability) > 100)) {
@@ -7245,6 +7330,18 @@ export const api = {
     },
   },
 
+  // Mirrors DealStageMetaController (ticket/). Canned data, deliberately: the catalog is the same
+  // fifteen constants for every caller, and data/dealStageCatalog.js is checked against
+  // DealStage.java by features/tickets/stageCatalog.test.js so this fixture cannot go stale the
+  // way the frontend's old hand-written stage list did. Authenticated-only on the real endpoint,
+  // no role gate — the payload carries no business data.
+  meta: {
+    async dealStages() {
+      requireSession();
+      return delay(DEAL_STAGE_CATALOG);
+    },
+  },
+
   // Mirrors FactoryConfigController + FactoryEmailService (factory/).
   // #388: list() mirrors FactoryConfigController.READ_ROLES = ceo/import — the
   // supplier directory is procurement data. It was requireSession() before.
@@ -8838,7 +8935,12 @@ export const api = {
       }
       // Rule 7: reuse the EXACT SAME stage-advance the legacy quotation() mock action already
       // performs — not a second path.
-      if (['DESIGNER', 'OWNER'].includes(preview.recipientType)) autoAdvanceStage(ticket, 'QUOTE_DESIGN_SIDE', user);
+      // Mirrors TicketService.stageForQuotationRecipient. V143 split the recipients that used to
+      // collapse onto one stage: DESIGNER -> S4, OWNER -> S5, BUYER -> S8. This line routed OWNER
+      // to QUOTE_DESIGN_SIDE until now, so issuing an owner quotation in mock mode advanced the
+      // deal to the designer's milestone and "has the owner been quoted?" stayed unanswerable.
+      if (preview.recipientType === 'DESIGNER') autoAdvanceStage(ticket, 'QUOTE_DESIGN_SIDE', user);
+      if (preview.recipientType === 'OWNER') autoAdvanceStage(ticket, 'QUOTE_OWNER', user);
       if (preview.recipientType === 'BUYER') autoAdvanceStage(ticket, 'QUOTE_BUYER', user);
       pushEvent(ticket, user, 'QUOTATION_ISSUED', null, null,
         `ออกใบเสนอราคาลูกค้า ${preview.number} (revision ${preview.quotationRevisionNo})`);

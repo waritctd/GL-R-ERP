@@ -25,9 +25,19 @@ function stubMobile() {
 
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
+  // Imported inside the factory, not at the top of the file: vi.mock is hoisted above every import.
+  const { DEAL_STAGE_CATALOG } = await import('../../data/dealStageCatalog.js');
   return {
     ...actual,
     api: {
+      // The pipeline enumeration (GET /api/meta/deal-stages). Served here as the SAME canned
+      // payload mockApi serves — data/dealStageCatalog.js, which stageCatalog.test.js pins against
+      // DealStage.java — so this fixture cannot quietly describe a pipeline the backend does not
+      // have. A fixture more populated (or differently shaped) than production is the failure mode
+      // CLAUDE.md names; reusing the guarded one is how that is avoided.
+      meta: {
+        dealStages: vi.fn().mockResolvedValue(DEAL_STAGE_CATALOG),
+      },
       tickets: {
         list: vi.fn(),
         create: vi.fn(),
@@ -217,7 +227,7 @@ describe('TicketListPage', () => {
 
   // FIX A (review-remediation): `role="button"` on the `<tr>` pruned every
   // descendant — customer name, ผู้ดูแล, the stage cell (incl. the "เงียบ"
-  // stale badge), and the "ขั้นตอน N/14" progress readout — out of the
+  // stale badge), and the "ขั้นตอน N/15" progress readout — out of the
   // accessibility tree, so a screen reader announced only "เปิดดีล
   // PR-2026-0501, button" and nothing else. The row itself must no longer be
   // focusable or carry a button role; the identity cell's own <Link> is the
@@ -361,7 +371,7 @@ describe('TicketListPage', () => {
     expect(cardScope.getByText(longDeal.customerName).className).not.toContain('truncate');
     expect(cardScope.getByText(longDeal.projectName).className).toContain('ticket-card-project');
     expect(cardScope.getByText(longDeal.createdByName, { exact: false }).className).toContain('ticket-card-owner');
-    expect(cardScope.getByText(/เสนอราคาผู้ออกแบบ\/เจ้าของ/)).toBeTruthy();
+    expect(cardScope.getByText(/เสนอราคาผู้ออกแบบ/)).toBeTruthy();
     expect(cardScope.getByRole('button', { name: 'เปิดดีล PR-2026-0507' })).toBeTruthy();
     expect(screen.getByRole('searchbox', { name: 'ค้นหาดีล' })).toBeTruthy();
     expect(screen.getByRole('button', { name: /สร้างดีลใหม่/ })).toBeTruthy();
@@ -698,7 +708,7 @@ describe('TicketListPage', () => {
   });
 
   // FIX 3/4/5 (review-remediation): the progress column used to show
-  // "N% · ขั้นตอน X/14" (a percentage restating the fraction next to it),
+  // "N% · ขั้นตอน X/15" (a percentage restating the fraction next to it),
   // and a manager-only win% badge lived in that same column — both gone
   // now (owner decision: win% belongs to the forecast in TeamPipelineSummary,
   // not a second progress number). The stale "เงียบ" flag moved to the stage
@@ -717,14 +727,14 @@ describe('TicketListPage', () => {
       const { container } = renderTicketListPage(salesUser);
       await screen.findByText('บริษัท ทดสอบ จำกัด');
 
-      // Deal 501 is QUOTE_DESIGN_SIDE, stage no. 4 of 14. Scoped to its own
+      // Deal 501 is QUOTE_DESIGN_SIDE, stage no. 4 of 15 (V143 added a fifteenth). Scoped to its own
       // row — the table has several rows, all sharing the same
       // `data-label`, so a container-wide query would grab whichever row
       // happens to sort first instead.
       const rows = Array.from(container.querySelectorAll('tr.data-row'));
       const targetRow = rows.find((row) => row.textContent.includes('บริษัท ทดสอบ จำกัด'));
-      const progressCell = within(targetRow).getByText(/ขั้นตอน \d+\/14/).closest('td');
-      expect(progressCell.textContent).toContain('ขั้นตอน 4/14');
+      const progressCell = within(targetRow).getByText(/ขั้นตอน \d+\/15/).closest('td');
+      expect(progressCell.textContent).toContain('ขั้นตอน 4/15');
       expect(progressCell.textContent).not.toMatch(/%/);
     });
 
@@ -734,8 +744,9 @@ describe('TicketListPage', () => {
 
       const rows = Array.from(container.querySelectorAll('tr.data-row'));
       const pausedRow = rows.find((row) => row.textContent.includes('บริษัท พักไว้ จำกัด'));
-      // Deal 504 is NEGOTIATION, stage no. 8 of 14, lifecycle ON_HOLD.
-      const progressCell = within(pausedRow).getByText(/ขั้นตอน 8\/14/).closest('td');
+      // Deal 504 is NEGOTIATION — no. 9 of 15 since V143 inserted QUOTE_OWNER ahead of it (it was
+      // 8 of 14) — lifecycle ON_HOLD.
+      const progressCell = within(pausedRow).getByText(/ขั้นตอน 9\/15/).closest('td');
       expect(progressCell.textContent).toContain('พักไว้ชั่วคราว');
       expect(progressCell.textContent).not.toMatch(/%/);
     });
@@ -773,7 +784,7 @@ describe('TicketListPage', () => {
       const targetRow = rows.find((row) => row.textContent.includes('บริษัท ยกเลิกไม่ระบุขั้นตอน จำกัด'));
       const progressCell = progressCellOf(targetRow);
       expect(progressCell.textContent).toContain('ยกเลิก');
-      expect(progressCell.textContent).not.toMatch(/ขั้นตอน \d+\/14/);
+      expect(progressCell.textContent).not.toMatch(/ขั้นตอน \d+\/15/);
     });
 
     // FIX F6 (review-remediation): showLifecycleBadge used to badge only

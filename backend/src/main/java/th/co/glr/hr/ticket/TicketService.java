@@ -26,6 +26,7 @@ import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.PricingRequestService.CancelOpenForTicketResult;
+import th.co.glr.hr.ticket.TicketResponses.StageDecisionDto;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionDto;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionState;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionsResponse;
@@ -1403,28 +1404,12 @@ public class TicketService {
     // are the deliberate, user-approved exception — following up the team's deals
     // is exactly this role's job. Never extend it beyond these three methods.
 
-    /**
-     * Stages whose manual fallback belongs to the deal owner / sales_manager / ceo.
-     *
-     * <p>{@link DealStage#QUOTE_OWNER} joins the set (V143) for the same reason
-     * {@link DealStage#QUOTE_DESIGN_SIDE} is in it: quoting the owner is a sales action, so when
-     * the automatic advance at quotation-issue time did not happen (a quotation raised outside
-     * the PCR chain, or a stage corrected after the fact) the fallback must belong to the same
-     * three principals — not to account or import, whose money/import stages are separate sets
-     * below. This IS a permission surface: {@link #requireStageWriteAccess} keys off exactly
-     * these three sets, and membership here is what makes the difference between 403 and a write.
-     */
-    private static final Set<String> SALES_TARGET_STAGES = Set.of(
-        DealStage.LEAD_APPROACH, DealStage.PRESENTATION, DealStage.SPEC_APPROVED,
-        DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER, DealStage.OWNER_SIGNOFF,
-        DealStage.AWAITING_BUYER, DealStage.QUOTE_BUYER, DealStage.NEGOTIATION,
-        DealStage.ORDER_RECEIVED, DealStage.DELIVERY_SCHEDULING, DealStage.DELIVERED);
-    /** Money stages — manual fallback for account/ceo (normally auto from payment track). */
-    private static final Set<String> ACCOUNT_TARGET_STAGES = Set.of(
-        DealStage.DEPOSIT_RECEIVED, DealStage.CLOSED_PAID);
-    /** Import stage — manual fallback for import/ceo (normally auto from the IR). */
-    private static final Set<String> IMPORT_TARGET_STAGES = Set.of(
-        DealStage.PROCUREMENT);
+    // The three target-stage sets moved to DealStage (SALES_TARGET_STAGES / ACCOUNT_TARGET_STAGES
+    // / IMPORT_TARGET_STAGES) so that the gate a client is TOLD about and the gate that is
+    // ENFORCED are the same object. They are still a permission surface and
+    // requireStageWriteAccess still keys off exactly them; only their home changed. The client's
+    // copy used to be a hand-maintained literal in the frontend's stageMeta.js, which is the drift
+    // this refactor exists to end.
 
     @Transactional
     public TicketDto updateStage(long ticketId, String targetStage, String note, UserPrincipal actor) {
@@ -1432,24 +1417,7 @@ public class TicketService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับสถานะขั้นตอนการขาย '" + targetStage + "'");
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
-        requireStageWriteAccess(s, targetStage, actor);
-        // Keyed on the lifecycle, not on lost_reason: since V58 the reason SURVIVES
-        // a reopen, so a live reopened deal still carries one. Checked before
-        // requireActive so a lost deal gets this specific message.
-        if (DealLifecycle.CLOSED_LOST.equals(s.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ");
-        }
-        requireActive(s);
-        if (targetStage.equals(s.salesStage())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้อยู่ในขั้นตอน " + targetStage + " อยู่แล้ว");
-        }
-        // The fact gate. Deliberately BEFORE the note and tracking-field rules below: those two ask
-        // "has the rep done the paperwork?", and a deal whose facts do not support the target stage
-        // must be refused whatever the paperwork says. Ordering it after them would have produced
-        // the misleading pair "write a note" -> "…now the fact is missing", and would have let a
-        // reader mistake the note rule for the thing doing the work.
-        requireStageFactsHold(s, targetStage);
+        requireStageMoveAllowed(s, targetStage, actor);
         // ONE decision, two messages. This used to be two independent rules — a backward check
         // with an isRoutineBackwardMove exception bolted on, and a raw `indexOf(target) -
         // indexOf(current) > 1` skip check. The second one demanded a written justification for
@@ -1474,19 +1442,118 @@ public class TicketService {
         // index-wise backward and therefore not forward progress, which is exactly what excludes
         // it here. autoAdvanceStage (the system-driven path) is a separate method entirely and
         // never runs through here, so it is never gated by this block.
-        boolean forward = DealStage.indexOf(targetStage) > DealStage.indexOf(s.salesStage());
-        if (forward) {
-            boolean hasFollowUp = s.nextFollowUpAt() != null;
-            boolean hasRecentActivity = tickets.hasActivitySinceLastStageChange(ticketId);
-            if (!hasFollowUp || !hasRecentActivity) {
-                throw new ApiException(HttpStatus.BAD_REQUEST,
-                    "เลื่อนสถานะไม่ได้: ต้องระบุวันติดตามครั้งถัดไป และบันทึกกิจกรรมอย่างน้อย 1 รายการหลังเปลี่ยนสถานะล่าสุด");
-            }
+        if (DealStage.indexOf(targetStage) > DealStage.indexOf(s.salesStage())) {
+            requireStageAdvanceReadiness(s, tickets.hasActivitySinceLastStageChange(ticketId));
         }
         tickets.updateSalesStage(ticketId, targetStage);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.STAGE_CHANGED, s.salesStage(), targetStage, blankToNull(note));
         return requireTicket(ticketId);
+    }
+
+    /**
+     * Every gate a manual stage move must clear that does not depend on the note, in the order
+     * {@link #updateStage} has always run them.
+     *
+     * <p>Extracted so that {@link #stageDecisions} can ask the question by <em>calling this and
+     * catching</em> rather than by re-deriving it. That is the whole point of the extraction: a
+     * client that renders "may I move there?" and a server that answers it must not be two
+     * implementations. The frontend previously carried its own copy of the write gate and its own
+     * copy of the note rule, and both had silently gone stale — the copy of the note rule was
+     * still the pre-#704 single hardcoded pair, so the UI demanded a written reason for exactly
+     * the routes this service had just started accepting without one.
+     *
+     * <p>The note rule ({@link DealStage#requiresJustification}) is deliberately NOT here: it is
+     * not a question of whether the move is permitted, only of what must accompany it, and it
+     * surfaces on the decision as {@code requiresReason} rather than as a refusal. The forward
+     * readiness gate is not here either, because {@link #updateStage} runs it AFTER the note rule
+     * and moving it earlier would change which of two 400s a caller sees; see
+     * {@link #requireStageAdvanceReadiness}.
+     */
+    private void requireStageMoveAllowed(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
+        requireStageWriteAccess(s, targetStage, actor);
+        // Keyed on the lifecycle, not on lost_reason: since V58 the reason SURVIVES
+        // a reopen, so a live reopened deal still carries one. Checked before
+        // requireActive so a lost deal gets this specific message.
+        if (DealLifecycle.CLOSED_LOST.equals(s.lifecycle())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ");
+        }
+        requireActive(s);
+        if (targetStage.equals(s.salesStage())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้อยู่ในขั้นตอน " + targetStage + " อยู่แล้ว");
+        }
+        // The fact gate. Deliberately BEFORE the note and tracking-field rules: those two ask
+        // "has the rep done the paperwork?", and a deal whose facts do not support the target stage
+        // must be refused whatever the paperwork says. Ordering it after them would have produced
+        // the misleading pair "write a note" -> "…now the fact is missing", and would have let a
+        // reader mistake the note rule for the thing doing the work.
+        requireStageFactsHold(s, targetStage);
+    }
+
+    /**
+     * The Slice B1 "kill the weekly report" readiness gate, extracted for the same reason as
+     * {@link #requireStageMoveAllowed} — {@link #stageDecisions} calls it and catches.
+     *
+     * <p>{@code hasRecentActivity} is passed in rather than read here so the decision builder can
+     * make the repository round-trip <strong>once</strong> for all fifteen stages instead of
+     * fifteen times; it is the same {@code tickets.hasActivitySinceLastStageChange(ticketId)}
+     * value either way. Deliberately independent of the target stage: the gate asks about the
+     * deal's own bookkeeping, not about where it is going, so every forward target shares one
+     * answer.
+     */
+    private void requireStageAdvanceReadiness(TicketSummaryDto s, boolean hasRecentActivity) {
+        if (s.nextFollowUpAt() == null || !hasRecentActivity) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "เลื่อนสถานะไม่ได้: ต้องระบุวันติดตามครั้งถัดไป และบันทึกกิจกรรมอย่างน้อย 1 รายการหลังเปลี่ยนสถานะล่าสุด");
+        }
+    }
+
+    /**
+     * Per-stage verdicts for this caller on this deal — one entry for every stage in
+     * {@link DealStage#ORDER}, including the deal's current one.
+     *
+     * <p><strong>This is the client's answer to "where may I move this deal, and what will it
+     * cost me?", and it is produced by running the real gates.</strong> Each entry comes from
+     * calling {@link #requireStageMoveAllowed} (plus {@link #requireStageAdvanceReadiness} for a
+     * forward target) inside a try/catch and reading the verdict off whether an
+     * {@link ApiException} came back — the same technique the removed {@code canSetStage} used for
+     * the write gate alone. There is therefore exactly one implementation of "can this stage be
+     * reached", and a UI rendering these decisions cannot drift from it, because it has nothing
+     * of its own to drift with.
+     *
+     * <p>{@code blockedReason} is the refused call's own message, so the tooltip a rep reads
+     * before clicking is verbatim the error they would have got by clicking. That makes it the one
+     * deliberate exception to "user-facing Thai copy lives in the frontend": only this service
+     * knows <em>why</em> a specific stage is refused, and duplicating fifteen reasons client-side
+     * would recreate the problem this method exists to remove.
+     *
+     * <p>{@code requiresReason} is {@link DealStage#requiresJustification} — not a refusal, a
+     * cost. It is reported even for a blocked stage: whether a note would be needed does not
+     * depend on the gates, and suppressing it would make the field's meaning conditional.
+     *
+     * <p>Cost: one extra {@code hasActivitySinceLastStageChange} query per {@link #actions} call,
+     * hoisted out of the loop. The gates themselves touch no repository.
+     */
+    private List<StageDecisionDto> stageDecisions(TicketSummaryDto s, UserPrincipal actor) {
+        boolean hasRecentActivity = tickets.hasActivitySinceLastStageChange(s.id());
+        List<StageDecisionDto> decisions = new ArrayList<>(DealStage.ORDER.size());
+        for (String target : DealStage.ORDER) {
+            String blockedReason = null;
+            try {
+                requireStageMoveAllowed(s, target, actor);
+                if (DealStage.indexOf(target) > DealStage.indexOf(s.salesStage())) {
+                    requireStageAdvanceReadiness(s, hasRecentActivity);
+                }
+            } catch (ApiException e) {
+                blockedReason = e.getMessage();
+            }
+            decisions.add(new StageDecisionDto(target, DealStage.displayNoOf(target),
+                blockedReason == null,
+                DealStage.requiresJustification(s.salesStage(), target),
+                blockedReason));
+        }
+        return decisions;
     }
 
     /**
@@ -1903,18 +1970,18 @@ public class TicketService {
         if ("ceo".equals(role)) {
             return;
         }
-        if (SALES_TARGET_STAGES.contains(targetStage)) {
+        if (DealStage.SALES_TARGET_STAGES.contains(targetStage)) {
             if ("sales_manager".equals(role)) {
                 return;
             }
             if (SALES_ROLES.contains(role) && s.createdById() == actor.id()) {
                 return;
             }
-        } else if (ACCOUNT_TARGET_STAGES.contains(targetStage)) {
+        } else if (DealStage.ACCOUNT_TARGET_STAGES.contains(targetStage)) {
             if ("account".equals(role)) {
                 return;
             }
-        } else if (IMPORT_TARGET_STAGES.contains(targetStage)) {
+        } else if (DealStage.IMPORT_TARGET_STAGES.contains(targetStage)) {
             if (IMPORT_ROLES.contains(role)) {
                 return;
             }
@@ -2149,10 +2216,11 @@ public class TicketService {
         TicketDto ticket = requireViewAccess(ticketId, actor);
         TicketSummaryDto s = ticket.summary();
         List<TicketActionDto> actions = new ArrayList<>();
+        List<StageDecisionDto> decisions = stageDecisions(s, actor);
         boolean active = DealLifecycle.ACTIVE.equals(s.lifecycle());
         if (active) {
             addOperationalActions(actions, ticket, actor);
-            addStageActions(actions, s, actor);
+            addStageActions(actions, decisions);
             addPolicyActions(actions, s, actor);
             // Slice S1 "engine collapse": addQuotationActions (MARK_QUOTATION_SENT/
             // ACCEPTED/REJECTED) was removed — those verbs pointed at retired
@@ -2175,7 +2243,7 @@ public class TicketService {
         }
         TicketActionState state = new TicketActionState(s.lifecycle(), s.salesStage(), s.paymentStatus(),
             s.fulfillmentStatus(), s.status());
-        return new TicketActionsResponse(state, actions);
+        return new TicketActionsResponse(state, actions, decisions);
     }
 
     private void addOperationalActions(List<TicketActionDto> actions, TicketDto ticket, UserPrincipal actor) {
@@ -2239,14 +2307,26 @@ public class TicketService {
         if (canEditItems(s, actor)) actions.add(new TicketActionDto("EDIT_ITEMS", "operational", "แก้ไขรายการ"));
     }
 
-    private void addStageActions(List<TicketActionDto> actions, TicketSummaryDto s, UserPrincipal actor) {
-        for (String target : DealStage.ORDER) {
-            if (target.equals(s.salesStage())) continue;
-            if (canSetStage(s, target, actor)) {
-                actions.add(new TicketActionDto("ADVANCE_STAGE", "stage", "เลื่อนสถานะ", target));
+    /**
+     * ADVANCE_STAGE / UPDATE_STAGE, derived from {@link #stageDecisions} rather than from a second
+     * reading of the gates.
+     *
+     * <p>This used to consult {@code canSetStage} alone — the write gate and nothing else — so it
+     * advertised ADVANCE_STAGE into all four fact-gated stages regardless of whether the fact
+     * held. Clicking one 409'd on {@code requireStageFactsHold}. Advertising an action that dies
+     * on click is worse than not offering it, the same discipline {@link #addOperationalActions}
+     * already documents for the removed legacy actions and {@link #canIssueImportRequest} enforces
+     * by hand; deriving both verbs from the decisions makes it structural instead of remembered.
+     */
+    private void addStageActions(List<TicketActionDto> actions, List<StageDecisionDto> decisions) {
+        boolean any = false;
+        for (StageDecisionDto decision : decisions) {
+            if (decision.allowed()) {
+                actions.add(new TicketActionDto("ADVANCE_STAGE", "stage", "เลื่อนสถานะ", decision.stage()));
+                any = true;
             }
         }
-        if (DealStage.ORDER.stream().anyMatch(target -> !target.equals(s.salesStage()) && canSetStage(s, target, actor))) {
+        if (any) {
             actions.add(new TicketActionDto("UPDATE_STAGE", "stage", "แก้ไขสถานะ", List.of("stage")));
         }
     }
@@ -2456,14 +2536,11 @@ public class TicketService {
                       TicketStatus.PRICE_PROPOSED).contains(s.status());
     }
 
-    private boolean canSetStage(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
-        try {
-            requireStageWriteAccess(s, targetStage, actor);
-            return true;
-        } catch (ApiException e) {
-            return false;
-        }
-    }
+    // canSetStage(s, targetStage, actor) — a try/catch around requireStageWriteAccess — is gone.
+    // It answered a strictly weaker question than the one its only caller (addStageActions) needed:
+    // "may this role write this stage?" rather than "can this deal reach it?", which is why
+    // ADVANCE_STAGE was advertised into fact-gated stages that 409 on click. stageDecisions runs
+    // the full gate chain by the same try/catch technique and addStageActions now reads it.
 
     private TicketDto requireTicket(long id) {
         return tickets.findById(id)

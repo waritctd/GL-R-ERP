@@ -1,6 +1,7 @@
 package th.co.glr.hr.ticket;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -101,6 +102,125 @@ public final class DealStage {
      */
     private static final Set<String> MANDATORY = Set.of(
         NEGOTIATION, ORDER_RECEIVED, DELIVERY_SCHEDULING, DELIVERED, CLOSED_PAID);
+
+    // ── Write gates ─────────────────────────────────────────────────────────────────────────
+    //
+    // These three sets moved here from TicketService (where they were private static fields) so
+    // that ONE definition serves both enforcement and description. TicketService.
+    // requireStageWriteAccess still keys off exactly these sets — membership here is what makes
+    // the difference between a 403 and a write — and {@link #gateOf} now reads the same sets to
+    // tell a client which department owns a stage. Before this move the client's copy of the
+    // gate lived in the frontend's stageMeta.js as a hand-maintained literal, which is precisely
+    // the drift this class is being consolidated to end. Do not re-declare a gate anywhere else.
+
+    /**
+     * Stages whose manual fallback belongs to the deal owner / sales_manager / ceo.
+     *
+     * <p>{@link #QUOTE_OWNER} is in the set (V143) for the same reason {@link #QUOTE_DESIGN_SIDE}
+     * is: quoting the owner is a sales action, so when the automatic advance at quotation-issue
+     * time did not happen (a quotation raised outside the PCR chain, or a stage corrected after
+     * the fact) the fallback must belong to the same three principals — not to account or import,
+     * whose money/import stages are the separate sets below.
+     */
+    public static final Set<String> SALES_TARGET_STAGES = Set.of(
+        LEAD_APPROACH, PRESENTATION, SPEC_APPROVED,
+        QUOTE_DESIGN_SIDE, QUOTE_OWNER, OWNER_SIGNOFF,
+        AWAITING_BUYER, QUOTE_BUYER, NEGOTIATION,
+        ORDER_RECEIVED, DELIVERY_SCHEDULING, DELIVERED);
+    /** Money stages — manual fallback for account/ceo (normally auto from the payment track). */
+    public static final Set<String> ACCOUNT_TARGET_STAGES = Set.of(
+        DEPOSIT_RECEIVED, CLOSED_PAID);
+    /** Import stage — manual fallback for import/ceo (normally auto from the IR). */
+    public static final Set<String> IMPORT_TARGET_STAGES = Set.of(PROCUREMENT);
+
+    public static final String GATE_SALES = "sales";
+    public static final String GATE_ACCOUNT = "account";
+    public static final String GATE_IMPORT = "import";
+
+    /**
+     * Which department owns the manual fallback for {@code stage} — read straight off the three
+     * target sets above, never a second literal. Null for an unknown code.
+     *
+     * <p>The three sets partition {@link #ORDER} exactly (12 + 2 + 1 = 15), a property
+     * {@code DealStageTest} asserts, so every real stage has exactly one gate.
+     */
+    public static String gateOf(String stage) {
+        if (SALES_TARGET_STAGES.contains(stage)) return GATE_SALES;
+        if (ACCOUNT_TARGET_STAGES.contains(stage)) return GATE_ACCOUNT;
+        if (IMPORT_TARGET_STAGES.contains(stage)) return GATE_IMPORT;
+        return null;
+    }
+
+    /**
+     * Stages the deal normally reaches on its own, from an operational transition rather than a
+     * rep picking them out of a list: {@code confirmCustomer} → ORDER_RECEIVED,
+     * {@code reconcilePaymentStatus} → DEPOSIT_RECEIVED, {@code issueImportRequest} →
+     * PROCUREMENT, {@code maybeAdvanceClosedPaid} → CLOSED_PAID. Read off this class's own
+     * "Auto-advanced stages" header, which lists exactly these four.
+     *
+     * <p>Purely descriptive — it changes no gate. A UI uses it to explain where a stage comes
+     * from instead of offering a one-click advance into it; the manual fallback still exists and
+     * is still governed by the target sets above (and, for all four of these, by
+     * {@code TicketService.requireStageFactsHold}).
+     *
+     * <p>DELIVERY_SCHEDULING is deliberately absent although {@code recordDelivery} and
+     * {@code reserveStock} auto-advance into it: the rep also reaches it by hand as a normal part
+     * of the flow, so presenting it as "the system does this for you" would be wrong.
+     */
+    private static final Set<String> AUTO_ADVANCED = Set.of(
+        ORDER_RECEIVED, DEPOSIT_RECEIVED, PROCUREMENT, CLOSED_PAID);
+
+    public static boolean isAutoAdvanced(String stage) {
+        return AUTO_ADVANCED.contains(stage);
+    }
+
+    /** The five phases of the pipeline, from this class's own section headers. */
+    private static final Map<String, Integer> PHASE = Map.ofEntries(
+        Map.entry(LEAD_APPROACH, 1), Map.entry(PRESENTATION, 1),
+        Map.entry(SPEC_APPROVED, 2), Map.entry(QUOTE_DESIGN_SIDE, 2),
+        Map.entry(QUOTE_OWNER, 2), Map.entry(OWNER_SIGNOFF, 2),
+        Map.entry(AWAITING_BUYER, 3), Map.entry(QUOTE_BUYER, 3), Map.entry(NEGOTIATION, 3),
+        Map.entry(ORDER_RECEIVED, 4), Map.entry(DEPOSIT_RECEIVED, 4), Map.entry(PROCUREMENT, 4),
+        Map.entry(DELIVERY_SCHEDULING, 5), Map.entry(DELIVERED, 5), Map.entry(CLOSED_PAID, 5));
+
+    /** 1-based phase, or 0 for an unknown code. */
+    public static int phaseOf(String stage) {
+        return PHASE.getOrDefault(stage, 0);
+    }
+
+    /**
+     * The owner's S1–S20 sheet number for each stage — the business's own identifier, distinct
+     * from {@link #displayNoOf}.
+     *
+     * <p><strong>The two genuinely differ and always will</strong>, which is why both are served
+     * rather than one being derived from the other. {@code PROCUREMENT} is a single pipeline
+     * stage covering six sheet steps (S12–S17), so the sheet runs to S20 while the pipeline has
+     * 15 entries; and V143 inserting {@link #QUOTE_OWNER} moved every later display number by one
+     * while changing no sheet number at all. A client that shows "4." next to a stage is showing
+     * the display sequence; a client discussing "S12" with the CEO is using this.
+     */
+    private static final Map<String, String> BUSINESS_CODE = Map.ofEntries(
+        Map.entry(LEAD_APPROACH, "S1"), Map.entry(PRESENTATION, "S2"),
+        Map.entry(SPEC_APPROVED, "S3"), Map.entry(QUOTE_DESIGN_SIDE, "S4"),
+        Map.entry(QUOTE_OWNER, "S5"), Map.entry(OWNER_SIGNOFF, "S6"),
+        Map.entry(AWAITING_BUYER, "S7"), Map.entry(QUOTE_BUYER, "S8"),
+        Map.entry(NEGOTIATION, "S9"), Map.entry(ORDER_RECEIVED, "S10"),
+        Map.entry(DEPOSIT_RECEIVED, "S11"), Map.entry(PROCUREMENT, "S12–S17"),
+        Map.entry(DELIVERY_SCHEDULING, "S18"), Map.entry(DELIVERED, "S19"),
+        Map.entry(CLOSED_PAID, "S20"));
+
+    public static String businessCodeOf(String stage) {
+        return BUSINESS_CODE.get(stage);
+    }
+
+    /**
+     * The 1-based DISPLAY sequence — what a stepper prints beside a stage. See
+     * {@link #BUSINESS_CODE} for why this is not the S-number. 0 for an unknown code.
+     */
+    public static int displayNoOf(String stage) {
+        int idx = indexOf(stage);
+        return idx < 0 ? 0 : idx + 1;
+    }
 
     /** 0-based position in the pipeline, or -1 for an unknown code. */
     public static int indexOf(String stage) {
