@@ -27,6 +27,7 @@ import { DEAL_STAGE_CATALOG } from '../data/dealStageCatalog.js';
 // WinProbabilityDefaults.java / DealActivityKind.java / TicketService.updateStage.
 import {
   computeStale as dealComputeStale,
+  effectiveWinProbability as dealEffectiveWinProbability,
   hasActivitySince as dealHasActivitySince,
   isReadyToAdvance as dealIsReadyToAdvance,
   isValidActivityKind as dealIsValidActivityKind,
@@ -2519,11 +2520,19 @@ function buildTicketDetail(ticket) {
       closeConfirmedAt: ticket.closeConfirmedAt ?? null,
       closeConfirmedByName: ticket.closeConfirmedByName ?? null,
       invoiceOnFile: hasInvoiceAttachment(ticket),
-      // Deal tracking fields (V83, Slice B1/B2 — handoff 103). effectiveWinProbability is
-      // deliberately NOT included here: it's a Java record method, not a component, so the
-      // real backend never serializes it either — see dealTrackingMeta.js's doc comment.
-      // Every consumer derives it from winProbabilityOverride + salesStage instead.
+      // Deal tracking fields (V83, Slice B1/B2 — handoff 103).
+      //
+      // effectiveWinProbability IS served now (issue #738): the real TicketSummaryDto computes it
+      // and, since it was made a Jackson property, sends it. It used to be omitted here on the
+      // correct grounds that the backend did not serialize it either — which meant the UI had to
+      // re-derive it from a copied table, and #714 is what that cost. Computed via
+      // dealTrackingMeta's mirror, which stageCatalog-style guards keep honest against
+      // WinProbabilityDefaults.java; per CLAUDE.md that makes mock-driven tests evidence about
+      // plumbing here, never about the number itself.
       winProbabilityOverride: ticket.winProbabilityOverride ?? null,
+      effectiveWinProbability: dealEffectiveWinProbability(
+        ticket.winProbabilityOverride ?? null, ticket.salesStage,
+      ),
       designerName: ticket.designerName ?? null,
       ownerName: ticket.ownerName ?? null,
       buyerName: ticket.buyerName ?? null,
@@ -4042,8 +4051,13 @@ export const api = {
         invoiceOnFile: hasInvoiceAttachment(t),
         // Deal tracking fields (V83, Slice B1/B2 — handoff 103) — same fields as
         // buildTicketDetail's summary, so the manager pipeline view (TicketListPage)
-        // has win%/stale without a per-row detail fetch.
+        // has win%/stale without a per-row detail fetch. effectiveWinProbability must be
+        // here and not only on the detail projection: TicketListPage's win-weighted
+        // forecast sums it across LIST rows (issue #738).
         winProbabilityOverride: t.winProbabilityOverride ?? null,
+        effectiveWinProbability: dealEffectiveWinProbability(
+          t.winProbabilityOverride ?? null, t.salesStage,
+        ),
         designerName: t.designerName ?? null,
         ownerName: t.ownerName ?? null,
         buyerName: t.buyerName ?? null,

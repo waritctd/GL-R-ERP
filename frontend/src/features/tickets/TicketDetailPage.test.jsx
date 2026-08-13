@@ -1522,17 +1522,25 @@ describe('TicketDetailPage', () => {
   // (the default tab — see ticketDetailTabs.js's own comment on that tab),
   // so these no longer call openTab at all.
   describe('deal tracking panel', () => {
-    it('shows the section and the win% default; the pre-emptive gate hint now sits next to the advance button, not here', async () => {
+    it('shows the section and the SERVER win%; the pre-emptive gate hint now sits next to the advance button, not here', async () => {
       api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({ summary: { salesStage: 'QUOTE_DESIGN_SIDE' } }),
+        ticket: buildTicket({
+          // Issue #738: the panel now renders TicketSummaryDto.effectiveWinProbability off the
+          // payload instead of re-deriving it from a copied stage→% table, so the fixture must
+          // supply it. 37 is deliberately a value NO stage default holds — if this ever reads 40
+          // again the panel has gone back to deriving from QUOTE_DESIGN_SIDE, and if it reads 0
+          // the field stopped being read at all. Both are visible failures rather than a number
+          // that happens to agree.
+          summary: { salesStage: 'QUOTE_DESIGN_SIDE', effectiveWinProbability: 37 },
+        }),
       });
 
       renderTicketDetailPage(ceoUser);
 
       expect(await screen.findByRole('heading', { level: 2, name: 'การติดตามดีล' })).not.toBeNull();
       expect(await screen.findByText('ยังไม่พร้อม')).not.toBeNull();
-      // QUOTE_DESIGN_SIDE's stage default (WIN_PROBABILITY_DEFAULTS) — no override set.
-      expect(screen.getByText('40%')).not.toBeNull();
+      expect(screen.getByText('37%')).not.toBeNull();
+      expect(screen.queryByText('40%')).toBeNull();
       // Ticket-detail IA rebuild Phase 1 (Phase-1 audit finding #3, "y=870"):
       // the descriptive gate sentence moved out of this panel entirely — it
       // now renders next to DealStagePanel's "เลื่อนไป" button instead (see

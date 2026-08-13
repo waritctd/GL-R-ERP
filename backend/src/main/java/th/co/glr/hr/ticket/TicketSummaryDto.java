@@ -1,5 +1,6 @@
 package th.co.glr.hr.ticket;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -71,7 +72,23 @@ public record TicketSummaryDto(
      */
     boolean stale
 ) {
-    /** Override wins when set, else the {@link DealStage}-derived default. Never a blocker. */
+    /**
+     * Override wins when set, else the {@link DealStage}-derived default. Never a blocker.
+     *
+     * <p><b>{@code @JsonProperty} is what makes this reach the client, and it is the point.</b>
+     * Jackson serializes a record's COMPONENTS; an extra method is invisible to it unless
+     * annotated. So this number was computed here and never sent, and the frontend re-derived it
+     * from a hand-copied table (`features/tickets/dealTrackingMeta.js`) to render the win-weighted
+     * pipeline forecast — the last surviving instance of the pattern #712 (commission tiers) and
+     * #713 (stage rules) removed, and #714 was a live example of it going wrong: V143 inserted
+     * QUOTE_OWNER, the copy was not updated, and every S5 deal quietly contributed 0% to a
+     * money-shaped forecast. See issue #738.
+     *
+     * <p>{@code READ_ONLY} because there is no matching record component to deserialize into:
+     * this record is serialize-only on the wire, and the access mode says so rather than relying
+     * on nobody ever pointing Jackson at it in the other direction.
+     */
+    @JsonProperty(value = "effectiveWinProbability", access = JsonProperty.Access.READ_ONLY)
     public int effectiveWinProbability() {
         return WinProbabilityDefaults.effective(winProbabilityOverride, salesStage);
     }
