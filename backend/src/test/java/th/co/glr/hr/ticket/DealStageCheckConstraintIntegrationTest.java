@@ -22,9 +22,14 @@ import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
- * THE GUARD THIS CLASS EXISTS TO ADD: {@link DealStage#ORDER} and the live
- * {@code chk_ticket_sales_stage} CHECK constraint on {@code sales.ticket} must permit exactly the
- * same set of stage codes.
+ * THE GUARD THIS CLASS EXISTS TO ADD: every value-list CHECK constraint on {@code sales.ticket}
+ * that has a hand-maintained Java mirror must permit exactly what that mirror declares. Two such
+ * pairs exist and both were unguarded:
+ *
+ * <ul>
+ *   <li>{@code chk_ticket_sales_stage} ←→ {@link DealStage#ORDER} (the original, PR #717)</li>
+ *   <li>{@code chk_ticket_lifecycle} ←→ {@link DealLifecycle#VALID} (added 2026-08-13)</li>
+ * </ul>
  *
  * <p>{@code V143__deal_stage_quote_owner.sql} ends with "Keep this set in sync with
  * th.co.glr.hr.ticket.DealStage.ORDER, which is its Java mirror." Nothing enforced that. Add a
@@ -34,16 +39,32 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * V143 added the 15th stage, two Java/JS maps silently stayed at 14, and 1,541 tests were green
  * throughout.
  *
+ * <p><b>The lifecycle pair is the same shape with a different blast radius, and it is worth being
+ * precise about what is and is not wrong with it.</b> {@link DealLifecycle#isValid} is dead code,
+ * and that is <em>not</em> a defect: a lifecycle value is never externally supplied — every {@code
+ * TicketRepository#updateLifecycle} caller passes a {@link DealLifecycle} constant — so there is
+ * nothing to validate, and {@code chk_ticket_lifecycle} is the backstop if that ever changes. Do
+ * not "fix" {@code isValid} or add validation nobody needs. The ONLY gap is that {@code VALID} and
+ * the CHECK could silently drift apart: add a seventh lifecycle to Java with no forward migration
+ * and {@code updateLifecycle} 500s on the first deal that reaches it; widen the CHECK without
+ * updating Java and a row can hold a lifecycle no {@code DealLifecycle} constant names. This class
+ * makes both a red.
+ *
  * <h2>Why the live catalog and not the migration files</h2>
  *
- * <p>The constraint is defined <em>across</em> migrations: V50 created it over 14 stages, V143
- * dropped and re-added it over 15. Migrations are forward-only and never edited in place, so any
- * guard that reads SQL text is reading a snapshot that is already wrong (V50) or will be wrong the
- * next time the constraint moves (V143 → whatever comes next). "Parse the newest file mentioning
+ * <p>The stage constraint is defined <em>across</em> migrations: V50 created it over 14 stages,
+ * V143 dropped and re-added it over 15. Migrations are forward-only and never edited in place, so
+ * any guard that reads SQL text is reading a snapshot that is already wrong (V50) or will be wrong
+ * the next time the constraint moves (V143 → whatever comes next). "Parse the newest file mentioning
  * the constraint" just relocates the fragility. The only definition that is true by construction is
  * the one Postgres holds after every migration has run, which is what {@code pg_get_constraintdef}
  * renders and what a production write is actually checked against. ({@code pg_constraint.consrc}
  * was removed in PostgreSQL 12 — the function is the supported way to read this.)
+ *
+ * <p>{@code chk_ticket_lifecycle} happens to still live in exactly one place today (V51, never
+ * re-declared), which makes it tempting to read that file instead. That would be the wrong lesson:
+ * the stage constraint looked equally single-sourced right up until V143 moved it, and a guard that
+ * reads the catalog needs no maintenance the day the same thing happens here.
  *
  * <p>Two mechanisms are used together, deliberately:
  *
@@ -73,6 +94,7 @@ class DealStageCheckConstraintIntegrationTest extends AbstractPostgresIntegratio
     private static final String SCHEMA = "sales";
     private static final String TABLE = "ticket";
     private static final String CONSTRAINT = "chk_ticket_sales_stage";
+    private static final String LIFECYCLE_CONSTRAINT = "chk_ticket_lifecycle";
 
     /**
      * The stage count that exists today (V143). Used only as a LOWER bound, never an equality: a
@@ -80,6 +102,10 @@ class DealStageCheckConstraintIntegrationTest extends AbstractPostgresIntegratio
      * not here on a count that says nothing about which side drifted.
      */
     private static final int STAGES_TODAY = 15;
+
+    /** The lifecycle count that exists today (V51). A LOWER bound, for the same reason as
+     * {@link #STAGES_TODAY}. */
+    private static final int LIFECYCLES_TODAY = 6;
 
     /**
      * How Postgres renders {@code col IN ('a','b')} for a scalar column — as
@@ -128,7 +154,7 @@ class DealStageCheckConstraintIntegrationTest extends AbstractPostgresIntegratio
      */
     @Test
     void theLiveConstraintIsReadableAndItsValueListIsPlausible() {
-        String definition = liveConstraintDefinition();
+        String definition = liveConstraintDefinition(CONSTRAINT);
 
         assertThat(definition)
             .as("chk_ticket_sales_stage is not shaped like a value list any more — this guard "
@@ -252,6 +278,126 @@ class DealStageCheckConstraintIntegrationTest extends AbstractPostgresIntegratio
         assertThat(stageOfTheDeal()).isEqualTo(DealStage.NEGOTIATION);
     }
 
+    // ═════════════════════════════════════════════════════════════════════════════════════════
+    // The same guard, for chk_ticket_lifecycle ←→ DealLifecycle.VALID (2026-08-13). Same five
+    // shapes in the same order — anti-vacuity on the extraction, the set comparison in both
+    // directions, both probes, anti-vacuity on the probes — because the mirror is the same shape
+    // and a reader who understands one half should not have to re-learn the other.
+    // ═════════════════════════════════════════════════════════════════════════════════════════
+
+    /**
+     * ANTI-VACUITY, the lifecycle half of
+     * {@link #theLiveConstraintIsReadableAndItsValueListIsPlausible()}: a query that matched no
+     * constraint, or a parse that matched no literal, would hand every assertion below an empty
+     * set that trivially satisfies "nothing is missing" in one direction.
+     */
+    @Test
+    void theLiveLifecycleConstraintIsReadableAndItsValueListIsPlausible() {
+        String definition = liveConstraintDefinition(LIFECYCLE_CONSTRAINT);
+
+        assertThat(definition)
+            .as("chk_ticket_lifecycle is not shaped like a value list any more — this guard cannot "
+                + "read it, and a human has to look rather than let it pass")
+            .contains(ARRAY_OPEN);
+
+        Set<String> permitted = permittedLifecycles();
+        assertThat(permitted)
+            .as("read %d value(s) out of %s — the deal lifecycle has had at least %d values since "
+                + "V51, so this is a broken extraction, not a shrunken constraint. Definition: %s",
+                permitted.size(), LIFECYCLE_CONSTRAINT, LIFECYCLES_TODAY, definition)
+            .hasSizeGreaterThanOrEqualTo(LIFECYCLES_TODAY)
+            .contains(DealLifecycle.COMPLETED);
+
+        assertThat(DealLifecycle.VALID)
+            .hasSizeGreaterThanOrEqualTo(LIFECYCLES_TODAY)
+            .contains(DealLifecycle.COMPLETED);
+    }
+
+    /**
+     * THE LIFECYCLE GUARD. Both directions, reported separately because they are different bugs.
+     *
+     * <ul>
+     *   <li><strong>In {@code VALID}, rejected by the constraint</strong> — a lifecycle was added to
+     *       Java with no forward migration. {@code TicketRepository#updateLifecycle} is a bare
+     *       UPDATE with no application-level validation in front of it (by design — see the class
+     *       Javadoc on {@code isValid}), so the first deal moved there dies on the CHECK.
+     *       Fix: add the migration.
+     *   <li><strong>Permitted by the constraint, absent from {@code VALID}</strong> — a migration
+     *       widened the CHECK and Java was not updated, so a row can hold a lifecycle no {@code
+     *       DealLifecycle} constant names and no {@code TicketService} branch handles.
+     *       Fix: add the constant to {@code VALID}.
+     * </ul>
+     */
+    @Test
+    void theConstraintPermitsExactlyTheLifecyclesDealLifecycleValidDeclares() {
+        Set<String> permitted = permittedLifecycles();
+
+        assertThat(permitted)
+            .as("%s permits a value DealLifecycle.VALID does not declare — a migration widened the "
+                + "CHECK and the Java mirror was not updated, so a deal can hold a lifecycle the "
+                + "application has no constant for", LIFECYCLE_CONSTRAINT)
+            .containsExactlyInAnyOrderElementsOf(DealLifecycle.VALID);
+
+        // Stated the other way round as well, so the failure message names the right side of the
+        // mirror whichever one drifted.
+        assertThat(DealLifecycle.VALID)
+            .as("DealLifecycle.VALID declares a lifecycle %s does not permit — updateLifecycle "
+                + "fails with a constraint violation the first time a deal reaches it",
+                LIFECYCLE_CONSTRAINT)
+            .containsExactlyInAnyOrderElementsOf(permitted);
+    }
+
+    /**
+     * Direction 1 behaviourally, with no dependency on the parse: every value in {@link
+     * DealLifecycle#VALID} really is writable through the real repository — the same method every
+     * production caller uses.
+     */
+    @Test
+    void everyLifecycleInValidCanReallyBeWrittenToADeal() {
+        for (String lifecycle : DealLifecycle.VALID) {
+            assertThatCode(() -> tickets.updateLifecycle(ticketId, lifecycle))
+                .as("DealLifecycle.VALID declares %s but sales.ticket refuses it — the forward "
+                    + "migration widening %s is missing", lifecycle, LIFECYCLE_CONSTRAINT)
+                .doesNotThrowAnyException();
+            assertThat(lifecycleOfTheDeal()).isEqualTo(lifecycle);
+        }
+    }
+
+    /**
+     * Direction 2's other half: every value the parse pulled out really is accepted, so
+     * {@link #permittedLifecycles()} is evidence rather than a hopeful regex.
+     */
+    @Test
+    void everyValueTheLifecycleParseCallsPermittedReallyIsAccepted() {
+        for (String value : permittedLifecycles()) {
+            assertThatCode(() -> tickets.updateLifecycle(ticketId, value))
+                .as("this guard read %s as a value %s permits, but sales.ticket refused it — the "
+                    + "extraction is unreliable and the comparison it feeds cannot be trusted",
+                    value, LIFECYCLE_CONSTRAINT)
+                .doesNotThrowAnyException();
+        }
+    }
+
+    /**
+     * ANTI-VACUITY for the two lifecycle probes: the constraint is still ENFORCING. A migration
+     * that dropped {@code chk_ticket_lifecycle} would make every write succeed and both probes pass
+     * while the column accepted anything at all.
+     *
+     * <p>Parked on {@link DealLifecycle#ON_HOLD} rather than on whichever value was added last, for
+     * the same reason its stage counterpart parks on {@code NEGOTIATION}: this test must keep
+     * answering its own question when a mutation removes the value at the frontier.
+     */
+    @Test
+    void anUnknownLifecycleIsStillRejected_soTheProbesAboveAreNotVacuous() {
+        tickets.updateLifecycle(ticketId, DealLifecycle.ON_HOLD);
+
+        assertThatThrownBy(() -> tickets.updateLifecycle(ticketId, "NOT_A_LIFECYCLE"))
+            .as("%s no longer rejects an unknown lifecycle — it has been dropped or widened to "
+                + "everything, and the probes in this class are proving nothing", LIFECYCLE_CONSTRAINT)
+            .isInstanceOf(DataIntegrityViolationException.class);
+        assertThat(lifecycleOfTheDeal()).isEqualTo(DealLifecycle.ON_HOLD);
+    }
+
     // ── reading the live constraint ──────────────────────────────────────────────────────────
 
     /**
@@ -263,7 +409,7 @@ class DealStageCheckConstraintIntegrationTest extends AbstractPostgresIntegratio
      * come back — zero means the constraint was renamed or dropped, and that must be a red here
      * rather than an empty set that quietly weakens every comparison downstream.
      */
-    private String liveConstraintDefinition() {
+    private String liveConstraintDefinition(String constraint) {
         List<String> definitions = jdbc.queryForList("""
             SELECT pg_get_constraintdef(c.oid)
               FROM pg_constraint c
@@ -275,20 +421,29 @@ class DealStageCheckConstraintIntegrationTest extends AbstractPostgresIntegratio
                AND c.contype = 'c'
                AND c.convalidated
             """,
-            Map.of("schema", SCHEMA, "table", TABLE, "constraint", CONSTRAINT),
+            Map.of("schema", SCHEMA, "table", TABLE, "constraint", constraint),
             String.class);
 
         assertThat(definitions)
             .as("expected exactly one validated CHECK constraint %s.%s.%s — zero means it was "
                 + "renamed or dropped, and this guard must fail rather than compare against nothing",
-                SCHEMA, TABLE, CONSTRAINT)
+                SCHEMA, TABLE, constraint)
             .hasSize(1);
         return definitions.get(0);
     }
 
     /** The set of stage codes the live constraint permits. */
     private Set<String> permittedStages() {
-        return new LinkedHashSet<>(permittedValues(liveConstraintDefinition()));
+        return permittedValuesOf(CONSTRAINT);
+    }
+
+    /** The set of lifecycle codes the live constraint permits. */
+    private Set<String> permittedLifecycles() {
+        return permittedValuesOf(LIFECYCLE_CONSTRAINT);
+    }
+
+    private Set<String> permittedValuesOf(String constraint) {
+        return new LinkedHashSet<>(permittedValues(liveConstraintDefinition(constraint), constraint));
     }
 
     /**
@@ -300,15 +455,15 @@ class DealStageCheckConstraintIntegrationTest extends AbstractPostgresIntegratio
      * invisible in direction 2, where the whole question is whether the constraint permits
      * something extra. Failing on an unrecognised element converts that silent gap into a red.
      */
-    private static List<String> permittedValues(String definition) {
+    private static List<String> permittedValues(String definition, String constraint) {
         int open = definition.indexOf(ARRAY_OPEN);
         if (open < 0) {
-            throw new AssertionError(CONSTRAINT + " is not rendered as a value list, so this guard "
+            throw new AssertionError(constraint + " is not rendered as a value list, so this guard "
                 + "cannot extract what it permits. Definition: " + definition);
         }
         int close = definition.indexOf(']', open);
         if (close < 0) {
-            throw new AssertionError("unterminated value list in " + CONSTRAINT
+            throw new AssertionError("unterminated value list in " + constraint
                 + ". Definition: " + definition);
         }
         String block = definition.substring(open + ARRAY_OPEN.length(), close);
@@ -318,7 +473,7 @@ class DealStageCheckConstraintIntegrationTest extends AbstractPostgresIntegratio
             Matcher matcher = ARRAY_ELEMENT.matcher(element);
             if (!matcher.matches()) {
                 throw new AssertionError("could not read element <" + element + "> of "
-                    + CONSTRAINT + " as a quoted value — this guard will not report a partial set. "
+                    + constraint + " as a quoted value — this guard will not report a partial set. "
                     + "Definition: " + definition);
             }
             values.add(matcher.group(1));
@@ -328,6 +483,11 @@ class DealStageCheckConstraintIntegrationTest extends AbstractPostgresIntegratio
 
     private String stageOfTheDeal() {
         return jdbc.queryForObject("SELECT sales_stage FROM sales.ticket WHERE ticket_id = :id",
+            Map.of("id", ticketId), String.class);
+    }
+
+    private String lifecycleOfTheDeal() {
+        return jdbc.queryForObject("SELECT lifecycle FROM sales.ticket WHERE ticket_id = :id",
             Map.of("id", ticketId), String.class);
     }
 }
