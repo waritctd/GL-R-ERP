@@ -11,9 +11,19 @@ globalThis.React = React;
 
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
+  // Imported inside the factory, not at the top of the file: vi.mock is hoisted above every import.
+  const { DEAL_STAGE_CATALOG } = await import('../../data/dealStageCatalog.js');
   return {
     ...actual,
     api: {
+      // The pipeline enumeration (GET /api/meta/deal-stages). Served here as the SAME canned
+      // payload mockApi serves — data/dealStageCatalog.js, which stageCatalog.test.js pins against
+      // DealStage.java — so this fixture cannot quietly describe a pipeline the backend does not
+      // have. A fixture more populated (or differently shaped) than production is the failure mode
+      // CLAUDE.md names; reusing the guarded one is how that is avoided.
+      meta: {
+        dealStages: vi.fn().mockResolvedValue(DEAL_STAGE_CATALOG),
+      },
       tickets: {
         get: vi.fn(),
         listPayments: vi.fn(),
@@ -308,7 +318,8 @@ describe('TicketDetailPage', () => {
 
     expect(await screen.findByText('ขั้นตอนดีล')).not.toBeNull();
     // DealStagePanel below also names the current stage — assert presence, not uniqueness.
-    expect(screen.getAllByText('เสนอราคาผู้ออกแบบ/เจ้าของ').length).toBeGreaterThan(0);
+    // S4's Thai copy narrowed to the designer alone when V143 gave the owner their own stage (S5).
+    expect(screen.getAllByText('เสนอราคาผู้ออกแบบ').length).toBeGreaterThan(0);
     expect(screen.getByText('มูลค่าดีล')).not.toBeNull();
     // The payment panel below also renders amountPayable — assert presence, not uniqueness.
     expect(screen.getAllByText('฿50,000.00').length).toBeGreaterThan(0);
@@ -1606,7 +1617,10 @@ describe('TicketDetailPage', () => {
         currentState: {
           lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed',
         },
-        availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'OWNER_SIGNOFF' }],
+        // QUOTE_OWNER, not OWNER_SIGNOFF: V143 inserted S5 between S4 and S6, so the stage after
+        // QUOTE_DESIGN_SIDE moved. This fixture said OWNER_SIGNOFF and stayed green for as long as
+        // the frontend carried its own 14-stage list — the same drift the catalog endpoint ends.
+        availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'QUOTE_OWNER' }],
         ...overrides,
       };
     }
@@ -1653,7 +1667,7 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByText(/ต้องระบุวันติดตามครั้งถัดไป/)).toBeNull();
 
       fireEvent.click(advanceItem);
-      await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledWith(701, { stage: 'OWNER_SIGNOFF' }));
+      await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledWith(701, { stage: 'QUOTE_OWNER' }));
     });
 
     // FIX 3 (P2, clutter-follow-up review round 2): the old inline "เลื่อนไป"

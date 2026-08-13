@@ -3,6 +3,7 @@ package th.co.glr.hr.ticket;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -181,6 +182,101 @@ class DealStageTest {
         for (String stage : DealStage.ORDER) {
             assertThat(DealStage.requiresJustification(stage, stage)).as("%s -> itself", stage).isFalse();
         }
+    }
+
+    // ── Part D: the catalog served to clients ────────────────────────────────
+    //
+    // Every assertion below covers a field the frontend used to declare for itself in
+    // features/tickets/stageMeta.js. That copy silently stopped at fourteen stages when V143 added
+    // QUOTE_OWNER, so these are not decoration: they are the guard the deleted copy never had.
+
+    /**
+     * The three write-gate sets partition {@code ORDER} exactly. This is what makes
+     * {@link DealStage#gateOf} total and unambiguous, and it is also a live authz property:
+     * {@code TicketService.requireStageWriteAccess} runs an if/else-if chain over these sets and
+     * falls through to 403, so a stage in none of them would be unreachable by every role except
+     * ceo, and a stage in two would silently take the first branch's gate.
+     */
+    @Test
+    void theThreeWriteGateSetsPartitionThePipelineExactly() {
+        assertThat(DealStage.SALES_TARGET_STAGES).hasSize(12);
+        assertThat(DealStage.ACCOUNT_TARGET_STAGES)
+            .containsExactlyInAnyOrder(DealStage.DEPOSIT_RECEIVED, DealStage.CLOSED_PAID);
+        assertThat(DealStage.IMPORT_TARGET_STAGES).containsExactly(DealStage.PROCUREMENT);
+
+        for (String stage : DealStage.ORDER) {
+            long memberships = Stream.of(DealStage.SALES_TARGET_STAGES,
+                    DealStage.ACCOUNT_TARGET_STAGES, DealStage.IMPORT_TARGET_STAGES)
+                .filter(set -> set.contains(stage))
+                .count();
+            assertThat(memberships).as("%s must belong to exactly one gate set", stage).isEqualTo(1);
+            assertThat(DealStage.gateOf(stage)).as("gate of %s", stage)
+                .isIn(DealStage.GATE_SALES, DealStage.GATE_ACCOUNT, DealStage.GATE_IMPORT);
+        }
+        // No set may reach outside the pipeline either — a stray code there would be a gate on a
+        // stage that cannot exist.
+        assertThat(DealStage.SALES_TARGET_STAGES).isSubsetOf(DealStage.ORDER);
+        assertThat(DealStage.ACCOUNT_TARGET_STAGES).isSubsetOf(DealStage.ORDER);
+        assertThat(DealStage.IMPORT_TARGET_STAGES).isSubsetOf(DealStage.ORDER);
+        assertThat(DealStage.gateOf("NOT_A_STAGE")).isNull();
+    }
+
+    /** Every stage has a phase, phases run 1–5, and they never go backwards along {@code ORDER}. */
+    @Test
+    void everyStageHasAPhaseAndPhasesAreMonotonicAlongTheOrder() {
+        int previous = 0;
+        for (String stage : DealStage.ORDER) {
+            int phase = DealStage.phaseOf(stage);
+            assertThat(phase).as("phase of %s", stage).isBetween(1, 5);
+            assertThat(phase).as("phase of %s must not go backwards", stage).isGreaterThanOrEqualTo(previous);
+            previous = phase;
+        }
+        assertThat(DealStage.ORDER.stream().map(DealStage::phaseOf).distinct().toList())
+            .containsExactly(1, 2, 3, 4, 5);
+        assertThat(DealStage.phaseOf("NOT_A_STAGE")).isZero();
+    }
+
+    /**
+     * The display sequence and the owner's S-sheet number are different things, and this pins
+     * exactly how. Both are served because neither can be computed from the other: PROCUREMENT is
+     * one pipeline stage spanning six sheet steps, and V143 shifted the display numbers after S4
+     * while leaving every sheet number alone.
+     */
+    @Test
+    void displayNumberAndBusinessCodeAreBothTotalAndDeliberatelyDifferent() {
+        for (int i = 0; i < DealStage.ORDER.size(); i++) {
+            String stage = DealStage.ORDER.get(i);
+            assertThat(DealStage.displayNoOf(stage)).as("display no of %s", stage).isEqualTo(i + 1);
+            assertThat(DealStage.businessCodeOf(stage)).as("business code of %s", stage).isNotNull();
+        }
+        assertThat(DealStage.ORDER.stream().map(DealStage::businessCodeOf).distinct())
+            .as("no two stages may share a sheet number").hasSize(DealStage.ORDER.size());
+
+        // The divergence itself, stated: S5 is the 5th stage, but S6 is the 6th and S20 is the 15th.
+        assertThat(DealStage.displayNoOf(DealStage.QUOTE_OWNER)).isEqualTo(5);
+        assertThat(DealStage.businessCodeOf(DealStage.QUOTE_OWNER)).isEqualTo("S5");
+        assertThat(DealStage.displayNoOf(DealStage.CLOSED_PAID)).isEqualTo(15);
+        assertThat(DealStage.businessCodeOf(DealStage.CLOSED_PAID)).isEqualTo("S20");
+        assertThat(DealStage.businessCodeOf(DealStage.PROCUREMENT)).isEqualTo("S12–S17");
+
+        assertThat(DealStage.displayNoOf("NOT_A_STAGE")).isZero();
+        assertThat(DealStage.businessCodeOf("NOT_A_STAGE")).isNull();
+    }
+
+    /**
+     * The four auto-advanced stages are exactly the four with an {@code autoAdvanceStage} call
+     * site keyed to them, and exactly the four {@code TicketService.requireStageFactsHold} gates —
+     * a stage the system normally reaches for you is a stage whose fact must already hold.
+     * DELIVERY_SCHEDULING is auto-advanced too but is deliberately absent: the rep also reaches it
+     * by hand as part of the normal flow.
+     */
+    @Test
+    void autoAdvancedIsExactlyTheFourFactGatedStages() {
+        assertThat(DealStage.ORDER.stream().filter(DealStage::isAutoAdvanced).toList())
+            .containsExactly(DealStage.ORDER_RECEIVED, DealStage.DEPOSIT_RECEIVED,
+                DealStage.PROCUREMENT, DealStage.CLOSED_PAID);
+        assertThat(DealStage.isAutoAdvanced(DealStage.DELIVERY_SCHEDULING)).isFalse();
+        assertThat(DealStage.isAutoAdvanced("NOT_A_STAGE")).isFalse();
     }
 
     private static void assertNoNoteAlongPath(List<String> path) {

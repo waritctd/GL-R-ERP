@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
-import { CANCEL_REASONS } from './stageMeta.js';
+import { EMPTY_STAGE_CATALOG } from './stageCatalog.js';
+import { CANCEL_REASON_LABEL, labelledReasons } from './stageMeta.js';
 
 /**
  * Cancel-deal modal — same shape as MarkLostModal, deliberately different
@@ -12,9 +13,11 @@ import { CANCEL_REASONS } from './stageMeta.js';
  * Cancelling is irreversible, so the reason is required before the button
  * enables — matching mark-lost rather than the old bare confirm dialog.
  */
-export function CancelDealModal({ onClose, onSubmit, submitting }) {
+export function CancelDealModal({ catalog = EMPTY_STAGE_CATALOG, onClose, onSubmit, submitting }) {
   const [reason, setReason] = useState(null);
   const [note, setNote] = useState('');
+  // Codes from DealCancelReason.ORDER via /api/meta/deal-stages; wording stays here.
+  const reasons = labelledReasons(catalog.cancelReasons, CANCEL_REASON_LABEL);
 
   return (
     <Modal
@@ -36,7 +39,7 @@ export function CancelDealModal({ onClose, onSubmit, submitting }) {
       )}
     >
       <div className="flex flex-col gap-2" role="radiogroup" aria-label="เหตุผลที่ยกเลิก">
-        {CANCEL_REASONS.map((r) => {
+        {reasons.map((r) => {
           const selected = reason === r.code;
           return (
             <button

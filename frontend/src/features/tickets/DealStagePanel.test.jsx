@@ -1,11 +1,21 @@
 import React from 'react';
 import { act, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { DealStagePanel } from './DealStagePanel.jsx';
 
 globalThis.React = React;
 
-const salesOwner = { id: 1, name: 'พนักงานขาย', role: 'sales' };
+// The panel no longer takes a `user` and no longer decides anything: it renders the server's
+// availableActions plus its per-stage stageDecisions (TicketService.stageDecisions), over the
+// backend-served stage catalog. Both are supplied here as the API supplies them.
+const catalog = DEAL_STAGE_CATALOG;
+
+// "Everything the server would allow" — enough for the UPDATE_STAGE gate, which now asks whether
+// ANY decision is allowed rather than recomputing allowedTargetStages.
+const allAllowed = catalog.stages.map((stage, index) => ({
+  stage: stage.code, no: index + 1, allowed: true, requiresReason: false, blockedReason: null,
+}));
 
 function baseSummary(overrides = {}) {
   return {
@@ -38,9 +48,10 @@ const noopHandlers = {
 function renderPanel(props = {}) {
   return render(
     <DealStagePanel
-      user={salesOwner}
       summary={baseSummary()}
       availableActions={[]}
+      stageDecisions={allAllowed}
+      catalog={catalog}
       {...noopHandlers}
       {...props}
     />,
@@ -52,9 +63,10 @@ function renderPanelWithRef(props = {}) {
   const utils = render(
     <DealStagePanel
       ref={ref}
-      user={salesOwner}
       summary={baseSummary()}
       availableActions={[]}
+      stageDecisions={allAllowed}
+      catalog={catalog}
       {...noopHandlers}
       {...props}
     />,
@@ -89,8 +101,9 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
     rerender(
       <DealStagePanel
         ref={ref}
-        user={salesOwner}
         summary={baseSummary()}
+        stageDecisions={allAllowed}
+        catalog={catalog}
         availableActions={[{ action: 'PLACE_ON_HOLD' }]}
         {...noopHandlers}
       />,
@@ -107,8 +120,9 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
     rerender(
       <DealStagePanel
         ref={ref}
-        user={salesOwner}
         summary={baseSummary()}
+        stageDecisions={allAllowed}
+        catalog={catalog}
         availableActions={[{ action: 'MARK_DORMANT' }]}
         {...noopHandlers}
       />,
@@ -125,8 +139,9 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
     rerender(
       <DealStagePanel
         ref={ref}
-        user={salesOwner}
         summary={baseSummary()}
+        stageDecisions={allAllowed}
+        catalog={catalog}
         availableActions={[{ action: 'MARK_LOST' }]}
         {...noopHandlers}
       />,
@@ -269,6 +284,9 @@ describe('DealStagePanel Slice A "chip diet" — removed sub-status rows stay go
 
   it('still renders the pipeline\'s own stage content (this panel is not empty — only the duplicated rows are gone)', () => {
     renderPanel({ summary: baseSummary({ salesStage: 'QUOTE_DESIGN_SIDE' }) });
-    expect(screen.getByText('เสนอราคาผู้ออกแบบ/เจ้าของ')).not.toBeNull();
+    // V143 gave the project owner their own stage (QUOTE_OWNER, S5), so S4's wording narrowed to
+    // the designer alone — it used to read "เสนอราคาผู้ออกแบบ/เจ้าของ", which after the split named
+    // a recipient this stage no longer covers.
+    expect(screen.getByText('เสนอราคาผู้ออกแบบ')).not.toBeNull();
   });
 });

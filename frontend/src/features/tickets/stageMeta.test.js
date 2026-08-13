@@ -1,84 +1,64 @@
 import { describe, expect, it } from 'vitest';
+import * as stageMeta from './stageMeta.js';
 import {
-  allowedTargetStages, canMarkLost, canSetStage, isRoutineBackwardMove, nextStage,
-  SALES_STAGES, stageIndex,
+  AUTO_STAGE_HINT, CANCEL_REASON_LABEL, GATE_LABEL, labelledReasons, LOST_REASON_LABEL,
 } from './stageMeta.js';
 
-// NOTE: these gates only drive what the UI offers — the authoritative rules are
-// TicketService's deal-pipeline gates, covered by TicketServiceTest on the backend.
-
-const owner = { id: 6, role: 'sales' };
-const otherSales = { id: 2, role: 'sales' };
-const salesManager = { id: 9, role: 'sales_manager' };
-const importUser = { id: 7, role: 'import' };
-const accountUser = { id: 11, role: 'account' };
-const ceo = { id: 8, role: 'ceo' };
-
-const deal = { salesStage: 'PRESENTATION', createdById: 6 };
-
-describe('stageMeta', () => {
-  it('defines the 14-stage model in order', () => {
-    expect(SALES_STAGES).toHaveLength(14);
-    expect(SALES_STAGES[0].code).toBe('LEAD_APPROACH');
-    expect(SALES_STAGES[13].code).toBe('CLOSED_PAID');
-    expect(stageIndex('ORDER_RECEIVED')).toBe(8);
-    expect(nextStage('CLOSED_PAID')).toBeNull();
+/**
+ * stageMeta.js is Thai display copy and nothing else.
+ *
+ * It used to also hold the stage list, the write gates and the note rule — a hand-maintained copy
+ * of DealStage.java and TicketService, with no guard of any kind, which had gone stale in three
+ * separate places at once. Those tests are gone with the code they covered, and their subject
+ * matter moved to where it can actually be proven:
+ *
+ *   • who may set which stage → StageDecisionIntegrationTest (real Postgres, real TicketService,
+ *     written wrong-way-round). It was never testable here: this file only ever agreed with itself.
+ *   • when a move needs a written reason → DealStageTest + StageDecisionIntegrationTest.
+ *   • the stage list, its order, phases and gates → DealStageTest, plus stageCatalog.test.js,
+ *     which checks this side against DealStage.java directly.
+ *
+ * What is left to test here is the copy, and — below — that no rule has crept back in.
+ */
+describe('stageMeta holds labels, and only labels', () => {
+  // The regression guard for the whole refactor. If a `canSetStage`, an `allowedTargetStages` or
+  // an `isRoutineBackwardMove` reappears here, the frontend has started deciding again and this
+  // fails before anyone has to notice the drift in production.
+  it('exports no decision function — the backend decides, this module renders', () => {
+    const decisionShaped = Object.keys(stageMeta).filter((name) => (
+      /^(can|is|allowed|requires|may)[A-Z]/.test(name) || /Stages$/.test(name)
+    ));
+    expect(decisionShaped).toEqual([]);
   });
 
-  it('sales owner may set sales stages but never money/import stages', () => {
-    expect(canSetStage(owner, deal, 'SPEC_APPROVED')).toBe(true);
-    expect(canSetStage(owner, deal, 'DELIVERED')).toBe(true);
-    expect(canSetStage(owner, deal, 'DEPOSIT_RECEIVED')).toBe(false);
-    expect(canSetStage(owner, deal, 'PROCUREMENT')).toBe(false);
-    expect(canSetStage(owner, deal, 'CLOSED_PAID')).toBe(false);
+  it('labels every write gate the backend can report', () => {
+    // The gate VALUES come from DealStage.gateOf; stageCatalog.test.js pins that this covers them.
+    expect(Object.keys(GATE_LABEL).sort()).toEqual(['account', 'import', 'sales']);
+    expect(GATE_LABEL.sales).toBe('ฝ่ายขาย');
   });
 
-  it('non-owner sales gets nothing; sales_manager and ceo pass sales stages', () => {
-    expect(canSetStage(otherSales, deal, 'SPEC_APPROVED')).toBe(false);
-    expect(allowedTargetStages(otherSales, deal)).toHaveLength(0);
-    expect(canSetStage(salesManager, deal, 'SPEC_APPROVED')).toBe(true);
-    expect(canSetStage(ceo, deal, 'SPEC_APPROVED')).toBe(true);
+  it('explains where each auto-advanced stage comes from', () => {
+    expect(Object.keys(AUTO_STAGE_HINT).sort()).toEqual(
+      ['CLOSED_PAID', 'DEPOSIT_RECEIVED', 'ORDER_RECEIVED', 'PROCUREMENT'],
+    );
+    for (const hint of Object.values(AUTO_STAGE_HINT)) {
+      expect(hint).toContain('อัตโนมัติ');
+    }
   });
 
-  it('account and import fall back only on their own stages', () => {
-    expect(canSetStage(accountUser, deal, 'DEPOSIT_RECEIVED')).toBe(true);
-    expect(canSetStage(accountUser, deal, 'CLOSED_PAID')).toBe(true);
-    expect(canSetStage(accountUser, deal, 'SPEC_APPROVED')).toBe(false);
-    expect(canSetStage(importUser, deal, 'PROCUREMENT')).toBe(true);
-    expect(canSetStage(importUser, deal, 'SPEC_APPROVED')).toBe(false);
-    expect(canSetStage(ceo, deal, 'PROCUREMENT')).toBe(true);
-  });
-
-  it('allowedTargetStages excludes the current stage', () => {
-    const codes = allowedTargetStages(owner, deal).map((s) => s.code);
-    expect(codes).not.toContain('PRESENTATION');
-    expect(codes).toContain('LEAD_APPROACH');
-    expect(codes).toContain('DELIVERED');
-  });
-
-  it('lost/reopen is owner, sales_manager or ceo only', () => {
-    expect(canMarkLost(owner, deal)).toBe(true);
-    expect(canMarkLost(salesManager, deal)).toBe(true);
-    expect(canMarkLost(ceo, deal)).toBe(true);
-    expect(canMarkLost(otherSales, deal)).toBe(false);
-    expect(canMarkLost(importUser, deal)).toBe(false);
-    expect(canMarkLost(accountUser, deal)).toBe(false);
-  });
-
-  it('treats S4 → S3 as routine, every other backward move as an exception', () => {
-    // The designer is normally quoted before signing off the spec, so
-    // QUOTE_DESIGN_SIDE → SPEC_APPROVED must not demand a written reason.
-    expect(isRoutineBackwardMove('QUOTE_DESIGN_SIDE', 'SPEC_APPROVED')).toBe(true);
-    // One adjacent pair only — not a general relaxation, and not symmetric.
-    expect(isRoutineBackwardMove('SPEC_APPROVED', 'QUOTE_DESIGN_SIDE')).toBe(false);
-    expect(isRoutineBackwardMove('QUOTE_DESIGN_SIDE', 'PRESENTATION')).toBe(false);
-    expect(isRoutineBackwardMove('OWNER_SIGNOFF', 'SPEC_APPROVED')).toBe(false);
-  });
-
-  it("another rep's deal offers a plain sales user nothing", () => {
-    const othersDeal = { salesStage: 'LEAD_APPROACH', createdById: 99 };
-    expect(canSetStage(owner, othersDeal, 'PRESENTATION')).toBe(false);
-    expect(canMarkLost(owner, othersDeal)).toBe(false);
-    expect(canSetStage(salesManager, othersDeal, 'PRESENTATION')).toBe(true);
+  it('labels a backend-supplied reason code set, and passes an unknown code through', () => {
+    // The order is the backend's — labelledReasons must not sort, filter or re-order it, or the
+    // list a rep reads would stop matching the business's own F1–F8 sequence.
+    expect(labelledReasons(['PRICE', 'PRODUCT_FIT'], LOST_REASON_LABEL)).toEqual([
+      { code: 'PRICE', label: 'ราคา' },
+      { code: 'PRODUCT_FIT', label: 'ไม่มีสินค้าที่ลูกค้าต้องการ' },
+    ]);
+    expect(labelledReasons(['OTHER'], CANCEL_REASON_LABEL)[0].label).toBe('อื่น ๆ (ระบุในหมายเหตุ)');
+    // A code the backend adds before this side has wording for it renders as its code rather than
+    // as `undefined` — visible, not blank.
+    expect(labelledReasons(['F9_BRAND_NEW'], LOST_REASON_LABEL)).toEqual([
+      { code: 'F9_BRAND_NEW', label: 'F9_BRAND_NEW' },
+    ]);
+    expect(labelledReasons(undefined, LOST_REASON_LABEL)).toEqual([]);
   });
 });

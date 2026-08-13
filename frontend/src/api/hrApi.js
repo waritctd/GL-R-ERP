@@ -298,6 +298,12 @@ export const api = {
     updateProduct: (priceId, input) => apiRequest(API_ROUTES.catalog.price(priceId), { method: 'PUT', body: input }),
     deleteProduct: (priceId) => apiRequest(API_ROUTES.catalog.price(priceId), { method: 'DELETE' }),
   },
+  // Mirrors DealStageMetaController (ticket/). The deal pipeline's shape — stages with their
+  // display number, S-sheet code, phase, write gate and auto-advance flag, plus the phase list and
+  // the lost/cancel reason CODE sets. Labels stay client-side; see utils/format.js + stageMeta.js.
+  meta: {
+    dealStages: () => apiRequest(API_ROUTES.meta.dealStages),
+  },
   factoryConfigs: {
     list: () => apiRequest(API_ROUTES.factoryConfigs.list),
     sendEmail: (ticketId, payload) => apiRequest(API_ROUTES.factoryConfigs.sendEmail(ticketId), { method: 'POST', body: payload }),

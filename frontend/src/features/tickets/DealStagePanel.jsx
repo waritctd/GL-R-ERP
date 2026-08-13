@@ -7,7 +7,8 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, formatThaiDate, tenderRequirementLabel } from '../../utils/format.js';
 import { DealStageStepper, PhaseTracker } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
-import { allowedTargetStages, canMarkLost, canSetStage, GATE_LABEL, nextStage, stageMeta } from './stageMeta.js';
+import { EMPTY_STAGE_CATALOG, findStage, nextStageIn } from './stageCatalog.js';
+import { AUTO_STAGE_HINT, GATE_LABEL } from './stageMeta.js';
 import { UpdateStageModal } from './UpdateStageModal.jsx';
 
 function daysSince(iso) {
@@ -16,7 +17,7 @@ function daysSince(iso) {
 }
 
 /**
- * Deal pipeline panel (V50): the 14-stage journey this deal must travel, with
+ * Deal pipeline panel (V50, widened by V143): the journey this deal must travel, with
  * the current stage front and center. One ticket = one deal — the operational
  * price-request/dual-track machinery below the panel is HOW some stages get
  * done, and doc generation surfaces here on exactly the stage it belongs to
@@ -28,9 +29,10 @@ function daysSince(iso) {
  * พัก dormant / เสียงาน no longer render inline here — they moved into
  * TicketDetailPage's single header overflow menu and bottom danger zone. The
  * actual decision of whether each is AVAILABLE stays entirely in this
- * component (`canEditStage`/`canLost`/`canHold`/`canDormant` below, backed by
- * the same `hasAction`/`canSetStage`/`canMarkLost` gates as before —
- * unchanged); this forwardRef only exposes WHEN each one is available (so the
+ * component (`canEditStage`/`canLost`/`canHold`/`canDormant` below, now backed
+ * ENTIRELY by the server's own answer — `availableActions` and the per-stage
+ * `stageDecisions` payload, with no local re-derivation of who may do what);
+ * this forwardRef only exposes WHEN each one is available (so the
  * parent knows whether to render a menu item / danger button at all) and
  * functions that open this panel's own modals (so the actual submit/mutation
  * logic — and the "who may act" re-check — never leaves this component). A
@@ -69,7 +71,8 @@ function daysSince(iso) {
  * primaryAction — the pipeline's OWN state, not a rollup of everyone else's.
  */
 export const DealStagePanel = forwardRef(function DealStagePanel({
-  user, summary, availableActions = [], docActions, primaryAction, actionLoading,
+  summary, availableActions = [], stageDecisions = [], catalog = EMPTY_STAGE_CATALOG,
+  docActions, primaryAction, actionLoading,
   advanceReady = true,
   onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement,
 }, ref) {
@@ -84,13 +87,18 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   // lifecycle, not lostReason — the reason persists after a reopen (V57).
   const lost = summary.lifecycle === 'CLOSED_LOST';
   const lifecycle = summary.lifecycle ?? (lost ? 'CLOSED_LOST' : 'ACTIVE');
-  const meta = stageMeta(summary.salesStage);
+  const meta = findStage(catalog, summary.salesStage);
   const label = dealStageLabel(summary.salesStage);
-  const next = lost ? null : nextStage(summary.salesStage);
+  const next = lost ? null : nextStageIn(catalog, summary.salesStage);
   const days = daysSince(summary.stageUpdatedAt);
-  const canEditStage = hasAction('UPDATE_STAGE') && allowedTargetStages(user, summary).length > 0 && !lost;
-  const canLost = hasAction('MARK_LOST') && canMarkLost(user, summary) && !lost && summary.salesStage !== 'CLOSED_PAID';
-  const canAdvance = next && !next.auto && hasAction('ADVANCE_STAGE', next.code) && canSetStage(user, summary, next.code);
+  // Every gate below is now read off the server's answer, never recomputed. `hasAction` is the
+  // backend's availableActions list (TicketService.actions) and `stageDecisions` is its per-stage
+  // verdict; the local canSetStage/canMarkLost/allowedTargetStages copies these replaced were a
+  // second implementation of TicketService's authorization, and had gone stale.
+  const canEditStage = hasAction('UPDATE_STAGE')
+    && stageDecisions.some((decision) => decision.allowed) && !lost;
+  const canLost = hasAction('MARK_LOST') && !lost && summary.salesStage !== 'CLOSED_PAID';
+  const canAdvance = Boolean(next) && !next.auto && hasAction('ADVANCE_STAGE', next.code);
   const canHold = hasAction('PLACE_ON_HOLD');
   const canDormant = hasAction('MARK_DORMANT');
   const canResume = hasAction('RESUME');
@@ -127,7 +135,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   // When the next stage isn't one this user can one-click into, explain who or
   // what advances it instead of showing a dead end.
   const nextHint = next && !canAdvance
-    ? (next.auto ? next.autoHint : `ขั้นถัดไปอัปเดตโดย${GATE_LABEL[next.gate]}`)
+    ? (next.auto ? AUTO_STAGE_HINT[next.code] : `ขั้นถัดไปอัปเดตโดย${GATE_LABEL[next.gate]}`)
     : null;
 
   async function submitStage(payload) {
@@ -160,12 +168,12 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
           style={{ fontSize: 12 }}
           onClick={() => setShowSteps((v) => !v)}
         >
-          {showSteps ? 'ซ่อนขั้นตอนทั้งหมด' : 'ดูขั้นตอนทั้งหมด (14 ขั้น)'}
+          {showSteps ? 'ซ่อนขั้นตอนทั้งหมด' : `ดูขั้นตอนทั้งหมด (${catalog.stages.length} ขั้น)`}
         </Button>
       )}
     >
       <div className="flex flex-col gap-4 px-4 py-4 sm:px-5">
-        <PhaseTracker salesStage={summary.salesStage} lost={lost} />
+        <PhaseTracker catalog={catalog} salesStage={summary.salesStage} lost={lost} />
 
         {lifecycle === 'ON_HOLD' || lifecycle === 'DORMANT' ? (
           <div className={`flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 ${
@@ -202,7 +210,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
                 ปิดเมื่อ {formatThaiDate(summary.lostAt)} — เปิดดีลใหม่ได้โดยสถานะเดิม (ขั้นที่ {meta?.no ?? '-'}) ยังอยู่
               </div>
             </div>
-            {canMarkLost(user, summary) ? (
+            {hasAction('REOPEN') ? (
               <Button type="button" variant="secondary" disabled={actionLoading} onClick={onReopen}>
                 เปิดดีลอีกครั้ง
               </Button>
@@ -314,13 +322,13 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
           </div>
         )}
 
-        {showSteps ? <DealStageStepper salesStage={summary.salesStage} lost={lost} /> : null}
+        {showSteps ? <DealStageStepper catalog={catalog} salesStage={summary.salesStage} lost={lost} /> : null}
       </div>
 
       {editOpen ? (
         <UpdateStageModal
-          user={user}
           deal={summary}
+          stageDecisions={stageDecisions}
           submitting={actionLoading}
           onClose={() => setEditOpen(false)}
           onSubmit={submitStage}
@@ -328,6 +336,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
       ) : null}
       {lostOpen ? (
         <MarkLostModal
+          catalog={catalog}
           submitting={actionLoading}
           onClose={() => setLostOpen(false)}
           onSubmit={submitLost}

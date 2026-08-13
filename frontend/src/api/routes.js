@@ -102,6 +102,10 @@ export const API_ROUTES = {
     // HolidayController/WorkScheduleController (both stay hr/ceo-gated, untouched).
     calendarContext: '/api/leave/calendar-context',
   },
+  // Read-only enumerations served by the backend so no client re-declares them.
+  meta: {
+    dealStages: '/api/meta/deal-stages',
+  },
   tickets: {
     list: '/api/tickets',
     create: '/api/tickets',
