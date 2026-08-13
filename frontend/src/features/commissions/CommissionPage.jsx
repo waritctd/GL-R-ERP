@@ -399,11 +399,20 @@ export function CommissionPage({ user, showToast }) {
   // scoping surfaces are money-PENDING deals, so a CLOSED_PAID deal (already fully paid) often
   // will not appear here — see createFromDeal's NOTE above the mock implementation. Manual
   // ticket-id lookup (below) always works regardless; this list is a nice-to-have on top.
+  //
+  // Also drops any ticket whose commissionRecorded is already true (TicketSummaryDto
+  // .commissionRecorded, issue #736): a deal that already has a live commission is not actually
+  // "eligible" any more, and this mirrors the same flag accountActions.js#nextAccountAction now
+  // checks for its worklist CTA, so the picker and the worklist can't disagree about which
+  // CLOSED_PAID deals still need one recorded.
   useEffect(() => {
     if (!canCreateFromDeal) return;
     let cancelled = false;
     api.tickets.list({ salesStage: 'CLOSED_PAID' })
-      .then((response) => { if (!cancelled) setEligibleTickets(response.tickets ?? []); })
+      .then((response) => {
+        if (cancelled) return;
+        setEligibleTickets((response.tickets ?? []).filter((ticket) => !ticket.commissionRecorded));
+      })
       .catch(() => { if (!cancelled) setEligibleTickets([]); });
     return () => { cancelled = true; };
   }, [canCreateFromDeal]);

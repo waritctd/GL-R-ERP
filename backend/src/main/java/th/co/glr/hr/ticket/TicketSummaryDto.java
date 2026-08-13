@@ -70,7 +70,22 @@ public record TicketSummaryDto(
      * Computed, not stored: true when this ACTIVE deal has no {@code sales.deal_activity} row
      * logged in the last 7 days (or none ever). See {@code TicketRepository#isStale}.
      */
-    boolean stale
+    boolean stale,
+    /**
+     * A live {@code SALE} commission already exists for this deal — the same question {@code
+     * CommissionService.createFromDeal}'s duplicate guard asks ({@code
+     * CommissionRepository.hasActiveCommissionForTicket}), served here so the accountant's
+     * worklist ({@code accountActions.js#nextAccountAction}) stops guessing whether a {@code
+     * CLOSED_PAID} deal still needs its commission recorded and permanently over-counting its
+     * backlog (issue #736).
+     *
+     * <p>Deliberate disclosure decision: this exposes only the EXISTENCE of a commission to any
+     * ticket reader, never an amount — amounts stay behind {@code CommissionController's}
+     * role check, which the {@code account} role has no route through ({@code
+     * canListCommissionRecords = ['sales','sales_manager','ceo']}). {@link #invoiceOnFile} is
+     * the existing precedent for a boolean derived from a related table on this DTO.
+     */
+    boolean commissionRecorded
 ) {
     /**
      * Override wins when set, else the {@link DealStage}-derived default. Never a blocker.
@@ -110,7 +125,7 @@ public record TicketSummaryDto(
             salesStage, lostReason, lostAt, stageUpdatedAt, lifecycle, tenderRequirement, depositPolicy,
             depositPolicyReason, entryChannel, null, null, null, null, null, PaymentStage.NOT_REQUIRED,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false, null, null, false, null, null,
-            null, null, null, null, false);
+            null, null, null, null, false, false);
     }
 
     /**
@@ -131,6 +146,7 @@ public record TicketSummaryDto(
             tenderRequirement, depositPolicy, depositPolicyReason, entryChannel, billingDate, dueDate,
             creditTermDays, lastFollowUpAt, nextFollowUpAt, paymentStage, amountPayable, amountPaid,
             amountOutstanding, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
-            cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale);
+            cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
+            commissionRecorded);
     }
 }

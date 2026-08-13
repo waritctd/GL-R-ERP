@@ -563,7 +563,8 @@ public class TicketService {
             s.amountPaid(), s.amountOutstanding(), s.overdue(),
             s.closeConfirmedAt(), s.closeConfirmedByName(), s.invoiceOnFile(),
             s.cancelReason(), s.cancelledAt(),
-            s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale());
+            s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale(),
+            s.commissionRecorded());
     }
 
     /**

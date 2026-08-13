@@ -91,7 +91,7 @@ class TicketSummaryDtoSerializationTest {
             base.amountPayable(), base.amountPaid(), base.amountOutstanding(), base.overdue(),
             base.closeConfirmedAt(), base.closeConfirmedByName(), base.invoiceOnFile(),
             base.cancelReason(), base.cancelledAt(), 85, base.designerName(), base.ownerName(),
-            base.buyerName(), base.stale());
+            base.buyerName(), base.stale(), base.commissionRecorded());
 
         JsonNode json = mapper.readTree(mapper.writeValueAsString(overridden));
 

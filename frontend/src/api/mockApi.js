@@ -2084,6 +2084,21 @@ function hasInvoiceAttachment(ticket) {
   return mockAttachments.some((a) => a.ticketId === ticket.id && a.attachType === 'INVOICE');
 }
 
+// Commissions live in their own store (db.commissions), not on the ticket — mirrors
+// sales.commission_record being its own table. Mirrors CommissionRepository
+// .hasActiveCommissionForTicket exactly (issue #736): a live SALE commission for this ticket,
+// i.e. kind === 'SALE' and status not in ('VOID', 'REJECTED'). Shared here rather than inlined in
+// each of the two TicketSummaryDto builders below, so the predicate exists in exactly one place —
+// createFromDeal's own duplicate guard a few hundred lines down has the same shape inline (it
+// predates this flag and already has its own 409 test coverage), but both read the same
+// db.commissions store and must never be allowed to drift from each other or from the real
+// CommissionRepository method.
+function hasRecordedCommission(ticket) {
+  return db.commissions.some((item) => item.sourceTicketId === ticket.id
+    && item.kind === 'SALE'
+    && !['VOID', 'REJECTED'].includes(item.status));
+}
+
 // Mirrors TicketService.requireClosePrerequisites. Legacy document_issued deals
 // predate the delivery and invoice tracks, so those two are waived for them —
 // requiring either would strand old data permanently.
@@ -2580,6 +2595,9 @@ function buildTicketDetail(ticket) {
       ownerName: ticket.ownerName ?? null,
       buyerName: ticket.buyerName ?? null,
       stale: dealComputeStale(ticket.lifecycle ?? 'ACTIVE', dealActivitiesForTicket(ticket.id)),
+      // Existence-only flag (issue #736) — see hasRecordedCommission's own comment. Never an
+      // amount; amounts stay behind commissions.list()'s own role gate.
+      commissionRecorded: hasRecordedCommission(ticket),
       ...paymentFields,
     },
     items: ticket.items, events: ticket.events,
@@ -4105,6 +4123,10 @@ export const api = {
         ownerName: t.ownerName ?? null,
         buyerName: t.buyerName ?? null,
         stale: dealComputeStale(t.lifecycle ?? 'ACTIVE', dealActivitiesForTicket(t.id)),
+        // Same existence-only flag as buildTicketDetail's summary — served on the LIST projection
+        // too because accountActions.js's worklist is built from list rows, not detail fetches
+        // (issue #736).
+        commissionRecorded: hasRecordedCommission(t),
         ...derivePaymentFields(t),
       }));
       return delay({ tickets });
