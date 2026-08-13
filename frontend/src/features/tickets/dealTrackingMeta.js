@@ -11,12 +11,27 @@
 // See handoff 103's "Assumptions (owner review needed)" before treating either
 // as settled business policy.
 
-/** Mirrors WinProbabilityDefaults.java's stage → % map exactly. */
+/**
+ * Mirrors WinProbabilityDefaults.java's stage → % map exactly — in pipeline order (DealStage.ORDER),
+ * so the two files read side by side.
+ *
+ * GUARDED, as of the QUOTE_OWNER fix: dealTrackingMeta.test.js parses both DealStage.java and
+ * WinProbabilityDefaults.java out of the backend source tree and fails when this object is missing
+ * a stage, carries a stage the backend does not have, or disagrees on a single number. Until then
+ * nothing compared the two, and V143's QUOTE_OWNER insertion left this copy at fourteen entries:
+ * `winProbabilityDefault('QUOTE_OWNER')` fell through to the `?? 0`, so every deal at S5 showed 0%
+ * and added nothing to TicketListPage's win-weighted forecast, with the whole suite green.
+ *
+ * QUOTE_OWNER is 40 by owner ruling — the same as QUOTE_DESIGN_SIDE, because quoting the owner is
+ * the same act as quoting the designer with a different recipient and nothing has been confirmed.
+ * The rest of the table is still the unratified first pass this file's header describes.
+ */
 export const WIN_PROBABILITY_DEFAULTS = {
   LEAD_APPROACH: 10,
   PRESENTATION: 20,
   SPEC_APPROVED: 30,
   QUOTE_DESIGN_SIDE: 40,
+  QUOTE_OWNER: 40,
   OWNER_SIGNOFF: 50,
   AWAITING_BUYER: 50,
   QUOTE_BUYER: 60,
