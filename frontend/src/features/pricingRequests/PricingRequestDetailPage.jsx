@@ -577,9 +577,21 @@ export function PricingRequestDetailPage({ user, showToast }) {
     () => customerQuotations.find((q) => isCustomerQuotationEditable(q)) ?? [...customerQuotations].reverse()[0] ?? null,
     [customerQuotations],
   );
+  // Mirrors PricingRequestService.createCustomerChangeRevision (:438-465). The status half used to
+  // be a literal `!['DRAFT','CANCELLED','SUPERSEDED'].includes(status)` denylist — verbatim the
+  // hand-maintained one PR #703 DELETED from the backend, replacing it with
+  // `canTransition(status, SUPERSEDED)` precisely because the denylist and the state machine had
+  // drifted apart in both directions. The frontend kept the copy the backend threw away, so it
+  // still offered สร้างรอบแก้ไข on a QUOTATION_ACCEPTED deal — which #703 made terminal, with its
+  // own explicit 409 ("ลูกค้ายอมรับใบเสนอราคาแล้ว..."). Issue #734.
+  //
+  // Reading the SUPERSEDED edge instead means this button and that 409 cannot disagree without the
+  // transition table itself being wrong, which is one thing to keep true rather than two.
+  // QUOTATION_ACCEPTED needs no special case here: it is terminal in the table, so it has no
+  // SUPERSEDED edge and the predicate is already false for it.
   const canCreateCustomerRevision = isSales(user)
     && summary?.ticketCreatedById === user?.employeeId
-    && !['DRAFT', 'CANCELLED', 'SUPERSEDED'].includes(summary?.status);
+    && canTransition(summary?.status, 'SUPERSEDED');
   const pricingRequestAttachments = attachmentsQuery.data ?? [];
   // Mirrors PricingRequestService.ATTACHMENT_EDITABLE_STATUSES: Sales may only upload/delete its
   // own Pricing Request attachments while the request is DRAFT, and only on the request it owns.
