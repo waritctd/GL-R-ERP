@@ -13,6 +13,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestEventDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
@@ -54,9 +55,21 @@ public class PricingRequestRepository {
         """;
 
     private final NamedParameterJdbcTemplate jdbc;
+    /**
+     * Owns the {@code sales.factory_quote} half of {@link #cancelOpenChildrenForDeadRequest}.
+     * Constructed here rather than injected so the 25-odd hand-wired {@code new
+     * PricingRequestRepository(jdbc)} call sites across the integration suite keep compiling
+     * unchanged — the same reason (and the same pattern) as {@code FactoryQuoteRepository}'s own
+     * single-argument constructor, which builds its {@code FileAttachmentBlobRepository} the same
+     * way. Both are stateless JDBC data-access objects over the one template, so there is nothing
+     * to share and nothing to configure; keeping ONE constructor also avoids handing Spring an
+     * ambiguous choice.
+     */
+    private final FactoryQuoteRepository factoryQuotes;
 
     public PricingRequestRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
+        this.factoryQuotes = new FactoryQuoteRepository(jdbc);
     }
 
     /** Serializes every mutating operation Step 6 (order confirmation) performs against a given
@@ -615,6 +628,60 @@ public class PricingRequestRepository {
             (rs, rowNum) -> rs.getLong("pricing_request_id"));
     }
 
+    /**
+     * The DEAD-request cascade: the pricing request itself has just reached CANCELLED, so every
+     * child that is still alive must die with it. Called by {@code PricingRequestService#cancel}
+     * (a user cancelled the request) and {@code PricingRequestService#cancelOpenForTicket} (the
+     * DEAL went terminal, so its requests are cancelled from whatever status they held).
+     *
+     * <p><strong>Why this is not {@link #cancelOpenStep2Children}</strong> — the two cascades look
+     * alike and must not be merged. See that method's own Javadoc: the revision cascade has to
+     * LEAVE the parent's priced quotes alone, because the carry-forward shortcut copies them onto
+     * the child. This one has the opposite job. A single shared method would have to pick one
+     * behaviour and would silently break the other.
+     *
+     * <p>Covers the three child tables a dead request can still own. The fourth
+     * ({@code sales.pricing_decision} / {@code sales.quotation}) is handled by
+     * {@link #supersedeOpenPricingDecisionAndQuotation}, which the same two callers invoke
+     * immediately after — kept separate because those two go to SUPERSEDED rather than CANCELLED
+     * and the quotation half is deliberately NOT shared with the revision path.
+     *
+     * <p>{@code sales.pricing_costing}'s predicate spans all three open statuses on purpose.
+     * {@code DRAFT}/{@code CALCULATED} are the historical pair (Import used to build a costing
+     * draft); V141 moved costing to the CEO and {@link PricingCostingRepository} now inserts rows
+     * born directly at {@code SUBMITTED}, which is therefore the ONLY status a costing created
+     * today will ever be found in. Matching only the historical two — as this cascade did before
+     * the cancel-cutoff change — made the costing half a complete no-op against current data,
+     * invisible precisely because the rows it was meant to catch never appear in the old statuses.
+     * The two legacy statuses are kept in the list for rows predating V141.
+     */
+    public void cancelOpenChildrenForDeadRequest(long pricingRequestId, String reason, long actorId) {
+        factoryQuotes.cancelOpenForPricingRequest(pricingRequestId, reason, actorId);
+        jdbc.update("""
+            UPDATE sales.pricing_costing
+               SET status = 'CANCELLED',
+                   updated_at = now()
+             WHERE pricing_request_id = :pricingRequestId
+               AND status IN ('DRAFT', 'CALCULATED', 'SUBMITTED')
+            """, Map.of("pricingRequestId", pricingRequestId));
+    }
+
+    /**
+     * The REVISION cascade: a customer-change revision has just superseded this request, so its
+     * not-yet-answered factory quotes are tidied away. Sole caller is
+     * {@code PricingRequestService#createCustomerChangeRevision}.
+     *
+     * <p><strong>The narrow {@code ('DRAFT','REQUESTED')} predicate is load-bearing — do not widen
+     * it to match {@link #cancelOpenChildrenForDeadRequest}.</strong> When the revision's items are
+     * identical to this parent's, {@code FactoryQuoteCarryForward} copies the parent's quotes onto
+     * the child at submit time, and {@code FactoryQuoteRepository#copyReadyQuotesToRevision} reads
+     * them {@code WHERE status = 'READY_FOR_COSTING'}. Cancelling those here would leave the copy
+     * nothing to find, and because the shortcut deliberately FAILS OPEN (every "no" quietly falls
+     * back to the ordinary Import path) the damage would not surface as a failure — the feature
+     * would simply stop happening, and every revision would take an Import round-trip for prices
+     * nobody disputed. A quote the factory has already answered still means something to the
+     * revision; one it has not answered does not.
+     */
     public void cancelOpenStep2Children(long pricingRequestId, String reason, long actorId) {
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("pricingRequestId", pricingRequestId)
@@ -650,10 +717,26 @@ public class PricingRequestRepository {
      * knowledge of either, so a customer-change (cost-affecting) revision superseding its parent
      * pricing request left a DRAFT/APPROVED decision and any non-terminal quotation silently
      * stale — still readable via {@code PricingDecisionService.salesView}/{@code get} and
-     * {@code CustomerQuotationService.get} as if they were current. Called alongside
-     * {@code cancelOpenStep2Children} from {@code PricingRequestService.createCustomerChangeRevision},
-     * never from plain {@code cancel()}/{@code cancelOpenForTicket} — those cascades are
-     * unchanged by this method existing.
+     * {@code CustomerQuotationService.get} as if they were current.
+     *
+     * <p><strong>Callers: {@code PricingRequestService#cancel} and {@code #cancelOpenForTicket}
+     * only</strong> — the two DEAD-request paths, which pair it with
+     * {@link #cancelOpenChildrenForDeadRequest}. ({@code createCustomerChangeRevision} calls the
+     * decision half, {@link #supersedeOpenPricingDecision}, on its own: the reissue-through-CEO
+     * chain deliberately leaves the parent's ISSUED quotation live until the REPLACEMENT is
+     * issued. This Javadoc claimed the exact opposite — "never from plain cancel()" — until the
+     * cancel-cutoff change; it had been wrong since the reissue chain split the two halves.)
+     *
+     * <p><strong>{@code DRAFT} is in the quotation predicate deliberately, and it is the entry
+     * that closes a real hole.</strong> A quotation may be created (as DRAFT) only while the
+     * pricing request sits at APPROVED_FOR_QUOTATION, which the cancel cutoff now admits — so from
+     * this change onward a cancelled request can own a DRAFT quotation, where previously it could
+     * not. Leaving one behind would be worse than untidy: {@code CustomerQuotationService#issue}
+     * gates on the QUOTATION's {@code doc_status}, and only moves the pricing request when it is
+     * still APPROVED_FOR_QUOTATION — an {@code if}, not an assertion. A DRAFT quotation orphaned
+     * on a CANCELLED request would therefore still ISSUE cleanly, silently skipping the pricing
+     * request transition, and put a live offer in front of a customer whose deal was cancelled.
+     * Retiring the draft here is what makes that unreachable.
      *
      * <p>Not routed through {@code PricingDecisionRepository}/{@code CustomerQuotationRepository}
      * (this class's own dependency direction stays one-way, same as {@code cancelOpenStep2Children}
@@ -667,7 +750,7 @@ public class PricingRequestRepository {
             UPDATE sales.quotation
                SET doc_status = 'SUPERSEDED'
              WHERE pricing_request_id = :pricingRequestId
-               AND doc_status IN ('ISSUED', 'READY_TO_ISSUE', 'SENT', 'REVISION_REQUESTED')
+               AND doc_status IN ('DRAFT', 'ISSUED', 'READY_TO_ISSUE', 'SENT', 'REVISION_REQUESTED')
             """, Map.of("pricingRequestId", pricingRequestId));
     }
 

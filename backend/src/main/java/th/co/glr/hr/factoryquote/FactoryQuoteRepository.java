@@ -320,6 +320,41 @@ public class FactoryQuoteRepository {
             """, Map.of("dispatchId", dispatchId));
     }
 
+    /**
+     * Cancels every factory quote still ALIVE on a pricing request whose own life has ended —
+     * the request was cancelled by its owner/the CEO ({@code PricingRequestService#cancel}) or its
+     * deal went terminal ({@code PricingRequestService#cancelOpenForTicket}). Reached through
+     * {@code PricingRequestRepository#cancelOpenChildrenForDeadRequest}, which is the single
+     * cascade entry point for both of those paths.
+     *
+     * <p><strong>The predicate is a positive allowlist of the five NON-terminal statuses.</strong>
+     * The three it omits are each terminal and must be left exactly as they are — {@code
+     * NOT_AVAILABLE} (the factory declined; overwriting that with CANCELLED would destroy the
+     * reason the quote died), {@code SUPERSEDED} (a later revision already replaced it), and
+     * {@code CANCELLED} (idempotent no-op on a second call, not an error). Same allowlist
+     * rationale as {@link #supersede}: a 9th {@code FactoryQuoteStatus} added later is
+     * non-cancellable until someone deliberately opts it in, where a denylist would silently
+     * admit it.
+     *
+     * <p><strong>It did not always read this way.</strong> Until the cancel-cutoff change (owner
+     * ruling 2026-08-13) this method matched only {@code ('DRAFT','REQUESTED')} — a quote nobody
+     * had answered yet — and it was a verbatim duplicate of SQL inlined in {@code
+     * PricingRequestRepository#cancelOpenStep2Children}, which is why nothing called it. That
+     * narrow set was survivable only because cancel itself was unreachable past
+     * AWAITING_FACTORY_RESPONSE. Now that {@link th.co.glr.hr.pricingrequest.PricingRequestStatus}
+     * permits cancel through APPROVED_FOR_QUOTATION, the common case is a request whose quotes are
+     * all {@code READY_FOR_COSTING} — precisely the ones the old predicate missed — and missing
+     * them would leave live, {@code is_current = TRUE} quotes hanging off a CANCELLED request.
+     *
+     * <p>Setting {@code is_current = FALSE} alongside the status is required, not cosmetic:
+     * {@code chk_factory_quote_current_terminal} permits {@code is_current = FALSE} only for
+     * SUPERSEDED/CANCELLED, and {@code uq_factory_quote_current_factory} (partial, {@code WHERE
+     * is_current = TRUE AND status <> 'CANCELLED'}) must stop matching these rows so a later quote
+     * to the same factory on the same request does not collide with a dead one.
+     *
+     * @return the number of quotes actually cancelled; 0 is a legitimate outcome (nothing was
+     *     alive), not a failure.
+     */
     public int cancelOpenForPricingRequest(long pricingRequestId, String reason, long actorId) {
         return jdbc.update("""
             UPDATE sales.factory_quote
@@ -330,7 +365,8 @@ public class FactoryQuoteRepository {
                    cancelled_at = now(),
                    updated_at = now()
              WHERE pricing_request_id = :pricingRequestId
-               AND status IN ('DRAFT', 'REQUESTED')
+               AND status IN ('DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING',
+                              'READY_FOR_COSTING')
             """,
             new MapSqlParameterSource()
                 .addValue("pricingRequestId", pricingRequestId)
