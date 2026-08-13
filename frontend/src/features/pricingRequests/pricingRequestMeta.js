@@ -175,6 +175,26 @@ export function isCustomerQuotationEditable(quotation) {
   return ['DRAFT', 'READY_TO_ISSUE'].includes(quotation?.docStatus);
 }
 
+/**
+ * Mirrors the reissue-through-CEO-chain refusal in CustomerQuotationService.update (:226-240,
+ * owner ruling 2026-08-13): a REVISION may not carry ANY discount, so a non-zero salesDiscount on
+ * a quotation with a parent is a 409. A first quotation is untouched — there the CEO's own
+ * decision supplied the ceiling/floor, so discounting inside it is authority the CEO granted.
+ *
+ * This reads the SERVER's own `parentQuotationId` (CustomerQuotationDtos.java:29) rather than
+ * re-deriving "is this a revision" from docStatus. That distinction is the whole bug (issue #733):
+ * a revision IS a DRAFT, so isCustomerQuotationEditable is true for it and the page offered a
+ * discount input that could only ever 409. #703 also stopped createRevision carrying prior
+ * discounts forward, so a rep opening a revision sees every discount at zero — retyping one is the
+ * natural reaction, and it was the exact action the backend rejected.
+ *
+ * Editability of the discount is therefore narrower than editability of the quotation: description
+ * and item notes stay writable on a revision, only the money does not.
+ */
+export function isCustomerQuotationDiscountEditable(quotation) {
+  return isCustomerQuotationEditable(quotation) && quotation?.parentQuotationId == null;
+}
+
 // ── Step 5: Customer Decision and Commercial Revisions. Mirrors CustomerQuotationService.recordOutcome. ──
 
 /** Mirrors CustomerQuotationService.recordOutcome's gate: sales (ticket owner) only, and only

@@ -37,6 +37,8 @@ import {
   canStartCeoReview,
   canViewCustomerQuotation,
   isCustomerQuotationEditable,
+  isCustomerQuotationDiscountEditable,
+  canTransition,
   pricingRequestRecipientLabel,
   unitBasisLabel,
 } from './pricingRequestMeta.js';
@@ -1255,9 +1257,20 @@ export function PricingRequestDetailPage({ user, showToast }) {
               const quotation = currentCustomerQuotation;
               const quotationStatus = quotationStatusLabel(quotation.docStatus);
               const editable = isCustomerQuotationEditable(quotation) && canManageCustomerQuotation(user, summary);
+              // Issue #733: a revision's discount is refused by CustomerQuotationService.update,
+              // so the input must not be offered on one. Narrower than `editable` on purpose —
+              // description/notes stay writable, only the money does not.
+              const discountEditable = editable && isCustomerQuotationDiscountEditable(quotation);
               return (
                 <div key={quotation.id} className="flex flex-col gap-3">
                   <div className="text-sm"><strong>เลขที่</strong> {quotation.number}</div>
+                  {editable && !discountEditable ? (
+                    <p className="rounded-md border border-warning-border bg-warning-bg p-3 text-xs text-warning-dark">
+                      ใบเสนอราคาฉบับแก้ไขให้ส่วนลดไม่ได้ — ส่วนลดทุกรายการถูกตั้งเป็น 0 และแก้ไขไม่ได้
+                      หากต้องเปลี่ยนราคาหรือจำนวนหลังออกใบเสนอราคาแล้ว ต้องสร้างรอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า
+                      (customer-change revision) เพื่อให้ CEO อนุมัติราคาใหม่
+                    </p>
+                  ) : null}
                   <div className="flex flex-col gap-2">
                     {quotation.items.map((item) => {
                       const draft = quotationItemDrafts[item.id] ?? {};
@@ -1281,7 +1294,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
                             <span>{item.requestedQuantity} ({item.requestedUnitBasis})</span>
                             <span>ราคาที่อนุมัติ: {formatCurrency(item.approvedUnitPrice, quotation.currency)}</span>
-                            {editable ? (
+                            {discountEditable ? (
                               <label className="flex items-center gap-1">
                                 ส่วนลด/หน่วย
                                 <input
@@ -1297,7 +1310,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             ) : (
                               <span>ส่วนลด/หน่วย: {formatCurrency(item.salesDiscount, quotation.currency)}</span>
                             )}
-                            <span>ราคาสุทธิ: {formatCurrency(editable ? previewFinal : item.finalUnitPrice, quotation.currency)}</span>
+                            <span>ราคาสุทธิ: {formatCurrency(discountEditable ? previewFinal : item.finalUnitPrice, quotation.currency)}</span>
                             <span>รวมรายการ: {formatCurrency(item.lineTotal, quotation.currency)}</span>
                           </div>
                           {belowMinimum ? (
