@@ -711,6 +711,9 @@ export const api = {
     recalculatePricingDecision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionRecalculate(id), { method: 'POST', body: payload }),
     approvePricingDecision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionApprove(id), { method: 'POST', body: payload }),
     returnPricingDecisionToImport: (id, payload) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionReturnToImport(id), { method: 'POST', body: payload }),
+    // V141 "CEO owns costing" (PR #702). No request body — PricingDecisionController.recalculateCost
+    // takes none.
+    recalculatePricingDecisionCost: (id) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionRecalculateCost(id), { method: 'POST' }),
     // Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationController.
     createCustomerQuotation: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotations(id), { method: 'POST', body: payload }),
     listCustomerQuotations: (id) => apiRequest(API_ROUTES.pricingRequests.customerQuotations(id)),

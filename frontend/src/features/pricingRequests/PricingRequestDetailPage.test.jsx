@@ -48,6 +48,7 @@ vi.mock('../../api/index.js', () => ({
       getPricingDecisionSalesView: vi.fn(),
       startPricingDecision: vi.fn(),
       updatePricingDecision: vi.fn(),
+      recalculatePricingDecisionCost: vi.fn(),
       approvePricingDecision: vi.fn(),
       returnPricingDecisionToImport: vi.fn(),
       // Step 4: Customer Quotation Generation and Issuance.
@@ -211,6 +212,7 @@ function setApiDefaults() {
   api.pricingRequests.getPricingDecisionSalesView.mockRejectedValue(new Error('No approved pricing decision yet'));
   api.pricingRequests.startPricingDecision.mockResolvedValue({});
   api.pricingRequests.updatePricingDecision.mockResolvedValue({});
+  api.pricingRequests.recalculatePricingDecisionCost.mockResolvedValue({});
   api.pricingRequests.approvePricingDecision.mockResolvedValue({});
   api.pricingRequests.returnPricingDecisionToImport.mockResolvedValue({});
   api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [] });
@@ -923,6 +925,46 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
         items: [expect.objectContaining({ pricingDecisionItemId: 8001, marginPct: 0.35, minimumSellingPrice: 65 })],
       }),
     ));
+  });
+
+  // V141 ("CEO owns costing", PR #702, commit 1).
+  it('lets the CEO recalculate the decision cost, calling recalculatePricingDecisionCost with the decision id and nothing else', async () => {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+    await screen.findByText('PCD-2026-0001');
+
+    fireEvent.click(screen.getByTestId('pcr-ceo-recalculate-cost'));
+
+    await waitFor(() => expect(api.pricingRequests.recalculatePricingDecisionCost).toHaveBeenCalledWith(7001));
+    expect(api.pricingRequests.recalculatePricingDecisionCost).toHaveBeenCalledTimes(1);
+  });
+
+  // Wrong-way-round: the whole CEO decision panel is import-excluded (canSeeRawPricingDecision(user)
+  // && !isImport(user)), so this is not a narrower gate than the panel itself — it must be absent
+  // for the same reason every other control in this panel is absent for Import.
+  it('does not offer "คำนวณต้นทุนใหม่" to Import — the whole CEO decision panel is import-excluded', async () => {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    expect(screen.queryByTestId('pcr-ceo-recalculate-cost')).toBeNull();
+  });
+
+  // Wrong-way-round: editable = isDraft && canActOnPricingDecision(...) — an APPROVED decision is
+  // read-only even for the CEO who approved it.
+  it('does not offer "คำนวณต้นทุนใหม่" to the CEO on an APPROVED decision (not DRAFT)', async () => {
+    const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({
+      items: [buildDecision({ status: 'APPROVED', approvedBy: 4, approvedAt: '2026-07-21T00:00:00Z' })],
+    });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+    await screen.findByText('PCD-2026-0001');
+
+    expect(screen.queryByTestId('pcr-ceo-recalculate-cost')).toBeNull();
   });
 
   it('disables approval until every item has a margin and a minimum selling price (mirrors the server 422 gate)', async () => {

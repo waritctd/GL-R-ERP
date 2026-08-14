@@ -236,10 +236,6 @@ const SERVER_ONLY = {
   'POST /api/pricing-requests/{}/factory-purchase-orders': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
 
   // ── Built backend-first; the UI pass has not landed ───────────────────────
-  'POST /api/pricing-decisions/{}/recalculate-cost':
-    'V141 "CEO owns costing" (PR #702, 2026-08-13). This REPLACES the severed POST /api/pricing-costings/{}/recalculate '
-    + 'that hrApi still calls — see CALLS_DEPRECATED below, which is the other half of the same unfinished migration. '
-    + 'Covered by PricingDecisionIntegrationTest and PricingCostingAuthzIntegrationTest.',
   'PUT /api/pricing-decisions/{}/items/{}/cost-override':
     'V141 (PR #702). Genuinely new behaviour, not a duplicate: a per-line manual cost sitting BESIDE the computed '
     + 'figure, which it never destroys, with a mandatory reason and staleness re-stamping. No routes.js entry, so '

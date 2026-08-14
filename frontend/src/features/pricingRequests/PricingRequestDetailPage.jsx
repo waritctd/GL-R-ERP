@@ -392,6 +392,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
       };
     }),
   }), 'บันทึกราคาขายที่เสนอแล้ว');
+  // V141 ("CEO owns costing", PR #702): recomputes the bound costing in place, preserving every
+  // per-line override — see recalculatePricingDecisionCost's own doc comment in hrApi.js. Never
+  // changes status, margins, or approved_* — it only refreshes cost.
+  const recalculateDecisionCost = useActionMutation(
+    (decision) => api.pricingRequests.recalculatePricingDecisionCost(decision.id),
+    'คำนวณต้นทุนใหม่แล้ว',
+  );
   const approveDecision = useMutation({
     mutationFn: (decision) => api.pricingRequests.approvePricingDecision(decision.id, {
       clientRequestId: approveClientRequestId,
@@ -1149,35 +1156,49 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     })}
                   </div>
                   {editable ? (
-                    <div className="mt-3 flex flex-wrap gap-2 border-t border-border-subtle pt-3">
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        disabled={saveDecisionItems.isPending}
-                        onClick={() => saveDecisionItems.mutate({ decision, items: decision.items })}
-                        data-testid="pcr-ceo-save-decision-items"
-                      >
-                        บันทึกการเปลี่ยนแปลง
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="primary"
-                        disabled={approveDecision.isPending || missingBeforeApprove.length > 0}
-                        onClick={() => setConfirmAction({ type: 'approveDecision', decision })}
-                        data-testid="pcr-ceo-approve"
-                      >
-                        อนุมัติราคาขาย
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        disabled={returnDecisionToImport.isPending}
-                        onClick={() => setConfirmAction({ type: 'returnDecision', decision })}
-                      >
-                        ตีกลับให้ฝ่ายนำเข้าแก้ไข
-                      </Button>
+                    <div className="mt-3 flex flex-col gap-2 border-t border-border-subtle pt-3">
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={recalculateDecisionCost.isPending}
+                          onClick={() => recalculateDecisionCost.mutate(decision)}
+                          data-testid="pcr-ceo-recalculate-cost"
+                        >
+                          คำนวณต้นทุนใหม่
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={saveDecisionItems.isPending}
+                          onClick={() => saveDecisionItems.mutate({ decision, items: decision.items })}
+                          data-testid="pcr-ceo-save-decision-items"
+                        >
+                          บันทึกการเปลี่ยนแปลง
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="primary"
+                          disabled={approveDecision.isPending || missingBeforeApprove.length > 0}
+                          onClick={() => setConfirmAction({ type: 'approveDecision', decision })}
+                          data-testid="pcr-ceo-approve"
+                        >
+                          อนุมัติราคาขาย
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={returnDecisionToImport.isPending}
+                          onClick={() => setConfirmAction({ type: 'returnDecision', decision })}
+                        >
+                          ตีกลับให้ฝ่ายนำเข้าแก้ไข
+                        </Button>
+                      </div>
+                      <p className="m-0 text-xs text-text-muted">
+                        คำนวณต้นทุนใหม่จะดึงต้นทุนล่าสุดมาคำนวณ โดยไม่ลบค่าที่ปรับเองไว้ — ถ้าอัตราแลกเปลี่ยนหรือสูตรคำนวณเปลี่ยนไป ค่าที่ปรับเองอาจล้าสมัยและต้องยืนยันอีกครั้งก่อนอนุมัติ
+                      </p>
                       {missingBeforeApprove.length > 0 ? (
-                        <span className="self-center text-xs text-danger">ทุกรายการต้องมีอัตรากำไรและราคาขั้นต่ำก่อนอนุมัติ</span>
+                        <span className="text-xs text-danger">ทุกรายการต้องมีอัตรากำไรและราคาขั้นต่ำก่อนอนุมัติ</span>
                       ) : null}
                     </div>
                   ) : null}

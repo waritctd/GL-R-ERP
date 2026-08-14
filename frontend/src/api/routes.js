@@ -328,6 +328,9 @@ export const API_ROUTES = {
     pricingDecisionRecalculate: (id) => `/api/pricing-decisions/${id}/recalculate`,
     pricingDecisionApprove: (id) => `/api/pricing-decisions/${id}/approve`,
     pricingDecisionReturnToImport: (id) => `/api/pricing-decisions/${id}/return-to-import`,
+    // V141 "CEO owns costing" (PR #702). recalculate-cost is the CEO-side successor to the
+    // severed /pricing-costings/{}/recalculate.
+    pricingDecisionRecalculateCost: (id) => `/api/pricing-decisions/${id}/recalculate-cost`,
     // Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationController.
     customerQuotations: (id) => `/api/pricing-requests/${id}/quotations`,
     customerQuotation: (id) => `/api/customer-quotations/${id}`,

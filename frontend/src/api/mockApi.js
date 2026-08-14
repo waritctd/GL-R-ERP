@@ -8841,6 +8841,38 @@ export const api = {
       return delay({ decision });
     },
 
+    // V141 ("CEO owns costing", PR #702). Mirrors PricingDecisionService.recalculateCost: DRAFT
+    // decision AND CEO_REVIEWING request (recalculatePricingDecision above only checks DRAFT —
+    // that is a real gap in the OLDER sibling method, not a pattern to copy here). Re-derives each
+    // decision item's frozen cost from the bound costing's current computed figures. The mock's
+    // landed-cost engine never drifts on its own (no FX-refresh simulation), so today this is a
+    // same-value refresh; it never destroys anything and never changes status/margins/approved_*.
+    async recalculatePricingDecisionCost(id) {
+      hasRole('ceo');
+      const decision = mockPricingDecisions.find((d) => d.id === Number(id));
+      if (!decision) fail('ไม่พบมติราคานี้', 404);
+      if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่แก้ไขได้', 409);
+      const pr = findPricingRequestRaw(decision.pricingRequestId);
+      if (pr.status !== 'CEO_REVIEWING') fail('คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
+
+      const costing = mockPricingCostings.find((c) => c.id === decision.pricingCostingId);
+      for (const item of decision.items) {
+        const costingItem = costing?.items.find((ci) => ci.pricingRequestItemId === item.pricingRequestItemId);
+        if (!costingItem) continue;
+        item.frozenLandedCostPerPieceThb = costingItem.landedCostPerUnitThb;
+        item.frozenLandedCostPerRequestedUnitThb = Number(item.requestedQuantity) > 0
+          ? costingItem.totalLandedCostThb / Number(item.requestedQuantity)
+          : costingItem.landedCostPerUnitThb;
+        if (item.proposedMarginPct != null) {
+          item.proposedSellingPricePerRequestedUnit =
+            item.frozenLandedCostPerRequestedUnitThb * (1 + Number(item.proposedMarginPct));
+        }
+        item.updatedAt = new Date().toISOString();
+      }
+      decision.updatedAt = new Date().toISOString();
+      return delay({ decision });
+    },
+
     async approvePricingDecision(id, payload = {}) {
       const user = hasRole('ceo');
       const decision = mockPricingDecisions.find((d) => d.id === Number(id));
