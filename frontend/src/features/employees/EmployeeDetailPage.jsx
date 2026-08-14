@@ -12,11 +12,13 @@ import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { DetailHero, FieldList, InfoGrid } from '../../components/common/FieldList.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageStack } from '../../components/common/Layout.jsx';
+import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { formatAddress, formatMoney, formatThaiDate } from '../../utils/format.js';
 import { TaxAllowanceDrilldown } from '../taxAllowance/TaxAllowanceDrilldown.jsx';
 import { EmployeeFormModal } from './EmployeeFormModal.jsx';
+import { ResetPasswordDialog } from './ResetPasswordDialog.jsx';
 
 const tabDefs = [
   { id: 'personal', label: 'ข้อมูลส่วนตัว', icon: 'user' },
@@ -25,11 +27,16 @@ const tabDefs = [
   { id: 'sensitive', label: 'ข้อมูลอ่อนไหว', icon: 'shield', restricted: true },
 ];
 
-export function EmployeeDetailPage({ user, onUpdateEmployee }) {
+export function EmployeeDetailPage({ user, onUpdateEmployee, showToast }) {
   const { id } = useParams();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('personal');
   const [editing, setEditing] = useState(false);
+  const [resettingPassword, setResettingPassword] = useState(false);
+  // canManageEmployees is ['hr'], which mirrors EmployeeController#resetPassword's
+  // `sessions.requireAnyRole(user, "hr")` exactly. EmployeeDto carries no server-advertised action
+  // list to gate on (the #713 pattern), so this explicit role check is the available option; the
+  // server remains the enforcing gate either way.
   const canManage = hasPermission(user.role, 'canManageEmployees');
   const canSeeSensitive = hasPermission(user.role, 'canViewSensitiveEmployeeData');
 
@@ -79,10 +86,26 @@ export function EmployeeDetailPage({ user, onUpdateEmployee }) {
         </div>
         <StatusBadge tone={employee.statusTone}>{employee.statusTh}</StatusBadge>
         {canManage ? (
-          <Button type="button" onClick={() => setEditing(true)}>
-            <Icon name="pencil" />
-            แก้ไข
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button type="button" onClick={() => setEditing(true)}>
+              <Icon name="pencil" />
+              แก้ไข
+            </Button>
+            {/* Reset-password sits in the overflow rather than beside แก้ไข: it is destructive
+                (the employee's current password stops working immediately) and rare (onboarding or
+                a lockout), so it gets one deliberate extra step instead of sitting flush against
+                the everyday edit control. */}
+            <OverflowMenu
+              items={[{
+                key: 'reset-password',
+                label: 'ตั้งรหัสผ่านชั่วคราว',
+                icon: 'lock',
+                tone: 'danger',
+                onSelect: () => setResettingPassword(true),
+                testId: 'reset-password-action',
+              }]}
+            />
+          </div>
         ) : null}
       </DetailHero>
 
@@ -109,6 +132,22 @@ export function EmployeeDetailPage({ user, onUpdateEmployee }) {
       {activeTab === 'sensitive' && canSeeSensitive ? <SensitiveTab employee={employee} /> : null}
 
       {editing ? <EmployeeFormModal employee={employee} onClose={() => setEditing(false)} onSubmit={submitEdit} /> : null}
+
+      {/* `canManage &&` is defence in depth: the trigger is already HR-gated above, so this only
+          matters if the menu is ever moved. The server gate is what actually enforces this. */}
+      {resettingPassword && canManage ? (
+        <ResetPasswordDialog
+          employee={employee}
+          onClose={() => setResettingPassword(false)}
+          onConfirm={async () => {
+            const response = await api.employees.resetPassword(employee.id);
+            // The toast deliberately does NOT carry the password — toast text is retained and
+            // re-rendered by the app shell, well outside this dialog's lifetime.
+            showToast?.('success', `ตั้งรหัสผ่านชั่วคราวให้ ${employee.nameTh} แล้ว`);
+            return response.temporaryPassword;
+          }}
+        />
+      ) : null}
     </PageStack>
   );
 }

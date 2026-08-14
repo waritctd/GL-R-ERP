@@ -53,6 +53,7 @@ import {
 import {
   buildDemoCommissions, buildDemoTaxAllowanceDeclarations, buildDemoTaxAllowanceAttachments,
   buildDemoEmployeeTaxAllowances, buildDemoDeductionObligations, buildDemoPayrollInputDrafts,
+  buildDemoDeductionShortfalls,
 } from '../data/demoPayroll.js';
 
 const db = createDemoDatabase();
@@ -239,6 +240,11 @@ db.employeeTaxAllowances = db.employeeTaxAllowances?.length
 db.deductionObligations = db.deductionObligations?.length
   ? db.deductionObligations : buildDemoDeductionObligations(db.employees);
 db.deductionObligationRemittances = db.deductionObligationRemittances || [];
+// Garnishment shortfall ledger (issue #376). Unlike the remittance store above, this one CAN be
+// seeded honestly: a shortfall row is a plain record of an ALREADY-computed cap outcome, so
+// nothing here reimplements the ป.วิ.พ. ม.302 cap — the numbers are fixtures, not a calculation.
+db.deductionShortfalls = db.deductionShortfalls?.length
+  ? db.deductionShortfalls : buildDemoDeductionShortfalls(db.employees);
 // §5 leave-rules-as-data (V116, extended V119/V120): paidDaysCap/advanceNoticeDays/
 // minServiceMonths/maxConsecutiveDays/oncePerEmployment/dayCountBasis/proratedFirstYear/
 // firstYearMaxDays mirror the hr.leave_type columns for SHAPE parity only (contract.test.js checks
@@ -3737,6 +3743,19 @@ function findEmployee(id) {
   return employee;
 }
 
+// Mirrors TemporaryPasswordGenerator's alphabet and length exactly (14 chars, alphanumeric with
+// the visually ambiguous O/0/I/l/1 removed) so ResetPasswordDialog is exercised against a
+// realistic value. Uses Math.random, NOT SecureRandom — this is a demo-fixture generator for
+// exercising the UI, not a security-grade one; only the real backend's SecureRandom is that.
+const TEMPORARY_PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+function mockTemporaryPassword() {
+  let password = '';
+  for (let i = 0; i < 14; i += 1) {
+    password += TEMPORARY_PASSWORD_ALPHABET[Math.floor(Math.random() * TEMPORARY_PASSWORD_ALPHABET.length)];
+  }
+  return password;
+}
+
 function applyApprovedProfileRequest(request) {
   const employee = findEmployee(request.employeeId);
   if (request.fieldKey === 'phone') employee.phone = request.newValue;
@@ -4014,6 +4033,24 @@ export const api = {
         }
       }
       return delay({ employee: employeeWithRequestMeta(employee) });
+    },
+    // Mirrors EmployeeController#resetPassword + EmployeeService#resetPassword.
+    // hr ONLY — the Java side is `sessions.requireAnyRole(user, "hr")`, so ceo is deliberately NOT
+    // allowed here either. 404s on an unknown employee exactly as the service does.
+    async resetPassword(id) {
+      hasRole('hr');
+      const employee = findEmployee(id);
+      const temporaryPassword = mockTemporaryPassword();
+      // Mirrors EmployeeAuthRepository#setTemporaryPassword: the row's password is replaced and
+      // must_change_password is set, so the next login is forced through ChangePasswordModal.
+      // The real backend writes hr.employee directly, so an employee with no login row is still a
+      // successful reset — hence the optional match rather than a failure.
+      const account = db.users.find((user) => user.employeeId === employee.id);
+      if (account) {
+        account.password = temporaryPassword;
+        account.mustChangePassword = true;
+      }
+      return delay({ temporaryPassword });
     },
   },
   // Mirrors ProfileRequestController + ProfileRequestService (profile/).
@@ -7088,6 +7125,22 @@ export const api = {
       row.updatedById = user.employeeId;
       row.updatedAt = new Date().toISOString();
       return delay(deductionObligationPublic(row));
+    },
+    // Garnishment shortfall ledger (issue #376). Mirrors PayrollDeductionShortfallController +
+    // PayrollDeductionShortfallService: hr + ceo (VIEW_ROLES), read-only, no write half at all —
+    // rows are written only as a side effect of a payroll run.
+    async getDeductionShortfalls(params = {}) {
+      hasRole('hr', 'ceo');
+      let items = db.deductionShortfalls;
+      if (params.employeeId) items = items.filter((row) => row.employeeId === Number(params.employeeId));
+      if (params.kind) items = items.filter((row) => row.deductionKind === params.kind);
+      // Mirrors PayrollDeductionShortfallRepository#findAll's
+      // `ORDER BY s.payroll_month DESC, e.employee_code` — and its absence of any LIMIT, so the
+      // mock returns every matching row exactly as the server does.
+      items = [...items].sort((a, b) => (
+        b.payrollMonth.localeCompare(a.payrollMonth) || a.employeeCode.localeCompare(b.employeeCode)
+      ));
+      return delay({ items });
     },
   },
 

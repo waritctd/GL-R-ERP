@@ -551,6 +551,26 @@ export function payrollStatusLabel(status) {
   return map[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
+// PayrollDeductionKind -> Thai label. Canonical source; do not re-add a page-local map.
+//
+// NOTE this is NOT the same enum as DeductionObligationKind (STUDENT_LOAN / LEGAL_EXECUTION),
+// which labels an obligation record. PayrollDeductionKind labels a LINE on the payslip, has eight
+// values, and spells garnishment as LEGAL_EXECUTION_GARNISHMENT. Wording follows the enum's own
+// javadoc so the UI reads the same as the backend's source of truth.
+export function payrollDeductionKindLabel(kind) {
+  const map = {
+    WITHHOLDING_TAX: 'ภาษีหัก ณ ที่จ่าย',
+    SOCIAL_SECURITY: 'ประกันสังคม',
+    STUDENT_LOAN: 'กยศ.',
+    LEGAL_EXECUTION_GARNISHMENT: 'อายัดเงินเดือนตามหมายบังคับคดี',
+    WARNING_LETTER: 'หักตามใบเตือน',
+    CUSTOMER_RETURN: 'ลูกค้าคืนสินค้า',
+    OTHER_PRETAX: 'หักอื่นๆ ก่อนภาษี',
+    OTHER_POST_TAX: 'หักอื่นๆ หลังภาษี',
+  };
+  return map[kind] ?? kind ?? '-';
+}
+
 // Bangkok is the business zone for every attendance/leave/overtime date. Deriving "today" from
 // the browser's zone instead makes a late-evening session disagree with the server about which
 // day it is — which matters most on the attendance page, whose primary control is a date stepper.
