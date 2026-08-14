@@ -1,0 +1,38 @@
+-- Drops sales.deal_estimate_markup, the single-row config added by V112.
+--
+-- WHAT IT WAS. The deal-create modal's "ราคาตั้ง (ประมาณการ)" display multiplier: the catalog /
+-- supplier price is a FACTORY cost, and the owner did not want that raw number shown to a rep as
+-- "ราคาตั้ง", so it was multiplied by this coarse CEO-tunable figure first ("maybe x1.5 x2", the
+-- owner's own words) to approximate a selling price on screen. It was never part of any
+-- calculation -- not landed cost, not margin, not the quotation. Purely what a rep saw.
+--
+-- WHY IT IS GOING. That estimate was removed from the frontend ENTIRELY by PR #682 after UAT,
+-- because reps were reading catalog-price-times-markup as an actual selling price -- the precise
+-- misreading the multiplier existed to prevent. Nothing has consumed the value since. The backend
+-- half outlived it by four months: the controller, repository, DTOs and two test classes went on
+-- asserting a contract with no client, and this table went on holding a number nobody read.
+-- Owner ruling 2026-08-14 (issue #748): remove the whole surface, this table included. The Java
+-- side goes in the same commit as this migration.
+--
+-- WHAT IS DESTROYED. At most ONE row, ever: `id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1)`
+-- made the table a structural singleton, and the only writer was DealEstimateMarkupController's
+-- CEO-only PUT, which UPDATEs id = 1 in place (no INSERT, no DELETE anywhere in the codebase). The
+-- row holds a multiplier plus who last changed it and when -- no history, no per-country or
+-- per-effective-date series. Both local databases carrying this schema on 2026-08-14 held the
+-- untouched V112 seed: multiplier 2.000, updated_by NULL. See the PR body for the full count.
+--
+-- NOT sales.price_calc_config. That table IS the real margin policy that issue #388 deliberately
+-- locked `sales` out of reading, and V112 was careful to be a separate table precisely so this
+-- display figure could never smuggle that policy out through another door. Dropping this one takes
+-- none of it with it. FxRateController's open-read ruling used to cite the deleted controller as
+-- precedent; that reasoning is now restated in FxRateController itself and is unaffected.
+--
+-- NO CASCADE, deliberately. Checked before writing this: nothing references the table (no inbound
+-- foreign key, no view), the only FK on it is its own outbound updated_by -> hr.employee, and no
+-- seed or demo migration inserts into it. So a plain DROP is sufficient -- and if some environment
+-- has grown a dependant this did not anticipate, the right outcome is a loud failure to
+-- investigate, not a CASCADE quietly destroying whatever that dependant was.
+--
+-- IF EXISTS because prod's Flyway history is known to drift from the repo: an environment that
+-- somehow never applied V112 should skip this cleanly rather than leave Flyway in a failed state.
+DROP TABLE IF EXISTS sales.deal_estimate_markup;

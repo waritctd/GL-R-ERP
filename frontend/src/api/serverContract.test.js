@@ -271,15 +271,12 @@ const SERVER_ONLY = {
     + 'for a new employee\'s first password (it replaced employee-code-derived passwords, removed for security in '
     + 'PR #150), yet there is no button and no documented curl recipe. Onboarding needs a hand-crafted POST today.',
 
-  // ── Orphaned by a frontend removal; the clearest deletion candidate ───────
-  'GET /api/deal-estimate-markup': 'Orphaned by PR #682. See the PUT entry below.',
-  'PUT /api/deal-estimate-markup':
-    'The ราคาตั้ง (ประมาณการ) display multiplier (V112, PR #438), removed from the frontend entirely by PR #682 after '
-    + 'UAT — reps were reading a catalog-price-times-markup figure as a selling price. Two frontend tests now assert '
-    + 'it must NOT come back (TicketCreateModal.test.jsx, CeoSettingsPage.test.jsx). The controller, repository, DTOs, '
-    + 'V112 table and two backend test classes all survive, asserting a contract nothing consumes. This is the one '
-    + 'entry where deletion is the straightforward answer — left for an owner ruling, and note FxRateController cites '
-    + 'this controller as precedent for its own open-read decision.',
+  // GET/PUT /api/deal-estimate-markup were the two entries here until 2026-08-14. They are gone
+  // rather than re-worded: issue #748's owner ruling deleted the controller, repository, DTOs, both
+  // backend test classes and — by V145 — the V112 table itself, so there is no longer an endpoint
+  // to exempt. The two frontend tests asserting the multiplier must NOT come back stay where they
+  // are (TicketCreateModal.test.jsx, CeoSettingsPage.test.jsx); they guard the frontend, which is
+  // where the misreading happened.
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

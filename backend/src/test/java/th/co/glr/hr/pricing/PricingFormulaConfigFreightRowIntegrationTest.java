@@ -30,7 +30,11 @@ import tools.jackson.databind.json.JsonMapper;
  * /api/pricing-formula-config/freight-rates} and {@code DELETE
  * /api/pricing-formula-config/freight-rates/{id}} -- per CLAUDE.md's "Permission changes must ship
  * evidence". This runs the REAL controller over the REAL repository against REAL Postgres, the same
- * shape as {@code AttendanceScopeIntegrationTest} and {@code DealEstimateMarkupAuthzIntegrationTest}.
+ * shape as {@code AttendanceScopeIntegrationTest} (CLAUDE.md's canonical reference implementation)
+ * and, in this same pricing domain, {@code CatalogPricingReadAuthzIntegrationTest}. The second
+ * citation used to be {@code DealEstimateMarkupAuthzIntegrationTest}, deleted with the rest of the
+ * deal-estimate-markup surface by issue #748; it is repointed rather than dropped so this class
+ * still names a reader can open.
  *
  * <p>Mockito cannot stand in here for two separate reasons. First, a mocked repository would let a
  * 403 assertion "pass" while the SQL happily wrote the row anyway -- so every denial case below also

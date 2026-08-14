@@ -26,14 +26,23 @@ public class FxRateController {
      * gate by exactly one role, to {@code sales}. NOT opened to every authenticated session: the
      * owner's words were "should only be to sale", and this set is the whole of that ruling.
      *
-     * <p>The trigger was the deal-create modal's "ราคาตั้ง (ประมาณการ)" estimate (V112,
-     * {@link DealEstimateMarkupController}): a rep who picks a catalog item needs the FX rate to
-     * convert its price to THB, and every catalog row is EUR or USD — there are no THB rows at
-     * all — so gating the rate to the costing audience blocked the feature for the one role it
-     * exists for. {@code sales} is sufficient and necessary: {@code ROLE_PERMISSIONS.canCreateTickets}
-     * is {@code ['sales']} and {@code TicketService.create} gates on {@code Set.of("sales")}, so no
-     * other role can open that modal — {@code sales_manager} and {@code ceo} browse the pipeline but
-     * cannot create a deal.
+     * <p>The trigger was the deal-create modal's "ราคาตั้ง (ประมาณการ)" estimate (V112): a rep who
+     * picks a catalog item needs the FX rate to convert its price to THB, and every catalog row is
+     * EUR or USD — there are no THB rows at all — so gating the rate to the costing audience
+     * blocked the feature for the one role it exists for. {@code sales} is sufficient and
+     * necessary: {@code ROLE_PERMISSIONS.canCreateTickets} is {@code ['sales']} and
+     * {@code TicketService.create} gates on {@code Set.of("sales")}, so no other role can open that
+     * modal — {@code sales_manager} and {@code ceo} browse the pipeline but cannot create a deal.
+     *
+     * <p><b>THE TRIGGER IS GONE; THE RULING IS NOT.</b> That estimate was removed from the frontend
+     * by PR #682 after UAT (reps read catalog-price-times-markup as a selling price), and issue
+     * #748 then deleted its whole backend surface — {@code DealEstimateMarkupController}, its
+     * repository, DTOs and the V112 table (dropped by V145). This javadoc used to {@code @link}
+     * that controller as the precedent for the read widening below, so the reasoning is restated
+     * here in full rather than left pointing at a deleted class: the widening was justified by what
+     * an FX rate DISCLOSES, not by the feature that happened to ask for it. A rate only converts a
+     * number already visible to this caller, so it survives its trigger. Re-narrowing it is a
+     * separate owner decision, not a tidy-up that follows from #748.
      *
      * <p>The reasoning is deliberately narrower than #388's: an FX rate only converts a number that
      * is ALREADY visible to this caller — {@code /api/catalog/prices} is open to any authenticated
