@@ -8806,10 +8806,9 @@ export const api = {
       const revision = { ...quote, id: mockFactoryQuoteSeq++, quoteCode: `FQ-2026-${String(mockFactoryQuoteSeq).padStart(4, '0')}`, status: 'RESPONSE_RECEIVED', parentFactoryQuoteId: quote.id, revisionNo: quote.revisionNo + 1, current: true, createdAt: new Date().toISOString() };
       applyResponse(revision);
       mockFactoryQuotes.push(revision);
-      for (const costing of mockPricingCostings.filter((c) => c.pricingRequestId === pr.id && ['DRAFT', 'CALCULATED'].includes(c.status))) {
-        costing.stale = true;
-        costing.staleReason = 'Factory quote revision changed';
-      }
+      // A revision no longer marks open costings: V141 deleted FactoryQuoteService's
+      // markOpenCostingsStale together with the pricing_costing.stale/stale_reason columns it
+      // wrote, so mirroring it here would invent a state the real service cannot produce.
       pushPricingRequestEvent(pr, user, 'FACTORY_RESPONSE_REVISED', pr.status, pr.status);
       mockFactoryQuoteResponseReceipts.push({ factoryQuoteId: revision.id, createdBy: user.id, clientRequestId: payload.clientRequestId });
       return delay({ factoryQuote: revision });
@@ -8896,7 +8895,7 @@ export const api = {
       for (const item of pr.items) if (!readyFactories.has(item.factory)) fail(`ใบเสนอราคาของโรงงาน ${item.factory} ยังไม่พร้อมสำหรับการคำนวณต้นทุน`, 422);
       const existing = mockPricingCostings.find((c) => c.pricingRequestId === pr.id && ['DRAFT', 'CALCULATED'].includes(c.status));
       if (existing) return delay({ costing: existing });
-      const costing = { id: mockPricingCostingSeq++, costingCode: `PCO-2026-${String(mockPricingCostingSeq).padStart(4, '0')}`, pricingRequestId: pr.id, versionNo: mockPricingCostingSeq, status: 'DRAFT', stale: false, staleReason: null, note: payload.note ?? null, createdBy: user.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), calculatedAt: null, submittedBy: null, submittedAt: null, totalLandedCostThb: null, items: [] };
+      const costing = { id: mockPricingCostingSeq++, costingCode: `PCO-2026-${String(mockPricingCostingSeq).padStart(4, '0')}`, pricingRequestId: pr.id, versionNo: mockPricingCostingSeq, status: 'DRAFT', note: payload.note ?? null, createdBy: user.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), calculatedAt: null, submittedBy: null, submittedAt: null, totalLandedCostThb: null, items: [] };
       mockPricingCostings.push(costing);
       // Mirrors PricingCostingService.createDraft after V140: starting a costing settles the
       // request into AWAITING_FACTORY_RESPONSE when it is not already there (Import creating one
@@ -8982,8 +8981,6 @@ export const api = {
       });
       costing.totalLandedCostThb = costing.items.reduce((sum, item) => sum + item.totalLandedCostThb, 0);
       costing.status = 'CALCULATED';
-      costing.stale = false;
-      costing.staleReason = null;
       costing.note = payload.note ?? costing.note;
       costing.calculatedAt = new Date().toISOString();
       pushPricingRequestEvent(pr, user, 'PRICING_COSTING_CALCULATED', null, null);
@@ -8994,7 +8991,9 @@ export const api = {
       const user = hasRole('import');
       const costing = mockPricingCostings.find((c) => c.id === Number(id));
       if (!costing) fail('ไม่พบการคำนวณต้นทุนนี้', 404);
-      if (costing.stale) fail('ข้อมูลต้นทุนล้าสมัยแล้ว ต้องคำนวณใหม่ก่อนส่ง', 409);
+      // No staleness gate here. There used to be a 409 keyed on costing.stale — a rule the real
+      // service CANNOT enforce, because V141 dropped the column it read. A mock that refuses what
+      // production accepts is the same class of lie as one that accepts what production refuses.
       if (costing.status !== 'CALCULATED') fail('ส่งได้เฉพาะการคำนวณต้นทุนที่คำนวณเสร็จแล้วเท่านั้น', 409);
       const pr = findPricingRequestRaw(costing.pricingRequestId);
       costing.status = 'SUBMITTED';
