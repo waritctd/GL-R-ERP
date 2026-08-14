@@ -570,6 +570,93 @@ function sortedFormulaConfig(config) {
   };
 }
 
+// ── Freight-row add/delete (issue #436, PR #455) — mirrors PricingFormulaConfigController's new
+// endpoints exactly, including the fact that neither mutates in place: both derive the full
+// freight list from the current version and write a COMPLETE NEW version, reissuing a fresh id
+// for EVERY row (freight AND duty AND clearance) — never just the freight rows that changed. This
+// validation is a NON-AUTHORITATIVE approximation of the server's; a green run here is never
+// evidence the real endpoint would also accept the payload.
+
+/**
+ * Rebuilds the whole config as a NEW version, substituting `freightRows` in for the freight
+ * child list. Every scalar (buffers, margin, effectiveFrom, ...) and every duty/clearance row
+ * carries over from `current` verbatim in VALUE — but duty/clearance rows are still re-keyed with
+ * a fresh id via formulaDutyRow/formulaClearanceRow, same as pricingFormulaConfig.update above,
+ * because "never mutate an existing version's children in place" applies to every child table,
+ * not just the one this call happens to be touching.
+ */
+function createNewFormulaConfigVersion(current, freightRows) {
+  const maxVersion = Math.max(0, ...mockPricingFormulaConfigVersions.map((c) => c.version));
+  mockPricingFormulaConfigVersions.forEach((c) => { c.isCurrent = false; });
+  const newConfig = {
+    formulaConfigId: mockFormulaConfigSeq++,
+    version: maxVersion + 1,
+    insuranceValueFactor: current.insuranceValueFactor,
+    insuranceRate: current.insuranceRate,
+    insuranceBuffer: current.insuranceBuffer,
+    costBuffer: current.costBuffer,
+    sellingBuffer: current.sellingBuffer,
+    defaultMarginPct: current.defaultMarginPct,
+    sellingPriceRoundUpTo: current.sellingPriceRoundUpTo,
+    isCurrent: true,
+    effectiveFrom: current.effectiveFrom,
+    updatedAt: new Date().toISOString(),
+    freightRates: freightRows.map((r) => formulaFreightRow(
+      r.originCountry, r.thicknessMinMm, r.thicknessMaxMm, r.qtyMinSqm, r.qtyMaxSqm, r.amountThb)),
+    dutyRates: current.dutyRates.map((d) => formulaDutyRow(d.productType, d.productLabel, d.dutyPct)),
+    clearanceFees: current.clearanceFees.map((c) => formulaClearanceRow(c.qtyMinSqm, c.qtyMaxSqm, c.amountThb)),
+  };
+  mockPricingFormulaConfigVersions.push(newConfig);
+  return newConfig;
+}
+
+/**
+ * Half-open [min, max) overlap test — mirrors PricingFormulaConfigController#bandsOverlap
+ * exactly, including the strict "<" that keeps contiguous bands ([1,101) and [101,451)) from
+ * being flagged as overlapping.
+ */
+function freightBandsOverlap(aMin, aMax, bMin, bMax) {
+  const aMinLtBMax = bMax == null || aMin < bMax;
+  const bMinLtAMax = aMax == null || bMin < aMax;
+  return aMinLtBMax && bMinLtAMax;
+}
+
+/** Mirrors PricingFormulaConfigController#validate's band-ordering + per-country pairwise overlap
+ * check, run against the WHOLE resulting matrix (not just the row being added). */
+function validateFreightRates(rows) {
+  for (const row of rows) {
+    if (row.thicknessMinMm >= row.thicknessMaxMm) {
+      fail(`ช่วงความหนาไม่ถูกต้อง: ${row.originCountry} ${row.thicknessMinMm}-${row.thicknessMaxMm}`, 400);
+    }
+    if (row.qtyMaxSqm != null && row.qtyMinSqm >= row.qtyMaxSqm) {
+      fail(`ช่วงจำนวน (ตร.ม.) ไม่ถูกต้อง: ${row.originCountry} ${row.thicknessMinMm}-${row.thicknessMaxMm}`, 400);
+    }
+  }
+  const byCountry = new Map();
+  for (const row of rows) {
+    if (!byCountry.has(row.originCountry)) byCountry.set(row.originCountry, []);
+    byCountry.get(row.originCountry).push(row);
+  }
+  for (const [country, group] of byCountry) {
+    for (let i = 0; i < group.length; i += 1) {
+      for (let j = i + 1; j < group.length; j += 1) {
+        const a = group[i];
+        const b = group[j];
+        const thicknessOverlap = freightBandsOverlap(a.thicknessMinMm, a.thicknessMaxMm, b.thicknessMinMm, b.thicknessMaxMm);
+        const qtyOverlap = freightBandsOverlap(a.qtyMinSqm, a.qtyMaxSqm, b.qtyMinSqm, b.qtyMaxSqm);
+        if (thicknessOverlap && qtyOverlap) {
+          fail(
+            `ช่วงความหนาและช่วงจำนวน (ตร.ม.) ซ้อนทับกัน: ${country} `
+            + `หนา ${a.thicknessMinMm}-${a.thicknessMaxMm} มม. (${a.qtyMinSqm}-${a.qtyMaxSqm ?? 'ไม่จำกัด'} ตร.ม.) `
+            + `กับ ${b.thicknessMinMm}-${b.thicknessMaxMm} มม. (${b.qtyMinSqm}-${b.qtyMaxSqm ?? 'ไม่จำกัด'} ตร.ม.)`,
+            400,
+          );
+        }
+      }
+    }
+  }
+}
+
 // R5: Attachments
 const mockAttachments = [];
 let mockAttachSeq = 1;
@@ -7540,12 +7627,33 @@ export const api = {
   // endpoint, distinct from priceCalcConfigs above (which keeps serving the separate catalog
   // price calculator, untouched). get() mirrors READ_ROLES = ceo/import (same #388-style
   // rationale: this config IS the margin policy). update stays CEO-only.
+  //
+  // addFreightRate (issue #436, PR #455) mirrors PricingFormulaConfigController.addFreightRate —
+  // also CEO-only, also strictly additive to the whole-config POST above (same versioning model,
+  // never an UPDATE of a stored row). Its validation is a NON-AUTHORITATIVE approximation; the
+  // server decides.
   pricingFormulaConfig: {
     async get() {
       hasRole('ceo', 'import');
       const current = currentFormulaConfig();
       if (!current) fail('ไม่พบสูตรคำนวณราคาขาย', 404);
       return delay({ formulaConfig: sortedFormulaConfig(current) });
+    },
+    async addFreightRate(payload) {
+      hasRole('ceo');
+      const current = currentFormulaConfig();
+      if (!current) fail('ไม่พบสูตรคำนวณราคาขาย', 404);
+      const newRow = {
+        originCountry: payload.originCountry,
+        thicknessMinMm: Number(payload.thicknessMinMm),
+        thicknessMaxMm: Number(payload.thicknessMaxMm),
+        qtyMinSqm: Number(payload.qtyMinSqm),
+        qtyMaxSqm: payload.qtyMaxSqm == null ? null : Number(payload.qtyMaxSqm),
+        amountThb: Number(payload.amountThb),
+      };
+      validateFreightRates([...current.freightRates, newRow]);
+      const newConfig = createNewFormulaConfigVersion(current, [...current.freightRates, newRow]);
+      return delay({ formulaConfig: sortedFormulaConfig(newConfig) });
     },
     async update(payload) {
       hasRole('ceo');

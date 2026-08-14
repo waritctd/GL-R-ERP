@@ -236,7 +236,6 @@ const SERVER_ONLY = {
   'POST /api/pricing-requests/{}/factory-purchase-orders': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
 
   // ── Built backend-first; the UI pass has not landed ───────────────────────
-  'POST /api/pricing-formula-config/freight-rates': 'Freight-row add/delete, PR #455. See the DELETE entry below.',
   'DELETE /api/pricing-formula-config/freight-rates/{}':
     'Per-row add/delete for the freight matrix (issue #436, PR #455 — which touched 3 backend files and 0 frontend). '
     + 'CeoSettingsPage.jsx still edits freight AMOUNT ONLY through the whole-config write, so V109\'s six blank cells '

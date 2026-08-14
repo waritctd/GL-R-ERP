@@ -328,6 +328,7 @@ export const api = {
   pricingFormulaConfig: {
     get: () => apiRequest(API_ROUTES.pricingFormulaConfig.get),
     update: (payload) => apiRequest(API_ROUTES.pricingFormulaConfig.update, { method: 'POST', body: payload }),
+    addFreightRate: (payload) => apiRequest(API_ROUTES.pricingFormulaConfig.freightRates, { method: 'POST', body: payload }),
   },
   attachments: {
     list: (ticketId) => apiRequest(API_ROUTES.attachments.list(ticketId)),
