@@ -295,4 +295,35 @@ describe('DepositNoticePage', () => {
     await waitFor(() => expect(screen.queryByText('ยังไม่มีใบแจ้งยอดเงินรับมัดจำ')).toBeNull());
     expect(await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด')).not.toBeNull();
   });
+
+  // Issue #756: the VAT rate must come from the served document's vatPercent, not a
+  // hardcoded 0.07 literal — DepositNoticeDto.vatPercent (backend/src/main/java/th/co/glr/hr/
+  // deposit/DepositNoticeDto.java:25) is the authoritative source once a document exists.
+  // subtotal 500 -> deposit(50%) 250 -> VAT at 10% = 25.00 / at 7% = 17.50 — chosen so the two
+  // rates produce clearly different, unambiguous money strings (no shared substring) and the
+  // assertion cannot pass by coincidence.
+  it('uses the served document vatPercent (10%) in the VAT label and amount, not the 7% fallback', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [{ ...validDraftDoc, vatPercent: 0.10 }],
+    });
+    renderDepositNoticePage();
+
+    await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
+
+    // Summary panel: label carries the served 10% rate, not a hardcoded "7%" — and the VAT
+    // amount is deposit(250) * 0.10 = 25.00, not deposit * 0.07 = 17.50.
+    expect(screen.getByText('ภาษีมูลค่าเพิ่ม 10% (คิดจากมัดจำ)')).not.toBeNull();
+    expect(screen.queryByText(/ภาษีมูลค่าเพิ่ม 7%/)).toBeNull();
+    expect(screen.getByText('25.00 บาท')).not.toBeNull();
+    expect(screen.queryByText('17.50 บาท')).toBeNull();
+
+    // ConfirmDialog carries the same served rate + amount (validDraftDoc is a fully valid
+    // document, so "ออกเอกสาร" opens the dialog with no issue-validation errors in the way).
+    fireEvent.click(screen.getByRole('button', { name: /ออกเอกสาร/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('ภาษีมูลค่าเพิ่ม 10%')).not.toBeNull();
+    expect(within(dialog).queryByText(/ภาษีมูลค่าเพิ่ม 7%$/)).toBeNull();
+    expect(within(dialog).getByText('25.00 บาท')).not.toBeNull();
+    expect(within(dialog).queryByText('17.50 บาท')).toBeNull();
+  });
 });

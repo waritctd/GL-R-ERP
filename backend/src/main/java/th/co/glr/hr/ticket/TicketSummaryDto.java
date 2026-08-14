@@ -85,7 +85,25 @@ public record TicketSummaryDto(
      * canListCommissionRecords = ['sales','sales_manager','ceo']}). {@link #invoiceOnFile} is
      * the existing precedent for a boolean derived from a related table on this DTO.
      */
-    boolean commissionRecorded
+    boolean commissionRecorded,
+    /**
+     * When this deal was last reopened after being marked lost, or {@code null} if it has never
+     * been lost (V58, {@code sales.ticket.reopened_at}). Written by {@link
+     * TicketRepository#clearDealLost}, which — per its own Javadoc and {@code
+     * V58__audit_trail_integrity.sql} — deliberately leaves {@link #lostReason} readable across a
+     * reopen instead of nulling it out, so {@code lostReason != null} no longer means "currently
+     * lost". {@code reopenedAt != null} (equivalently {@code reopenCount > 0}) is what actually
+     * distinguishes a live reopened deal from one still sitting CLOSED_LOST; {@link #lifecycle} is
+     * the authoritative current state either way. The column existed since V58 but was never
+     * serialized until issue #757 gave it a DTO component.
+     */
+    Instant reopenedAt,
+    /**
+     * Times this deal has been reopened after being marked lost (V58, {@code
+     * sales.ticket.reopen_count}, {@code INTEGER NOT NULL DEFAULT 0}). {@code 0} for a deal that
+     * has never been lost-then-reopened. See {@link #reopenedAt}.
+     */
+    int reopenCount
 ) {
     /**
      * Override wins when set, else the {@link DealStage}-derived default. Never a blocker.
@@ -125,7 +143,7 @@ public record TicketSummaryDto(
             salesStage, lostReason, lostAt, stageUpdatedAt, lifecycle, tenderRequirement, depositPolicy,
             depositPolicyReason, entryChannel, null, null, null, null, null, PaymentStage.NOT_REQUIRED,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, false, null, null, false, null, null,
-            null, null, null, null, false, false);
+            null, null, null, null, false, false, null, 0);
     }
 
     /**
@@ -147,6 +165,6 @@ public record TicketSummaryDto(
             creditTermDays, lastFollowUpAt, nextFollowUpAt, paymentStage, amountPayable, amountPaid,
             amountOutstanding, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
             cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
-            commissionRecorded);
+            commissionRecorded, reopenedAt, reopenCount);
     }
 }

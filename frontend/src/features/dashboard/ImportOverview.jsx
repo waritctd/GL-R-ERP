@@ -35,13 +35,25 @@ import { nextFulfilmentActionCode, nextImportAction } from '../tickets/importAct
 // of the queue for import); QUOTATION_ACCEPTED/QUOTATION_ISSUED/SUPERSEDED/
 // CANCELLED are excluded because pricing is resolved (or dead) by then.
 //
-// COSTING_IN_PROGRESS and MORE_INFO_REQUIRED are retired statuses (V140 merged the first into
-// AWAITING_FACTORY_RESPONSE and deleted the second along with the ขอข้อมูลเพิ่มเติม round-trip),
-// and they are kept in this list ON PURPOSE — same reasoning as the queue page's merged
-// เจรจาราคากับโรงงาน chip and utils/format.js's label map. The frontend and backend deploy
-// separately, so a new frontend can be live against rows V140 has not migrated yet; dropping the
-// two values would silently undercount this gauge for that whole window. They are inert once the
-// migration has run everywhere, at which point all three places can drop them together.
+// THREE retired statuses are kept in this list ON PURPOSE — same reasoning as the queue page's
+// merged เจรจาราคากับโรงงาน chip and utils/format.js's label map:
+//   - COSTING_IN_PROGRESS  (V140 merged it into AWAITING_FACTORY_RESPONSE)
+//   - MORE_INFO_REQUIRED   (V140 deleted it with the ขอข้อมูลเพิ่มเติม round-trip)
+//   - COSTING_REVISION_REQUIRED (V141 retired it — the CEO owns costing, and returnToImport now
+//     sends the request straight to AWAITING_FACTORY_RESPONSE)
+//
+// The reason is the same for all three and it is ONLY this: the frontend and backend deploy
+// separately, so a new frontend can be live against a backend that still writes the value, on a
+// database the migration has not run on yet. Dropping a value would silently undercount this
+// gauge for that whole window. They are inert once the migrations have run everywhere, at which
+// point all three places can drop all three together.
+//
+// COSTING_REVISION_REQUIRED was NOT covered by this comment until issue #750 — it was dropped a
+// migration later than the other two, so it sat here reading as if the decision above had already
+// been made for it. It had not been. It is made now, deliberately, and on the narrower of the two
+// available grounds: unlike utils/format.js's label map, this list counts LIVE pricing requests
+// from api.pricingRequests.queue, so V141 §5's preserved pricing_request_event history is not a
+// reason to keep it here — only the deploy-before-migration window is.
 const PRICING_IN_FLIGHT_STATUSES = [
   'SUBMITTED', 'IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS',
   'READY_FOR_CEO_REVIEW', 'CEO_REVIEWING', 'COSTING_REVISION_REQUIRED', 'MORE_INFO_REQUIRED',
@@ -49,7 +61,15 @@ const PRICING_IN_FLIGHT_STATUSES = [
 
 // fulfillmentStatus values that mean "physically in transit" — the same set
 // both the "ขนส่ง" conveyor bucket and the "กำลังขนส่ง" tracker use.
-const IN_TRANSIT_STATUSES = ['IR_SENT', 'SHIPPING', 'CUSTOMS_CLEARANCE'];
+//
+// CUSTOMS_CLEARANCE used to sit third here and was removed as dead (issue #749): commit 7991b9f1
+// deleted it from FulfilmentStatus.java as a zero-reference constant, and no code path has ever
+// written it into sales.ticket.fulfillment_status, so the literal could never match a real row.
+// PR #715 removed the same value from utils/format.js's fulfilmentStatusLabel and from
+// features/tickets/stageMeta.js and left a "do not re-add" note in both; this was the third copy
+// it missed. Do not re-add it here for symmetry with the names in FactoryPurchaseOrderStatus or
+// V77's header comment — those describe the factory PO's own sequence, not this column.
+const IN_TRANSIT_STATUSES = ['IR_SENT', 'SHIPPING'];
 
 // The five mutually-exclusive fulfilment-stage buckets a deal can sit in
 // (pricing pickup is a 6th, computed separately since it comes from the

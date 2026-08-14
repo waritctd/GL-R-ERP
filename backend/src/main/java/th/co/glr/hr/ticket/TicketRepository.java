@@ -45,6 +45,7 @@ public class TicketRepository {
                t.close_confirmed_at,
                NULLIF(TRIM(CONCAT_WS(' ', ecc.first_name_th, ecc.last_name_th)), '') AS close_confirmed_by_name,
                t.cancel_reason, t.cancelled_at,
+               t.reopened_at, t.reopen_count,
                t.win_probability, t.designer_name, t.owner_name, t.buyer_name
           FROM sales.ticket t
           JOIN hr.employee ec ON ec.employee_id = t.created_by
@@ -952,7 +953,9 @@ public class TicketRepository {
             rs.getString("owner_name"),
             rs.getString("buyer_name"),
             false, // stale — recomputed by enrichSummary, which alone knows deal_activity
-            false // commissionRecorded — recomputed by enrichSummary, which alone queries commission_record
+            false, // commissionRecorded — recomputed by enrichSummary, which alone queries commission_record
+            rs.getTimestamp("reopened_at") != null ? rs.getTimestamp("reopened_at").toInstant() : null,
+            rs.getInt("reopen_count")
         );
     }
 
@@ -986,7 +989,7 @@ public class TicketRepository {
             // hasInvoiceAttachment above as another per-row query enrichSummary runs to fill in a
             // field mapSummary alone cannot answer from sales.ticket.
             s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), stale,
-            hasRecordedCommission(s.id()));
+            hasRecordedCommission(s.id()), s.reopenedAt(), s.reopenCount());
     }
 
     /**

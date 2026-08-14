@@ -348,7 +348,14 @@ export function buildDemoSalesSeed() {
       depositPercent, vatPercent: 0.07,
       notes: ['ราคารวมค่าขนส่งถึงชั้น 1 ของหน่วยงานในเขต กทม. แต่ไม่รวมค่าตัด/ติดตั้ง'],
       items, issuedByName: status === 'ISSUED' ? SALES1.name : null,
-      preparerName: 'จินตนา หาญมนตรี', hasPdf: status === 'ISSUED', hasXlsx: status === 'ISSUED',
+      preparerName: 'จินตนา หาญมนตรี',
+      // This is the post-render READ state (a seeded document is never "just issued" — it's
+      // already sitting there for demo purposes), NOT what depositNotices.issue's own response
+      // returns. DepositNoticeService.issue's renderAfterCommit means an issue() RESPONSE
+      // reports hasPdf/hasXlsx false even for a document that is otherwise fully ISSUED — see
+      // mockApi.js's depositNotices.issue and DepositNoticeDto.java (issue #752). Do not use
+      // this seed as a reference for what issue() itself returns.
+      hasPdf: status === 'ISSUED', hasXlsx: status === 'ISSUED',
       createdAt, updatedAt: createdAt,
       subtotal, depositAmount, vatAmount,
       totalPayable: Math.round((depositAmount + vatAmount) * 100) / 100,

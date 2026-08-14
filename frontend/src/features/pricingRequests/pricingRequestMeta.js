@@ -12,7 +12,7 @@
 
 // There is deliberately no bare PRICING_REQUEST_STATUSES array here. One existed until it was
 // removed as dead: nothing in the repo ever imported it, and ALLOWED_TRANSITIONS below already
-// carries the identical twelve statuses as its key set — but is actually read, by canTransition.
+// carries the identical eleven statuses as its key set — but is actually read, by canTransition.
 // A second copy that nothing consumes only drifts: that array had already gone stale once and
 // needed QUOTATION_ISSUED / QUOTATION_ACCEPTED added to catch it up, silently and with no test to
 // notice. If you need the status set, take Object.keys(ALLOWED_TRANSITIONS).
@@ -47,11 +47,30 @@
 //     amending an accepted deal is an ORDER amendment, not a quotation revision. That set is what
 //     canCreateCustomerRevision now reads (issue #734).
 //   - V141 retired COSTING_REVISION_REQUIRED entirely (the CEO owns costing; returnToImport goes
-//     straight to AWAITING_FACTORY_RESPONSE), so its key is gone from here too. mockApi.js still
-//     writes that status on returnToImport and demoSales.js still seeds a fixture in it — both are
-//     mock-only relics of a status production can no longer produce.
+//     straight to AWAITING_FACTORY_RESPONSE), so its key is gone from here too. This USED TO be
+//     a mock-only relic — mockApi.js's returnPricingDecisionToImport wrote the retired status and
+//     demoSales.js seeded a fixture in it — but issue #741 fixed both: the mock write now matches
+//     the backend, and demoSales.js:615 seeds AWAITING_FACTORY_RESPONSE with a comment recording
+//     why.
 // Exported for the guard only — pricingRequestMeta.test.js compares it against the parsed Java.
-// Application code goes through canTransition; do not read the table directly.
+// Application code goes through canTransition; do not read the table directly. Three callers do
+// today: canCancelPricingRequest below (:269, asks CANCELLED), mockApi.js's pricing-request cancel
+// handler (imports canTransition at :41 as pricingRequestCanTransition, also asks CANCELLED), and
+// PricingRequestDetailPage.jsx's canCreateCustomerRevision (:594, asks SUPERSEDED — issue #734
+// above). Not all three ask the same question, which is why the guard checks every edge for every
+// status rather than just the ones any one caller happens to exercise.
+//
+// #753 decision (2026-08-14): KEEP this table and canTransition as-is; do not delete, do not edit
+// an entry. The durable fix is still to SERVE the verdict rather than mirror it (above) — not done
+// here because the verdict would have to ride on PricingRequestSummaryDto, not just
+// PricingRequestDetailDto: PricingRequestPanel.jsx (:161, :178) calls canCancelPricingRequest on
+// LIST rows from api.pricingRequests.listForTicket (returns List<PricingRequestSummaryDto>, the
+// same summary shape the /pricing-requests queue endpoint returns), never a detail fetch. That is
+// a list-response-payload change, out of scope for the untidy sweep that closed #753. What holds
+// the line meanwhile: this file's test parses PricingRequestStatus.java out of the backend source
+// and asserts this table against it key-for-key, value-for-value, both directions, plus a
+// non-vacuous-parse assertion — a backend edge change turns the suite red instead of drifting
+// silently. That guard, not the re-sync above, is what stopped the clock.
 export const ALLOWED_TRANSITIONS = {
   DRAFT: ['SUBMITTED', 'CANCELLED'],
   // SUBMITTED -> READY_FOR_CEO_REVIEW is the factory-quote carry-forward edge: a customer-change
