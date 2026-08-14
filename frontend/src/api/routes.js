@@ -329,8 +329,10 @@ export const API_ROUTES = {
     pricingDecisionApprove: (id) => `/api/pricing-decisions/${id}/approve`,
     pricingDecisionReturnToImport: (id) => `/api/pricing-decisions/${id}/return-to-import`,
     // V141 "CEO owns costing" (PR #702). recalculate-cost is the CEO-side successor to the
-    // severed /pricing-costings/{}/recalculate.
+    // severed /pricing-costings/{}/recalculate; cost-override is genuinely new per-line behaviour.
     pricingDecisionRecalculateCost: (id) => `/api/pricing-decisions/${id}/recalculate-cost`,
+    pricingDecisionItemCostOverride: (decisionId, itemId) =>
+      `/api/pricing-decisions/${decisionId}/items/${itemId}/cost-override`,
     // Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationController.
     customerQuotations: (id) => `/api/pricing-requests/${id}/quotations`,
     customerQuotation: (id) => `/api/customer-quotations/${id}`,

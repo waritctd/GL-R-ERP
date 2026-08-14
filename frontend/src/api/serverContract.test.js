@@ -236,10 +236,6 @@ const SERVER_ONLY = {
   'POST /api/pricing-requests/{}/factory-purchase-orders': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
 
   // ── Built backend-first; the UI pass has not landed ───────────────────────
-  'PUT /api/pricing-decisions/{}/items/{}/cost-override':
-    'V141 (PR #702). Genuinely new behaviour, not a duplicate: a per-line manual cost sitting BESIDE the computed '
-    + 'figure, which it never destroys, with a mandatory reason and staleness re-stamping. No routes.js entry, so '
-    + 'e2e-real\'s API_ROUTES-derived sweep cannot see it either. Awaiting the frontend pass.',
   'POST /api/pricing-formula-config/freight-rates': 'Freight-row add/delete, PR #455. See the DELETE entry below.',
   'DELETE /api/pricing-formula-config/freight-rates/{}':
     'Per-row add/delete for the freight matrix (issue #436, PR #455 — which touched 3 backend files and 0 frontend). '

@@ -34,6 +34,7 @@ export function buildDemoSalesSeed() {
   let fqSeq = 0;
   let fqItemSeq = 0;
   let costingSeq = 0;
+  let costingItemSeq = 0;
   let decisionSeq = 0;
   let decisionItemSeq = 0;
   let quotationSeq = 0;
@@ -213,6 +214,9 @@ export function buildDemoSalesSeed() {
     costingSeq += 1;
     const id = costingSeq;
     const items = status === 'DRAFT' ? [] : lines.map((line) => ({
+      // PricingCostingItemDto's own id (distinct from pricingRequestItemId below, which this row
+      // merely carries as a FK) — see makeDecision's pricingCostingItemId, which points at this.
+      id: (costingItemSeq += 1),
       pricingRequestItemId: line.prItemId,
       factoryQuoteId: line.fqId, factoryQuoteItemId: line.fqItemId, factoryQuoteRevisionNo: 1,
       factoryName: line.factoryName,
@@ -222,6 +226,17 @@ export function buildDemoSalesSeed() {
       sqmPerUnit: line.sqmPerUnit ?? null, piecesPerBox: null, linearMPerUnit: null,
       goodsCostThb: line.rawUnitPrice, landedCostPerUnitThb: line.landedCostPerUnitThb,
       totalLandedCostThb: line.landedCostPerUnitThb * line.qty,
+      // V141 ("CEO owns costing") cost-override provenance — mirrors PricingCostingItemDto, same
+      // fields mockApi.js's own recalculateCosting seeds. fxRate is always 1 in mock mode (no BOT
+      // lookup here either). calculationConfigVersion is a literal 1, not a currentFormulaConfig()
+      // lookup: this seed module has no access to mockApi.js's formula-config state (a separate
+      // module, no circular import), and at the point this seed runs (module load, before any
+      // config write can possibly have happened) the live formula config IS version 1 — see
+      // mockApi.js's mockPricingFormulaConfigVersions seed.
+      fxRate: 1, fxSource: 'THB', calculationConfigVersion: 1,
+      manualLandedCostPerUnitThb: null, overrideReason: null,
+      overriddenBy: null, overriddenAt: null,
+      overrideFxRate: null, overrideCalcConfigVersion: null,
     }));
     const totalLandedCostThb = status === 'DRAFT' ? null
       : items.reduce((sum, it) => sum + it.totalLandedCostThb, 0);
@@ -249,7 +264,13 @@ export function buildDemoSalesSeed() {
       const approved = status === 'APPROVED';
       return {
         id: decisionItemSeq, pricingDecisionId: id,
-        pricingRequestItemId: ci.pricingRequestItemId, pricingCostingItemId: ci.pricingRequestItemId,
+        // ci.id, NOT pricingRequestItemId — PricingDecisionItemDto.pricingCostingItemId is a FK to
+        // pricing_costing_item.id (see mockApi.js's startPricingDecision, fixed the same way, for
+        // the full explanation). Getting this wrong means the CEO cost-override UI's join
+        // (costing.items.find(ci => ci.id === decisionItem.pricingCostingItemId)) never matches
+        // against the seeded demo data, which is the ONLY fixture the feature can be seen on in a
+        // browser under VITE_USE_MOCKS=true.
+        pricingRequestItemId: ci.pricingRequestItemId, pricingCostingItemId: ci.id,
         brand: prItem?.brand ?? null, model: prItem?.model ?? null,
         productDescription: prItem?.productDescription ?? null,
         factoryName: ci.factoryName ?? null, requestedUnitBasis: ci.requestedUnitBasis,
@@ -961,6 +982,7 @@ export function buildDemoSalesSeed() {
       factoryQuote: fqSeq + 1,
       factoryQuoteItem: fqItemSeq + 1,
       pricingCosting: costingSeq + 1,
+      pricingCostingItem: costingItemSeq + 1,
       pricingDecision: decisionSeq + 1,
       pricingDecisionItem: decisionItemSeq + 1,
       customerQuotation: quotationSeq + 1,

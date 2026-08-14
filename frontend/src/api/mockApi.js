@@ -714,6 +714,11 @@ let mockFactoryQuoteItemSeq = 1;
 let mockFactoryQuoteAttachmentSeq = 1;
 let mockPricingRequestAttachmentSeq = 1;
 let mockPricingCostingSeq = 1;
+// PricingCostingItemDto's own id (sales.pricing_costing_item.id) — distinct from
+// pricingRequestItemId, which is a FK a costing item merely CARRIES. PricingDecisionItemDto's
+// pricingCostingItemId points at THIS, not at pricingRequestItemId (see startPricingDecision
+// below and PricingDecisionDtos.PricingDecisionItemDto's own field list).
+let mockPricingCostingItemSeq = 1;
 // Step 3: CEO Selling Price Decision (sales.pricing_decision / pricing_decision_item).
 const mockPricingDecisions = [];
 let mockPricingDecisionSeq = 1;
@@ -751,6 +756,7 @@ let mockCustomerQuotationItemSeq = 1;
   mockFactoryQuoteItemSeq = salesSeed.nextSeq.factoryQuoteItem;
   mockPricingCostings.push(...salesSeed.pricingCostings);
   mockPricingCostingSeq = salesSeed.nextSeq.pricingCosting;
+  mockPricingCostingItemSeq = salesSeed.nextSeq.pricingCostingItem;
   mockPricingDecisions.push(...salesSeed.pricingDecisions);
   mockPricingDecisionSeq = salesSeed.nextSeq.pricingDecision;
   mockPricingDecisionItemSeq = salesSeed.nextSeq.pricingDecisionItem;
@@ -1365,6 +1371,31 @@ function mockQuantityToPieces(requestedQty, requestedUnitBasis, factors, pricing
     case 'PER_LINEAR_M': return Number(requestedQty) / mockRequireConversionFactor(factors.linearMPerUnit, pricingRequestItemId, 'linearMPerUnit');
     default: fail(`ไม่รองรับหน่วยนับที่ขอ '${requestedUnitBasis}'`, 422); return null;
   }
+}
+
+// V141 ("CEO owns costing") — mirrors PricingCostingRepository#mapItem's three DERIVED, NEVER
+// STORED fields: recomputed fresh every time a costing item is read, never cached on the item
+// itself, so none of the three can drift out of sync with the raw columns they describe. Applied
+// wherever a costing (or a costing item) is returned to a caller — see listCostings/getCosting
+// below — and reused directly inside recalculatePricingDecisionCost/overridePricingDecisionItemCost
+// to re-derive a decision item's frozen cost right after mutating the bound costing item.
+function deriveCostingItemEffective(item) {
+  const effectiveLandedCostPerUnitThb = item.manualLandedCostPerUnitThb != null
+    ? item.manualLandedCostPerUnitThb
+    : item.landedCostPerUnitThb;
+  const effectiveTotalLandedCostThb = effectiveLandedCostPerUnitThb * (item.normalizedQuantityPieces ?? 0);
+  const overrideStale = item.manualLandedCostPerUnitThb != null
+    && (item.overrideFxRate == null || item.overrideCalcConfigVersion == null
+        || item.overrideFxRate !== item.fxRate || item.overrideCalcConfigVersion !== item.calculationConfigVersion);
+  return { effectiveLandedCostPerUnitThb, effectiveTotalLandedCostThb, overrideStale };
+}
+
+function withDerivedCostingItemFields(item) {
+  return { ...item, ...deriveCostingItemEffective(item) };
+}
+
+function withDerivedCosting(costing) {
+  return { ...costing, items: (costing.items ?? []).map(withDerivedCostingItemFields) };
 }
 
 function buildMockDoc(doc) {
@@ -8586,14 +8617,16 @@ export const api = {
 
     async listCostings(id) {
       hasRole('import', 'ceo');
-      return delay({ items: mockPricingCostings.filter((c) => c.pricingRequestId === Number(id)) });
+      return delay({
+        items: mockPricingCostings.filter((c) => c.pricingRequestId === Number(id)).map(withDerivedCosting),
+      });
     },
 
     async getCosting(id) {
       hasRole('import', 'ceo');
       const costing = mockPricingCostings.find((c) => c.id === Number(id));
       if (!costing) fail('ไม่พบการคำนวณต้นทุนนี้', 404);
-      return delay({ costing });
+      return delay({ costing: withDerivedCosting(costing) });
     },
 
     async recalculateCosting(id, payload = {}) {
@@ -8616,6 +8649,9 @@ export const api = {
         const pricePerPiece = mockPricePerPiece(raw, quoteItem.unitBasis, factors, item.id);
         const normalizedQuantityPieces = mockQuantityToPieces(item.requestedQty, item.requestedUnitBasis, factors, item.id);
         return {
+          // PricingCostingItemDto's own id (distinct from pricingRequestItemId below, which this
+          // row merely carries as a FK) — see mockPricingCostingItemSeq's own comment.
+          id: mockPricingCostingItemSeq++,
           pricingRequestItemId: item.id,
           factoryQuoteId: quote.id,
           factoryQuoteItemId: quoteItem.id,
@@ -8635,6 +8671,20 @@ export const api = {
           goodsCostThb: pricePerPiece,
           landedCostPerUnitThb: pricePerPiece,
           totalLandedCostThb: pricePerPiece * normalizedQuantityPieces,
+          // V141 ("CEO owns costing") cost-override provenance — mirrors PricingCostingItemDto.
+          // The mock's FX is always 1 (no BOT lookup in mock mode, same simplification the rest of
+          // this costing builder already makes), so only the calculationConfigVersion half of
+          // overrideStale is reachable under VITE_USE_MOCKS=true: override -> CEO saves a new
+          // formula-config version -> recalculate cost -> stale. Do not fake the FX half.
+          fxRate: 1,
+          fxSource: 'THB',
+          calculationConfigVersion: currentFormulaConfig()?.version ?? 1,
+          manualLandedCostPerUnitThb: null,
+          overrideReason: null,
+          overriddenBy: null,
+          overriddenAt: null,
+          overrideFxRate: null,
+          overrideCalcConfigVersion: null,
         };
       });
       costing.totalLandedCostThb = costing.items.reduce((sum, item) => sum + item.totalLandedCostThb, 0);
@@ -8728,7 +8778,14 @@ export const api = {
             // reason — see its own comment) fixes it up once decision.id is known.
             pricingDecisionId: null,
             pricingRequestItemId: costingItem.pricingRequestItemId,
-            pricingCostingItemId: costingItem.pricingRequestItemId,
+            // costingItem.id, NOT pricingRequestItemId — PricingDecisionItemDto.pricingCostingItemId
+            // is a FK to pricing_costing_item.id (see PricingDecisionService.overrideItemCost's own
+            // lookup). The two used to be silently interchangeable here only because every mock
+            // costing item lacked its own id at all; now that recalculateCosting/makeCosting mint
+            // one, this must point at it or the CEO cost-override UI's join
+            // (costing.items.find(ci => ci.id === decisionItem.pricingCostingItemId)) never matches
+            // under VITE_USE_MOCKS=true.
+            pricingCostingItemId: costingItem.id,
             brand: prItem?.brand ?? null,
             model: prItem?.model ?? null,
             productDescription: prItem?.productDescription ?? null,
@@ -8843,10 +8900,11 @@ export const api = {
 
     // V141 ("CEO owns costing", PR #702). Mirrors PricingDecisionService.recalculateCost: DRAFT
     // decision AND CEO_REVIEWING request (recalculatePricingDecision above only checks DRAFT —
-    // that is a real gap in the OLDER sibling method, not a pattern to copy here). Re-derives each
-    // decision item's frozen cost from the bound costing's current computed figures. The mock's
-    // landed-cost engine never drifts on its own (no FX-refresh simulation), so today this is a
-    // same-value refresh; it never destroys anything and never changes status/margins/approved_*.
+    // that is a real gap in the OLDER sibling method, not a pattern to copy here). Refreshes the
+    // bound costing items' COMPUTED provenance (fxRate/calculationConfigVersion), preserving every
+    // override column, then re-derives each decision item's frozen cost from the resulting
+    // EFFECTIVE cost — this is what can make an existing override STALE without destroying it.
+    // Does not reimplement the landed-cost engine — landedCostPerUnitThb itself is untouched.
     async recalculatePricingDecisionCost(id) {
       hasRole('ceo');
       const decision = mockPricingDecisions.find((d) => d.id === Number(id));
@@ -8856,19 +8914,79 @@ export const api = {
       if (pr.status !== 'CEO_REVIEWING') fail('คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
 
       const costing = mockPricingCostings.find((c) => c.id === decision.pricingCostingId);
+      const currentVersion = currentFormulaConfig()?.version ?? 1;
+      for (const costingItem of costing?.items ?? []) {
+        costingItem.fxRate = 1;
+        costingItem.calculationConfigVersion = currentVersion;
+      }
       for (const item of decision.items) {
-        const costingItem = costing?.items.find((ci) => ci.pricingRequestItemId === item.pricingRequestItemId);
+        const costingItem = costing?.items.find((ci) => ci.id === item.pricingCostingItemId);
         if (!costingItem) continue;
-        item.frozenLandedCostPerPieceThb = costingItem.landedCostPerUnitThb;
+        const { effectiveLandedCostPerUnitThb, effectiveTotalLandedCostThb } = deriveCostingItemEffective(costingItem);
+        item.frozenLandedCostPerPieceThb = effectiveLandedCostPerUnitThb;
         item.frozenLandedCostPerRequestedUnitThb = Number(item.requestedQuantity) > 0
-          ? costingItem.totalLandedCostThb / Number(item.requestedQuantity)
-          : costingItem.landedCostPerUnitThb;
+          ? effectiveTotalLandedCostThb / Number(item.requestedQuantity)
+          : effectiveLandedCostPerUnitThb;
         if (item.proposedMarginPct != null) {
           item.proposedSellingPricePerRequestedUnit =
             item.frozenLandedCostPerRequestedUnitThb * (1 + Number(item.proposedMarginPct));
         }
         item.updatedAt = new Date().toISOString();
       }
+      decision.updatedAt = new Date().toISOString();
+      return delay({ decision });
+    },
+
+    // V141 (PR #702). Mirrors PricingDecisionService.overrideItemCost, including its check ORDER:
+    // role -> reason (mandatory in BOTH directions, checked before anything else) -> negative
+    // amount -> decision open-for-mutation -> item-belongs-to-decision -> bound-costing-item-found.
+    // `itemId` is the pricingDecisionItemId, resolved here to its bound pricingCostingItemId.
+    async overridePricingDecisionItemCost(decisionId, itemId, payload) {
+      const user = hasRole('ceo');
+      if (!payload?.reason || !payload.reason.trim()) {
+        fail('ต้องระบุเหตุผลในการปรับต้นทุน ไม่ว่าจะปรับหรือยกเลิกการปรับก็ตาม', 400);
+      }
+      const manualCost = payload.manualLandedCostPerUnitThb;
+      if (manualCost != null && Number(manualCost) < 0) {
+        fail('ต้นทุนที่ปรับต้องไม่ติดลบ', 400);
+      }
+      const decision = mockPricingDecisions.find((d) => d.id === Number(decisionId));
+      if (!decision) fail('ไม่พบมติราคานี้', 404);
+      if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่แก้ไขได้', 409);
+      const pr = findPricingRequestRaw(decision.pricingRequestId);
+      if (pr.status !== 'CEO_REVIEWING') fail('คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
+      const item = decision.items.find((i) => i.id === Number(itemId));
+      if (!item) fail(`รายการที่ ${itemId} ไม่ได้เป็นของมติราคานี้`, 400);
+      const costing = mockPricingCostings.find((c) => c.id === decision.pricingCostingId);
+      const costingItem = costing?.items.find((ci) => ci.id === item.pricingCostingItemId);
+      if (!costingItem) fail('ไม่พบรายการต้นทุนที่ผูกกับมติราคานี้', 409);
+
+      costingItem.overrideReason = payload.reason;
+      costingItem.overriddenBy = user.id;
+      costingItem.overriddenAt = new Date().toISOString();
+      if (manualCost != null) {
+        costingItem.manualLandedCostPerUnitThb = Number(manualCost);
+        // Re-stamp: snapshot THIS row's CURRENT computed provenance. Re-confirming the SAME value
+        // after a recalculate re-stamps these to whatever is current then — that is how staleness
+        // clears, and it is the CEO's only escape hatch besides clearing the override outright.
+        costingItem.overrideFxRate = costingItem.fxRate;
+        costingItem.overrideCalcConfigVersion = costingItem.calculationConfigVersion;
+      } else {
+        costingItem.manualLandedCostPerUnitThb = null;
+        costingItem.overrideFxRate = null;
+        costingItem.overrideCalcConfigVersion = null;
+      }
+
+      const { effectiveLandedCostPerUnitThb, effectiveTotalLandedCostThb } = deriveCostingItemEffective(costingItem);
+      item.frozenLandedCostPerPieceThb = effectiveLandedCostPerUnitThb;
+      item.frozenLandedCostPerRequestedUnitThb = Number(item.requestedQuantity) > 0
+        ? effectiveTotalLandedCostThb / Number(item.requestedQuantity)
+        : effectiveLandedCostPerUnitThb;
+      if (item.proposedMarginPct != null) {
+        item.proposedSellingPricePerRequestedUnit =
+          item.frozenLandedCostPerRequestedUnitThb * (1 + Number(item.proposedMarginPct));
+      }
+      item.updatedAt = new Date().toISOString();
       decision.updatedAt = new Date().toISOString();
       return delay({ decision });
     },
@@ -8884,6 +9002,23 @@ export const api = {
       if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่รออนุมัติ', 409);
       const pr = findPricingRequestRaw(decision.pricingRequestId);
       if (pr.status !== 'CEO_REVIEWING') fail('คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
+      // V141: refuse while ANY line of the bound costing carries a stale override — mirrors
+      // PricingDecisionService.approve's staleItemIds guard, including its message shape. Keeps
+      // the mock from being MORE PERMISSIVE than production, which is the dangerous direction
+      // (CLAUDE.md "Mock API contract") — approvePricingDecision must never accept here what the
+      // real service would 409 on.
+      const costing = mockPricingCostings.find((c) => c.id === decision.pricingCostingId);
+      const decisionItemIdByCostingItemId = new Map(decision.items.map((i) => [i.pricingCostingItemId, i.id]));
+      const staleItemIds = (costing?.items ?? [])
+        .filter((ci) => deriveCostingItemEffective(ci).overrideStale)
+        .map((ci) => decisionItemIdByCostingItemId.get(ci.id) ?? ci.id);
+      if (staleItemIds.length) {
+        fail(
+          'ไม่สามารถอนุมัติได้ เนื่องจากมีรายการที่ปรับต้นทุนเองล้าสมัย (อัตราแลกเปลี่ยนหรือค่าคำนวณเปลี่ยนไปหลังปรับ) '
+          + `กรุณาคำนวณต้นทุนใหม่หรือยืนยันค่าที่ปรับอีกครั้งก่อนอนุมัติ — รายการที่ล้าสมัย: [${staleItemIds}]`,
+          409,
+        );
+      }
       const missingMargin = decision.items.filter((i) => i.proposedMarginPct == null).map((i) => i.id);
       const missingMinimum = decision.items.filter((i) => i.minimumSellingPricePerRequestedUnit == null).map((i) => i.id);
       if (missingMargin.length || missingMinimum.length) {

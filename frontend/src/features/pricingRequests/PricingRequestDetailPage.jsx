@@ -9,7 +9,9 @@ import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
+import { Modal } from '../../components/common/Modal.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -175,6 +177,114 @@ function cleanResponsePayload(draft) {
       piecesPerBox: cleanNumber(item.piecesPerBox),
     })),
   };
+}
+
+/**
+ * V141 ("CEO owns costing", PR #702): the CEO's per-line manual cost override. `costingItem` may
+ * be undefined only in theory — the page's own button that opens this modal is itself gated on
+ * `costingItem` being present, so this component never has to render a no-costing-item state.
+ *
+ * The mandatory reason is enforced HERE, client-side, on BOTH the set path and the clear path —
+ * `onSubmit` (which is what ends up calling the API) is never invoked with a blank/whitespace-only
+ * reason. The server's own check stays authoritative and is never removed or weakened; this is
+ * purely so the CEO sees the mistake immediately instead of via a round-trip 400.
+ */
+function CostOverrideModal({ item, costingItem, onClose, onSubmit, pending }) {
+  const hasOverride = costingItem.manualLandedCostPerUnitThb != null;
+  const [amount, setAmount] = useState(() => String(
+    hasOverride ? costingItem.manualLandedCostPerUnitThb : costingItem.landedCostPerUnitThb ?? '',
+  ));
+  const [reason, setReason] = useState('');
+  const [amountError, setAmountError] = useState(null);
+  const [reasonError, setReasonError] = useState(null);
+
+  function validateReason() {
+    if (reason.trim()) {
+      setReasonError(null);
+      return true;
+    }
+    setReasonError('กรุณาระบุเหตุผลในการปรับต้นทุน');
+    return false;
+  }
+
+  function handleSet(event) {
+    event.preventDefault();
+    const reasonOk = validateReason();
+    const numericAmount = Number(amount);
+    const amountOk = amount !== '' && !Number.isNaN(numericAmount) && numericAmount >= 0;
+    setAmountError(amountOk ? null : 'กรุณากรอกต้นทุนที่ปรับให้ถูกต้อง (ตั้งแต่ 0 ขึ้นไป)');
+    if (!reasonOk || !amountOk) return;
+    onSubmit({ manualLandedCostPerUnitThb: numericAmount, reason: reason.trim() });
+  }
+
+  function handleClear() {
+    if (!validateReason()) return;
+    onSubmit({ manualLandedCostPerUnitThb: null, reason: reason.trim() });
+  }
+
+  return (
+    <Modal
+      title={hasOverride ? 'แก้ไขต้นทุนที่ปรับ' : 'ปรับต้นทุนเอง'}
+      subtitle={[item.brand, item.model].filter(Boolean).join(' ') || item.productDescription || undefined}
+      onClose={onClose}
+      testId="cost-override-modal"
+      footer={
+        <>
+          <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
+          {hasOverride ? (
+            <Button type="button" variant="secondary" disabled={pending} onClick={handleClear}>
+              ล้างค่าที่ปรับ
+            </Button>
+          ) : null}
+          <Button type="submit" form="cost-override-form" variant="primary" disabled={pending}>
+            {pending ? 'กำลังบันทึก…' : 'บันทึกต้นทุนที่ปรับ'}
+          </Button>
+        </>
+      }
+    >
+      <SafeForm id="cost-override-form" onSubmit={handleSet} noValidate>
+        <div className="grid gap-3">
+          <div className="rounded-md border border-border-subtle bg-surface-subtle p-3 text-xs">
+            <div>
+              ต้นทุนคำนวณ/ชิ้น:{' '}
+              <code className="text-info">{formatCurrency(costingItem.landedCostPerUnitThb, 'THB')}</code>
+            </div>
+            {hasOverride ? (
+              <div className="mt-1">
+                ต้นทุนที่ปรับปัจจุบัน/ชิ้น:{' '}
+                <code className="font-bold text-override">{formatCurrency(costingItem.manualLandedCostPerUnitThb, 'THB')}</code>
+              </div>
+            ) : null}
+            <p className="m-0 mt-1 text-2xs text-text-muted">ค่าที่คำนวณได้จะไม่ถูกเขียนทับ — ค่าที่ปรับเองจะแสดงคู่กันเสมอ</p>
+          </div>
+          <FormField label="ต้นทุนที่ปรับ (บาท/ชิ้น)" htmlFor="cost-override-amount" error={amountError}>
+            <input
+              id="cost-override-amount"
+              type="number"
+              min="0"
+              step="0.0001"
+              value={amount}
+              onChange={(e) => {
+                setAmount(e.target.value);
+                if (amountError) setAmountError(null);
+              }}
+            />
+          </FormField>
+          <FormField label="เหตุผล" htmlFor="cost-override-reason" error={reasonError} required>
+            <textarea
+              id="cost-override-reason"
+              className="min-h-20"
+              value={reason}
+              onChange={(e) => {
+                setReason(e.target.value);
+                if (reasonError) setReasonError(null);
+              }}
+            />
+          </FormField>
+        </div>
+      </SafeForm>
+    </Modal>
+  );
 }
 
 export function PricingRequestDetailPage({ user, showToast }) {
@@ -399,6 +509,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
     (decision) => api.pricingRequests.recalculatePricingDecisionCost(decision.id),
     'คำนวณต้นทุนใหม่แล้ว',
   );
+  // V141 (PR #702): a per-line manual cost override, sitting BESIDE the computed figure (which is
+  // never destroyed). `reason` is mandatory in both directions — the modal refuses to call this at
+  // all without one; the server's own check is the backstop, never removed or relied on alone.
+  const [costOverrideItem, setCostOverrideItem] = useState(null);
+  const overrideItemCost = useActionMutation(
+    ({ decision, item, manualLandedCostPerUnitThb, reason }) =>
+      api.pricingRequests.overridePricingDecisionItemCost(decision.id, item.id, { manualLandedCostPerUnitThb, reason }),
+    'บันทึกต้นทุนที่ปรับแล้ว',
+  );
   const approveDecision = useMutation({
     mutationFn: (decision) => api.pricingRequests.approvePricingDecision(decision.id, {
       clientRequestId: approveClientRequestId,
@@ -564,6 +683,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
     () => pricingDecisions.find((d) => d.status === 'DRAFT') ?? [...pricingDecisions].reverse()[0] ?? null,
     [pricingDecisions],
   );
+  // V141 ("CEO owns costing"): the bound costing's items, keyed by their OWN id — a decision
+  // item's pricingCostingItemId is a FK to that id, never to pricingRequestItemId (the two are
+  // easy to conflate since a costing item also carries pricingRequestItemId as its own FK). Every
+  // render must tolerate a missing costing item (the map simply has no entry for it) — this query
+  // can legitimately be empty (sales/sales_manager never fetch it) or not yet contain the bound
+  // costing (a brand-new decision before its first paint).
+  const decisionCostingItems = useMemo(() => {
+    const costing = costings.find((c) => c.id === currentDecision?.pricingCostingId);
+    return new Map((costing?.items ?? []).map((ci) => [ci.id, ci]));
+  }, [costings, currentDecision]);
   const decisionSalesView = decisionSalesViewQuery.data;
   // Step 4: newest revision last (creation order) — the OPEN draft/ready-to-issue revision if
   // one exists, else the most recent (so a just-issued or just-cancelled quotation still shows).
@@ -1093,6 +1222,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 const minPrice = draft.minimumSellingPrice ?? item.minimumSellingPricePerRequestedUnit;
                 return margin == null || margin === '' || minPrice == null || minPrice === '';
               });
+              // V141: mirrors PricingDecisionService.approve's own stale-override 409 guard, so the
+              // CEO discovers it here instead of via a failed approve. The server stays
+              // authoritative — this only pre-empts a call that would fail anyway.
+              const staleOverrideItems = decision.items.filter(
+                (item) => decisionCostingItems.get(item.pricingCostingItemId)?.overrideStale,
+              );
               return (
                 <div key={decision.id} className="rounded-md border border-border bg-surface p-3">
                   <div className="flex flex-wrap items-center gap-2">
@@ -1111,15 +1246,61 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       const effectiveCeiling = draft.discountCeilingPct ?? item.discountCeilingPct ?? '';
                       const belowMinimum = effectiveMinimum !== '' && item.proposedSellingPricePerRequestedUnit != null
                         && Number(item.proposedSellingPricePerRequestedUnit) < Number(effectiveMinimum);
+                      // V141: the bound costing line this decision item was frozen from — may
+                      // legitimately be undefined (costings never fetched, or not yet loaded), in
+                      // which case this renders only the decision item's own frozen cost above,
+                      // with no override affordance at all.
+                      const costingItem = decisionCostingItems.get(item.pricingCostingItemId);
+                      const hasOverride = costingItem?.manualLandedCostPerUnitThb != null;
                       return (
                         <div key={item.id} className="rounded-md border border-border-subtle p-2">
                           <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
                             <strong className="text-text">{[item.brand, item.model].filter(Boolean).join(' ') || item.productDescription || '-'}</strong>
                             <span>{item.factoryName ?? '-'}</span>
                             <span>{item.requestedQuantity} ({item.requestedUnitBasis})</span>
-                            <span>ต้นทุน/หน่วย: {formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</span>
+                            <span>ต้นทุน/หน่วยที่ขอ: {formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</span>
                             {belowMinimum ? <StatusBadge tone="danger">ต่ำกว่าราคาขั้นต่ำ</StatusBadge> : null}
+                            {costingItem?.overrideStale ? <StatusBadge tone="warning">ต้นทุนที่ปรับล้าสมัย</StatusBadge> : null}
                           </div>
+                          {costingItem ? (
+                            <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border-subtle pt-1.5 text-xs">
+                              <span>
+                                ต้นทุนคำนวณ/ชิ้น:{' '}
+                                <code className="text-info">{formatCurrency(costingItem.landedCostPerUnitThb, 'THB')}</code>
+                              </span>
+                              {hasOverride ? (
+                                <span className="flex min-w-0 items-baseline gap-1.5">
+                                  ต้นทุนที่ปรับ/ชิ้น:{' '}
+                                  <code className="font-bold text-override">{formatCurrency(costingItem.manualLandedCostPerUnitThb, 'THB')}</code>
+                                  <span className="text-2xs text-override">ปรับเอง</span>
+                                  {costingItem.overrideReason ? (
+                                    <span
+                                      className="min-w-0 max-w-[220px] truncate text-2xs text-text-muted"
+                                      title={costingItem.overrideReason}
+                                    >
+                                      ({costingItem.overrideReason})
+                                    </span>
+                                  ) : null}
+                                </span>
+                              ) : null}
+                              {editable ? (
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  className="text-2xs px-2 py-[3px]"
+                                  onClick={() => setCostOverrideItem({ decision, item, costingItem })}
+                                  data-testid={`pcr-ceo-cost-override-${item.id}`}
+                                >
+                                  {hasOverride ? 'แก้ไขต้นทุนที่ปรับ' : 'ปรับต้นทุนเอง'}
+                                </Button>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {costingItem?.overrideStale ? (
+                            <p className="m-0 mt-1 text-2xs text-warning-dark">
+                              อัตราแลกเปลี่ยนหรือค่าคำนวณเปลี่ยนไปหลังปรับต้นทุน — ต้องคำนวณต้นทุนใหม่หรือยืนยันค่าที่ปรับอีกครั้งก่อนอนุมัติ
+                            </p>
+                          ) : null}
                           {editable ? (
                             <div className="mt-2 grid gap-2 md:grid-cols-4">
                               <input
@@ -1179,7 +1360,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         <Button
                           type="button"
                           variant="primary"
-                          disabled={approveDecision.isPending || missingBeforeApprove.length > 0}
+                          disabled={approveDecision.isPending || missingBeforeApprove.length > 0 || staleOverrideItems.length > 0}
                           onClick={() => setConfirmAction({ type: 'approveDecision', decision })}
                           data-testid="pcr-ceo-approve"
                         >
@@ -1199,6 +1380,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       </p>
                       {missingBeforeApprove.length > 0 ? (
                         <span className="text-xs text-danger">ทุกรายการต้องมีอัตรากำไรและราคาขั้นต่ำก่อนอนุมัติ</span>
+                      ) : null}
+                      {staleOverrideItems.length > 0 ? (
+                        <span className="text-xs text-danger">
+                          มีรายการที่ปรับต้นทุนเองล้าสมัย — กรุณาคำนวณต้นทุนใหม่ หรือยืนยันค่าที่ปรับอีกครั้งก่อนอนุมัติ
+                        </span>
                       ) : null}
                     </div>
                   ) : null}
@@ -1552,6 +1738,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
           if (action?.type === 'issueQuotation') issueQuotation.mutate(action.quotation);
         }}
       />
+
+      {costOverrideItem ? (
+        <CostOverrideModal
+          item={costOverrideItem.item}
+          costingItem={costOverrideItem.costingItem}
+          pending={overrideItemCost.isPending}
+          onClose={() => setCostOverrideItem(null)}
+          onSubmit={(payload) => overrideItemCost.mutate(
+            { decision: costOverrideItem.decision, item: costOverrideItem.item, ...payload },
+            { onSuccess: () => setCostOverrideItem(null) },
+          )}
+        />
+      ) : null}
 
       {revisionModalOpen ? (
         <PricingRequestCreateModal

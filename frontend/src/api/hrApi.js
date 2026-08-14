@@ -714,6 +714,8 @@ export const api = {
     // V141 "CEO owns costing" (PR #702). No request body — PricingDecisionController.recalculateCost
     // takes none.
     recalculatePricingDecisionCost: (id) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionRecalculateCost(id), { method: 'POST' }),
+    overridePricingDecisionItemCost: (decisionId, itemId, payload) =>
+      apiRequest(API_ROUTES.pricingRequests.pricingDecisionItemCostOverride(decisionId, itemId), { method: 'PUT', body: payload }),
     // Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationController.
     createCustomerQuotation: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotations(id), { method: 'POST', body: payload }),
     listCustomerQuotations: (id) => apiRequest(API_ROUTES.pricingRequests.customerQuotations(id)),
