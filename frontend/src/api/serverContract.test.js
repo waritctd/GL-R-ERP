@@ -209,6 +209,12 @@ const UI_REACHABLE_KEYS = new Set(
 // decision, recorded in the PR that added this file — not something a test should decide.
 const SERVER_ONLY = {
   // ── Live, via a client this harness cannot see ────────────────────────────
+  'GET /api/public/brand/logo.png':
+    'Fetched by the MAIL CLIENT, not by this app — it is the <img> src in the notification email '
+    + 'templates, so the requester is Gmail/Outlook rendering a message, with no session and no hrApi '
+    + 'call. Exists only on uat: the whole th.co.glr.hr.mail package lives here because Render blocks '
+    + 'outbound SMTP on main, so this endpoint has no counterpart to reconcile against. Owner-confirmed '
+    + 'to keep (2026-08-13). Anonymous by necessity — an email client cannot authenticate.',
   'POST /api/attendance/punch':
     'The physical scanners post here with an X-GLR-Agent-Token instead of a session — see '
     + 'agents/attendance/showroom_agent.py. One of SecurityConfig\'s anonymous exceptions, and pinned by '
