@@ -11,9 +11,9 @@ package th.co.glr.hr.notification;
  * "resynced" with it if that method ever changes -- that discipline applied to an earlier version
  * of this predicate, but no longer applies. That earlier version WAS written as such a mirror
  * (division code EXACTLY {@code md}, OR any กรรมการ-family position) on the assumption that "who
- * may approve" and "who should be told" are the same set. Measured against real data (UAT
- * {@code wuypxdznuhhluwzncafh} and prod {@code tdyzcqzxmhtxpbouewud}, identical on this point as of
- * 2026-08-10), that assumption was false in practice: every active {@code md}/กรรมการ-family
+ * may approve" and "who should be told" are the same set. Measured against real data (both the UAT
+ * and production databases, identical on this point as of 2026-08-10), that assumption was false in
+ * practice: every active {@code md}/กรรมการ-family
  * employee -- ประธานกรรมการ, two more กรรมการ, and กรรมการผู้จัดการ -- matched one arm of that
  * {@code OR} or the other, so the "narrowing" was a no-op against production data; it selected the
  * exact same four people the old {@code MD%}/{@code MN%} rule did. The owner's ruling is that only
