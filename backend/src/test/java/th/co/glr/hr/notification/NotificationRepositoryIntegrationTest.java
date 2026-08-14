@@ -79,6 +79,62 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(salesRows.get(0).title()).isEqualTo("คำขอราคาถูกรับเรื่องแล้ว");
     }
 
+    /**
+     * {@code sales_manager} is the one role here that is not a whole ฝ่าย: it is a strict SUBSET of
+     * {@code sales}, narrowed by position. Both directions are asserted, because getting either
+     * wrong is silent — too wide and a rep is told to supervise themselves
+     * ({@code TicketService.reserveStock}), too narrow and nobody is told anything.
+     *
+     * <p>The NULL-position rep is also the regression guard for the {@code LEFT JOIN hr.position}
+     * this branch needed: an inner join would have silently dropped every employee without a
+     * position from the three division-only branches, so this asserts they still receive
+     * {@code "sales"}.
+     */
+    @Test
+    void notifyByRoleSalesManagerSelectsOnlyManagersWithinSalesAndNooneElse() {
+        long salesDivision = insertDivision("SA", "ฝ่ายขาย");
+        long importDivision = insertDivision("PCIM", "จัดซื้อต่างประเทศ");
+        long manager = insertEmployee("EMP-400", salesDivision, true, "ผู้จัดการฝ่ายขาย");
+        long assistantManager = insertEmployee("EMP-401", salesDivision, true, "ผู้ช่วยผู้จัดการฝ่ายขาย");
+        long departedManager = insertEmployee("EMP-402", salesDivision, false, "ผู้จัดการฝ่ายขาย");
+        long rep = insertEmployee("EMP-403", salesDivision, true, "พนักงานขาย");
+        long repWithNoPosition = insertEmployee("EMP-404", salesDivision, true);
+        long managerOfAnotherDivision = insertEmployee("EMP-405", importDivision, true, "ผู้จัดการฝ่ายจัดซื้อ");
+
+        repository.notifyByRole("sales_manager", 99L, "STOCK_RESERVED", "ดีล PR-2026-0101 ประกาศสินค้าจากสต็อก");
+
+        assertThat(repository.findByEmployeeId(manager)).hasSize(1);
+        assertThat(repository.findByEmployeeId(manager).get(0).title())
+            .isEqualTo("พนักงานขายประกาศสินค้าจากสต็อกเอง");
+        assertThat(repository.findByEmployeeId(assistantManager))
+            .describedAs("ผู้ช่วยผู้จัดการ contains ผู้จัดการ — DivisionAccessPolicy counts assistants too")
+            .hasSize(1);
+        assertThat(repository.findByEmployeeId(departedManager)).isEmpty();
+        assertThat(repository.findByEmployeeId(rep)).isEmpty();
+        assertThat(repository.findByEmployeeId(repWithNoPosition)).isEmpty();
+        assertThat(repository.findByEmployeeId(managerOfAnotherDivision)).isEmpty();
+
+        // The superset still behaves as before, NULL position included.
+        repository.notifyByRole("sales", 99L, "SUBMITTED", "ทุกคนในฝ่ายขาย");
+        assertThat(repository.findByEmployeeId(repWithNoPosition))
+            .describedAs("LEFT JOIN, not JOIN: a null position_id must not drop anyone from the "
+                + "division-only branches")
+            .hasSize(1);
+        assertThat(repository.findByEmployeeId(rep)).hasSize(1);
+        assertThat(repository.findByEmployeeId(managerOfAnotherDivision)).isEmpty();
+    }
+
+    /** An unknown role must resolve to nobody — a typo must not fan out to everyone. */
+    @Test
+    void notifyByRoleWithAnUnrecognisedRoleNotifiesNobody() {
+        long salesDivision = insertDivision("SA", "ฝ่ายขาย");
+        long manager = insertEmployee("EMP-500", salesDivision, true, "ผู้จัดการฝ่ายขาย");
+
+        repository.notifyByRole("sales-manager", 99L, "STOCK_RESERVED", "typo'd role");
+
+        assertThat(repository.findByEmployeeId(manager)).isEmpty();
+    }
+
     private Integer countLegacySalesNotifications() {
         return jdbc.getJdbcTemplate().queryForObject("SELECT COUNT(*) FROM sales.notification", Integer.class);
     }
@@ -92,6 +148,7 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         return id.longValue();
     }
 
+    /** Leaves {@code position_id} NULL — the shape the division-only branches must still reach. */
     private long insertEmployee(String code, long divisionId, boolean active) {
         Number id = jdbc.queryForObject("""
             INSERT INTO hr.employee (employee_code, first_name_th, division_id, is_active)
@@ -99,5 +156,25 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
             RETURNING employee_id
             """, Map.of("code", code, "name", code, "divisionId", divisionId, "active", active), Number.class);
         return id.longValue();
+    }
+
+    private long insertEmployee(String code, long divisionId, boolean active, String positionTh) {
+        long employeeId = insertEmployee(code, divisionId, active);
+        jdbc.update("UPDATE hr.employee SET position_id = :positionId WHERE employee_id = :id",
+            Map.of("positionId", ensurePosition(positionTh), "id", employeeId));
+        return employeeId;
+    }
+
+    /** V30 seeds a bare "ผู้จัดการ"; the fuller ฝ่าย-specific titles used here are created on demand. */
+    private long ensurePosition(String nameTh) {
+        List<Long> existing = jdbc.queryForList(
+            "SELECT position_id FROM hr.position WHERE name_th = :name LIMIT 1",
+            Map.of("name", nameTh), Long.class);
+        if (!existing.isEmpty()) {
+            return existing.getFirst();
+        }
+        return jdbc.queryForObject("""
+            INSERT INTO hr.position (name_th, is_active) VALUES (:name, TRUE) RETURNING position_id
+            """, Map.of("name", nameTh), Long.class);
     }
 }

@@ -974,6 +974,12 @@ public class TicketService {
      * endpoint cannot turn it into an existence probe — a role that can never declare (hr,
      * employee, account, sales_manager) still gets 403 without a row being read, exactly as
      * before. {@link #canDeclareStockCoverage} then applies the per-row rule.
+     *
+     * <p><strong>Supervision (owner ruling 2026-08-13).</strong> "Import can correct it" was the
+     * stated mitigation for an uncorroborated declaration, and nothing told anyone to look. A rep
+     * declaring on their own deal now notifies ฝ่ายขาย's ผู้จัดการ — see {@link
+     * #notifySalesManagerOfRepDeclaration} for who that resolves to, why it is the manager rather
+     * than Import, and why an import/ceo correction deliberately raises nothing.
      */
     @Transactional
     public TicketDto reserveStock(long ticketId, StockReservationRequest request, UserPrincipal actor) {
@@ -1014,14 +1020,89 @@ public class TicketService {
         boolean allCovered = !ticket.items().isEmpty()
             && ticket.items().stream()
                 .allMatch(item -> nullToZero(mergedStock.get(item.id())).compareTo(nullToZero(item.qty())) >= 0);
-        if (allCovered && (s.fulfillmentStatus() == null || FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()))) {
+        boolean leavesTheImportAxis = allCovered
+            && (s.fulfillmentStatus() == null || FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus()));
+        if (leavesTheImportAxis) {
             tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.FROM_STOCK);
             // Fully covered from stock — no import journey, so the goods are ready
             // now. Advance straight to DELIVERY_SCHEDULING (S18) rather than
             // PROCUREMENT (an import step this deal never performs).
             autoAdvanceStage(s, DealStage.DELIVERY_SCHEDULING, actor);
         }
+        notifySalesManagerOfRepDeclaration(s, actor, mergedStock, ticket.items(), leavesTheImportAxis);
         return requireTicket(ticketId);
+    }
+
+    /**
+     * Tells ฝ่ายขาย's ผู้จัดการ that one of their reps just declared stock coverage on their own
+     * deal (owner ruling 2026-08-13, the supervision half of "Sales declares, Import can correct").
+     *
+     * <p><strong>Why the manager and not Import.</strong> The declaration's stated mitigation was
+     * "Import can correct it", and nothing told anyone to look. The number is a
+     * <em>supervision</em> problem rather than a logistics one: {@link #reserveStock} lets the rep
+     * supply {@code qty_from_stock}, which is the {@code stockShare} half of that same rep's own
+     * STOCK_BONUS ({@code CommissionRepository#sumActiveStockActualReceived}), and nothing in this
+     * codebase corroborates it against real stock. Someone stating an input to their own pay is
+     * their manager's business.
+     *
+     * <p><strong>Only when the REP declares.</strong> {@code import}/{@code ceo} hold the identical
+     * ability and are the correction path — them declaring is the control working, not the risk, so
+     * it raises nothing. The trigger is exactly "the declarer's own money moves", i.e. the {@link
+     * #SALES_ROLES} branch of {@link #canDeclareStockCoverage}, which by that same predicate can
+     * only be the deal owner. Widening this to every declarer is a one-line change if the owner
+     * later wants it; it is left narrow so the notification stays a signal.
+     *
+     * <p><strong>Carries enough to triage without opening the ticket:</strong> which deal (code +
+     * customer), which rep, and the deal-wide declared/ordered quantities — deal-wide from {@code
+     * mergedStock}, deliberately NOT the per-request {@code totalDeclared} the STOCK_RESERVED event
+     * records, because a request that touches one line of three would understate the coverage the
+     * manager is being asked to judge. Full coverage is called out separately: that is the case
+     * that also routes the deal off the import axis entirely.
+     *
+     * <p><strong>Nothing about commission is computed here</strong> — the message quotes the two
+     * quantities this method was already handed and names STOCK_BONUS as the reason to look.
+     * {@code CommissionRepository} is untouched.
+     *
+     * <p><strong>Rollback safety.</strong> This is a plain {@code INSERT} through {@link
+     * NotificationRepository}, running inside {@link #reserveStock}'s {@code @Transactional} on the
+     * same connection as the declaration itself, so a rollback takes the notification with it —
+     * proven, not assumed, by {@code StockDeclarationNotificationIntegrationTest}. It deliberately
+     * does NOT go through {@code NotificationService#notify}: that method's {@code
+     * TransactionSynchronizationManager} deferral exists for the one side effect a rollback cannot
+     * undo (an outbound e-mail), and applying an {@code afterCommit} hook to a DB row would move
+     * the row OUT of the transaction that protects it — the opposite of what is wanted. Every other
+     * ticket notification in this class takes the same repository path for the same reason.
+     */
+    private void notifySalesManagerOfRepDeclaration(TicketSummaryDto s, UserPrincipal actor,
+                                                    Map<Long, BigDecimal> mergedStock,
+                                                    List<TicketItemDto> items,
+                                                    boolean leavesTheImportAxis) {
+        if (!SALES_ROLES.contains(actor.role())) {
+            return;
+        }
+        BigDecimal declared = items.stream()
+            .map(item -> nullToZero(mergedStock.get(item.id())))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal ordered = items.stream()
+            .map(item -> nullToZero(item.qty()))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        String customer = blankToNull(s.customerName()) == null ? "ไม่ระบุลูกค้า" : s.customerName().trim();
+        // "no import journey" is asserted only when the branch above actually set FROM_STOCK.
+        // allCovered alone is not enough — a deal already off the import axis skips that write,
+        // and autoAdvanceStage can still no-op on lifecycle/stage, so the stage is not claimed.
+        String coverage = leavesTheImportAxis
+            ? " (ครบทั้งดีล — ดีลนี้จะไม่ผ่านขั้นตอนนำเข้า)"
+            : "";
+        notifications.notifyByRole("sales_manager", s.id(), TicketEventKind.STOCK_RESERVED,
+            "ดีล " + s.code() + " (" + customer + "): " + actor.name()
+                + " ประกาศสินค้าจากสต็อกในดีลของตนเอง " + plainQty(declared) + "/" + plainQty(ordered)
+                + " หน่วย" + coverage
+                + " — ตัวเลขนี้เป็นฐานคำนวณ STOCK_BONUS ของผู้ดูแลดีลเอง และยังไม่มีการตรวจสอบกับสต็อกจริง กรุณาตรวจทาน");
+    }
+
+    /** {@code 100.00 -> "100"}, so a quantity reads as a quantity in a human-facing message. */
+    private static String plainQty(BigDecimal qty) {
+        return qty.stripTrailingZeros().toPlainString();
     }
 
     @Transactional
