@@ -62,10 +62,17 @@ export const UAT_PERSONAS = {
  * The shared UAT persona password, from E2E_UAT_PASSWORD.
  *
  * ⚠️ HONESTY NOTE — this is hygiene, NOT secrecy, and the distinction matters because writing it
- * down as a secret would be a lie a future reader could act on. The value is already published in
- * plaintext on the `uat` branch: in V900's header, in the `htpasswd -nbBC 10` line of
+ * down as a secret would be a lie a future reader could act on. A shared UAT password is already
+ * published in plaintext on the `uat` branch: in V900's header, in the `htpasswd -nbBC 10` line of
  * V907__uat_clear_forced_password_change.sql, in V908's comment, and in UAT_Accounts.md. This
  * repository is public. Nothing in this file can make it secret, and nobody should believe it has.
+ *
+ * ⚠️ AND THE COMMITTED VALUE IS NOT THE LIVE ONE. Confirmed 2026-08-15: the deployed UAT accepts a
+ * different password from the one those migrations record. So the seed files are simultaneously a
+ * disclosure (they publish A password) and NOT a source of truth (they publish the WRONG one) —
+ * the worst of both. Do not "helpfully" default this function to the seed's value: a wrong guess
+ * spends the 5-per-account / 20-per-IP rate-limit budget and can lock out real testers for 900s.
+ * Whoever runs UAT is the authority.
  *
  * Keeping it out of the checked-in suite buys two real things and no more:
  *   1. Rotating it is an environment change, not a code change plus a merge.
@@ -82,8 +89,12 @@ export function uatPassword() {
         '      E2E_BASE_URL=https://<uat-frontend-host> \\\n' +
         '      E2E_UAT_PASSWORD=... \\\n' +
         '      npm run test:e2e:uat\n\n' +
-        '  It is the shared password documented for the @uat.glr personas\n' +
-        '  (db/migration-uat/V900 and V907, on the `uat` branch).\n\n' +
+        '  It is the shared password for the @uat.glr personas — ASK someone who runs UAT.\n\n' +
+        '  ⚠️ Do NOT read it out of the migrations. V900/V907 (on the `uat` branch) document a\n' +
+        '  value that did NOT match the live deployment as of 2026-08-15: either V907 never\n' +
+        '  applied there, or the personas were rotated out of band afterwards. Those files\n' +
+        '  describe the SEED, not the running environment, and this is exactly the kind of\n' +
+        '  mismatch that costs rate-limit budget to discover.\n\n' +
         '  ⚠️ Do NOT guess it. LoginRateLimitFilter counts 5 failures per account and 20 per\n' +
         '  client IP inside a 900-second window, counting 401s AND 403s. A lockout on UAT hits\n' +
         '  real testers and cannot be cleared by restarting anything you control — the tracker is\n' +
