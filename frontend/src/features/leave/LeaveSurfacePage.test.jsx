@@ -21,6 +21,12 @@ vi.mock('../../api/index.js', () => ({
       reject: vi.fn(),
       cancel: vi.fn(),
       reviewSummary: vi.fn(),
+      // LeavePolicyBar.jsx (rendered unconditionally by this page, 2026-08-14 reversal) probes
+      // this on every render. Without a mock here the call falls through to `undefined()` and
+      // throws inside the query -- react-query swallows that into a silent error state rather
+      // than crashing the suite, but a real mock is more honest than leaning on that.
+      policyDocumentAvailable: vi.fn(),
+      downloadPolicyDocument: vi.fn(),
     },
   },
 }));
@@ -61,6 +67,9 @@ describe('LeaveSurfacePage', () => {
     api.leave.balances.mockResolvedValue({ balances: [] });
     api.leave.contactDefaults.mockResolvedValue({ contactDefaults: {} });
     api.leave.reviewSummary.mockResolvedValue({ pendingCount: 0, requests: [] });
+    // The state every environment is in today (see LeavePolicyBar.jsx's own header comment) --
+    // none of this file's assertions are about the bar itself, so the neutral default is enough.
+    api.leave.policyDocumentAvailable.mockResolvedValue('absent');
   });
 
   it('defaults to the "ของฉัน" tab and hides "รอพิจารณา"/"ลูกทีม" for a plain employee with no reports', async () => {

@@ -22,15 +22,22 @@ import { bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
  * in right now, and the first thing this page will render for its first user.
  *
  * ── WHAT THIS PAGE HONESTLY IS, AND IS NOT ───────────────────────────────────
- * Uploading here does NOT change the PDF employees open from the leave page. That link
- * (LeavePolicyBar.jsx) serves a copy BUNDLED with the frontend at `frontend/public/policy/`, by an
- * owner ruling on 2026-08-11 — chosen because the Vercel/Render demo has no backend at all, so an
- * API-served PDF is permanently unavailable there. Rewiring that reader to prefer this endpoint is
- * a product decision with a demo-environment consequence, not a side effect this page is entitled
- * to cause, so it is deliberately left alone and the copy below says so plainly rather than letting
- * an uploader assume employees now see their file.
+ * From 2026-08-11 to 2026-08-14, uploading here did NOT change the PDF employees open from the leave
+ * page: that reader (LeavePolicyBar.jsx) served a copy BUNDLED with the frontend at
+ * `frontend/public/policy/`, on the reasoning that the Vercel/Render demo "has no backend at all" so
+ * an API-served PDF would be permanently unavailable there. That premise was already stale when it
+ * was written — both `vercel.json` files rewrite `/api/:path*` to the real Render-hosted Spring
+ * backend, and `render.yaml` deploys one there — and once THIS page shipped a real upload workflow
+ * (issue #774) the owner reversed the ruling (2026-08-14): LeavePolicyBar.jsx now HEAD-probes this
+ * same GET endpoint and PREFERS a confirmed-current uploaded document over the bundled copy. See
+ * that file's own header comment for the full four-state table this reversal introduced.
  *
- * What it IS: the server-side archive of record. Versions are effective-dated and never
+ * So uploading here now DOES eventually change what employees see — once the version's effective
+ * date arrives and the reader's probe positively confirms it. The bundled copy is now the FALLBACK
+ * for "nothing usable has been uploaded yet" and "could not check right now", not the permanent
+ * answer it used to be regardless of what this page held.
+ *
+ * What it IS, unchanged: the server-side archive of record. Versions are effective-dated and never
  * overwritten, so the announcement in force on a past date stays retrievable — the property V133's
  * schema exists to preserve.
  *
@@ -141,7 +148,15 @@ export function LeavePolicyDocumentPage({ showToast }) {
     uploadMutation.mutate({ nextFile: file, nextEffectiveFrom: effectiveFrom });
   }
 
-  const isAvailable = availabilityQuery.data === true;
+  const isAvailable = availabilityQuery.data === 'available';
+  // 'unverified' and 'check-failed' share the retry branch below with a genuine query isError:
+  // with no confirmed server answer, "ยังไม่เคยมีการอัปโหลดไฟล์เข้ามาเลย" (never uploaded) is a claim
+  // this page cannot support -- and unlike LeavePolicyBar.jsx it has no bundled fallback to offer
+  // instead (this page IS the server-side archive), so "could not check, try again" is the only
+  // honest thing left to render.
+  const checkFailed = availabilityQuery.isError
+    || availabilityQuery.data === 'unverified'
+    || availabilityQuery.data === 'check-failed';
   const notYetInForce = justUploaded && justUploaded.effectiveFrom > bangkokTodayIso();
 
   return (
@@ -162,15 +177,21 @@ export function LeavePolicyDocumentPage({ showToast }) {
               ระบบจะเก็บทุกฉบับที่อัปโหลดไว้ตามวันที่มีผลบังคับใช้ ไม่มีการเขียนทับฉบับเดิม
               ทำให้ย้อนดูได้ว่าวันใดใช้ประกาศฉบับไหน
             </p>
-            {/* The single most important sentence on the page: an uploader would otherwise assume
-                employees immediately see their file. They do not. */}
+            {/* The single most important sentence on the page: reversed 2026-08-14. An uploader
+                used to be told nothing changes for employees; now it DOES, once this version's
+                effective date arrives and LeavePolicyBar.jsx's probe can confirm it -- see that
+                file's header comment for the full state table. */}
             <p className="m-0">
-              <strong>ยังไม่เปลี่ยนไฟล์ที่พนักงานเห็นในหน้า “การลา”</strong> ลิงก์ในหน้านั้นเปิดไฟล์ที่ติดมากับตัวระบบ
-              (ตามที่ผู้บริหารกำหนดไว้ เพื่อให้เปิดได้แม้ระบบสาธิตที่ไม่มีเซิร์ฟเวอร์)
-              หากต้องการเปลี่ยนไฟล์ที่พนักงานเห็น ต้องแจ้งทีมพัฒนาเพื่อเปลี่ยนไฟล์ที่ติดมากับระบบด้วย
+              <strong>ไฟล์ที่พนักงานเห็นในหน้า “การลา” จะเปลี่ยนตามฉบับนี้เมื่อถึงวันมีผลบังคับใช้</strong>{' '}
+              ลิงก์ในหน้านั้นตรวจสอบกับเซิร์ฟเวอร์ก่อนทุกครั้ง หากพบฉบับปัจจุบันจะแสดงไฟล์ที่อัปโหลดไว้ที่นี่
+              หากยังไม่มีฉบับที่ใช้ได้ หรือตรวจสอบกับเซิร์ฟเวอร์ไม่ได้ จะแสดงไฟล์สำรองที่ติดมากับระบบแทน
             </p>
+            {/* The link text below used to assert "the file employees see right now" as an
+                unconditional fact -- true only while the reader had no way to prefer an upload.
+                Reworded to describe the bundled copy for what it now is -- the fallback -- so it
+                does not contradict the paragraph above. */}
             <p className="m-0">
-              ไฟล์ที่พนักงานเห็นอยู่ตอนนี้:{' '}
+              ไฟล์สำรองที่ติดมากับระบบ (ใช้เมื่อยังไม่มีฉบับอัปโหลดที่ใช้ได้ หรือตรวจสอบกับเซิร์ฟเวอร์ไม่ได้):{' '}
               <a href={POLICY_PDF_HREF} target="_blank" rel="noopener noreferrer" className="font-bold text-primary">
                 ประกาศวันลาฉบับที่ติดมากับระบบ
               </a>
@@ -182,7 +203,7 @@ export function LeavePolicyDocumentPage({ showToast }) {
       <Panel title="เอกสารในระบบตอนนี้">
         {availabilityQuery.isLoading ? (
           <p className="m-0 text-text-muted">กำลังตรวจสอบ...</p>
-        ) : availabilityQuery.isError ? (
+        ) : checkFailed ? (
           <div className="flex flex-wrap items-center gap-3">
             <p className="m-0 text-text-secondary">ตรวจสอบเอกสารในระบบไม่สำเร็จ</p>
             <Button type="button" variant="secondary" onClick={() => availabilityQuery.refetch()}>ลองใหม่</Button>

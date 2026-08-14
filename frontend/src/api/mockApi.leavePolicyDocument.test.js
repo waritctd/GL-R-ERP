@@ -28,7 +28,7 @@ describe('mock leave policy document', () => {
   // than production and hide the only state a real deployment actually has.
   it('starts with no document, exactly as every real environment does', async () => {
     await api.auth.login({ role: 'hr' });
-    await expect(api.leave.policyDocumentAvailable()).resolves.toBe(false);
+    await expect(api.leave.policyDocumentAvailable()).resolves.toBe('absent');
     await expect(api.leave.downloadPolicyDocument())
       .rejects.toThrow('ยังไม่มีการอัปโหลดเอกสารประกาศฉบับนี้ กรุณาติดต่อฝ่ายบุคคล');
   });
@@ -54,7 +54,7 @@ describe('mock leave policy document', () => {
   // ...while READING stays open to any authenticated user, which is the asymmetry that matters.
   it('still lets a plain employee read the document', async () => {
     await api.auth.login({ role: 'employee' });
-    await expect(api.leave.policyDocumentAvailable()).resolves.toBe(true);
+    await expect(api.leave.policyDocumentAvailable()).resolves.toBe('available');
   });
 
   it('rejects a non-PDF, an empty file, and an oversized file with the controller messages', async () => {
@@ -105,13 +105,13 @@ describe('mock leave policy document', () => {
     // ...but the bytes served are still the version already in force, not the newest upload.
     const blob = await api.leave.downloadPolicyDocument();
     expect(blob.size).toBe(inForce.length);
-    await expect(api.leave.policyDocumentAvailable()).resolves.toBe(true);
+    await expect(api.leave.policyDocumentAvailable()).resolves.toBe('available');
   });
 
   it('treats a version effective today as current', async () => {
     await api.auth.login({ role: 'hr' });
     await api.leave.uploadPolicyDocument(pdf('today.pdf'), bangkokTodayIso());
-    await expect(api.leave.policyDocumentAvailable()).resolves.toBe(true);
+    await expect(api.leave.policyDocumentAvailable()).resolves.toBe('available');
   });
 
   // LeavePolicyDocumentRepository#insert never updates — a superseded version stays retrievable, so

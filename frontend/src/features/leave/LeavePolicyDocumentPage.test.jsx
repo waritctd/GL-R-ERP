@@ -53,7 +53,7 @@ async function fillAndSubmit({ file = pdf(), date = '2026-09-01' } = {}) {
 describe('LeavePolicyDocumentPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.leave.policyDocumentAvailable.mockResolvedValue(false);
+    api.leave.policyDocumentAvailable.mockResolvedValue('absent');
     api.leave.uploadPolicyDocument.mockResolvedValue({
       document: {
         documentId: 1,
@@ -77,20 +77,35 @@ describe('LeavePolicyDocumentPage', () => {
   });
 
   it('offers the stored document when one is current', async () => {
-    api.leave.policyDocumentAvailable.mockResolvedValue(true);
+    api.leave.policyDocumentAvailable.mockResolvedValue('available');
     renderPage();
 
     expect(await screen.findByRole('button', { name: /เปิดเอกสารในระบบ/ })).not.toBeNull();
   });
 
-  // ── The honesty requirement ───────────────────────────────────────────────
-  // Uploading here does NOT change the PDF employees open from /leave — that link serves a copy
-  // bundled with the frontend by owner ruling. Without saying so, an uploader would reasonably
-  // assume otherwise.
-  it('says outright that uploading does not change what employees see', async () => {
+  // ── The honesty requirement, reversed 2026-08-14 ──────────────────────────
+  // Until issue #774 shipped this page, uploading here did NOT change the PDF at /leave. Now it
+  // does, once the version's effective date arrives and LeavePolicyBar.jsx's probe confirms it --
+  // see that file's own tests for the reader side of this.
+  it('says outright that the leave-page reader now prefers the uploaded file once it is in force', async () => {
     renderPage();
 
-    expect(await screen.findByText(/ยังไม่เปลี่ยนไฟล์ที่พนักงานเห็นในหน้า/)).not.toBeNull();
+    expect(await screen.findByText(/จะเปลี่ยนตามฉบับนี้เมื่อถึงวันมีผลบังคับใช้/)).not.toBeNull();
+    // The old claim -- "the file employees see has NOT changed" -- would be a lie now; guard
+    // against a stale revert bringing it back.
+    expect(screen.queryByText(/ยังไม่เปลี่ยนไฟล์ที่พนักงานเห็นในหน้า/)).toBeNull();
+  });
+
+  // 'check-failed' shares the retry branch with a genuine query error: with no confirmed answer,
+  // "never uploaded" is a claim this page cannot support, and it has no bundled fallback to show
+  // in its place the way LeavePolicyBar.jsx does.
+  it('renders the retry affordance for a failed check, not the "never uploaded" copy', async () => {
+    api.leave.policyDocumentAvailable.mockResolvedValue('check-failed');
+    renderPage();
+
+    expect(await screen.findByText('ตรวจสอบเอกสารในระบบไม่สำเร็จ')).not.toBeNull();
+    expect(screen.getByRole('button', { name: /ลองใหม่/ })).not.toBeNull();
+    expect(screen.queryByText(/ยังไม่เคยมีการอัปโหลดไฟล์เข้ามาเลย/)).toBeNull();
   });
 
   // The server checks MultipartFile#getContentType — the type the CLIENT declares — so nothing

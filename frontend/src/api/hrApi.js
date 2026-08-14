@@ -178,13 +178,57 @@ export const api = {
     // see LeaveRequestPage.jsx's own comment on why that matters.
     preview: (payload, options = {}) =>
       apiRequest(API_ROUTES.leave.preview, { method: 'POST', body: payload, signal: options.signal }),
-    // Leave-surface IA rebuild, Phase A3: the §5 announcement PDF link on the "กฎการลา" tab.
-    // HEAD-probes first (no body transfer) so LeavePolicyBar.jsx can render a disabled/explained state
-    // when the backend has no path configured, instead of a broken link the user only discovers by
-    // clicking — see LeaveController#policyDocument's Javadoc for why the same route answers both.
+    // Leave-surface IA rebuild, Phase A3 (2026-08-10) → reversed 2026-08-14 (issue #774 shipped the
+    // upload UI, LeavePolicyDocumentPage.jsx — see LeavePolicyBar.jsx's header comment for the full
+    // history). HEAD-probes (no body transfer) so LeavePolicyBar.jsx can prefer a real uploaded
+    // document over its bundled fallback WITHOUT ever presenting an unverified answer as verified.
+    //
+    // `fetch` resolves if and only if an HTTP response actually came back — that is what separates
+    // "the server answered" from "nothing answered". But the DOCUMENT ITSELF is served in every
+    // case: a leave policy is reference material, so withholding it is the worse failure. The four
+    // rows below differ only in the STRENGTH OF THE WARNING the caller shows next to it, never in
+    // whether the document is offered —
+    //
+    //   2xx + content-type: application/pdf     -> 'available'      a current document exists; no warning
+    //   404                                      -> 'absent'         the server ANSWERED "nothing stored" --
+    //                                                                 that confirms the bundled copy IS
+    //                                                                 current, so this is an answer, not a
+    //                                                                 failure; no warning
+    //   2xx, but NOT a PDF (a static host's SPA -> 'unverified'      learned nothing about whether a real
+    //     catch-all serving index.html), OR                          API exists behind this path; mild
+    //     fetch REJECTS (network/DNS/CORS --                         warning
+    //     no HTTP response at all)
+    //   any other status (500/401/403/502/…)    -> 'check-failed'    POSITIVE evidence a backend exists and
+    //                                                                 refused to answer; strong warning + retry
+    //
+    // Why a 500 warns harder than a rejection: a 500 tells you a backend exists, could be holding a
+    // newer announcement, and is failing to say so. Treating that the same as "learned nothing" would
+    // under-warn about the one row with real reason for suspicion. A transport rejection or a non-PDF
+    // 200 carries no such evidence — neither says anything about whether a backend exists at all — so
+    // those two share the milder 'unverified' label instead.
+    //
+    // Why this never throws for an HTTP reason: every row above still has a document to fall back to
+    // (the bundled copy), so raising here would only force the caller to catch and fall back anyway.
+    // This function does the falling back itself and hands the caller a label to render, not an error
+    // to recover from.
+    //
+    // HEAD keeps the response's headers and drops only the body (Spring's DispatcherServlet answers
+    // HEAD on a @GetMapping this way — see LeaveController#policyDocument's Javadoc), which is what
+    // makes the content-type check below possible without transferring the PDF's bytes just to check
+    // availability. The check itself exists because a plain static host's SPA catch-all answers
+    // `200 text/html` for ANY unmatched path — a bare `res.ok` would read that as "available" and hand
+    // the reader an HTML page as if it were the announcement PDF.
     policyDocumentAvailable: async () => {
-      const res = await fetch(API_ROUTES.leave.policyDocument, { method: 'HEAD', credentials: 'include' });
-      return res.ok;
+      let res;
+      try {
+        res = await fetch(API_ROUTES.leave.policyDocument, { method: 'HEAD', credentials: 'include' });
+      } catch {
+        return 'unverified';
+      }
+      if (res.status === 404) return 'absent';
+      if (!res.ok) return 'check-failed';
+      const contentType = res.headers.get('content-type') ?? '';
+      return contentType.includes('application/pdf') ? 'available' : 'unverified';
     },
     downloadPolicyDocument: async () => {
       const res = await fetch(API_ROUTES.leave.policyDocument, { credentials: 'include' });

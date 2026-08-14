@@ -5480,15 +5480,25 @@ export const api = {
     // way a real environment gets one (V133: rows reach the table through that endpoint alone).
     //
     // The DEFAULT is unchanged and deliberately so: with nothing uploaded this still answers
-    // `false`, which is the state production, UAT and a fresh mock session are all in today. It can
-    // only become `true` by way of a real upload in the same session, so this is strictly more
-    // faithful, never more permissive. Availability is computed by findCurrent's own rule rather
-    // than "something was uploaded" — see currentLeavePolicyDocument().
+    // `'absent'`, which is the state production, UAT and a fresh mock session are all in today. It
+    // can only become `'available'` by way of a real upload in the same session, so this is
+    // strictly more faithful, never more permissive. Availability is computed by findCurrent's own
+    // rule rather than "something was uploaded" — see currentLeavePolicyDocument().
     //
     // Still NOT evidence the real endpoint works: no bytes cross a network here.
+    //
+    // ── A STRING ENUM, NOT A BOOLEAN (2026-08-14, LeavePolicyBar's upload-preferring reversal) ──
+    // hrApi.js's real HEAD probe answers one of FOUR strings — 'available' / 'absent' / 'unverified'
+    // / 'check-failed' — and never throws for an HTTP reason; see that method's own comment for the
+    // full table. The mock has no transport layer to fail, so it can only ever produce the two rows
+    // a session with a real store can actually reach: 'available' or 'absent'. It can never answer
+    // 'unverified' (there is no partial, unconfirmed answer to mirror — every mock call either finds
+    // a row or doesn't) or 'check-failed' (there is no failing backend to mirror). A test that needs
+    // those two rows exercised must stub hrApi.js's `fetch` directly — see
+    // hrApi.leavePolicyProbe.test.js — not drive it through this mock.
     async policyDocumentAvailable() {
       requireSession();
-      return delay(!!currentLeavePolicyDocument());
+      return delay(currentLeavePolicyDocument() ? 'available' : 'absent');
     },
     async downloadPolicyDocument() {
       requireSession();
