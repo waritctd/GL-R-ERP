@@ -53,6 +53,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.SendFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.orderconfirmation.OrderConfirmationRequests.ConfirmOrderRequest;
 import th.co.glr.hr.orderconfirmation.OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest;
 import th.co.glr.hr.orderconfirmation.OrderConfirmationService;
@@ -132,7 +133,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     void wireStepsServicesAndCreateFactory() {
         tickets = new TicketRepository(jdbc);
         pricingRequests = new PricingRequestRepository(jdbc);
-        NotificationRepository notifications = new NotificationRepository(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         customersRepo = new CustomerRepository(jdbc);
         projectsRepo = new ProjectRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(
