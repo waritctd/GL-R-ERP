@@ -119,7 +119,11 @@ public class NotificationRepository {
         Map.entry("CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ"),
         // Step 6: Deposit, Payment, and Order Confirmation.
         Map.entry("ORDER_CONFIRMED", "ยืนยันคำสั่งซื้อแล้ว"),
-        Map.entry("DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION", "สร้างร่างใบแจ้งยอดเงินรับมัดจำแล้ว")
+        Map.entry("DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION", "สร้างร่างใบแจ้งยอดเงินรับมัดจำแล้ว"),
+        // TicketService.reserveStock — a rep declaring stock coverage on their OWN deal. Without
+        // an entry here it would fall through to the generic "อัปเดตสถานะคำขอราคา", which reads as
+        // routine pipeline noise; the whole point of this notification is that it is not.
+        Map.entry("STOCK_RESERVED", "พนักงานขายประกาศสินค้าจากสต็อกเอง")
     );
 
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {
@@ -149,8 +153,14 @@ public class NotificationRepository {
     }
 
     /**
-     * Notify all employees whose division maps to the given sales role.
+     * Notify every active employee the given sales role resolves to.
      * Division mapping mirrors DivisionAccessPolicy — extended for sales module roles.
+     *
+     * <p>{@code import}/{@code ceo}/{@code sales} each resolve to a whole ฝ่าย.
+     * {@code sales_manager} does not: it resolves to the ฝ่ายขาย members whose position marks
+     * them a ผู้จัดการ, so it is a strict subset of {@code sales} and the two are not
+     * interchangeable. An unknown role resolves to nobody and inserts nothing (a silent no-op,
+     * as it always has been) — so a typo'd role name notifies no one rather than everyone.
      */
     public void notifyByRole(String role, long ticketId, String type, String message) {
         notifyByRoleInternal(role, type, message, "/tickets/" + ticketId);
@@ -161,21 +171,33 @@ public class NotificationRepository {
     }
 
     private void notifyByRoleInternal(String role, String type, String message, String link) {
-        String divisionFilter = switch (role) {
+        String recipientFilter = switch (role) {
             case "import" -> "d.source_code ILIKE 'PCIM%'";
             case "ceo"    -> "d.source_code ILIKE 'MD%' OR d.source_code ILIKE 'MN%'";
             case "sales"  -> "d.source_code ILIKE 'SA%'";
+            // The one recipient here that is NOT a whole ฝ่าย. Deliberately identical to
+            // CommissionRepository#findSalesManagerApproverEmployeeIds — the same people who
+            // already sign a rep's commission off are the ones who supervise a rep's commission
+            // INPUTS (TicketService.reserveStock). Two different answers to "who is the sales
+            // manager" is the drift worth avoiding; if that predicate ever moves, move this one
+            // with it. Note "sales" above would fan out to the reps themselves, including the one
+            // who just declared, so it is not a substitute.
+            case "sales_manager" -> "d.source_code ILIKE 'SA%' AND p.name_th LIKE '%ผู้จัดการ%'";
             default -> null;
         };
-        if (divisionFilter == null) return;
+        if (recipientFilter == null) return;
 
+        // LEFT JOIN, not JOIN: only the sales_manager branch reads hr.position, and an employee
+        // with a null position_id must stay reachable by the three division-only branches exactly
+        // as before. (An inner join here would silently un-notify them.)
         jdbc.update("""
             INSERT INTO hr.notification (employee_id, type, title, message, link)
             SELECT e.employee_id, :type, :title, :message, :link
               FROM hr.employee e
               JOIN hr.division d ON d.division_id = e.division_id
+              LEFT JOIN hr.position p ON p.position_id = e.position_id
              WHERE (%s) AND e.is_active = TRUE
-            """.formatted(divisionFilter),
+            """.formatted(recipientFilter),
             new MapSqlParameterSource()
                 .addValue("type", type)
                 .addValue("title", ticketEventTitle(type))

@@ -87,6 +87,47 @@ jobs:
         if: steps.changes.outputs.backend != 'true'
         run: echo "No backend/** changes in this diff; skipping the Maven build."
 
+      # Owner ruling 2026-08-14: Docker is ENABLED for this job, and its absence is a stated
+      # failure rather than something the suite quietly degrades around.
+      #
+      # Why a step and not just a test: the ~130 DB-backed classes (every real-DB authz proof
+      # CLAUDE.md requires, and DealStageCheckConstraintIntegrationTest's Java<->Postgres constraint
+      # mirrors) are worth nothing if they do not execute. This is the earliest point at which that
+      # precondition can be checked, it costs ~1s, and it fails with a sentence instead of ~130
+      # Testcontainers stack traces six minutes in. It runs BEFORE the JDK and LibreOffice setup
+      # deliberately — there is no reason to provision a build that cannot produce a real verdict.
+      #
+      # Mirrors PostgresTestSupport.isAvailable()'s own resolution order: an external TEST_DB_URL
+      # satisfies the requirement without Docker, exactly as it does for the suite. Its Java-side
+      # counterpart, IntegrationDatabaseRequiredInCiTest, is NOT redundant with this: `docker info`
+      # is what the shell can see, while that test asks DockerClientFactory — the component that
+      # actually decides, and which additionally honours DOCKER_HOST, ~/.testcontainers.properties
+      # and its own strategy chain. The two can disagree, and that disagreement fails green.
+      - name: Require an integration database (Docker, or TEST_DB_URL)
+        if: steps.changes.outputs.backend == 'true'
+        run: |
+          set -euo pipefail
+
+          if [ -n "${TEST_DB_URL:-}" ]; then
+            echo "TEST_DB_URL is set — the integration suite will use that external database."
+            exit 0
+          fi
+
+          if ! docker info >/dev/null 2>&1; then
+            echo "::error title=No integration database::This runner has no reachable Docker \
+          daemon and no TEST_DB_URL, so every DB-backed test would fail or be meaningless. A \
+          backend build without one cannot produce a verdict on the Java<->Postgres constraint \
+          mirrors or on any role-scope filter. Restore Docker on the runner, or set TEST_DB_URL. \
+          Do not work around this by removing this step."
+            exit 1
+          fi
+
+          # Informational only — `|| true` so a hiccup printing the version can never fail a step
+          # whose actual assertion (the `docker info` probe above) has already passed. A false red
+          # here would be worse than useless: it would teach people to delete the step.
+          echo "Docker daemon reachable; Testcontainers will provide Postgres."
+          docker version --format 'server {{.Server.Version}}' || true
+
       - name: Set up Temurin JDK 21
         if: steps.changes.outputs.backend == 'true'
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0

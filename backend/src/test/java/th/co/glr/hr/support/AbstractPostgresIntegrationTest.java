@@ -30,9 +30,23 @@ import th.co.glr.hr.payroll.PayrollTaxTreatment;
  *
  * <p>The datasource is resolved by {@link PostgresTestSupport}: an explicit {@code TEST_DB_URL}
  * overrides everything (external DB), otherwise a throwaway Testcontainers Postgres is started/reused.
- * When neither a {@code TEST_DB_URL} nor Docker is available the tests are skipped (not failed), so a
- * DB-less {@code mvnw verify} still runs green. Each test starts from a clean, fully-migrated schema
- * so tests are independent and order-free.
+ * Each test starts from a clean, fully-migrated schema so tests are independent and order-free.
+ *
+ * <p><b>The {@code @EnabledIf} below does NOT disable subclasses, and this Javadoc used to claim
+ * otherwise.</b> It said a DB-less {@code mvnw verify} "still runs green" because the tests skip.
+ * They do not skip. JUnit's {@code @EnabledIf} is not {@code @Inherited} (junit-jupiter-api 5.12.2:
+ * {@code @Target}, {@code @Retention}, {@code @Documented}, {@code @ExtendWith}, {@code @API} — and
+ * JUnit only walks to a superclass for annotations that are), so declared here it governs this
+ * class alone. With neither {@code TEST_DB_URL} nor Docker every subclass runs and fails in
+ * {@link #resetSchema} — {@code Could not find a valid Docker environment}, or
+ * {@code FATAL: database "wrk_it" does not exist} once {@link PostgresTestSupport#usesContainer()}
+ * routes the reset down the external-DB path. Verified empirically, not inferred.
+ *
+ * <p>The annotation is kept rather than deleted: it is accurate for this class, and removing it
+ * would change nothing. What matters is that <b>no one should "repair" the inheritance</b> — making
+ * these ~130 classes genuinely skip is how a green build comes to mean nothing at all, which is the
+ * outcome {@link IntegrationDatabaseRequiredInCiTest} exists to prevent. Read that class before
+ * touching this annotation.
  *
  * <p>On the Testcontainers path the reset is a {@code CREATE DATABASE ... TEMPLATE} clone of a
  * schema migrated <b>once</b> per JVM — not a per-test Flyway {@code clean()} + {@code migrate()}.
