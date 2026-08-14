@@ -11,9 +11,19 @@ globalThis.React = React;
 
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
+  // Imported inside the factory, not at the top of the file: vi.mock is hoisted above every import.
+  const { DEAL_STAGE_CATALOG } = await import('../../data/dealStageCatalog.js');
   return {
     ...actual,
     api: {
+      // The pipeline enumeration (GET /api/meta/deal-stages). Served here as the SAME canned
+      // payload mockApi serves — data/dealStageCatalog.js, which stageCatalog.test.js pins against
+      // DealStage.java — so this fixture cannot quietly describe a pipeline the backend does not
+      // have. A fixture more populated (or differently shaped) than production is the failure mode
+      // CLAUDE.md names; reusing the guarded one is how that is avoided.
+      meta: {
+        dealStages: vi.fn().mockResolvedValue(DEAL_STAGE_CATALOG),
+      },
       tickets: {
         get: vi.fn(),
         listPayments: vi.fn(),
@@ -308,7 +318,8 @@ describe('TicketDetailPage', () => {
 
     expect(await screen.findByText('ขั้นตอนดีล')).not.toBeNull();
     // DealStagePanel below also names the current stage — assert presence, not uniqueness.
-    expect(screen.getAllByText('เสนอราคาผู้ออกแบบ/เจ้าของ').length).toBeGreaterThan(0);
+    // S4's Thai copy narrowed to the designer alone when V143 gave the owner their own stage (S5).
+    expect(screen.getAllByText('เสนอราคาผู้ออกแบบ').length).toBeGreaterThan(0);
     expect(screen.getByText('มูลค่าดีล')).not.toBeNull();
     // The payment panel below also renders amountPayable — assert presence, not uniqueness.
     expect(screen.getAllByText('฿50,000.00').length).toBeGreaterThan(0);
@@ -1511,17 +1522,25 @@ describe('TicketDetailPage', () => {
   // (the default tab — see ticketDetailTabs.js's own comment on that tab),
   // so these no longer call openTab at all.
   describe('deal tracking panel', () => {
-    it('shows the section and the win% default; the pre-emptive gate hint now sits next to the advance button, not here', async () => {
+    it('shows the section and the SERVER win%; the pre-emptive gate hint now sits next to the advance button, not here', async () => {
       api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({ summary: { salesStage: 'QUOTE_DESIGN_SIDE' } }),
+        ticket: buildTicket({
+          // Issue #738: the panel now renders TicketSummaryDto.effectiveWinProbability off the
+          // payload instead of re-deriving it from a copied stage→% table, so the fixture must
+          // supply it. 37 is deliberately a value NO stage default holds — if this ever reads 40
+          // again the panel has gone back to deriving from QUOTE_DESIGN_SIDE, and if it reads 0
+          // the field stopped being read at all. Both are visible failures rather than a number
+          // that happens to agree.
+          summary: { salesStage: 'QUOTE_DESIGN_SIDE', effectiveWinProbability: 37 },
+        }),
       });
 
       renderTicketDetailPage(ceoUser);
 
       expect(await screen.findByRole('heading', { level: 2, name: 'การติดตามดีล' })).not.toBeNull();
       expect(await screen.findByText('ยังไม่พร้อม')).not.toBeNull();
-      // QUOTE_DESIGN_SIDE's stage default (WIN_PROBABILITY_DEFAULTS) — no override set.
-      expect(screen.getByText('40%')).not.toBeNull();
+      expect(screen.getByText('37%')).not.toBeNull();
+      expect(screen.queryByText('40%')).toBeNull();
       // Ticket-detail IA rebuild Phase 1 (Phase-1 audit finding #3, "y=870"):
       // the descriptive gate sentence moved out of this panel entirely — it
       // now renders next to DealStagePanel's "เลื่อนไป" button instead (see
@@ -1606,7 +1625,10 @@ describe('TicketDetailPage', () => {
         currentState: {
           lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed',
         },
-        availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'OWNER_SIGNOFF' }],
+        // QUOTE_OWNER, not OWNER_SIGNOFF: V143 inserted S5 between S4 and S6, so the stage after
+        // QUOTE_DESIGN_SIDE moved. This fixture said OWNER_SIGNOFF and stayed green for as long as
+        // the frontend carried its own 14-stage list — the same drift the catalog endpoint ends.
+        availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'QUOTE_OWNER' }],
         ...overrides,
       };
     }
@@ -1653,7 +1675,7 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByText(/ต้องระบุวันติดตามครั้งถัดไป/)).toBeNull();
 
       fireEvent.click(advanceItem);
-      await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledWith(701, { stage: 'OWNER_SIGNOFF' }));
+      await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledWith(701, { stage: 'QUOTE_OWNER' }));
     });
 
     // FIX 3 (P2, clutter-follow-up review round 2): the old inline "เลื่อนไป"
@@ -1929,10 +1951,20 @@ describe('TicketDetailPage', () => {
         currentState: { lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'SHIPPING', status: 'quotation_issued' },
         // A deliberately unrealistic payload (mirrors the "retired verbs" test
         // above) proving the role gate, not just the absence of the action.
+        //
+        // RESERVE_STOCK is deliberately NOT in this list any more. Issue #732:
+        // that action's local role check was removed on purpose, because
+        // TicketService.canDeclareStockCoverage grants it to the deal owner as
+        // well as to import/ceo, and actions() advertises it off that same
+        // predicate — so ANDing it with a frontend role set threw away the
+        // server's answer and hid the button from the one role PR #706 built
+        // it for. Feeding account an action the real service cannot produce for
+        // it would now assert a gate that intentionally does not exist. The
+        // realistic case — account is offered nothing, so account sees nothing
+        // — is asserted below instead.
         availableActions: [
           { action: 'ISSUE_IMPORT_REQUEST', kind: 'fulfillment', label: 'ออกคำขอนำเข้า' },
           { action: 'SHIPPING', kind: 'fulfillment', label: 'สินค้าเดินทาง' },
-          { action: 'RESERVE_STOCK', kind: 'fulfillment', label: 'จองสต็อก' },
           { action: 'RECORD_PARTIAL_DELIVERY', kind: 'fulfillment', label: 'บันทึกส่งมอบ' },
           { action: 'COMPLETE_DELIVERY', kind: 'fulfillment', label: 'ส่งมอบครบ' },
         ],
@@ -1945,6 +1977,107 @@ describe('TicketDetailPage', () => {
       expect(section.queryByRole('button', { name: 'จองสินค้าจากสต็อก' })).toBeNull();
       expect(section.queryByRole('button', { name: 'บันทึกการส่งสินค้า' })).toBeNull();
       expect(section.queryByRole('button', { name: 'ส่งมอบครบ' })).toBeNull();
+    });
+
+    // ── Issue #732: จองสินค้าจากสต็อก for the deal owner ──────────────────────
+    //
+    // PR #706 widened TicketService.canDeclareStockCoverage to FULFILMENT_ROLES ∪
+    // (SALES_ROLES ∧ deal owner) and actions() advertises RESERVE_STOCK off the
+    // same predicate — so the server already answers "may this viewer declare
+    // stock coverage", carrying the ownership rule, the ORDER_RECEIVED stage
+    // floor and the remaining-delivery check with it. The panel used to AND that
+    // answer with the pre-#706 role set and hide the button from sales entirely.
+    //
+    // ⚠️ These are RENDERING assertions over a mocked `api`. They pin that the
+    // frontend now honours the server's answer instead of overriding it; they say
+    // nothing about who the real service actually grants. That claim needs a
+    // real-DB test through the Java service (StockDeclarationAuthzIntegrationTest
+    // covers the backend half) — see CLAUDE.md.
+    it('shows จองสินค้าจากสต็อก to the sales deal owner when the server advertises RESERVE_STOCK', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', salesStage: 'ORDER_RECEIVED', createdById: 1 } }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'ORDER_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued' },
+        availableActions: [{ action: 'RESERVE_STOCK', kind: 'fulfillment', label: 'จองสินค้าจากสต็อก' }],
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+      const section = await fulfilmentSection();
+
+      expect(await section.findByRole('button', { name: 'จองสินค้าจากสต็อก' })).not.toBeNull();
+    });
+
+    // Wrong-way-round, and the one that matters: dropping the local role check
+    // must NOT mean the button is unconditional. When the server withholds
+    // RESERVE_STOCK — below the stage floor, not the owner, nothing left to
+    // deliver — the same sales user must still see nothing.
+    it('hides จองสินค้าจากสต็อก from a sales user the server did not offer RESERVE_STOCK to', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', salesStage: 'PROCUREMENT', createdById: 1 } }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued' },
+        availableActions: [],
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+      const section = await fulfilmentSection();
+
+      expect(section.queryByRole('button', { name: 'จองสินค้าจากสต็อก' })).toBeNull();
+    });
+
+    // ── Issue #730: a from-stock deal must not claim import milestones ────────
+    //
+    // SubstepChips walked a FLAT list and marked every entry before the current
+    // one done. FROM_STOCK sat at index 4, after the whole import sequence, so a
+    // from-stock deal rendered four milestones it never performed — and, per
+    // issueImportRequest's own guard (fulfillmentStatus must be null), never
+    // could have.
+    it('renders no import milestones on a deal fulfilled FROM_STOCK', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({
+          summary: { status: 'quotation_issued', salesStage: 'DELIVERY_SCHEDULING', fulfillmentStatus: 'FROM_STOCK' },
+          items: [{ id: 70101, brand: 'SCG', model: 'A1', qty: 10, qtyDelivered: 0, qtyFromStock: 10, approvedPrice: 150 }],
+        }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'DELIVERY_SCHEDULING', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: 'FROM_STOCK', status: 'quotation_issued' },
+        availableActions: [],
+      });
+
+      renderTicketDetailPage(ceoUser);
+      const section = await fulfilmentSection();
+
+      // findAllByText: the from-stock label appears twice on purpose — once as the
+      // fulfilmentStatus badge, once as the single chip of the from-stock path.
+      expect((await section.findAllByText('สินค้าจากสต็อก')).length).toBeGreaterThan(0);
+      for (const label of ['ออกใบขอซื้อ (IR) แล้ว', 'สั่งซื้อไปยังผู้ผลิตแล้ว', 'สินค้าอยู่ระหว่างเดินทาง', 'สินค้าถึงโกดังแล้ว']) {
+        expect(section.queryByText(label)).toBeNull();
+      }
+    });
+
+    // The other half: the import journey must still render in full for a deal
+    // that is actually on it — the fix must not have narrowed both paths.
+    it('still renders the full import sequence on a deal that issued an import request', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({
+          summary: { status: 'quotation_issued', salesStage: 'PROCUREMENT', fulfillmentStatus: 'SHIPPING' },
+          items: [{ id: 70101, brand: 'SCG', model: 'A1', qty: 10, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: 150 }],
+        }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: 'SHIPPING', status: 'quotation_issued' },
+        availableActions: [],
+      });
+
+      renderTicketDetailPage(ceoUser);
+      const section = await fulfilmentSection();
+
+      for (const label of ['ออกใบขอซื้อ (IR) แล้ว', 'สั่งซื้อไปยังผู้ผลิตแล้ว', 'สินค้าอยู่ระหว่างเดินทาง', 'สินค้าถึงโกดังแล้ว']) {
+        expect(await section.findByText(label)).not.toBeNull();
+      }
+      expect(section.queryByText('สินค้าจากสต็อก')).toBeNull();
     });
 
   });

@@ -2,9 +2,6 @@ package th.co.glr.hr.pricingrequest;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -23,6 +20,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
+import th.co.glr.hr.factoryquote.FactoryQuoteCarryForward;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestDetailDto;
@@ -85,16 +83,19 @@ public class PricingRequestService {
     private final ObjectMapper objectMapper;
     private final ContactRepository contacts;
     private final FileStorageService fileStorage;
+    private final FactoryQuoteCarryForward factoryQuoteCarryForward;
 
     public PricingRequestService(PricingRequestRepository requests, TicketRepository tickets,
                                  NotificationRepository notifications, ObjectMapper objectMapper,
-                                 ContactRepository contacts, FileStorageService fileStorage) {
+                                 ContactRepository contacts, FileStorageService fileStorage,
+                                 FactoryQuoteCarryForward factoryQuoteCarryForward) {
         this.requests      = requests;
         this.tickets       = tickets;
         this.notifications = notifications;
         this.objectMapper  = objectMapper;
         this.contacts      = contacts;
         this.fileStorage   = fileStorage;
+        this.factoryQuoteCarryForward = factoryQuoteCarryForward;
     }
 
     @Transactional
@@ -233,7 +234,7 @@ public class PricingRequestService {
         }
         List<Long> unresolvableCatalogItems = requests.findUnresolvableCatalogItemIds(id);
         if (!unresolvableCatalogItems.isEmpty()) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "ไม่พบสินค้าใน price catalog ที่ active สำหรับรายการ: " + unresolvableCatalogItems);
         }
         requests.snapshotCatalogSelections(id);
@@ -300,11 +301,61 @@ public class PricingRequestService {
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_SUBMITTED, PricingRequestStatus.DRAFT,
             PricingRequestStatus.SUBMITTED, null, null);
+        if (carryFactoryQuotesForwardOnSubmit(summary, actor)) {
+            return detail(id);
+        }
         notifications.notifyByRoleForPricingRequest("import", summary.id(), "PRICING_REQUEST_SUBMITTED",
             "คำขอราคา " + summary.requestCode() + " รอการรับเรื่อง");
         notifyCeo(summary, PricingRequestEventKind.PRICING_REQUEST_SUBMITTED,
             "คำขอราคา " + summary.requestCode() + " ถูกส่งเข้าสู่ Pricing workflow");
         return detail(id);
+    }
+
+    /**
+     * Reissue-through-CEO-chain (owner ruling 2026-08-13): a customer-change revision that changes
+     * only the commercial terms — same products, same requested quantities — reuses its parent's
+     * factory quotes and goes straight to the CEO instead of round-tripping through Import for
+     * prices nobody disputed.
+     *
+     * <p>Runs at SUBMIT time, not at revision-creation time, and that timing is load-bearing:
+     * {@code sales.factory_quote_item.pricing_request_item_id} is {@code ON DELETE RESTRICT}, while
+     * {@code updateDraft} replaces a draft's items with a DELETE + re-INSERT. Copying quotes onto a
+     * still-DRAFT child would therefore make the child's own items undeletable and turn the next
+     * {@code updateDraft} into a raw constraint violation. After submit the items are frozen, so
+     * there is nothing to collide with.
+     *
+     * <p>Deliberately fails OPEN, in the sense that every "no" lands the request on the ordinary
+     * Import path rather than raising: the shortcut is an optimisation, and refusing to take it is
+     * always safe. It is also placed AFTER the submit event above, so the audit trail reads
+     * submitted-then-advanced rather than inventing a submit that never happened.
+     *
+     * @return true when the request was advanced to READY_FOR_CEO_REVIEW.
+     */
+    private boolean carryFactoryQuotesForwardOnSubmit(PricingRequestSummaryDto summary, UserPrincipal actor) {
+        PricingRequestSummaryDto submitted = requests.findSummary(summary.id()).orElse(null);
+        if (submitted == null || !factoryQuoteCarryForward.carryForwardOnSubmit(submitted, actor.id())) {
+            return false;
+        }
+        // The advance itself. SUBMITTED -> READY_FOR_CEO_REVIEW is declared in
+        // PricingRequestStatus.ALLOWED specifically for this path. A compare-and-set miss here is
+        // not a user-facing error: the request is validly SUBMITTED either way, so fall back to
+        // the Import path rather than failing a submit that already succeeded.
+        int transitioned = requests.transition(summary.id(), PricingRequestStatus.SUBMITTED,
+            PricingRequestStatus.READY_FOR_CEO_REVIEW, null, null);
+        if (transitioned == 0) {
+            return false;
+        }
+        // Same event kind FactoryQuoteService.markReadyForCosting emits for the same transition,
+        // so "became ready for CEO review" reads as one consistent trail regardless of which path
+        // produced it.
+        requests.addEvent(summary.id(), summary.ticketId(), actor.id(), actor.name(),
+            PricingRequestEventKind.PRICING_COSTING_SUBMITTED, PricingRequestStatus.SUBMITTED,
+            PricingRequestStatus.READY_FOR_CEO_REVIEW,
+            "Factory quotes carried forward unchanged from the superseded pricing request "
+                + "— advanced for CEO review without a new Import round-trip", null);
+        notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
+            "คำขอราคา " + summary.requestCode() + " พร้อมให้ CEO พิจารณาราคาแล้ว (ใช้ราคาโรงงานเดิม)");
+        return true;
     }
 
     @Transactional
@@ -364,15 +415,16 @@ public class PricingRequestService {
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
-        requests.cancelOpenStep2Children(id, request.reason(), actor.id());
-        // Step 5 (V75, review follow-up): defensive, currently unreachable in practice —
-        // PricingRequestStatus.canTransition only allows cancel() from pre-costing-submission
-        // statuses (DRAFT/SUBMITTED/IMPORT_REVIEWING/AWAITING_FACTORY_RESPONSE — V140 retired
-        // COSTING_IN_PROGRESS and MORE_INFO_REQUIRED), none of which can co-exist with an open
-        // pricing_decision (that requires READY_FOR_CEO_REVIEW+). Kept anyway, at zero cost (a
-        // no-op UPDATE today), so a future widening of that map cannot silently reintroduce
-        // design correction 1's bug. See cancelOpenForTicket below for the path that DOES need
-        // this today — it deliberately bypasses canTransition (cancelForDeadDeal's own Javadoc).
+        requests.cancelOpenChildrenForDeadRequest(id, request.reason(), actor.id());
+        // Cancel cutoff (owner ruling 2026-08-13): this call USED to be dead defensive code, and
+        // the comment here said so — canTransition only reached cancel() from
+        // DRAFT/SUBMITTED/IMPORT_REVIEWING/AWAITING_FACTORY_RESPONSE, none of which can co-exist
+        // with an open pricing_decision (that needs READY_FOR_CEO_REVIEW+) or a quotation (that
+        // needs APPROVED_FOR_QUOTATION). The widened cutoff makes it live on the main path: a
+        // cancel from CEO_REVIEWING retires a DRAFT decision, and one from APPROVED_FOR_QUOTATION
+        // retires an APPROVED decision plus any DRAFT quotation built from it. The prediction the
+        // old comment made — "a future widening of that map cannot silently reintroduce design
+        // correction 1's bug" — is exactly what is being cashed in here.
         requests.supersedeOpenPricingDecisionAndQuotation(id);
         String metadataJson = toReasonMetadataJson(request.reason());
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
@@ -391,8 +443,23 @@ public class PricingRequestService {
         if (parent.ticketCreatedById() != actor.id()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        if (Set.of(PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, PricingRequestStatus.SUPERSEDED)
-                .contains(parent.status())) {
+        // Reissue-through-CEO-chain (owner ruling 2026-08-13): the state machine is now the ONLY
+        // authority on which statuses a customer-change revision may start from, replacing the
+        // hand-maintained {DRAFT, CANCELLED, SUPERSEDED} denylist that used to live here. That
+        // denylist and PricingRequestStatus.ALLOWED had drifted apart in both directions, and
+        // PricingRequestRepository.supersedeForCustomerRevision consulted neither. Deriving the
+        // gate from canTransition means this 409 and the repository's IllegalStateException can
+        // never disagree about what is legal.
+        //
+        // QUOTATION_ACCEPTED gets its own message because it is the case that CHANGED: it used to
+        // be reachable and is now refused. Once the customer has accepted, changing the deal is an
+        // order amendment, not a quotation revision.
+        if (PricingRequestStatus.QUOTATION_ACCEPTED.equals(parent.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ลูกค้ายอมรับใบเสนอราคาแล้ว จึงแก้ไขผ่าน revision ของคำขอราคาไม่ได้ "
+                    + "— การเปลี่ยนแปลงหลังลูกค้ายอมรับต้องทำเป็นการแก้ไขคำสั่งซื้อ");
+        }
+        if (!PricingRequestStatus.canTransition(parent.status(), PricingRequestStatus.SUPERSEDED)) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "สร้าง revision จากการเปลี่ยนแปลงของลูกค้าได้เฉพาะจากคำขอราคาที่ยื่นและยังดำเนินการอยู่เท่านั้น");
         }
@@ -422,15 +489,29 @@ public class PricingRequestService {
             }
             throw new ApiException(HttpStatus.CONFLICT, "clientRequestId นี้ถูกใช้ไปแล้ว");
         }
-        int superseded = requests.supersedeForCustomerRevision(parent.id(), newId);
+        int superseded = requests.supersedeForCustomerRevision(parent.id(), parent.status(), newId);
         if (superseded == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         requests.cancelOpenStep2Children(parent.id(), "Customer change revision created", actor.id());
         // Step 5 (V75, design correction 1): also supersede any DRAFT/APPROVED pricing_decision
-        // and any non-terminal quotation left over from Steps 3/4 — cancelOpenStep2Children above
-        // predates both and does not touch them.
-        requests.supersedeOpenPricingDecisionAndQuotation(parent.id());
+        // left over from Step 3 — cancelOpenStep2Children above predates it and does not touch it.
+        //
+        // Reissue-through-CEO-chain (owner ruling 2026-08-13): this deliberately no longer
+        // supersedes the parent's QUOTATION. It used to (the method was
+        // supersedeOpenPricingDecisionAndQuotation, and it flipped an ISSUED quotation to
+        // SUPERSEDED the instant a revision was created), which meant the customer was left with
+        // no live offer for the whole time the new chain ran — and if the CEO ultimately refused
+        // the new price there was nothing to fall back to. The owner's ruling is that the already
+        // issued quotation STAYS ISSUED and valid while the replacement chain runs, and is
+        // superseded only when the replacement quotation is actually issued
+        // (CustomerQuotationService#issue -> supersedeSupersededChainQuotations).
+        //
+        // The DECISION half stays eager on purpose: it is internal pricing state, not the
+        // customer-facing offer, and the issued quotation carries its own frozen price snapshot
+        // (sales.quotation_item), so superseding the decision cannot change what the customer was
+        // quoted.
+        requests.supersedeOpenPricingDecision(parent.id());
         requests.addEvent(parent.id(), parent.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_REVISED, parent.status(), PricingRequestStatus.SUPERSEDED,
             request.revisionReason(), toRevisionMetadataJson(newId));
@@ -470,6 +551,13 @@ public class PricingRequestService {
         TicketSummaryDto ticket = requireTicket(summary.ticketId());
         requireActive(ticket);
         FileStorageService.StoredFile stored = fileStorage.store("pricing-request", id, file, Set.of());
+        // The disk copy above is NOT part of this transaction. saveAttachment and addEvent below
+        // can both still fail, rolling this method back and leaving the file on disk with no
+        // sales.pricing_request_attachment row referencing it. deleteOnRollback ties it to the
+        // transaction's outcome and is a no-op when the method commits. The store deliberately
+        // stays BELOW the authorization/status gates above (see deleteOnRollback's Javadoc):
+        // hoisting it out of the transaction would mean storing before authorizing.
+        fileStorage.deleteOnRollback(stored);
         PricingRequestAttachmentDto attachment = requests.saveAttachment(id, stored.fileName(), stored.filePath(),
             stored.mimeType(), stored.fileSize(), actor.id());
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
@@ -519,13 +607,17 @@ public class PricingRequestService {
         }
         String path = requests.findAttachmentFilePath(attachmentId);
         requests.deleteAttachment(attachmentId);
-        if (path != null) {
-            try {
-                Files.deleteIfExists(Paths.get(path));
-            } catch (IOException ignored) {
-                // Metadata removal is authoritative; a missing local file should not fail the workflow.
-            }
-        }
+        // Deferred to commit, not done here: this method is @Transactional, and a disk delete is
+        // not. Removing the bytes inline meant a rollback restored the
+        // sales.pricing_request_attachment row while the file it points at stayed gone — a document
+        // the pricing request still lists and nobody can ever download again. Identical to the
+        // hazard PR #719 fixed in AttachmentController#delete, and the mirror of the
+        // deleteOnRollback guard PR #708 added to uploadAttachment just above.
+        //
+        // deleteOnCommit also replaces the swallowed-IOException block that used to live here: it
+        // is best-effort and cannot throw either (it logs a WARN instead), so metadata removal
+        // stays authoritative and a file that is already gone still does not fail the workflow.
+        fileStorage.deleteOnCommit(path);
     }
 
     /**
@@ -620,7 +712,13 @@ public class PricingRequestService {
                 }
                 int rows = requests.cancelForDeadDeal(id, summary.status(), actor.id());
                 if (rows == 1) {
-                    requests.cancelOpenStep2Children(id, reason, actor.id());
+                    // Cancel cutoff (owner ruling 2026-08-13): the DEAD-request cascade, same as
+                    // cancel() above. This path needed it even more than cancel() did —
+                    // cancelForDeadDeal bypasses canTransition entirely and cancels from ANY open
+                    // status, so its children have always been reachable at READY_FOR_COSTING (a
+                    // factory quote) and SUBMITTED (a costing), and the old narrow predicates
+                    // missed both. Switching this call is a bug fix independent of the cutoff.
+                    requests.cancelOpenChildrenForDeadRequest(id, reason, actor.id());
                     // Step 5 (V75, review follow-up): same fix as cancel()/createCustomerChangeRevision
                     // — a deal reaching a terminal lifecycle must also close out an open decision/
                     // quotation on this pricing request, not just its factory-quote/costing children.
@@ -681,20 +779,6 @@ public class PricingRequestService {
             // Jackson serialisation, but the checked exception must still be
             // handled rather than escaping as an unhandled 500.
             throw new ApiException(HttpStatus.BAD_REQUEST, "เหตุผลการยกเลิกไม่ถูกต้อง");
-        }
-    }
-
-    private String toDueDateMetadataJson(LocalDate dueDate) {
-        // Unlike cancel's reason (always present, @NotBlank), dueDate is optional —
-        // omit metadata entirely rather than serialising a JSON null, matching
-        // addEvent's null-metadata convention (COALESCE(...,'{}'::jsonb) on read).
-        if (dueDate == null) {
-            return null;
-        }
-        try {
-            return objectMapper.writeValueAsString(Map.of("dueDate", dueDate));
-        } catch (JsonProcessingException e) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "วันครบกำหนดไม่ถูกต้อง");
         }
     }
 

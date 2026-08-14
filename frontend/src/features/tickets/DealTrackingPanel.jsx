@@ -5,7 +5,7 @@ import { Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import {
-  effectiveWinProbability, hasActivitySince, isReadyToAdvance, lastStageChangeAt,
+  hasActivitySince, isReadyToAdvance, lastStageChangeAt,
 } from './dealTrackingMeta.js';
 
 /**
@@ -43,7 +43,12 @@ export function DealTrackingPanel({
   const [editOpen, setEditOpen] = useState(false);
   const [draft, setDraft] = useState(null); // set on edit open
 
-  const effectiveWin = effectiveWinProbability(summary.winProbabilityOverride, summary.salesStage);
+  // The SERVER's number (TicketSummaryDto.effectiveWinProbability), not a re-derivation of it.
+  // This used to call dealTrackingMeta's effectiveWinProbability() against a hand-copied stage→%
+  // table; the backend had always computed the same value and simply never serialized it (issue
+  // #738). `?? 0` is for the pre-catalog first frame and for any caller-built summary that predates
+  // the field — the same 0 the old table returned for an unknown stage, so nothing renders NaN.
+  const effectiveWin = summary.effectiveWinProbability ?? 0;
   const hasOverride = summary.winProbabilityOverride != null;
 
   const sinceIso = lastStageChangeAt(events, summary.createdAt);

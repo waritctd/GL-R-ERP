@@ -127,6 +127,13 @@ async function selectCustomerAndProject() {
   goToSection('กลับ');
 }
 
+/** The channel is required and has no default, so most create-path tests must state one. */
+function chooseEntryChannel(name = /ผู้ออกแบบนำ/) {
+  goToSection('ผู้ติดต่อ & ช่องทางดีล');
+  fireEvent.click(screen.getByRole('radio', { name }));
+  goToSection('กลับ');
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   api.customers.search.mockResolvedValue({ customers: [mockCustomer] });
@@ -172,6 +179,11 @@ describe('TicketCreateModal validation', () => {
     renderModal({ onSubmit, initialItems: [validItem({ size: '' })] });
 
     await selectCustomerAndProject();
+    // entryChannel now sits earlier than items in on-screen order (ลูกค้า → โครงการ → ผู้ติดต่อ &
+    // ช่องทางดีล → รายการสินค้า), so it must be chosen or the failed-submit jump lands on the
+    // channel picker instead of this item's ขนาด field — this test would otherwise time out
+    // waiting on a placeholder that never mounts.
+    chooseEntryChannel();
     submitForm();
 
     const sizeInput = await screen.findByPlaceholderText('เช่น 600x1200');
@@ -196,6 +208,7 @@ describe('TicketCreateModal validation', () => {
     renderModal({ onSubmit, initialItems: [validItem({ color: '', texture: '' })] });
 
     await selectCustomerAndProject();
+    chooseEntryChannel();
     submitForm();
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -214,6 +227,9 @@ describe('TicketCreateModal validation', () => {
     renderModal({ onSubmit, initialItems: [validItem({ unitBasis: 'PIECE', qty: 0 })] });
 
     await selectCustomerAndProject();
+    // See the ขนาด test above: entryChannel precedes items in on-screen order, so it must be
+    // chosen or the failed-submit jump goes to the channel picker instead of this item field.
+    chooseEntryChannel();
     submitForm();
 
     const qtyInput = await screen.findByPlaceholderText('จำนวนแผ่น');
@@ -229,6 +245,9 @@ describe('TicketCreateModal validation', () => {
     renderModal({ onSubmit, initialItems: [validItem({ unitBasis: 'SQM', qtySqm: '' })] });
 
     await selectCustomerAndProject();
+    // See the ขนาด test above: entryChannel precedes items in on-screen order, so it must be
+    // chosen or the failed-submit jump goes to the channel picker instead of this item field.
+    chooseEntryChannel();
     submitForm();
 
     const sqmInput = await screen.findByPlaceholderText('เช่น 120.500');
@@ -244,6 +263,7 @@ describe('TicketCreateModal validation', () => {
     renderModal({ onSubmit, initialItems: [validItem()] });
 
     await selectCustomerAndProject();
+    chooseEntryChannel();
     submitForm();
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -278,6 +298,9 @@ describe('TicketCreateModal validation', () => {
     renderModal({ onSubmit, initialItems: [validItem({ size: '' })] });
 
     await selectCustomerAndProject();
+    // See the ขนาด test above: entryChannel precedes items in on-screen order, so it must be
+    // chosen or the failed-submit jump goes to the channel picker instead of this item field.
+    chooseEntryChannel();
     submitForm();
 
     const sizeInput = await screen.findByPlaceholderText('เช่น 600x1200');
@@ -318,9 +341,94 @@ describe('TicketCreateModal validation', () => {
     // Zero items — creation must still be allowed (items are optional, V50).
     expect(screen.getByRole('button', { name: /^สร้างดีล/ }).disabled).toBe(false);
 
+    chooseEntryChannel();
     submitForm();
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit.mock.calls[0][0].items).toEqual([]);
+  });
+
+  // The bug this branch fixes: the picker used to arrive pre-selected as DESIGNER_LED, so a rep
+  // who never opened this section silently recorded "designer-led". A value was ALWAYS sent, so
+  // no backend default could tell that apart from a real choice.
+  it('does not submit when the rep never touched the entry-channel picker', async () => {
+    const onSubmit = vi.fn();
+    renderModal({ onSubmit });
+
+    await selectCustomerAndProject();
+    submitForm();
+
+    await waitFor(() => expect(screen.getByText('กรุณาเลือกช่องทางดีล (ระบุว่าดีลนี้เข้ามาทางไหน)')).toBeTruthy());
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('starts with NO entry channel selected', async () => {
+    renderModal({ onSubmit: vi.fn() });
+    goToSection('ผู้ติดต่อ & ช่องทางดีล');
+    const radios = screen.getAllByRole('radio');
+    expect(radios).toHaveLength(3);
+    // Wrong-way-round: assert none is checked, not that a particular one is.
+    expect(radios.filter((r) => r.getAttribute('aria-checked') === 'true')).toHaveLength(0);
+  });
+
+  it('wires the entry-channel error to the radiogroup and clears it once a channel is picked', async () => {
+    const onSubmit = vi.fn();
+    renderModal({ onSubmit });
+
+    await selectCustomerAndProject();
+    submitForm();
+
+    // No explicit goToSection here, deliberately: entryChannel is the only invalid field once
+    // customer+project are set and there are no items, so the failed submit's own
+    // jumpToField('entryChannel') (viewForFieldKey → 'contact') has already navigated here. Adding
+    // a goToSection('ผู้ติดต่อ & ช่องทางดีล') at this point would look harmless but throws — the
+    // hub row it clicks is no longer rendered once the jump has fired.
+    const group = await screen.findByRole('radiogroup', { name: 'ช่องทางดีล' });
+    await waitFor(() => expect(group.getAttribute('aria-invalid')).toBe('true'));
+    expect(group.getAttribute('aria-describedby')).toBe('entry-channel-error');
+
+    fireEvent.click(screen.getByRole('radio', { name: /ผู้ซื้อตรง/ }));
+    expect(group.getAttribute('aria-invalid')).toBeNull();
+    expect(screen.queryByText('กรุณาเลือกช่องทางดีล (ระบุว่าดีลนี้เข้ามาทางไหน)')).toBeNull();
+  });
+
+  it('sends exactly the channel the rep picked, not a default', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderModal({ onSubmit });
+
+    await selectCustomerAndProject();
+    chooseEntryChannel(/ผู้ซื้อตรง/);
+    submitForm();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].entryChannel).toBe('BUYER_DIRECT');
+  });
+
+  // Restoring a draft is NOT the same as creating fresh: a channel the rep already stated must
+  // come back selected, or the no-default rule above would quietly discard their answer.
+  it('pre-fills the channel from a restored draft', async () => {
+    // This file's `beforeEach` notes that some Node versions ship a broken built-in `localStorage`
+    // global. That is exactly this env: `typeof localStorage === 'object'` but setItem/getItem are
+    // NOT functions, so the component's own loadDraft() try/catch always yields null. A version of
+    // this test that merely try/catch-guarded the setItem and bailed out passed even with draft
+    // restoration deleted outright (mutation-checked — it asserted nothing). Stubbing a working
+    // localStorage is what makes the assertion below real.
+    const store = new Map();
+    vi.stubGlobal('localStorage', {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => { store.set(k, String(v)); },
+      removeItem: (k) => { store.delete(k); },
+      clear: () => { store.clear(); },
+    });
+    try {
+      // DRAFT_KEY is a module-private const in TicketCreateModal.jsx (not exported); its real
+      // value, read from source, is 'glr:draft-deal'.
+      localStorage.setItem('glr:draft-deal', JSON.stringify({ entryChannel: 'OWNER_DIRECT' }));
+      renderModal({ onSubmit: vi.fn() });
+      goToSection('ผู้ติดต่อ & ช่องทางดีล');
+      expect(screen.getByRole('radio', { name: /เจ้าของตรง/ }).getAttribute('aria-checked')).toBe('true');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -411,6 +519,7 @@ describe('TicketCreateModal implicit submission (Enter-key) safety', () => {
     renderModal({ onSubmit, initialItems: [validItem()] });
 
     await selectCustomerAndProject();
+    chooseEntryChannel();
 
     submitForm();
 
@@ -470,6 +579,7 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
     renderModal({ onSubmit });
 
     await selectCustomerAndProject();
+    chooseEntryChannel();
     const brandInput = await addItemAndSearchBrand('Bode');
     await pickFromDropdown('Bode');
 
@@ -529,6 +639,7 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
     renderModal({ onSubmit });
 
     await selectCustomerAndProject();
+    chooseEntryChannel();
     const brandInput = await addItemAndSearchBrand('Bode');
     await pickFromDropdown('Bode');
     await waitFor(() => expect(brandInput.value).toBe('Bode'));
@@ -623,6 +734,7 @@ describe('TicketCreateModal catalog price display', () => {
     renderModal({ onSubmit, initialItems: [catalogItem()] });
 
     await selectCustomerAndProject();
+    chooseEntryChannel();
     goToSection('รายการสินค้า');
 
     const row = await screen.findByTestId('item-catalog-price-0');

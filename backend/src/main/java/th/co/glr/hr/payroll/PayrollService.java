@@ -6,6 +6,7 @@ import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashSet;
@@ -434,6 +435,7 @@ public class PayrollService {
         LocalDate payrollMonth = period.payrollMonth();
         LocalDate payDate = resolveEffectiveDate(effectiveDate, payrollMonth);
         AppProperties.Employer employer = appProperties.getPayroll().getEmployer();
+        requireEmployerConfiguredForStatutoryExport(kind, employer);
 
         byte[] content;
         String auditFields;
@@ -467,6 +469,67 @@ public class PayrollService {
         }
         auditPayrollAccess("EXPORT_PAYROLL_" + kind.name(), actor, period, auditFields);
         return new PayrollExportFile(kind, kind.fileName(payDate), content);
+    }
+
+    /**
+     * Fail closed, before any exporter runs, when the employer registration fields a {@code
+     * KBANK}/{@code PND1}/{@code SSO} file renders have no value configured. {@link
+     * ProductionReadinessConfig} now WARNs about exactly this gap at startup, but a WARN is easy to
+     * miss in a log stream -- without this precondition, an unset {@code
+     * app.payroll.employer.company-tax-id} (etc.) would flow straight into {@link Pnd1Exporter},
+     * which reads {@code digits(employer.getCompanyTaxId())} with no guard of its own and happily
+     * renders a PND1 filing with a <em>blank payer tax id that looks like a valid, complete file</em>
+     * -- the same shape applies to the KBank debit account and the SSO employer account. Refusing
+     * the export outright (503, naming the missing env var) beats a filing that silently carries
+     * blanks where the Revenue Department / KBank / SSO expect real registration numbers.
+     *
+     * <p>Precondition only -- this neither reads nor derives any payroll figure; it only decides
+     * whether the export may proceed at all. {@code PAYROLL_DETAIL} never reads {@code employer}
+     * (see the switch above) and is deliberately not gated here.
+     *
+     * <p>Required per kind -- fields with no safe fallback in the exporter itself: {@code KBANK}
+     * needs {@code kbankDebitAccount} + {@code companyNameTh} ({@code kbankBatchRef} falls back to
+     * the effective date -- not required); {@code PND1} needs {@code companyTaxId} + {@code
+     * pnd1Branch}; {@code SSO} needs {@code ssoEmployerAccount} + {@code ssoBranch} and at least one
+     * of {@code establishmentName}/{@code companyNameTh} ({@link SsoExporter} already falls back
+     * establishment -> company name itself, so only their joint absence is a problem; {@code
+     * ssoRatePercent} has a default -- not required).
+     */
+    private void requireEmployerConfiguredForStatutoryExport(PayrollExportKind kind, AppProperties.Employer employer) {
+        List<String> missing = new ArrayList<>();
+        switch (kind) {
+            case KBANK -> {
+                requireConfigured(missing, employer.getKbankDebitAccount(), "APP_PAYROLL_KBANK_DEBIT_ACCOUNT");
+                requireConfigured(missing, employer.getCompanyNameTh(), "APP_PAYROLL_COMPANY_NAME_TH");
+            }
+            case PND1 -> {
+                requireConfigured(missing, employer.getCompanyTaxId(), "APP_PAYROLL_COMPANY_TAX_ID");
+                requireConfigured(missing, employer.getPnd1Branch(), "APP_PAYROLL_PND1_BRANCH");
+            }
+            case SSO -> {
+                requireConfigured(missing, employer.getSsoEmployerAccount(), "APP_PAYROLL_SSO_EMPLOYER_ACCOUNT");
+                requireConfigured(missing, employer.getSsoBranch(), "APP_PAYROLL_SSO_BRANCH");
+                if (isBlank(employer.getEstablishmentName()) && isBlank(employer.getCompanyNameTh())) {
+                    missing.add("APP_PAYROLL_ESTABLISHMENT_NAME or APP_PAYROLL_COMPANY_NAME_TH");
+                }
+            }
+            default -> { }
+        }
+        if (!missing.isEmpty()) {
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
+                "ไม่สามารถออกไฟล์ได้ เนื่องจากยังไม่ได้ตั้งค่าข้อมูลนายจ้าง กรุณาตั้งค่าตัวแปรสภาพแวดล้อมต่อไปนี้: "
+                    + String.join(", ", missing));
+        }
+    }
+
+    private void requireConfigured(List<String> missing, String value, String envVar) {
+        if (isBlank(value)) {
+            missing.add(envVar);
+        }
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     /**

@@ -11,12 +11,27 @@
 // See handoff 103's "Assumptions (owner review needed)" before treating either
 // as settled business policy.
 
-/** Mirrors WinProbabilityDefaults.java's stage → % map exactly. */
+/**
+ * Mirrors WinProbabilityDefaults.java's stage → % map exactly — in pipeline order (DealStage.ORDER),
+ * so the two files read side by side.
+ *
+ * GUARDED, as of the QUOTE_OWNER fix: dealTrackingMeta.test.js parses both DealStage.java and
+ * WinProbabilityDefaults.java out of the backend source tree and fails when this object is missing
+ * a stage, carries a stage the backend does not have, or disagrees on a single number. Until then
+ * nothing compared the two, and V143's QUOTE_OWNER insertion left this copy at fourteen entries:
+ * `winProbabilityDefault('QUOTE_OWNER')` fell through to the `?? 0`, so every deal at S5 showed 0%
+ * and added nothing to TicketListPage's win-weighted forecast, with the whole suite green.
+ *
+ * QUOTE_OWNER is 40 by owner ruling — the same as QUOTE_DESIGN_SIDE, because quoting the owner is
+ * the same act as quoting the designer with a different recipient and nothing has been confirmed.
+ * The rest of the table is still the unratified first pass this file's header describes.
+ */
 export const WIN_PROBABILITY_DEFAULTS = {
   LEAD_APPROACH: 10,
   PRESENTATION: 20,
   SPEC_APPROVED: 30,
   QUOTE_DESIGN_SIDE: 40,
+  QUOTE_OWNER: 40,
   OWNER_SIGNOFF: 50,
   AWAITING_BUYER: 50,
   QUOTE_BUYER: 60,
@@ -35,11 +50,21 @@ export function winProbabilityDefault(salesStage) {
 
 /**
  * Mirrors TicketSummaryDto.effectiveWinProbability() / WinProbabilityDefaults.effective —
- * the rep's override when set, else the stage default. `effectiveWinProbability` is a
- * Java record *method*, not a record component, so it is NOT serialized onto the JSON
- * ticket summary by either the real backend or the mock; every consumer (UI or mock)
- * derives it client-side from `winProbabilityOverride` + `salesStage` via this function
- * instead of expecting a `summary.effectiveWinProbability` field to exist.
+ * the rep's override when set, else the stage default.
+ *
+ * ⚠️ **NOT for UI code. The only legitimate caller is mockApi.js.**
+ *
+ * The real backend now SERIALIZES this number (`TicketSummaryDto.effectiveWinProbability`, made a
+ * Jackson property in the fix for issue #738), so every consumer reads `summary.effectiveWinProbability`
+ * off the payload. What is left here exists solely so the mock can put a value in that field —
+ * a fixture has to answer the request with something, and answering with a *different* number than
+ * production would be worse than answering with a mirrored one.
+ *
+ * That mirror is safe only because it is guarded: dealTrackingMeta.test.js parses
+ * WinProbabilityDefaults.java and DealStage.java out of the backend source tree, so the table above
+ * cannot drift the way it did when V143 added QUOTE_OWNER (#714). Per CLAUDE.md, a mock that
+ * mirrors a backend computation is never independent evidence ABOUT that computation — it is only
+ * ever evidence about plumbing. Do not reintroduce a UI caller.
  */
 export function effectiveWinProbability(winProbabilityOverride, salesStage) {
   return winProbabilityOverride != null ? Number(winProbabilityOverride) : winProbabilityDefault(salesStage);

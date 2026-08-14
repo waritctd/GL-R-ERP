@@ -320,6 +320,51 @@ public class CustomerQuotationRepository {
     }
 
     /**
+     * Reissue-through-CEO-chain (owner ruling 2026-08-13): retires the quotations left live on the
+     * ANCESTOR pricing requests of a revision chain, at the moment the replacement quotation is
+     * issued.
+     *
+     * <p>This is the second half of a deliberate timing change. A customer-change revision used to
+     * supersede its parent's issued quotation immediately, on creation
+     * ({@code PricingRequestRepository#supersedeOpenPricingDecisionAndQuotation}), which left the
+     * customer with no live offer for the entire time the replacement chain ran — and nothing to
+     * fall back to if the CEO refused the new price. The parent's quotation now stays ISSUED and
+     * valid throughout, and only loses that status here, once a replacement genuinely exists.
+     *
+     * <p>Scoping, and why each clause is load-bearing:
+     * <ul>
+     *   <li>{@code root} matches the whole revision chain via
+     *       {@code COALESCE(root_pricing_request_id, pricing_request_id)} — V71's chain key,
+     *       null on the original request — so a chain of any depth is covered, not just the
+     *       immediate parent.</li>
+     *   <li>{@code pr.status = 'SUPERSEDED'} restricts this to requests a revision actually
+     *       replaced. Without it a sibling or the issuing request itself could be swept up.</li>
+     *   <li>{@code q.pricing_request_id <> :pricingRequestId} is belt-and-braces on top of that:
+     *       the request being issued is never SUPERSEDED at this point, but a future caller
+     *       should not have to know that to use this safely.</li>
+     *   <li>The {@code doc_status IN (...)} list matches the one the eager path used, so the same
+     *       quotations retire — only later.</li>
+     * </ul>
+     *
+     * @return number of quotations superseded; 0 is the normal case for a first issue.
+     */
+    public int supersedeSupersededChainQuotations(long pricingRequestId) {
+        return jdbc.update("""
+            UPDATE sales.quotation q
+               SET doc_status = 'SUPERSEDED'
+              FROM sales.pricing_request pr
+             WHERE q.pricing_request_id = pr.pricing_request_id
+               AND q.pricing_request_id <> :pricingRequestId
+               AND pr.status = 'SUPERSEDED'
+               AND COALESCE(pr.root_pricing_request_id, pr.pricing_request_id) = (
+                     SELECT COALESCE(root_pricing_request_id, pricing_request_id)
+                       FROM sales.pricing_request
+                      WHERE pricing_request_id = :pricingRequestId)
+               AND q.doc_status IN ('ISSUED', 'READY_TO_ISSUE', 'SENT', 'REVISION_REQUESTED')
+            """, Map.of("pricingRequestId", pricingRequestId));
+    }
+
+    /**
      * Step 5: compare-and-set ISSUED -> {@code outcome} (ACCEPTED/REJECTED/REVISION_REQUESTED —
      * the service validates the value before calling this). Rowcount 0 means not open for
      * recording (already terminal/not ISSUED) — the service distinguishes an idempotent replay

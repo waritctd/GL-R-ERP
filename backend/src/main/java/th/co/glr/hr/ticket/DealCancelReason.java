@@ -25,9 +25,16 @@ public final class DealCancelReason {
     /** Anything else — the note carries the detail. */
     public static final String OTHER             = "OTHER";
 
-    public static final Set<String> VALID = Set.of(
+    /**
+     * Presentation order for a client rendering these as a list, with OTHER last. {@link #VALID}
+     * is derived from it so the two can never hold different codes — see the same note on
+     * {@link DealLostReason#ORDER}.
+     */
+    public static final java.util.List<String> ORDER = java.util.List.of(
         OWNER_CANCELLED, PROJECT_SUSPENDED, BUDGET_CANCELLED, OTHER
     );
+
+    public static final Set<String> VALID = Set.copyOf(ORDER);
 
     public static boolean isValid(String reason) {
         return reason != null && VALID.contains(reason);

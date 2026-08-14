@@ -28,6 +28,8 @@ import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationDto
 import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationItemDto;
 import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.ticket.DepositPolicy;
+import th.co.glr.hr.ticket.PaymentTrack;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketItemDto;
@@ -46,6 +48,15 @@ class DepositNoticeServiceTest {
     private final CustomerQuotationRepository quotationRepo = mock(CustomerQuotationRepository.class);
     private final DepositNoticeService service = new DepositNoticeService(
         docs, ticketRepo, notifications, renderer, remainingRenderer, customerRepo, quotationRepo);
+    {
+        // Default stub so every payment-track write in this file (advancePaymentStatus's
+        // compare-and-set) reads as "succeeded" unless a specific test overrides it — Mockito's
+        // default answer for an unstubbed int-returning method is 0, which the service would
+        // read as a lost race and turn into a 409. any() (untyped) matches null too, so a null
+        // "expected" would be covered by this same stub (not exercised by this file's fixtures,
+        // which always start from a real status, but kept for consistency with TicketServiceTest).
+        when(ticketRepo.advancePaymentStatus(anyLong(), anyString(), any(), anyString())).thenReturn(1);
+    }
 
     private final UserPrincipal owner = new UserPrincipal(
         1L, "sales@glr.co.th", "Sales", "sales", 1L, true, LocalDate.of(2026, 1, 1), false, 1L, false);
@@ -61,13 +72,14 @@ class DepositNoticeServiceTest {
     void issue_advancesPaymentTrackAndKeepsTicketStatus() {
         stubDraft(99L, 10L);
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        when(docs.issue(99L, 1L, "Sales")).thenReturn("GLRD69001");
+        when(docs.issue(99L, 1L, "Sales")).thenReturn(Optional.of("GLRD69001"));
 
         service.issue(99L, owner);
 
         // Payment track advances; the main status is untouched (no document_issued flip
         // — that side effect killed the dual-track UI and let unpaid tickets close).
-        verify(ticketRepo).updatePaymentStatus(10L, "DEPOSIT_NOTICE_ISSUED");
+        verify(ticketRepo).advancePaymentStatus(
+            10L, DepositPolicy.REQUIRED, "CUSTOMER_CONFIRMED", PaymentTrack.DEPOSIT_NOTICE_ISSUED);
         verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
             eq(TicketEventKind.DEPOSIT_NOTICE_ISSUED),
             eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), anyString());
@@ -83,13 +95,36 @@ class DepositNoticeServiceTest {
     }
 
     @Test
-    void issue_requiresCustomerConfirmedPayment() {
+    void issue_requiresCustomerConfirmedOrDepositNoticeIssuedPayment() {
         stubDraft(99L, 10L);
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, null);
         assertConflict(() -> service.issue(99L, owner));
+        verify(docs, never()).issue(anyLong(), anyLong(), anyString());
 
-        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED");
+        // A payment status genuinely past the deposit-notice step (already paid) is also
+        // refused — only CUSTOMER_CONFIRMED (first issue) or DEPOSIT_NOTICE_ISSUED (a revision,
+        // tested separately below — PaymentTrack's one legal self-loop) are legal here.
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID");
         assertConflict(() -> service.issue(99L, owner));
+        verify(docs, never()).issue(anyLong(), anyLong(), anyString());
+    }
+
+    /**
+     * Rule from the payment-track redesign (site 2): re-issuing FROM DEPOSIT_NOTICE_ISSUED
+     * itself — a revision — is now a legal self-loop, where it used to be refused with the same
+     * CONFLICT as any other non-CUSTOMER_CONFIRMED status. See {@code PaymentTrackIntegrationTest}
+     * for the real-DB proof (new doc number minted, old one SUPERSEDED, payment_status unchanged).
+     */
+    @Test
+    void issue_fromDepositNoticeIssued_isNowAllowedAsARevision() {
+        stubDraft(99L, 10L);
+        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED");
+        when(docs.issue(99L, 1L, "Sales")).thenReturn(Optional.of("GLRD69002"));
+
+        service.issue(99L, owner); // must not throw
+
+        verify(ticketRepo).advancePaymentStatus(10L, DepositPolicy.REQUIRED,
+            "DEPOSIT_NOTICE_ISSUED", PaymentTrack.DEPOSIT_NOTICE_ISSUED);
     }
 
     // ── sales_manager oversight (read only, zero write actions) ─────────────

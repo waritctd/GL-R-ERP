@@ -57,11 +57,7 @@ import th.co.glr.hr.orderconfirmation.OrderConfirmationRequests.CreateDepositNot
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PriceCalcConfigRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
-import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.CreateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.RecalculateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.SubmitCostingRequest;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
@@ -142,7 +138,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
 
         FileStorageService fileStorage = new FileStorageService("/tmp/glr-inventory-delivery-test-uploads");
         pricingRequestService = new PricingRequestService(
-            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage);
+            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
 
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
         FactoryEmailService factoryEmail = mock(FactoryEmailService.class);
@@ -155,17 +151,24 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         dispatchProperties.getFactoryQuoteDispatch().setMaxAttempts(3);
         dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
         dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
+        FxRateRepository fxRates = new FxRateRepository(jdbc);
+        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
+        // auto-advance check and PricingDecisionService's startReview/recalculateCost.
+        th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
+            new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
+                new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties);
+            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
+            landedCostCalculator);
 
         PricingCostingRepository costingRepository = new PricingCostingRepository(jdbc);
-        FxRateRepository fxRates = new FxRateRepository(jdbc);
-        costingService = new PricingCostingService(costingRepository, pricingRequests, factoryQuotes, tickets,
-            fxRates, new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc), notifications);
+        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
+        // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
+        costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
 
         PricingDecisionRepository decisionRepository = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
-            tickets, fxRates, notifications);
+            tickets, fxRates, notifications, landedCostCalculator);
 
         PriceCalcService priceCalcMock = mock(PriceCalcService.class);
         ticketService = new TicketService(tickets, notifications, priceCalcMock,
@@ -225,16 +228,19 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     }
 
     @Test
-    void confirmOrder_costAffectingRevisionAfterAcceptance_reconcilesToRevisedQty_notOriginal() {
-        // PR1 reaches QUOTATION_ACCEPTED with quantity X=10 — deliberately WITHOUT ever calling
-        // confirmOrder on it, mirroring the realistic flow (Sales would not confirm an order
-        // that is about to be revised). PricingRequestStatus.ALLOWED marks QUOTATION_ACCEPTED as
-        // terminal for forward transitions, but createCustomerChangeRevision's own gate does NOT
-        // consult that table — it is reachable here, proving Step 5's "terminal" design does not
-        // block a post-acceptance customer-change revision.
-        Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("10"));
+    void confirmOrder_costAffectingRevisionAfterIssue_reconcilesToRevisedQty_notOriginal() {
+        // PR1 reaches QUOTATION_ISSUED with quantity X=10 — deliberately WITHOUT ever calling
+        // confirmOrder on it, mirroring the realistic flow (Sales would not confirm an order that
+        // is about to be revised).
+        //
+        // Reissue-through-CEO-chain (owner ruling 2026-08-13): this test used to drive PR1 all the
+        // way to QUOTATION_ACCEPTED, and its comment cited that as PROOF that
+        // createCustomerChangeRevision's gate did not consult PricingRequestStatus.ALLOWED. That
+        // was the bug, described as a feature. The gate now derives from the same table, so the
+        // revision is created from QUOTATION_ISSUED — the last point at which one is still legal.
+        Deal deal = createDealAndDriveFirstPricingRequestToQuotationIssued(new BigDecimal("10"));
         assertThat(pricingRequestService.get(deal.pricingRequestId, salesActor).summary().status())
-            .isEqualTo("QUOTATION_ACCEPTED");
+            .isEqualTo("QUOTATION_ISSUED");
 
         // PR2: a cost-affecting revision changing the SAME source item's quantity to Y=15.
         long revisedPricingRequestId = createRevisionAndDriveToQuotationAccepted(deal, new BigDecimal("15"));
@@ -248,22 +254,48 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         assertThat(ticketItemQty(deal.ticketItemId)).isEqualByComparingTo("15");
     }
 
+    /**
+     * <b>This test was inverted by the reissue-through-CEO-chain ruling (owner, 2026-08-13), and
+     * the inversion is the point.</b>
+     *
+     * <p>It used to walk "Sales confirms the original order (X=10), the customer then asks for a
+     * change, the revision (Y=15) is accepted and confirmed, reconciliation converges forward".
+     * That sequence is now <b>structurally unreachable</b>, and not by accident: {@code confirmOrder}
+     * requires {@code QUOTATION_ACCEPTED}, and a customer-change revision is now refused FROM
+     * {@code QUOTATION_ACCEPTED}. Once the customer has accepted and the order is confirmed, the
+     * deal is moving to PO and fulfilment — changing it there is an order amendment, which is a
+     * mechanism this codebase does not have yet.
+     *
+     * <p>So rather than delete the walk and quietly lose the fact, it now asserts the refusal, and
+     * that the confirmed quantity is left exactly as it was.
+     *
+     * <p><b>Coverage genuinely lost, stated rather than hidden:</b> the forward-convergence branch
+     * of {@code OrderConfirmationService}'s reconciliation (confirm PR1, then confirm PR2 on the
+     * same ticket item) no longer has a reachable trigger <i>via the revision chain</i>. A deal may
+     * carry 0..N pricing requests, so a second INDEPENDENT pricing request on the same ticket may
+     * still reach it — that was not verified either way here. The code is untouched and still
+     * correct; what changed is that this test can no longer drive it.
+     */
     @Test
-    void confirmOrder_calledOnBothTheOriginalAndTheRevision_convergesForwardToTheRevisedQty() {
-        // A second, less likely but still reachable sequence: Sales DOES confirm the original
-        // order (X=10) before the customer asks for a change. The revision (Y=15) is then driven
-        // to acceptance and confirmOrder is called a SECOND time, on PR2 — reconciliation must
-        // still converge to the latest confirmed quantity, not get stuck at the first one.
+    void confirmOrder_thenACustomerChangeRevision_isRefused_soAConfirmedOrderCannotBeRevised() {
         Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("10"));
         orderConfirmation.confirmOrder(deal.pricingRequestId,
             new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
         assertThat(ticketItemQty(deal.ticketItemId)).isEqualByComparingTo("10");
 
-        long revisedPricingRequestId = createRevisionAndDriveToQuotationAccepted(deal, new BigDecimal("15"));
-        orderConfirmation.confirmOrder(revisedPricingRequestId,
-            new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+        assertThatThrownBy(() -> createRevisionAndDriveToQuotationAccepted(deal, new BigDecimal("15")))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                // Pinned to the QUOTATION_ACCEPTED refusal specifically: this walk touches several
+                // services that can each 409 for their own reasons, and a bare status assertion
+                // would be satisfied by any of them.
+                assertThat(e.getMessage()).contains("ลูกค้ายอมรับใบเสนอราคาแล้ว");
+            });
 
-        assertThat(ticketItemQty(deal.ticketItemId)).isEqualByComparingTo("15");
+        // The confirmed order is untouched — no half-applied revision, no drift back to the stub.
+        assertThat(ticketItemQty(deal.ticketItemId)).isEqualByComparingTo("10");
+        assertThat(pricingRequestService.get(deal.pricingRequestId, salesActor).summary().status())
+            .isEqualTo("QUOTATION_ACCEPTED");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -274,7 +306,10 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
 
     @Test
     void fullChain_reserveStockAndCompleteDelivery_operateAgainstReconciledQty_notStaleTicketCreationQty() {
-        Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("10"));
+        // PR1 stops at QUOTATION_ISSUED — the last point a customer-change revision is legal since
+        // the reissue-through-CEO-chain ruling. It is never confirmed, so nothing is lost here:
+        // this test only ever confirmed PR2.
+        Deal deal = createDealAndDriveFirstPricingRequestToQuotationIssued(new BigDecimal("10"));
         long revisedPricingRequestId = createRevisionAndDriveToQuotationAccepted(deal, new BigDecimal("15"));
         orderConfirmation.confirmOrder(revisedPricingRequestId,
             new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
@@ -353,8 +388,24 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     // already-delivered quantity is refused, not silently applied.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
+    /**
+     * <b>Inverted by the reissue-through-CEO-chain ruling (owner, 2026-08-13)</b>, for the same
+     * structural reason as {@code confirmOrder_thenACustomerChangeRevision_isRefused_...}: getting
+     * a quantity DELIVERED requires {@code issueImportRequest}, which requires
+     * {@code TicketStatus.QUOTATION_ISSUED}, which only {@code confirmOrder}'s bridge write sets,
+     * which requires {@code QUOTATION_ACCEPTED} — from which a revision is now refused.
+     *
+     * <p>The refusal now happens one step EARLIER and more bluntly than the behaviour this test
+     * was written for: the revision cannot be created at all, so {@code confirmOrder} never gets
+     * the chance to reject a downward reconciliation.
+     *
+     * <p><b>Coverage genuinely lost, stated rather than hidden:</b>
+     * {@code reconcileTicketItems}' below-already-delivered guard no longer has a reachable trigger
+     * through the public API. It remains as defence in depth. If an order-amendment mechanism is
+     * ever added, that guard is the first thing that needs its coverage back.
+     */
     @Test
-    void confirmOrder_revisionLowersQtyBelowAlreadyDelivered_isRejectedNotSilentlyApplied() {
+    void deliveredOrder_cannotBeRevisedDownwards_becauseTheRevisionIsRefusedOutright() {
         Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("10"));
         orderConfirmation.confirmOrder(deal.pricingRequestId,
             new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
@@ -374,14 +425,21 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             importActor);
         assertThat(ticketItemQtyDelivered(deal.ticketItemId)).isEqualByComparingTo("6");
 
-        // A revision now asks for only 3 — below the 6 already physically delivered.
-        long revisedPricingRequestId = createRevisionAndDriveToQuotationAccepted(deal, new BigDecimal("3"));
+        // A revision now asks for only 3 — below the 6 already physically delivered. It is refused
+        // at creation, so the dangerous state is never constructed in the first place.
+        assertThatThrownBy(() -> createRevisionAndDriveToQuotationAccepted(deal, new BigDecimal("3")))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                // Pinned to the QUOTATION_ACCEPTED refusal specifically: this walk touches several
+                // services that can each 409 for their own reasons, and a bare status assertion
+                // would be satisfied by any of them.
+                assertThat(e.getMessage()).contains("ลูกค้ายอมรับใบเสนอราคาแล้ว");
+            });
 
-        assertThatThrownBy(() -> orderConfirmation.confirmOrder(revisedPricingRequestId,
-            new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        // ticket_item.qty must be untouched (still 10, not silently dropped to 3 or left corrupt).
+        // ticket_item.qty must be untouched (still 10, not silently dropped to 3 or left corrupt),
+        // and the delivery history must be intact.
         assertThat(ticketItemQty(deal.ticketItemId)).isEqualByComparingTo("10");
+        assertThat(ticketItemQtyDelivered(deal.ticketItemId)).isEqualByComparingTo("6");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -396,14 +454,19 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
 
     @Test
     void confirmOrder_revisionDropsALineEntirely_closesItsTicketItemSoItStopsBlockingDelivery() {
-        TwoItemDeal deal = createTwoItemDealAndDriveToQuotationAccepted(
+        // Reissue-through-CEO-chain (owner ruling 2026-08-13): PR1 stops at QUOTATION_ISSUED, and
+        // the original is NOT confirmed first. It used to be — the point being that the closeout
+        // works on a line that had genuinely been correct at some point (B reconciled to 5) rather
+        // than one merely never touched. Confirming requires QUOTATION_ACCEPTED, from which a
+        // revision is now refused, so that stronger precondition is no longer constructible and B
+        // enters the revision still holding its ticket-creation stub of 1.
+        //
+        // The behaviour under test is unaffected: closeOutDroppedChainItems closes a dropped line
+        // down to its qtyDelivered whatever its qty happened to be, and the assertion that the deal
+        // can then actually reach FULLY_DELIVERED is what makes this a real test either way.
+        TwoItemDeal deal = createTwoItemDealAndDriveToQuotationIssued(
             new BigDecimal("10"), new BigDecimal("5"));
-        // Confirm the ORIGINAL first, so both items are properly reconciled (A=10, B=5) before
-        // the revision that drops B — proving the closeout works on a line that had genuinely
-        // been correct at some point, not one that was merely never touched.
-        orderConfirmation.confirmOrder(deal.pricingRequestId,
-            new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
-        assertThat(ticketItemQty(deal.ticketItemBId)).isEqualByComparingTo("5");
+        assertThat(ticketItemQty(deal.ticketItemBId)).isEqualByComparingTo("1");
 
         // The revision keeps item A (qty unchanged) but DROPS item B entirely — only A is listed.
         PricingRequestRequests.PricingRequestItemRequest revisedItemA = new PricingRequestRequests.PricingRequestItemRequest(
@@ -447,11 +510,24 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         assertThat(delivered.summary().salesStage()).isEqualTo(DealStage.DELIVERED);
     }
 
-    /** Same setup as above but B was PARTIALLY delivered (2 of 5) before the revision drops it —
-     * the closeout must preserve that history (qty -> 2, not 0), never fabricating a false "5
-     * delivered" and never violating chk_ticket_item_qty_delivered by going below what's real. */
+    /**
+     * Same setup as above but B was PARTIALLY delivered (2 of 5) before the revision drops it.
+     *
+     * <p><b>Inverted by the reissue-through-CEO-chain ruling (owner, 2026-08-13).</b> It used to
+     * assert that the closeout preserved delivery history (B's qty → 2, not 0), never fabricating
+     * a false "5 delivered" and never violating {@code chk_ticket_item_qty_delivered}. Reaching a
+     * partial delivery requires {@code confirmOrder} (via {@code issueImportRequest}'s
+     * {@code TicketStatus.QUOTATION_ISSUED} gate), which requires {@code QUOTATION_ACCEPTED}, from
+     * which a revision is now refused — so the scenario cannot be built any more.
+     *
+     * <p><b>Coverage genuinely lost, stated rather than hidden:</b> the history-preserving branch
+     * of {@code TicketRepository#closeOutDroppedChainItems} (close to {@code qtyDelivered} rather
+     * than to zero) no longer has a reachable trigger. The sibling test above still covers the
+     * zero-delivered case. If order amendment is ever built, this is the second guard that needs
+     * its coverage back.
+     */
     @Test
-    void confirmOrder_revisionDropsAPartiallyDeliveredLine_closesToWhatWasActuallyDelivered() {
+    void aPartiallyDeliveredLine_cannotBeDroppedByARevision_becauseTheRevisionIsRefusedOutright() {
         TwoItemDeal deal = createTwoItemDealAndDriveToQuotationAccepted(
             new BigDecimal("10"), new BigDecimal("5"));
         orderConfirmation.confirmOrder(deal.pricingRequestId,
@@ -479,16 +555,20 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             "ลูกค้าขอตัดรายการ B ออก", UUID.randomUUID().toString(), PricingRequestRecipient.DESIGNER, null,
             "Designer Co.", LocalDate.now().plusDays(14), new BigDecimal("5000.00"), "THB",
             "step 8 partial-then-dropped walk", List.of(revisedItemA));
-        PricingRequestDetailDto revision = pricingRequestService.createCustomerChangeRevision(
-            deal.pricingRequestId, revisionRequest, salesActor);
-        long revisedPricingRequestId = revision.summary().id();
-        driveDraftPricingRequestToQuotationAccepted(revisedPricingRequestId, FACTORY, new BigDecimal("10"));
 
-        orderConfirmation.confirmOrder(revisedPricingRequestId,
-            new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+        assertThatThrownBy(() -> pricingRequestService.createCustomerChangeRevision(
+            deal.pricingRequestId, revisionRequest, salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                // Pinned to the QUOTATION_ACCEPTED refusal specifically: this walk touches several
+                // services that can each 409 for their own reasons, and a bare status assertion
+                // would be satisfied by any of them.
+                assertThat(e.getMessage()).contains("ลูกค้ายอมรับใบเสนอราคาแล้ว");
+            });
 
-        // Closed to exactly what was delivered (2), not to 0 — history preserved, nothing fabricated.
-        assertThat(ticketItemQty(deal.ticketItemBId)).isEqualByComparingTo("2");
+        // B keeps both its reconciled quantity and its real delivery history — the refusal happens
+        // before anything is written, so there is nothing half-applied to clean up.
+        assertThat(ticketItemQty(deal.ticketItemBId)).isEqualByComparingTo("5");
         assertThat(ticketItemQtyDelivered(deal.ticketItemBId)).isEqualByComparingTo("2");
     }
 
@@ -505,6 +585,16 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
      * TWO items on the same factory, so a subsequent revision can drop one of them entirely
      * (the "dropped line" bug fix tests) while keeping the other. */
     private TwoItemDeal createTwoItemDealAndDriveToQuotationAccepted(BigDecimal qtyA, BigDecimal qtyB) {
+        return createTwoItemDeal(qtyA, qtyB, true);
+    }
+
+    /** Stops at QUOTATION_ISSUED, so a revision may still be created — see
+     * {@link #createDealAndDriveFirstPricingRequestToQuotationIssued}. */
+    private TwoItemDeal createTwoItemDealAndDriveToQuotationIssued(BigDecimal qtyA, BigDecimal qtyB) {
+        return createTwoItemDeal(qtyA, qtyB, false);
+    }
+
+    private TwoItemDeal createTwoItemDeal(BigDecimal qtyA, BigDecimal qtyB, boolean recordAcceptance) {
         long catalogProductIdA = insertCatalogProduct(FACTORY, "TH",
             "TEST-INV-A-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
         long catalogProductIdB = insertCatalogProduct(FACTORY, "TH",
@@ -538,14 +628,17 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             List.of(itemA, itemB));
         long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
 
-        driveTwoItemDraftToQuotationAccepted(pricingRequestId);
+        driveTwoItemDraftToQuotationIssued(pricingRequestId);
+        if (recordAcceptance) {
+            recordAcceptanceOnCurrentQuotation(pricingRequestId);
+        }
         return new TwoItemDeal(ticketId, ticketItemAId, ticketItemBId, pricingRequestId, catalogProductIdA, catalogProductIdB);
     }
 
     /** Same as {@link #driveDraftPricingRequestToQuotationAccepted} but responds to EVERY item on
      * the (single, same-factory) draft rather than assuming exactly one — both items share
      * {@link #FACTORY}, so {@code generateDrafts} produces exactly one draft covering both. */
-    private void driveTwoItemDraftToQuotationAccepted(long pricingRequestId) {
+    private void driveTwoItemDraftToQuotationIssued(long pricingRequestId) {
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
 
@@ -566,12 +659,10 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             responseItems, UUID.randomUUID().toString());
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-
-        PricingCostingDto costingDraft = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("step 8 costing", null), importActor);
-        costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 1"), importActor);
-        PricingCostingDto calculated = costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 2"), importActor);
-        costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
+        // READY_FOR_CEO_REVIEW the moment the (only, here) factory quote is ready — Import no
+        // longer creates/recalculates/submits a costing of its own; the CEO's startReview below
+        // computes it.
 
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
@@ -585,10 +676,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         CustomerQuotationDto draftQuotation = quotationService.create(pricingRequestId,
             new CreateCustomerQuotationRequest(null, null, null, LocalDate.now().plusDays(30), null,
                 UUID.randomUUID().toString()), salesActor);
-        CustomerQuotationDto issued = quotationService.issue(
+        quotationService.issue(
             draftQuotation.id(), new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor);
-        quotationService.recordOutcome(issued.id(),
-            new RecordQuotationOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), salesActor);
     }
 
     private BigDecimal ticketItemQty(long itemId) {
@@ -606,6 +695,24 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
      * to QUOTATION_ACCEPTED via the real Steps 1-5 services — deliberately stopping there
      * (confirmOrder is left to the caller, since some tests need to withhold it). */
     private Deal createDealAndDriveFirstPricingRequestToQuotationAccepted(BigDecimal quantity) {
+        return createDealAndDriveFirstPricingRequest(quantity, true);
+    }
+
+    /**
+     * Same fixture, stopped one step earlier — at QUOTATION_ISSUED, before the customer's
+     * acceptance is recorded.
+     *
+     * <p>Reissue-through-CEO-chain (owner ruling 2026-08-13): this is now the ONLY state a
+     * customer-change revision can be created from at the end of the chain. QUOTATION_ACCEPTED is
+     * terminal and refused — see {@code PricingRequestStatus.ALLOWED} and the two
+     * {@code customerChangeRevision_from...IsRejected} tests below. Every test in this file that
+     * revises a deal therefore starts here rather than from acceptance.
+     */
+    private Deal createDealAndDriveFirstPricingRequestToQuotationIssued(BigDecimal quantity) {
+        return createDealAndDriveFirstPricingRequest(quantity, false);
+    }
+
+    private Deal createDealAndDriveFirstPricingRequest(BigDecimal quantity, boolean recordAcceptance) {
         long catalogProductId = insertCatalogProduct(FACTORY, "TH",
             "TEST-INV-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
 
@@ -630,14 +737,23 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             new BigDecimal("5000.00"), "THB", "step 8 acceptance walk", UUID.randomUUID().toString(), List.of(item));
         long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
 
-        driveDraftPricingRequestToQuotationAccepted(pricingRequestId, FACTORY, quantity);
+        driveDraftPricingRequestToQuotationIssued(pricingRequestId, FACTORY, quantity);
+        if (recordAcceptance) {
+            recordAcceptanceOnCurrentQuotation(pricingRequestId);
+        }
         return new Deal(ticketId, ticketItemId, pricingRequestId, catalogProductId);
     }
 
-    /** Creates a customer-change revision on {@code deal}'s ticket item, requesting the NEW
-     * {@code quantity}, and drives IT to QUOTATION_ACCEPTED too. Reachable even though the
-     * parent pricing request already sits at QUOTATION_ACCEPTED — see
-     * OrderConfirmationService#reconcileTicketItems's own Javadoc. */
+    /**
+     * Creates a customer-change revision on {@code deal}'s ticket item, requesting the NEW
+     * {@code quantity}, and drives IT to QUOTATION_ACCEPTED.
+     *
+     * <p>The parent must be at QUOTATION_ISSUED — see
+     * {@link #createDealAndDriveFirstPricingRequestToQuotationIssued}. Called with a parent at
+     * QUOTATION_ACCEPTED it throws a 409 on the very first call, which is exactly what two tests
+     * in this file now assert (a confirmed or delivered order cannot be revised); it is a
+     * fixture in one direction and the subject under test in the other.
+     */
     private long createRevisionAndDriveToQuotationAccepted(Deal deal, BigDecimal newQuantity) {
         PricingRequestRequests.PricingRequestItemRequest revisedItem = new PricingRequestRequests.PricingRequestItemRequest(
             deal.ticketItemId, deal.catalogProductId, null, "SCG", "Tile Inventory", "SCG Tile Inventory", null, null,
@@ -656,6 +772,26 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     }
 
     private void driveDraftPricingRequestToQuotationAccepted(long pricingRequestId, String factory, BigDecimal quantity) {
+        driveDraftPricingRequestToQuotationIssued(pricingRequestId, factory, quantity);
+        recordAcceptanceOnCurrentQuotation(pricingRequestId);
+    }
+
+    /**
+     * Records the customer's ACCEPTED outcome on whichever quotation of {@code pricingRequestId}
+     * is currently ISSUED. Split out from {@link #driveDraftPricingRequestToQuotationAccepted} so
+     * a test can stop at QUOTATION_ISSUED and revise from there — which, since the
+     * reissue-through-CEO-chain ruling, is the only point a revision is still legal.
+     */
+    private void recordAcceptanceOnCurrentQuotation(long pricingRequestId) {
+        CustomerQuotationDto issued = quotationService.listForPricingRequest(pricingRequestId, salesActor).stream()
+            .filter(q -> QuotationStatus.ISSUED.equals(q.docStatus()))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("no ISSUED quotation on pricing request " + pricingRequestId));
+        quotationService.recordOutcome(issued.id(),
+            new RecordQuotationOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), salesActor);
+    }
+
+    private void driveDraftPricingRequestToQuotationIssued(long pricingRequestId, String factory, BigDecimal quantity) {
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
 
@@ -675,12 +811,10 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             UUID.randomUUID().toString());
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-
-        PricingCostingDto costingDraft = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("step 8 costing", null), importActor);
-        costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 1"), importActor);
-        PricingCostingDto calculated = costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 2"), importActor);
-        costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
+        // READY_FOR_CEO_REVIEW the moment the (only, here) factory quote is ready — Import no
+        // longer creates/recalculates/submits a costing of its own; the CEO's startReview below
+        // computes it.
 
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
@@ -694,10 +828,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         CustomerQuotationDto draftQuotation = quotationService.create(pricingRequestId,
             new CreateCustomerQuotationRequest(null, null, null, LocalDate.now().plusDays(30), null,
                 UUID.randomUUID().toString()), salesActor);
-        CustomerQuotationDto issued = quotationService.issue(
+        quotationService.issue(
             draftQuotation.id(), new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor);
-        quotationService.recordOutcome(issued.id(),
-            new RecordQuotationOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), salesActor);
     }
 
     private void drainDispatches() {

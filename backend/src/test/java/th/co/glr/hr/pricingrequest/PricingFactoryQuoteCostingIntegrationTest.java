@@ -3,7 +3,9 @@ package th.co.glr.hr.pricingrequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -17,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -56,14 +59,15 @@ import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PriceCalcConfigRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
+import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingItemDto;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.CreateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.RecalculateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.SubmitCostingRequest;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
-import th.co.glr.hr.pricingcosting.PricingCostingStatus;
+import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
+import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
@@ -80,6 +84,11 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     private FactoryQuoteRepository factoryQuoteRepository;
     private FactoryQuoteService factoryQuoteService;
     private PricingCostingService costingService;
+    // V141 ("CEO owns costing"): the CEO path — Import's costing create/recalculate/submit is
+    // gone, so every test that used to build a costing via costingService now drives it through
+    // PricingDecisionService#startReview/recalculateCost instead.
+    private PricingDecisionService pricingDecisionService;
+    private LandedCostCalculator landedCostCalculator;
     private FactoryEmailService factoryEmail;
     private NotificationRepository notificationRepository;
     private AppProperties dispatchProperties;
@@ -120,7 +129,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
         FileStorageService fileStorage = new FileStorageService("/tmp/glr-pricing-test-uploads");
         pricingRequestService = new PricingRequestService(
-            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage);
+            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
         factoryQuoteRepository = factoryQuotes;
         notificationRepository = notifications;
@@ -136,12 +145,20 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         dispatchProperties.getFactoryQuoteDispatch().setMaxAttempts(3);
         dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
         dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
+        FxRateRepository fxRates = new FxRateRepository(jdbc);
+        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
+        // auto-advance check and PricingDecisionService's startReview/recalculateCost.
+        landedCostCalculator = new LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
+            new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), factoryEmail, notifications,
-            new FileStorageService("/tmp/glr-pricing-test-uploads"), dispatchProperties);
-        costingService = new PricingCostingService(new PricingCostingRepository(jdbc), pricingRequests,
-            factoryQuotes, tickets, new FxRateRepository(jdbc), new PriceCalcConfigRepository(jdbc),
-            new FactoryConfigRepository(jdbc), notifications);
+            new FileStorageService("/tmp/glr-pricing-test-uploads"), dispatchProperties, landedCostCalculator);
+        PricingCostingRepository costingRepository = new PricingCostingRepository(jdbc);
+        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
+        // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
+        costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
+        pricingDecisionService = new PricingDecisionService(new PricingDecisionRepository(jdbc), pricingRequests,
+            costingRepository, tickets, fxRates, notifications, landedCostCalculator);
         TicketService ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
 
@@ -264,48 +281,52 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         assertThat(factoryARevision2.status()).isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
 
         factoryQuoteService.markReadyForCosting(factoryARevision2.id(), importActor);
+        // V141 ("CEO owns costing"): Factory A alone being ready must not advance the request —
+        // Factory B has not answered at all yet, so LandedCostCalculator.isFullyResolvable is
+        // false and markReadyForCosting's auto-advance does not fire.
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
         FactoryQuoteDto factoryBResponse = factoryQuoteService.receive(factoryB.id(),
             response("REF-B-1", "THB", "200.00", factoryB.items().get(0).pricingRequestItemId()), importActor);
         factoryQuoteService.markReadyForCosting(factoryBResponse.id(), importActor);
-
-        PricingCostingDto draft = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("draft", null), importActor);
-        assertThat(draft.status()).isEqualTo(PricingCostingStatus.DRAFT);
-        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-
-        PricingCostingDto calculated1 = costingService.recalculate(draft.id(),
-            new RecalculateCostingRequest("first pass"), importActor);
-        PricingCostingDto calculated2 = costingService.recalculate(draft.id(),
-            new RecalculateCostingRequest("second pass"), importActor);
-        assertThat(calculated2.status()).isEqualTo(PricingCostingStatus.CALCULATED);
-        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-        assertThat(calculated1.submittedAt()).isNull();
-        assertThat(calculated2.submittedAt()).isNull();
-
-        FactoryQuoteDto factoryARevision3 = factoryQuoteService.receive(factoryARevision2.id(),
-            response("REF-A-3", "THB", "100.00", factoryARevision2.items().get(0).pricingRequestItemId()), importActor);
-        assertThat(costingService.get(draft.id(), importActor).stale()).isTrue();
-        assertThatThrownBy(() -> costingService.submit(draft.id(), new SubmitCostingRequest("too soon"), importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-
-        factoryQuoteService.markReadyForCosting(factoryARevision3.id(), importActor);
-        PricingCostingDto recalculated = costingService.recalculate(draft.id(),
-            new RecalculateCostingRequest("uses latest revision"), importActor);
-        assertThat(recalculated.items()).extracting(item -> item.factoryQuoteRevisionNo()).contains(3);
-
-        PricingCostingDto submitted = costingService.submit(draft.id(),
-            new SubmitCostingRequest("submit to CEO"), importActor);
-        assertThat(submitted.status()).isEqualTo(PricingCostingStatus.SUBMITTED);
-        assertThat(submitted.submittedAt()).isNotNull();
+        // The LAST factory quote becoming ready auto-advances the request straight to
+        // READY_FOR_CEO_REVIEW — there is no Import-driven costing draft/recalculate/submit step
+        // any more (PricingCostingService is read-only; see its own javadoc).
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
 
-        assertThatThrownBy(() -> costingService.recalculate(submitted.id(),
-            new RecalculateCostingRequest("cannot edit"), importActor))
+        // A mid-flight revision arriving while READY_FOR_CEO_REVIEW pulls the REQUEST back to
+        // AWAITING_FACTORY_RESPONSE — the direct replacement for the old "costing goes stale"
+        // assertion: there is no submitted-costing row sitting around any more to go stale, since
+        // the cost is computed fresh, once, at CEO-review time (see PricingRequestStatus's
+        // READY_FOR_CEO_REVIEW -> AWAITING_FACTORY_RESPONSE back-edge).
+        FactoryQuoteDto factoryARevision3 = factoryQuoteService.receive(factoryARevision2.id(),
+            response("REF-A-3", "THB", "100.00", factoryARevision2.items().get(0).pricingRequestItemId()), importActor);
+        assertThat(factoryARevision3.status()).isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
+        assertThat(factoryARevision3.revisionNo()).isEqualTo(3);
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
+        // The CEO cannot open a review whose price is about to change under them until Import
+        // re-marks this revision ready.
+        assertThatThrownBy(() -> pricingDecisionService.startReview(pricingRequestId,
+                new StartPricingDecisionRequest(null, "THB", null, UUID.randomUUID().toString()), ceoActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        assertThat(costingService.get(submitted.id(), ceoActor).items())
+
+        factoryQuoteService.markReadyForCosting(factoryARevision3.id(), importActor);
+        // Factory B's quote was untouched by A's revision and is still READY_FOR_COSTING, so
+        // re-marking A ready re-advances the request straight back to READY_FOR_CEO_REVIEW.
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
+
+        // CEO opens review — computes + persists the costing itself, from whichever factory
+        // quote is CURRENT right now (Factory A's rev 3 at 100.00, Factory B's rev 1 at 200.00).
+        PricingDecisionDto decision = pricingDecisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(null, "THB", null, UUID.randomUUID().toString()), ceoActor);
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.CEO_REVIEWING);
+        PricingCostingDto submitted = costingService.get(decision.pricingCostingId(), ceoActor);
+        assertThat(submitted.items()).extracting(item -> item.factoryQuoteRevisionNo()).contains(3);
+        assertThat(submitted.items())
             .extracting(item -> item.rawUnitPrice())
             .contains(new BigDecimal("100.0000"), new BigDecimal("200.0000"));
         assertThat(factoryQuoteService.list(pricingRequestId, importActor))
@@ -335,17 +356,20 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     }
 
     @Test
-    void costingCreateRejectsClientRequestReplayAcrossPricingRequests() {
+    void startReviewRejectsClientRequestReplayAcrossPricingRequests() {
+        // V141 ("CEO owns costing"): the clientRequestId idempotency guard moves onto
+        // PricingDecisionService#startReview — Import's costing createDraft (the old home of this
+        // guard) is gone.
         long firstPricingRequestId = pricingRequestService.createDraft(ticketId,
             pricingRequest("11111111-1111-4111-8111-111111111111"), salesActor).summary().id();
         pricingRequestService.submit(firstPricingRequestId, salesActor);
         pricingRequestService.pickup(firstPricingRequestId, importActor);
         markAllFactoriesReady(firstPricingRequestId);
 
-        String costingClientRequestId = "99999999-9999-4999-8999-999999999999";
-        PricingCostingDto firstDraft = costingService.createDraft(firstPricingRequestId,
-            new CreateCostingRequest("first", costingClientRequestId), importActor);
-        assertThat(firstDraft.pricingRequestId()).isEqualTo(firstPricingRequestId);
+        String startReviewClientRequestId = "99999999-9999-4999-8999-999999999999";
+        PricingDecisionDto firstDecision = pricingDecisionService.startReview(firstPricingRequestId,
+            new StartPricingDecisionRequest(null, "THB", null, startReviewClientRequestId), ceoActor);
+        assertThat(firstDecision.pricingRequestId()).isEqualTo(firstPricingRequestId);
 
         long secondPricingRequestId = pricingRequestService.createDraft(ticketId,
             pricingRequest("22222222-2222-4222-8222-222222222222"), salesActor).summary().id();
@@ -353,9 +377,14 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         pricingRequestService.pickup(secondPricingRequestId, importActor);
         markAllFactoriesReady(secondPricingRequestId);
 
-        assertThatThrownBy(() -> costingService.createDraft(secondPricingRequestId,
-            new CreateCostingRequest("second", costingClientRequestId), importActor))
+        assertThatThrownBy(() -> pricingDecisionService.startReview(secondPricingRequestId,
+                new StartPricingDecisionRequest(null, "THB", null, startReviewClientRequestId), ceoActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        // Assert absence, not merely the status code: the second pricing request gained no
+        // decision (and therefore no costing) from the rejected replay attempt.
+        assertThat(pricingDecisionService.list(secondPricingRequestId, importActor)).isEmpty();
+        assertThat(pricingRequestService.get(secondPricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
     }
 
     @Test
@@ -638,7 +667,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         };
         FactoryQuoteService crashingService = new FactoryQuoteService(factoryQuoteRepository, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), factoryEmail, throwingNotifications,
-            new FileStorageService("/tmp/glr-pricing-test-uploads"), dispatchProperties);
+            new FileStorageService("/tmp/glr-pricing-test-uploads"), dispatchProperties, landedCostCalculator);
 
         var txManager = new org.springframework.jdbc.datasource.DataSourceTransactionManager(
             jdbc.getJdbcTemplate().getDataSource());
@@ -690,7 +719,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             .thenThrow(new RuntimeException("smtp unreachable"));
         FactoryQuoteService failingService = new FactoryQuoteService(factoryQuoteRepository, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), failingEmail, notificationRepository,
-            new FileStorageService("/tmp/glr-pricing-test-uploads"), dispatchProperties);
+            new FileStorageService("/tmp/glr-pricing-test-uploads"), dispatchProperties, landedCostCalculator);
 
         failingService.send(draft.id(),
             new SendFactoryQuoteRequest("factory-a@example.com", "Subject", "Body", UUID.randomUUID().toString()),
@@ -750,41 +779,188 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     }
 
     @Test
-    void firstFactoryResponseOnMultiFactoryRequestMovesToAwaitingFactoryResponseNotCosting() {
-        // Regression for the review finding: a single factory answering a multi-factory
-        // pricing request must not flip the whole request to "costing in progress" while
-        // other factories (Factory B here) are still pending. COSTING_IN_PROGRESS is
-        // entered only by PricingCostingService.createDraft(), once every item's factory
-        // has a current READY_FOR_COSTING quote.
+    void firstFactoryResponseOnMultiFactoryRequestMovesToAwaitingFactoryResponse_andMarkingItReadyAloneDoesNotAdvanceEither() {
+        // Regression for the review finding, extended for V141 ("CEO owns costing"): a single
+        // factory answering (and even being marked READY_FOR_COSTING) on a multi-factory pricing
+        // request must not advance the whole request while other factories (Factory B here) are
+        // still pending. The auto-advance in FactoryQuoteService.markReadyForCosting only fires
+        // once LandedCostCalculator.isFullyResolvable is true for EVERY item — see
+        // bothFactoriesReadyThenAutoAdvanceToReadyForCeoReview below for the LAST-quote-ready case.
         long pricingRequestId = pricingRequestService.createDraft(ticketId,
             pricingRequest("44444444-4444-4444-8444-444444444444"), salesActor).summary().id();
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
         FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
 
-        factoryQuoteService.receive(draft.id(),
+        FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
             response("REF-DIRECT", "THB", "100.00", draft.items().get(0).pricingRequestItemId()), importActor);
+
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
+
+        factoryQuoteService.markReadyForCosting(responded.id(), importActor);
 
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
     }
 
     @Test
-    void bothFactoriesReadyThenCreateDraftMovesRequestToCostingInProgress() {
+    void bothFactoriesReadyThenAutoAdvanceToReadyForCeoReview() {
+        // V141 ("CEO owns costing"): the LAST factory quote becoming ready auto-advances the
+        // request straight to READY_FOR_CEO_REVIEW — there is no Import-driven "create a costing
+        // draft" step any more to separately trigger the old COSTING_IN_PROGRESS transition.
         long pricingRequestId = pricingRequestService.createDraft(ticketId,
             pricingRequest("aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"), salesActor).summary().id();
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
+
         markAllFactoriesReady(pricingRequestId);
+
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
+    }
+
+    /**
+     * How long a racer waits at the rendezvous below for the other one to reach the same point.
+     * Paid ONCE, and only on the correct (serialized) path — see the test's javadoc.
+     */
+    private static final long MARK_READY_RENDEZVOUS_MILLIS = 3_000;
+
+    /**
+     * THE GAP THIS TEST CLOSES: {@code FactoryQuoteService#markReadyForCosting} takes a
+     * {@code pg_advisory_xact_lock} on the pricing request (via {@code
+     * PricingRequestRepository#lockPricingRequest}) and its own comment explains exactly what that
+     * lock is for — "two Import users marking the LAST two factories ready simultaneously would
+     * BOTH evaluate isFullyResolvable to false under READ COMMITTED, neither would advance, and
+     * the request would sit at AWAITING_FACTORY_RESPONSE with every quote ready". Nothing
+     * exercised two callers racing, so that lock was unguarded: delete it and every existing test
+     * stays green while production acquires a stuck pricing request recoverable only by
+     * re-negotiating a quote back out of READY_FOR_COSTING.
+     *
+     * <h2>Two traps this test has to dodge, or it would be theatre</h2>
+     *
+     * <p><b>1. The lock has to actually be held.</b> {@link AbstractPostgresIntegrationTest} has no
+     * Spring context and hand-wires every service with {@code new}, so {@code @Transactional} is
+     * inert and {@code pg_advisory_xact_lock} — which is transaction-scoped — would be released at
+     * the end of its own auto-committed {@code SELECT} instead of spanning the call. A racing test
+     * written the obvious way would therefore pass with or without the lock, proving nothing. Both
+     * racers here go through {@link AbstractPostgresIntegrationTest#transactional}, the real AOP
+     * proxy built from the production annotation, so the lock genuinely spans
+     * {@code markReadyForCosting}. {@code TransactionalHarnessIntegrationTest} pins that
+     * distinction directly.
+     *
+     * <p><b>2. A bare race is not reproducible.</b> Two threads launched at the same instant only
+     * <i>sometimes</i> interleave the damaging way, so a red would be a coin flip and a green would
+     * mean nothing. The {@link CountDownLatch} rendezvous inside the spied {@code markReady} forces
+     * the interleaving instead of hoping for it: each racer, having written its own
+     * {@code READY_FOR_COSTING} but not yet committed it, waits for the other to reach the same
+     * point before evaluating {@code isFullyResolvable}.
+     *
+     * <ul>
+     *   <li><b>Lock present (production):</b> the second racer is still blocked in
+     *       {@code pg_advisory_xact_lock} and never reaches the rendezvous, so the first times out
+     *       after {@link #MARK_READY_RENDEZVOUS_MILLIS}, commits, and releases the lock; the second
+     *       then runs with the first's write COMMITTED and visible, sees every quote ready, and
+     *       advances. Cost: one bounded wait.</li>
+     *   <li><b>Lock removed (the mutation):</b> both reach the rendezvous, both proceed with the
+     *       other's write still uncommitted and invisible under READ COMMITTED, both evaluate
+     *       {@code isFullyResolvable} to false, neither advances — and the status assertion below
+     *       goes red deterministically rather than occasionally.</li>
+     * </ul>
+     *
+     * <p>The spy is a <b>rendezvous point, not the system under test</b>: it delegates to the real
+     * {@code markReady} and returns its real row count. Everything asserted is real Postgres state.
+     */
+    @Test
+    void markReadyForCostingSerializesConcurrentCallersOnTheLastTwoQuotes_soTheAutoAdvanceIsNotMissed()
+            throws Exception {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId,
+            pricingRequest("dddddddd-3333-4333-8333-dddddddddddd"), salesActor).summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+
+        List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
+        FactoryQuoteDto draftA = quoteFor(drafts, "Factory A");
+        FactoryQuoteDto draftB = quoteFor(drafts, "Factory B");
+        FactoryQuoteDto respondedA = factoryQuoteService.receive(draftA.id(),
+            response("REF-RACE-A", "THB", "100.00", draftA.items().get(0).pricingRequestItemId()), importActor);
+        FactoryQuoteDto respondedB = factoryQuoteService.receive(draftB.id(),
+            response("REF-RACE-B", "THB", "200.00", draftB.items().get(0).pricingRequestItemId()), importActor);
+        // Neither quote is ready yet, so from its own transaction's point of view EACH racer is
+        // marking "the last outstanding factory" ready — the exact situation the lock exists for.
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
 
-        PricingCostingDto draft = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("draft", null), importActor);
+        CountDownLatch bothMarkedReady = new CountDownLatch(2);
+        FactoryQuoteRepository racingQuotes = spy(new FactoryQuoteRepository(jdbc));
+        doAnswer(invocation -> {
+            Object rowsUpdated = invocation.callRealMethod();
+            bothMarkedReady.countDown();
+            bothMarkedReady.await(MARK_READY_RENDEZVOUS_MILLIS, TimeUnit.MILLISECONDS);
+            return rowsUpdated;
+        }).when(racingQuotes).markReady(ArgumentMatchers.anyLong());
+        // landedCostCalculator is deliberately the UNSPIED one: isFullyResolvable must read the
+        // database exactly as production does, through this thread's own transaction.
+        FactoryQuoteService racing = transactional(new FactoryQuoteService(racingQuotes, pricingRequests, tickets,
+            new FactoryConfigRepository(jdbc), factoryEmail, notificationRepository,
+            new FileStorageService("/tmp/glr-pricing-test-uploads"), dispatchProperties, landedCostCalculator));
 
-        assertThat(draft.status()).isEqualTo(PricingCostingStatus.DRAFT);
+        Callable<Long> firstImportUser = () -> racing.markReadyForCosting(respondedA.id(), importActor).id();
+        Callable<Long> secondImportUser = () -> racing.markReadyForCosting(respondedB.id(), secondImportActor).id();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        List<Long> successes = new ArrayList<>();
+        List<Throwable> failures = new ArrayList<>();
+        try {
+            Future<Long> futureA = executor.submit(firstImportUser);
+            Future<Long> futureB = executor.submit(secondImportUser);
+            for (Future<Long> future : List.of(futureA, futureB)) {
+                try {
+                    successes.add(future.get(30, TimeUnit.SECONDS));
+                } catch (ExecutionException e) {
+                    failures.add(e.getCause());
+                }
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+
+        // ── Anti-vacuity, before the claim: the race really happened, and both halves of it won ──
+        assertThat(failures)
+            .as("neither racer may fail — unlike the approve()/createCustomerChangeRevision races "
+                + "elsewhere in this suite, marking two DIFFERENT factories' quotes ready is not a "
+                + "contended write, so serialization must cost a wait and nothing else")
+            .isEmpty();
+        assertThat(successes).hasSize(2);
+        verify(racingQuotes, times(2)).markReady(ArgumentMatchers.anyLong());
+        assertThat(bothMarkedReady.getCount())
+            .as("both racers must have reached the rendezvous inside markReady — otherwise the "
+                + "interleaving was never forced and this test proves nothing about the lock")
+            .isZero();
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.factory_quote
+             WHERE pricing_request_id = :id AND is_current = TRUE AND status = 'READY_FOR_COSTING'
+            """, Map.of("id", pricingRequestId), Long.class))
+            .as("both quotes really are READY_FOR_COSTING, so the auto-advance's precondition is "
+                + "genuinely satisfied and the status below is about the lock, not about the data")
+            .isEqualTo(2L);
+
+        // ── The claim ────────────────────────────────────────────────────────────────────────
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
+            .as("the LAST quote becoming ready must advance the request. Without "
+                + "lockPricingRequest, both racers evaluate isFullyResolvable against the other's "
+                + "uncommitted write, both see false, and the request is stranded at "
+                + "AWAITING_FACTORY_RESPONSE with every quote ready — recoverable only by "
+                + "re-negotiating a quote back out of READY_FOR_COSTING")
+            .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id AND event_kind = 'PRICING_COSTING_SUBMITTED'
+            """, Map.of("id", pricingRequestId), Long.class))
+            .as("exactly one racer may advance the request: the transition is a compare-and-set on "
+                + "AWAITING_FACTORY_RESPONSE, so a second advance would mean the audit trail "
+                + "recorded a transition that never happened")
+            .isEqualTo(1L);
     }
 
     @Test
@@ -794,9 +970,12 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
         markAllFactoriesReady(pricingRequestId);
+        // V141 ("CEO owns costing"): markAllFactoriesReady auto-advances the request all the way
+        // to READY_FOR_CEO_REVIEW (both quotes ready) — there is no standalone Import costing to
+        // build as scaffolding any more.
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
         FactoryQuoteDto factoryA = quoteFor(factoryQuoteService.list(pricingRequestId, importActor), "Factory A");
-        PricingCostingDto costing = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("draft", null), importActor);
 
         String replayClientRequestId = "cccccccc-3333-4333-8333-cccccccccccc";
         FactoryQuoteDto firstAttempt = factoryQuoteService.receive(factoryA.id(),
@@ -804,9 +983,11 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             importActor);
         assertThat(firstAttempt.status()).isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
         assertThat(firstAttempt.revisionNo()).isEqualTo(2);
-        // Baseline captured AFTER the real (first) attempt already marked the costing stale —
-        // the replay below must not re-trigger markOpenCostingsStale on top of it.
-        Instant costingUpdatedAtAfterFirstAttempt = costingUpdatedAt(costing.id());
+        // V141: a revision arriving while READY_FOR_CEO_REVIEW pulls the REQUEST back to
+        // AWAITING_FACTORY_RESPONSE — the replacement for the old markOpenCostingsStale side
+        // effect (there is no costing row sitting around any more to mark stale).
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
 
         // Simulate the HTTP response for the call above being lost: Import retries with the
         // exact same request against the same (now-superseded) factoryQuoteId.
@@ -843,9 +1024,10 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
               FROM sales.factory_quote_response_receipt
              WHERE client_request_id = CAST(:clientRequestId AS uuid)
             """, Map.of("clientRequestId", replayClientRequestId), Long.class)).isEqualTo(1L);
-        // The replay must not have re-invoked markOpenCostingsStale: the costing row's
-        // updated_at must be unchanged from the (already-stale) state left by the first attempt.
-        assertThat(costingUpdatedAt(costing.id())).isEqualTo(costingUpdatedAtAfterFirstAttempt);
+        // The replay must not have re-triggered the pull-back a second time: the request must
+        // still read exactly AWAITING_FACTORY_RESPONSE, not have bounced status again.
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
     }
 
     @Test
@@ -1116,14 +1298,10 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         FactoryQuoteDto revision2 = factoryQuoteService.receive(revision1.id(),
             response("REF-A-2", "THB", "95.00", revision1.items().get(0).pricingRequestItemId()), importActor);
         assertThat(factoryQuoteService.get(revision1.id(), importActor).status()).isEqualTo(FactoryQuoteStatus.SUPERSEDED);
+        // V141 ("CEO owns costing"): this is the ONLY factory quote on this (single-factory)
+        // pricing request, so marking it ready auto-advances the request straight to
+        // READY_FOR_CEO_REVIEW — there is no separate Import costing draft/submit step any more.
         factoryQuoteService.markReadyForCosting(revision2.id(), importActor);
-
-        PricingCostingDto costingDraft = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("draft", null), importActor);
-        costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 1"), importActor);
-        PricingCostingDto calculated = costingService.recalculate(costingDraft.id(),
-            new RecalculateCostingRequest("pass 2"), importActor);
-        costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
 
@@ -1140,13 +1318,20 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     /**
      * MUTATION-CHECKABLE GUARD 2: the quote ITSELF has reached READY_FOR_COSTING. Isolated from
      * the other two guards: no costing has ever been created for this pricing request, so guard
-     * 3 cannot fire, and the pricing request's own status (still AWAITING_FACTORY_RESPONSE) is
-     * within ATTACHMENT_DELETE_STATUSES, so guard 1 cannot fire either.
+     * 3 cannot fire, and the pricing request's own status stays within ATTACHMENT_DELETE_STATUSES
+     * so guard 1 cannot fire either. V141 ("CEO owns costing") forces this test onto the
+     * TWO-factory {@code pricingRequest()} fixture (not the single-factory one the other two
+     * guard tests use): marking the ONLY factory on a single-factory request ready would
+     * auto-advance the request straight to READY_FOR_CEO_REVIEW — which is NOT in
+     * ATTACHMENT_DELETE_STATUSES, so guard 1 would fire too and the isolation this test exists
+     * for would break. Leaving Factory B unanswered here keeps
+     * LandedCostCalculator.isFullyResolvable false, so the auto-advance never fires and the
+     * request stays at AWAITING_FACTORY_RESPONSE while Factory A alone reaches READY_FOR_COSTING.
      */
     @Test
     void factoryQuoteAttachmentDeletion_isRefusedOnceTheQuoteItselfIsReadyForCosting() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId,
-            singleFactoryPricingRequest("a1000000-0003-4003-8003-a10000000003"), salesActor).summary().id();
+            pricingRequest("a1000000-0003-4003-8003-a10000000003"), salesActor).summary().id();
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
         FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
@@ -1167,20 +1352,15 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
     /**
      * MUTATION-CHECKABLE GUARD 3: this exact quote revision is referenced by a costing that has
-     * already been SUBMITTED. Isolated from guard 2 by revising the quote again AFTER submit
-     * (permitted — a READY_FOR_CEO_REVIEW pricing request's current quote may still be revised,
-     * see FactoryQuoteService.receive's RESPONSE_STATUSES): the old, costed revision becomes
+     * already been SUBMITTED. Isolated from guard 2 by revising the quote AGAIN after the CEO
+     * returns the request to Import (permitted — AWAITING_FACTORY_RESPONSE is back within
+     * FactoryQuoteService.receive's RESPONSE_STATUSES): the old, costed revision becomes
      * SUPERSEDED (not READY_FOR_COSTING), so only guard 3 can be why its attachment stays
-     * undeletable. Isolated from guard 1 by driving the pricing request to COSTING_IN_PROGRESS
-     * afterward (inside ATTACHMENT_DELETE_STATUSES) via direct SQL — Step 3 (design corrections
-     * 3+4) removed FactoryQuoteService.receive()'s own auto-transition into COSTING_IN_PROGRESS
-     * (a second, divergent reopen path this branch's own change eliminates; see that method's
-     * comment), so a real caller would now go through
-     * PricingDecisionService.returnToImport() + PricingCostingService.createDraft() to get there
-     * — this test only cares about isolating guard 3, not re-proving that state-machine path
-     * (covered separately by PricingRequestRepositoryIntegrationTest /
-     * PricingRequestStatusTest), so it takes the direct-SQL shortcut like other setup in this
-     * file already does.
+     * undeletable. Isolated from guard 1 the same way, for free: V141 ("CEO owns costing") means
+     * {@code PricingDecisionService.returnToImport} — the real, now-only reopen path (Import's
+     * old {@code createDraft} that this test used to reach via a raw-SQL shortcut is gone) —
+     * lands exactly on AWAITING_FACTORY_RESPONSE, which is already inside
+     * ATTACHMENT_DELETE_STATUSES. No SQL shortcut needed any more.
      */
     @Test
     void factoryQuoteAttachmentDeletion_isRefusedOnceReferencedByASubmittedCosting() {
@@ -1191,29 +1371,34 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
         FactoryQuoteDto revision1 = factoryQuoteService.receive(draft.id(),
             response("REF-A-1", "THB", "100.00", draft.items().get(0).pricingRequestItemId()), importActor);
+        // Single-factory request: marking revision1 ready auto-advances straight to
+        // READY_FOR_CEO_REVIEW (still inside MUTABLE_STATUSES, so uploading below is unaffected).
         factoryQuoteService.markReadyForCosting(revision1.id(), importActor);
         FactoryQuoteAttachmentDto attachmentOnRevision1 = factoryQuoteService.uploadAttachment(revision1.id(),
             new MockMultipartFile("file", "revision1.pdf", "application/pdf", "quote".getBytes()), importActor);
 
-        PricingCostingDto costingDraft = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("draft", null), importActor);
-        costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 1"), importActor);
-        PricingCostingDto calculated = costingService.recalculate(costingDraft.id(),
-            new RecalculateCostingRequest("pass 2"), importActor);
-        costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
+        // CEO opens review — computes + persists a SUBMITTED costing referencing revision1 in
+        // the same action that creates the decision.
+        PricingDecisionDto decision = pricingDecisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(null, "THB", null, UUID.randomUUID().toString()), ceoActor);
+        assertThat(factoryQuoteRepository.existsSubmittedCostingReferencingQuote(revision1.id())).isTrue();
 
-        // Revise AFTER submit: revision1 (the costed one) becomes SUPERSEDED — not
-        // READY_FOR_COSTING. The pricing request stays READY_FOR_CEO_REVIEW (Step 3's change —
-        // see this test's own javadoc); drive it on to COSTING_IN_PROGRESS directly so guard 1
-        // (READY_FOR_CEO_REVIEW excluded from ATTACHMENT_DELETE_STATUSES) cannot be why deletion
-        // is refused, isolating guard 3.
+        // CEO returns the request — the ONE named reopen path now — sending it to
+        // AWAITING_FACTORY_RESPONSE, which puts revision1 back within RESPONSE_STATUSES for a
+        // new revision AND within ATTACHMENT_DELETE_STATUSES (isolating guard 1).
+        pricingDecisionService.returnToImport(decision.id(),
+            new th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest("ราคาคลาดเคลื่อน"),
+            ceoActor);
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
+
+        // Revise AGAIN: revision1 (the already-costed one) becomes SUPERSEDED — not
+        // READY_FOR_COSTING, so guard 2 cannot fire either. The SUBMITTED costing from startReview
+        // above is untouched by both the return and this new revision — it still references
+        // revision1's factory_quote_id, which is exactly what guard 3 checks.
         factoryQuoteService.receive(revision1.id(),
             response("REF-A-2", "THB", "90.00", revision1.items().get(0).pricingRequestItemId()), importActor);
         assertThat(factoryQuoteService.get(revision1.id(), importActor).status()).isEqualTo(FactoryQuoteStatus.SUPERSEDED);
-        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
-        jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
-            Map.of("status", PricingRequestStatus.AWAITING_FACTORY_RESPONSE, "id", pricingRequestId));
 
         assertThat(factoryQuoteRepository.existsSubmittedCostingReferencingQuote(revision1.id())).isTrue();
 
@@ -1265,7 +1450,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             UUID.randomUUID().toString());
 
         assertThatThrownBy(() -> factoryQuoteService.receive(draft.id(), badBox, importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -1324,7 +1509,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             salesActor).summary().id();
 
         assertThatThrownBy(() -> pricingRequestService.submit(pricingRequestId, salesActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
         assertThat(jdbc.queryForObject(
             "SELECT status FROM sales.pricing_request WHERE pricing_request_id = :id",
             Map.of("id", pricingRequestId), String.class))
@@ -1482,7 +1667,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             UnitBasis.PER_PIECE, new BigDecimal("200.00"), "50.00",
             new BigDecimal("0.5"), null, null))
             .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
                 assertThat(e.getMessage()).contains("piecesPerBox");
             });
     }
@@ -1490,8 +1675,13 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     /**
      * Builds a fresh single-item pricing request against "Factory C" / TestLand's all-zero
      * price_calc_config (see the {@code catalogProductIdFactoryC} field javadoc), drives it
-     * through submit -> pickup -> generate draft -> factory response -> mark ready -> costing
-     * draft -> recalculate, and returns the resulting single costing line.
+     * through submit -> pickup -> generate draft -> factory response -> mark ready -> CEO
+     * startReview, and returns the resulting single costing line. V141 ("CEO owns costing"):
+     * markReadyForCosting auto-advances this single-factory request straight to
+     * READY_FOR_CEO_REVIEW, and the CEO's startReview computes the cost via the SAME
+     * LandedCostCalculator.calculate() Import's deleted createDraft/recalculate used to trigger
+     * — every arithmetic assertion in the tests driving this helper is unaffected by WHO
+     * triggers the calculation, only the calculation itself matters.
      */
     private PricingCostingItemDto singleItemCosting(
         BigDecimal requestedQty, String requestedUnitBasis,
@@ -1514,11 +1704,10 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             sqmPerUnit, piecesPerBox, linearMPerUnit);
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-        PricingCostingDto costing = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("unit conversion test", UUID.randomUUID().toString()), importActor);
-        PricingCostingDto calculated = costingService.recalculate(costing.id(),
-            new RecalculateCostingRequest("calc"), importActor);
-        return calculated.items().get(0);
+        PricingDecisionDto decision = pricingDecisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(null, "THB", null, UUID.randomUUID().toString()), ceoActor);
+        PricingCostingDto costing = costingService.get(decision.pricingCostingId(), ceoActor);
+        return costing.items().get(0);
     }
 
     @Test
@@ -1797,11 +1986,5 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     private UserPrincipal actor(long employeeId, String role) {
         return new UserPrincipal(employeeId, employeeId + "@glr.co.th", "Actor " + employeeId, role, employeeId,
             true, LocalDate.now(), false, null, false);
-    }
-
-    private Instant costingUpdatedAt(long costingId) {
-        return jdbc.queryForObject("""
-            SELECT updated_at FROM sales.pricing_costing WHERE pricing_costing_id = :id
-            """, Map.of("id", costingId), java.sql.Timestamp.class).toInstant();
     }
 }

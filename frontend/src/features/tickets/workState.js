@@ -42,7 +42,8 @@
 // leads the sticky bar, and what the header banner says when there isn't
 // one for this viewer.
 
-import { GATE_LABEL, stageMeta } from './stageMeta.js';
+import { EMPTY_STAGE_CATALOG, findStage } from './stageCatalog.js';
+import { GATE_LABEL } from './stageMeta.js';
 import { nextSalesAction } from './salesActions.js';
 import { nextImportAction } from './importActions.js';
 import { nextAccountAction } from './accountActions.js';
@@ -75,7 +76,7 @@ import { nextAccountAction } from './accountActions.js';
  * module stays out of the way rather than saying something that would
  * compete with it.
  */
-export function resolveWorkState(user, deal, pricingRequests = []) {
+export function resolveWorkState(user, deal, pricingRequests = [], catalog = EMPTY_STAGE_CATALOG) {
   const role = user?.role;
   if (!deal || deal.lifecycle !== 'ACTIVE') return { action: null, waitingRoleLabel: null };
 
@@ -93,6 +94,8 @@ export function resolveWorkState(user, deal, pricingRequests = []) {
   // make (see the module's own doc comment).
   if (role === 'ceo' || role === 'sales_manager') return { action: null, waitingRoleLabel: null };
 
-  const meta = stageMeta(deal.salesStage);
+  // The stage's owning department is the backend's `gate` (from TicketService's three
+  // *_TARGET_STAGES sets), read off the catalog — not a local table. Null while it loads.
+  const meta = findStage(catalog, deal.salesStage);
   return { action: null, waitingRoleLabel: meta ? GATE_LABEL[meta.gate] : null };
 }

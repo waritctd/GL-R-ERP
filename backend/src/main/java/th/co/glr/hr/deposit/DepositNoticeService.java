@@ -6,6 +6,8 @@ import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.CustomerDto;
@@ -16,17 +18,22 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.ticket.DealLifecycle;
+import th.co.glr.hr.ticket.DepositPolicy;
+import th.co.glr.hr.ticket.PaymentTrack;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketEventKind;
-import th.co.glr.hr.ticket.TicketItemDto;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketStatus;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
 @Service
 public class DepositNoticeService {
-    private static final String PREPARER = "จินตนา หาญมนตรี";
+    // No PREPARER constant here. One existed, holding a hardcoded staff name, and nothing read it:
+    // the preparer's name reaches a deposit notice from the DB instead, as the NOT NULL DEFAULT on
+    // sales.deposit_notice.preparer_name (V12). Deleting the Java copy leaves that default — the
+    // only live source — untouched; re-adding it would just create a second place to change a
+    // person's name and a silent way for the two to disagree.
     private static final java.util.Set<String> SALES_ROLES  = java.util.Set.of("sales");
     private static final java.util.Set<String> CEO_ROLES    = java.util.Set.of("ceo");
     private static final java.util.Set<String> IMPORT_ROLES = java.util.Set.of("import");
@@ -164,8 +171,25 @@ public class DepositNoticeService {
         TicketSummaryDto s = tickets.findById(doc.ticketId())
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
             .summary();
-        if (!TicketStatus.QUOTATION_ISSUED.equals(s.status())
-                || !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
+        // Loosened precondition (payment-track state machine, site 2): a deposit notice may be
+        // (re-)issued from CUSTOMER_CONFIRMED (first issue) OR from DEPOSIT_NOTICE_ISSUED itself
+        // (a revision — PaymentTrack's one legal self-loop; PR #698's own "AND status='DRAFT'"
+        // guard on docs.issue is what makes a revision safe to mint a fresh doc number here).
+        //
+        // The explicit !bypassesDepositNotice(...) guard matters beyond the paymentStatus check
+        // above: DEPOSIT_NOTICE_ISSUED is not on a bypass policy's PaymentTrack path AT ALL, so a
+        // WAIVED/NOT_REQUIRED/CREDIT_CUSTOMER deal that somehow reached CUSTOMER_CONFIRMED (the
+        // paymentStatus check alone would pass) must still be refused HERE, with a clean 409 —
+        // not left to fall through to advancePaymentStatus below, which would throw an uncaught
+        // IllegalStateException (ApiExceptionHandler has no handler for it, so it would surface as
+        // an opaque 500, not a controlled conflict). Found while writing PaymentTrackIntegrationTest's
+        // off-path case; a bypass-policy deal CAN reach a DRAFT deposit notice today (createDraft
+        // does not check deposit_policy), so this is a genuinely reachable path, not hypothetical.
+        // On a bypass policy, issuing a deposit notice now throws — a deliberate behaviour change
+        // from rule 4; see the branch report.
+        boolean paymentTrackReady = !DepositPolicy.bypassesDepositNotice(s.depositPolicy())
+            && ("CUSTOMER_CONFIRMED".equals(s.paymentStatus()) || "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()));
+        if (!TicketStatus.QUOTATION_ISSUED.equals(s.status()) || !paymentTrackReady) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ออกใบแจ้งรับมัดจำได้เฉพาะเมื่อออกใบเสนอราคาแล้วและลูกค้ายืนยันคำสั่งซื้อแล้วเท่านั้น");
         }
@@ -173,20 +197,41 @@ public class DepositNoticeService {
         // (Phase 1 lifecycle gate; mirrors TicketService.requireActive).
         requireActiveLifecycle(s);
 
-        String docNumber = docs.issue(docId, actor.id(), actor.name());
+        String docNumber = docs.issue(docId, actor.id(), actor.name())
+            .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT,
+                "ใบแจ้งรับมัดจำนี้ถูกออกไปแล้วโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง"));
 
-        // Render downloadable files at issue time. For now the DB stores render flags; bytes
-        // remain regenerable from the persisted document snapshot.
-        try {
-            DepositNoticeDto issued = docs.findById(docId).orElseThrow();
-            renderer.toPdf(issued);
-            renderer.toXlsx(issued);
-            docs.setFilePaths(docId, "rendered", "rendered");
-        } catch (Exception e) {
-            // Non-fatal: files can be regenerated on download.
+        // Render downloadable files at issue time — but AFTER this transaction commits, never
+        // inside it. toPdf shells out to LibreOffice (LibreOfficePdfConverter forks soffice and
+        // blocks on proc.waitFor(120, SECONDS)), and at this point the transaction is holding a
+        // pooled connection plus a row lock on the single sales.document_sequence row for
+        // (DEPOSIT_NOTICE, this Thai year) that nextDocNumber incremented inside docs.issue above.
+        // That row is the serialization point for EVERY deposit notice issued in the whole year, so
+        // holding it across an external process turns one slow render into a queue nobody can see:
+        // the next rep to issue simply blocks until the first rep's soffice exits.
+        //
+        // Safe to defer because the render participates in no invariant here. Both renders return
+        // byte[] that this method DISCARDS, nothing durable is written (LibreOfficePdfConverter
+        // deletes its temp files in a finally), and setFilePaths only stores the literal flags
+        // "rendered"/"rendered" — surfacing as DepositNoticeDto.hasPdf/hasXlsx, which no production
+        // frontend code reads; getPdf/getXlsx re-render from the persisted snapshot and never
+        // consult those columns. The doc number and the DRAFT->ISSUED compare-and-set both stay
+        // exactly where they were, in this transaction, so neither the sequence race nor the
+        // double-issue race DepositNoticeRepository#issue guards is affected.
+        //
+        // One deliberate, API-observable consequence: the DTO returned below is built before this
+        // runs, so an issue() response now reports hasPdf/hasXlsx false and a subsequent read
+        // reports them true.
+        renderAfterCommit(docId);
+
+        // expected = s.paymentStatus(), which by the guard above is exactly CUSTOMER_CONFIRMED
+        // (first issue, single hop) or DEPOSIT_NOTICE_ISSUED (revision, the one legal self-loop).
+        int rows = tickets.advancePaymentStatus(doc.ticketId(), s.depositPolicy(), s.paymentStatus(),
+            PaymentTrack.DEPOSIT_NOTICE_ISSUED);
+        if (rows == 0) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ขั้นตอนการรับชำระเงินถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
-
-        tickets.updatePaymentStatus(doc.ticketId(), "DEPOSIT_NOTICE_ISSUED");
         tickets.addEvent(doc.ticketId(), actor.id(), actor.name(),
             TicketEventKind.DEPOSIT_NOTICE_ISSUED,
             s.status(), s.status(),
@@ -306,6 +351,26 @@ public class DepositNoticeService {
             case NEW_ITEM      -> TicketStatus.IN_REVIEW;         // Import re-prices
         };
 
+        // The status move is now an EXPLICIT transition rather than a side effect of logging the
+        // event below. It used to ride on TicketRepository.addEvent, which wrote whatever toStatus
+        // it was handed as long as TicketStatus.isValid(toStatus) — a membership check, not a
+        // transition guard. addEvent no longer touches the column at all, so without this call the
+        // revision would log its event and leave the deal sitting where it was.
+        //
+        // Two of these three edges deliberately move the deal BACKWARDS (approved/document_issued
+        // -> price_proposed for the CEO to re-approve, -> in_review for Import to re-price) and one
+        // is the approved -> approved self-edge; all six from/to pairs reachable from the guard
+        // above are declared in TicketStatus.ALLOWED as intentional. Converging this flow onto the
+        // pricing-request revision path is a separate, later piece of work.
+        int rows = tickets.transitionStatus(ticketId, st, toStatus);
+        if (rows == 0) {
+            // Lost compare-and-set: another writer moved sales.ticket.status between the read above
+            // and this write. A conflict, never a re-SELECT for a nicer message — see
+            // TicketRepository.transitionStatus's own Javadoc.
+            throw new ApiException(HttpStatus.CONFLICT,
+                "สถานะดีลถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
+
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.REVISION_REQUESTED, st, toStatus,
             "[" + req.scope().name() + "] " + req.reason());
@@ -322,6 +387,49 @@ public class DepositNoticeService {
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * Renders the issued document once the transaction that issued it has COMMITTED — or
+     * immediately when no transaction is active. See {@link #issue}'s own comment for why the
+     * render must not run inside the transaction.
+     *
+     * <p>Follows {@code FileStorageService#deleteOnCommit} and {@code
+     * NotificationService#sendEmailAfterCommit}, the codebase's existing answer to "a non-database
+     * side effect inside a {@code @Transactional} method", including the asymmetry: with no
+     * transaction active there is no commit to wait for, so deferring would mean never rendering at
+     * all. Both branches resolve to "do the work, unless a rollback could still take the row away".
+     *
+     * <p><b>The try/catch has to live in here, not around the call site.</b> An exception escaping a
+     * {@link TransactionSynchronization#afterCommit} callback propagates to whoever called {@code
+     * commit} — so a LibreOffice timeout would start failing an {@code issue()} that had already
+     * durably succeeded. The swallow is therefore load-bearing now in a way it was not before, and
+     * it preserves the pre-existing contract exactly: rendering is non-fatal, the flags are left
+     * unset, and the bytes are regenerable on download.
+     */
+    private void renderAfterCommit(long docId) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            renderIssuedDocuments(docId);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                renderIssuedDocuments(docId);
+            }
+        });
+    }
+
+    /** Best-effort render + flag write that can never throw — see {@link #renderAfterCommit}. */
+    private void renderIssuedDocuments(long docId) {
+        try {
+            DepositNoticeDto issued = docs.findById(docId).orElseThrow();
+            renderer.toPdf(issued);
+            renderer.toXlsx(issued);
+            docs.setFilePaths(docId, "rendered", "rendered");
+        } catch (Exception e) {
+            // Non-fatal: files can be regenerated on download.
+        }
+    }
 
     private TicketSummaryDto requireApprovedTicket(long ticketId, UserPrincipal actor) {
         TicketDto t = tickets.findById(ticketId)

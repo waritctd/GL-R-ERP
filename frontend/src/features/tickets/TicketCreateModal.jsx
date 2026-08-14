@@ -158,6 +158,9 @@ function makeItemSchema(rowNumber) {
 const customerRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกบริษัท/ลูกค้า');
 // Mirrors TicketService.create: every new deal belongs to a โครงการ.
 const projectRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกโครงการ (1 ดีล = 1 Ticket ภายใต้โครงการ)');
+// Descriptive-only by owner ruling (it drives no behaviour), but it must be STATED — see the
+// no-default comment on the entryChannel state below.
+const entryChannelRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกช่องทางดีล (ระบุว่าดีลนี้เข้ามาทางไหน)');
 
 /**
  * Validates the whole form and returns every invalid field, plus `order`:
@@ -166,7 +169,7 @@ const projectRequiredSchema = z.any().refine((v) => v != null, 'กรุณา�
  * root-level check runs after nested array elements are validated, which
  * would put item errors before customer/project if we relied on it).
  */
-function validateTicketForm({ customer, project, items }) {
+function validateTicketForm({ customer, project, entryChannel, items }) {
   const errors = {};
   const order = [];
 
@@ -185,6 +188,14 @@ function validateTicketForm({ customer, project, items }) {
       errors.project = projectResult.error.issues[0].message;
       order.push('project');
     }
+  }
+
+  // Unlike project, NOT nested inside `if (customerResult.success)` — the channel picker is
+  // reachable and answerable regardless of whether a customer is chosen yet.
+  const entryChannelResult = entryChannelRequiredSchema.safeParse(entryChannel);
+  if (!entryChannelResult.success) {
+    errors.entryChannel = entryChannelResult.error.issues[0].message;
+    order.push('entryChannel');
   }
 
   items.forEach((item, index) => {
@@ -206,6 +217,7 @@ function validateTicketForm({ customer, project, items }) {
 function viewForFieldKey(key) {
   if (key === 'customer') return 'customer';
   if (key === 'project') return 'project';
+  if (key === 'entryChannel') return 'contact';
   if (key.startsWith('items.')) return 'items';
   return 'hub';
 }
@@ -462,7 +474,11 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   const [form, setForm] = useState({ note: initialDraft?.note ?? '' });
   const [dealTitle, setDealTitle] = useState(initialDraft?.dealTitle ?? '');
   const [priority, setPriority] = useState(initialDraft?.priority ?? 'NORMAL');
-  const [entryChannel, setEntryChannel] = useState(initialDraft?.entryChannel ?? 'DESIGNER_LED');
+  // No default on purpose. A pre-selected channel meant a rep who never noticed this control
+  // silently recorded "designer-led", and because a value is ALWAYS sent the backend could not
+  // tell that apart from a deliberate choice — so no backend default could rescue it. A restored
+  // draft still pre-fills, because editing a draft is not the same as creating fresh.
+  const [entryChannel, setEntryChannel] = useState(initialDraft?.entryChannel ?? null);
   // V50: a deal may start with NO items (lightweight lead-stage draft) — the
   // price-request flow begins later once items are added and submitted.
   const [items, setItems] = useState(() => (
@@ -835,6 +851,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     const { errors: nextFieldErrors, order } = validateTicketForm({
       customer: selectedCustomer,
       project: selectedProject,
+      entryChannel,
       items,
     });
     if (order.length > 0) {
@@ -895,7 +912,9 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   const sectionDone = {
     customer: Boolean(selectedCustomer),
     project: Boolean(selectedProject),
-    contact: Boolean(selectedContact),
+    // ผู้ติดต่อ is optional (contactId is nullable); the REQUIRED thing in this section is the
+    // entry channel, so that is what ticks the row — same as ลูกค้า/โครงการ tracking theirs.
+    contact: Boolean(entryChannel),
     items: items.length > 0,
     details: Boolean(dealTitle.trim() || form.note.trim() || priority !== 'NORMAL'),
   };
@@ -910,13 +929,15 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   // rather than read off `fieldErrors`' key order, so the list shrinks as the rep fixes things and
   // stays in on-screen order (`fieldErrors` is a plain object and carries neither property).
   const hubValidation = Object.keys(fieldErrors).length > 0
-    ? validateTicketForm({ customer: selectedCustomer, project: selectedProject, items })
+    ? validateTicketForm({ customer: selectedCustomer, project: selectedProject, entryChannel, items })
     : null;
   const hubMissingErrors = hubValidation?.errors ?? {};
   const hubMissingKeys = hubValidation?.order ?? [];
   const canCreateNow = Boolean(selectedCustomer && selectedProject);
 
-  const entryChannelLabel = ENTRY_CHANNEL_OPTIONS.find((o) => o.code === entryChannel)?.label ?? entryChannel;
+  const entryChannelLabel = entryChannel
+    ? (ENTRY_CHANNEL_OPTIONS.find((o) => o.code === entryChannel)?.label ?? entryChannel)
+    : 'ยังไม่ได้เลือกช่องทาง';
   const priorityLabel = PRIORITY_OPTIONS.find((p) => p.code === priority)?.label ?? priority;
 
   // ── sub-views ────────────────────────────────────────────────────────────
@@ -949,6 +970,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           />
           <HubRow
             title="ผู้ติดต่อ & ช่องทางดีล"
+            required
             done={sectionDone.contact}
             subtitle={[selectedContact ? `${selectedContact.firstName} ${selectedContact.lastName}`.trim() : null, entryChannelLabel].filter(Boolean).join(' · ')}
             onClick={() => setView('contact')}
@@ -1158,9 +1180,23 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         <BackLink onClick={() => setView('hub')} />
 
         <div>
-          <span className="mb-1.5 block text-sm font-bold text-text-secondary">ช่องทางดีล (entry channel)</span>
-          <div className="grid grid-cols-3 gap-1.5" role="radiogroup" aria-label="ช่องทางดีล">
-            {ENTRY_CHANNEL_OPTIONS.map((option) => {
+          <span className="mb-1 block text-sm font-bold text-text-secondary">
+            ช่องทางดีล (entry channel)
+            <span className="text-danger" aria-hidden="true"> *</span>
+          </span>
+          {/* Why this is asked, so a forced choice does not become a random one. */}
+          <p className="mb-1.5 mt-0 text-2xs text-text-muted">
+            ดีลนี้เข้ามาทางไหน — ใช้อธิบายว่าทำไมดีลถึงข้ามขั้นตอนฝั่งออกแบบ
+          </p>
+          <div
+            className="grid grid-cols-3 gap-1.5"
+            role="radiogroup"
+            aria-label="ช่องทางดีล"
+            aria-required="true"
+            aria-invalid={fieldErrors.entryChannel ? true : undefined}
+            aria-describedby={fieldErrors.entryChannel ? fieldErrorId('entry-channel') : undefined}
+          >
+            {ENTRY_CHANNEL_OPTIONS.map((option, index) => {
               const selected = entryChannel === option.code;
               return (
                 <button
@@ -1168,9 +1204,19 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                   type="button"
                   role="radio"
                   aria-checked={selected}
-                  onClick={() => setEntryChannel(option.code)}
+                  ref={index === 0 ? (node) => { fieldRefs.current.entryChannel = node; } : undefined}
+                  onClick={() => { setEntryChannel(option.code); clearFieldError('entryChannel'); }}
                   className={`rounded-md border px-1.5 py-2.5 text-center text-xs font-extrabold leading-tight ${
-                    selected ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface text-text-secondary'
+                    selected
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : entryChannel
+                        // A choice HAS been made, just not this one — plain solid, as before.
+                        ? 'border-border bg-surface text-text-secondary'
+                        // Nothing chosen yet. Dashed is this app's "not yet decided" idiom
+                        // (HubRow's incomplete check circle, the empty-state boxes, the add
+                        // pills) — it makes the blank state read as awaiting an answer rather
+                        // than as a broken control, and it clears itself the moment one lands.
+                        : 'border-dashed border-border-strong bg-surface text-text-secondary'
                   }`}
                 >
                   {option.label}
@@ -1179,6 +1225,11 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               );
             })}
           </div>
+          {fieldErrors.entryChannel ? (
+            <p id={fieldErrorId('entry-channel')} role="alert" className="mx-0 mb-0 mt-1.5 text-2xs font-bold text-danger">
+              {fieldErrors.entryChannel}
+            </p>
+          ) : null}
         </div>
 
         {!selectedCustomer ? (

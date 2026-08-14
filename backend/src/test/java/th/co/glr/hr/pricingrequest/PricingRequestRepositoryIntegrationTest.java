@@ -165,33 +165,20 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
     }
 
     @Test
-    void transition_readyForCeoReviewToCostingInProgress_isNoLongerPermitted() {
-        // Step 3 (design corrections 3+4): a submitted costing must be genuinely immutable once
-        // READY_FOR_CEO_REVIEW, so this direct reopen (Costing v2 path, commit 5) is removed —
-        // the only route back to COSTING_IN_PROGRESS now goes through the CEO explicitly
-        // returning the request (CEO_REVIEWING -> COSTING_REVISION_REQUIRED -> COSTING_IN_PROGRESS,
-        // see the next test).
+    void transition_readyForCeoReviewToAwaitingFactoryResponse_isPermittedByTheCanonicalMap() {
+        // V141 ("CEO owns costing"): this exact edge existed once before (Costing v2 path, commit
+        // 5) and was removed because it let Import silently reopen a SUBMITTED costing with no
+        // CEO action. V141 reintroduces it for a different reason — there is no submitted-costing
+        // row sitting around any more for a factory-quote revision to mark "stale"
+        // (markOpenCostingsStale, deleted); FactoryQuoteService.receive()'s revision branch pulls
+        // the REQUEST back here instead when a revision arrives while READY_FOR_CEO_REVIEW.
+        // Repository-level proof that transition() actually persists this against a real Postgres
+        // row — PricingRequestStatusTest pins the same edge at the pure-function level.
         long id = createDraft();
         jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
             Map.of("status", PricingRequestStatus.READY_FOR_CEO_REVIEW, "id", id));
 
-        assertThatThrownBy(() -> requests.transition(id, PricingRequestStatus.READY_FOR_CEO_REVIEW,
-            PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null))
-            .isInstanceOf(IllegalStateException.class);
-
-        assertThat(requests.findSummary(id).orElseThrow().status()).isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
-    }
-
-    @Test
-    void transition_costingRevisionRequiredToCostingInProgress_isPermittedByTheCanonicalMap() {
-        // The Step 3 replacement: repository-level proof that the single named return-to-Import
-        // state (COSTING_REVISION_REQUIRED) can transition on to COSTING_IN_PROGRESS, the same
-        // way READY_FOR_CEO_REVIEW used to before this branch's change.
-        long id = createDraft();
-        jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
-            Map.of("status", PricingRequestStatus.COSTING_REVISION_REQUIRED, "id", id));
-
-        int rows = requests.transition(id, PricingRequestStatus.COSTING_REVISION_REQUIRED,
+        int rows = requests.transition(id, PricingRequestStatus.READY_FOR_CEO_REVIEW,
             PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
 
         assertThat(rows).isEqualTo(1);
@@ -199,19 +186,48 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
     }
 
     @Test
-    void cancelForDeadDeal_cancelsFromReadyForCeoReview_aStatusTheCanonicalMapForbidsANormalCancelFrom() {
-        // The one intentional bypass of PricingRequestStatus.canTransition: a dead-deal cascade
-        // must be able to cancel from READY_FOR_CEO_REVIEW even though transition() would now
-        // reject READY_FOR_CEO_REVIEW -> CANCELLED as illegal (only SUPERSEDED/COSTING_IN_PROGRESS
-        // are reachable from there for a live user action).
+    void transition_ceoReviewingToAwaitingFactoryResponse_isPermittedByTheCanonicalMap() {
+        // V141 ("CEO owns costing"): the single named return-to-Import edge now
+        // (PricingDecisionService.returnToImport) — repository-level proof that transition()
+        // persists it, replacing the retired CEO_REVIEWING -> COSTING_REVISION_REQUIRED edge this
+        // test used to pin (COSTING_REVISION_REQUIRED itself is gone — see
+        // PricingRequestStatusTest#costingRevisionRequired_statusNoLongerExists). There is no
+        // standalone costing draft any more for Import to revise once returned here; its only
+        // remaining job is to renegotiate/re-mark a factory quote ready, and the CEO's next
+        // startReview recomputes the cost from scratch.
         long id = createDraft();
         jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
-            Map.of("status", PricingRequestStatus.READY_FOR_CEO_REVIEW, "id", id));
+            Map.of("status", PricingRequestStatus.CEO_REVIEWING, "id", id));
+
+        int rows = requests.transition(id, PricingRequestStatus.CEO_REVIEWING,
+            PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
+
+        assertThat(rows).isEqualTo(1);
+        assertThat(requests.findSummary(id).orElseThrow().status()).isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
+    }
+
+    @Test
+    void cancelForDeadDeal_cancelsFromQuotationIssued_aStatusTheCanonicalMapForbidsANormalCancelFrom() {
+        // The one intentional bypass of PricingRequestStatus.canTransition: a dead-deal cascade must
+        // be able to cancel a pricing request from a status no live user action may cancel from.
+        //
+        // This test used to make that point with READY_FOR_CEO_REVIEW. The cancel cutoff (owner
+        // ruling 2026-08-13) made READY_FOR_CEO_REVIEW legitimately cancellable — cancel is now
+        // allowed everywhere up to and including APPROVED_FOR_QUOTATION — so that status no longer
+        // demonstrates a bypass of anything. QUOTATION_ISSUED replaces it, and is the stronger
+        // example: it is exactly where the two paths must diverge. A live user may NOT cancel a
+        // request whose quotation is in the customer's hands (retracting an offer is a commercial
+        // act, routed through the deal or through a revision) — but when the DEAL itself is marked
+        // lost, the cascade must still be able to close the request out. Both halves are asserted
+        // here, in that order.
+        long id = createDraft();
+        jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
+            Map.of("status", PricingRequestStatus.QUOTATION_ISSUED, "id", id));
         assertThatThrownBy(() -> requests.transition(
-            id, PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.CANCELLED, null, salesActorId))
+            id, PricingRequestStatus.QUOTATION_ISSUED, PricingRequestStatus.CANCELLED, null, salesActorId))
             .isInstanceOf(IllegalStateException.class);
 
-        int rows = requests.cancelForDeadDeal(id, PricingRequestStatus.READY_FOR_CEO_REVIEW, salesActorId);
+        int rows = requests.cancelForDeadDeal(id, PricingRequestStatus.QUOTATION_ISSUED, salesActorId);
 
         assertThat(rows).isEqualTo(1);
         PricingRequestSummaryDto cancelled = requests.findSummary(id).orElseThrow();

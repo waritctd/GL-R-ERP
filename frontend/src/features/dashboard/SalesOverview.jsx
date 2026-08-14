@@ -10,38 +10,9 @@ import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
 import { StatCard } from '../../components/common/StatCard.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { bangkokMonthStartIso, bangkokTodayIso, formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
-import { monthlyTierBase, round2, tierBreakdown } from '../commissions/commissionCalc.js';
 import { followUpStatus, nextSalesAction, sortWorklist, SALES_ACTION } from '../tickets/salesActions.js';
 
-// Mirrors CommissionPage.jsx's local MANUAL_KIND_LABELS keys, which in turn
-// mirror backend CommissionKind.java's manual-entry constants exactly. Kept
-// as a second small copy (not imported) because CommissionPage.jsx has no
-// exported constant for this — see that file's own comment on why manual
-// entries never feed the tier calculation.
-const MANUAL_COMMISSION_KINDS = new Set(['ADJUSTMENT', 'MANAGER', 'STOCK_BONUS', 'INCENTIVE']);
-
 const FOLLOW_UP_LIST_LIMIT = 6;
-
-/**
- * Sales' own "ค่าคอมเดือนนี้" estimate — mirrors CommissionPage.jsx's
- * `monthlyTierSummary` (isSales branch) exactly: the monthly tier base is the
- * VAT-adjusted, weight-multiplied sum of every non-void/rejected SALE
- * commission's actualReceived, and the estimate adds any already-APPROVED
- * manual entry on top. Not authoritative — HR's payroll-ready run is (see
- * CLAUDE.md's mock-authz note) — this is the same informational mirror
- * CommissionPage already shows sales, just surfaced here too.
- */
-function estimateMonthlyCommission(records) {
-  const weighted = records
-    .filter((record) => !['VOID', 'REJECTED'].includes(record.status) && !MANUAL_COMMISSION_KINDS.has(record.kind))
-    .reduce((sum, record) => sum + Number(record.actualReceived || 0) * Number(record.weightMultiplier || 1), 0);
-  const base = monthlyTierBase(weighted);
-  const { total: tierTotal } = tierBreakdown(base);
-  const manualTotal = records
-    .filter((record) => MANUAL_COMMISSION_KINDS.has(record.kind) && record.status === 'APPROVED')
-    .reduce((sum, record) => sum + Number(record.manualAmount || 0), 0);
-  return { base, estimate: round2(tierTotal + manualTotal) };
-}
 
 function WorklistRow({ deal, action, onClick }) {
   const badgeTone = action.followUp === 'overdue'
@@ -95,9 +66,14 @@ export function SalesOverview({ user, employee }) {
     queryKey: queryKeys.pricingRequestQueue({}),
     queryFn: () => api.pricingRequests.queue({}).then((response) => response.items ?? []),
   });
-  const commissionsQuery = useQuery({
-    queryKey: ['commissions', 'list', 'sales-overview', payrollMonth],
-    queryFn: () => api.commissions.list({ payrollMonth }).then((response) => response.commissions ?? []),
+  // Server-computed monthly commission estimate (CommissionService#monthlySummary) — never
+  // re-derived client-side, so this can never drift from a DB tier-config change the way the
+  // former client-side re-implementation could (see CLAUDE.md's V81 note). Also lighter than the
+  // former api.commissions.list() call it replaces: the panel needs only two totals, not every
+  // record for the month.
+  const commissionSummaryQuery = useQuery({
+    queryKey: ['commissions', 'monthly-summary', payrollMonth],
+    queryFn: () => api.commissions.monthlySummary({ payrollMonth }).then((response) => response.summary),
   });
 
   // useMemo (not a bare `?? []`) so the fallback empty array is referentially
@@ -106,7 +82,6 @@ export function SalesOverview({ user, employee }) {
   // memoization (same convention as TicketListPage's `allDeals`).
   const deals = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
   const pricingRequests = useMemo(() => pricingRequestsQuery.data ?? [], [pricingRequestsQuery.data]);
-  const commissionRecords = useMemo(() => commissionsQuery.data ?? [], [commissionsQuery.data]);
   const loading = ticketsQuery.isLoading || pricingRequestsQuery.isLoading;
 
   const activeDeals = useMemo(() => deals.filter((deal) => deal.lifecycle === 'ACTIVE'), [deals]);
@@ -136,7 +111,10 @@ export function SalesOverview({ user, employee }) {
     .sort((a, b) => new Date(a.nextFollowUpAt) - new Date(b.nextFollowUpAt))
     .slice(0, FOLLOW_UP_LIST_LIMIT), [activeDeals, todayIso]);
 
-  const commission = useMemo(() => estimateMonthlyCommission(commissionRecords), [commissionRecords]);
+  const commission = useMemo(() => ({
+    base: commissionSummaryQuery.data?.commissionableBase ?? 0,
+    estimate: commissionSummaryQuery.data?.totalCommission ?? 0,
+  }), [commissionSummaryQuery.data]);
 
   const greetName = employee?.nickName || employee?.nameTh || user?.name || '';
 

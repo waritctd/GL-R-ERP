@@ -350,27 +350,47 @@ export function leaveStatusLabel(status) {
   return map[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
-// Project sales-pipeline stage -> StatusBadge tone (V50). Canonical source; do
-// not re-add a page-local map for project stage labels elsewhere. Stage order/
-// gates/phases live in features/tickets/stageMeta.js.
+// Project sales-pipeline stage -> StatusBadge tone (V50, widened by V143).
+//
+// Canonical source for the WORDING; do not re-add a page-local map elsewhere. Stage order, phases,
+// gates and the auto-advance flag are NOT here and are not the frontend's to declare — they come
+// from GET /api/meta/deal-stages (see features/tickets/stageCatalog.js).
+//
+// Completeness against the backend's stage list is enforced twice, because a missing label is how
+// the QUOTE_OWNER regression stayed invisible: at runtime by stageMeta.js's
+// assertStageLabelsComplete (throws in dev/test, console.error in prod), and at build time by
+// features/tickets/stageCatalog.test.js, which reads DealStage.java out of the backend source tree
+// and fails if this map does not cover every constant in DealStage.ORDER.
+const DEAL_STAGE_LABELS = {
+  LEAD_APPROACH:       { label: 'เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ', tone: 'neutral' },
+  PRESENTATION:        { label: 'นำเสนอสินค้า', tone: 'info' },
+  SPEC_APPROVED:       { label: 'ผู้ออกแบบอนุมัติสเปค', tone: 'info' },
+  // V143 narrowed S4 to the DESIGNER only and gave the owner their own S5 below. The wording
+  // follows: this stage no longer covers "เจ้าของ".
+  QUOTE_DESIGN_SIDE:   { label: 'เสนอราคาผู้ออกแบบ', tone: 'info' },
+  QUOTE_OWNER:         { label: 'เสนอราคาเจ้าของโครงการ', tone: 'info' },
+  OWNER_SIGNOFF:       { label: 'เจ้าของอนุมัติสเปค', tone: 'success' },
+  AWAITING_BUYER:      { label: 'รอผลประมูล / รอผู้ซื้อ', tone: 'warning' },
+  QUOTE_BUYER:         { label: 'เสนอราคาผู้ซื้อ/ผู้รับเหมา', tone: 'info' },
+  NEGOTIATION:         { label: 'เจรจา ติดตามใบสั่งซื้อ/มัดจำ', tone: 'warning' },
+  ORDER_RECEIVED:      { label: 'ได้รับใบสั่งซื้อ', tone: 'success' },
+  DEPOSIT_RECEIVED:    { label: 'ได้รับเงินมัดจำ', tone: 'success' },
+  PROCUREMENT:         { label: 'จัดซื้อและนำเข้าสินค้า', tone: 'info' },
+  DELIVERY_SCHEDULING: { label: 'นัดส่งสินค้า / นัดรับเงินส่วนที่เหลือ', tone: 'warning' },
+  DELIVERED:           { label: 'ส่งมอบสินค้าครบถ้วน', tone: 'success' },
+  CLOSED_PAID:         { label: 'ปิดงาน — รับเงินครบถ้วน', tone: 'success' },
+};
+
+/** Does this stage code have Thai display copy? The predicate behind the label guard. */
+export function hasDealStageLabel(stage) {
+  return Object.prototype.hasOwnProperty.call(DEAL_STAGE_LABELS, stage);
+}
+
 export function dealStageLabel(stage) {
-  const map = {
-    LEAD_APPROACH:       { label: 'เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ', tone: 'neutral' },
-    PRESENTATION:        { label: 'นำเสนอสินค้า', tone: 'info' },
-    SPEC_APPROVED:       { label: 'ผู้ออกแบบอนุมัติสเปค', tone: 'info' },
-    QUOTE_DESIGN_SIDE:   { label: 'เสนอราคาผู้ออกแบบ/เจ้าของ', tone: 'info' },
-    OWNER_SIGNOFF:       { label: 'เจ้าของอนุมัติสเปค', tone: 'success' },
-    AWAITING_BUYER:      { label: 'รอผลประมูล / รอผู้ซื้อ', tone: 'warning' },
-    QUOTE_BUYER:         { label: 'เสนอราคาผู้ซื้อ/ผู้รับเหมา', tone: 'info' },
-    NEGOTIATION:         { label: 'เจรจา ติดตามใบสั่งซื้อ/มัดจำ', tone: 'warning' },
-    ORDER_RECEIVED:      { label: 'ได้รับใบสั่งซื้อ', tone: 'success' },
-    DEPOSIT_RECEIVED:    { label: 'ได้รับเงินมัดจำ', tone: 'success' },
-    PROCUREMENT:         { label: 'จัดซื้อและนำเข้าสินค้า', tone: 'info' },
-    DELIVERY_SCHEDULING: { label: 'นัดส่งสินค้า / นัดรับเงินส่วนที่เหลือ', tone: 'warning' },
-    DELIVERED:           { label: 'ส่งมอบสินค้าครบถ้วน', tone: 'success' },
-    CLOSED_PAID:         { label: 'ปิดงาน — รับเงินครบถ้วน', tone: 'success' },
-  };
-  return map[stage] ?? { label: stage || '-', tone: 'neutral' };
+  // The fallback renders the raw code rather than throwing: a shipped build must still draw the
+  // deal. It is deliberately ugly, and the guard above is what makes sure nobody has to rely on
+  // seeing it — assertStageLabelsComplete has already thrown in dev/test by this point.
+  return DEAL_STAGE_LABELS[stage] ?? { label: stage || '-', tone: 'neutral' };
 }
 
 // Project lost reason -> StatusBadge tone (V50). Canonical source.
@@ -438,13 +458,20 @@ export function overdueBadgeLabel(overdue) {
     : { label: 'ยังไม่เกินกำหนด', tone: 'neutral' };
 }
 
+/**
+ * Labels for sales.ticket.fulfillment_status — exactly FulfilmentStatus.java's seven codes.
+ *
+ * `PICKED_UP` is deliberately absent, and is NOT the same thing as the `PICKED_UP` in
+ * DealHistoryPanel's event-kind map ('รับมอบหมาย' — Import took the ticket). That one is a
+ * TicketEventKind and is live; this axis is fulfillment_status, which never held it. Both
+ * `PICKED_UP` and `CUSTOMS_CLEARANCE` were deleted from FulfilmentStatus.java by 7991b9f1 as
+ * dead constants. Do not re-add either here on the strength of seeing the name elsewhere.
+ */
 export function fulfilmentStatusLabel(value) {
   const map = {
     IR_ISSUED: { label: 'ออกคำขอนำเข้าแล้ว', tone: 'info' },
     IR_SENT: { label: 'ส่งคำขอนำเข้าแล้ว', tone: 'info' },
-    PICKED_UP: { label: 'รับจากผู้ผลิตแล้ว', tone: 'info' },
     SHIPPING: { label: 'สินค้าเดินทาง', tone: 'info' },
-    CUSTOMS_CLEARANCE: { label: 'รอออกของ', tone: 'warning' },
     GOODS_RECEIVED: { label: 'สินค้าถึงโกดังแล้ว', tone: 'success' },
     FROM_STOCK: { label: 'สินค้าจากสต็อก', tone: 'success' },
     PARTIALLY_DELIVERED: { label: 'ส่งมอบบางส่วน', tone: 'warning' },
@@ -460,6 +487,8 @@ export function entryChannelLabel(value) {
     DESIGNER_LED: 'ผู้ออกแบบนำดีล',
     OWNER_DIRECT: 'เจ้าของติดต่อโดยตรง',
     BUYER_DIRECT: 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง',
+    // Stored-only (V144 default): no channel was ever stated. Never offered as a choice.
+    UNSPECIFIED: 'ยังไม่ระบุช่องทาง',
   };
   return { label: map[value] ?? value ?? '-', tone: 'neutral' };
 }

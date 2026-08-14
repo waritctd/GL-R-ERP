@@ -8,7 +8,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
 import { nextFulfilmentActionCode } from './importActions.js';
-import { PROCUREMENT_SUBSTEPS } from './stageMeta.js';
+import { procurementPath } from './stageMeta.js';
 
 const STEP_ROLE_TH = { import: 'ฝ่ายนำเข้า', ceo: 'CEO', sales: 'ฝ่ายขาย', account: 'ฝ่ายบัญชี' };
 
@@ -40,11 +40,19 @@ function StepNumber({ no }) {
 // this rendering (read-only, inside its "inner journey" chip strip) per the
 // same precedent Slice S3 set for the deposit-policy chip; this is the
 // action-bearing version.
-function SubstepChips({ currentCode }) {
-  const currentIdx = PROCUREMENT_SUBSTEPS.findIndex((s) => s.code === currentCode);
+function SubstepChips({ currentCode, fromStock = null }) {
+  // Issue #730: this used to walk the flat PROCUREMENT_SUBSTEPS list and mark everything before
+  // the current code "done". That list is a lookup table, not a path — FROM_STOCK sits at index 4,
+  // so a from-stock deal rendered IR-issued / ordered / shipping / goods-received in green, four
+  // milestones it never performed and, per issueImportRequest's own guard, never could have.
+  // procurementPath() returns the journey this deal is actually on, so index-as-progress is true
+  // again. Same defect PR #715 fixed for PICKED_UP/CUSTOMS_CLEARANCE — but FROM_STOCK is written
+  // by reserveStock, so this instance was live, and PR #706 made it more common.
+  const steps = procurementPath(currentCode, fromStock);
+  const currentIdx = steps.findIndex((s) => s.code === currentCode);
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      {PROCUREMENT_SUBSTEPS.map((step, i) => {
+      {steps.map((step, i) => {
         const done = currentIdx >= 0 && i < currentIdx;
         const current = i === currentIdx;
         return (
@@ -112,7 +120,14 @@ export function DealFulfilmentPanel({
 
   const totalOrdered = items.reduce((sum, item) => sum + Number(item.qty || 0), 0);
   const totalDelivered = items.reduce((sum, item) => sum + Number(item.qtyDelivered || 0), 0);
+  const totalFromStock = items.reduce((sum, item) => sum + Number(item.qtyFromStock || 0), 0);
   const deliveryProgress = totalOrdered > 0 ? Math.min(100, Math.round((totalDelivered / totalOrdered) * 100)) : 0;
+  // Which journey this deal walked, for SubstepChips (issue #730). Once the deal reaches a
+  // DELIVERY state its fulfillmentStatus no longer says, but the declaration itself survives on
+  // the lines: reserveStock writes qtyFromStock, and only FULL coverage sets FROM_STOCK. So full
+  // coverage => the from-stock branch; anything less => the import sequence really did run for
+  // the remainder. `null` (no items loaded yet) means "don't guess", not "import".
+  const fromStock = totalOrdered > 0 ? totalFromStock >= totalOrdered : null;
 
   const deliveriesQuery = useQuery({
     queryKey: queryKeys.ticketDeliveries(ticketId),
@@ -187,7 +202,20 @@ export function DealFulfilmentPanel({
     markIrSent:         hasAction('IR_SENT') && fulfilmentActionCode === 'markIrSent' && isFulfilment,
     markShipping:       hasAction('SHIPPING') && fulfilmentActionCode === 'markShipping' && isFulfilment,
     markGoodsReceived:  hasAction('GOODS_RECEIVED') && fulfilmentActionCode === 'markGoodsReceived' && isFulfilment,
-    reserveStock:       hasAction('RESERVE_STOCK') && isFulfilment,
+    // The ONE entry here with no local role check, deliberately (issue #732). PR #706 widened the
+    // backend gate to the deal owner — TicketService.canDeclareStockCoverage is
+    // FULFILMENT_ROLES ∪ (SALES_ROLES ∧ createdById == actor.id) — and actions() advertises
+    // RESERVE_STOCK off that same predicate. ANDing the server's answer with the pre-#706 role set
+    // meant the server offered the action and the frontend threw it away, so the one role the
+    // workflow was built for could not start it. TicketService's own Javadoc names this failure
+    // mode: gate and advertisement are one predicate so they "cannot drift into offering an action
+    // that immediately 403s", and applying it unevenly leaves a capability "live but invisible".
+    //
+    // hasAction('RESERVE_STOCK') already carries the ownership rule, the S10 stage floor and the
+    // remaining-delivery check, because the server computed all three. Re-deriving any of them
+    // here is what rots. The other six entries KEEP isFulfilment — their backend gates really are
+    // FULFILMENT_ROLES-only, so dropping it there would offer buttons that 403.
+    reserveStock:       hasAction('RESERVE_STOCK'),
     recordDelivery:     hasAction('RECORD_PARTIAL_DELIVERY') && isFulfilment,
     completeDelivery:   hasAction('COMPLETE_DELIVERY') && isFulfilment,
   };
@@ -243,7 +271,7 @@ export function DealFulfilmentPanel({
             {fs ? <StatusBadge tone={fsLabel.tone}>{fsLabel.label}</StatusBadge> : null}
           </div>
 
-          <SubstepChips currentCode={fs} />
+          <SubstepChips currentCode={fs} fromStock={fromStock} />
 
           <div className="flex flex-wrap gap-2">
             {can.issueImportRequest ? (

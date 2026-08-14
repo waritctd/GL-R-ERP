@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import imageCompression from 'browser-image-compression';
@@ -16,17 +16,6 @@ import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { commissionStatusLabel as statusInfo, dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
-import {
-  invoiceCalculation,
-  monthlyTierBase,
-  round2,
-  tierBreakdown,
-  // Issue #405: the auto-computed INCENTIVE ladder, mirrored here so the sales rep's own
-  // informational monthly summary matches HR's authoritative payrollReadySummary exactly.
-  monthlyIncentive,
-  INCENTIVE_LADDER,
-  INCENTIVE_STOCK_BONUS_EFFECTIVE_MONTH,
-} from './commissionCalc.js';
 
 const today = new Date().toISOString().slice(0, 10);
 const thisMonth = new Date().toISOString().slice(0, 7);
@@ -91,6 +80,18 @@ function kindLabel(kind) {
 function numberOrNull(value) {
   if (value === '' || value === null || value === undefined) return null;
   return Number(value);
+}
+
+// Debounces `value` by `delayMs` -- mirrors OvertimePanel.jsx/LeaveRequestPage.jsx's identically
+// named private helper (same reason: don't fire one request per keystroke). Kept as its own small
+// local copy rather than a new shared hook module for a four-line function.
+function useDebouncedValue(value, delayMs) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return debounced;
 }
 
 /**
@@ -163,7 +164,11 @@ function CommissionCalcBreakdown({ record }) {
           <code className="font-mono">{formatMoney(record.actualReceived)}</code>
         </div>
         <div className="flex items-center justify-between gap-3 text-text-muted">
-          <span>÷ 1.07 (แยกภาษีมูลค่าเพิ่ม)</span>
+          {/* The VAT divisor itself is a policy number owned by CommissionCalculator, so it is
+              not restated here — both figures either side of this line are server-computed
+              columns off the record, and naming the divisor in JS is exactly the kind of stale
+              copy this branch removed from the monthly-tier panel's below-floor badge. */}
+          <span>÷ แยกภาษีมูลค่าเพิ่ม (VAT)</span>
           <span />
         </div>
         <div className="flex items-center justify-between gap-3 font-bold">
@@ -285,6 +290,10 @@ export function CommissionPage({ user, showToast }) {
   const [month, setMonth] = useState(thisMonth);
   const [records, setRecords] = useState([]);
   const [summary, setSummary] = useState(null);
+  // Sales-only monthly tier summary — server-computed (CommissionService#monthlySummary), fetched
+  // alongside `records` by the same load()/month effect below. Never re-derived client-side; a
+  // load failure leaves this null and the panel simply doesn't render (see load()).
+  const [monthlyTierSummary, setMonthlyTierSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -301,6 +310,12 @@ export function CommissionPage({ user, showToast }) {
   // sales_manager/ceo: review-queue inline input edit
   const [editingId, setEditingId] = useState(null);
   const [deductionDraft, setDeductionDraft] = useState(emptyDeductionDraft);
+  // Live preview of the edited invoice's recompute — server-computed (CommissionService#simulate)
+  // rather than client math; see the debounced effect below. Seeded from the record's own
+  // last-persisted figures on beginEdit (no math, just a field read) so the panel shows a sensible
+  // value immediately instead of stale zeros.
+  const [deductionPreview, setDeductionPreview] = useState({ actualReceived: 0, commissionableBase: 0 });
+  const deductionPreviewRequestId = useRef(0);
 
   const [expandedId, setExpandedId] = useState(null);
   const [clawbackId, setClawbackId] = useState(null); // record id pending clawback reason, or null
@@ -357,6 +372,17 @@ export function CommissionPage({ user, showToast }) {
       } finally {
         setLoading(false);
       }
+      if (isSales) {
+        // Server-computed monthly tier summary (CommissionService#monthlySummary) — never
+        // re-derived client-side. A failure here must not take down the records table above: it
+        // is a secondary, informational panel, so on error the panel just stays hidden.
+        try {
+          const summaryResponse = await api.commissions.monthlySummary({ payrollMonth: month });
+          setMonthlyTierSummary(summaryResponse.summary);
+        } catch {
+          setMonthlyTierSummary(null);
+        }
+      }
       return;
     }
     // account: GET /api/commissions has no route for this role on the real backend (see
@@ -373,11 +399,20 @@ export function CommissionPage({ user, showToast }) {
   // scoping surfaces are money-PENDING deals, so a CLOSED_PAID deal (already fully paid) often
   // will not appear here — see createFromDeal's NOTE above the mock implementation. Manual
   // ticket-id lookup (below) always works regardless; this list is a nice-to-have on top.
+  //
+  // Also drops any ticket whose commissionRecorded is already true (TicketSummaryDto
+  // .commissionRecorded, issue #736): a deal that already has a live commission is not actually
+  // "eligible" any more, and this mirrors the same flag accountActions.js#nextAccountAction now
+  // checks for its worklist CTA, so the picker and the worklist can't disagree about which
+  // CLOSED_PAID deals still need one recorded.
   useEffect(() => {
     if (!canCreateFromDeal) return;
     let cancelled = false;
     api.tickets.list({ salesStage: 'CLOSED_PAID' })
-      .then((response) => { if (!cancelled) setEligibleTickets(response.tickets ?? []); })
+      .then((response) => {
+        if (cancelled) return;
+        setEligibleTickets((response.tickets ?? []).filter((ticket) => !ticket.commissionRecorded));
+      })
       .catch(() => { if (!cancelled) setEligibleTickets([]); });
     return () => { cancelled = true; };
   }, [canCreateFromDeal]);
@@ -422,35 +457,6 @@ export function CommissionPage({ user, showToast }) {
     const managerApproved = records.filter((item) => item.status === 'MANAGER_APPROVED').length;
     return { base, approved, submitted, managerApproved };
   }, [records]);
-
-  // Sales-only monthly tier breakdown: informational mirror of CommissionCalculator, computed
-  // client-side from exactly the records the sales rep can see (backend already scopes list() to
-  // their own). Not authoritative — HR's payroll-ready run is — but gives the tier-by-tier
-  // context the calc-detail waterfall alone can't (a single invoice's own base vs. the month's).
-  const monthlyTierSummary = useMemo(() => {
-    if (!isSales) return null;
-    const weighted = records
-      .filter((item) => !['VOID', 'REJECTED'].includes(item.status) && !isManualKind(item.kind))
-      .reduce((sum, item) => sum + Number(item.actualReceived || 0) * Number(item.weightMultiplier || 1), 0);
-    const base = monthlyTierBase(weighted);
-    const tierResult = tierBreakdown(base);
-    // Manual entries (feat/commission-manual-adjustments) never feed the tier calc — only an
-    // APPROVED manual amount is added on top of the tier commission for the rep's own final
-    // total, mirroring CommissionService#payrollReadySummary exactly (see the manualTotals map
-    // there). A MANAGER_APPROVED manual entry (still awaiting CEO sign-off) does not count yet.
-    const manualTotal = records
-      .filter((item) => isManualKind(item.kind) && item.status === 'APPROVED')
-      .reduce((sum, item) => sum + Number(item.manualAmount || 0), 0);
-    // Issue #405: the auto-computed INCENTIVE ladder, informational-mirror of
-    // CommissionService#computeRepPayrollCommissions -- zero before the 2026-08-01 fix-forward
-    // effective month, and suppressed (zero) when the rep already has an APPROVED manual
-    // INCENTIVE entry this month, same double-count guard as the authoritative HR view.
-    const manualIncentiveApproved = records.some((item) => item.kind === 'INCENTIVE' && item.status === 'APPROVED');
-    const incentiveAmount = (month < INCENTIVE_STOCK_BONUS_EFFECTIVE_MONTH || manualIncentiveApproved)
-      ? 0
-      : monthlyIncentive(base, INCENTIVE_LADDER);
-    return { base, ...tierResult, manualTotal, incentiveAmount, total: round2(tierResult.total + incentiveAmount + manualTotal) };
-  }, [records, isSales, month]);
 
   function canManagerReview(record) {
     return record.status === 'SUBMITTED' && user.role === 'sales_manager';
@@ -860,15 +866,64 @@ export function CommissionPage({ user, showToast }) {
       weightMultiplier: Number(record.weightMultiplier || 1),
       reason: '',
     });
+    // Seed the preview with the record's own last-persisted figures (a plain field read, no
+    // math) so the panel shows a sensible value immediately, before the debounced simulate()
+    // call below has had a chance to run.
+    setDeductionPreview({
+      actualReceived: Number(record.actualReceived || 0),
+      commissionableBase: Number(record.commissionableBase || 0),
+    });
   }
 
   function updateDeductionDraft(field, value) {
     setDeductionDraft((current) => ({ ...current, [field]: value }));
   }
 
-  // Live preview only — the server always recomputes the final commission from whatever it
-  // persists; this never gets sent as-is, only the individual input fields do.
-  const deductionPreview = useMemo(() => invoiceCalculation(deductionDraft), [deductionDraft]);
+  const debouncedDeductionDraft = useDebouncedValue(deductionDraft, 300);
+
+  // Live preview only — server-computed (CommissionService#simulate) as the manager edits, so it
+  // can never drift from the real calculation; this draft never gets sent as-is, only the
+  // individual input fields do (see saveDeductions). Debounced ~300ms so editing doesn't fire one
+  // request per keystroke. A request counter drops a stale, out-of-order response so a slow
+  // earlier reply can never clobber a newer one. Only runs while a row is actually being edited.
+  useEffect(() => {
+    if (editingId == null) return;
+    // The debounced copy lags the live draft by one debounce interval, and `editingId` changing
+    // re-fires this effect immediately — without this guard, opening a row would first simulate
+    // the PREVIOUS row's (or the empty draft's) numbers and flash them into the money preview
+    // before the real values arrive. Wait until the debounce has caught up with the live draft.
+    if (debouncedDeductionDraft !== deductionDraft) return;
+    const editingRecord = records.find((record) => record.id === editingId);
+    if (!editingRecord) return;
+    const requestId = (deductionPreviewRequestId.current += 1);
+    api.commissions.simulate({
+      salesRepId: editingRecord.salesRepId,
+      // CommissionSimulatorRequest.payrollMonth is a Java LocalDate deserialised by Jackson's
+      // JavaTimeModule (see config/JacksonConfig.java), which requires a full ISO yyyy-MM-dd —
+      // a bare "yyyy-MM" 400s. `month` is a <input type="month"> value, hence the `-01`; this is
+      // the same conversion createManualCommission already does a few hundred lines below.
+      payrollMonth: `${month}-01`,
+      grossAmount: debouncedDeductionDraft.grossAmount,
+      bankFees: debouncedDeductionDraft.bankFees,
+      suspenseVat: debouncedDeductionDraft.suspenseVat,
+      transportFee: debouncedDeductionDraft.transportFee,
+      cutFee: debouncedDeductionDraft.cutFee,
+      shortfall: debouncedDeductionDraft.shortfall,
+      withholdingTax: debouncedDeductionDraft.withholdingTax,
+      overpayment: debouncedDeductionDraft.overpayment,
+    }).then((response) => {
+      if (deductionPreviewRequestId.current !== requestId) return; // superseded by a newer request
+      setDeductionPreview(response.simulation);
+    }).catch(() => {
+      // Keep showing the previous preview values; do not toast on every keystroke.
+    });
+    // `records` is read for the lookup only; re-running per records change (e.g. after an
+    // unrelated save) is unnecessary noise, so it is intentionally omitted below.
+    // `deductionDraft` IS in the deps (the guard above compares against it): each keystroke
+    // re-runs this effect, hits the guard, and returns without a request — the debounce still
+    // does the throttling.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingId, debouncedDeductionDraft, deductionDraft, month]);
 
   async function saveDeductions(id) {
     if (!deductionDraft.reason.trim()) {
@@ -1496,7 +1551,12 @@ function ManagerReviewEditPanel({ record, draft, onChange, preview, saving, onSa
   );
 }
 
-/** sales-only: informational tier-by-tier breakdown of the currently selected payroll month. */
+/**
+ * sales-only: informational tier-by-tier breakdown of the currently selected payroll month.
+ * `summary` is CommissionMonthlySummaryDto exactly, as returned by
+ * GET /api/commissions/monthly-summary (CommissionService#monthlySummary) — every figure here is
+ * server-computed, never re-derived client-side.
+ */
 function MonthlyTierPanel({ summary }) {
   const [open, setOpen] = useState(false);
   return (
@@ -1511,17 +1571,16 @@ function MonthlyTierPanel({ summary }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span>
           <small className="block text-text-muted">ฐานค่าคอมรวมเดือนนี้ (น้ำหนักรวมแล้ว)</small>
-          <code className="font-mono text-base font-bold">{formatMoney(summary.base)}</code>
+          <code className="font-mono text-base font-bold">{formatMoney(summary.commissionableBase)}</code>
         </span>
         <span className="text-right">
           <small className="block text-text-muted">ค่าคอมประมาณการ</small>
-          <code className="font-mono text-base font-bold">{formatMoney(summary.total)}</code>
+          <code className="font-mono text-base font-bold">{formatMoney(summary.totalCommission)}</code>
         </span>
       </div>
       {summary.incentiveAmount ? (
         // Issue #405: the auto-computed INCENTIVE ladder amount, already folded into
-        // "ค่าคอมประมาณการ" on top of the tier commission — informational mirror of
-        // CommissionService#computeRepPayrollCommissions.
+        // "ค่าคอมประมาณการ" on top of the tier commission — server-computed by the same call.
         <div className="mt-2 flex items-center justify-between gap-3 text-sm">
           <span className="text-text-muted">อินเซนทีฟ (นอกขั้นบันได)</span>
           <code className="font-mono">{formatMoney(summary.incentiveAmount)}</code>
@@ -1530,7 +1589,7 @@ function MonthlyTierPanel({ summary }) {
       {summary.manualTotal ? (
         // Manual entries (feat/commission-manual-adjustments) never feed the tier calc above —
         // this is the rep's own APPROVED manual amount, already folded into "ค่าคอมประมาณการ"
-        // on top of the tier commission, same as CommissionService#payrollReadySummary.
+        // on top of the tier commission.
         <div className="mt-2 flex items-center justify-between gap-3 text-sm">
           <span className="text-text-muted">ค่าคอมปรับปรุง/โบนัสที่อนุมัติแล้ว (นอกขั้นบันได)</span>
           <code className={cn('font-mono', summary.manualTotal < 0 && 'text-danger')}>
@@ -1539,35 +1598,46 @@ function MonthlyTierPanel({ summary }) {
         </div>
       ) : null}
       {summary.belowFloor ? (
+        // The floor amount itself is a policy number that must not live in the frontend — see
+        // CLAUDE.md's mock API contract note on commission constants. Named generically here.
         <p className="mt-2">
-          <StatusBadge tone="neutral">ฐานเดือนนี้ต่ำกว่า 50,000 บาท — ยังไม่มีค่าคอมตามเกณฑ์นโยบาย</StatusBadge>
+          <StatusBadge tone="neutral">ฐานเดือนนี้ต่ำกว่าเกณฑ์ขั้นต่ำตามนโยบาย — ยังไม่มีค่าคอมในเดือนนี้</StatusBadge>
         </p>
       ) : null}
       {open ? (
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="text-text-muted">
-                <th className="pb-1 pr-3 font-semibold">ขั้น</th>
-                <th className="pb-1 pr-3 font-semibold">ช่วง (บาท)</th>
-                <th className="pb-1 pr-3 font-semibold text-right">อัตรา</th>
-                <th className="pb-1 font-semibold text-right">ค่าคอมในขั้นนี้</th>
-              </tr>
-            </thead>
-            <tbody>
-              {summary.rows.map((row) => (
-                <tr key={row.tierNumber} className="border-t border-border">
-                  <td className="py-1 pr-3">{row.tierNumber}</td>
-                  <td className="py-1 pr-3">
-                    {formatMoney(row.lowerBound)} – {row.upperBound == null ? 'ขึ้นไป' : formatMoney(row.upperBound)}
-                  </td>
-                  <td className="py-1 pr-3 text-right">{row.ratePercent.toFixed(2)}%</td>
-                  <td className="py-1 text-right"><code className="font-mono">{formatMoney(row.commission)}</code></td>
+        summary.tiers.length === 0 ? (
+          // Mock mode (VITE_USE_MOCKS=true) does not know the real tier config — see mockApi.js's
+          // commissions.monthlySummary fixture. The totals above still render (they are the mock's
+          // own canned/summed figures); only the per-tier breakdown is unavailable.
+          <p className="mt-3 text-sm text-text-muted">ไม่มีรายละเอียดขั้นบันไดค่าคอมให้แสดงในขณะนี้</p>
+        ) : (
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="text-text-muted">
+                  <th className="pb-1 pr-3 font-semibold">ขั้น</th>
+                  <th className="pb-1 pr-3 font-semibold">ช่วง (บาท)</th>
+                  <th className="pb-1 pr-3 font-semibold text-right">อัตรา</th>
+                  <th className="pb-1 font-semibold text-right">ค่าคอมในขั้นนี้</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {summary.tiers.map((row) => (
+                  <tr key={row.tierNumber} className="border-t border-border">
+                    <td className="py-1 pr-3">{row.tierNumber}</td>
+                    <td className="py-1 pr-3">
+                      {formatMoney(row.lowerBound)} – {row.upperBound == null ? 'ขึ้นไป' : formatMoney(row.upperBound)}
+                    </td>
+                    {/* ratePercent arrives as a JSON number/string from a server BigDecimal —
+                        Number(...) first so a string value doesn't throw calling .toFixed. */}
+                    <td className="py-1 pr-3 text-right">{Number(row.ratePercent).toFixed(2)}%</td>
+                    <td className="py-1 text-right"><code className="font-mono">{formatMoney(row.commission)}</code></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
       ) : null}
     </Panel>
   );

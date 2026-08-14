@@ -48,30 +48,47 @@ files into this folder **first**, from private storage you control.
 Use the script; it does the fetch, the safety checks, the build and the push:
 
 ```bash
-export GLR_IMAGE_REPO=docker.io/yourorg/glr-hr-backend   # must match render.yaml's image.url
+export GLR_IMAGE_REPO=ghcr.io/waritctd/glr-hr-backend   # must match render.yaml's image.url, minus the tag
 export GLR_FONTS_URL="https://your-private-storage/thai-fonts.tar.gz?<signature>"
-./scripts/build-push-backend-image.sh v2026-08-10 --also-latest
+./scripts/build-push-backend-image.sh v2026-08-14
 ```
 
 `GLR_FONTS_URL` is optional — leave it unset and populate `backend/fonts/` by hand instead. The
 script refuses to build on an empty folder, and refuses outright if the font files have somehow
 become git-tracked.
 
-### What the build verifies, and why it takes two checks
+Pushing to GHCR needs a token with `write:packages` — `gh`'s default scopes do **not** include it
+(`gh auth refresh -h github.com -s write:packages,read:packages`, then
+`gh auth token | docker login ghcr.io -u <user> --password-stdin`).
+
+`--also-latest` exists but prefer not to use it here: `render.yaml` pins an explicit tag so a deploy
+is a deliberate act, and a moving `:latest` undermines that.
+
+### What the build verifies: every FAMILY + STYLE pair, not every family
 
 ```
-ARG ALLOW_MISSING_FONTS=false
-RUN fc-cache -f -v && ...
-      fc-list  | grep -qi "$f"        # 1. is a font by this NAME registered?
-      fc-match "$f" family            # 2. does it RESOLVE to itself, or silently fall back?
+fc-match --format '%{family[0]}|%{style[0]}' "Angsana New:style=Bold"   # must print exactly "Angsana New|Bold"
 ```
 
-1. **`fc-list`** catches a truncated or partial fetch — a family that never registered.
-2. **`fc-match`** is the one that catches *substitution*, and it is the check this repo was
-   missing. `fc-match` never fails: ask it for a font it does not have and it cheerfully returns
-   whatever it would substitute. On a fontless image `fc-match "Angsana New" family` prints
-   `DejaVu Sans` and `fc-match "Arial" family` prints `Liberation Sans` — measured, not assumed.
-   That is exactly the production defect, and check 1 alone cannot see it.
+`fc-match` never fails. Ask it for something absent and it cheerfully returns whatever it would
+substitute — and it substitutes the two halves **independently**:
+
+| asked for | got | what fell back |
+|---|---|---|
+| `Nonexistent Font:style=Bold` | `Verdana\|Bold` | family |
+| `BrowalliaUPC:style=Bold` | `BrowalliaUPC\|Regular` | **style only — family held** |
+
+That second row is why a family-only check is not enough. It is not hypothetical: this folder
+carried `angsa.ttf` but no `angsab.ttf` for months. `fc-list` found "Angsana New" and
+`fc-match "Angsana New"` resolved to itself, so the old family-only loop passed — while all three
+**bold** Angsana cells in `quotation_template.xls` (company header, ใบเสนอราคา title, totals row)
+rendered in a substitute. Comparing the `family|style` pair is what catches it.
+
+The guard was mutation-checked on 2026-08-14: removing `angsab.ttf` fails the build with
+`asked fontconfig for 'Angsana New|Bold' and got 'Angsana New|Regular'`, and only that face fails.
+
+To re-derive the required list rather than trusting this table, read the workbook's own BIFF font
+table — `bls >= 700` is bold. The list above was confirmed that way, not just from documentation.
 
 **An empty `backend/fonts/` WARNS and continues.** #670 made it fatal — the right instinct, since
 a fontless image renders customer documents in substitutes and a build-log warning nobody reads is
@@ -83,9 +100,19 @@ carry fonts.
 The substitution guard from #670 is **kept**: if fonts are supplied and fontconfig substitutes one
 anyway, the build fails.
 
-**Render (hosted): builds from source again, and therefore ships substitute fonts.** `render.yaml`
-is back on `runtime: docker` + `dockerfilePath`. `scripts/build-push-backend-image.sh` is left in
-place and working — restoring `runtime: image` with a real `image.url` is what finishes #666.
+**Render (hosted): runs a pre-built image, so the fonts are present.** `render.yaml` is on
+`runtime: image` pointing at a private GHCR tag built by `scripts/build-push-backend-image.sh`.
+Render builds from a fresh clone where this folder is always empty, so a Render-built image can
+never carry the fonts — that is the whole reason for the pre-built route.
+
+Two things that bite if forgotten:
+
+- **`--platform linux/amd64` is mandatory.** Render runs amd64. This repo is developed on Apple
+  Silicon, where `docker build` defaults to arm64 and produces an image Render pulls and then
+  cannot start, failing at deploy time long after the build looked fine. The script passes it.
+- **The registry must be PRIVATE and Render needs credentials.** The image embeds licensed fonts,
+  and this repo is public. Render pulls via a registry credential named `ghcr-glr` (Dashboard →
+  Settings → Registry Credentials) holding a GitHub PAT with `read:packages`.
 
 **On-prem (future):** natural fit — your build server/CI job fetches `thai-fonts.tar.gz` into
 `backend/fonts/` as a step before `docker build`, exactly like the script does.

@@ -1,67 +1,25 @@
-// Canonical metadata for the 14-stage DEAL pipeline (V50): one ticket = one
-// deal, and these stages are what it takes to close it. Mirrors DealStage /
-// DealLostReason / TicketService stage gates (backend ticket/ package).
-// Business cross-reference to the boss's S1–S20 sheet lives in DealStage.java.
+// Thai display copy for the deal pipeline — and nothing else.
 //
-// NOTE: gate logic here only drives which buttons/options the UI shows — the
-// backend re-checks everything. Mock authz approximates the Java service and
-// is NOT authoritative (see CLAUDE.md).
+// WHAT LIVES HERE: labels. Wording is presentation, and moving it to the backend would couple a
+// copy edit to a backend deploy, so it stays.
+//
+// WHAT NO LONGER LIVES HERE, and must never come back:
+//   * the stage list, their numbers, phases and write gates — GET /api/meta/deal-stages, read via
+//     stageCatalog.js. The literal that used to be here was a copy of DealStage.ORDER plus a copy
+//     of TicketService's three target-stage sets, and it had silently gone stale.
+//   * canSetStage / allowedTargetStages / canMarkLost / isDealOwner — those were a second
+//     implementation of TicketService.requireStageWriteAccess and requireDealOwnership. The
+//     backend now ships a verdict per stage on GET /api/tickets/{id}/actions (`stageDecisions`),
+//     and MARK_LOST is already an entry in `availableActions`. A UI that re-derives an
+//     authorization rule is a UI that can disagree with the server, and this one did.
+//   * isRoutineBackwardMove and the `distance > 1` skip test — one decision, DealStage
+//     .requiresJustification, reported per stage as `requiresReason`. The copies here demanded a
+//     written reason for three of the business's four normal routes, which the backend had already
+//     stopped requiring.
+//
+// The rule for anything added below: if the backend also decides it, it does not belong here.
 
-export const SALES_PHASES = [
-  { id: 1, name: 'การเข้าถึงโครงการ', helper: 'Lead' },
-  { id: 2, name: 'งานสเปค', helper: 'Specification' },
-  { id: 3, name: 'ประมูลและเจรจา', helper: 'Bidding' },
-  { id: 4, name: 'คำสั่งซื้อและนำเข้า', helper: 'Order & import' },
-  { id: 5, name: 'ส่งมอบและปิดงาน', helper: 'Delivery & closing' },
-];
-
-// gate: who may set the stage MANUALLY (owner = the deal's sales rep, i.e.
-// ticket.createdById;
-// sales_manager and ceo always pass sales-gated stages; ceo passes everything).
-// auto: normally advanced by the ticket flow — the UI never offers a one-click
-// advance into these, and the edit modal explains where they come from.
-export const SALES_STAGES = [
-  { code: 'LEAD_APPROACH',       no: 1,  phase: 1, gate: 'sales',   auto: false },
-  { code: 'PRESENTATION',        no: 2,  phase: 1, gate: 'sales',   auto: false },
-  { code: 'SPEC_APPROVED',       no: 3,  phase: 2, gate: 'sales',   auto: false },
-  { code: 'QUOTE_DESIGN_SIDE',   no: 4,  phase: 2, gate: 'sales',   auto: false },
-  { code: 'OWNER_SIGNOFF',       no: 5,  phase: 2, gate: 'sales',   auto: false },
-  { code: 'AWAITING_BUYER',      no: 6,  phase: 3, gate: 'sales',   auto: false },
-  { code: 'QUOTE_BUYER',         no: 7,  phase: 3, gate: 'sales',   auto: false },
-  { code: 'NEGOTIATION',         no: 8,  phase: 3, gate: 'sales',   auto: false },
-  { code: 'ORDER_RECEIVED',      no: 9,  phase: 4, gate: 'sales',   auto: true,
-    autoHint: 'อัปเดตอัตโนมัติเมื่อฝ่ายขายยืนยันใบสั่งซื้อของดีลนี้' },
-  { code: 'DEPOSIT_RECEIVED',    no: 10, phase: 4, gate: 'account', auto: true,
-    autoHint: 'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับมัดจำของดีลนี้' },
-  { code: 'PROCUREMENT',         no: 11, phase: 4, gate: 'import',  auto: true,
-    autoHint: 'อัปเดตอัตโนมัติเมื่อฝ่ายนำเข้าออกใบขอซื้อ (IR) ของดีลนี้' },
-  { code: 'DELIVERY_SCHEDULING', no: 12, phase: 5, gate: 'sales',   auto: false },
-  { code: 'DELIVERED',           no: 13, phase: 5, gate: 'sales',   auto: false },
-  { code: 'CLOSED_PAID',         no: 14, phase: 5, gate: 'account', auto: true,
-    autoHint: 'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับเงินครบของดีลนี้' },
-];
-
-export const LOST_REASONS = [
-  { code: 'PRODUCT_FIT',       label: 'ไม่มีสินค้าที่ลูกค้าต้องการ' },
-  { code: 'PRICE',             label: 'ราคา' },
-  { code: 'LEAD_TIME',         label: 'ระยะเวลาส่งมอบ (leadtime)' },
-  { code: 'PAYMENT_TERMS',     label: 'เงื่อนไขการชำระเงิน (payment term)' },
-  { code: 'RELATIONSHIP',      label: 'ความสัมพันธ์ / connection' },
-  { code: 'PROJECT_ON_HOLD',   label: 'โครงการหยุดก่อสร้างชั่วคราว' },
-  { code: 'PROJECT_CANCELLED', label: 'โครงการหยุดก่อสร้างถาวร' },
-  { code: 'ALREADY_PURCHASED', label: 'ลูกค้าสั่งซื้อกระเบื้องไปหมดแล้ว' },
-];
-
-/**
- * Why the opportunity went away (V56) — distinct from LOST_REASONS, which is why
- * we lost a deal we were competing for. Mirrors DealCancelReason (backend ticket/).
- */
-export const CANCEL_REASONS = [
-  { code: 'OWNER_CANCELLED',   label: 'เจ้าของยกเลิกโครงการ' },
-  { code: 'PROJECT_SUSPENDED', label: 'โครงการถูกระงับไม่มีกำหนด' },
-  { code: 'BUDGET_CANCELLED',  label: 'งบประมาณถูกยกเลิก' },
-  { code: 'OTHER',             label: 'อื่น ๆ (ระบุในหมายเหตุ)' },
-];
+import { hasDealStageLabel } from '../../utils/format.js';
 
 export const GATE_LABEL = {
   sales: 'ฝ่ายขาย',
@@ -69,83 +27,102 @@ export const GATE_LABEL = {
   account: 'ฝ่ายบัญชี',
 };
 
-export function stageMeta(code) {
-  return SALES_STAGES.find((s) => s.code === code) ?? null;
-}
+/**
+ * Thai wording for the auto-advanced stages — "where does this stage come from, if I cannot just
+ * click into it?". Keyed by code; the *set* of auto stages is the catalog's `auto` flag, served by
+ * the backend, so this map only supplies words for the ones that have it.
+ */
+export const AUTO_STAGE_HINT = {
+  ORDER_RECEIVED:   'อัปเดตอัตโนมัติเมื่อฝ่ายขายยืนยันใบสั่งซื้อของดีลนี้',
+  DEPOSIT_RECEIVED: 'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับมัดจำของดีลนี้',
+  PROCUREMENT:      'อัปเดตอัตโนมัติเมื่อฝ่ายนำเข้าออกใบขอซื้อ (IR) ของดีลนี้',
+  CLOSED_PAID:      'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับเงินครบของดีลนี้',
+};
 
-export function stageIndex(code) {
-  return SALES_STAGES.findIndex((s) => s.code === code);
-}
-
-export function nextStage(code) {
-  const idx = stageIndex(code);
-  return idx >= 0 && idx < SALES_STAGES.length - 1 ? SALES_STAGES[idx + 1] : null;
-}
+export const LOST_REASON_LABEL = {
+  PRODUCT_FIT:       'ไม่มีสินค้าที่ลูกค้าต้องการ',
+  PRICE:             'ราคา',
+  LEAD_TIME:         'ระยะเวลาส่งมอบ (leadtime)',
+  PAYMENT_TERMS:     'เงื่อนไขการชำระเงิน (payment term)',
+  RELATIONSHIP:      'ความสัมพันธ์ / connection',
+  PROJECT_ON_HOLD:   'โครงการหยุดก่อสร้างชั่วคราว',
+  PROJECT_CANCELLED: 'โครงการหยุดก่อสร้างถาวร',
+  ALREADY_PURCHASED: 'ลูกค้าสั่งซื้อกระเบื้องไปหมดแล้ว',
+};
 
 /**
- * Backward moves that are a normal part of the sales flow, so they don't need a
- * written reason. Mirrors DealStage.isRoutineBackwardMove (backend ticket/).
- *
- * QUOTE_DESIGN_SIDE (S4+S5) sits after SPEC_APPROVED (S3) in the pipeline order,
- * but the common business path quotes the designer before the designer signs off
- * the spec (S1 → S2 → S4 → S3 → S5). Demanding a justification for that everyday
- * step puts friction on the default path.
+ * Why the opportunity went away (V56) — distinct from LOST_REASON_LABEL, which is why we lost a
+ * deal we were competing for. The code set comes from the catalog (DealCancelReason.ORDER).
  */
-export function isRoutineBackwardMove(fromStage, toStage) {
-  return fromStage === 'QUOTE_DESIGN_SIDE' && toStage === 'SPEC_APPROVED';
-}
+export const CANCEL_REASON_LABEL = {
+  OWNER_CANCELLED:   'เจ้าของยกเลิกโครงการ',
+  PROJECT_SUSPENDED: 'โครงการถูกระงับไม่มีกำหนด',
+  BUDGET_CANCELLED:  'งบประมาณถูกยกเลิก',
+  OTHER:             'อื่น ๆ (ระบุในหมายเหตุ)',
+};
 
-export function phaseOf(code) {
-  const meta = stageMeta(code);
-  return meta ? SALES_PHASES.find((p) => p.id === meta.phase) : null;
-}
-
-export function isDealOwner(user, deal) {
-  return user?.role === 'sales' && deal?.createdById != null
-    && Number(deal.createdById) === Number(user.id);
-}
-
-/** Mirrors TicketService.requireStageWriteAccess for a manual set of `code`. */
-export function canSetStage(user, deal, code) {
-  const meta = stageMeta(code);
-  if (!meta || !user) return false;
-  if (user.role === 'ceo') return true;
-  if (meta.gate === 'sales') {
-    return user.role === 'sales_manager' || isDealOwner(user, deal);
-  }
-  if (meta.gate === 'account') return user.role === 'account';
-  if (meta.gate === 'import') return user.role === 'import';
-  return false;
-}
-
-/** Mirrors TicketService.requireDealOwnership (lost / reopen). */
-export function canMarkLost(user, deal) {
-  return user?.role === 'ceo' || user?.role === 'sales_manager' || isDealOwner(user, deal);
-}
-
-/** Stages the edit-modal offers this user for this deal (current stage excluded). */
-export function allowedTargetStages(user, deal) {
-  return SALES_STAGES.filter(
-    (s) => s.code !== deal?.salesStage && canSetStage(user, deal, s.code),
-  );
-}
-
-// Fulfillment sub-steps rendered inside the PROCUREMENT stage — these come from
-// the deal's own fulfillment_status, never separate stages (see handoff 65).
+// Fulfilment sub-steps rendered inside the PROCUREMENT stage — these come from the deal's own
+// fulfillment_status, never separate stages.
+//
+// Deliberately NOT served by /api/meta/deal-stages: FulfilmentStatus.java publishes an import
+// SEQUENCE (IR_ISSUED → IR_SENT → SHIPPING → GOODS_RECEIVED) and a delivery-complete SET, not one
+// ordered whole, so there is no single canonical list for the backend to serve and inventing one
+// would be a new defect rather than the removal of one. Known gap, stated rather than guessed at.
+//
+// The codes below are exactly FulfilmentStatus.java's seven. `PICKED_UP` and `CUSTOMS_CLEARANCE`
+// used to sit at positions 3 and 5 of this list; both were deleted from FulfilmentStatus.java by
+// 7991b9f1 as "dead constants (zero references anywhere)", and no code path has ever written
+// either into sales.ticket.fulfillment_status. Leaving them here was not inert: SubstepChips marks
+// every entry before the current one as done, so a deal on SHIPPING rendered "รับจากผู้ผลิตแล้ว"
+// as a completed step, and one on GOODS_RECEIVED rendered "รอออกของ" as completed — two steps the
+// business never performed and the column cannot express. Keep this list in step with that file.
 export const PROCUREMENT_SUBSTEPS = [
   { code: 'IR_ISSUED',      label: 'ออกใบขอซื้อ (IR) แล้ว' },
   { code: 'IR_SENT',        label: 'สั่งซื้อไปยังผู้ผลิตแล้ว' },
-  { code: 'PICKED_UP',      label: 'รับจากผู้ผลิตแล้ว' },
   { code: 'SHIPPING',       label: 'สินค้าอยู่ระหว่างเดินทาง' },
-  { code: 'CUSTOMS_CLEARANCE', label: 'รอออกของ' },
   { code: 'GOODS_RECEIVED', label: 'สินค้าถึงโกดังแล้ว' },
   { code: 'FROM_STOCK',     label: 'สินค้าจากสต็อก' },
   { code: 'PARTIALLY_DELIVERED', label: 'ส่งมอบบางส่วน' },
   { code: 'FULLY_DELIVERED', label: 'ส่งมอบครบแล้ว' },
 ];
 
-// Payment sub-steps (keyed by paymentStatus) — the inner journey of stages
-// 9–14. Replaces the old standalone Track P stepper on the deal detail page.
+/**
+ * The SAME seven codes, split into the shape FulfilmentStatus.java actually publishes — because
+ * the flat list above is a lookup table, not a path, and rendering it as one caused issue #730.
+ *
+ * `IMPORT_SEQUENCE` (FulfilmentStatus.java:33) is an ordered chain. `FROM_STOCK` is a BRANCH that
+ * skips it entirely: a deal declared fully from stock never issues an import request — and cannot,
+ * since issueImportRequest's own guard requires fulfillmentStatus == null. Rendering position-as-
+ * progress over the flat list therefore painted IR-issued / ordered / shipping / goods-received
+ * green on a deal that did none of them. The delivery states are the one segment BOTH journeys
+ * end on.
+ *
+ * `procurementPath(code)` returns the ordered path a deal on `code` is actually walking, so a
+ * caller can keep using index-as-progress without that meaning being a lie. This is still a
+ * client-side split of a client-side list — the durable fix is the backend serving the path, the
+ * way PaymentTrack.path(policy) already does for payments — but it no longer claims milestones
+ * that did not happen.
+ */
+const IMPORT_SEQUENCE = ['IR_ISSUED', 'IR_SENT', 'SHIPPING', 'GOODS_RECEIVED'];
+const DELIVERY_STATES = ['PARTIALLY_DELIVERED', 'FULLY_DELIVERED'];
+
+export function procurementPath(currentCode, fromStock = null) {
+  const byCode = (code) => PROCUREMENT_SUBSTEPS.find((s) => s.code === code);
+  if (currentCode === 'FROM_STOCK' || fromStock === true) return ['FROM_STOCK', ...DELIVERY_STATES].map(byCode);
+  if (fromStock === false) return [...IMPORT_SEQUENCE, ...DELIVERY_STATES].map(byCode);
+  // fromStock unknown AND the deal has moved on to a DELIVERY state: its procurement status has
+  // been overwritten, so fulfillmentStatus alone can no longer say which journey got it here.
+  // Asserting either one would be the same false statement in a new place, so the strip narrows
+  // to the segment that is still true. Callers that can tell (the panel reads the deal's own
+  // qtyFromStock) should pass `fromStock` and get the full path back.
+  if (DELIVERY_STATES.includes(currentCode)) return DELIVERY_STATES.map(byCode);
+  return [...IMPORT_SEQUENCE, ...DELIVERY_STATES].map(byCode);
+}
+
+// Payment sub-steps (keyed by paymentStatus) — the inner journey of the back-half stages.
+// Same reason as PROCUREMENT_SUBSTEPS for staying client-side: PaymentTrack.path(policy) returns a
+// DIFFERENT sequence on a deposit-bypass policy, so "the ordered list of payment states" is not a
+// single thing the backend can serve.
 export const PAYMENT_SUBSTEPS = [
   { code: 'CUSTOMER_CONFIRMED',    label: 'ลูกค้ายืนยัน' },
   { code: 'DEPOSIT_NOTICE_ISSUED', label: 'ออกใบแจ้งมัดจำ' },
@@ -154,15 +131,35 @@ export const PAYMENT_SUBSTEPS = [
   { code: 'FULLY_PAID',            label: 'ชำระครบแล้ว' },
 ];
 
-// The internal PricingRequest journey (DRAFT -> SUBMITTED -> IMPORT_REVIEWING
-// <-> MORE_INFO_REQUIRED) used to be keyed off ticket.status here as
-// PRICING_SUBSTEPS. Since commit 5 (ticket creation no longer auto-submits)
-// that status is permanently stuck at 'draft', so it moved to
-// features/pricingRequests/pricingRequestMeta.js. It was briefly a single
-// progress-chip strip keyed off "the deal's most recent PricingRequest"
-// (highest id), but that reduction was itself a bug (review-remediation plan,
-// Fix 3): a PricingRequestSummaryStrip on DealStagePanel rendered every
-// non-CANCELLED request instead of picking one "latest". Slice A "chip diet"
-// later removed that strip outright (DealStagePanel.jsx's own doc comment) —
-// PricingRequestPanel's own per-request list (never reduced to one) already
-// covers the same ground.
+/** Reason lists, labelled from a backend-supplied code set. Unknown codes render their own code. */
+export function labelledReasons(codes, labels) {
+  return (codes ?? []).map((code) => ({ code, label: labels[code] ?? code }));
+}
+
+/**
+ * THE LABEL GUARD.
+ *
+ * Every stage code the backend serves must have Thai display copy on this side. A code without one
+ * is not a cosmetic problem — it is the signal that the backend's pipeline moved and this side did
+ * not notice, which is exactly what happened when V143 added QUOTE_OWNER: the stage rendered as
+ * the raw string `QUOTE_OWNER` on the deal page and nothing anywhere complained. #704 could not be
+ * deployed because of it.
+ *
+ * Called from stageCatalog.js's `select`, so it runs the instant the catalog lands, on every page
+ * that reads it — not only on the one deal that happens to be sitting on the unlabelled stage.
+ *
+ * Loud means loud, but never at the cost of the page:
+ *   * dev/test — throws. A missing label fails the suite and fails a local click-through.
+ *   * production — console.error. A shipped build must still render the deal; the fallback in
+ *     dealStageLabel shows the raw code, which is ugly on purpose.
+ */
+export function assertStageLabelsComplete(codes) {
+  const missing = (codes ?? []).filter((code) => !hasDealStageLabel(code));
+  if (missing.length === 0) return;
+  const message = `[stageMeta] ขั้นตอนการขายไม่มีคำแปลภาษาไทย: ${missing.join(', ')} — `
+    + 'add it to dealStageLabel() in utils/format.js (see stageMeta.js\'s label guard)';
+  if (import.meta.env?.DEV || import.meta.env?.MODE === 'test') {
+    throw new Error(message);
+  }
+  console.error(message);
+}

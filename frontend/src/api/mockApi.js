@@ -13,23 +13,21 @@
 // accurate when editing — they are how the next reader finds the source of truth.
 
 import { createDemoDatabase } from '../data/demoData.js';
-// Deal pipeline (V50): stage order + write gates shared with the pages so the
-// mock's monotonic/gate behavior can't drift from the UI's; the authoritative
-// rules live in TicketService (backend ticket/).
-import {
-  canMarkLost as dealCanMarkLost,
-  canSetStage as dealCanSetStage,
-  CANCEL_REASONS as DEAL_CANCEL_REASONS,
-  isRoutineBackwardMove,
-  LOST_REASONS as DEAL_LOST_REASONS,
-  stageIndex as dealStageIndex,
-} from '../features/tickets/stageMeta.js';
+// Deal pipeline (V50, widened by V143). The mock serves the stage CATALOG as canned data — the
+// shape of GET /api/meta/deal-stages — and nothing more.
+//
+// It deliberately no longer imports a stage RULE from the pages, because there is no longer a
+// stage rule in the pages to import. The three it used to (canSetStage, canMarkLost,
+// isRoutineBackwardMove) were copies of TicketService gates that had all gone stale; see
+// mockStageDecisions below for what replaced them and what the mock now refuses to decide at all.
+import { DEAL_STAGE_CATALOG } from '../data/dealStageCatalog.js';
 // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103): win%
 // defaults, the activity-kind taxonomy, and the stage-advance-gate readiness
 // check, shared with the UI so the mock's numbers/gate can't drift from
 // WinProbabilityDefaults.java / DealActivityKind.java / TicketService.updateStage.
 import {
   computeStale as dealComputeStale,
+  effectiveWinProbability as dealEffectiveWinProbability,
   hasActivitySince as dealHasActivitySince,
   isReadyToAdvance as dealIsReadyToAdvance,
   isValidActivityKind as dealIsValidActivityKind,
@@ -45,26 +43,11 @@ import {
   RECIPIENT_OPTIONS as PRICING_REQUEST_RECIPIENT_OPTIONS,
   UNIT_BASIS_OPTIONS as PRICING_REQUEST_UNIT_BASIS_OPTIONS,
 } from '../features/pricingRequests/pricingRequestMeta.js';
-// Commission redesign (Slices A1/A2/calc-refine + A3): the calculation itself — VAT-strip
-// formula, monthly tier base, progressive tiers/floor — is shared with the UI so the mock's
-// numbers can never drift from CommissionPage's own display math. The authoritative
-// implementation is backend/.../commission/CommissionCalculator.java + TierConfig.java; this
-// mock mirrors it, per CLAUDE.md ("mock authz is not authoritative" — the calculation itself is
-// business logic, not authz, and is mirrored as exactly as this module allows).
-import {
-  invoiceCalculation as calcInvoice,
-  monthlyTierBase as calcMonthlyTierBase,
-  progressiveCommission as calcProgressiveCommission,
-  round2 as commissionRound2,
-  // Issue #405: auto-computed INCENTIVE ladder + STOCK_BONUS — mirrors
-  // CommissionService#computeRepPayrollCommissions exactly, including the fix-forward effective
-  // month gate and the manual-entry double-count suppression guard (see payrollReady below).
-  monthlyIncentive as calcMonthlyIncentive,
-  stockSaleBonus as calcStockSaleBonus,
-  INCENTIVE_LADDER,
-  STOCK_BONUS_DEFAULTS,
-  INCENTIVE_STOCK_BONUS_EFFECTIVE_MONTH,
-} from '../features/commissions/commissionCalc.js';
+// fix/commission-figures-from-backend: mock mode no longer imports the commission tier math —
+// see the fenced MOCK COMMISSION FIXTURES block near the `commissions` namespace below for why,
+// and for the small local `round2`/`mockInvoiceCalculation` helpers that replace this import
+// (neither is policy: they are generic 2dp rounding and "sum the caller's own input fields",
+// not a tier/rate/floor table).
 // Payroll/commission seed data (chore/mock-demo-seed-state-matrix) — the genuinely
 // fake-able stores only (see demoPayroll.js's own header for what's deliberately excluded).
 import {
@@ -113,7 +96,7 @@ for (const t of db.tickets) {
   t.tenderRequirement = t.tenderRequirement ?? 'UNKNOWN';
   t.depositPolicy = t.depositPolicy ?? 'REQUIRED';
   t.depositPolicyReason = t.depositPolicyReason ?? null;
-  t.entryChannel = t.entryChannel ?? 'DESIGNER_LED';
+  t.entryChannel = t.entryChannel ?? 'UNSPECIFIED';
   const existingQuotations = t.quotations ?? (t.quotation ? [t.quotation] : []);
   t.quotations = existingQuotations.map((q, index) => normalizeQuotation(q, t, index));
   if (t.id === 6 && t.quotations.length === 1) {
@@ -2101,6 +2084,21 @@ function hasInvoiceAttachment(ticket) {
   return mockAttachments.some((a) => a.ticketId === ticket.id && a.attachType === 'INVOICE');
 }
 
+// Commissions live in their own store (db.commissions), not on the ticket — mirrors
+// sales.commission_record being its own table. Mirrors CommissionRepository
+// .hasActiveCommissionForTicket exactly (issue #736): a live SALE commission for this ticket,
+// i.e. kind === 'SALE' and status not in ('VOID', 'REJECTED'). Shared here rather than inlined in
+// each of the two TicketSummaryDto builders below, so the predicate exists in exactly one place —
+// createFromDeal's own duplicate guard a few hundred lines down has the same shape inline (it
+// predates this flag and already has its own 409 test coverage), but both read the same
+// db.commissions store and must never be allowed to drift from each other or from the real
+// CommissionRepository method.
+function hasRecordedCommission(ticket) {
+  return db.commissions.some((item) => item.sourceTicketId === ticket.id
+    && item.kind === 'SALE'
+    && !['VOID', 'REJECTED'].includes(item.status));
+}
+
 // Mirrors TicketService.requireClosePrerequisites. Legacy document_issued deals
 // predate the delivery and invoice tracks, so those two are waived for them —
 // requiring either would strand old data permanently.
@@ -2400,6 +2398,139 @@ function addNotification(userId, ticketId, ticketCode, type, message) {
   db.notifications.unshift({ id: nextId, userId, ticketId, ticketCode, type, message, read: false, createdAt: new Date().toISOString() });
 }
 
+// ── Deal pipeline: what this mock will and will not decide ────────────────────────────────────
+//
+// Read this before adding anything stage-shaped below.
+//
+// The catalog (DEAL_STAGE_CATALOG) is canned DATA — the shape of GET /api/meta/deal-stages, kept
+// honest against DealStage.java by features/tickets/stageCatalog.test.js, which parses the Java.
+// Index lookups over it are lookups, not rules.
+//
+// The DECISIONS are a different matter, and the mock is deliberately incomplete about them:
+//
+//   * ROLE GATE — approximated, as every namespace in this file approximates its service's authz.
+//     Driven by the catalog's own `gate` field (which comes from TicketService's three
+//     *_TARGET_STAGES sets) rather than a second list. NOT AUTHORITATIVE; verify against
+//     StageDecisionIntegrationTest.
+//   * FACT GATES (TicketService.requireStageFactsHold, #710) — NOT reimplemented. The four
+//     fact-gated stages are simply closed to a manual move in mock mode, which is STRICTER than
+//     production, never looser. They are still reachable here the way they are reached in real
+//     life: through the operational action that records the fact (confirmCustomer, deposit-paid,
+//     complete-delivery, final-payment), each of which calls autoAdvanceStage below. Before this,
+//     the mock let a manual move into all four unconditionally — more permissive than production,
+//     which is the dangerous direction and is the exact hazard CLAUDE.md names.
+//
+//     ⚠️ That "stricter, never looser" claim was FALSE until issue #742, because this set was
+//     derived from the catalog's `auto` field — i.e. from DealStage.AUTO_ADVANCED, which is a
+//     DIFFERENT set from the one requireStageFactsHold gates, differing in both directions:
+//         AUTO_ADVANCED         ORDER_RECEIVED, DEPOSIT_RECEIVED, PROCUREMENT, CLOSED_PAID
+//         requireStageFactsHold ORDER_RECEIVED, DEPOSIT_RECEIVED, DELIVERED,   CLOSED_PAID
+//     So mock mode ALLOWED a manual move to DELIVERED on an undelivered deal — production answers
+//     409 ยังส่งมอบสินค้าไม่ครบ — and REFUSED a move to PROCUREMENT that production permits.
+//   * THE NOTE RULE (DealStage.requiresJustification) — NOT reimplemented, and deliberately not
+//     approximated either. The mock's old copy was the pre-#704 rule and demanded a written reason
+//     for three of the business's four normal routes; a corrected copy would just be a fresh
+//     mirror with no guard. `requiresReason` is therefore always false in mock mode, so mock-mode
+//     QA never exercises the note requirement. That is a stated gap, not an oversight — the rule
+//     is covered by DealStageTest and StageDecisionIntegrationTest on the backend, and the modal's
+//     rendering of it is covered by UpdateStageModal.test.jsx driving a hand-built payload.
+//
+// Mirrors TicketService.stageDecisions / requireStageMoveAllowed (backend ticket/).
+/**
+ * The stages a manual move is closed to in mock mode — a literal mirror of the four
+ * `DealStage.X.equals(targetStage)` guards in TicketService.requireStageFactsHold, NOT a
+ * derivation from any other field.
+ *
+ * It has to be a literal because there is no named set on the Java side to derive from: the gates
+ * are four `if` statements inside one private method. Reaching for the nearest available set
+ * (`auto` / DealStage.AUTO_ADVANCED) is exactly the mistake issue #742 records, and it produced a
+ * mock LOOSER than production on DELIVERED.
+ *
+ * Exported ONLY for the guard: features/tickets/stageCatalog.test.js parses
+ * requireStageFactsHold's body out of TicketService.java and asserts this set against it, so the
+ * literal cannot drift the way the derivation did. Do not import it for behaviour.
+ */
+export const MOCK_FACT_GATED_STAGES = new Set([
+  'ORDER_RECEIVED',   // customerOrderVerified — payment track started
+  'DEPOSIT_RECEIVED', // depositReceived
+  'DELIVERED',        // deliveryGateComplete — the one AUTO_ADVANCED omits
+  'CLOSED_PAID',      // closedPaidFactsHold — FULLY_PAID *and* fully delivered
+]);
+
+function dealStageIndex(code) {
+  return DEAL_STAGE_CATALOG.stages.findIndex((stage) => stage.code === code);
+}
+
+/** Mirrors TicketService.requireStageWriteAccess, keyed off the catalog's gate. NOT authoritative. */
+function mockCanWriteStage(user, ticket, code) {
+  const gate = DEAL_STAGE_CATALOG.stages.find((stage) => stage.code === code)?.gate;
+  if (!gate || !user) return false;
+  if (user.role === 'ceo') return true;
+  if (gate === 'sales') {
+    return user.role === 'sales_manager'
+      || (user.role === 'sales' && Number(ticket?.createdById) === Number(user.id));
+  }
+  return user.role === gate;
+}
+
+/**
+ * Mirrors TicketService.entryChannelIsStated — "a channel was actually CHOSEN on this deal".
+ *
+ * Both DESIGNER_LED and UNSPECIFIED count as UNSTATED and neither needs a reason to move off:
+ * UNSPECIFIED is the V144 column default, DESIGNER_LED is the pre-V144 default that was never
+ * backfilled, so an untouched deal reads one or the other purely by age. Dropping UNSPECIFIED here
+ * would make the FIRST statement of a channel on every new deal demand a reason.
+ *
+ * Read by BOTH the action advertisement and setEntryChannel's own 400, the same single-definition
+ * discipline the Java service uses — so the mock cannot advertise a note-free change and then
+ * refuse it.
+ */
+function mockEntryChannelIsStated(ticket) {
+  return Boolean(ticket?.entryChannel)
+    && ticket.entryChannel !== 'DESIGNER_LED'
+    && ticket.entryChannel !== 'UNSPECIFIED';
+}
+
+/** Mirrors TicketService.requireDealOwnership (lost / reopen / hold / tracking). NOT authoritative. */
+function mockCanDealOwnership(user, ticket) {
+  return user?.role === 'ceo' || user?.role === 'sales_manager'
+    || (user?.role === 'sales' && Number(ticket?.createdById) === Number(user.id));
+}
+
+/**
+ * The mock's answer to GET /api/tickets/{id}/actions -> stageDecisions. One entry per stage, in
+ * pipeline order, matching the real StageDecisionDto shape exactly.
+ *
+ * The single place the mock decides anything stage-shaped: mockApi.updateStage consults this
+ * rather than re-deriving, so the mock cannot advertise an option it would then refuse.
+ */
+function mockStageDecisions(ticket, user) {
+  return DEAL_STAGE_CATALOG.stages.map(({ code, no }) => {
+    let blockedReason = null;
+    if (!mockCanWriteStage(user, ticket, code)) {
+      blockedReason = 'ไม่มีสิทธิ์เข้าถึงรายการนี้';
+    } else if (ticket.lifecycle === 'CLOSED_LOST') {
+      blockedReason = 'ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ';
+    } else if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+      blockedReason = `ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงแก้ไขขั้นตอนนี้ไม่ได้`;
+    } else if (code === ticket.salesStage) {
+      blockedReason = `ดีลนี้อยู่ในขั้นตอน ${code} อยู่แล้ว`;
+    } else if (MOCK_FACT_GATED_STAGES.has(code)) {
+      // The stub, not a copy of requireStageFactsHold — see the block comment above.
+      blockedReason = `เลื่อนไปขั้นตอน ${code} ไม่ได้: ขั้นตอนนี้อัปเดตอัตโนมัติจากขั้นตอนของดีล`
+        + ' (โหมดจำลองไม่รองรับการตั้งค่าด้วยมือ)';
+    } else if (dealStageIndex(code) > dealStageIndex(ticket.salesStage)) {
+      const sinceIso = dealLastStageChangeAt(ticket.events, ticket.createdAt);
+      const hasRecentActivity = dealHasActivitySince(dealActivitiesForTicket(ticket.id), sinceIso);
+      if (!dealIsReadyToAdvance(ticket, hasRecentActivity)) {
+        blockedReason = DEAL_STAGE_ADVANCE_GATE_MESSAGE;
+      }
+    }
+    // requiresReason is deliberately always false here — see the block comment above.
+    return { stage: code, no, allowed: blockedReason === null, requiresReason: false, blockedReason };
+  });
+}
+
 // Deal pipeline (V50): mirrors TicketService.autoAdvanceStage — monotonic
 // forward-only, no-op while lost. Called from the 4 milestone transitions.
 function autoAdvanceStage(ticket, targetStage, user) {
@@ -2441,21 +2572,32 @@ function buildTicketDetail(ticket) {
       tenderRequirement: ticket.tenderRequirement ?? 'UNKNOWN',
       depositPolicy: ticket.depositPolicy ?? 'REQUIRED',
       depositPolicyReason: ticket.depositPolicyReason ?? null,
-      entryChannel: ticket.entryChannel ?? 'DESIGNER_LED',
+      entryChannel: ticket.entryChannel ?? 'UNSPECIFIED',
       cancelReason: ticket.cancelReason ?? null,
       cancelledAt: ticket.cancelledAt ?? null,
       closeConfirmedAt: ticket.closeConfirmedAt ?? null,
       closeConfirmedByName: ticket.closeConfirmedByName ?? null,
       invoiceOnFile: hasInvoiceAttachment(ticket),
-      // Deal tracking fields (V83, Slice B1/B2 — handoff 103). effectiveWinProbability is
-      // deliberately NOT included here: it's a Java record method, not a component, so the
-      // real backend never serializes it either — see dealTrackingMeta.js's doc comment.
-      // Every consumer derives it from winProbabilityOverride + salesStage instead.
+      // Deal tracking fields (V83, Slice B1/B2 — handoff 103).
+      //
+      // effectiveWinProbability IS served now (issue #738): the real TicketSummaryDto computes it
+      // and, since it was made a Jackson property, sends it. It used to be omitted here on the
+      // correct grounds that the backend did not serialize it either — which meant the UI had to
+      // re-derive it from a copied table, and #714 is what that cost. Computed via
+      // dealTrackingMeta's mirror, which stageCatalog-style guards keep honest against
+      // WinProbabilityDefaults.java; per CLAUDE.md that makes mock-driven tests evidence about
+      // plumbing here, never about the number itself.
       winProbabilityOverride: ticket.winProbabilityOverride ?? null,
+      effectiveWinProbability: dealEffectiveWinProbability(
+        ticket.winProbabilityOverride ?? null, ticket.salesStage,
+      ),
       designerName: ticket.designerName ?? null,
       ownerName: ticket.ownerName ?? null,
       buyerName: ticket.buyerName ?? null,
       stale: dealComputeStale(ticket.lifecycle ?? 'ACTIVE', dealActivitiesForTicket(ticket.id)),
+      // Existence-only flag (issue #736) — see hasRecordedCommission's own comment. Never an
+      // amount; amounts stay behind commissions.list()'s own role gate.
+      commissionRecorded: hasRecordedCommission(ticket),
       ...paymentFields,
     },
     items: ticket.items, events: ticket.events,
@@ -2468,13 +2610,72 @@ function commissionMonth(value) {
   return (value || new Date().toISOString()).slice(0, 7);
 }
 
-// Slice A1/calc-refine: `invoiceCalculation` now also subtracts withholdingTax and adds
-// overpayment (before the VAT strip), and `progressiveCommission` applies the <50,000 monthly
-// floor and the V81 tier-13 rate (3.25%, not the old 7.5%) — both imported from
-// commissionCalc.js so this mock can never drift from CommissionPage's own display math or the
-// real CommissionCalculator. See that module for the exact formula.
-const invoiceCalculation = calcInvoice;
-const progressiveCommission = calcProgressiveCommission;
+// ─────────────────────────────────────────────────────────────────────────────
+// MOCK COMMISSION FIXTURES — NOT THE SOURCE OF TRUTH, NOT EVIDENCE.
+// Mock mode does NOT compute commission. The real figures come from
+// CommissionService (tiers/incentive read from sales.tier_config and
+// sales.commission_incentive_tier at runtime) and are served by
+// GET /api/commissions/monthly-summary and POST /api/commissions/simulator.
+// Nothing here tracks a DB tier change, by design: this file used to import
+// the frontend's own commission math, which pinned the mock to the display
+// layer and guaranteed both would drift from the backend together (the V81
+// tier-13 rate correction is the case on record). A green test under
+// VITE_USE_MOCKS=true says NOTHING about any commission figure.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Thai VAT strip used ONLY to fabricate a plausible commissionableBase column on demo/mock
+// records below -- named distinctly from a "policy" constant on purpose: it is not read from
+// sales.tier_config, does not represent any CEO-configurable rate, and nothing else in this file
+// may add a tier table, rate, floor, or incentive/stock-bonus config alongside it.
+const MOCK_VAT_DIVISOR = 1.07;
+
+// round2(n) already exists above (generic 2dp rounding, not commission-specific) -- reused here
+// rather than redeclared.
+
+// Mirrors ONLY CommissionCalculator.calculateInvoice's subtraction formula -- arithmetic over the
+// caller's OWN input fields (gross minus each deduction, plus overpayment), not policy. The VAT
+// strip below uses MOCK_VAT_DIVISOR (see above), not a re-import of the deleted commissionCalc.js.
+function mockInvoiceCalculation(payload) {
+  const actualReceived = round2(
+    Number(payload.grossAmount || 0)
+    - Number(payload.bankFees || 0)
+    - Number(payload.suspenseVat || 0)
+    - Number(payload.transportFee || 0)
+    - Number(payload.cutFee || 0)
+    - Number(payload.shortfall || 0)
+    - Number(payload.withholdingTax || 0)
+    + Number(payload.overpayment || 0)
+  );
+  return {
+    actualReceived,
+    commissionableBase: round2(actualReceived / MOCK_VAT_DIVISOR),
+  };
+}
+
+// Canned monthlySummary() figures -- a frozen snapshot of what the OLD client-side tier math used
+// to produce for the demo seed's mock sales user (sales@glr.co.th, August 2026), so before/after
+// screenshots of the UI stay comparable across this change; only the SOURCE of the figure moved,
+// from client math to (in mock mode) this fixture, and from real usage to the real
+// CommissionService. These three numbers will NOT move if the demo seed or the real DB tier
+// config changes -- by design, since mock mode cannot read either.
+const MOCK_MONTHLY_SUMMARY_FIXTURE = { commissionableBase: 116822.43, tierCommission: 292.06, incentiveAmount: 0 };
+
+// Canned simulate() monthly-aggregate fields -- arbitrary, clearly-fixture numbers (not derived
+// from any tier table). actualReceived/commissionableBase above them are NOT canned: those are
+// mockInvoiceCalculation's honest arithmetic over the caller's own typed-in invoice fields.
+const MOCK_SIMULATION_FIXTURE = {
+  existingMonthlyBase: 500000.00,
+  projectedMonthlyBase: 650000.00,
+  projectedMonthlyCommission: 1625.00,
+  incrementalCommission: 375.00,
+};
+
+// Canned payrollReady() per-rep tier/incentive/stock-bonus figures -- WHICH reps appear and their
+// manualAdjustmentAmount stay real (grouped from db.commissions, summed honestly; "who has
+// activity this month" and "sum their manual amounts" are not policy). commissionableBase and the
+// tier/incentive/stock-bonus portions of commissionAmount are this one fixed fixture, reused for
+// every rep -- the real per-rep math lives only in CommissionService#computeRepPayrollCommissions.
+const MOCK_PAYROLL_READY_TIER_FIXTURE = { commissionableBase: 87654.32, tierCommission: 219.14, incentiveAmount: 0, stockBonusAmount: 0 };
 
 // Step 9 cross-check threshold: flag (never block) when the hand-typed grossAmount diverges from
 // the linked deal's actual payableAmount by more than this fraction. Mirrors
@@ -2488,43 +2689,14 @@ function commissionDealMismatch(grossAmount, payable) {
 }
 
 // Manual commission entries (feat/commission-manual-adjustments, V84): a sales_manager/CEO
-// hand-typed amount, never run through invoiceCalculation/progressiveCommission, with no invoice
-// behind it. Mirrors backend/.../commission/CommissionKind.java's four manual kinds exactly —
-// ALL FOUR are hand-typed for now (owner decision: manual across the UI until the CEO-confirmed
+// hand-typed amount, never run through the commission tier calculation, with no invoice behind
+// it. Mirrors backend/.../commission/CommissionKind.java's four manual kinds exactly — ALL FOUR
+// are hand-typed for now (owner decision: manual across the UI until the CEO-confirmed
 // auto-config lands to prefill suggestions for specific ones later — not implemented here).
 const MANUAL_COMMISSION_KINDS = ['ADJUSTMENT', 'MANAGER', 'STOCK_BONUS', 'INCENTIVE'];
 
 function isManualCommissionKind(kind) {
   return MANUAL_COMMISSION_KINDS.includes(kind);
-}
-
-// Issue #405: stockShare(ticket) = SUM(item.qtyFromStock) / SUM(item.qty), 0 when the ticket has
-// no items or its items sum to 0 qty (or the ticket can't be found) — mirrors
-// CommissionRepository#sumActiveStockActualReceived's GROUP BY ticket_id subquery.
-function ticketStockShare(ticketId) {
-  const ticket = db.tickets.find((t) => t.id === Number(ticketId));
-  const items = ticket?.items ?? [];
-  const totalQty = items.reduce((sum, item) => sum + Number(item.qty || 0), 0);
-  if (totalQty === 0) return 0;
-  const stockQty = items.reduce((sum, item) => sum + Number(item.qtyFromStock || 0), 0);
-  return stockQty / totalQty;
-}
-
-// Issue #405: STOCK_BONUS's per-rep-per-month "stock receipts" input — SUM(actualReceived x
-// stockShare(ticket)) across every APPROVED commission this rep/month with a sourceTicketId.
-// Review fix (2026-08-02): mirrors the APPROVED-only records payrollReady's own reps/manualTotals
-// aggregation above already restricts itself to (NOT the broader VOID/REJECTED-exclusion
-// sumActiveWeightedActualReceived uses for the unrelated simulate() preview) -- an earlier
-// version of this used that broader filter and let a still-SUBMITTED receipt (nobody approved)
-// contribute to a paid stock bonus. Unapproved money must never reach a payroll figure. Records
-// with no sourceTicketId (every manual kind) are excluded by the filter itself.
-function stockReceiptsForRep(salesRepId, month) {
-  return db.commissions
-    .filter((item) => item.salesRepId === salesRepId
-      && item.sourceTicketId != null
-      && commissionMonth(item.payrollMonth) === month
-      && item.status === 'APPROVED')
-    .reduce((sum, item) => sum + Number(item.actualReceived || 0) * ticketStockShare(item.sourceTicketId), 0);
 }
 
 function buildCommissionRecord(record) {
@@ -3922,7 +4094,7 @@ export const api = {
         tenderRequirement: t.tenderRequirement ?? 'UNKNOWN',
         depositPolicy: t.depositPolicy ?? 'REQUIRED',
         depositPolicyReason: t.depositPolicyReason ?? null,
-        entryChannel: t.entryChannel ?? 'DESIGNER_LED',
+        entryChannel: t.entryChannel ?? 'UNSPECIFIED',
         // Mock-parity fix (role-views-account + role-views-ceo, same underlying
         // gap, landed independently on both branches — collapsed here into one):
         // the real TicketSummaryDto (see TicketService.java / TicketRepository.java)
@@ -3940,12 +4112,21 @@ export const api = {
         invoiceOnFile: hasInvoiceAttachment(t),
         // Deal tracking fields (V83, Slice B1/B2 — handoff 103) — same fields as
         // buildTicketDetail's summary, so the manager pipeline view (TicketListPage)
-        // has win%/stale without a per-row detail fetch.
+        // has win%/stale without a per-row detail fetch. effectiveWinProbability must be
+        // here and not only on the detail projection: TicketListPage's win-weighted
+        // forecast sums it across LIST rows (issue #738).
         winProbabilityOverride: t.winProbabilityOverride ?? null,
+        effectiveWinProbability: dealEffectiveWinProbability(
+          t.winProbabilityOverride ?? null, t.salesStage,
+        ),
         designerName: t.designerName ?? null,
         ownerName: t.ownerName ?? null,
         buyerName: t.buyerName ?? null,
         stale: dealComputeStale(t.lifecycle ?? 'ACTIVE', dealActivitiesForTicket(t.id)),
+        // Same existence-only flag as buildTicketDetail's summary — served on the LIST projection
+        // too because accountActions.js's worklist is built from list rows, not detail fetches
+        // (issue #736).
+        commissionRecorded: hasRecordedCommission(t),
         ...derivePaymentFields(t),
       }));
       return delay({ tickets });
@@ -4037,6 +4218,9 @@ export const api = {
     async actions(id) {
       const { user, ticket } = requireTicketViewer(id);
       const active = (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE';
+      // Computed once and used for both halves of the response: the ADVANCE_STAGE/UPDATE_STAGE
+      // verbs below are derived from it, and it ships to the client as stageDecisions.
+      const stageDecisions = mockStageDecisions(ticket, user);
       const availableActions = [];
       const add = (action, kind, label, extra = {}) => availableActions.push({ action, kind, label, ...extra });
       const owner = user.role === 'sales' && ticket.createdById === user.id;
@@ -4090,8 +4274,11 @@ export const api = {
         }
         if (ticket.createdById === user.id && !['closed', 'cancelled'].includes(ticket.status)) add('CANCEL', 'operational', 'ยกเลิก');
         if (owner && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(ticket.status)) add('EDIT_ITEMS', 'operational', 'แก้ไขรายการ');
-        for (const stage of ['LEAD_APPROACH','PRESENTATION','SPEC_APPROVED','QUOTE_DESIGN_SIDE','OWNER_SIGNOFF','AWAITING_BUYER','QUOTE_BUYER','NEGOTIATION','ORDER_RECEIVED','DEPOSIT_RECEIVED','PROCUREMENT','DELIVERY_SCHEDULING','DELIVERED','CLOSED_PAID']) {
-          if (stage !== ticket.salesStage && dealCanSetStage(user, ticket, stage)) add('ADVANCE_STAGE', 'stage', 'เลื่อนสถานะ', { targetStage: stage });
+        // Mirrors TicketService.addStageActions: derived from the decisions, so the mock can
+        // never advertise a stage it would then refuse. The hardcoded 14-stage array that used to
+        // live here was the third copy of DealStage.ORDER and had gone stale on QUOTE_OWNER.
+        for (const decision of stageDecisions.filter((d) => d.allowed)) {
+          add('ADVANCE_STAGE', 'stage', 'เลื่อนสถานะ', { targetStage: decision.stage });
         }
         if (availableActions.some((a) => a.kind === 'stage')) add('UPDATE_STAGE', 'stage', 'แก้ไขสถานะ', { requiredFields: ['stage'] });
         if (dealOwner) {
@@ -4099,7 +4286,13 @@ export const api = {
           add('PLACE_ON_HOLD', 'lifecycle', 'พักดีลไว้');
           add('MARK_DORMANT', 'lifecycle', 'พัก dormant');
           add('SET_TENDER_REQUIREMENT', 'policy', 'ตั้งค่าสถานะประมูล', { requiredFields: ['value'] });
-          add('SET_ENTRY_CHANNEL', 'policy', 'ตั้งค่า entry channel', { requiredFields: ['value'] });
+          // requiredFields carries the note rule, exactly as TicketService.addPolicyActions does:
+          // a channel that was actually STATED needs a reason to change, an unstated one (the V144
+          // UNSPECIFIED default, or the never-backfilled pre-V144 DESIGNER_LED) does not. Same
+          // predicate as setEntryChannel below — see TicketService.entryChannelIsStated.
+          add('SET_ENTRY_CHANNEL', 'policy', 'ตั้งค่า entry channel', {
+            requiredFields: mockEntryChannelIsStated(ticket) ? ['value', 'note'] : ['value'],
+          });
         }
         if (['account', 'ceo'].includes(user.role)) add('WAIVE_DEPOSIT', 'policy', 'นโยบายมัดจำ', { requiredFields: ['policy', 'reason'] });
       } else if (['ON_HOLD', 'DORMANT'].includes(ticket.lifecycle) && dealOwner) {
@@ -4117,6 +4310,7 @@ export const api = {
           status: ticket.status,
         },
         availableActions,
+        stageDecisions,
       });
     },
 
@@ -4148,7 +4342,11 @@ export const api = {
         tenderRequirement: 'UNKNOWN',
         depositPolicy: 'REQUIRED',
         depositPolicyReason: null,
-        entryChannel: payload.entryChannel || 'DESIGNER_LED',
+        // Mirrors TicketRepository.create (V144): an omitted channel means "nobody said", not
+        // "designer-led". Defaulting to a real route made every unattended row assert one, so a
+        // deliberate DESIGNER_LED was indistinguishable from silence. UNSPECIFIED is legal as
+        // STORED but never as a setEntryChannel INPUT — see th.co.glr.hr.ticket.EntryChannel.
+        entryChannel: payload.entryChannel || 'UNSPECIFIED',
         createdAt: now.slice(0, 10), updatedAt: now.slice(0, 10), closedAt: null,
         items: (payload.items || []).map((item, i) => ({
           id: nextId * 100 + i, ticketId: nextId,
@@ -4297,7 +4495,7 @@ export const api = {
     async cancel(id, payload = {}) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!DEAL_CANCEL_REASONS.some((r) => r.code === payload.reason)) {
+      if (!DEAL_STAGE_CATALOG.cancelReasons.includes(payload.reason)) {
         fail(`ไม่รองรับเหตุผลการยกเลิก '${payload.reason}'`, 400);
       }
       if (ticket.status === 'closed' || ticket.status === 'cancelled') fail('ไม่สามารถยกเลิกได้', 409);
@@ -4500,26 +4698,17 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
       if (dealStageIndex(payload.stage) < 0) fail(`ไม่รองรับสถานะขั้นตอนการขาย '${payload.stage}'`, 400);
-      if (!dealCanSetStage(user, ticket, payload.stage)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      // Lifecycle, not lostReason: a reopened deal is ACTIVE and keeps its reason (V57).
-      if (ticket.lifecycle === 'CLOSED_LOST') fail('ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ', 409);
-      if (ticket.salesStage === payload.stage) fail(`ดีลนี้อยู่ในขั้นตอน ${payload.stage} อยู่แล้ว`, 409);
-      const backward = dealStageIndex(payload.stage) < dealStageIndex(ticket.salesStage)
-        && !isRoutineBackwardMove(ticket.salesStage, payload.stage);
-      const skipForward = dealStageIndex(payload.stage) - dealStageIndex(ticket.salesStage) > 1;
-      if (backward && !(payload.note || '').trim()) fail('การย้อนสถานะกลับต้องระบุเหตุผล', 400);
-      if (skipForward && !(payload.note || '').trim()) fail('การข้ามขั้นตอนต้องระบุเหตุผล', 400);
-      // Deal tracking (V83, Slice B1/B2 — handoff 103): mirrors TicketService.updateStage's
-      // forward-move gate exactly (strictly-greater target index, not merely "not backward" —
-      // see handoff 103's "The Gate Rule" for why that distinction matters for the routine
-      // QUOTE_DESIGN_SIDE → SPEC_APPROVED move). Approximates the Java service, per CLAUDE.md —
-      // the real enforcement is DealTrackingAndActivityIntegrationTest against the real service.
-      const forward = dealStageIndex(payload.stage) > dealStageIndex(ticket.salesStage);
-      if (forward) {
-        const sinceIso = dealLastStageChangeAt(ticket.events, ticket.createdAt);
-        const hasRecentActivity = dealHasActivitySince(dealActivitiesForTicket(ticket.id), sinceIso);
-        if (!dealIsReadyToAdvance(ticket, hasRecentActivity)) fail(DEAL_STAGE_ADVANCE_GATE_MESSAGE, 400);
+      // Enforced from the SAME decision list actions() serves, never re-derived — so an option the
+      // mock offered is an option the mock accepts, and there is one place to read. The status is
+      // approximated (403 for the permission message, 409 otherwise) because the mock's decisions
+      // carry a reason, not a status code; the real service's codes are pinned by
+      // StageDecisionIntegrationTest.
+      const decision = mockStageDecisions(ticket, user).find((d) => d.stage === payload.stage);
+      if (!decision.allowed) {
+        fail(decision.blockedReason, decision.blockedReason === 'ไม่มีสิทธิ์เข้าถึงรายการนี้' ? 403 : 409);
       }
+      // NO note requirement here. DealStage.requiresJustification is a backend decision and the
+      // mock does not mirror it — see the "what this mock will and will not decide" block above.
       const fromStage = ticket.salesStage;
       ticket.salesStage = payload.stage;
       ticket.stageUpdatedAt = new Date().toISOString();
@@ -4531,8 +4720,8 @@ export const api = {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
-      if (!DEAL_LOST_REASONS.some((r) => r.code === payload.reason)) fail(`ไม่รองรับเหตุผลการเสียงาน '${payload.reason}'`, 400);
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!DEAL_STAGE_CATALOG.lostReasons.includes(payload.reason)) fail(`ไม่รองรับเหตุผลการเสียงาน '${payload.reason}'`, 400);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (ticket.lifecycle === 'CLOSED_LOST') fail('ดีลนี้ถูกทำเครื่องหมายเสียงานไปแล้ว', 409);
       ticket.lostReason = payload.reason;
       ticket.lostAt = new Date().toISOString();
@@ -4547,7 +4736,7 @@ export const api = {
     async reopen(id, payload = {}) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (ticket.lifecycle !== 'CLOSED_LOST' || ticket.lostReason == null) fail('ดีลนี้ยังไม่ได้ถูกทำเครื่องหมายเสียงาน', 409);
       // lostReason/lostAt deliberately PRESERVED (V57): erasing them left the row
       // indistinguishable from one never lost, so "why did we lose this before we
@@ -4563,7 +4752,7 @@ export const api = {
     async hold(id, payload = {}) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
       ticket.lifecycle = 'ON_HOLD';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -4574,7 +4763,7 @@ export const api = {
     async dormant(id, payload = {}) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!['ACTIVE', 'ON_HOLD'].includes(ticket.lifecycle ?? 'ACTIVE')) fail('พัก dormant ได้เฉพาะดีลที่ active หรือ on hold', 409);
       ticket.lifecycle = 'DORMANT';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -4585,7 +4774,7 @@ export const api = {
     async resume(id, payload = {}) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!['ON_HOLD', 'DORMANT'].includes(ticket.lifecycle)) fail('ดำเนินการต่อได้เฉพาะดีลที่พักไว้', 409);
       ticket.lifecycle = 'ACTIVE';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -4596,7 +4785,7 @@ export const api = {
     async setTenderRequirement(id, payload) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
       if (!['REQUIRED', 'NOT_REQUIRED', 'UNKNOWN'].includes(payload.value)) fail(`ไม่รองรับเงื่อนไขการประมูล '${payload.value}'`, 400);
       ticket.tenderRequirement = payload.value;
@@ -4608,10 +4797,10 @@ export const api = {
     async setEntryChannel(id, payload) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
       if (!['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].includes(payload.value)) fail(`ไม่รองรับช่องทางรับงาน '${payload.value}'`, 400);
-      if (ticket.entryChannel && ticket.entryChannel !== 'DESIGNER_LED' && ticket.entryChannel !== payload.value && !(payload.note || '').trim()) {
+      if (mockEntryChannelIsStated(ticket) && ticket.entryChannel !== payload.value && !(payload.note || '').trim()) {
         fail('การเปลี่ยน entry channel ต้องระบุเหตุผล', 400);
       }
       ticket.entryChannel = payload.value;
@@ -4637,7 +4826,7 @@ export const api = {
 
     // ── Deal tracking + activity (V83, Slice B1/B2 "kill the weekly report" —
     // handoff 103). Mirrors TicketController's addActivity/activities/updateTracking
-    // and TicketService's requireDealOwnership gate (reuses dealCanMarkLost — the
+    // and TicketService's requireDealOwnership gate (reuses mockCanDealOwnership — the
     // same check backing markLost/reopen/hold/dormant/resume above, since the real
     // service's requireDealOwnership is one shared method too).
 
@@ -4646,7 +4835,7 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       // Deliberately NOT requireActive: a rep can still log why a deal went quiet
       // on a non-ACTIVE deal (mirrors TicketService.addActivity — see handoff 103).
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!payload?.activityDate) fail('ต้องระบุวันที่ทำกิจกรรม', 400);
       if (!dealIsValidActivityKind(payload?.kind)) fail(`ไม่รองรับประเภทกิจกรรม '${payload?.kind}'`, 400);
       const activity = {
@@ -4666,14 +4855,14 @@ export const api = {
     async listActivities(id) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       return delay({ items: dealActivitiesForTicket(ticket.id) });
     },
 
     async updateTracking(id, payload) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      if (!dealCanMarkLost(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
       if (payload?.winProbability != null
         && (Number(payload.winProbability) < 0 || Number(payload.winProbability) > 100)) {
@@ -5826,7 +6015,7 @@ export const api = {
       }
       const id = Math.max(0, ...db.commissions.map((item) => item.id)) + 1;
       const salesRepId = Number(payload.salesRepId || user.id);
-      const calc = invoiceCalculation(payload);
+      const calc = mockInvoiceCalculation(payload);
       const record = {
         id,
         sourceTicketId: payload.sourceTicketId ?? null,
@@ -5925,7 +6114,7 @@ export const api = {
         : dealPayableAmountSnapshot;
       const dealAmountMismatch = commissionDealMismatch(effectiveGrossAmount, dealPayableAmountSnapshot);
       const id = Math.max(0, ...db.commissions.map((item) => item.id)) + 1;
-      const calc = invoiceCalculation({ ...payload, grossAmount: effectiveGrossAmount });
+      const calc = mockInvoiceCalculation({ ...payload, grossAmount: effectiveGrossAmount });
       const record = {
         id,
         sourceTicketId: ticketId,
@@ -5992,11 +6181,12 @@ export const api = {
     },
 
     // Slice A2: the sales-manager/CEO review step may edit any invoice input (not just the
-    // three deduction fields it always could) plus the calc-refine weightMultiplier (1/2/3;
-    // only 2x is owner-confirmed policy — see commissionCalc.js / handoff 102's "3x-unconfirmed
-    // note"). Every field is value-or-existing (null leaves it unchanged), and a non-blank
-    // `reason` is required on every call, mirroring UpdateCommissionDeductionsRequest exactly.
-    // The final commission is ALWAYS recomputed here — there is no path that sets it directly.
+    // three deduction fields it always could) plus the calc-refine weightMultiplier (1/2/3; only
+    // 2x is owner-confirmed policy — see handoff 102's "3x-unconfirmed note", recoverable from git
+    // history per CLAUDE.md's "Where the old docs went"). Every field is value-or-existing (null
+    // leaves it unchanged), and a non-blank `reason` is required on every call, mirroring
+    // UpdateCommissionDeductionsRequest exactly. The final commission is ALWAYS recomputed here —
+    // there is no path that sets it directly.
     async updateDeductions(id, payload) {
       hasRole('sales_manager', 'ceo');
       if (!payload.reason || !String(payload.reason).trim()) {
@@ -6055,7 +6245,7 @@ export const api = {
         if (![1, 2, 3].includes(weight)) fail('weightMultiplier ต้องเป็น 1, 2 หรือ 3', 400);
         record.weightMultiplier = weight;
       }
-      const calc = invoiceCalculation(record.invoiceDetails);
+      const calc = mockInvoiceCalculation(record.invoiceDetails);
       db.commissions
         .filter((item) => item.invoiceDetails.id === record.invoiceDetails.id && !['VOID', 'REJECTED'].includes(item.status))
         .forEach((item) => {
@@ -6154,8 +6344,8 @@ export const api = {
     /**
      * Manual commission entries (feat/commission-manual-adjustments): sales_manager/CEO adds a
      * hand-typed, signed amount for kind ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE against
-     * salesRepId's payrollMonth — no invoice, never touches invoiceCalculation/
-     * progressiveCommission. Mirrors CommissionService#createManualCommission +
+     * salesRepId's payrollMonth — no invoice, never touches the commission tier calculation.
+     * Mirrors CommissionService#createManualCommission +
      * CommissionRepository#createManualCommission's two INSERT branches exactly.
      *
      * Authz here only APPROXIMATES the Java service (CLAUDE.md "Mock API contract") — the real
@@ -6172,7 +6362,7 @@ export const api = {
       if (payload.amount === null || payload.amount === undefined || payload.amount === '' || Number.isNaN(Number(payload.amount))) {
         fail('ต้องระบุจำนวนเงิน', 400);
       }
-      const amount = commissionRound2(Number(payload.amount));
+      const amount = round2(Number(payload.amount));
       if (!payload.reason || !String(payload.reason).trim()) {
         fail('ต้องระบุเหตุผลสำหรับรายการค่าคอมมิชชั่นแบบกรอกเอง', 400);
       }
@@ -6226,49 +6416,41 @@ export const api = {
       return delay({ commission: buildCommissionRecord(record) });
     },
 
+    // MOCK COMMISSION FIXTURE (see the header above `commissions`): actualReceived/
+    // commissionableBase below are honest arithmetic over the caller's own typed-in invoice
+    // fields (mockInvoiceCalculation). existingMonthlyBase/projectedMonthlyBase/
+    // projectedMonthlyCommission/incrementalCommission are NOT -- mock mode has no tier config to
+    // compute them from, so they are MOCK_SIMULATION_FIXTURE's canned numbers regardless of the
+    // caller's rep/month/history. The real figures come from CommissionService#simulate.
     async simulate(payload) {
       const user = requireSession();
       if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (user.role === 'sales' && (Number(payload.transportFee || 0) > 0 || Number(payload.cutFee || 0) > 0 || Number(payload.shortfall || 0) > 0)) {
         fail('ฝ่ายขายไม่มีสิทธิ์แก้ไขช่องรายการหักเงิน', 403);
       }
-      const salesRepId = user.role === 'sales' ? user.id : Number(payload.salesRepId || user.id);
       const month = commissionMonth(payload.payrollMonth || new Date().toISOString());
-      const calc = invoiceCalculation({
+      const calc = mockInvoiceCalculation({
         ...payload,
         transportFee: user.role === 'sales' ? 0 : payload.transportFee,
         cutFee: user.role === 'sales' ? 0 : payload.cutFee,
         shortfall: user.role === 'sales' ? 0 : payload.shortfall,
       });
-      // Commission redesign calc-refine: the monthly TIER BASE is the full-precision SUM(actual
-      // received x weight_multiplier) / 1.07, divided exactly once — not a sum of already-2dp
-      // commissionableBase rows. The unsaved invoice being simulated has no weight choice yet
-      // (that only happens later, at manager review), so it folds into the weighted sum at the
-      // default weight of 1. Mirrors CommissionService#simulate.
-      const existingWeightedActualReceived = db.commissions
-        .filter((item) => item.salesRepId === salesRepId
-          && commissionMonth(item.payrollMonth) === month
-          && !['VOID', 'REJECTED'].includes(item.status))
-        .reduce((sum, item) => sum + Number(item.actualReceived || 0) * Number(item.weightMultiplier || 1), 0);
-      const projectedWeightedActualReceived = existingWeightedActualReceived + calc.actualReceived;
-      const existingBase = calcMonthlyTierBase(existingWeightedActualReceived);
-      const projectedBase = calcMonthlyTierBase(projectedWeightedActualReceived);
-      const priorCommission = progressiveCommission(existingBase);
-      const projectedCommission = progressiveCommission(projectedBase);
       return delay({
         simulation: {
           payrollMonth: `${month}-01`,
           actualReceived: calc.actualReceived,
           commissionableBase: calc.commissionableBase,
-          // Display-rounded to 2dp — the unrounded value is what fed progressiveCommission above.
-          existingMonthlyBase: commissionRound2(existingBase),
-          projectedMonthlyBase: commissionRound2(projectedBase),
-          projectedMonthlyCommission: projectedCommission,
-          incrementalCommission: commissionRound2(projectedCommission - priorCommission),
+          ...MOCK_SIMULATION_FIXTURE,
         },
       });
     },
 
+    // MOCK COMMISSION FIXTURE (see the header above `commissions`): WHICH reps appear, and their
+    // manualAdjustmentAmount, are real -- grouped from db.commissions and summed honestly ("who
+    // has approved activity this month" and "sum their manual amounts" are not policy). Every
+    // tier/incentive/stock-bonus figure is MOCK_PAYROLL_READY_TIER_FIXTURE, the one fixed fixture
+    // reused for every rep -- the real per-rep math lives only in
+    // CommissionService#computeRepPayrollCommissions.
     async payrollReady(params = {}) {
       hasRole('hr');
       const month = commissionMonth(params.payrollMonth || new Date().toISOString());
@@ -6276,88 +6458,47 @@ export const api = {
       const reps = new Map();
       // Manual entries (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE, feat/commission-manual-
       // adjustments) never feed the tier calc — accumulated separately and added to each rep's
-      // FINAL commission total only, on top of the tier commission, exactly mirroring
-      // CommissionService#payrollReadySummary's manualTotals map. Only APPROVED records reach
-      // this point (the `approved` filter above), so a manual entry still sitting at
-      // MANAGER_APPROVED correctly does not count yet.
+      // FINAL commission total only, on top of the (canned) tier commission. Only APPROVED
+      // records reach this point (the `approved` filter above), so a manual entry still sitting
+      // at MANAGER_APPROVED correctly does not count yet.
       const manualTotals = new Map();
-      // Issue #405 transition safeguard, REWORKED (2026-08-02 review): summed per-kind manual
-      // amount, not just "does one exist" — mirrors
-      // CommissionService#computeRepPayrollCommissions's reworked guard exactly. A POSITIVE
-      // summed amount is a hand-typed REPLACEMENT and suppresses the auto limb; a ZERO or
-      // NEGATIVE summed amount is a CORRECTION layered on top, so the auto limb still computes
-      // and the correction (already folded into manualTotals/manualAmount below) adds to it. A
-      // negative manual INCENTIVE previously zeroed the entire auto limb instead of adding a
-      // correction on top of it — see the backend method's comment for the full rationale.
-      const manualIncentiveTotals = new Map();
-      const manualStockBonusTotals = new Map();
       approved.forEach((item) => {
         if (isManualCommissionKind(item.kind)) {
           manualTotals.set(item.salesRepId, {
             salesRepName: item.salesRepName,
             amount: (manualTotals.get(item.salesRepId)?.amount || 0) + Number(item.manualAmount || 0),
           });
-          if (item.kind === 'INCENTIVE') {
-            manualIncentiveTotals.set(item.salesRepId, (manualIncentiveTotals.get(item.salesRepId) || 0) + Number(item.manualAmount || 0));
-          }
-          if (item.kind === 'STOCK_BONUS') {
-            manualStockBonusTotals.set(item.salesRepId, (manualStockBonusTotals.get(item.salesRepId) || 0) + Number(item.manualAmount || 0));
-          }
           return;
         }
-        // Commission redesign calc-refine: accumulate the WEIGHTED actual-received (real cash x
-        // weight_multiplier), not the already-2dp-rounded commissionableBase column — mirrors
-        // CommissionService#payrollReadySummary's RepAccumulator exactly.
-        const current = reps.get(item.salesRepId) || { salesRepId: item.salesRepId, salesRepName: item.salesRepName, weightedActualReceived: 0 };
-        current.weightedActualReceived += Number(item.actualReceived || 0) * Number(item.weightMultiplier || 1);
-        reps.set(item.salesRepId, current);
+        if (!reps.has(item.salesRepId)) {
+          reps.set(item.salesRepId, { salesRepId: item.salesRepId, salesRepName: item.salesRepName });
+        }
       });
-      // Issue #405, ข้อ 12 fix-forward gate: a payroll month before 2026-08-01 has no matching
-      // config generation (see V108), so both auto-computed limbs stay at zero — mirrors
-      // CommissionRepository#findIncentiveTiers/#findStockBonusConfig's generation-selection SQL.
-      const effectiveMonth = month >= INCENTIVE_STOCK_BONUS_EFFECTIVE_MONTH;
+      const { commissionableBase, tierCommission, incentiveAmount, stockBonusAmount } = MOCK_PAYROLL_READY_TIER_FIXTURE;
       const salesReps = [...reps.values()].map((rep) => {
-        const safeWeighted = Math.max(0, rep.weightedActualReceived);
-        // Full precision here (not rounded to 2dp) — only the final commission total rounds.
-        const safeBase = calcMonthlyTierBase(safeWeighted);
-        const tierCommission = progressiveCommission(safeBase);
         const manualAmount = manualTotals.get(rep.salesRepId)?.amount || 0;
         manualTotals.delete(rep.salesRepId);
-        // Suppress the auto limb only when the summed manual amount of that kind is STRICTLY
-        // POSITIVE (a replacement) — zero/negative (a correction) leaves the auto limb computing.
-        const incentiveReplaced = (manualIncentiveTotals.get(rep.salesRepId) || 0) > 0;
-        const incentiveAmount = (!effectiveMonth || incentiveReplaced)
-          ? 0
-          : calcMonthlyIncentive(safeBase, INCENTIVE_LADDER);
-        const stockBonusReplaced = (manualStockBonusTotals.get(rep.salesRepId) || 0) > 0;
-        // Review fix (performance mirror): short-circuit before the stock-receipts scan when the
-        // config is disabled or the limb is replaced — STOCK_BONUS_DEFAULTS.enabled is false by
-        // default, so this also matches "ships config-gated OFF" for the mock.
-        const stockBonusAmount = (!effectiveMonth || stockBonusReplaced || !STOCK_BONUS_DEFAULTS.enabled)
-          ? 0
-          : calcStockSaleBonus(stockReceiptsForRep(rep.salesRepId, month), STOCK_BONUS_DEFAULTS);
         return {
           salesRepId: rep.salesRepId,
           salesRepName: rep.salesRepName,
-          commissionableBase: commissionRound2(safeBase),
-          commissionAmount: commissionRound2(tierCommission + incentiveAmount + stockBonusAmount + manualAmount),
-          manualAdjustmentAmount: commissionRound2(manualAmount),
-          incentiveAmount: commissionRound2(incentiveAmount),
-          stockBonusAmount: commissionRound2(stockBonusAmount),
+          commissionableBase,
+          commissionAmount: round2(tierCommission + incentiveAmount + stockBonusAmount + manualAmount),
+          manualAdjustmentAmount: round2(manualAmount),
+          incentiveAmount,
+          stockBonusAmount,
         };
       });
       // A rep whose ONLY approved commission this month is a manual entry (e.g. a MANAGER
-      // commission for someone with no SALE commission yet) still needs a summary row: tier
-      // base/commission are zero, the manual amount is the whole total. Issue #405: their
-      // auto-computed incentive/stock-bonus are kept explicitly zero too — mirrors
-      // CommissionService#payrollReadySummary's second loop exactly.
+      // commission for someone with no SALE commission yet) still needs a summary row: no tier
+      // activity, so commissionableBase/incentive/stockBonus are all zero and the manual amount
+      // is the whole total — mirrors CommissionService#payrollReadySummary's second loop exactly.
       manualTotals.forEach((entry, salesRepId) => {
         salesReps.push({
           salesRepId,
           salesRepName: entry.salesRepName,
           commissionableBase: 0,
-          commissionAmount: commissionRound2(entry.amount),
-          manualAdjustmentAmount: commissionRound2(entry.amount),
+          commissionAmount: round2(entry.amount),
+          manualAdjustmentAmount: round2(entry.amount),
           incentiveAmount: 0,
           stockBonusAmount: 0,
         });
@@ -6372,6 +6513,45 @@ export const api = {
           totalIncentiveAmount: salesReps.reduce((sum, item) => sum + item.incentiveAmount, 0),
           totalStockBonusAmount: salesReps.reduce((sum, item) => sum + item.stockBonusAmount, 0),
           salesReps,
+        },
+      });
+    },
+
+    /**
+     * fix/commission-figures-from-backend: a rep's own live monthly commission estimate. Mirrors
+     * CommissionController#monthlySummary's role gate exactly (SALES, SALES_MANAGER, CEO — same
+     * as list() above). MOCK COMMISSION FIXTURE (see the header above `commissions`):
+     * commissionableBase/tierCommission/incentiveAmount/belowFloor/tiers are ALL canned —
+     * MOCK_MONTHLY_SUMMARY_FIXTURE, `false`, and `[]` respectively — mock mode has no DB tier
+     * config to compute a real per-tier breakdown from, so CommissionPage's MonthlyTierPanel shows
+     * its empty-state line instead of a fabricated table. manualTotal is the one honestly-summed
+     * figure: a plain sum of this rep/month's approved manual-kind demo records, no policy
+     * involved. totalCommission is computed from these (not itself canned), so it tracks
+     * manualTotal correctly even though two of its three inputs are frozen.
+     */
+    async monthlySummary(params = {}) {
+      const user = requireSession();
+      if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const salesRepId = user.role === 'sales' ? user.id : Number(params.salesRepId || user.id);
+      const month = commissionMonth(params.payrollMonth || new Date().toISOString());
+      const manualTotal = round2(db.commissions
+        .filter((item) => item.salesRepId === salesRepId
+          && commissionMonth(item.payrollMonth) === month
+          && isManualCommissionKind(item.kind)
+          && item.status === 'APPROVED')
+        .reduce((sum, item) => sum + Number(item.manualAmount || 0), 0));
+      const { commissionableBase, tierCommission, incentiveAmount } = MOCK_MONTHLY_SUMMARY_FIXTURE;
+      return delay({
+        summary: {
+          payrollMonth: `${month}-01`,
+          salesRepId,
+          commissionableBase,
+          tierCommission,
+          incentiveAmount,
+          manualTotal,
+          totalCommission: round2(tierCommission + incentiveAmount + manualTotal),
+          belowFloor: false,
+          tiers: [],
         },
       });
     },
@@ -7233,6 +7413,18 @@ export const api = {
       if (index === -1) fail(`ไม่พบสินค้า price_id=${pid}`, 404);
       mockProductPrices.splice(index, 1);
       return delay({ status: 'deleted' });
+    },
+  },
+
+  // Mirrors DealStageMetaController (ticket/). Canned data, deliberately: the catalog is the same
+  // fifteen constants for every caller, and data/dealStageCatalog.js is checked against
+  // DealStage.java by features/tickets/stageCatalog.test.js so this fixture cannot go stale the
+  // way the frontend's old hand-written stage list did. Authenticated-only on the real endpoint,
+  // no role gate — the payload carries no business data.
+  meta: {
+    async dealStages() {
+      requireSession();
+      return delay(DEAL_STAGE_CATALOG);
     },
   },
 
@@ -8696,8 +8888,15 @@ export const api = {
       decision.returnReason = payload.returnReason;
       decision.returnedAt = new Date().toISOString();
       decision.updatedAt = new Date().toISOString();
-      pr.status = 'COSTING_REVISION_REQUIRED';
-      pushPricingRequestEvent(pr, user, 'PRICING_DECISION_RETURNED', 'CEO_REVIEWING', 'COSTING_REVISION_REQUIRED', payload.returnReason);
+      // AWAITING_FACTORY_RESPONSE, matching PricingDecisionService.returnToImport (:453-460).
+      // This wrote COSTING_REVISION_REQUIRED until issue #741 — a status V141 DELETED, from both
+      // chk_pricing_request_status and PricingRequestStatus.VALUES. There was no production
+      // symptom, which is the whole problem: the same CEO click produced 'CEO ตีกลับให้แก้ไขต้นทุน'
+      // in danger tone under VITE_USE_MOCKS=true and 'เจรจาราคากับโรงงาน' in info tone against the
+      // real backend, so anyone using mock mode as a design or QA reference for the CEO return
+      // path was looking at a state that no longer exists.
+      pr.status = 'AWAITING_FACTORY_RESPONSE';
+      pushPricingRequestEvent(pr, user, 'PRICING_DECISION_RETURNED', 'CEO_REVIEWING', 'AWAITING_FACTORY_RESPONSE', payload.returnReason);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       if (pr.assignedImportId != null) {
         addNotification(pr.assignedImportId, pr.ticketId, ticket?.code, 'PRICING_DECISION_RETURNED',
@@ -8829,7 +9028,12 @@ export const api = {
       }
       // Rule 7: reuse the EXACT SAME stage-advance the legacy quotation() mock action already
       // performs — not a second path.
-      if (['DESIGNER', 'OWNER'].includes(preview.recipientType)) autoAdvanceStage(ticket, 'QUOTE_DESIGN_SIDE', user);
+      // Mirrors TicketService.stageForQuotationRecipient. V143 split the recipients that used to
+      // collapse onto one stage: DESIGNER -> S4, OWNER -> S5, BUYER -> S8. This line routed OWNER
+      // to QUOTE_DESIGN_SIDE until now, so issuing an owner quotation in mock mode advanced the
+      // deal to the designer's milestone and "has the owner been quoted?" stayed unanswerable.
+      if (preview.recipientType === 'DESIGNER') autoAdvanceStage(ticket, 'QUOTE_DESIGN_SIDE', user);
+      if (preview.recipientType === 'OWNER') autoAdvanceStage(ticket, 'QUOTE_OWNER', user);
       if (preview.recipientType === 'BUYER') autoAdvanceStage(ticket, 'QUOTE_BUYER', user);
       pushEvent(ticket, user, 'QUOTATION_ISSUED', null, null,
         `ออกใบเสนอราคาลูกค้า ${preview.number} (revision ${preview.quotationRevisionNo})`);

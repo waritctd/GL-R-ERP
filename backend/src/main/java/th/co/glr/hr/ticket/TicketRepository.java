@@ -17,6 +17,8 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.common.ApiException;
+import org.springframework.http.HttpStatus;
 
 @Repository
 public class TicketRepository {
@@ -109,12 +111,19 @@ public class TicketRepository {
             .addValue("salesStage", salesStage)
             .addValue("createdBy", createdByFilter);
         appendRoleScope(sql, params, actorRole);
+        // The ticket_id tiebreaker is load-bearing, not decoration: created_at alone is not a
+        // total order, and this query is paged with LIMIT/OFFSET below. Ties make each page a
+        // separate arbitrary slice, so a row can appear on two pages while another never appears
+        // at all. Measured before the tiebreaker, against a seed where every ticket shares one
+        // created_at: paging size=1 returned ticket 1 on both page 0 and page 1 and NEVER
+        // returned ticket 2 — reproducibly, five runs out of five. Ties are not a seed artefact;
+        // tickets created in one batch tie the same way in production.
         sql.append("""
              GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
                       ea.first_name_th, ea.last_name_th,
                       p.name, ct.first_name, ct.last_name,
                       ecc.first_name_th, ecc.last_name_th
-             ORDER BY t.created_at DESC
+             ORDER BY t.created_at DESC, t.ticket_id DESC
             """);
         if (page != null) {
             sql.append(" LIMIT :limit OFFSET :offset");
@@ -244,8 +253,12 @@ public class TicketRepository {
                 .addValue("projectId", request.projectId())
                 .addValue("contactId", request.contactId())
                 .addValue("note", request.note())
+                // V144: an omitted channel lands UNSPECIFIED ("not stated"), not DESIGNER_LED.
+                // Defaulting to a real route made every unattended row assert one, so a deliberate
+                // DESIGNER_LED was indistinguishable from silence — see EntryChannel's Javadoc and
+                // V144__ticket_entry_channel_unspecified.sql for the pre-V144 data cutoff.
                 .addValue("entryChannel", request.entryChannel() != null && !request.entryChannel().isBlank()
-                    ? request.entryChannel() : EntryChannel.DESIGNER_LED),
+                    ? request.entryChannel() : EntryChannel.UNSPECIFIED),
             keyHolder, new String[]{"ticket_id"});
         long ticketId = keyHolder.getKey().longValue();
         if (hasItems) insertItems(ticketId, request.items());
@@ -282,28 +295,31 @@ public class TicketRepository {
                                    String message, String itemSnapshotJson,
                                    String documentType, Long documentId) {
         if (toStatus != null) {
-            // toStatus doubles as the event's "to" timeline label AND, for genuine
-            // status transitions, the ticket's new status. Deal-pipeline events
-            // (STAGE_CHANGED, MARKED_LOST, ON_HOLD, POLICY_CHANGED, …) reuse the same
-            // from/to slots to carry a sales_stage / lifecycle value — write it onto
-            // sales.ticket.status ONLY when it is a real ticket status, otherwise a
-            // stage code (e.g. QUOTE_BUYER) would violate chk_ticket_status. The
-            // updated_at / closed_at / pickup side-effects still fire for every event.
-            boolean writeStatus = TicketStatus.isValid(toStatus);
-            boolean closing = writeStatus
-                && (TicketStatus.CLOSED.equals(toStatus) || TicketStatus.CANCELLED.equals(toStatus));
+            // Logging an event NO LONGER WRITES sales.ticket.status. It used to: the column was
+            // set to toStatus whenever TicketStatus.isValid(toStatus), which is a MEMBERSHIP
+            // check, not a transition guard — so any event carrying any valid status silently
+            // overwrote the column from any current state, while DepositNoticeService and
+            // TicketService.requireClosePrerequisites read that same column as a guard. Every
+            // genuine transition now goes through #transitionStatus, which validates the edge
+            // against TicketStatus.ALLOWED and compare-and-sets on the expected value.
+            //
+            // The updated_at / closed_at / pickup side-effects deliberately STAY here and fire
+            // for every event exactly as before — including closed_at, which keys off toStatus
+            // being CLOSED/CANCELLED rather than off the row's current value, so a caller that
+            // transitions then logs gets the same closed_at it always did. (isValid is no longer
+            // consulted for `closing`: CLOSED and CANCELLED are members of VALUES by
+            // construction, so the old `writeStatus &&` conjunct could never change the result.)
+            boolean closing =
+                TicketStatus.CLOSED.equals(toStatus) || TicketStatus.CANCELLED.equals(toStatus);
             boolean isPickup = TicketEventKind.PICKED_UP.equals(kind);
             jdbc.update("""
                 UPDATE sales.ticket
-                   SET status = CASE WHEN :writeStatus THEN :status ELSE status END,
-                       updated_at = now(),
+                   SET updated_at = now(),
                        closed_at = CASE WHEN :closing THEN now() ELSE closed_at END,
                        assigned_to = CASE WHEN :isPickup THEN :actorId ELSE assigned_to END
                  WHERE ticket_id = :id
                 """,
                 new MapSqlParameterSource()
-                    .addValue("status", toStatus)
-                    .addValue("writeStatus", writeStatus)
                     .addValue("closing", closing)
                     .addValue("isPickup", isPickup)
                     .addValue("actorId", actorId)
@@ -935,7 +951,8 @@ public class TicketRepository {
             rs.getString("designer_name"),
             rs.getString("owner_name"),
             rs.getString("buyer_name"),
-            false // stale — recomputed by enrichSummary, which alone knows deal_activity
+            false, // stale — recomputed by enrichSummary, which alone knows deal_activity
+            false // commissionRecorded — recomputed by enrichSummary, which alone queries commission_record
         );
     }
 
@@ -965,7 +982,11 @@ public class TicketRepository {
             stage, payable, paid, outstanding, overdue,
             s.closeConfirmedAt(), s.closeConfirmedByName(), hasInvoiceAttachment(s.id()),
             s.cancelReason(), s.cancelledAt(),
-            s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), stale);
+            // commissionRecorded joins payableAmount/sumPaid/hasBalanceReceipt/isStale/
+            // hasInvoiceAttachment above as another per-row query enrichSummary runs to fill in a
+            // field mapSummary alone cannot answer from sales.ticket.
+            s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), stale,
+            hasRecordedCommission(s.id()));
     }
 
     /**
@@ -979,6 +1000,30 @@ public class TicketRepository {
              WHERE ticket_id = :id AND attach_type = 'INVOICE'
             """, Map.of("id", ticketId), Integer.class);
         return n != null && n > 0;
+    }
+
+    /**
+     * Backs {@link TicketSummaryDto#commissionRecorded} — a DELIBERATE second copy of {@code
+     * CommissionRepository.hasActiveCommissionForTicket}'s predicate, not a re-derivation.
+     * {@code TicketRepository} is hand-wired as {@code new TicketRepository(jdbc)} in ~40 places
+     * (services, controllers, tests), so injecting {@code CommissionRepository} here to call the
+     * real method would break every one of them for the sake of one boolean.
+     *
+     * <p>The copy is guarded instead of re-derived: {@code CommissionRecordedFlagIntegrationTest}
+     * asserts, against real Postgres, that this method and {@code CommissionRepository
+     * .hasActiveCommissionForTicket} always agree. If you change one predicate you MUST change the
+     * other, and that test is what catches it if you forget.
+     */
+    private boolean hasRecordedCommission(long ticketId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT EXISTS(
+                SELECT 1 FROM sales.commission_record
+                 WHERE source_ticket_id = :ticketId
+                   AND kind = 'SALE'
+                   AND status NOT IN ('VOID', 'REJECTED')
+            )
+            """, Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
     }
 
     /** ฝ่ายบัญชี signs off that the deal is ready to close; CEO verification still required. */
@@ -1016,6 +1061,77 @@ public class TicketRepository {
             return PaymentStage.DEPOSIT_PENDING;
         }
         return outstanding.signum() > 0 ? PaymentStage.BALANCE_PENDING : PaymentStage.NOT_REQUIRED;
+    }
+
+    /** Live (non-CANCELLED) PO counts for one deal — the raw input to the import-status rollup. */
+    public record PurchaseOrderRollup(int live, int received, int pastOpen) {}
+
+    /**
+     * One query, three filtered counts — everything {@link #deriveImportStatus} needs from {@code
+     * sales.factory_purchase_order}. CANCELLED is excluded from every count: a cancelled PO is how
+     * Import backs out of a factory order, so it must behave as if it never existed for rollup
+     * purposes (see {@link #deriveImportStatus}'s own Javadoc for the all-cancelled-deal decision
+     * this feeds). {@code received}/{@code pastOpen} need no explicit {@code <> 'CANCELLED'} of
+     * their own — {@code RECEIVED} and {@code SHIPPING} are already disjoint from {@code
+     * CANCELLED}, so the extra predicate would be redundant, not merely omitted by oversight.
+     */
+    public PurchaseOrderRollup purchaseOrderRollup(long ticketId) {
+        return jdbc.queryForObject("""
+            SELECT COUNT(*) FILTER (WHERE status <> 'CANCELLED')              AS live,
+                   COUNT(*) FILTER (WHERE status = 'RECEIVED')                AS received,
+                   COUNT(*) FILTER (WHERE status IN ('SHIPPING', 'RECEIVED')) AS past_open
+              FROM sales.factory_purchase_order
+             WHERE ticket_id = :ticketId
+            """, Map.of("ticketId", ticketId),
+            (rs, rowNum) -> new PurchaseOrderRollup(
+                rs.getInt("live"), rs.getInt("received"), rs.getInt("past_open")));
+    }
+
+    /**
+     * Rolls this deal's live (non-CANCELLED) factory purchase orders up into a single import-axis
+     * {@link FulfilmentStatus} value, or {@code null} when the POs assert nothing about where the
+     * import journey currently stands:
+     *
+     * <ul>
+     *   <li>no live POs at all (none ever created, or every one CANCELLED) -&gt; {@code null}</li>
+     *   <li>every live PO is RECEIVED -&gt; {@link FulfilmentStatus#GOODS_RECEIVED}</li>
+     *   <li>at least one live PO has moved past OPEN (SHIPPING or RECEIVED), but not every one is
+     *       RECEIVED yet -&gt; {@link FulfilmentStatus#SHIPPING}</li>
+     *   <li>every live PO is still OPEN -&gt; {@code null} (the ticket keeps whatever IR_ISSUED /
+     *       IR_SENT flag it already carries — the POs have not started shipping yet)</li>
+     * </ul>
+     *
+     * <p><strong>All-cancelled deal, deliberately treated identically to zero POs.</strong>
+     * Cancelling every PO on a deal is how Import backs out of a factory order entirely — e.g.
+     * re-sourcing from a different factory. Returning {@code null} here (rather than inventing a
+     * terminal "cancelled" import status) hands control back to the ticket-level {@code
+     * TicketService#markShipping}/{@code #markGoodsReceived} flow, so the deal is not stranded
+     * with no way to progress. Leaving the deal frozen at whatever import-axis status it last had
+     * would be a worse outcome than trusting the ticket-level setters again.
+     */
+    public String deriveImportStatus(long ticketId) {
+        PurchaseOrderRollup r = purchaseOrderRollup(ticketId);
+        if (r.live() == 0) {
+            return null;
+        }
+        if (r.received() == r.live()) {
+            return FulfilmentStatus.GOODS_RECEIVED;
+        }
+        if (r.pastOpen() > 0) {
+            return FulfilmentStatus.SHIPPING;
+        }
+        return null;
+    }
+
+    /**
+     * Whether this deal is PO-tracked at all (&gt;= 1 live, non-CANCELLED PO) — the refusal guard
+     * {@code TicketService#markShipping}/{@code #markGoodsReceived} use to refuse a ticket-level
+     * write that would bypass the per-factory PO record. Implemented via {@link
+     * #purchaseOrderRollup}'s own {@code live} count rather than a second, independent query, so
+     * this and {@link #deriveImportStatus} can never see a different PO snapshot from one another.
+     */
+    public boolean hasLivePurchaseOrders(long ticketId) {
+        return purchaseOrderRollup(ticketId).live() > 0;
     }
 
     public void updateSalesStage(long ticketId, String stage) {
@@ -1435,6 +1551,47 @@ public class TicketRepository {
     }
 
     /**
+     * Validated ticket-status transition — the ONE way {@code sales.ticket.status} is written
+     * (ticket creation's INSERT sets the initial {@code draft} and is not a transition). Mirrors
+     * {@code PricingRequestRepository.transition} and {@link #advancePaymentStatus}:
+     *
+     * <ol>
+     *   <li>the edge is asserted against {@link TicketStatus#canTransition} BEFORE any SQL runs,
+     *       throwing {@link IllegalStateException} — an undeclared {@code expected -> next} pair
+     *       means the CALLING CODE asked for a transition the machine does not recognise, a
+     *       programming error to catch at the source, not a user-visible race;
+     *   <li>the UPDATE is a compare-and-set on {@code status = :expected}, so a 0 rowcount means a
+     *       concurrent writer moved the row between the caller's read and this write. The SERVICE
+     *       must turn that into a 409 — never re-SELECT to build a nicer message, which would
+     *       reintroduce the very race the {@code WHERE} clause closes.
+     * </ol>
+     *
+     * <p>Single-hop only, deliberately: unlike the payment track there is no multi-state walk to
+     * perform, because every write site knows both ends of its own transition.
+     *
+     * <p>{@code closed_at} is NOT set here — it is written by {@link #addEventInternal} for every
+     * CLOSED/CANCELLED event, exactly as it was before the status write was separated out, so the
+     * two halves together produce byte-for-byte the same row as the old single statement.
+     *
+     * @return the rowcount (0 or 1).
+     */
+    public int transitionStatus(long ticketId, String expected, String next) {
+        if (!TicketStatus.canTransition(expected, next)) {
+            throw new IllegalStateException(
+                "Illegal ticket status transition: " + expected + " -> " + next);
+        }
+        return jdbc.update("""
+            UPDATE sales.ticket
+               SET status = :next, updated_at = now()
+             WHERE ticket_id = :id AND status = :expected
+            """,
+            new MapSqlParameterSource()
+                .addValue("id", ticketId)
+                .addValue("expected", expected)
+                .addValue("next", next));
+    }
+
+    /**
      * Step 6 (V76): the ONE deliberate bridge write outside the legacy ticket status state
      * machine — see {@code th.co.glr.hr.orderconfirmation.OrderConfirmationService}'s class
      * Javadoc for the full reasoning. Since {@link th.co.glr.hr.ticket.TicketService#submit}
@@ -1445,16 +1602,96 @@ public class TicketRepository {
      * never silently overwritten — 0 rows signals "not eligible", which the caller turns into a
      * 409 unless the current status already happens to be {@code quotation_issued} (an idempotent
      * replay of this same bridge).
+     *
+     * <p>Now expressed as a {@link #transitionStatus} call rather than its own hand-written SQL,
+     * so this bridge is subject to the same machine as every other write and {@code draft ->
+     * quotation_issued} is a DECLARED edge instead of an untracked exception. Behaviour is
+     * unchanged: the {@code expected} value is hardcoded to {@code draft}, so the edge check is
+     * a constant that always passes and a non-draft row still yields 0 rows, never a throw.
      */
     public int markQuotationIssuedForOrderConfirmation(long ticketId) {
-        return jdbc.update("""
-            UPDATE sales.ticket
-               SET status = 'quotation_issued', updated_at = now()
-             WHERE ticket_id = :id AND status = 'draft'
-            """, Map.of("id", ticketId));
+        return transitionStatus(ticketId, TicketStatus.DRAFT, TicketStatus.QUOTATION_ISSUED);
     }
 
-    public void updatePaymentStatus(long ticketId, String paymentStatus) {
+    /**
+     * Validated payment-track advance. Walks EVERY hop from {@code expected} to {@code next}
+     * through {@link PaymentTrack#stepsBetween}, so an illegal edge throws {@link
+     * IllegalStateException} BEFORE any SQL runs (mirrors {@code
+     * PricingRequestRepository.transition}). The final UPDATE is a compare-and-set on {@code
+     * payment_status = :expected}; a 0 rowcount means a concurrent writer moved the row and the
+     * SERVICE must turn that into a 409 — do NOT re-SELECT to build a nicer message (same
+     * discipline as {@code PricingRequestRepository.transition}'s own Javadoc).
+     *
+     * <p>Multi-hop is a WALK, not a SKIP: intermediate states are traversed and validated by
+     * {@link PaymentTrack#stepsBetween}, never jumped over. The whole walk is inside the caller's
+     * transaction, so no observer ever sees an intermediate value — the UPDATE below still moves
+     * the row straight from {@code expected} to {@code next} in one statement; only the
+     * VALIDATION is multi-hop.
+     *
+     * <p>{@code IS NOT DISTINCT FROM}, not a plain {@code =}: {@code expected == null} is the
+     * entry case ({@code null -> CUSTOMER_CONFIRMED}), and a plain {@code = :expected} never
+     * matches a NULL column value.
+     *
+     * @return the rowcount (0 or 1) — 0 means the compare-and-set lost a race; never re-SELECT to
+     *     build a nicer error, per the discipline above.
+     */
+    public int advancePaymentStatus(long ticketId, String policy, String expected, String next) {
+        // stepsBetween throws IllegalStateException for an illegal edge, BEFORE any SQL runs.
+        // The design intent is "a programming error to catch at the source", which is right — but
+        // IllegalStateException is unmapped in ApiExceptionHandler, so anything that does reach it
+        // surfaces as an opaque HTTP 500 rather than something a caller can act on. Adversarial
+        // review found three legacy-data routes that reached it. Those are fixed at source (the
+        // gate in reconcilePaymentStatus, and V142's backfill), so this is defence in depth:
+        // convert to a 409 so a residual illegal edge is a legible conflict, not a 500.
+        // Deliberately NOT a global @ExceptionHandler(IllegalStateException) — that would swallow
+        // genuine programming errors across the whole app.
+        try {
+            PaymentTrack.stepsBetween(policy, expected, next);
+        } catch (IllegalStateException e) {
+            throw new ApiException(HttpStatus.CONFLICT, "สถานะการชำระเงินของดีลนี้ไม่ถูกต้อง กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
+        // WALK, and PERSIST every hop (owner ruling): a multi-hop advance writes each intermediate
+        // state in turn rather than jumping straight to the target. confirmFinalPayment on a
+        // REQUIRED deal goes DEPOSIT_PAID -> AWAITING_FINAL_PAYMENT -> FULLY_PAID, and the row
+        // genuinely sits at AWAITING_FINAL_PAYMENT in between so the deal's history shows it.
+        // A single jump-write would leave no trace that the state was ever reached.
+        //
+        // Each hop is its own compare-and-set chained off the previous one, so a lost race stops
+        // the walk immediately and returns 0 for the caller to turn into a 409 — it never
+        // continues writing from a state it did not actually observe. All hops run inside the
+        // caller's transaction, so a failure part-way rolls the whole walk back in production.
+        // NOTE: @Transactional is inert in this repo's hand-wired integration tests, so the suite
+        // does NOT prove that atomicity — see the finding on the integration harness.
+        List<String> hops = PaymentTrack.stepsBetween(policy, expected, next);
+        String from = expected;
+        int rows = 0;
+        for (String hop : hops) {
+            rows = jdbc.update("""
+                UPDATE sales.ticket
+                   SET payment_status = :next, updated_at = now()
+                 WHERE ticket_id = :id AND payment_status IS NOT DISTINCT FROM :expected
+                """,
+                new MapSqlParameterSource()
+                    .addValue("next", hop)
+                    .addValue("id", ticketId)
+                    .addValue("expected", from));
+            if (rows == 0) {
+                return 0;
+            }
+            from = hop;
+        }
+        return rows;
+    }
+
+    /**
+     * Test-seed / migration use only — bypasses {@link PaymentTrack} entirely (a blind, unguarded
+     * UPDATE: no compare-and-set, no validated edge, no {@code updated_at} touch). No production
+     * code may call this; every real write goes through {@link #advancePaymentStatus}. Renamed
+     * from the original unqualified {@code updatePaymentStatus} — kept because {@code
+     * TicketScopeIntegrationTest} seeds {@code payment_status} directly to build fixture state
+     * without driving it through the state machine.
+     */
+    public void updatePaymentStatusUnchecked(long ticketId, String paymentStatus) {
         jdbc.update(
             "UPDATE sales.ticket SET payment_status = :s WHERE ticket_id = :id",
             new MapSqlParameterSource().addValue("s", paymentStatus).addValue("id", ticketId));

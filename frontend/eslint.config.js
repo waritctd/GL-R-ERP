@@ -56,7 +56,12 @@ export default [
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',
-      globals: { ...globals.browser },
+      // Node globals alongside the browser ones: a handful of *.test.js files run under vitest's
+      // node environment and legitimately reach the filesystem — stageCatalog.test.js reads
+      // DealStage.java out of the backend source tree to prove the frontend's stage catalog and
+      // Thai labels still match the Java (see its own header). Without `process` here that guard
+      // cannot be written at all.
+      globals: { ...globals.browser, ...globals.node },
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
     settings: { react: { version: 'detect' } },

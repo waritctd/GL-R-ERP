@@ -158,7 +158,7 @@ class CommissionServiceTest {
         assertThatThrownBy(() -> service.submit(request, invoiceFile(), accountUser()))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
-            .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+            .isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
         verify(commissions, never()).createInvoice(any());
     }
 
@@ -293,7 +293,7 @@ class CommissionServiceTest {
                 ticketId, "INV-X", LocalDate.of(2026, 6, 15), null, null, null, null, null, null, null, null,
                 invoiceFile(), accountUser()))
             .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
         verify(commissions, never()).createInvoice(any());
     }
 

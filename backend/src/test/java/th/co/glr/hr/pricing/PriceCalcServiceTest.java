@@ -47,7 +47,7 @@ class PriceCalcServiceTest {
 
         assertThatThrownBy(() -> service.calculateForTicket(10L))
             .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
                 assertThat(e.getMessage()).contains("USD");
             });
         verify(tickets, never()).updateItemCalcResults(anyLong(), any(), any(), anyInt(), any());

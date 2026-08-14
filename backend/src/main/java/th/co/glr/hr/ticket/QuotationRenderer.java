@@ -12,6 +12,7 @@ import java.util.Locale;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellStyle;
 import org.apache.poi.ss.usermodel.CellType;
+import org.apache.poi.ss.usermodel.PageMargin;
 import org.apache.poi.ss.usermodel.PrintSetup;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -356,7 +357,7 @@ public class QuotationRenderer {
         double columnsW = 0;
         for (int c = 0; c <= 8; c++) columnsW += sh.getColumnWidthInPixels(c) * 72.0 / 96.0; // px → pt
         double printableW = A4_WIDTH_PT
-            - (sh.getMargin(Sheet.LeftMargin) + sh.getMargin(Sheet.RightMargin)) * 72.0;
+            - (sh.getMargin(PageMargin.LEFT) + sh.getMargin(PageMargin.RIGHT)) * 72.0;
         return columnsW <= 0 ? 1.0 : Math.min(1.0, printableW / columnsW);
     }
 
@@ -367,17 +368,17 @@ public class QuotationRenderer {
                         + n * itemRowHeight(sh)                          // items
                         + sumRowHeights(sh, FOOTER_START, FOOTER_END);   // notes + totals + signature
         double printableH = A4_HEIGHT_PT
-            - (sh.getMargin(Sheet.TopMargin) + sh.getMargin(Sheet.BottomMargin)) * 72.0;
+            - (sh.getMargin(PageMargin.TOP) + sh.getMargin(PageMargin.BOTTOM)) * 72.0;
         return Math.min(naturalWidthScale(sh), printableH / contentH);
     }
 
     // Consistent page margins (inches) on every layout so content has corner padding and every page
     // lines up the same way. Applied before the scale equations so they account for the padding.
     private void applyMargins(Sheet sh) {
-        sh.setMargin(Sheet.LeftMargin, 0.3);
-        sh.setMargin(Sheet.RightMargin, 0.3);
-        sh.setMargin(Sheet.TopMargin, 0.3);
-        sh.setMargin(Sheet.BottomMargin, 0.4);   // extra room for the "หน้า X/Y" footer
+        sh.setMargin(PageMargin.LEFT, 0.3);
+        sh.setMargin(PageMargin.RIGHT, 0.3);
+        sh.setMargin(PageMargin.TOP, 0.3);
+        sh.setMargin(PageMargin.BOTTOM, 0.4);   // extra room for the "หน้า X/Y" footer
     }
 
     private double itemRowHeight(Sheet sh) {
@@ -567,9 +568,4 @@ public class QuotationRenderer {
 
     private String nullSafe(String s) { return s != null ? s : ""; }
     private String nullSafe(String s, String fallback) { return (s != null && !s.isBlank()) ? s : fallback; }
-
-    private String fmt2(BigDecimal v) {
-        if (v == null) return "-";
-        return String.format(Locale.US, "%,.2f", v);
-    }
 }

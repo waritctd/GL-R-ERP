@@ -10,4 +10,5 @@ public final class CommissionResponses {
     public record CommissionDetailResponse(CommissionRecord commission) {}
     public record CommissionSimulationResponse(CommissionSimulationDto simulation) {}
     public record PayrollSummaryResponse(PayrollCommissionSummaryDto summary) {}
+    public record CommissionMonthlySummaryResponse(CommissionMonthlySummaryDto summary) {}
 }

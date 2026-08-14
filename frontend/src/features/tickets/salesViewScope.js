@@ -15,7 +15,7 @@
 // this page (route-gated in app/permissions.js) and warehouse/qc roles are
 // out of scope for this phase.
 
-import { phaseOf, stageIndex } from './stageMeta.js';
+import { EMPTY_STAGE_CATALOG, phaseIdOf, stageIndexIn } from './stageCatalog.js';
 
 // Every section id this module knows how to hide, kept as a single list so
 // visibleSections() can never accidentally omit a key a caller depends on.
@@ -97,7 +97,6 @@ export function visibleSections(role) {
   return allFalse();
 }
 
-const PROCUREMENT_IDX = stageIndex('PROCUREMENT');
 const TERMINAL_TICKET_STATUSES = new Set(['closed', 'cancelled']);
 const PAYMENT_ACTION_PENDING = new Set(['DEPOSIT_NOTICE_ISSUED', 'AWAITING_FINAL_PAYMENT']);
 
@@ -114,7 +113,7 @@ const PAYMENT_ACTION_PENDING = new Set(['DEPOSIT_NOTICE_ISSUED', 'AWAITING_FINAL
  * `deal` is expected to be a TicketListPage row (or a ticket `summary`) with
  * at least: lifecycle, status, salesStage, paymentStatus, overdue.
  */
-export function dealInScope(role, deal) {
+export function dealInScope(role, deal, catalog = EMPTY_STAGE_CATALOG) {
   if (!deal) return false;
   if (role === 'ceo' || role === 'sales_manager') return true;
   if (role === 'sales') return true;
@@ -124,8 +123,9 @@ export function dealInScope(role, deal) {
 
   if (role === 'import') {
     if (closed) return false;
-    const phase = phaseOf(deal.salesStage)?.id;
-    const idx = stageIndex(deal.salesStage);
+    const phase = phaseIdOf(catalog, deal.salesStage);
+    const idx = stageIndexIn(catalog, deal.salesStage);
+    const procurementIdx = stageIndexIn(catalog, 'PROCUREMENT');
     // Phase 2 (spec) / phase 3 (bidding & negotiation) is when a
     // PricingRequest is typically in flight for this deal. The list DTO
     // doesn't carry pricing-request rows itself (those are a per-ticket
@@ -136,7 +136,9 @@ export function dealInScope(role, deal) {
     //
     // idx >= PROCUREMENT is the literal "salesStage index ≥ PROCUREMENT"
     // rule: import's own procurement/fulfilment execution stages.
-    return phase === 2 || phase === 3 || idx >= PROCUREMENT_IDX;
+    // procurementIdx is -1 until the catalog loads; the `>= 0` guard keeps that from reading as
+    // "every stage qualifies" for one frame.
+    return phase === 2 || phase === 3 || (procurementIdx >= 0 && idx >= procurementIdx);
   }
 
   if (role === 'account') {

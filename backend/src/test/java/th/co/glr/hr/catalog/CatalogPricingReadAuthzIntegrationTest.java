@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -29,6 +29,8 @@ import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PriceCalcConfigController;
 import th.co.glr.hr.pricing.PriceCalcConfigRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Issue #388 — five read endpoints in the pricing/catalog domain authenticated the caller
@@ -94,19 +96,31 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
         SessionContext sessions = new SessionContext();
 
         // PriceImportService is reached only from CatalogController's WRITE paths, which this class
-        // never exercises — mocking it keeps the whole import engine out of the fixture.
+        // never exercises — mocking it keeps the whole import engine out of the fixture. It still
+        // needs the Jackson 2 ObjectMapper JacksonConfig provides in production (src/main keeps that
+        // bean for internal use — see JacksonConfig's javadoc), which is a separate object from the
+        // Jackson 3 JsonMapper below that drives the MockMvc HTTP layer.
         ObjectMapper objectMapper = new ObjectMapper();
         objectMapper.findAndRegisterModules();
+
+        // Real HTTP responses go through Boot's Jackson-3-backed JacksonJsonHttpMessageConverter
+        // (JacksonAutoConfiguration), not a bare ObjectMapper — so the MockMvc layer is wired with
+        // the same converter type, built the same way. accept-empty-string-as-null-object mirrors the
+        // one Jackson property this app sets (src/main/resources/application.yml); Jackson 3 needs no
+        // JavaTimeModule registration, unlike the Jackson 2 ObjectMapper above.
+        JsonMapper jsonMapper = JsonMapper.builder()
+            .configure(DeserializationFeature.ACCEPT_EMPTY_STRING_AS_NULL_OBJECT, true)
+            .build();
 
         catalogMvc = standalone(new CatalogController(
             new CatalogRepository(jdbc),
             new PriceImportService(mock(ImportEngine.class), jdbc, objectMapper),
-            sessions), objectMapper);
+            sessions), jsonMapper);
         priceConfigMvc = standalone(
-            new PriceCalcConfigController(new PriceCalcConfigRepository(jdbc), sessions), objectMapper);
-        fxMvc = standalone(new FxRateController(new FxRateRepository(jdbc), sessions), objectMapper);
+            new PriceCalcConfigController(new PriceCalcConfigRepository(jdbc), sessions), jsonMapper);
+        fxMvc = standalone(new FxRateController(new FxRateRepository(jdbc), sessions), jsonMapper);
         factoryMvc = standalone(
-            new FactoryConfigController(new FactoryConfigRepository(jdbc), sessions), objectMapper);
+            new FactoryConfigController(new FactoryConfigRepository(jdbc), sessions), jsonMapper);
 
         seedFixtures();
     }
@@ -261,14 +275,13 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
     // ── helpers ───────────────────────────────────────────────────────────────────────────────
 
     /**
-     * The Jackson converter is wired explicitly with {@code findAndRegisterModules()}: several of
-     * these DTOs carry {@code Instant}/{@code LocalDate} fields, and a bare {@code ObjectMapper}
-     * fails to serialize them — which surfaces as a bogus 500 on an authz assertion with no stack
-     * trace in the surefire report.
+     * The Jackson converter is wired explicitly, matching production's Boot-4-auto-configured
+     * {@code JacksonJsonHttpMessageConverter}: several of these DTOs carry {@code Instant}/
+     * {@code LocalDate} fields, and Jackson 3 handles both natively (no module registration needed).
      */
-    private static MockMvc standalone(Object controller, ObjectMapper objectMapper) {
+    private static MockMvc standalone(Object controller, JsonMapper jsonMapper) {
         return MockMvcBuilders.standaloneSetup(controller)
-            .setMessageConverters(new MappingJackson2HttpMessageConverter(objectMapper))
+            .setMessageConverters(new JacksonJsonHttpMessageConverter(jsonMapper))
             .setControllerAdvice(new ApiExceptionHandler())
             .build();
     }
