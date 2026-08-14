@@ -170,7 +170,6 @@ function buildCosting(overrides = {}) {
     costingCode: 'COST-2026-0001',
     versionNo: 1,
     status: 'CALCULATED',
-    stale: false,
     totalLandedCostThb: 15000,
     items: [
       {
@@ -1256,7 +1255,7 @@ describe('PricingRequestDetailPage accessibility: no nested interactive controls
     const { container } = renderDetailPage({
       user: importUser,
       factoryQuotes: [buildFactoryQuote()],
-      costings: [buildCosting({ status: 'CALCULATED', stale: false })],
+      costings: [buildCosting({ status: 'CALCULATED' })],
       attachments: [{ id: 1, fileName: 'spec.pdf', includeInFactoryEmail: true }],
     });
     await waitForLoaded();

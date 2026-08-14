@@ -242,7 +242,7 @@ export function buildDemoSalesSeed() {
       : items.reduce((sum, it) => sum + it.totalLandedCostThb, 0);
     const costing = {
       id, costingCode: `PCO-2026-${String(id).padStart(4, '0')}`,
-      pricingRequestId: pr.id, versionNo: id, status, stale: false, staleReason: null,
+      pricingRequestId: pr.id, versionNo: id, status,
       note: null, createdBy: IMPORT1.id, createdAt, updatedAt: createdAt,
       calculatedAt: status === 'DRAFT' ? null : createdAt,
       submittedBy: submittedAt ? IMPORT1.id : null, submittedAt,
