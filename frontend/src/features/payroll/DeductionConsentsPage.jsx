@@ -1,14 +1,16 @@
 import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
 import { DataTable, expandedRowRegionId } from '../../components/common/DataTable.jsx';
 import { FieldList } from '../../components/common/FieldList.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { DeductionConsentFormModal } from './DeductionConsentFormModal.jsx';
 import {
   CONSENT_APPLICABLE_DEDUCTION_KINDS,
   formatThaiDate,
@@ -51,8 +53,20 @@ import {
 
 // Read is hr + ceo (canViewPayroll, mirroring the GET's hasAnyRole('HR','CEO')); the route guard in
 // permissions.js already enforces that, so this page adds no gate of its own for reading.
-export function DeductionConsentsPage() {
+//
+// WRITING is hr only. The register's PUT is hasRole('HR') (EDIT_ROLES), strictly narrower than its
+// GET — CEO reads the same rows and may change none of them — and a route guard cannot express
+// that, since CEO must still reach the page. So the write affordances gate on canManagePayroll
+// (['hr'], the same key PayrollPage uses for exactly this split, issue #390) and CEO simply never
+// sees them. FRONTEND GATING ONLY: DeductionWrittenConsentService enforces the real gate and would
+// refuse a CEO write regardless of what this page renders.
+export function DeductionConsentsPage({ user, showToast }) {
+  const queryClient = useQueryClient();
+  const canManage = hasPermission(user?.role, 'canManagePayroll');
   const [searchParams, setSearchParams] = useSearchParams();
+  // null = closed; { mode: 'create' } or { mode: 'edit', row } = open.
+  const [editor, setEditor] = useState(null);
+  const [formError, setFormError] = useState('');
   // Both are real server-side request parameters, not client-side narrowing — `employeeId` is
   // deep-link only (same convention as the sibling shortfall ledger), `kind` gets a control below
   // since the applicable set is only four values.
@@ -72,6 +86,43 @@ export function DeductionConsentsPage() {
     queryFn: () => api.payroll.getDeductionConsents({ ...(employeeId ? { employeeId } : {}), ...(kind ? { kind } : {}) }).then((response) => response.items ?? []),
   });
   const rows = useMemo(() => consentsQuery.data ?? [], [consentsQuery.data]);
+
+  // Only HR can open the editor, and only HR may call employees.list (canViewEmployees is ['hr'],
+  // and EmployeeController gates it server-side), so this must not fire for a CEO viewer.
+  // Deliberately the same key/shape as useHrData's own employees query so the two share one cache
+  // entry rather than colliding under it with a differently-filtered result.
+  const employeesQuery = useQuery({
+    queryKey: queryKeys.employees(),
+    queryFn: () => api.employees.list().then((response) => response.employees || []),
+    enabled: canManage,
+  });
+  const activeEmployees = useMemo(
+    () => (employeesQuery.data ?? []).filter((employee) => employee.active !== false),
+    [employeesQuery.data],
+  );
+
+  const upsertMutation = useMutation({
+    mutationFn: (payload) => api.payroll.upsertDeductionConsent(payload),
+    onSuccess: () => {
+      // Invalidate rather than write the response through: the PUT returns only the single row it
+      // wrote (findAll(employeeId, kind)), so assigning it over the list would blank the register.
+      // The PREFIX is invalidated, not one exact key, because the page may currently be filtered —
+      // the row just written can belong to a cache entry other than the visible one.
+      queryClient.invalidateQueries({ queryKey: ['payroll', 'deductionConsents'] });
+      setEditor(null);
+      setFormError('');
+      showToast?.('บันทึกข้อมูลหนังสือยินยอมแล้ว');
+    },
+    // Inline, not a toast: the modal stays open so the offending field is fixable without
+    // re-entering everything. The backend's own Thai message (400 wrong kind, 404 unknown employee)
+    // is preserved rather than replaced by a generic fallback.
+    onError: (error) => setFormError(error?.message || 'บันทึกข้อมูลหนังสือยินยอมไม่สำเร็จ'),
+  });
+
+  function openEditor(next) {
+    setFormError('');
+    setEditor(next);
+  }
 
   function setKind(nextKind) {
     const next = new URLSearchParams(searchParams);
@@ -139,6 +190,23 @@ export function DeductionConsentsPage() {
       sortAccessor: (row) => row.updatedAt ?? '',
       render: (row) => formatThaiDate(row.updatedAt),
     },
+    // HR only — the PUT is hasRole('HR'), so a CEO viewer gets no edit affordance at all rather
+    // than a control that 403s on submit.
+    ...(canManage ? [{
+      key: 'edit',
+      header: '',
+      render: (row) => (
+        <Button
+          type="button"
+          variant="icon"
+          title="แก้ไขบันทึก"
+          aria-label={`แก้ไขบันทึกหนังสือยินยอมของ ${row.employeeName} (${payrollDeductionKindLabel(row.deductionKind)})`}
+          onClick={() => openEditor({ mode: 'edit', row })}
+        >
+          <Icon name="pencil" size={14} />
+        </Button>
+      ),
+    }] : []),
     {
       key: 'expand',
       header: '',
@@ -166,6 +234,12 @@ export function DeductionConsentsPage() {
       <PageHeader
         title="ทะเบียนหนังสือยินยอมหักเงิน"
         subtitle="Written deduction consents"
+        actions={canManage ? (
+          <Button type="button" variant="primary" onClick={() => openEditor({ mode: 'create' })}>
+            <Icon name="plus" size={15} />
+            บันทึกหนังสือยินยอม
+          </Button>
+        ) : null}
       />
 
       <Panel>
@@ -202,7 +276,17 @@ export function DeductionConsentsPage() {
         // reflow the grid's own minmax() floors would force a bare horizontal scroll at that
         // width instead of the stacked, data-label-prefixed cards every other DataTable page
         // gets — see CLAUDE.md's "tablet band hides data two opposite ways" note.
-        gridClassName="grid-cols-[minmax(160px,1.4fr)_minmax(150px,1.2fr)_minmax(150px,1.1fr)_minmax(120px,0.9fr)_minmax(110px,0.8fr)_minmax(110px,0.8fr)_44px] nav-drawer:min-w-[880px] reflow-cards"
+        // Tracks must match the column COUNT, which differs by role: HR gets an extra 44px edit
+        // column that CEO does not. One template for both would leave CEO's grid a track short of
+        // its cells and silently wrap the last column onto a new row.
+        //
+        // TWO COMPLETE LITERALS, never one interpolated string: Tailwind 4 finds classes by
+        // scanning source text for literal candidates, so a class assembled at runtime
+        // (`grid-cols-[...${flag ? '_44px' : ''}...]`) is never generated and the grid silently
+        // falls back to no template at all. Both strings below must stay whole and greppable.
+        gridClassName={canManage
+          ? 'grid-cols-[minmax(160px,1.4fr)_minmax(150px,1.2fr)_minmax(150px,1.1fr)_minmax(120px,0.9fr)_minmax(110px,0.8fr)_minmax(110px,0.8fr)_44px_44px] nav-drawer:min-w-[924px] reflow-cards'
+          : 'grid-cols-[minmax(160px,1.4fr)_minmax(150px,1.2fr)_minmax(150px,1.1fr)_minmax(120px,0.9fr)_minmax(110px,0.8fr)_minmax(110px,0.8fr)_44px] nav-drawer:min-w-[880px] reflow-cards'}
         loading={consentsQuery.isLoading}
         error={consentsQuery.isError}
         errorMessage="โหลดทะเบียนหนังสือยินยอมไม่สำเร็จ"
@@ -278,6 +362,19 @@ export function DeductionConsentsPage() {
           </div>
         )}
       />
+
+      {editor ? (
+        <DeductionConsentFormModal
+          mode={editor.mode}
+          row={editor.row}
+          employees={activeEmployees}
+          employeesLoading={employeesQuery.isLoading}
+          busy={upsertMutation.isPending}
+          formError={formError}
+          onClose={() => openEditor(null)}
+          onSubmit={(payload) => upsertMutation.mutate(payload)}
+        />
+      ) : null}
     </PageStack>
   );
 }

@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeductionConsentsPage } from './DeductionConsentsPage.jsx';
 import { api } from '../../api/index.js';
@@ -12,9 +12,15 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    api: { payroll: { getDeductionConsents: vi.fn() } },
+    api: {
+      payroll: { getDeductionConsents: vi.fn(), upsertDeductionConsent: vi.fn() },
+      employees: { list: vi.fn() },
+    },
   };
 });
+
+const HR = { role: 'hr', employeeId: 10 };
+const CEO = { role: 'ceo', employeeId: 1 };
 
 // Field-for-field with DeductionWrittenConsentDto. Only the four CONSENT_APPLICABLE_KINDS can
 // appear — V107's CHECK constraint rejects the rest at the database.
@@ -51,14 +57,14 @@ const rows = [
   },
 ];
 
-function renderPage({ entry = '/payroll/deduction-consents' } = {}) {
+function renderPage({ entry = '/payroll/deduction-consents', user, showToast } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[entry]}>
-        <DeductionConsentsPage />
+        <DeductionConsentsPage user={user} showToast={showToast} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -68,6 +74,14 @@ describe('DeductionConsentsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.payroll.getDeductionConsents.mockResolvedValue({ items: rows });
+    api.payroll.upsertDeductionConsent.mockResolvedValue({ items: [rows[0]] });
+    api.employees.list.mockResolvedValue({
+      employees: [
+        { id: 3, code: 'GLR-1003', nameTh: 'สมชาย ใจดี', active: true },
+        { id: 20, code: 'GLR-1020', nameTh: 'มานี รักงาน', active: true },
+        { id: 44, code: 'GLR-1044', nameTh: 'อดีต พนักงาน', active: false },
+      ],
+    });
   });
 
   it('renders a row per recorded consent', async () => {
@@ -182,5 +196,140 @@ describe('DeductionConsentsPage', () => {
 
     expect(await screen.findByText('โหลดทะเบียนหนังสือยินยอมไม่สำเร็จ')).not.toBeNull();
     expect(screen.getByRole('button', { name: 'ลองใหม่' })).not.toBeNull();
+  });
+
+  // ── The write half: hr only ───────────────────────────────────────────────
+  // DeductionWrittenConsentService.EDIT_ROLES is Set.of("hr"), strictly narrower than VIEW_ROLES
+  // (hr + ceo). A route guard cannot express that — CEO must still reach the page — so the split
+  // lives in the page and is asserted wrong-way-round: what matters is that CEO gets NO control,
+  // not that HR gets one.
+  //
+  // FRONTEND GATING ONLY. This says nothing about what the server would do with a CEO's PUT;
+  // DeductionWrittenConsentService is what enforces that, and it is unverified here.
+  // Every form query is scoped to the dialog: "พนักงาน" and "ประเภทการหัก" are also a table column
+  // header and the toolbar filter's label, so an unscoped getByLabelText matches several elements.
+  async function openDialog(name) {
+    fireEvent.click(screen.getByRole('button', { name }));
+    return within(await screen.findByRole('dialog'));
+  }
+
+  describe('write affordances', () => {
+    it('offers HR both the record action and a per-row edit', async () => {
+      renderPage({ user: HR });
+      await screen.findByText('สมชาย ใจดี');
+
+      expect(screen.getByRole('button', { name: 'บันทึกหนังสือยินยอม' })).not.toBeNull();
+      expect(screen.getByRole('button', { name: /แก้ไขบันทึกหนังสือยินยอมของ สมชาย ใจดี/ })).not.toBeNull();
+    });
+
+    it('offers the CEO no write control at all, on the page or on any row', async () => {
+      renderPage({ user: CEO });
+      await screen.findByText('สมชาย ใจดี');
+
+      expect(screen.queryByRole('button', { name: 'บันทึกหนังสือยินยอม' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /แก้ไขบันทึกหนังสือยินยอม/ })).toBeNull();
+      // And no employee lookup is even attempted — employees.list is HR-only server-side too.
+      expect(api.employees.list).not.toHaveBeenCalled();
+    });
+
+    it('sends a recorded consent to the server as the DTO shape', async () => {
+      renderPage({ user: HR });
+      await screen.findByText('สมชาย ใจดี');
+
+      const dialog = await openDialog('บันทึกหนังสือยินยอม');
+
+      fireEvent.change(dialog.getByRole('combobox', { name: 'พนักงาน' }), { target: { value: '20' } });
+      fireEvent.change(dialog.getByRole('combobox', { name: 'ประเภทการหัก' }), { target: { value: 'CUSTOMER_RETURN' } });
+      fireEvent.click(dialog.getByRole('checkbox'));
+      fireEvent.change(dialog.getByRole('textbox', { name: 'เลขที่เอกสาร' }), { target: { value: ' CONSENT-2569-0099 ' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+      await waitFor(() => expect(api.payroll.upsertDeductionConsent).toHaveBeenCalledWith({
+        employeeId: 20,
+        deductionKind: 'CUSTOMER_RETURN',
+        consentOnFile: true,
+        // Trimmed, and null (not '') when blank — the columns are nullable TEXT.
+        consentDocumentReference: 'CONSENT-2569-0099',
+        consentDate: null,
+        notes: null,
+      }));
+    });
+
+    // (employee, kind) is the table's UNIQUE key and the endpoint upserts on it, so letting either
+    // be changed during an edit would write a DIFFERENT row and silently leave the original.
+    it('locks employee and deduction kind when editing an existing row', async () => {
+      renderPage({ user: HR });
+      await screen.findByText('สมชาย ใจดี');
+
+      const dialog = await openDialog(/แก้ไขบันทึกหนังสือยินยอมของ สมชาย ใจดี/);
+
+      expect(dialog.getByRole('combobox', { name: 'พนักงาน' }).disabled).toBe(true);
+      expect(dialog.getByRole('combobox', { name: 'ประเภทการหัก' }).disabled).toBe(true);
+      // Prefilled from the row, so an edit is a real edit rather than a blank re-entry.
+      expect(dialog.getByRole('textbox', { name: 'เลขที่เอกสาร' }).value).toBe('CONSENT-2569-0012');
+      expect(dialog.getByRole('checkbox').checked).toBe(true);
+    });
+
+    it('offers only the four kinds the backend accepts', async () => {
+      renderPage({ user: HR });
+      await screen.findByText('สมชาย ใจดี');
+      const dialog = await openDialog('บันทึกหนังสือยินยอม');
+
+      const kindOptions = Array.from(dialog.getByRole('combobox', { name: 'ประเภทการหัก' }).options)
+        .map((option) => option.value)
+        .filter(Boolean);
+      expect(kindOptions.sort()).toEqual(['CUSTOMER_RETURN', 'OTHER_POST_TAX', 'OTHER_PRETAX', 'WARNING_LETTER']);
+    });
+
+    // The dialog is where the box actually gets ticked, and a modal covers the page's own
+    // explanation while it is open — so the non-consequence has to be restated inside it.
+    it('states inside the dialog that ticking the box changes no deduction', async () => {
+      renderPage({ user: HR });
+      await screen.findByText('สมชาย ใจดี');
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกหนังสือยินยอม' }));
+
+      expect(await screen.findByText(/การติ๊กหรือไม่ติ๊กช่องนี้ไม่มีผลต่อการหักเงิน/)).not.toBeNull();
+      // "บันทึก" (record), never "อนุมัติ" (approve) — the verb is part of the guarantee.
+      expect(screen.queryByRole('button', { name: 'อนุมัติ' })).toBeNull();
+    });
+
+    it('keeps the dialog open and shows the backend message when the write is refused', async () => {
+      api.payroll.upsertDeductionConsent.mockRejectedValue(new Error('ไม่พบข้อมูลพนักงาน'));
+      renderPage({ user: HR });
+      await screen.findByText('สมชาย ใจดี');
+
+      const dialog = await openDialog('บันทึกหนังสือยินยอม');
+      fireEvent.change(dialog.getByRole('combobox', { name: 'พนักงาน' }), { target: { value: '20' } });
+      fireEvent.change(dialog.getByRole('combobox', { name: 'ประเภทการหัก' }), { target: { value: 'CUSTOMER_RETURN' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+      // The server's own Thai message survives rather than being replaced by a generic fallback.
+      expect(await screen.findByRole('alert')).not.toBeNull();
+      expect(screen.getByText('ไม่พบข้อมูลพนักงาน')).not.toBeNull();
+      // Still open, so the bad field is fixable without re-entering everything.
+      expect(screen.getByRole('dialog')).not.toBeNull();
+    });
+
+    it('refuses to submit without an employee and a kind', async () => {
+      renderPage({ user: HR });
+      await screen.findByText('สมชาย ใจดี');
+      await openDialog('บันทึกหนังสือยินยอม');
+
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+      expect(await screen.findByText('กรุณาเลือกพนักงาน')).not.toBeNull();
+      expect(screen.getByText('กรุณาเลือกประเภทการหัก')).not.toBeNull();
+      expect(api.payroll.upsertDeductionConsent).not.toHaveBeenCalled();
+    });
+
+    it('leaves inactive employees out of the picker', async () => {
+      renderPage({ user: HR });
+      await screen.findByText('สมชาย ใจดี');
+      const dialog = await openDialog('บันทึกหนังสือยินยอม');
+
+      const employeeOptions = Array.from(dialog.getByRole('combobox', { name: 'พนักงาน' }).options).map((option) => option.value);
+      expect(employeeOptions).toContain('20');
+      expect(employeeOptions).not.toContain('44');
+    });
   });
 });

@@ -261,6 +261,17 @@ db.deductionShortfalls = db.deductionShortfalls?.length
 // Rows appear the same way they do in production: by someone recording one through the register's
 // PUT half.
 db.deductionConsents = db.deductionConsents || [];
+db.deductionConsentSeq = db.deductionConsentSeq || 1;
+// Mirrors DeductionWrittenConsentService.CONSENT_APPLICABLE_KINDS, which is itself V107's
+// `CHECK (deduction_kind IN (...))` constraint. The other four PayrollDeductionKind values are
+// excluded on purpose: WITHHOLDING_TAX / SOCIAL_SECURITY / STUDENT_LOAN are ม.76 item (1), where no
+// consent question arises, and LEGAL_EXECUTION_GARNISHMENT is compelled by court order regardless
+// of consent.
+//
+// A value mirrored into this file has NO automatic guard — contract.test.js compares method names
+// and parameter COUNTS, never values — so this list is pinned against the one the UI offers by
+// mockApi.deductionConsents.test.js.
+const CONSENT_APPLICABLE_KINDS = ['WARNING_LETTER', 'CUSTOMER_RETURN', 'OTHER_PRETAX', 'OTHER_POST_TAX'];
 // §5 leave-rules-as-data (V116, extended V119/V120): paidDaysCap/advanceNoticeDays/
 // minServiceMonths/maxConsecutiveDays/oncePerEmployment/dayCountBasis/proratedFirstYear/
 // firstYearMaxDays mirror the hr.leave_type columns for SHAPE parity only (contract.test.js checks
@@ -7412,6 +7423,57 @@ export const api = {
         a.employeeCode.localeCompare(b.employeeCode) || a.deductionKind.localeCompare(b.deductionKind)
       ));
       return delay({ items });
+    },
+
+    // hr ONLY — DeductionWrittenConsentService.EDIT_ROLES is Set.of("hr"), NARROWER than the read
+    // gate above (hr + ceo). Getting that asymmetry wrong in the permissive direction is the
+    // failure CLAUDE.md warns about (issue #199 was exactly it), so CEO is refused here on purpose
+    // even though CEO may read the very same rows.
+    async upsertDeductionConsent(payload = {}) {
+      const actor = hasRole('hr');
+      // The real service validates the kind BEFORE checking the employee exists, and returns 400
+      // rather than silently ignoring the row. Order matters for a caller that sends both wrong.
+      if (!CONSENT_APPLICABLE_KINDS.includes(payload.deductionKind)) {
+        fail(
+          `ประเภทการหัก ${payload.deductionKind} ไม่ใช่ประเภทที่ต้องมีหนังสือยินยอม `
+          + '(item (1) หรือคำสั่งศาล/บังคับคดี ไม่ต้องขอความยินยอม)',
+          400,
+        );
+      }
+      const employee = db.employees.find((row) => row.id === Number(payload.employeeId));
+      if (!employee) fail('ไม่พบข้อมูลพนักงาน', 404);
+
+      const now = new Date().toISOString();
+      // ON CONFLICT (employee_id, deduction_kind) DO UPDATE — one row per pair, so re-recording the
+      // same pair overwrites rather than appending. recorded_by_id / recorded_at are set on INSERT
+      // only and deliberately NOT re-stamped on update, matching the repository's DO UPDATE SET
+      // column list exactly (it lists consent_on_file, consent_document_reference, consent_date,
+      // notes, updated_by_id, updated_at — and nothing else).
+      const existing = db.deductionConsents.find((row) => (
+        row.employeeId === employee.id && row.deductionKind === payload.deductionKind
+      ));
+      const row = existing || {
+        id: db.deductionConsentSeq++,
+        employeeId: employee.id,
+        employeeCode: employee.code,
+        employeeName: employee.nameTh,
+        deductionKind: payload.deductionKind,
+        recordedById: actor.employeeId ?? null,
+        recordedAt: now,
+      };
+      row.consentOnFile = !!payload.consentOnFile;
+      row.consentDocumentReference = payload.consentDocumentReference ?? null;
+      row.consentDate = payload.consentDate ?? null;
+      row.notes = payload.notes ?? null;
+      row.updatedById = actor.employeeId ?? null;
+      row.updatedAt = now;
+      if (!existing) db.deductionConsents.push(row);
+
+      // ⚠️ Returns findAll(employeeId, deductionKind) — the ONE row just written, NOT the whole
+      // register. Mirrored exactly, because a caller that treated this as the full list would blank
+      // its own table; see hrApi.upsertDeductionConsent's note. Nothing in any payroll calculation
+      // reads what this just wrote.
+      return delay({ items: [row] });
     },
   },
 

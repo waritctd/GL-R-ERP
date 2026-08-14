@@ -645,6 +645,21 @@ export const api = {
     // Resolves `{ items }` — a record of which deductions HR holds written employee consent for on
     // paper. It is NOT an enforcement gate: no payroll calculation reads it.
     getDeductionConsents: (params) => apiRequest(withQuery(API_ROUTES.payroll.deductionConsents, params)),
+    // Upserts ONE (employeeId, deductionKind) row — the table's UNIQUE key, so re-recording the
+    // same pair overwrites rather than appending (V107). The audit log carries the history; this
+    // row only ever holds the current fact. hr ONLY (hasRole('HR') / EDIT_ROLES), narrower than the
+    // read above, which CEO also gets.
+    //
+    // ⚠️ The response is NOT the whole register. DeductionWrittenConsentService#upsert returns
+    // `repository.findAll(employeeId, deductionKind)` — the rows for the pair just written, i.e.
+    // exactly one row. A caller that assigned it over its list state would blank the table, so
+    // DeductionConsentsPage invalidates and refetches instead of writing the response through.
+    //
+    // 400 when deductionKind is outside CONSENT_APPLICABLE_KINDS (WARNING_LETTER / CUSTOMER_RETURN
+    // / OTHER_PRETAX / OTHER_POST_TAX — V107's CHECK constraint); 404 when the employee does not
+    // exist. Recording a row changes no payroll figure: nothing reads this table back.
+    upsertDeductionConsent: (payload) =>
+      apiRequest(API_ROUTES.payroll.deductionConsents, { method: 'PUT', body: payload }),
   },
   priceImport: {
     factories: () => apiRequest(API_ROUTES.priceImport.factories),
