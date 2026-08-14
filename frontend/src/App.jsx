@@ -49,6 +49,7 @@ const AccountOverview = lazy(() => import('./features/dashboard/AccountOverview.
 const AccountFinancePage = lazy(() => import('./features/finance/AccountFinancePage.jsx').then(toDefault('AccountFinancePage')));
 const PayrollPage = lazy(() => import('./features/payroll/PayrollPage.jsx').then(toDefault('PayrollPage')));
 const DeductionShortfallsPage = lazy(() => import('./features/payroll/DeductionShortfallsPage.jsx').then(toDefault('DeductionShortfallsPage')));
+const DeductionConsentsPage = lazy(() => import('./features/payroll/DeductionConsentsPage.jsx').then(toDefault('DeductionConsentsPage')));
 // ล.ย.01 tax-allowance declaration (issue #387): employee self-service form + HR review register.
 const TaxAllowancePage = lazy(() => import('./features/taxAllowance/TaxAllowancePage.jsx').then(toDefault('TaxAllowancePage')));
 const TaxAllowanceReviewPage = lazy(() => import('./features/taxAllowance/TaxAllowanceReviewPage.jsx').then(toDefault('TaxAllowanceReviewPage')));
@@ -387,6 +388,14 @@ export function App() {
             <Route
               path="/payroll/deduction-shortfalls"
               element={<DeductionShortfallsPage />}
+            />
+            {/* Written-consent register (issue #376's other read surface, exposed for #744). Its
+                own route for the same reason as the ledger above: the endpoint is cross-month and
+                takes no period, where PayrollPage is scoped to one selected month. Read is hr+ceo;
+                the hr-only write is gated inside the page. */}
+            <Route
+              path="/payroll/deduction-consents"
+              element={<DeductionConsentsPage user={user} showToast={showToast} />}
             />
             {/* Attendance calendar admin (PR #480's API, this branch's UI) — HR/CEO only. */}
             <Route

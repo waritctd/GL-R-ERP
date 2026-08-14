@@ -88,6 +88,14 @@ const PATH_GUARDS = [
   // reachable by any authenticated role. canViewPayroll (hr + ceo) mirrors the endpoint's
   // @PreAuthorize("hasAnyRole('HR','CEO')") and PayrollDeductionShortfallService's VIEW_ROLES.
   { test: (p) => p === '/payroll/deduction-shortfalls', can: (u) => hasPermission(u.role, 'canViewPayroll') },
+  // Written-consent register (issue #376's other read surface). Needs its own entry for exactly the
+  // same reason as the sibling above — `/payroll` is an EXACT match and canAccessPath fails OPEN
+  // for a path no guard claims, so without this line any authenticated role reaches it.
+  // canViewPayroll (hr + ceo) mirrors the GET's @PreAuthorize("hasAnyRole('HR','CEO')") and
+  // DeductionWrittenConsentService.VIEW_ROLES. The narrower WRITE gate (hasRole('HR'), EDIT_ROLES)
+  // is enforced inside the page on canManagePayroll — a route guard cannot express it, since CEO
+  // must reach the page read-only.
+  { test: (p) => p === '/payroll/deduction-consents', can: (u) => hasPermission(u.role, 'canViewPayroll') },
   // ล.ย.01 tax-allowance declaration (issue #387). `/tax-allowance` is the
   // employee's own declaration form — same "must have an employeeId" shape as
   // `/profile` above, and just as important to guard explicitly: unknown paths

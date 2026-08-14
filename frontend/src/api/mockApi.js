@@ -245,6 +245,22 @@ db.deductionObligationRemittances = db.deductionObligationRemittances || [];
 // nothing here reimplements the ป.วิ.พ. ม.302 cap — the numbers are fixtures, not a calculation.
 db.deductionShortfalls = db.deductionShortfalls?.length
   ? db.deductionShortfalls : buildDemoDeductionShortfalls(db.employees);
+// Written-consent register (issue #376, exposed for #744). SEEDED EMPTY, ON PURPOSE — and this is
+// the honest fixture, not a lazy one.
+//
+// hr.deduction_written_consent is written by exactly one code path: DeductionWrittenConsentRepository
+// #upsert, reached only from DeductionWrittenConsentService#upsert, reached only from
+// DeductionWrittenConsentController's PUT — which had no client at all until this branch. V107
+// creates the table and seeds nothing, and no other migration or service touches it (verified by
+// grep across backend/src/main). So the table is necessarily EMPTY in every environment, production
+// included — exactly like hr.leave_policy_document (V133).
+//
+// Seeding demo rows here would therefore invert CLAUDE.md's warning: the fixture would be more
+// populated than production, and the EMPTY state — the only state any real deployment has today,
+// and so the one a reader will actually meet — would never be rendered by the default mock session.
+// Rows appear the same way they do in production: by someone recording one through the register's
+// PUT half.
+db.deductionConsents = db.deductionConsents || [];
 // §5 leave-rules-as-data (V116, extended V119/V120): paidDaysCap/advanceNoticeDays/
 // minServiceMonths/maxConsecutiveDays/oncePerEmployment/dayCountBasis/proratedFirstYear/
 // firstYearMaxDays mirror the hr.leave_type columns for SHAPE parity only (contract.test.js checks
@@ -7376,6 +7392,24 @@ export const api = {
       // mock returns every matching row exactly as the server does.
       items = [...items].sort((a, b) => (
         b.payrollMonth.localeCompare(a.payrollMonth) || a.employeeCode.localeCompare(b.employeeCode)
+      ));
+      return delay({ items });
+    },
+
+    // Written-consent register (issue #376). Mirrors DeductionWrittenConsentController +
+    // DeductionWrittenConsentService + DeductionWrittenConsentRepository.
+    //
+    // READ is hr + ceo (VIEW_ROLES); WRITE is hr ONLY (EDIT_ROLES) — the asymmetry is the point,
+    // and matching it here is what keeps the mock from being more permissive than production.
+    async getDeductionConsents(params = {}) {
+      hasRole('hr', 'ceo');
+      let items = db.deductionConsents;
+      if (params.employeeId) items = items.filter((row) => row.employeeId === Number(params.employeeId));
+      if (params.kind) items = items.filter((row) => row.deductionKind === params.kind);
+      // Mirrors DeductionWrittenConsentRepository#findAll's `ORDER BY e.employee_code,
+      // c.deduction_kind` — and its absence of any LIMIT, so every matching row comes back.
+      items = [...items].sort((a, b) => (
+        a.employeeCode.localeCompare(b.employeeCode) || a.deductionKind.localeCompare(b.deductionKind)
       ));
       return delay({ items });
     },

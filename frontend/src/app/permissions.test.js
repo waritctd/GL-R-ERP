@@ -138,6 +138,36 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/hr', employee)).toBe(false);
   });
 
+  // ── Nested /payroll paths: the fail-open case ─────────────────────────────
+  // canAccessPath returns TRUE for any path no guard claims (`if (!guard) return true`), and the
+  // `/payroll` guard is an EXACT match — so a nested payroll route without its own PATH_GUARDS
+  // entry is reachable by every authenticated role, including `employee` and `sales`. That is not
+  // hypothetical: it is what PR #768 found when it added the shortfall ledger.
+  //
+  // Written wrong-way-round on purpose (CLAUDE.md): the assertions that matter are the refusals.
+  // Deleting either PATH_GUARDS entry makes this test fail — verified by mutation check, not
+  // assumed.
+  //
+  // FRONTEND ROUTING ONLY. This proves which roles the SPA will route; it is not evidence about the
+  // server. The backend enforces the same split independently —
+  // @PreAuthorize("hasAnyRole('HR','CEO')") on the GET, hasRole('HR') on the PUT — and that is
+  // where the real gate lives.
+  it('refuses every non-payroll role on the nested payroll paths', () => {
+    for (const path of ['/payroll/deduction-consents', '/payroll/deduction-shortfalls']) {
+      expect(canAccessPath(path, employee)).toBe(false);
+      expect(canAccessPath(path, sales)).toBe(false);
+      expect(canAccessPath(path, importer)).toBe(false);
+      expect(canAccessPath(path, account)).toBe(false);
+    }
+  });
+
+  it('lets HR and CEO reach the nested payroll paths, mirroring canViewPayroll', () => {
+    for (const path of ['/payroll/deduction-consents', '/payroll/deduction-shortfalls']) {
+      expect(canAccessPath(path, hr)).toBe(true);
+      expect(canAccessPath(path, ceo)).toBe(true);
+    }
+  });
+
   it('scopes ticket paths to ticket roles', () => {
     expect(canAccessPath('/tickets', sales)).toBe(true);
     expect(canAccessPath('/tickets/12', sales)).toBe(true);

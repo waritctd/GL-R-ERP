@@ -48,6 +48,7 @@
     "GET /api/overtime/employees",
     "GET /api/payroll",
     "GET /api/payroll/component-tax-treatments",
+    "GET /api/payroll/deduction-consents",
     "GET /api/payroll/deduction-shortfalls",
     "GET /api/payroll/input-draft",
     "GET /api/payroll/suggested-inputs",

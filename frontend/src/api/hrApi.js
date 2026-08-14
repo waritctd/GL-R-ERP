@@ -638,6 +638,13 @@ export const api = {
     // DeductionObligationService#recordGarnishmentShortfalls during a payroll run. Optional
     // `employeeId` / `kind` params; the server applies no LIMIT and no pagination.
     getDeductionShortfalls: (params) => apiRequest(withQuery(API_ROUTES.payroll.deductionShortfalls, params)),
+    // Written-consent register (issue #376). hr + ceo may read (DeductionWrittenConsentService
+    // .VIEW_ROLES); only hr may write (EDIT_ROLES). Optional `employeeId` / `kind` params; the
+    // server applies no LIMIT and no pagination, and orders by employee_code then deduction_kind.
+    //
+    // Resolves `{ items }` — a record of which deductions HR holds written employee consent for on
+    // paper. It is NOT an enforcement gate: no payroll calculation reads it.
+    getDeductionConsents: (params) => apiRequest(withQuery(API_ROUTES.payroll.deductionConsents, params)),
   },
   priceImport: {
     factories: () => apiRequest(API_ROUTES.priceImport.factories),

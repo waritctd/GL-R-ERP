@@ -211,6 +211,12 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // surfaces (PayrollPage, TaxAllowanceReviewPage, SpecialMoneyPanel …), and no other nav item
     // uses it. Permanent navigation chrome pointing at a routine ledger would dilute it.
     { path: '/payroll/deduction-shortfalls', label: 'ยอดค้างหักตามหมายบังคับคดี', helper: 'Deduction shortfalls', icon: 'fileText', group: 'finance', show: hasPermission(user.role, 'canViewPayroll') },
+    // Written-consent register (issue #376's other read surface). Same audience as its two siblings
+    // — canViewPayroll is hr+ceo, mirroring the GET's own hasAnyRole('HR','CEO'); HR alone gets the
+    // record action once inside. `clipboard`, not `shield` or `badgeCheck`: this is HR's filing
+    // record of a signed letter, and a shield/check glyph would imply the app is verifying or
+    // clearing something, which is precisely what this register does NOT do.
+    { path: '/payroll/deduction-consents', label: 'ทะเบียนหนังสือยินยอมหักเงิน', helper: 'Written deduction consents', icon: 'clipboard', group: 'finance', show: hasPermission(user.role, 'canViewPayroll') },
     { path: '/attendance', label: 'เวลาทำงาน', helper: 'Attendance', icon: 'calendar', group: 'self', show: true },
     // Combined OT + welfare/special-money page (RequestsPage.jsx, tabs carried
     // in ?tab=). `match` keeps this item highlighted on both /employee-requests and

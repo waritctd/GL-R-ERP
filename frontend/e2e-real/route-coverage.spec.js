@@ -46,6 +46,7 @@ const ROUTES = [
   '/leave/new',
   '/payroll',
   '/payroll/deduction-shortfalls', // Garnishment shortfall ledger (issue #376 read surface)
+  '/payroll/deduction-consents', // Written-consent register (issue #376 read + write surface)
   '/settings/attendance-calendar',
   '/attendance',
   '/tickets',

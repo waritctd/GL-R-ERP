@@ -294,6 +294,14 @@ export const API_ROUTES = {
     // Read-only garnishment shortfall ledger (issue #376). Mirrors
     // PayrollDeductionShortfallController. Optional employeeId / kind query params.
     deductionShortfalls: '/api/payroll/deduction-shortfalls',
+    // Written-consent register (issue #376, exposed for #744). ONE path, two verbs — mirrors
+    // DeductionWrittenConsentController, whose @GetMapping and @PutMapping both sit on the bare
+    // class-level @RequestMapping. GET takes optional employeeId / kind query params; PUT takes a
+    // JSON body and upserts one (employee, kind) row.
+    //
+    // A RECORD, NOT A GATE: nothing in PayrollCalculator reads the row this writes — see
+    // DeductionWrittenConsentService's own javadoc and V107's COMMENT ON TABLE.
+    deductionConsents: '/api/payroll/deduction-consents',
   },
   priceImport: {
     factories: '/api/price-import/factories',

@@ -236,11 +236,15 @@ const SERVER_ONLY = {
   'POST /api/pricing-requests/{}/factory-purchase-orders': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
 
   // ── Built backend-first; the UI pass has not landed ───────────────────────
-  'GET /api/payroll/deduction-consents': 'Written-consent record, issue #376. See the PUT entry below.',
+  // The four pricing entries that stood here (recalculate-cost, cost-override, and the two
+  // freight-rate rows) went with PR #769, which shipped their CEO costing UI. GET
+  // /api/payroll/deduction-consents went in the same week — DeductionConsentsPage.jsx now reaches
+  // it (issue #744). The stale-entry test below is what deletes an entry once it gains a caller.
   'PUT /api/payroll/deduction-consents':
     'HR bookkeeping of which deductions have written employee consent on file (issue #376, PR #411). Deliberately a '
     + 'recorded field and NOT an enforcement gate — nothing in PayrollCalculator reads it. Service-level tests only; '
-    + 'the HTTP layer is untested because nothing calls it.',
+    + 'the HTTP layer is untested because nothing calls it. The GET half is now wired to '
+    + 'DeductionConsentsPage.jsx; this write half is the next commit on the same branch.',
   'POST /api/leave/policy-document':
     'The UPLOAD half of the §5 announcement PDF (PR #494). It has never had a frontend client. V133 says rows reach '
     + 'the table only through this endpoint, so the table is necessarily empty in every environment. Covered by '
