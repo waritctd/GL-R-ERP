@@ -2,7 +2,6 @@ package th.co.glr.hr.pricingdecision;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -18,18 +17,20 @@ import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.FxRateDto;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.FxResolver;
+import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingItemDto;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
-import th.co.glr.hr.pricingcosting.PricingCostingStatus;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesViewDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository.ApprovedItem;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository.CreateDecisionResult;
+import th.co.glr.hr.pricingdecision.PricingDecisionRepository.FrozenCostUpdate;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository.ItemUpdate;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository.WriteItem;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.RecalculatePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
@@ -47,10 +48,18 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  * Step 3 of the sales pricing redesign: CEO Selling Price Decision. Turns a frozen SUBMITTED
  * costing into an approved, customer-facing selling price.
  *
+ * <p>V141 ("CEO owns costing"): {@link #startReview} now COMPUTES the costing itself (via {@link
+ * LandedCostCalculator}), in the same transaction that creates the decision — Import no longer
+ * submits one ({@code th.co.glr.hr.pricingcosting.PricingCostingService} is read-only). The CEO
+ * may {@link #recalculateCost} the bound costing in place, or {@link #overrideItemCost} a single
+ * line — both preserve any existing override; {@link #approve} refuses while any line's override
+ * is stale (its FX rate or calc-config version moved since the override was entered).
+ *
  * <pre>
- * READY_FOR_CEO_REVIEW -&gt; (CEO starts) CEO_REVIEWING
+ * READY_FOR_CEO_REVIEW -&gt; (CEO starts, computes cost) CEO_REVIEWING
  *     |-- approve -&gt; APPROVED_FOR_QUOTATION
- *     `-- return  -&gt; COSTING_REVISION_REQUIRED  (Import recalculates / new costing version, resubmits)
+ *     `-- return  -&gt; AWAITING_FACTORY_RESPONSE  (Import re-marks a factory quote ready; CEO
+ *                      opens review again and the cost is recomputed from scratch)
  * </pre>
  *
  * <p>Deliberately does NOT create a customer quotation, touch legacy {@code sales.ticket_item}
@@ -71,16 +80,19 @@ public class PricingDecisionService {
     private final TicketRepository tickets;
     private final FxRateRepository fxRates;
     private final NotificationRepository notifications;
+    private final LandedCostCalculator landedCost;
 
     public PricingDecisionService(PricingDecisionRepository decisions, PricingRequestRepository pricingRequests,
                                   PricingCostingRepository costings, TicketRepository tickets,
-                                  FxRateRepository fxRates, NotificationRepository notifications) {
+                                  FxRateRepository fxRates, NotificationRepository notifications,
+                                  LandedCostCalculator landedCost) {
         this.decisions = decisions;
         this.pricingRequests = pricingRequests;
         this.costings = costings;
         this.tickets = tickets;
         this.fxRates = fxRates;
         this.notifications = notifications;
+        this.landedCost = landedCost;
     }
 
     @Transactional
@@ -94,7 +106,41 @@ public class PricingDecisionService {
         String clientRequestId = validateUuid(request.clientRequestId());
         decisions.lockPricingRequest(pricingRequestId);
 
-        PricingCostingDto submittedCosting = requireLatestSubmittedCosting(pricingRequestId);
+        // Re-read UNDER the lock — the check above is racy. Without this, the costing INSERT
+        // below (createComputed) would run for the LOSER of a concurrent double-submit before it
+        // discovers it lost, leaving an orphan sales.pricing_costing row. The explicit
+        // clientRequestId replay lookup MUST come before the status re-check (not after): a
+        // genuine retry of an already-succeeded call finds the pricing request has already moved
+        // to CEO_REVIEWING, and a bare status re-check would wrongly 409 an idempotent retry
+        // instead of returning its result — exactly the ordering approve() already uses for its
+        // own clientRequestId check, below.
+        summary = requirePricingRequest(pricingRequestId);
+        if (clientRequestId != null) {
+            Optional<PricingDecisionDto> replay = decisions.findByClientRequestId(actor.id(), clientRequestId);
+            if (replay.isPresent()) {
+                if (replay.get().pricingRequestId() != pricingRequestId) {
+                    throw new ApiException(HttpStatus.CONFLICT,
+                        "clientRequestId นี้ถูกใช้ไปแล้วกับคำขอราคาอื่น");
+                }
+                return replay.get();
+            }
+        }
+        if (!PricingRequestStatus.READY_FOR_CEO_REVIEW.equals(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ยังไม่พร้อมส่งให้ CEO พิจารณา");
+        }
+
+        // V141 ("CEO owns costing"): the cost is computed HERE, once, deterministically, from
+        // whichever factory quote is current right now — Import no longer submits a costing of
+        // its own. 422s (via LandedCostCalculator.resolveSources) if any request item's factory
+        // quote is not READY_FOR_COSTING — should not happen, since
+        // FactoryQuoteService.markReadyForCosting only advances the pricing request to
+        // READY_FOR_CEO_REVIEW once every item resolves, but THIS check, not that one, is the
+        // authoritative gate for whether a costing can actually be computed.
+        LandedCostCalculator.CalculationResult calc = landedCost.calculate(summary);
+        long costingId = costings.createComputed(pricingRequestId, request.ceoNote(), actor.id(), calc.total());
+        costings.replaceItemsPreservingOverrides(costingId, calc.items());
+        PricingCostingDto submittedCosting = requireCosting(costingId);
+
         String currency = firstText(request.currency(), firstText(summary.targetCurrency(), "THB")).toUpperCase();
         FxRateDto fx = FxResolver.resolve(fxRates, currency);
         BigDecimal defaultMarginPct = request.defaultMarginPct();
@@ -113,9 +159,12 @@ public class PricingDecisionService {
 
         List<WriteItem> writeItems = new ArrayList<>();
         for (PricingCostingItemDto item : submittedCosting.items()) {
-            BigDecimal frozenPerPiece = item.landedCostPerUnitThb();
+            // Frozen from the EFFECTIVE cost, not the raw computed one, so an override flows into
+            // price = cost x margin exactly like the computed figure would have (see
+            // PricingCostingItemDto.effectiveLandedCostPerUnitThb/effectiveTotalLandedCostThb).
+            BigDecimal frozenPerPiece = item.effectiveLandedCostPerUnitThb();
             BigDecimal frozenPerRequestedUnit = money4(
-                item.totalLandedCostThb().divide(item.requestedQuantity(), 8, RoundingMode.HALF_UP));
+                item.effectiveTotalLandedCostThb().divide(item.requestedQuantity(), 8, RoundingMode.HALF_UP));
             BigDecimal proposedSellingPrice = defaultMarginPct != null
                 ? computeSellingPrice(frozenPerRequestedUnit, defaultMarginPct, fx.rateToThb(), currency)
                 : null;
@@ -185,6 +234,104 @@ public class PricingDecisionService {
         return requireDecision(decisionId);
     }
 
+    /**
+     * V141 ("CEO owns costing"): recomputes the bound costing IN PLACE (same {@code
+     * pricing_costing_id} — a new FX rate or a factory-quote change since {@code startReview}
+     * would otherwise leave the decision frozen on a stale price), preserving any existing
+     * per-line override ({@link PricingCostingRepository#replaceItemsPreservingOverrides}), then
+     * re-derives every decision item's frozen cost + proposed selling price from the (possibly
+     * still-overridden) effective cost. DRAFT decisions only — {@link #requireOpenDecisionForMutation}
+     * enforces that, same as every other CEO-editing action here.
+     */
+    @Transactional
+    public PricingDecisionDto recalculateCost(long decisionId, UserPrincipal actor) {
+        requireRole(actor, CEO_ROLES);
+        PricingDecisionDto decision = requireOpenDecisionForMutation(decisionId);
+        PricingRequestSummaryDto summary = requirePricingRequest(decision.pricingRequestId());
+        LandedCostCalculator.CalculationResult calc = landedCost.calculate(summary);
+        costings.replaceItemsPreservingOverrides(decision.pricingCostingId(), calc.items());
+        PricingCostingDto refreshed = requireCosting(decision.pricingCostingId());
+        Map<Long, PricingCostingItemDto> costingItemsByRequestItem = refreshed.items().stream()
+            .collect(java.util.stream.Collectors.toMap(PricingCostingItemDto::pricingRequestItemId, i -> i));
+
+        List<FrozenCostUpdate> updates = new ArrayList<>();
+        for (PricingDecisionItemDto item : decision.items()) {
+            PricingCostingItemDto costingItem = costingItemsByRequestItem.get(item.pricingRequestItemId());
+            if (costingItem == null) {
+                continue;
+            }
+            BigDecimal frozenPerPiece = costingItem.effectiveLandedCostPerUnitThb();
+            BigDecimal frozenPerRequestedUnit = money4(
+                costingItem.effectiveTotalLandedCostThb().divide(item.requestedQuantity(), 8, RoundingMode.HALF_UP));
+            BigDecimal sellingPrice = item.proposedMarginPct() != null
+                ? computeSellingPrice(frozenPerRequestedUnit, item.proposedMarginPct(), decision.fxRateUsed(), decision.currency())
+                : null;
+            updates.add(new FrozenCostUpdate(item.id(), frozenPerPiece, frozenPerRequestedUnit, sellingPrice));
+        }
+        decisions.updateFrozenCosts(decisionId, updates);
+        addEvent(decision.pricingRequestId(), actor, PricingRequestEventKind.PRICING_DECISION_UPDATED,
+            "CEO คำนวณต้นทุนใหม่");
+        return requireDecision(decisionId);
+    }
+
+    /**
+     * V141 ("CEO owns costing"): the only genuinely new behaviour — a per-line manual cost
+     * override sitting BESIDE the computed figure, which is never destroyed. {@code itemId} is
+     * the {@code pricing_decision_item} id (a sub-resource of this decision), resolved here to
+     * its bound {@code pricing_costing_item_id}. {@code reason} is mandatory in BOTH directions —
+     * clearing (manualLandedCostPerUnitThb == null) is money-affecting too, mirroring {@link
+     * #returnToImport}'s own mandatory-reason check. Writing a value stamps {@code
+     * override_fx_rate}/{@code override_calc_config_version} from THIS item's CURRENT computed
+     * values — re-confirming the same value after a recalculate re-stamps them to whatever is
+     * current then, which is how staleness clears (the CEO's escape hatch). DRAFT decisions only.
+     */
+    @Transactional
+    public PricingDecisionDto overrideItemCost(long decisionId, long itemId, CostOverrideRequest request, UserPrincipal actor) {
+        requireRole(actor, CEO_ROLES);
+        if (request.reason() == null || request.reason().isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเหตุผลในการปรับต้นทุน ไม่ว่าจะปรับหรือยกเลิกการปรับก็ตาม");
+        }
+        BigDecimal manualCost = request.manualLandedCostPerUnitThb();
+        if (manualCost != null && manualCost.compareTo(BigDecimal.ZERO) < 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้นทุนที่ปรับต้องไม่ติดลบ");
+        }
+        PricingDecisionDto decision = requireOpenDecisionForMutation(decisionId);
+        PricingDecisionItemDto item = decision.items().stream()
+            .filter(i -> i.id() == itemId)
+            .findFirst()
+            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "รายการที่ " + itemId + " ไม่ได้เป็นของมติราคานี้"));
+        PricingCostingDto costing = requireCosting(decision.pricingCostingId());
+        PricingCostingItemDto costingItem = costing.items().stream()
+            .filter(i -> i.id() == item.pricingCostingItemId())
+            .findFirst()
+            .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "ไม่พบรายการต้นทุนที่ผูกกับมติราคานี้"));
+
+        BigDecimal roundedManualCost = manualCost == null ? null : money4(manualCost);
+        if (roundedManualCost != null) {
+            costings.applyOverride(costingItem.id(), roundedManualCost, request.reason(), actor.id(),
+                costingItem.fxRate(), costingItem.calculationConfigVersion());
+        } else {
+            costings.clearOverride(costingItem.id(), actor.id());
+        }
+
+        // landed_cost_per_unit_thb/normalized_quantity_pieces are untouched by an override write,
+        // so re-deriving the effective figures from the ALREADY-fetched costingItem (rather than
+        // re-querying) is safe and matches PricingCostingRepository#mapItem's own formula exactly.
+        BigDecimal effectivePerPiece = roundedManualCost != null ? roundedManualCost : costingItem.landedCostPerUnitThb();
+        BigDecimal effectiveTotal = money4(effectivePerPiece.multiply(costingItem.normalizedQuantityPieces()));
+        BigDecimal frozenPerRequestedUnit = money4(effectiveTotal.divide(item.requestedQuantity(), 8, RoundingMode.HALF_UP));
+        BigDecimal sellingPrice = item.proposedMarginPct() != null
+            ? computeSellingPrice(frozenPerRequestedUnit, item.proposedMarginPct(), decision.fxRateUsed(), decision.currency())
+            : null;
+        decisions.updateFrozenCosts(decisionId, List.of(
+            new FrozenCostUpdate(item.id(), effectivePerPiece, frozenPerRequestedUnit, sellingPrice)));
+
+        addEvent(decision.pricingRequestId(), actor, PricingRequestEventKind.PRICING_COSTING_ITEM_COST_OVERRIDDEN,
+            (roundedManualCost != null ? "CEO ปรับต้นทุนรายการที่ " : "CEO ล้างการปรับต้นทุนรายการที่ ")
+                + item.id() + ": " + request.reason());
+        return requireDecision(decisionId);
+    }
+
     @Transactional
     public PricingDecisionDto approve(long decisionId, ApprovePricingDecisionRequest request, UserPrincipal actor) {
         requireRole(actor, CEO_ROLES);
@@ -211,6 +358,26 @@ public class PricingDecisionService {
         }
         requireActiveDeal(summary.ticketId());
 
+        // V141: refuse while ANY line of the bound costing carries a stale override (its FX rate
+        // or calc-config version moved since the CEO entered the manual value) — approving one
+        // would freeze a selling price built on a cost the CEO never actually confirmed against
+        // current conditions. recalculateCost (re-derives every line, preserving overrides) or
+        // re-confirming the SAME override value (which re-stamps its provenance, clearing
+        // staleness) are the two ways past this.
+        PricingCostingDto costing = requireCosting(decision.pricingCostingId());
+        Map<Long, Long> decisionItemIdByCostingItemId = decision.items().stream()
+            .collect(java.util.stream.Collectors.toMap(PricingDecisionItemDto::pricingCostingItemId, PricingDecisionItemDto::id));
+        List<Long> staleItemIds = costing.items().stream()
+            .filter(PricingCostingItemDto::overrideStale)
+            .map(costingItem -> decisionItemIdByCostingItemId.getOrDefault(costingItem.id(), costingItem.id()))
+            .toList();
+        if (!staleItemIds.isEmpty()) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ไม่สามารถอนุมัติได้ เนื่องจากมีรายการที่ปรับต้นทุนเองล้าสมัย "
+                    + "(อัตราแลกเปลี่ยนหรือค่าคำนวณเปลี่ยนไปหลังปรับ) กรุณาคำนวณต้นทุนใหม่หรือยืนยันค่าที่ปรับอีกครั้งก่อนอนุมัติ "
+                    + "— รายการที่ล้าสมัย: " + staleItemIds);
+        }
+
         List<Long> missingMargin = new ArrayList<>();
         List<Long> missingMinimum = new ArrayList<>();
         for (PricingDecisionItemDto item : decision.items()) {
@@ -222,7 +389,7 @@ public class PricingDecisionService {
             }
         }
         if (!missingMargin.isEmpty() || !missingMinimum.isEmpty()) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "ทุกรายการต้องระบุ margin และราคาขายขั้นต่ำก่อนอนุมัติ — รายการที่ยังไม่มี margin: "
                     + missingMargin + ", รายการที่ยังไม่มีราคาขายขั้นต่ำ: " + missingMinimum);
         }
@@ -252,6 +419,18 @@ public class PricingDecisionService {
         notifications.notifyEmployeeForPricingRequest(summary.requestedById(), summary.id(),
             PricingRequestEventKind.PRICING_DECISION_APPROVED,
             "คำขอราคา " + summary.requestCode() + " ได้รับอนุมัติราคาขายแล้ว");
+        // V141: notify Import too — approval means the deal is moving on to quotation, useful
+        // context for whoever has been renegotiating with the factory. Mirrors returnToImport's
+        // own targeting (assignedImportId, else role broadcast "import").
+        if (summary.assignedImportId() != null) {
+            notifications.notifyEmployeeForPricingRequest(summary.assignedImportId(), summary.id(),
+                PricingRequestEventKind.PRICING_DECISION_APPROVED,
+                "คำขอราคา " + summary.requestCode() + " ได้รับอนุมัติราคาขายแล้ว");
+        } else {
+            notifications.notifyByRoleForPricingRequest("import", summary.id(),
+                PricingRequestEventKind.PRICING_DECISION_APPROVED,
+                "คำขอราคา " + summary.requestCode() + " ได้รับอนุมัติราคาขายแล้ว");
+        }
         return requireDecision(decisionId);
     }
 
@@ -273,13 +452,17 @@ public class PricingDecisionService {
         if (returnedRows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "มติราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
+        // V141: sends the request to AWAITING_FACTORY_RESPONSE, not a dedicated "revise the
+        // costing" status — there is no standalone costing draft any more for Import to revise.
+        // Import's only remaining job is to renegotiate/re-mark the factory quote(s) ready; the
+        // CEO's next startReview recomputes the cost from scratch.
         int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.CEO_REVIEWING,
-            PricingRequestStatus.COSTING_REVISION_REQUIRED, null, null);
+            PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
         if (transitioned == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         addEvent(summary, actor, PricingRequestEventKind.PRICING_DECISION_RETURNED,
-            PricingRequestStatus.CEO_REVIEWING, PricingRequestStatus.COSTING_REVISION_REQUIRED,
+            PricingRequestStatus.CEO_REVIEWING, PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
             request.returnReason());
         if (summary.assignedImportId() != null) {
             notifications.notifyEmployeeForPricingRequest(summary.assignedImportId(), summary.id(),
@@ -358,18 +541,9 @@ public class PricingDecisionService {
         return money4(price);
     }
 
-    private PricingCostingDto requireLatestSubmittedCosting(long pricingRequestId) {
-        List<PricingCostingDto> all = costings.findByPricingRequest(pricingRequestId);
-        PricingCostingDto latest = null;
-        for (PricingCostingDto costing : all) {
-            if (PricingCostingStatus.SUBMITTED.equals(costing.status())) {
-                latest = costing;
-            }
-        }
-        if (latest == null) {
-            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ยังไม่มีการคำนวณต้นทุนที่ส่งเข้ามา");
-        }
-        return latest;
+    private PricingCostingDto requireCosting(long costingId) {
+        return costings.find(costingId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบการคำนวณต้นทุนนี้"));
     }
 
     private PricingDecisionDto requireOpenDecisionForMutation(long decisionId) {

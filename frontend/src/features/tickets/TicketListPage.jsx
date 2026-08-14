@@ -25,9 +25,8 @@ import {
 } from '../../utils/format.js';
 import { StageProgressBar } from './DealStageStepper.jsx';
 import { dealInScope } from './salesViewScope.js';
-import { SALES_PHASES, SALES_STAGES, stageIndex, stageMeta } from './stageMeta.js';
+import { EMPTY_STAGE_CATALOG, findStage, stageIndexIn, useStageCatalog } from './stageCatalog.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
-import { effectiveWinProbability } from './dealTrackingMeta.js';
 
 // Same selector Modal.jsx traps on — kept identical so the two overlay
 // surfaces agree on what "focusable" means.
@@ -91,7 +90,7 @@ function scopeCopy(role, inboxOnly) {
 // action", "import: lead with the pricing queue"). Presentation only, same
 // spirit as dealInScope in salesViewScope.js but specific enough to this
 // page's cards that it isn't worth exporting from that shared module.
-function worklistReason(role, deal) {
+function worklistReason(role, deal, catalog = EMPTY_STAGE_CATALOG) {
   if (role === 'account') {
     if (deal.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') return 'รอยืนยันรับมัดจำ';
     if (deal.paymentStatus === 'AWAITING_FINAL_PAYMENT') return 'รอชำระส่วนที่เหลือ';
@@ -99,7 +98,7 @@ function worklistReason(role, deal) {
     return null;
   }
   if (role === 'import') {
-    const meta = stageMeta(deal.salesStage);
+    const meta = findStage(catalog, deal.salesStage);
     if (meta?.phase === 2 || meta?.phase === 3) return 'รอคำขอราคา';
     if (deal.salesStage === 'PROCUREMENT') return 'ดำเนินการนำเข้า (IR / จัดส่ง)';
     if (['DELIVERY_SCHEDULING', 'DELIVERED'].includes(deal.salesStage)) return 'ส่งมอบ / จองสต็อก';
@@ -107,6 +106,12 @@ function worklistReason(role, deal) {
   }
   return null;
 }
+
+// Thai phase names. The phase ID LIST is the backend catalog's (see stageCatalog.js); only the
+// wording is ours. Kept in step with DealStageStepper's own PHASE_NAME by the design system, not by
+// a shared constant — these are two different renderings of the same five words.
+const PHASE_NAME = { 1: 'การเข้าถึงโครงการ', 2: 'งานสเปค', 3: 'ประมูลและเจรจา', 4: 'คำสั่งซื้อและนำเข้า', 5: 'ส่งมอบและปิดงาน' };
+const phaseName = (id) => PHASE_NAME[id] ?? `เฟส ${id}`;
 
 // Per-phase dot accents. Static class map — Tailwind's scanner needs the full
 // class names in source, so no `bg-phase-${id}` interpolation.
@@ -168,7 +173,6 @@ function matchesSearch(deal, query) {
 // above (days since the STAGE last changed) — this is "has anyone followed up
 // recently", not "how long has this deal sat in its stage".
 const MANAGER_PIPELINE_ROLES = new Set(['sales_manager', 'ceo']);
-const ORDER_RECEIVED_IDX = stageIndex('ORDER_RECEIVED');
 
 /**
  * No-recent-activity badge, shown per-deal for the manager pipeline view.
@@ -198,19 +202,27 @@ function TrackingBadges({ deal }) {
  * are neither a live forecast nor a definitive loss, so folding them into
  * either bucket would misstate it.
  */
-function groupDealsForPipeline(deals) {
+function groupDealsForPipeline(deals, catalog) {
   const won = [];
   const expected = [];
   const lost = [];
   for (const deal of deals) {
     if (deal.lifecycle === 'CLOSED_LOST') { lost.push(deal); continue; }
     if (deal.lifecycle !== 'ACTIVE') continue;
-    const idx = stageIndex(deal.salesStage);
-    (idx >= ORDER_RECEIVED_IDX ? won : expected).push(deal);
+    const idx = stageIndexIn(catalog, deal.salesStage);
+    const orderReceivedIdx = stageIndexIn(catalog, 'ORDER_RECEIVED');
+    // orderReceivedIdx is -1 until the catalog loads; without the guard every deal would count as
+    // "won" for a frame, which would misstate the forecast on screen.
+    (orderReceivedIdx >= 0 && idx >= orderReceivedIdx ? won : expected).push(deal);
   }
   const sumValue = (list) => list.reduce((sum, deal) => sum + (Number(deal.amountPayable) || 0), 0);
   const forecast = expected.reduce((sum, deal) => {
-    const win = effectiveWinProbability(deal.winProbabilityOverride, deal.salesStage);
+    // The SERVER's number (TicketSummaryDto.effectiveWinProbability). This is money-shaped output —
+    // it used to be re-derived here from a hand-copied stage→% table, and #714 is what that costs:
+    // V143 added QUOTE_OWNER, the copy did not, and every S5 deal silently contributed 0 to this
+    // sum. Issue #738. `?? 0` reproduces exactly that old fallback for a row without the field, so
+    // an unserved value under-counts rather than turning the whole forecast into NaN.
+    const win = deal.effectiveWinProbability ?? 0;
     return sum + (Number(deal.amountPayable) || 0) * (win / 100);
   }, 0);
   return {
@@ -266,12 +278,12 @@ function TeamPipelineSummary({ groups }) {
 // styles.css) hides the `progress` column to fit the row — the stale flag
 // would otherwise silently disappear for a manager at that width even
 // though nothing about it stopped being true.
-function WorkStageCell({ deal, role, showTracking = false }) {
-  const reason = worklistReason(role, deal);
+function WorkStageCell({ deal, role, catalog, showTracking = false }) {
+  const reason = worklistReason(role, deal, catalog);
   return (
     <span className="flex min-w-0 flex-col gap-1">
       {reason ? <StatusBadge tone="info">{reason}</StatusBadge> : null}
-      <DealStageCell deal={deal} />
+      <DealStageCell deal={deal} catalog={catalog} />
       {showTracking ? <TrackingBadges deal={deal} /> : null}
     </span>
   );
@@ -292,10 +304,10 @@ const PAUSED_OR_TERMINAL_LIFECYCLES = new Set(['CANCELLED', 'COMPLETED', 'ON_HOL
  * lifecycle gets its label prefixed onto the fraction (see
  * PAUSED_OR_TERMINAL_LIFECYCLES); a live ACTIVE deal gets the bare fraction.
  */
-function progressReadout(deal) {
+function progressReadout(deal, catalog) {
   if (deal.lifecycle === 'CLOSED_LOST') return 'ไม่คืบหน้า (เสียงาน)';
-  const idx = stageIndex(deal.salesStage);
-  const total = SALES_STAGES.length;
+  const idx = stageIndexIn(catalog, deal.salesStage);
+  const total = catalog.stages.length;
   // FIX F: the lifecycle prefix must be decided BEFORE the "no resolvable
   // stage" early return, not after it. A CANCELLED/COMPLETED/ON_HOLD/DORMANT
   // deal with a null/unrecognized `salesStage` (idx < 0) has no fraction to
@@ -320,13 +332,13 @@ function progressReadout(deal) {
  * and the fraction were just saying the same thing twice, so only the
  * fraction remains.
  */
-function ProgressCell({ deal }) {
+function ProgressCell({ deal, catalog }) {
   const lost = deal.lifecycle === 'CLOSED_LOST';
   return (
     <span className="flex min-w-0 flex-col gap-1">
-      <StageProgressBar salesStage={deal.salesStage} lost={lost} />
+      <StageProgressBar catalog={catalog} salesStage={deal.salesStage} lost={lost} />
       <span className="text-2xs font-bold tabular-nums text-text-muted">
-        {progressReadout(deal)}
+        {progressReadout(deal, catalog)}
       </span>
     </span>
   );
@@ -335,13 +347,13 @@ function ProgressCell({ deal }) {
 // NOTE: 'lost' keys on lifecycle, never on lostReason. Since V57 the reason
 // SURVIVES a reopen, so a live reopened deal still carries one — testing the
 // reason would render it as เสียงาน and drop it out of the phase counts.
-function DealStageCell({ deal }) {
+function DealStageCell({ deal, catalog }) {
   if (deal.lifecycle === 'CLOSED_LOST') {
     const lost = dealLostReasonLabel(deal.lostReason);
     return <StatusBadge tone="danger">เสียงาน · {lost.label}</StatusBadge>;
   }
   const stage = dealStageLabel(deal.salesStage);
-  const meta = stageMeta(deal.salesStage);
+  const meta = findStage(catalog, deal.salesStage);
   const operational = ticketStatusLabel(deal.status);
   // FIX F6 (review-remediation): used to badge only ON_HOLD/DORMANT, so a
   // CANCELLED or COMPLETED deal looked indistinguishable from a live one in
@@ -407,9 +419,9 @@ function DealOpenButton({ deal, onOpen }) {
   );
 }
 
-function DealCard({ deal, reason = null, showTracking = false, onOpen }) {
+function DealCard({ deal, catalog, reason = null, showTracking = false, onOpen }) {
   const stage = dealStageLabel(deal.salesStage);
-  const stageMetaInfo = stageMeta(deal.salesStage);
+  const stageMetaInfo = findStage(catalog, deal.salesStage);
   const freshnessText = overdueBadgeLabel(deal.stageUpdatedAt)?.label || formatThaiDate(deal.stageUpdatedAt ?? deal.updatedAt);
   return (
     <>
@@ -430,7 +442,7 @@ function DealCard({ deal, reason = null, showTracking = false, onOpen }) {
         <strong>{stageMetaInfo ? `${stageMetaInfo.no}. ` : ''}{stage.label}</strong>
         {reason ? <small>{reason}</small> : null}
       </div>
-      <StageProgressBar salesStage={deal.salesStage} lost={deal.lifecycle === 'CLOSED_LOST'} />
+      <StageProgressBar catalog={catalog} salesStage={deal.salesStage} lost={deal.lifecycle === 'CLOSED_LOST'} />
       {showTracking ? <TrackingBadges deal={deal} /> : null}
 
       <span className="ticket-card-owner">
@@ -482,7 +494,7 @@ function MoneyWorklistCard({ deal, onOpen }) {
   );
 }
 
-function buildDealColumns({ role, isManagerView }) {
+function buildDealColumns({ role, isManagerView, catalog }) {
   return [
     {
       key: 'customer',
@@ -519,13 +531,13 @@ function buildDealColumns({ role, isManagerView }) {
       key: 'stage',
       header: 'ขั้นตอน / เหตุผลงาน',
       sortable: true,
-      sortAccessor: (deal) => (deal.lifecycle === 'CLOSED_LOST' ? -1 : stageMeta(deal.salesStage)?.no ?? 0),
-      render: (deal) => <WorkStageCell deal={deal} role={role} showTracking={isManagerView} />,
+      sortAccessor: (deal) => (deal.lifecycle === 'CLOSED_LOST' ? -1 : findStage(catalog, deal.salesStage)?.no ?? 0),
+      render: (deal) => <WorkStageCell deal={deal} role={role} catalog={catalog} showTracking={isManagerView} />,
     },
     {
       key: 'progress',
       header: 'ความคืบหน้า',
-      render: (deal) => <ProgressCell deal={deal} />,
+      render: (deal) => <ProgressCell deal={deal} catalog={catalog} />,
     },
     {
       key: 'date',
@@ -592,6 +604,11 @@ export function TicketListPage({ user, showToast }) {
 
   const canCreate = ROLE_PERMISSIONS.canCreateTickets.includes(user.role);
 
+  // The pipeline's shape (stage order, phases, gates), fetched once from GET /api/meta/deal-stages.
+  // Deliberately NOT folded into `loading` below: the deal list must still render if the
+  // enumeration is slow. Every lookup over it is written to answer safely for the empty catalog.
+  const { catalog: stageCatalog } = useStageCatalog();
+
   const ticketsQuery = useQuery({
     queryKey: queryKeys.ticketList(''),
     queryFn: () => api.tickets.list({}).then((response) => response.tickets || []),
@@ -611,15 +628,15 @@ export function TicketListPage({ user, showToast }) {
   // Lifecycle buckets live in the additional filters below, so phase counts stay active-only.
   const phaseCounts = useMemo(() => {
     const counts = {};
-    for (const phase of SALES_PHASES) counts[phase.id] = 0;
+    for (const phaseId of stageCatalog.phases) counts[phaseId] = 0;
     for (const deal of allDeals) {
       if (deal.lifecycle === 'ACTIVE') {
-        const meta = stageMeta(deal.salesStage);
+        const meta = findStage(stageCatalog, deal.salesStage);
         if (meta) counts[meta.phase] += 1;
       }
     }
     return counts;
-  }, [allDeals]);
+  }, [allDeals, stageCatalog]);
 
   const lifecycleCounts = useMemo(() => {
     const counts = {
@@ -647,8 +664,8 @@ export function TicketListPage({ user, showToast }) {
   // as flagCounts/lifecycleCounts above — a stable overview regardless of
   // whatever the viewer happens to be filtering the table to right now.
   const pipelineGroups = useMemo(
-    () => (isManagerView ? groupDealsForPipeline(allDeals) : null),
-    [allDeals, isManagerView],
+    () => (isManagerView ? groupDealsForPipeline(allDeals, stageCatalog) : null),
+    [allDeals, isManagerView, stageCatalog],
   );
 
   // Role-scoped views, Phase A: how many of allDeals are actually in this
@@ -656,9 +673,9 @@ export function TicketListPage({ user, showToast }) {
   // lifecycleCounts/flagCounts above (independent of the other active
   // filters), used by the inbox toggle chips below.
   const inboxCounts = useMemo(() => (hasWorklistDistinction ? {
-    inbox: allDeals.filter((deal) => dealInScope(user.role, deal)).length,
+    inbox: allDeals.filter((deal) => dealInScope(user.role, deal, stageCatalog)).length,
     all: allDeals.length,
-  } : null), [allDeals, hasWorklistDistinction, user.role]);
+  } : null), [allDeals, hasWorklistDistinction, stageCatalog, user.role]);
 
   const deals = useMemo(() => {
     return allDeals.filter((deal) => {
@@ -667,16 +684,16 @@ export function TicketListPage({ user, showToast }) {
       // filter matches on ACTIVE too — paused/terminal deals are reached via the lifecycle
       // chips below. This keeps each phase card's count equal to the rows it filters to.
       const phaseOk = !phaseFilter
-        || (deal.lifecycle === 'ACTIVE' && stageMeta(deal.salesStage)?.phase === Number(phaseFilter));
+        || (deal.lifecycle === 'ACTIVE' && findStage(stageCatalog, deal.salesStage)?.phase === Number(phaseFilter));
       const lifeOk = !lifecycleFilter || (lifecycleFilter === 'CLOSED_LOST' ? lost : deal.lifecycle === lifecycleFilter);
       const flagOk = !flagFilter
         || (flagFilter === 'overdue' && deal.overdue)
         || (flagFilter === 'partial_delivery' && deal.fulfillmentStatus === 'PARTIALLY_DELIVERED');
-      const inboxOk = !inboxOnly || dealInScope(user.role, deal);
+      const inboxOk = !inboxOnly || dealInScope(user.role, deal, stageCatalog);
       const searchOk = matchesSearch(deal, searchText);
       return phaseOk && lifeOk && flagOk && inboxOk && searchOk;
     });
-  }, [allDeals, flagFilter, lifecycleFilter, phaseFilter, inboxOnly, user.role, searchText]);
+  }, [allDeals, flagFilter, lifecycleFilter, phaseFilter, inboxOnly, stageCatalog, user.role, searchText]);
 
   const hasActiveMoreFilters = Boolean(lifecycleFilter || flagFilter);
   const showMoreFilters = moreFiltersOpen;
@@ -711,8 +728,9 @@ export function TicketListPage({ user, showToast }) {
     const filters = [];
     if (searchText.trim()) filters.push('ค้นหาในรายการ');
     if (phaseFilter) {
-      const phase = SALES_PHASES.find((item) => String(item.id) === phaseFilter);
-      if (phase) filters.push(`เฟส ${phase.id}: ${phase.name}`);
+      if (stageCatalog.phases.includes(Number(phaseFilter))) {
+        filters.push(`เฟส ${phaseFilter}: ${phaseName(Number(phaseFilter))}`);
+      }
     }
     if (lifecycleFilter) filters.push(`สถานะงาน: ${dealLifecycleLabel(lifecycleFilter).label}`);
     if (flagFilter) {
@@ -721,7 +739,7 @@ export function TicketListPage({ user, showToast }) {
     }
     if (hasWorklistDistinction && searchParams.get('inbox') === '0') filters.push('ขอบเขต: ทั้งหมด');
     return filters;
-  }, [flagFilter, hasWorklistDistinction, lifecycleFilter, phaseFilter, searchParams, searchText]);
+  }, [flagFilter, hasWorklistDistinction, lifecycleFilter, phaseFilter, searchParams, searchText, stageCatalog]);
 
   // Phase chips, WorklistFilters-driven (Task 1b/2). The "all" chip used to
   // read "ดีลที่ดำเนินอยู่" ("active deals") over a count (`activePipelineCount`)
@@ -736,13 +754,13 @@ export function TicketListPage({ user, showToast }) {
   // matching exactly what selecting it filters to) counts.
   const phaseChipItems = useMemo(() => [
     { key: '', label: 'ทั้งหมด' },
-    ...SALES_PHASES.map((phase) => ({
-      key: String(phase.id),
-      label: `เฟส ${phase.id} · ${phase.name}`,
-      count: phaseCounts[phase.id],
-      dotClassName: PHASE_STYLES[phase.id].dot,
+    ...stageCatalog.phases.map((phaseId) => ({
+      key: String(phaseId),
+      label: `เฟส ${phaseId} · ${phaseName(phaseId)}`,
+      count: phaseCounts[phaseId],
+      dotClassName: PHASE_STYLES[phaseId]?.dot,
     })),
-  ], [phaseCounts]);
+  ], [phaseCounts, stageCatalog]);
 
   function selectPhase(key) {
     // Clicking the already-active chip clears back to "all" — same toggle-off
@@ -760,22 +778,23 @@ export function TicketListPage({ user, showToast }) {
   ] : null), [hasWorklistDistinction, inboxCounts]);
 
   const tableColumns = useMemo(
-    () => buildDealColumns({ role: user.role, isManagerView }),
-    [isManagerView, user.role],
+    () => buildDealColumns({ role: user.role, isManagerView, catalog: stageCatalog }),
+    [isManagerView, stageCatalog, user.role],
   );
 
   const emptyDescription = useMemo(() => {
     if (searchText.trim()) return 'ไม่พบดีลที่ตรงกับคำค้นหาและตัวกรองที่เลือก';
     if (phaseFilter) {
-      const phase = SALES_PHASES.find((item) => String(item.id) === phaseFilter);
-      return phase ? `ไม่มีดีลในเฟส ${phase.id} · ${phase.name}` : 'ไม่มีดีลในเฟสที่เลือก';
+      return stageCatalog.phases.includes(Number(phaseFilter))
+        ? `ไม่มีดีลในเฟส ${phaseFilter} · ${phaseName(Number(phaseFilter))}`
+        : 'ไม่มีดีลในเฟสที่เลือก';
     }
     if (flagFilter === 'overdue') return 'ไม่มีดีลที่เกินกำหนดชำระ';
     if (flagFilter === 'partial_delivery') return 'ไม่มีดีลที่ส่งมอบบางส่วน';
     if (lifecycleFilter) return `ไม่มีดีลในสถานะ${dealLifecycleLabel(lifecycleFilter).label}`;
     if (inboxOnly) return 'ไม่มีดีลที่ต้องดำเนินการตอนนี้ — ลองดูแท็บ "ทั้งหมด"';
     return 'ยังไม่มีดีลในเงื่อนไขที่เลือก';
-  }, [flagFilter, lifecycleFilter, inboxOnly, phaseFilter, searchText]);
+  }, [flagFilter, lifecycleFilter, inboxOnly, phaseFilter, searchText, stageCatalog]);
 
   function invalidateTicketsList() {
     return queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
@@ -1107,7 +1126,7 @@ export function TicketListPage({ user, showToast }) {
         mobileCard={(deal) => (
           user.role === 'account'
             ? <MoneyWorklistCard deal={deal} onOpen={openDeal} />
-            : <DealCard deal={deal} reason={worklistReason(user.role, deal)} showTracking={isManagerView} onOpen={openDeal} />
+            : <DealCard deal={deal} catalog={stageCatalog} reason={worklistReason(user.role, deal, stageCatalog)} showTracking={isManagerView} onOpen={openDeal} />
         )}
         initialSort={{ key: 'date', dir: 'desc' }}
         loading={loading}

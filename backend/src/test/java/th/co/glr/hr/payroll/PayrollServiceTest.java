@@ -3,8 +3,10 @@ package th.co.glr.hr.payroll;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -347,6 +349,211 @@ class PayrollServiceTest {
         assertThatThrownBy(() -> service.currentOrPreview(LocalDate.of(2026, 6, 1), salesUser()))
             .isInstanceOfSatisfying(ApiException.class, exception ->
                 assertThat(exception.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    // ---- Fix B: statutory exports fail closed when employer registration is blank -------------
+    // Wrong-way-round per CLAUDE.md: these prove the export IS refused on a blank field, not merely
+    // that a fully-populated one works (though that positive case is covered too, per kind).
+
+    @Test
+    void kbankExportRefusedWhenDebitAccountBlank() {
+        AppProperties props = fullyConfiguredEmployerProps();
+        props.getPayroll().getEmployer().setKbankDebitAccount("");
+        PayrollService serviceUnderTest = serviceWithEmployer(props);
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period()));
+
+        assertThatThrownBy(() ->
+                serviceUnderTest.export(PayrollExportKind.KBANK, 99L, LocalDate.of(2026, 6, 26), hrUser()))
+            .isInstanceOfSatisfying(ApiException.class, exception -> {
+                assertThat(exception.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                assertThat(exception.getMessage()).contains("APP_PAYROLL_KBANK_DEBIT_ACCOUNT");
+            });
+        verify(payrollRepository, never()).findExportRows(anyLong());
+    }
+
+    @Test
+    void kbankExportRefusedWhenCompanyNameBlank() {
+        AppProperties props = fullyConfiguredEmployerProps();
+        props.getPayroll().getEmployer().setCompanyNameTh("");
+        PayrollService serviceUnderTest = serviceWithEmployer(props);
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period()));
+
+        assertThatThrownBy(() ->
+                serviceUnderTest.export(PayrollExportKind.KBANK, 99L, LocalDate.of(2026, 6, 26), hrUser()))
+            .isInstanceOfSatisfying(ApiException.class, exception -> {
+                assertThat(exception.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                assertThat(exception.getMessage()).contains("APP_PAYROLL_COMPANY_NAME_TH");
+            });
+    }
+
+    @Test
+    void kbankExportProceedsWhenFullyConfigured() {
+        PayrollService serviceUnderTest = serviceWithEmployer(fullyConfiguredEmployerProps());
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period()));
+        when(payrollRepository.findExportRows(99L)).thenReturn(List.of(exportRow()));
+
+        PayrollExportFile file =
+            serviceUnderTest.export(PayrollExportKind.KBANK, 99L, LocalDate.of(2026, 6, 26), hrUser());
+
+        assertThat(file.fileName()).isEqualTo("PCT260626.txt");
+    }
+
+    @Test
+    void pnd1ExportRefusedWhenCompanyTaxIdBlank() {
+        AppProperties props = fullyConfiguredEmployerProps();
+        props.getPayroll().getEmployer().setCompanyTaxId("");
+        PayrollService serviceUnderTest = serviceWithEmployer(props);
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period()));
+
+        assertThatThrownBy(() ->
+                serviceUnderTest.export(PayrollExportKind.PND1, 99L, LocalDate.of(2026, 6, 26), hrUser()))
+            .isInstanceOfSatisfying(ApiException.class, exception -> {
+                assertThat(exception.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                assertThat(exception.getMessage()).contains("APP_PAYROLL_COMPANY_TAX_ID");
+            });
+        verify(payrollRepository, never()).findExportRows(anyLong());
+    }
+
+    @Test
+    void pnd1ExportRefusedWhenBranchBlank() {
+        AppProperties props = fullyConfiguredEmployerProps();
+        props.getPayroll().getEmployer().setPnd1Branch("");
+        PayrollService serviceUnderTest = serviceWithEmployer(props);
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period()));
+
+        assertThatThrownBy(() ->
+                serviceUnderTest.export(PayrollExportKind.PND1, 99L, LocalDate.of(2026, 6, 26), hrUser()))
+            .isInstanceOfSatisfying(ApiException.class, exception -> {
+                assertThat(exception.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                assertThat(exception.getMessage()).contains("APP_PAYROLL_PND1_BRANCH");
+            });
+    }
+
+    @Test
+    void pnd1ExportProceedsWhenFullyConfigured() {
+        PayrollService serviceUnderTest = serviceWithEmployer(fullyConfiguredEmployerProps());
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period()));
+        when(payrollRepository.findExportRows(99L)).thenReturn(List.of(exportRow()));
+
+        PayrollExportFile file =
+            serviceUnderTest.export(PayrollExportKind.PND1, 99L, LocalDate.of(2026, 6, 26), hrUser());
+
+        assertThat(file.fileName()).isEqualTo("Pnd1260626.txt");
+    }
+
+    @Test
+    void ssoExportRefusedWhenEmployerAccountBlank() {
+        AppProperties props = fullyConfiguredEmployerProps();
+        props.getPayroll().getEmployer().setSsoEmployerAccount("");
+        PayrollService serviceUnderTest = serviceWithEmployer(props);
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period()));
+
+        assertThatThrownBy(() ->
+                serviceUnderTest.export(PayrollExportKind.SSO, 99L, LocalDate.of(2026, 6, 26), hrUser()))
+            .isInstanceOfSatisfying(ApiException.class, exception -> {
+                assertThat(exception.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                assertThat(exception.getMessage()).contains("APP_PAYROLL_SSO_EMPLOYER_ACCOUNT");
+            });
+        verify(payrollRepository, never()).findExportRows(anyLong());
+    }
+
+    @Test
+    void ssoExportRefusedWhenBranchBlank() {
+        AppProperties props = fullyConfiguredEmployerProps();
+        props.getPayroll().getEmployer().setSsoBranch("");
+        PayrollService serviceUnderTest = serviceWithEmployer(props);
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period()));
+
+        assertThatThrownBy(() ->
+                serviceUnderTest.export(PayrollExportKind.SSO, 99L, LocalDate.of(2026, 6, 26), hrUser()))
+            .isInstanceOfSatisfying(ApiException.class, exception -> {
+                assertThat(exception.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                assertThat(exception.getMessage()).contains("APP_PAYROLL_SSO_BRANCH");
+            });
+    }
+
+    @Test
+    void ssoExportRefusedWhenEstablishmentNameAndCompanyNameBothBlank() {
+        AppProperties props = fullyConfiguredEmployerProps();
+        props.getPayroll().getEmployer().setEstablishmentName("");
+        props.getPayroll().getEmployer().setCompanyNameTh("");
+        PayrollService serviceUnderTest = serviceWithEmployer(props);
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period()));
+
+        assertThatThrownBy(() ->
+                serviceUnderTest.export(PayrollExportKind.SSO, 99L, LocalDate.of(2026, 6, 26), hrUser()))
+            .isInstanceOfSatisfying(ApiException.class, exception -> {
+                assertThat(exception.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                assertThat(exception.getMessage()).contains("APP_PAYROLL_ESTABLISHMENT_NAME");
+                assertThat(exception.getMessage()).contains("APP_PAYROLL_COMPANY_NAME_TH");
+            });
+    }
+
+    @Test
+    void ssoExportNotBlockedWhenEstablishmentNameBlankButCompanyNameSet() {
+        // SsoExporter itself falls back establishment name -> company name; the guard's "at least
+        // one of the two" must mirror that fallback rather than requiring both.
+        AppProperties props = fullyConfiguredEmployerProps();
+        props.getPayroll().getEmployer().setEstablishmentName("");
+        PayrollService serviceUnderTest = serviceWithEmployer(props);
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period()));
+        when(payrollRepository.findExportRows(99L)).thenReturn(List.of(exportRow()));
+
+        PayrollExportFile file =
+            serviceUnderTest.export(PayrollExportKind.SSO, 99L, LocalDate.of(2026, 6, 26), hrUser());
+
+        assertThat(file.fileName()).isEqualTo("SPS1-10260626.txt");
+    }
+
+    @Test
+    void payrollDetailExportNotBlockedByACompletelyBlankEmployer() {
+        // PAYROLL_DETAIL never reads employer (see PayrollService#export's switch) so the guard
+        // must not gate it at all, even when every employer field is at its blank default.
+        PayrollService serviceUnderTest = serviceWithEmployer(new AppProperties());
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period()));
+        when(payrollRepository.findDetailIdentity(java.util.Set.of(42L))).thenReturn(Map.of());
+
+        PayrollExportFile file = serviceUnderTest.export(
+            PayrollExportKind.PAYROLL_DETAIL, 99L, LocalDate.of(2026, 6, 26), hrUser());
+
+        assertThat(file.fileName()).isEqualTo("PayrollDetail260626.xlsx");
+    }
+
+    /** Builds a second {@link PayrollService} wired to the same test-scoped mocks as the class-level
+     * {@code service} field, but with a caller-supplied {@link AppProperties} so a single test can
+     * flip one employer field at a time without disturbing the shared fixture every other test in
+     * this class relies on. */
+    private PayrollService serviceWithEmployer(AppProperties props) {
+        return new PayrollService(
+            payrollRepository,
+            mock(PayrollCalculator.class),
+            mock(CommissionService.class),
+            auditService,
+            payslipRenderer,
+            mock(LeaveRepository.class),
+            new KBankPctExporter(),
+            new Pnd1Exporter(),
+            new SsoExporter(),
+            new PayrollDetailExporter(),
+            props,
+            mock(th.co.glr.hr.payroll.obligation.DeductionObligationService.class)
+        );
+    }
+
+    /** Every field Fix B's guard requires (across all three kinds), populated -- so a test that
+     * blanks exactly one field via its own setter is provably testing that ONE field, not
+     * incidentally relying on some other field already being blank. */
+    private static AppProperties fullyConfiguredEmployerProps() {
+        AppProperties props = new AppProperties();
+        AppProperties.Employer employer = props.getPayroll().getEmployer();
+        employer.setCompanyNameTh("บริษัท ทดสอบ จำกัด");
+        employer.setCompanyTaxId("0105542026329");
+        employer.setPnd1Branch("0000");
+        employer.setKbankDebitAccount("6001010598");
+        employer.setSsoEmployerAccount("0000000000");
+        employer.setSsoBranch("000000");
+        employer.setEstablishmentName("บริษัท ทดสอบ establishment สาขา 1");
+        return props;
     }
 
     private ListAppender<ILoggingEvent> attachAuditAppender() {

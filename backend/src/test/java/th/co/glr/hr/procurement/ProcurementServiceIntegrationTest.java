@@ -58,11 +58,7 @@ import th.co.glr.hr.orderconfirmation.OrderConfirmationService;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PriceCalcConfigRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
-import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.CreateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.RecalculateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.SubmitCostingRequest;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
@@ -145,7 +141,7 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
         FileStorageService fileStorage = new FileStorageService("/tmp/glr-procurement-test-uploads");
         pricingRequestService = new PricingRequestService(
-            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage);
+            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
 
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
         factoryQuoteRepository = factoryQuotes;
@@ -159,17 +155,24 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         dispatchProperties.getFactoryQuoteDispatch().setMaxAttempts(3);
         dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
         dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
+        FxRateRepository fxRates = new FxRateRepository(jdbc);
+        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
+        // auto-advance check and PricingDecisionService's startReview/recalculateCost.
+        th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
+            new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
+                new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties);
+            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
+            landedCostCalculator);
 
         costingRepository = new PricingCostingRepository(jdbc);
-        FxRateRepository fxRates = new FxRateRepository(jdbc);
-        costingService = new PricingCostingService(costingRepository, pricingRequests, factoryQuotes, tickets,
-            fxRates, new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc), notifications);
+        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
+        // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
+        costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
 
         decisionRepository = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
-            tickets, fxRates, notifications);
+            tickets, fxRates, notifications, landedCostCalculator);
 
         PriceCalcService priceCalcMock = mock(PriceCalcService.class);
         ticketService = new TicketService(tickets, notifications, priceCalcMock,
@@ -187,7 +190,7 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, notifications);
 
         purchaseOrders = new ProcurementRepository(jdbc);
-        procurement = new ProcurementService(purchaseOrders, pricingRequests, tickets, notifications);
+        procurement = new ProcurementService(purchaseOrders, pricingRequests, tickets, notifications, ticketService);
 
         salesRepId = createEmployee(employees, "พนักงานขาย เจ็ด", "sales-step7@glr.co.th", "SALES", "แผนกขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า เจ็ด", "import-step7@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
@@ -295,18 +298,26 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
-        // ── Composes with the EXISTING ticket-level fulfillment flow — proven independent:
-        //    markIrSent/markShipping/markGoodsReceived are untouched by this branch and remain
-        //    reachable purely off ticket.fulfillment_status, regardless of PO state above ────
-        TicketDto afterIrSent = ticketService.markIrSent(deal.ticketId, importActor);
-        assertThat(afterIrSent.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.IR_SENT);
-        TicketDto afterTicketShipping = ticketService.markShipping(deal.ticketId, importActor);
-        assertThat(afterTicketShipping.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.SHIPPING);
-        TicketDto afterTicketGoodsReceived = ticketService.markGoodsReceived(deal.ticketId, importActor);
-        assertThat(afterTicketGoodsReceived.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.GOODS_RECEIVED);
-        assertThat(afterTicketGoodsReceived.summary().salesStage()).isEqualTo(DealStage.DELIVERY_SCHEDULING);
-        // The OTHER PO (factory B) is still OPEN — the ticket-level flag sequence above advanced
-        // independently of it, proving the two really are separate layers, not coupled.
+        // ── Composes with the ticket-level fulfillment flow — but, as of the derived-fulfilment-
+        //    status branch, no longer INDEPENDENTLY of it. The PO rollup (TicketService
+        //    #applyPurchaseOrderRollup, called from every PO-progressing method above) is now the
+        //    source of truth for a PO-tracked deal's import axis: factory A's recordShippingDetail
+        //    + recordGoodsReceived already rolled the ticket forward to SHIPPING (one live PO past
+        //    OPEN, but factory B is still OPEN so not every live PO is RECEIVED yet), and the
+        //    ticket-level markShipping/markGoodsReceived setters now REFUSE (409) on any deal with
+        //    a live PO rather than risk a write that could disagree with the PO record — see those
+        //    two methods' own comments in TicketService for the refuse-not-delegate reasoning, and
+        //    DerivedFulfilmentRollupIntegrationTest for the dedicated coverage of the rollup itself
+        //    (this assertion only pins that the two compose as designed, not the rollup rules) ────
+        assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().fulfillmentStatus())
+            .isEqualTo(FulfilmentStatus.SHIPPING);
+        assertThatThrownBy(() -> ticketService.markShipping(deal.ticketId, importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThatThrownBy(() -> ticketService.markGoodsReceived(deal.ticketId, importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        // The OTHER PO (factory B) is still OPEN — receiving IT is what completes the rollup to
+        // GOODS_RECEIVED (see DerivedFulfilmentRollupIntegrationTest
+        // #rollupMovesTicketToGoodsReceivedOnlyWhenEveryLivePoIsReceived), not a ticket-level call.
         FactoryPurchaseOrderDto poB = created.stream().filter(po -> FACTORY_B.equals(po.factoryName())).findFirst().orElseThrow();
         assertThat(procurement.get(poB.id(), importActor).status()).isEqualTo(FactoryPurchaseOrderStatus.OPEN);
     }
@@ -635,12 +646,9 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
             factoryQuoteService.markReadyForCosting(responded.id(), importActor);
         }
-
-        PricingCostingDto costingDraft = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("step 7 costing", null), importActor);
-        costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 1"), importActor);
-        PricingCostingDto calculated = costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 2"), importActor);
-        costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
+        // READY_FOR_CEO_REVIEW the moment the LAST factory quote is ready — Import no longer
+        // creates/recalculates/submits a costing of its own; the CEO's startReview below computes it.
 
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
@@ -704,13 +712,12 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             UUID.randomUUID().toString());
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-
-        PricingCostingDto costingDraft = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("foreign costing", null), importActor);
-        costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 1"), importActor);
-        PricingCostingDto calculated = costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 2"), importActor);
-        PricingCostingDto submitted = costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
-        return submitted.items().get(0).id();
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
+        // READY_FOR_CEO_REVIEW — the CEO's startReview computes+persists the costing itself, so
+        // that is now how this fixture gets a real pricing_costing_item id to return.
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        return decision.items().get(0).pricingCostingItemId();
     }
 
     /** A second pricing request on an EXISTING ticket (CLAUDE.md's own "1 Deal -&gt; 0..N Pricing
@@ -750,12 +757,8 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             UUID.randomUUID().toString());
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-
-        PricingCostingDto costingDraft = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("2nd pr costing", null), importActor);
-        costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 1"), importActor);
-        PricingCostingDto calculated = costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 2"), importActor);
-        costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
+        // READY_FOR_CEO_REVIEW — the CEO's startReview below computes+persists the costing itself.
 
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);

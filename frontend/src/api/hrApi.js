@@ -298,6 +298,12 @@ export const api = {
     updateProduct: (priceId, input) => apiRequest(API_ROUTES.catalog.price(priceId), { method: 'PUT', body: input }),
     deleteProduct: (priceId) => apiRequest(API_ROUTES.catalog.price(priceId), { method: 'DELETE' }),
   },
+  // Mirrors DealStageMetaController (ticket/). The deal pipeline's shape — stages with their
+  // display number, S-sheet code, phase, write gate and auto-advance flag, plus the phase list and
+  // the lost/cancel reason CODE sets. Labels stay client-side; see utils/format.js + stageMeta.js.
+  meta: {
+    dealStages: () => apiRequest(API_ROUTES.meta.dealStages),
+  },
   factoryConfigs: {
     list: () => apiRequest(API_ROUTES.factoryConfigs.list),
     sendEmail: (ticketId, payload) => apiRequest(API_ROUTES.factoryConfigs.sendEmail(ticketId), { method: 'POST', body: payload }),
@@ -424,6 +430,10 @@ export const api = {
     clawback: (id, payload) => apiRequest(API_ROUTES.commissions.clawback(id), { method: 'POST', body: payload }),
     simulate: (payload) => apiRequest(API_ROUTES.commissions.simulator, { method: 'POST', body: payload }),
     payrollReady: (params) => apiRequest(withQuery(API_ROUTES.commissions.payrollReady, params)),
+    // fix/commission-figures-from-backend: a rep's own live monthly commission estimate --
+    // { payrollMonth, salesRepId } query params, both optional (defaults to the caller's own rep
+    // id / the current payroll month server-side). Mirrors CommissionController#monthlySummary.
+    monthlySummary: (params) => apiRequest(withQuery(API_ROUTES.commissions.monthlySummary, params)),
   },
   payroll: {
     current: (params) => apiRequest(withQuery(API_ROUTES.payroll.current, params)),

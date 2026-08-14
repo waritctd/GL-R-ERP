@@ -48,11 +48,7 @@ import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PriceCalcConfigRepository;
-import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.CreateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.RecalculateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.SubmitCostingRequest;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
@@ -129,7 +125,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         FileStorageService fileStorage = new FileStorageService("/tmp/glr-customer-quotation-test-uploads");
         pricingRequestService = new PricingRequestService(
-            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage);
+            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
         factoryQuoteRepository = factoryQuotes;
         FactoryEmailService factoryEmail = mock(FactoryEmailService.class);
@@ -142,15 +138,22 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         dispatchProperties.getFactoryQuoteDispatch().setMaxAttempts(3);
         dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
         dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
-        factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties);
-        costingRepository = new PricingCostingRepository(jdbc);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
-        costingService = new PricingCostingService(costingRepository, pricingRequests, factoryQuotes, tickets,
-            fxRates, new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc), notifications);
+        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
+        // auto-advance check and PricingDecisionService's startReview/recalculateCost.
+        th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
+            new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
+                new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
+        factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
+            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
+            landedCostCalculator);
+        costingRepository = new PricingCostingRepository(jdbc);
+        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
+        // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
+        costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
         decisionRepository = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
-            tickets, fxRates, notifications);
+            tickets, fxRates, notifications, landedCostCalculator);
         th.co.glr.hr.pricing.PriceCalcService priceCalcMock = mock(th.co.glr.hr.pricing.PriceCalcService.class);
         ticketService = new TicketService(tickets, notifications, priceCalcMock,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
@@ -347,7 +350,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             null, null, null, null, null,
             List.of(new UpdateCustomerQuotationItemRequest(item.id(), null, null, tooMuchDiscount))), salesActor))
             .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
 
         // Nothing was mutated — the item's discount stays at the pre-attempt value.
         CustomerQuotationDto unchanged = quotationService.get(draft.id(), salesActor);
@@ -571,8 +574,24 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(oldAfter.docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
     }
 
+    /**
+     * Renamed and re-pointed by the reissue-through-CEO-chain ruling (owner, 2026-08-13), which
+     * SPLIT this cascade in two rather than weakening it.
+     *
+     * <p>It used to assert that createCustomerChangeRevision superseded the old pricing request,
+     * the old decision AND the old quotation, all at creation time. The quotation half was the
+     * problem: it left the customer holding no live offer for the entire time the replacement
+     * chain ran, and nothing to fall back to if the CEO refused the new price. The decision half
+     * stays eager — it is internal pricing state, not the customer-facing offer, and the issued
+     * quotation carries its own frozen price snapshot in sales.quotation_item, so superseding the
+     * decision cannot change what the customer was quoted.
+     *
+     * <p>The quotation's retirement is not untested, it moved: it now happens when the REPLACEMENT
+     * quotation is issued, which is proved end to end by
+     * {@code ReissueThroughCeoChainIntegrationTest#parentQuotationStaysIssuedWhileTheChainRuns_andRetiresWhenTheReplacementIssues}.
+     */
     @Test
-    void recordOutcome_revisionRequested_thenCostAffectingRevision_supersedesOldDecisionAndQuotation() {
+    void recordOutcome_revisionRequested_thenCostAffectingRevision_supersedesOldDecisionButLeavesTheQuotationLive() {
         long pricingRequestId = approvedPricingRequest();
         CustomerQuotationDto draft = quotationService.create(pricingRequestId,
             new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
@@ -594,15 +613,17 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             List.of(pricingItem("SCG", "Tile A4", "Factory A4", new BigDecimal("99"))));
         var revisionDetail = pricingRequestService.createCustomerChangeRevision(pricingRequestId, changeRequest, salesActor);
 
-        // Design correction 1: the OLD pricing request, OLD decision, and OLD quotation are all
-        // now SUPERSEDED — none of them silently reads as current any more.
+        // Design correction 1, still in force for the INTERNAL state: the OLD pricing request and
+        // OLD decision are SUPERSEDED — neither silently reads as current any more.
         assertThat(pricingRequestService.get(pricingRequestId, salesActor).summary().status())
             .isEqualTo(PricingRequestStatus.SUPERSEDED);
         assertThat(jdbc.queryForObject(
             "SELECT status FROM sales.pricing_decision WHERE pricing_request_id = :id",
             Map.of("id", pricingRequestId), String.class)).isEqualTo("SUPERSEDED");
+        // Reissue-through-CEO-chain: the CUSTOMER-FACING document is deliberately NOT retired here.
+        // The customer's offer stays exactly as it was until a replacement actually issues.
         CustomerQuotationDto oldQuotation = quotationService.get(revisionRequested.id(), salesActor);
-        assertThat(oldQuotation.docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
+        assertThat(oldQuotation.docStatus()).isEqualTo(QuotationStatus.REVISION_REQUESTED);
 
         // The NEW pricing request revision is a fresh DRAFT, untouched by the cascade.
         assertThat(revisionDetail.summary().status()).isEqualTo(PricingRequestStatus.DRAFT);
@@ -876,11 +897,9 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
                 importActor);
             factoryQuoteService.markReadyForCosting(responded.id(), importActor);
         }
-        PricingCostingDto draftCosting = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("draft", null), importActor);
-        costingService.recalculate(draftCosting.id(), new RecalculateCostingRequest("pass 1"), importActor);
-        PricingCostingDto calculated = costingService.recalculate(draftCosting.id(), new RecalculateCostingRequest("pass 2"), importActor);
-        costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
+        // READY_FOR_CEO_REVIEW the moment the LAST factory quote is ready — Import no longer
+        // creates/recalculates/submits a costing of its own; the CEO's startReview computes it.
         return pricingRequestId;
     }
 
@@ -907,11 +926,9 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             UUID.randomUUID().toString());
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-        PricingCostingDto costingDraft = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("unit test", UUID.randomUUID().toString()), importActor);
-        costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 1"), importActor);
-        PricingCostingDto calculated = costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 2"), importActor);
-        costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
+        // READY_FOR_CEO_REVIEW the moment the (only, here) factory quote is ready — Import no
+        // longer creates/recalculates/submits a costing of its own; the CEO's startReview computes it.
         return pricingRequestId;
     }
 

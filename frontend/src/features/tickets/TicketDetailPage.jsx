@@ -39,9 +39,7 @@ import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
-import {
-  allowedTargetStages, canMarkLost, canSetStage, nextStage,
-} from './stageMeta.js';
+import { nextStageIn, useStageCatalog } from './stageCatalog.js';
 import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
@@ -383,6 +381,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     || user.id === documentsTicketSummary.assignedToId
     || ROLE_PERMISSIONS.canViewTicketDocuments.includes(role)
   );
+  // The pipeline's shape (stages, phases, gates, lost/cancel reason codes), fetched once from
+  // GET /api/meta/deal-stages. Deliberately NOT folded into this page's `loading` gate: the deal
+  // must still render if the enumeration is slow, exactly as CeoSettingsPage keeps its newest
+  // config query out of its own full-page gate.
+  const { catalog: stageCatalog } = useStageCatalog();
   const actionsQuery = useQuery({
     queryKey: queryKeys.ticketActions(ticketId),
     queryFn: () => api.tickets.actions(ticketId),
@@ -393,6 +396,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     placeholderData: (previous) => previous,
   });
   const availableActions = actionsQuery.data?.availableActions ?? [];
+  // Per-stage verdicts from TicketService.stageDecisions — which stages this user may move THIS
+  // deal to, which need a written reason, and why each refused one is refused. Replaces the local
+  // canSetStage/allowedTargetStages copies this page used to run.
+  const stageDecisions = actionsQuery.data?.stageDecisions ?? [];
   const actionNames = new Set(availableActions.map((action) => action.action));
   const hasAction = (action) => actionNames.has(action);
   // isLoading-only (not isFetching): this gate swaps the ENTIRE page for a
@@ -913,7 +920,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // directly via a forwardRef (pricingRequestPanelRef / dealQuotationPanelRef),
   // and that panel no longer renders a trigger of its own — the sticky bar
   // is the only copy of each label on the page.
-  const workState = resolveWorkState(user, summary, pricingRequests);
+  const workState = resolveWorkState(user, summary, pricingRequests, stageCatalog);
   const workStateAction = workState.action;
   let stickyPrimaryLabel = nextAction;
   let stickyPrimaryAction = primaryAction;
@@ -1022,9 +1029,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   // Overflow-menu / danger-zone availability — mirrors DealStagePanel's own
   // canEditStage/canLost/canHold/canDormant gates byte-for-byte (same
-  // hasAction/canSetStage/canMarkLost/allowedTargetStages calls on the same
-  // data) so the header menu never offers something that panel itself
-  // wouldn't also allow. DealStagePanel stays the single actual authority —
+  // hasAction/stageDecisions reads on the same server payload) so the header
+  // menu never offers something that panel itself wouldn't also allow. DealStagePanel stays the single actual authority —
   // see its own doc comment on why the ref-exposed open functions re-check
   // these same conditions instead of trusting the caller.
   const lost = summary.lifecycle === 'CLOSED_LOST';
@@ -1038,8 +1044,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // exact button). Mirrored explicitly here so the header overflow menu
   // can't duplicate it.
   const isActiveLifecycle = (summary.lifecycle ?? 'ACTIVE') === 'ACTIVE';
-  const canEditStage = isActiveLifecycle && hasAction('UPDATE_STAGE') && allowedTargetStages(user, summary).length > 0 && !lost;
-  const canLostDeal = isActiveLifecycle && hasAction('MARK_LOST') && canMarkLost(user, summary) && !lost && summary.salesStage !== 'CLOSED_PAID';
+  const canEditStage = isActiveLifecycle && hasAction('UPDATE_STAGE')
+    && stageDecisions.some((decision) => decision.allowed) && !lost;
+  const canLostDeal = isActiveLifecycle && hasAction('MARK_LOST') && !lost && summary.salesStage !== 'CLOSED_PAID';
   const canHoldDeal = isActiveLifecycle && hasAction('PLACE_ON_HOLD');
   const canDormantDeal = isActiveLifecycle && hasAction('MARK_DORMANT');
   // Mirrors DealStagePanel's own `next`/`canAdvance` byte-for-byte, PLUS the
@@ -1058,11 +1065,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // through the single-arg version. Checked directly against
   // `availableActions` here so this stays byte-identical to DealStagePanel's
   // gate, not just same-named.
-  const next = isActiveLifecycle && !lost ? nextStage(summary.salesStage) : null;
+  const next = isActiveLifecycle && !lost ? nextStageIn(stageCatalog, summary.salesStage) : null;
   const hasAdvanceStageAction = Boolean(next) && availableActions.some(
     (item) => item.action === 'ADVANCE_STAGE' && item.targetStage === next.code,
   );
-  const canAdvance = Boolean(next) && !next.auto && hasAdvanceStageAction && canSetStage(user, summary, next.code);
+  // No local re-derivation left: hasAdvanceStageAction IS the server's verdict for this exact
+  // target (TicketService.addStageActions now derives ADVANCE_STAGE from stageDecisions, so it
+  // reflects the fact gates too, not just the role gate).
+  const canAdvance = Boolean(next) && !next.auto && hasAdvanceStageAction;
 
   // Stage-advance readiness (dealTrackingMeta.js's own gate, shared with
   // DealTrackingPanel's badge): lifted up here (Phase-1 audit finding #3,
@@ -1342,9 +1352,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       <div className="min-w-0">
       <DealStagePanel
         ref={dealStagePanelRef}
-        user={user}
         summary={summary}
         availableActions={availableActions}
+        stageDecisions={stageDecisions}
+        catalog={stageCatalog}
         // primaryAction now lives solely in DealStateHeader above (Phase 2 Slice S2's
         // "one primary CTA" — see its own doc comment) — not passed here too, to avoid
         // rendering the exact same button twice on one page.
@@ -1357,6 +1368,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         onDormant={(payload) => doAction(() => api.tickets.dormant(ticketId, payload), 'พัก dormant แล้ว')}
         onResume={(payload) => doAction(() => api.tickets.resume(ticketId, payload), 'ดำเนินการต่อแล้ว')}
         onSetTenderRequirement={(payload) => doAction(() => api.tickets.setTenderRequirement(ticketId, payload), 'บันทึกสถานะประมูลแล้ว')}
+        // Issue #740: api.tickets.setEntryChannel had NO caller anywhere in frontend/src, while
+        // TicketService.addPolicyActions advertised SET_ENTRY_CHANNEL to every deal owner — so a
+        // deal stuck at ยังไม่ระบุช่องทาง (the V144 stored default) could not be corrected from this
+        // portal at all. Neither contract guard could see it: both start from hrApi.js and never
+        // trace a call from a component.
+        onSetEntryChannel={(payload) => doAction(() => api.tickets.setEntryChannel(ticketId, payload), 'บันทึกช่องทางรับงานแล้ว')}
         docActions={(can.downloadRemainingInvoice || (sections.quotation && latestQuotation)) ? (
           <>
             {/* Import/account (role-scoped views, Phase A): the view-only
@@ -2284,6 +2301,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           so this is the mark-lost modal's reason picker, not a ConfirmDialog. */}
       {confirm?.kind === 'cancelTicket' && (
         <CancelDealModal
+          catalog={stageCatalog}
           submitting={actionLoading}
           onClose={() => setConfirm(null)}
           onSubmit={async (payload) => {

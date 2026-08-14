@@ -49,7 +49,7 @@ public final class UnitBasis {
             case PER_PIECE, "PIECE", "PCS", "PC", "EACH" -> PER_PIECE;
             case PER_BOX, "BOX" -> PER_BOX;
             case PER_LINEAR_M, "LINEAR_M", "LINEAR_METER", "METER", "METRE" -> PER_LINEAR_M;
-            default -> throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+            default -> throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "ไม่รองรับค่า " + fieldLabel + " '" + value + "'");
         };
     }

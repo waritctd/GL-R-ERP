@@ -84,7 +84,7 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         FileStorageService fileStorage = new FileStorageService("./build/test-uploads");
 
         pricingRequestService = new PricingRequestService(
-            pricingRequests, tickets, notifications, new ObjectMapper(), contacts, fileStorage);
+            pricingRequests, tickets, notifications, new ObjectMapper(), contacts, fileStorage, factoryQuoteCarryForward());
 
         // Real TicketService, wired the same way TicketRepositoryIntegrationTest wires the
         // repository — PriceCalcService is mocked since none of the read paths under test
@@ -96,13 +96,20 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
             notifications, new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers,
             new CustomerQuotationRepository(jdbc));
 
+        // V141 ("CEO owns costing"): shared by FactoryQuoteService (markReadyForCosting's
+        // auto-advance check) and, in production, PricingDecisionService — this file only reads
+        // through PricingCostingService (see pricingCostingService.get below), so the calculator
+        // is wired but never exercised beyond satisfying the constructor.
+        th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
+            new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests,
+                new FxRateRepository(jdbc), new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), new FactoryEmailService(mock(Mailer.class)),
-            notifications, fileStorage, new AppProperties());
+            notifications, fileStorage, new AppProperties(), landedCostCalculator);
 
-        pricingCostingService = new PricingCostingService(pricingCostings, pricingRequests, factoryQuotes,
-            tickets, new FxRateRepository(jdbc), new PriceCalcConfigRepository(jdbc),
-            new FactoryConfigRepository(jdbc), notifications);
+        // V141: PricingCostingService is READ-ONLY now (list/get) — the 8-arg convenience
+        // constructor that assembled its own LandedCostCalculator is gone.
+        pricingCostingService = new PricingCostingService(pricingCostings, pricingRequests, tickets);
 
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
@@ -180,7 +187,7 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void accountListPage_depositNoticeIssuedPending_isReturned() {
         long ticketId = createTicket(DealStage.DEPOSIT_RECEIVED);
-        tickets.updatePaymentStatus(ticketId, "DEPOSIT_NOTICE_ISSUED");
+        tickets.updatePaymentStatusUnchecked(ticketId, "DEPOSIT_NOTICE_ISSUED");
 
         assertThat(idsIn(listPage(accountUser))).contains(ticketId);
     }
@@ -188,7 +195,7 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void accountListPage_awaitingFinalPaymentPending_isReturned() {
         long ticketId = createTicket(DealStage.DELIVERED);
-        tickets.updatePaymentStatus(ticketId, "AWAITING_FINAL_PAYMENT");
+        tickets.updatePaymentStatusUnchecked(ticketId, "AWAITING_FINAL_PAYMENT");
 
         assertThat(idsIn(listPage(accountUser))).contains(ticketId);
     }

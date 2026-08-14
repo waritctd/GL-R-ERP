@@ -129,7 +129,7 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
 
         FileStorageService fileStorage = new FileStorageService("/tmp/glr-ticket-ia-authz-matrix-test-uploads");
         pricingRequestService = new PricingRequestService(
-            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage);
+            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
 
         // PriceCalcService is unrelated to every gate under test here (it prices item lines, not
         // authz) — mocked exactly as the existing CustomerQuotationIntegrationTest does, never the
@@ -146,7 +146,7 @@ class TicketIaAuthzMatrixIntegrationTest extends AbstractPostgresIntegrationTest
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets, notifications,
             new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers, quotationRepository);
 
-        procurementService = new ProcurementService(new ProcurementRepository(jdbc), pricingRequests, tickets, notifications);
+        procurementService = new ProcurementService(new ProcurementRepository(jdbc), pricingRequests, tickets, notifications, ticketService);
 
         attachmentController = new AttachmentController(new AttachmentRepository(jdbc), new SessionContext(), tickets,
             new AuditService(new AuditLogRepository(jdbc), objectMapper), fileStorage);

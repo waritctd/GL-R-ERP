@@ -123,6 +123,39 @@ describe('nextAccountAction', () => {
     expect(action.to).toBe('/commissions?ticketId=42');
   });
 
+  // Issue #736 pair, wrong-way-round: commissionRecorded:true is the interesting half — the
+  // "still yields recordInvoiceCommission" half alone would have passed before this change too,
+  // since a CLOSED_PAID deal always resolved to step 5 regardless of whether the commission
+  // already existed.
+  it('CLOSED_PAID with commissionRecorded:true is no longer account’s action', () => {
+    const t = ticket({
+      id: 42,
+      status: 'quotation_issued',
+      paymentStatus: 'FULLY_PAID',
+      fulfillmentStatus: 'FULLY_DELIVERED',
+      amountOutstanding: 0,
+      salesStage: 'CLOSED_PAID',
+      closeConfirmedAt: '2026-07-20T00:00:00.000Z',
+      commissionRecorded: true,
+    });
+    expect(nextAccountAction(t)).toBeNull();
+  });
+
+  it('CLOSED_PAID with commissionRecorded:false still yields บันทึกใบกำกับ + ออกค่าคอม', () => {
+    const t = ticket({
+      id: 42,
+      status: 'quotation_issued',
+      paymentStatus: 'FULLY_PAID',
+      fulfillmentStatus: 'FULLY_DELIVERED',
+      amountOutstanding: 0,
+      salesStage: 'CLOSED_PAID',
+      closeConfirmedAt: '2026-07-20T00:00:00.000Z',
+      commissionRecorded: false,
+    });
+    const action = nextAccountAction(t);
+    expect(action.key).toBe('recordInvoiceCommission');
+  });
+
   it('a legacy (pre-dual-track) fully-paid document_issued deal is also close-ready', () => {
     const t = ticket({ status: 'document_issued', paymentStatus: 'FULLY_PAID', amountOutstanding: 0 });
     expect(nextAccountAction(t).key).toBe('confirmCloseReady');
@@ -139,5 +172,12 @@ describe('accountMoneyBucket', () => {
     }))).toBe('closeReady');
     expect(accountMoneyBucket(ticket({ salesStage: 'CLOSED_PAID', paymentStatus: 'FULLY_PAID', amountOutstanding: 0 }))).toBe('commissionPending');
     expect(accountMoneyBucket(ticket({ paymentStatus: 'CUSTOMER_CONFIRMED' }))).toBeNull();
+  });
+
+  // Issue #736, same wrong-way-round pair as nextAccountAction's above.
+  it('commissionRecorded:true removes a CLOSED_PAID deal from the commissionPending bucket', () => {
+    const closedPaid = { salesStage: 'CLOSED_PAID', paymentStatus: 'FULLY_PAID', amountOutstanding: 0 };
+    expect(accountMoneyBucket(ticket({ ...closedPaid, commissionRecorded: true }))).toBeNull();
+    expect(accountMoneyBucket(ticket({ ...closedPaid, commissionRecorded: false }))).toBe('commissionPending');
   });
 });

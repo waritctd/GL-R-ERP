@@ -11,16 +11,34 @@ const PHASE_FILL = {
   5: 'bg-phase-5',
 };
 import { dealStageLabel } from '../../utils/format.js';
-import { GATE_LABEL, SALES_PHASES, SALES_STAGES, stageIndex } from './stageMeta.js';
+import { EMPTY_STAGE_CATALOG, stageIndexIn, stagesInPhase } from './stageCatalog.js';
+import { GATE_LABEL } from './stageMeta.js';
+
+// The Thai names of the five phases. The phase LIST (which ids exist, and which stages sit in
+// each) comes from the backend catalog; only the wording is ours. See stageMeta.js's header for
+// the split.
+const PHASE_NAME = {
+  1: { name: 'การเข้าถึงโครงการ', helper: 'Lead' },
+  2: { name: 'งานสเปค', helper: 'Specification' },
+  3: { name: 'ประมูลและเจรจา', helper: 'Bidding' },
+  4: { name: 'คำสั่งซื้อและนำเข้า', helper: 'Order & import' },
+  5: { name: 'ส่งมอบและปิดงาน', helper: 'Delivery & closing' },
+};
+
+function phaseName(phaseId) {
+  return PHASE_NAME[phaseId]?.name ?? `เฟส ${phaseId}`;
+}
 
 /**
- * Phase accordion for the 14-stage pipeline (adapted from the Claude Design
- * prototype's accordion). Only the current phase starts expanded so the page
- * never shows 14 rows at once; completed phases collapse behind a ✓ header.
+ * Phase accordion for the deal pipeline. Only the current phase starts expanded so the page never
+ * shows every stage at once; completed phases collapse behind a ✓ header.
+ *
+ * The stage list is the backend's (`catalog`), not this file's — it was a hardcoded 14-entry array
+ * until V143 added a fifteenth stage and this component silently kept rendering fourteen.
  */
-export function DealStageStepper({ salesStage, lost = false }) {
-  const currentIdx = stageIndex(salesStage);
-  const currentPhase = SALES_STAGES[currentIdx]?.phase ?? 1;
+export function DealStageStepper({ catalog = EMPTY_STAGE_CATALOG, salesStage, lost = false }) {
+  const currentIdx = stageIndexIn(catalog, salesStage);
+  const currentPhase = catalog.stages[currentIdx]?.phase ?? 1;
   const [open, setOpen] = useState(() => ({ [currentPhase]: true }));
 
   function toggle(phaseId) {
@@ -29,21 +47,22 @@ export function DealStageStepper({ salesStage, lost = false }) {
 
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-surface">
-      {SALES_PHASES.map((phase) => {
-        const steps = SALES_STAGES.filter((s) => s.phase === phase.id);
-        const firstIdx = stageIndex(steps[0].code);
-        const lastIdx = stageIndex(steps[steps.length - 1].code);
+      {catalog.phases.map((phaseId) => {
+        const steps = stagesInPhase(catalog, phaseId);
+        if (steps.length === 0) return null;
+        const firstIdx = stageIndexIn(catalog, steps[0].code);
+        const lastIdx = stageIndexIn(catalog, steps[steps.length - 1].code);
         const isDone = currentIdx > lastIdx;
         const isCurrent = currentIdx >= firstIdx && currentIdx <= lastIdx;
         const doneCount = Math.min(Math.max(currentIdx - firstIdx + 1, 0), steps.length);
-        const isOpen = !!open[phase.id];
+        const isOpen = !!open[phaseId];
         return (
-          <div key={phase.id} className="border-b border-border last:border-b-0">
+          <div key={phaseId} className="border-b border-border last:border-b-0">
             <button
               type="button"
               className="flex w-full items-center gap-3 bg-transparent px-4 py-3 text-left"
               aria-expanded={isOpen}
-              onClick={() => toggle(phase.id)}
+              onClick={() => toggle(phaseId)}
             >
               <span
                 className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg text-xs font-extrabold ${
@@ -54,7 +73,7 @@ export function DealStageStepper({ salesStage, lost = false }) {
                       : 'bg-surface-subtle text-text-muted'
                 }`}
               >
-                {isDone ? <Icon name="check" size={13} /> : phase.id}
+                {isDone ? <Icon name="check" size={13} /> : phaseId}
               </span>
               <span className="min-w-0 flex-1">
                 {/* WCAG AA fix (fix/ui-contrast-tokens): a PHASE_TEXT map used to apply
@@ -70,7 +89,7 @@ export function DealStageStepper({ salesStage, lost = false }) {
                     consistency (no phase looks different from its siblings depending
                     on whether it happened to pass). */}
                 <span className={`block text-sm font-extrabold ${isCurrent && !lost ? 'text-text' : 'text-text-muted'}`}>
-                  เฟส {phase.id} · {phase.name}
+                  เฟส {phaseId} · {phaseName(phaseId)}
                 </span>
                 <span className="block text-2xs text-text-muted">
                   {isDone ? 'เสร็จแล้ว' : isCurrent ? `${doneCount}/${steps.length} ขั้นตอน` : `${steps.length} ขั้นตอน`}
@@ -83,7 +102,7 @@ export function DealStageStepper({ salesStage, lost = false }) {
             {isOpen ? (
               <div className="px-4 pb-3">
                 {steps.map((step) => {
-                  const idx = stageIndex(step.code);
+                  const idx = stageIndexIn(catalog, step.code);
                   const stepDone = idx < currentIdx;
                   const stepCurrent = idx === currentIdx;
                   const label = dealStageLabel(step.code);
@@ -124,16 +143,17 @@ export function DealStageStepper({ salesStage, lost = false }) {
 }
 
 /**
- * Horizontal 5-phase tracker. Lost projects render an empty track.
+ * Horizontal phase tracker. Lost projects render an empty track.
  */
-export function PhaseTracker({ salesStage, lost = false }) {
-  const currentIdx = stageIndex(salesStage);
+export function PhaseTracker({ catalog = EMPTY_STAGE_CATALOG, salesStage, lost = false }) {
+  const currentIdx = stageIndexIn(catalog, salesStage);
   return (
     <div className="flex items-start gap-2">
-      {SALES_PHASES.map((phase) => {
-        const steps = SALES_STAGES.filter((s) => s.phase === phase.id);
-        const firstIdx = stageIndex(steps[0].code);
-        const lastIdx = stageIndex(steps[steps.length - 1].code);
+      {catalog.phases.map((phaseId) => {
+        const steps = stagesInPhase(catalog, phaseId);
+        if (steps.length === 0) return null;
+        const firstIdx = stageIndexIn(catalog, steps[0].code);
+        const lastIdx = stageIndexIn(catalog, steps[steps.length - 1].code);
         let fill = 0;
         if (!lost) {
           if (currentIdx > lastIdx) fill = 1;
@@ -141,17 +161,17 @@ export function PhaseTracker({ salesStage, lost = false }) {
         }
         const isCurrent = !lost && currentIdx >= firstIdx && currentIdx <= lastIdx;
         return (
-          <div key={phase.id} className="min-w-0 flex flex-1 basis-0 flex-col gap-1.5">
+          <div key={phaseId} className="min-w-0 flex flex-1 basis-0 flex-col gap-1.5">
             <span className={`text-2xs font-extrabold ${isCurrent ? 'text-text-secondary' : 'text-text-muted'}`}>
-              เฟส {phase.id}
+              เฟส {phaseId}
             </span>
             <div className="h-2 overflow-hidden rounded-full bg-surface-subtle">
               <span
-                className={`block h-full rounded-full ${lost ? 'bg-danger-bg' : PHASE_FILL[phase.id]}`}
+                className={`block h-full rounded-full ${lost ? 'bg-danger-bg' : PHASE_FILL[phaseId]}`}
                 style={{ width: `${fill * 100}%` }}
               />
             </div>
-            <span className="text-2xs font-semibold leading-tight text-text-muted [overflow-wrap:anywhere]">{phase.name}</span>
+            <span className="text-2xs font-semibold leading-tight text-text-muted [overflow-wrap:anywhere]">{phaseName(phaseId)}</span>
           </div>
         );
       })}
@@ -159,15 +179,16 @@ export function PhaseTracker({ salesStage, lost = false }) {
   );
 }
 
-/** Compact per-row progress bar for the list page (5 proportional segments). */
-export function StageProgressBar({ salesStage, lost = false }) {
-  const currentIdx = stageIndex(salesStage);
+/** Compact per-row progress bar for the list page (one proportional segment per phase). */
+export function StageProgressBar({ catalog = EMPTY_STAGE_CATALOG, salesStage, lost = false }) {
+  const currentIdx = stageIndexIn(catalog, salesStage);
   return (
     <div className="flex items-center gap-0.5" aria-hidden="true">
-      {SALES_PHASES.map((phase) => {
-        const steps = SALES_STAGES.filter((s) => s.phase === phase.id);
-        const firstIdx = stageIndex(steps[0].code);
-        const lastIdx = stageIndex(steps[steps.length - 1].code);
+      {catalog.phases.map((phaseId) => {
+        const steps = stagesInPhase(catalog, phaseId);
+        if (steps.length === 0) return null;
+        const firstIdx = stageIndexIn(catalog, steps[0].code);
+        const lastIdx = stageIndexIn(catalog, steps[steps.length - 1].code);
         let fill = 0;
         if (!lost) {
           if (currentIdx > lastIdx) fill = 1;
@@ -175,12 +196,12 @@ export function StageProgressBar({ salesStage, lost = false }) {
         }
         return (
           <span
-            key={phase.id}
+            key={phaseId}
             className="h-1.5 overflow-hidden rounded-full bg-surface-subtle"
             style={{ flex: steps.length }}
           >
             <span
-              className={`block h-full rounded-full ${lost ? 'bg-danger-bg' : PHASE_FILL[phase.id]}`}
+              className={`block h-full rounded-full ${lost ? 'bg-danger-bg' : PHASE_FILL[phaseId]}`}
               style={{ width: `${fill * 100}%` }}
             />
           </span>

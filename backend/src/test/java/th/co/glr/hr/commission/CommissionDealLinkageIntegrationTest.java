@@ -63,11 +63,7 @@ import th.co.glr.hr.orderconfirmation.OrderConfirmationService;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PriceCalcConfigRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
-import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.CreateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.RecalculateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.SubmitCostingRequest;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
@@ -151,7 +147,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
 
         FileStorageService fileStorage = new FileStorageService("/tmp/glr-commission-linkage-test-uploads");
         pricingRequestService = new PricingRequestService(
-            pricingRequests, tickets, notificationRepository, objectMapper, new ContactRepository(jdbc), fileStorage);
+            pricingRequests, tickets, notificationRepository, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
 
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
         FactoryEmailService factoryEmail = mock(FactoryEmailService.class);
@@ -164,17 +160,24 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         dispatchProperties.getFactoryQuoteDispatch().setMaxAttempts(3);
         dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
         dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
+        FxRateRepository fxRates = new FxRateRepository(jdbc);
+        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
+        // auto-advance check and PricingDecisionService's startReview/recalculateCost.
+        th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
+            new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
+                new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notificationRepository, fileStorage, dispatchProperties);
+            new FactoryConfigRepository(jdbc), factoryEmail, notificationRepository, fileStorage, dispatchProperties,
+            landedCostCalculator);
 
         PricingCostingRepository costingRepository = new PricingCostingRepository(jdbc);
-        FxRateRepository fxRates = new FxRateRepository(jdbc);
-        costingService = new PricingCostingService(costingRepository, pricingRequests, factoryQuotes, tickets,
-            fxRates, new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc), notificationRepository);
+        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
+        // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
+        costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
 
         PricingDecisionRepository decisionRepository = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
-            tickets, fxRates, notificationRepository);
+            tickets, fxRates, notificationRepository, landedCostCalculator);
 
         PriceCalcService priceCalcMock = mock(PriceCalcService.class);
         ticketService = new TicketService(tickets, notificationRepository, priceCalcMock,
@@ -249,7 +252,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
 
         assertThatThrownBy(() -> commissionService.submit(request, invoiceFile(), accountActor))
             .isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
         assertThat(countCommissionRecords()).isEqualTo(before);
     }
 
@@ -426,12 +429,10 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
             UUID.randomUUID().toString());
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-
-        PricingCostingDto costingDraft = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("step 9 costing", null), importActor);
-        costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 1"), importActor);
-        PricingCostingDto calculated = costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 2"), importActor);
-        costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
+        // READY_FOR_CEO_REVIEW the moment the (only, here) factory quote is ready — Import no
+        // longer creates/recalculates/submits a costing of its own; the CEO's startReview below
+        // computes it.
 
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);

@@ -38,14 +38,14 @@ public final class FxResolver {
                 .orElseGet(() -> new FxRateDto(0L, "THB", ONE, LocalDate.now(), null, "THB", null));
         }
         FxRateDto rate = fxRates.findByCurrency(currency)
-            .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+            .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "ไม่พบอัตราแลกเปลี่ยนสำหรับสกุลเงิน " + currency));
         if (!"BOT".equalsIgnoreCase(rate.source()) || rate.fetchedAt() == null) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "อัตราแลกเปลี่ยน " + currency + " ต้องมาจาก BOT ก่อนคำนวณต้นทุน");
         }
         if (rate.effectiveDate() == null || rate.effectiveDate().isBefore(LocalDate.now().minusDays(7))) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "อัตราแลกเปลี่ยน BOT สำหรับ " + currency + " เก่าเกินไป");
         }
         return rate;

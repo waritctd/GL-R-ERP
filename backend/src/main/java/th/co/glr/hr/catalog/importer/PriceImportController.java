@@ -72,7 +72,7 @@ public class PriceImportController {
             return svc.uploadAndCommit(factoryId, file.getOriginalFilename(),
                 file.getInputStream(), effectiveLabel, user.id());
         } catch (IOException e) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "อ่านไฟล์ไม่ได้: " + e.getMessage());
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "อ่านไฟล์ไม่ได้: " + e.getMessage());
         }
     }
 
@@ -100,7 +100,7 @@ public class PriceImportController {
                 user.id()
             );
         } catch (IOException e) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "อ่านไฟล์ไม่ได้: " + e.getMessage());
         }
     }

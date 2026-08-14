@@ -1,16 +1,20 @@
 import { useState } from 'react';
 import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
-import { LOST_REASONS } from './stageMeta.js';
+import { EMPTY_STAGE_CATALOG } from './stageCatalog.js';
+import { labelledReasons, LOST_REASON_LABEL } from './stageMeta.js';
 
 /**
  * Mark-lost modal (from the Claude Design prototype): one reason from the
  * standardized list + optional note. The deal keeps its stage — reopening
  * later resumes exactly where it was.
  */
-export function MarkLostModal({ onClose, onSubmit, submitting }) {
+export function MarkLostModal({ catalog = EMPTY_STAGE_CATALOG, onClose, onSubmit, submitting }) {
   const [reason, setReason] = useState(null);
   const [note, setNote] = useState('');
+  // The CODE set is DealLostReason.ORDER, served by /api/meta/deal-stages; only the Thai wording is
+  // this side's. The hardcoded list this replaced was a copy of that enum with no guard.
+  const reasons = labelledReasons(catalog.lostReasons, LOST_REASON_LABEL);
 
   return (
     <Modal
@@ -32,7 +36,7 @@ export function MarkLostModal({ onClose, onSubmit, submitting }) {
       )}
     >
       <div className="flex flex-col gap-2" role="radiogroup" aria-label="เหตุผลที่เสียงาน">
-        {LOST_REASONS.map((r) => {
+        {reasons.map((r) => {
           const selected = reason === r.code;
           return (
             <button

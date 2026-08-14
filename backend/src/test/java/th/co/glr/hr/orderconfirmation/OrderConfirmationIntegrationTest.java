@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -56,11 +57,7 @@ import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PriceCalcConfigRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
-import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.CreateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.RecalculateCostingRequest;
-import th.co.glr.hr.pricingcosting.PricingCostingRequests.SubmitCostingRequest;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
@@ -145,7 +142,7 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         FileStorageService fileStorage = new FileStorageService("/tmp/glr-order-confirmation-test-uploads");
         pricingRequestService = new PricingRequestService(
-            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage);
+            pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
 
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
         factoryQuoteRepository = factoryQuotes;
@@ -159,17 +156,24 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         dispatchProperties.getFactoryQuoteDispatch().setMaxAttempts(3);
         dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
         dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
+        FxRateRepository fxRates = new FxRateRepository(jdbc);
+        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
+        // auto-advance check and PricingDecisionService's startReview/recalculateCost.
+        th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
+            new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
+                new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties);
+            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
+            landedCostCalculator);
 
         costingRepository = new PricingCostingRepository(jdbc);
-        FxRateRepository fxRates = new FxRateRepository(jdbc);
-        costingService = new PricingCostingService(costingRepository, pricingRequests, factoryQuotes, tickets,
-            fxRates, new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc), notifications);
+        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
+        // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
+        costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
 
         decisionRepository = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
-            tickets, fxRates, notifications);
+            tickets, fxRates, notifications, landedCostCalculator);
 
         PriceCalcService priceCalcMock = mock(PriceCalcService.class);
         ticketService = new TicketService(tickets, notifications, priceCalcMock,
@@ -530,6 +534,176 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
+    // Transaction-harness coverage (test/transaction-harness): confirmOrder's write sequence is
+    // lockPricingRequest -> replay check -> markOrderConfirmed (1) ->
+    // markQuotationIssuedForOrderConfirmation (2) -> tickets.addEvent (3) -> reconcileTicketItems
+    // (4) -> ticketService.confirmCustomer (5-6) -> pricingRequests.addEvent ORDER_CONFIRMED (7)
+    // -> notifications.notifyByRoleForPricingRequest (8, last). Every hand-wired integration test
+    // in this suite — including every OTHER test in this very file — drives orderConfirmation
+    // with `new OrderConfirmationService(...)`, which has NO Spring AOP proxy, so @Transactional
+    // on confirmOrder does nothing for them: every JDBC statement auto-commits independently.
+    // These two tests close that gap.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Real proxy, real rollback: fails at the LAST write (the notification) and proves all seven
+     * writes before it are undone. Built via {@link AbstractPostgresIntegrationTest#transactional}
+     * so {@code confirmOrder}'s own {@code @Transactional} — not a test-supplied transaction — is
+     * what has to do the work; see {@link
+     * #confirmOrder_withoutTheProxy_strandsTheDealHalfConfirmed_theHarnessDefectItself()} for the
+     * vacuity control proving this assertion is not trivially true.
+     */
+    @Test
+    void confirmOrder_failingAfterEveryWrite_rollsBackAllOfThem_whenProxied() {
+        long pricingRequestId = driveToQuotationAccepted();
+        List<Map<String, Object>> itemsBefore = ticketItemSnapshot();
+
+        OrderConfirmationService failing = wireFailingOrderConfirmationService();
+
+        assertThatThrownBy(() -> transactional(failing).confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor))
+            .isInstanceOf(IllegalStateException.class);
+
+        assertThat(jdbc.queryForObject(
+            "SELECT order_confirmed_at IS NOT NULL FROM sales.pricing_request WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId), Boolean.class))
+            .as("markOrderConfirmed's write (1 of 8) must not survive a rollback triggered by the "
+                + "8th write failing")
+            .isFalse();
+        assertThat(jdbc.queryForObject(
+            "SELECT status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
+            .as("markQuotationIssuedForOrderConfirmation's write (2) must not survive")
+            .isEqualTo(TicketStatus.DRAFT);
+        assertThat(jdbc.queryForObject(
+            "SELECT payment_status IS NULL FROM sales.ticket WHERE ticket_id = :id",
+            Map.of("id", ticketId), Boolean.class))
+            .as("confirmCustomer's updatePaymentStatus write (5) must not survive")
+            .isTrue();
+        assertThat(countTicketEventsOfKind("ORDER_CONFIRMED_FROM_QUOTATION"))
+            .as("tickets.addEvent's write (3) must not survive")
+            .isZero();
+        assertThat(countTicketEventsOfKind("CUSTOMER_CONFIRMED"))
+            .as("confirmCustomer's own ticket_event write (6) must not survive")
+            .isZero();
+        assertThat(countPricingRequestEventsOfKind(pricingRequestId, "ORDER_CONFIRMED"))
+            .as("pricingRequests.addEvent ORDER_CONFIRMED (7) must not survive")
+            .isZero();
+        assertThat(countPricingRequestEventsOfKind(pricingRequestId, "TICKET_ITEMS_RECONCILED"))
+            .as("reconcileTicketItems's own event (part of write 4) must not survive")
+            .isZero();
+        assertThat(ticketItemSnapshot())
+            .as("reconcileTicketItems's UPDATE/INSERT on sales.ticket_item (write 4) must not survive")
+            .isEqualTo(itemsBefore);
+
+        // The deal must not be stuck: a subsequent confirm through the REAL (non-failing) service
+        // — the retry production depends on — succeeds.
+        OrderConfirmationDtos.OrderConfirmationResultDto retried = orderConfirmation.confirmOrder(
+            pricingRequestId, new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor);
+        assertThat(retried.ticket().summary().status()).isEqualTo(TicketStatus.QUOTATION_ISSUED);
+        assertThat(retried.pricingRequest().orderConfirmedAt()).isNotNull();
+    }
+
+    /**
+     * The vacuity control, and the reason the assertions above are not passing for a trivial
+     * reason. Same injected failure, but calls the RAW un-proxied service exactly as all other
+     * integration tests in this suite do — no {@link AbstractPostgresIntegrationTest#transactional}
+     * wrapping. Because {@code @Transactional} does nothing without a real AOP proxy, every write
+     * before the injected failure COMMITS independently, stranding the deal half-confirmed:
+     * {@code order_confirmed_at} is set, the ticket sits at {@code quotation_issued}, {@code
+     * confirmCustomer}'s payment/stage writes landed, and the reconciliation write(s) survive
+     * independently of everything after them — and a retry now 409s, because {@code
+     * markOrderConfirmed}'s own compare-and-set already fired. The deal is confirmed but the
+     * notification the accepted order depends on never fired, and nothing will ever re-drive it;
+     * only hand-written SQL frees it in production today.
+     *
+     * <p>(Reviewer's note: an earlier draft of this Javadoc claimed {@code confirmCustomer} "never
+     * ran, paymentStatus stays NULL". That was wrong — {@code confirmCustomer} is writes 5-6, i.e.
+     * strictly BEFORE the injected 8th-write failure, so its writes commit like all the others.
+     * The claim is now pinned by an assertion below rather than asserted only in prose.)
+     *
+     * <p>Documents today's broken auto-commit behaviour deliberately — it asserts the DEFECT, not
+     * a desired outcome, and should be DELETED the day the base test harness itself runs inside a
+     * real Spring context with proxied beans (at which point every plain, hand-wired service in
+     * this suite would roll back correctly and this divergent-behaviour test would no longer
+     * describe reality).
+     */
+    @Test
+    void confirmOrder_withoutTheProxy_strandsTheDealHalfConfirmed_theHarnessDefectItself() {
+        long pricingRequestId = driveToQuotationAccepted();
+        List<Map<String, Object>> itemsBefore = ticketItemSnapshot();
+
+        OrderConfirmationService failing = wireFailingOrderConfirmationService();
+
+        assertThatThrownBy(() -> failing.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor))
+            .isInstanceOf(IllegalStateException.class);
+
+        assertThat(jdbc.queryForObject(
+            "SELECT order_confirmed_at IS NOT NULL FROM sales.pricing_request WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId), Boolean.class))
+            .as("without a proxy, markOrderConfirmed's write commits on its own and survives — the "
+                + "harness defect this test documents")
+            .isTrue();
+        assertThat(jdbc.queryForObject(
+            "SELECT status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
+            .isEqualTo(TicketStatus.QUOTATION_ISSUED);
+        assertThat(ticketItemSnapshot())
+            .as("reconcileTicketItems's write also survives independently of everything after it")
+            .isNotEqualTo(itemsBefore);
+        // Pins the corrected claim in this method's Javadoc: confirmCustomer (writes 5-6) runs
+        // strictly BEFORE the injected 8th-write failure, so its writes commit too. The exact
+        // mirror image of the proxied test's "payment_status IS NULL / zero CUSTOMER_CONFIRMED
+        // events" assertions — which is what makes those two non-vacuous.
+        assertThat(jdbc.queryForObject(
+            "SELECT payment_status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
+            .as("confirmCustomer's updatePaymentStatus write (5) survives without a proxy")
+            .isEqualTo("CUSTOMER_CONFIRMED");
+        assertThat(countTicketEventsOfKind("CUSTOMER_CONFIRMED"))
+            .as("confirmCustomer's own ticket_event write (6) survives without a proxy")
+            .isOne();
+
+        // The consequence that matters: the deal is confirmed but never fully processed, and a
+        // retry 409s because markOrderConfirmed's compare-and-set already fired.
+        assertThatThrownBy(() -> orderConfirmation.confirmOrder(pricingRequestId,
+            new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    /** Identical to the fixture's {@code orderConfirmation} except its {@code
+     * NotificationRepository} is a mock that throws on the LAST write of confirmOrder's sequence
+     * — every other dependency (pricingRequests, tickets, ticketService, quotationRepository,
+     * depositNoticeService) stays REAL, so everything before that last write is genuinely
+     * exercised against real Postgres. */
+    private OrderConfirmationService wireFailingOrderConfirmationService() {
+        NotificationRepository failingNotifications = mock(NotificationRepository.class);
+        doThrow(new IllegalStateException("injected failure after every confirmOrder write"))
+            .when(failingNotifications)
+            .notifyByRoleForPricingRequest(anyString(), anyLong(), anyString(), anyString());
+        return new OrderConfirmationService(
+            pricingRequests, tickets, ticketService, quotationRepository, depositNoticeService, failingNotifications);
+    }
+
+    private List<Map<String, Object>> ticketItemSnapshot() {
+        return jdbc.queryForList(
+            "SELECT item_id, qty, qty_sqm FROM sales.ticket_item WHERE ticket_id = :id ORDER BY item_id",
+            Map.of("id", ticketId));
+    }
+
+    private long countTicketEventsOfKind(String kind) {
+        Long count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = :kind",
+            Map.of("id", ticketId, "kind", kind), Long.class);
+        return count == null ? 0 : count;
+    }
+
+    private long countPricingRequestEventsOfKind(long pricingRequestId, String eventKind) {
+        Long count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM sales.pricing_request_event WHERE pricing_request_id = :id AND event_kind = :kind",
+            Map.of("id", pricingRequestId, "kind", eventKind), Long.class);
+        return count == null ? 0 : count;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
     // Mutation-check evidence (verbatim red output recorded in the branch handoff)
     // ─────────────────────────────────────────────────────────────────────────────────────
     // See docs/agent-handoffs/95_feat-sales-deposit-order-confirmation.md "Authz Evidence" for
@@ -593,12 +767,10 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             UUID.randomUUID().toString());
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-
-        PricingCostingDto costingDraft = costingService.createDraft(pricingRequestId,
-            new CreateCostingRequest("step 6 costing", null), importActor);
-        costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 1"), importActor);
-        PricingCostingDto calculated = costingService.recalculate(costingDraft.id(), new RecalculateCostingRequest("pass 2"), importActor);
-        costingService.submit(calculated.id(), new SubmitCostingRequest("submit"), importActor);
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
+        // READY_FOR_CEO_REVIEW the moment the (only, here) factory quote is ready — Import no
+        // longer creates/recalculates/submits a costing of its own; the CEO's startReview below
+        // computes it.
 
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);

@@ -92,7 +92,7 @@ class SalesNotificationEmailRollbackIntegrationTest extends AbstractPostgresInte
 
         pricingRequestService = new PricingRequestService(
             pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc),
-            new FileStorageService("/tmp/glr-sales-mail-rollback-uploads"));
+            new FileStorageService("/tmp/glr-sales-mail-rollback-uploads"), factoryQuoteCarryForward());
         TicketService ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
 

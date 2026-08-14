@@ -320,6 +320,41 @@ public class FactoryQuoteRepository {
             """, Map.of("dispatchId", dispatchId));
     }
 
+    /**
+     * Cancels every factory quote still ALIVE on a pricing request whose own life has ended —
+     * the request was cancelled by its owner/the CEO ({@code PricingRequestService#cancel}) or its
+     * deal went terminal ({@code PricingRequestService#cancelOpenForTicket}). Reached through
+     * {@code PricingRequestRepository#cancelOpenChildrenForDeadRequest}, which is the single
+     * cascade entry point for both of those paths.
+     *
+     * <p><strong>The predicate is a positive allowlist of the five NON-terminal statuses.</strong>
+     * The three it omits are each terminal and must be left exactly as they are — {@code
+     * NOT_AVAILABLE} (the factory declined; overwriting that with CANCELLED would destroy the
+     * reason the quote died), {@code SUPERSEDED} (a later revision already replaced it), and
+     * {@code CANCELLED} (idempotent no-op on a second call, not an error). Same allowlist
+     * rationale as {@link #supersede}: a 9th {@code FactoryQuoteStatus} added later is
+     * non-cancellable until someone deliberately opts it in, where a denylist would silently
+     * admit it.
+     *
+     * <p><strong>It did not always read this way.</strong> Until the cancel-cutoff change (owner
+     * ruling 2026-08-13) this method matched only {@code ('DRAFT','REQUESTED')} — a quote nobody
+     * had answered yet — and it was a verbatim duplicate of SQL inlined in {@code
+     * PricingRequestRepository#cancelOpenStep2Children}, which is why nothing called it. That
+     * narrow set was survivable only because cancel itself was unreachable past
+     * AWAITING_FACTORY_RESPONSE. Now that {@link th.co.glr.hr.pricingrequest.PricingRequestStatus}
+     * permits cancel through APPROVED_FOR_QUOTATION, the common case is a request whose quotes are
+     * all {@code READY_FOR_COSTING} — precisely the ones the old predicate missed — and missing
+     * them would leave live, {@code is_current = TRUE} quotes hanging off a CANCELLED request.
+     *
+     * <p>Setting {@code is_current = FALSE} alongside the status is required, not cosmetic:
+     * {@code chk_factory_quote_current_terminal} permits {@code is_current = FALSE} only for
+     * SUPERSEDED/CANCELLED, and {@code uq_factory_quote_current_factory} (partial, {@code WHERE
+     * is_current = TRUE AND status <> 'CANCELLED'}) must stop matching these rows so a later quote
+     * to the same factory on the same request does not collide with a dead one.
+     *
+     * @return the number of quotes actually cancelled; 0 is a legitimate outcome (nothing was
+     *     alive), not a failure.
+     */
     public int cancelOpenForPricingRequest(long pricingRequestId, String reason, long actorId) {
         return jdbc.update("""
             UPDATE sales.factory_quote
@@ -330,7 +365,8 @@ public class FactoryQuoteRepository {
                    cancelled_at = now(),
                    updated_at = now()
              WHERE pricing_request_id = :pricingRequestId
-               AND status IN ('DRAFT', 'REQUESTED')
+               AND status IN ('DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING',
+                              'READY_FOR_COSTING')
             """,
             new MapSqlParameterSource()
                 .addValue("pricingRequestId", pricingRequestId)
@@ -413,13 +449,43 @@ public class FactoryQuoteRepository {
         return id == null ? 0L : id;
     }
 
-    public void supersede(long quoteId) {
-        jdbc.update("""
+    /**
+     * Refuses to supersede a quote that has already left the live/negotiable lifecycle. Owner
+     * ruling: a LIVE quote may be superseded (that's the normal revision path), a DEAD one may
+     * not. The three excluded statuses are each terminal — no repository method in this file
+     * transitions OUT of any of them: {@code NOT_AVAILABLE} (set by {@link #markNotAvailable}),
+     * {@code SUPERSEDED} (set by this method itself — so a second call is an idempotent no-op,
+     * not an error), {@code CANCELLED} (set by {@link #cancelOpenForPricingRequest}).
+     *
+     * <p>Uses a POSITIVE allowlist rather than the pricing-request's negative {@code status <>
+     * 'SUPERSEDED' AND status <> 'CANCELLED'} guard ({@code
+     * PricingRequestRepository#supersedeForCustomerRevision}, this method's sibling on the
+     * PricingRequest aggregate) to match every OTHER status-guarded method already in this file
+     * ({@link #updateDraft}, {@link #markRequested}, {@link #updateFirstResponse}, {@link
+     * #startNegotiation}, {@link #markReady}, {@link #markNotAvailable}, {@link
+     * #cancelOpenForPricingRequest}), which all use a positive {@code status IN (...)}/{@code
+     * status = '...'}. An allowlist also fails safe: a 9th {@code FactoryQuoteStatus} added later
+     * is non-supersedable until someone deliberately opts it in, where a denylist would silently
+     * admit it. (No separate {@code is_current} check is needed: {@code
+     * chk_factory_quote_current_terminal} already guarantees {@code is_current = TRUE} for every
+     * status in this allowlist.)
+     *
+     * <p>The only production caller ({@code FactoryQuoteService#receive}) already restricts itself
+     * to {@code RESPONSE_RECEIVED}/{@code NEGOTIATING}/{@code READY_FOR_COSTING} before calling
+     * this — this predicate is the hardening for any FUTURE caller that reaches the repository
+     * directly without that same service-level check.
+     *
+     * @return rows affected: 1 on a successful supersede, 0 when the quote was not in a
+     *     supersedable status. The caller MUST treat 0 as a refusal, not silently ignore it.
+     */
+    public int supersede(long quoteId) {
+        return jdbc.update("""
             UPDATE sales.factory_quote
                SET status = 'SUPERSEDED',
                    is_current = FALSE,
                    updated_at = now()
              WHERE factory_quote_id = :quoteId
+               AND status IN ('DRAFT','REQUESTED','RESPONSE_RECEIVED','NEGOTIATING','READY_FOR_COSTING')
             """, Map.of("quoteId", quoteId));
     }
 
@@ -566,17 +632,6 @@ public class FactoryQuoteRepository {
         return inserted.stream().findFirst();
     }
 
-    public void markOpenCostingsStale(long pricingRequestId, String reason) {
-        jdbc.update("""
-            UPDATE sales.pricing_costing
-               SET stale = TRUE,
-                   stale_reason = :reason,
-                   updated_at = now()
-             WHERE pricing_request_id = :pricingRequestId
-               AND status IN ('DRAFT', 'CALCULATED')
-            """, Map.of("pricingRequestId", pricingRequestId, "reason", reason));
-    }
-
     public Optional<FactoryQuoteDto> find(long quoteId) {
         try {
             FactoryQuoteDto quote = jdbc.queryForObject(baseSelect() + " WHERE fq.factory_quote_id = :quoteId",
@@ -598,6 +653,126 @@ public class FactoryQuoteRepository {
                     long id = rs.getLong("factory_quote_id");
                 return mapQuote(rs, findItems(id), findAttachments(id), findLatestDispatch(id).orElse(null));
             });
+    }
+
+    /**
+     * Copies every CURRENT, {@code READY_FOR_COSTING} quote of {@code fromPricingRequestId} onto
+     * {@code toPricingRequestId}, remapping each quote item's {@code pricing_request_item_id}
+     * through {@code itemIdMapping} (parent item id -&gt; child item id).
+     *
+     * <p>Reissue-through-CEO-chain (owner ruling 2026-08-13): when a customer-change revision
+     * renegotiates only the commercial terms — every product and every requested quantity
+     * identical to the parent's — Import is not made to re-ask the factory for prices that did not
+     * change. {@code FactoryQuoteCarryForward} is the only caller and owns the decision about
+     * WHEN this is safe; this method owns only the copy.
+     *
+     * <p>Copies are fresh roots, not revisions: {@code root_factory_quote_id}/
+     * {@code parent_factory_quote_id} are left NULL and {@code revision_no} is 1, because the
+     * chain key {@code uq_factory_quote_chain_revision} is
+     * {@code (COALESCE(root_factory_quote_id, factory_quote_id), revision_no)} — pointing the copy
+     * at the parent's root would collide with the parent's own revision numbering, and the two
+     * quotes belong to different pricing requests anyway. Each copy gets its own
+     * {@code quote_code}.
+     *
+     * <p>{@code email_*}/{@code sent_by}/{@code requested_at} are copied verbatim so the audit
+     * trail still shows which factory email actually produced these prices; {@code received_at} is
+     * likewise the ORIGINAL receipt time, not now(). Nothing here fabricates a second conversation
+     * with the factory that never happened.
+     *
+     * @return the ids of the quotes created, in factory-name order.
+     */
+    public List<Long> copyReadyQuotesToRevision(long fromPricingRequestId, long toPricingRequestId,
+                                                Map<Long, Long> itemIdMapping, long actorId) {
+        List<Long> sourceQuoteIds = jdbc.query("""
+            SELECT factory_quote_id
+              FROM sales.factory_quote
+             WHERE pricing_request_id = :from
+               AND is_current = TRUE
+               AND status = 'READY_FOR_COSTING'
+             ORDER BY factory_name_snapshot
+            """, Map.of("from", fromPricingRequestId), (rs, rowNum) -> rs.getLong("factory_quote_id"));
+        List<Long> created = new java.util.ArrayList<>();
+        for (Long sourceQuoteId : sourceQuoteIds) {
+            Long newQuoteId = jdbc.queryForObject("""
+                INSERT INTO sales.factory_quote
+                    (quote_code, pricing_request_id, factory_id, factory_name_snapshot, status,
+                     email_to, email_subject, email_body, email_provider_message_id, email_sent_at,
+                     sent_by, supplier_quote_ref, default_currency, payment_terms, lead_time_text,
+                     note, negotiation_note, requested_at, received_at, revision_no,
+                     revision_reason, is_current, created_by)
+                SELECT :quoteCode, :to, factory_id, factory_name_snapshot, 'READY_FOR_COSTING',
+                       email_to, email_subject, email_body, email_provider_message_id, email_sent_at,
+                       sent_by, supplier_quote_ref, default_currency, payment_terms, lead_time_text,
+                       note, negotiation_note, requested_at, received_at, 1,
+                       'Carried forward from pricing request ' || :from, TRUE, :actorId
+                  FROM sales.factory_quote
+                 WHERE factory_quote_id = :sourceQuoteId
+                RETURNING factory_quote_id
+                """,
+                new MapSqlParameterSource()
+                    .addValue("quoteCode", nextQuoteCode())
+                    .addValue("to", toPricingRequestId)
+                    .addValue("from", fromPricingRequestId)
+                    .addValue("actorId", actorId)
+                    .addValue("sourceQuoteId", sourceQuoteId),
+                Long.class);
+            // Item-by-item rather than INSERT ... SELECT with a join: the remapping lives in a Java
+            // Map (built by the item-equivalence check that authorised this copy in the first
+            // place), and an item whose parent id is absent from that map must be SKIPPED, not
+            // silently inserted with a dangling reference. In practice the map is total — the
+            // caller only reaches here when every item matched — so a skip would mean the caller's
+            // own precondition broke, and the isFullyResolvable re-check it performs afterwards is
+            // what catches that.
+            for (FactoryQuoteItemDto item : findItems(sourceQuoteId)) {
+                Long childItemId = itemIdMapping.get(item.pricingRequestItemId());
+                if (childItemId == null) {
+                    continue;
+                }
+                jdbc.update("""
+                    INSERT INTO sales.factory_quote_item
+                        (factory_quote_id, pricing_request_item_id, catalog_product_id_snapshot,
+                         supplier_product_code, supplier_product_description, quoted_quantity,
+                         quoted_unit, unit_basis, raw_unit_price, currency, minimum_order_quantity,
+                         sqm_per_unit, pieces_per_box, linear_m_per_unit, lead_time_text,
+                         availability_note, line_note, sort_order)
+                    SELECT :newQuoteId, :childItemId, catalog_product_id_snapshot,
+                           supplier_product_code, supplier_product_description, quoted_quantity,
+                           quoted_unit, unit_basis, raw_unit_price, currency, minimum_order_quantity,
+                           sqm_per_unit, pieces_per_box, linear_m_per_unit, lead_time_text,
+                           availability_note, line_note, sort_order
+                      FROM sales.factory_quote_item
+                     WHERE factory_quote_item_id = :sourceItemId
+                    """,
+                    new MapSqlParameterSource()
+                        .addValue("newQuoteId", newQuoteId)
+                        .addValue("childItemId", childItemId)
+                        .addValue("sourceItemId", item.id()));
+            }
+            created.add(newQuoteId);
+        }
+        return created;
+    }
+
+    /**
+     * Compensating delete for {@link #copyReadyQuotesToRevision}, used when the copy turns out not
+     * to satisfy {@code LandedCostCalculator.isFullyResolvable} after all.
+     *
+     * <p>Deliberately NOT left to a transaction rollback. Every integration test in this repo
+     * hand-wires its services with {@code new}, so {@code @Transactional} is inert there and a
+     * test asserting "the copy was undone" would be asserting a rollback that never happens (see
+     * {@code AbstractPostgresIntegrationTest}'s own Javadoc). An explicit delete behaves
+     * identically in production and under test, which is the point.
+     *
+     * <p>Safe as a hard delete: these rows were created moments earlier by the copy and nothing
+     * can reference them yet. {@code factory_quote_item} goes via ON DELETE CASCADE.
+     */
+    public int deleteQuotes(List<Long> factoryQuoteIds) {
+        if (factoryQuoteIds.isEmpty()) {
+            return 0;
+        }
+        return jdbc.update("""
+            DELETE FROM sales.factory_quote WHERE factory_quote_id IN (:ids)
+            """, new MapSqlParameterSource().addValue("ids", factoryQuoteIds));
     }
 
     public Optional<FactoryQuoteDto> findCurrentByFactory(long pricingRequestId, String factoryName) {

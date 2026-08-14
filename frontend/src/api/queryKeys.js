@@ -84,6 +84,8 @@ export const queryKeys = {
   // `salesStage` query param, distinct key from the plain ticketList above.
   ticketListBySalesStage: (salesStage) => ['tickets', 'list', 'salesStage', salesStage ?? ''],
   ticketDetail: (id) => ['tickets', 'detail', id],
+  // Immutable server enumeration — fetched once, never invalidated. See stageCatalog.js.
+  dealStageCatalog: () => ['meta', 'deal-stages'],
   ticketActions: (id) => ['tickets', 'actions', id],
   ticketPayments: (id) => ['tickets', 'payments', id],
   ticketDeliveries: (id) => ['tickets', 'deliveries', id],

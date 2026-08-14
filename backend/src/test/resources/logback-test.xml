@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Test-only logging configuration. It exists for exactly one reason.
+
+  AbstractPostgresIntegrationTest builds a HikariCP connection pool per test (see its Javadoc for
+  why: the old DriverManagerDataSource re-authenticated on every single JDBC call, which was the
+  dominant cost of this suite in CI). Hikari announces every pool start and shutdown at INFO, so
+  ~1,100 integration tests produced ~5,300 log lines — over half of the entire build log — saying
+  nothing but "a pool opened, a pool closed". At WARN the events actually worth seeing (connection
+  acquisition timeouts, leak detection) still print, and the noise is gone.
+
+  Setting this level programmatically does NOT hold: Spring Boot re-initialises the logging system
+  every time a @SpringBootTest context starts, which resets any level set from Java. A config file
+  is re-read on each of those initialisations, so it survives.
+
+  Everything else inherits Spring Boot's standard console setup via base.xml, so the pattern and
+  every other logger's level are unchanged — including the loggers that BotHolidayFetchServiceTest,
+  ProductionReadinessConfigTest, PayrollServiceTest and EmployeeServiceTest attach their own
+  ListAppender to, none of which is this one.
+-->
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/base.xml"/>
+    <logger name="com.zaxxer.hikari" level="WARN"/>
+</configuration>

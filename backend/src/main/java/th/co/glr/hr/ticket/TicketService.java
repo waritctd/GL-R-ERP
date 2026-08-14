@@ -7,6 +7,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import th.co.glr.hr.pricing.PriceBreakdownItemDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,6 +26,7 @@ import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.PricingRequestService.CancelOpenForTicketResult;
+import th.co.glr.hr.ticket.TicketResponses.StageDecisionDto;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionDto;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionState;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionsResponse;
@@ -36,6 +39,15 @@ public class TicketService {
     private static final Set<String> IMPORT_ROLES = Set.of("import");
     private static final Set<String> CEO_ROLES    = Set.of("ceo");
     private static final Set<String> FULFILMENT_ROLES = Set.of("import", "ceo");
+    // Coarse pre-filter for the stock-coverage declaration only (owner ruling 2026-08-13,
+    // "Sales declares, Import can correct" — see reserveStock). DERIVED from the two sets
+    // canDeclareStockCoverage actually tests, never hand-written, so it cannot silently drift
+    // from them if either is ever changed. It is only the first of two gates: passing this set
+    // says "your role could declare on SOME deal", not "on THIS one" — a sales rep still has to
+    // own the deal. See requireViewAccess for the same two-stage role-then-row shape.
+    private static final Set<String> STOCK_DECLARATION_ROLES =
+        Stream.concat(FULFILMENT_ROLES.stream(), SALES_ROLES.stream())
+            .collect(Collectors.toUnmodifiableSet());
     // Money-receipt confirmations belong to ฝ่ายบัญชี (accounting), with CEO as fallback.
     private static final Set<String> ACCOUNT_ROLES = Set.of("account", "ceo");
     // Step 1 of the three-party close. Deliberately EXCLUDES ceo, unlike ACCOUNT_ROLES:
@@ -150,11 +162,14 @@ public class TicketService {
      * file download) to re-check. Every other viewer role gets the DTO unchanged.
      *
      * <p>NOTE: mutation responses built via {@code requireTicket} directly (e.g. import's
-     * own procurement actions — reserveStock, recordDelivery, markGoodsReceived) do NOT
-     * go through this projection and so still embed quotations in their return value.
-     * That is a narrower, accepted residual gap (transient, tied to import legitimately
-     * performing its own action) recorded in the branch handoff rather than silently
-     * closed by touching every one of those call sites.
+     * own procurement actions — recordDelivery, markGoodsReceived, and reserveStock when
+     * import is the declarer) do NOT go through this projection and so still embed
+     * quotations in their return value. That is a narrower, accepted residual gap
+     * (transient, tied to import legitimately performing its own action) recorded in the
+     * branch handoff rather than silently closed by touching every one of those call sites.
+     * The 2026-08-13 widening of {@link #reserveStock} to the deal owner does not enlarge
+     * it: this projection only ever strips anything for {@link #IMPORT_ROLES}, and a sales
+     * rep may already read their own deal's quotations through {@link #requireViewAccess}.
      */
     private TicketDto projectForRole(TicketDto ticket, String role) {
         if (!IMPORT_ROLES.contains(role)) {
@@ -218,6 +233,8 @@ public class TicketService {
         requireRole(actor, IMPORT_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.SUBMITTED);
         requireActive(s);
+        requireStatusAdvanced(
+            tickets.transitionStatus(ticketId, TicketStatus.SUBMITTED, TicketStatus.IN_REVIEW));
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.PICKED_UP, TicketStatus.SUBMITTED, TicketStatus.IN_REVIEW, null);
         return requireTicket(ticketId);
@@ -249,6 +266,10 @@ public class TicketService {
         String snapshot = buildItemSnapshot(request.items());
         boolean isRevision = !TicketStatus.IN_REVIEW.equals(currentStatus);
         String eventKind = isRevision ? TicketEventKind.PRICE_REVISED : TicketEventKind.PRICE_PROPOSED;
+        // PROPOSE_ALLOWED_STATUSES is exactly {in_review, price_proposed, approved}; the middle
+        // one is the declared price_proposed -> price_proposed self-edge (a re-proposal).
+        requireStatusAdvanced(
+            tickets.transitionStatus(ticketId, currentStatus, TicketStatus.PRICE_PROPOSED));
         tickets.addEventWithSnapshot(ticketId, actor.id(), actor.name(),
             eventKind, currentStatus, TicketStatus.PRICE_PROPOSED, request.note(), snapshot);
         notifications.notifyByRole("ceo", ticketId, "PRICE_PROPOSED",
@@ -284,6 +305,8 @@ public class TicketService {
         requireActive(s);
         tickets.approveItemPrices(ticketId);
         tickets.setHasEdits(ticketId, false);
+        requireStatusAdvanced(
+            tickets.transitionStatus(ticketId, TicketStatus.PRICE_PROPOSED, TicketStatus.APPROVED));
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.APPROVED, TicketStatus.PRICE_PROPOSED, TicketStatus.APPROVED, null);
         notifications.notifyEmployee(s.createdById(), ticketId, "APPROVED",
@@ -303,6 +326,8 @@ public class TicketService {
         requireRole(actor, CEO_ROLES);
         TicketSummaryDto s = loadAndVerifyStatus(ticketId, TicketStatus.PRICE_PROPOSED);
         requireActive(s);
+        requireStatusAdvanced(
+            tickets.transitionStatus(ticketId, TicketStatus.PRICE_PROPOSED, TicketStatus.IN_REVIEW));
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.REJECTED, TicketStatus.PRICE_PROPOSED, TicketStatus.IN_REVIEW, request.reason());
         notifications.notifyByRole("import", ticketId, "REJECTED",
@@ -385,13 +410,16 @@ public class TicketService {
             + (request.amendmentReason() != null && !request.amendmentReason().isBlank()
                 ? " — amendment: " + request.amendmentReason().trim()
                 : "");
+        // QUOTATION_ALLOWED_STATUSES is exactly {approved, quotation_issued}; the latter is the
+        // declared quotation_issued -> quotation_issued self-edge (an amended re-issue).
+        requireStatusAdvanced(
+            tickets.transitionStatus(ticketId, fromStatus, TicketStatus.QUOTATION_ISSUED));
         tickets.addEventWithDocument(ticketId, actor.id(), actor.name(),
             TicketEventKind.QUOTATION_ISSUED, fromStatus, TicketStatus.QUOTATION_ISSUED, eventMessage,
             RelatedDocumentType.QUOTATION, created.id());
-        if (QuotationRecipient.DESIGNER.equals(recipientType) || QuotationRecipient.OWNER.equals(recipientType)) {
-            autoAdvanceStage(s, DealStage.QUOTE_DESIGN_SIDE, actor);
-        } else if (QuotationRecipient.BUYER.equals(recipientType)) {
-            autoAdvanceStage(s, DealStage.QUOTE_BUYER, actor);
+        String stage = stageForQuotationRecipient(recipientType);
+        if (stage != null) {
+            autoAdvanceStage(s, stage, actor);
         }
         return requireTicket(ticketId);
     }
@@ -535,7 +563,8 @@ public class TicketService {
             s.amountPaid(), s.amountOutstanding(), s.overdue(),
             s.closeConfirmedAt(), s.closeConfirmedByName(), s.invoiceOnFile(),
             s.cancelReason(), s.cancelledAt(),
-            s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale());
+            s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale(),
+            s.commissionRecorded());
     }
 
     /**
@@ -620,6 +649,9 @@ public class TicketService {
                 "ปิดงานไม่ได้: ต้องให้ฝ่ายบัญชียืนยันก่อน");
         }
         requireClosePrerequisites(s);
+        // requireClosePrerequisites admits exactly {quotation_issued, document_issued}, which are
+        // the only two states TicketStatus.ALLOWED lets reach CLOSED.
+        requireStatusAdvanced(tickets.transitionStatus(ticketId, s.status(), TicketStatus.CLOSED));
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.CLOSED, s.status(), TicketStatus.CLOSED, "CEO ตรวจสอบและปิดงาน");
         tickets.updateLifecycle(ticketId, DealLifecycle.COMPLETED);
@@ -640,12 +672,50 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ขั้นตอนการรับชำระเงินผ่านสถานะ CUSTOMER_CONFIRMED ไปแล้ว");
         }
-        tickets.updatePaymentStatus(ticketId, "CUSTOMER_CONFIRMED");
-        tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.CUSTOMER_CONFIRMED, s.status(), s.status(), null);
+        // Idempotent no-op when already CUSTOMER_CONFIRMED: PaymentTrack has no
+        // CUSTOMER_CONFIRMED -> CUSTOMER_CONFIRMED self-loop (unlike DEPOSIT_NOTICE_ISSUED's one
+        // legal revision loop), so re-confirming must skip the write and the event entirely
+        // rather than attempt an edge the machine does not recognise. This preserves the prior
+        // observable behaviour (a harmless re-click) without adding a new edge to the machine.
+        if (!"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
+            int rows = tickets.advancePaymentStatus(
+                ticketId, s.depositPolicy(), s.paymentStatus(), PaymentTrack.CUSTOMER_CONFIRMED);
+            requirePaymentAdvanced(rows);
+            tickets.addEvent(ticketId, actor.id(), actor.name(),
+                TicketEventKind.CUSTOMER_CONFIRMED, s.status(), s.status(), null);
+        }
         // Deal pipeline (V50): a confirmed PO advances the deal — guarded no-op inside.
         autoAdvanceStage(s, DealStage.ORDER_RECEIVED, actor);
         return requireTicket(ticketId);
+    }
+
+    /**
+     * Turns a lost payment-track compare-and-set race into a 409. {@code advancePaymentStatus}'s
+     * 0 rowcount means a concurrent writer moved {@code payment_status} out from under this
+     * request between the read and the write — per that method's own Javadoc, the correct
+     * response is a conflict, never a re-SELECT to build a nicer message.
+     */
+    private void requirePaymentAdvanced(int rows) {
+        if (rows == 0) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ขั้นตอนการรับชำระเงินถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
+    }
+
+    /**
+     * Turns a lost ticket-status compare-and-set race into a 409, mirroring
+     * {@link #requirePaymentAdvanced}. {@code transitionStatus}'s 0 rowcount means a concurrent
+     * writer moved {@code sales.ticket.status} out from under this request between the read that
+     * chose {@code expected} and the write — per that method's Javadoc the correct response is a
+     * conflict, never a re-SELECT to build a nicer message. (An UNDECLARED edge is a different
+     * thing entirely and throws {@link IllegalStateException} inside the repository before any
+     * SQL runs; it never reaches here.)
+     */
+    private void requireStatusAdvanced(int rows) {
+        if (rows == 0) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "สถานะดีลถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
     }
 
     // NOTE: the former issueDepositNotice endpoint (advance payment track with no
@@ -683,8 +753,13 @@ public class TicketService {
         // DEPOSIT_PAID is also acceptable: the customer often pays (and accounting
         // confirms) before import gets to the IR — requiring DEPOSIT_NOTICE_ISSUED
         // exactly deadlocked the fulfillment track in that ordering.
+        //
+        // Rule 5 (payment-track state machine): null is no longer treated as "deposit bypassed"
+        // here — null may only ever advance to CUSTOMER_CONFIRMED, so a bypass-policy deal must
+        // have actually reached CUSTOMER_CONFIRMED (via confirmCustomer) before an IR can issue.
+        // This is a deliberate behaviour change; see the branch report.
         boolean depositPolicyBypassesNotice = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
-            && (s.paymentStatus() == null || "CUSTOMER_CONFIRMED".equals(s.paymentStatus()));
+            && "CUSTOMER_CONFIRMED".equals(s.paymentStatus());
         boolean depositReady = "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
             || "DEPOSIT_PAID".equals(s.paymentStatus())
             || depositPolicyBypassesNotice;
@@ -712,6 +787,10 @@ public class TicketService {
         requireRole(actor, FULFILMENT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
+        // Deliberately NOT guarded by hasLivePurchaseOrders (unlike markShipping/markGoodsReceived
+        // below): IR_SENT is a pre-shipment milestone the POs say nothing about yet —
+        // TicketRepository#deriveImportStatus returns null while every live PO is still OPEN — so
+        // a ticket-level IR_SENT can never contradict the PO rollup.
         if (!FulfilmentStatus.IR_ISSUED.equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องออกใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าส่ง IR แล้วได้");
         }
@@ -726,12 +805,21 @@ public class TicketService {
         requireRole(actor, FULFILMENT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
+        // Refuse, don't delegate. A ticket-level "start shipping" click cannot say WHICH factory
+        // shipped — container ref, ETD/ETA are per-factory PO detail that only the PO aggregate
+        // (ProcurementService) legitimately owns, so "delegating" this click would mean fabricating
+        // that detail. On a PO-tracked deal the PO rollup (applyPurchaseOrderRollup below) is the
+        // source of truth for this axis; refusing is the only option that invents no data.
+        // Unconditional on PO presence — not merely "when they disagree" — because a ticket-level
+        // write that happens to already agree with the PO rollup would still have bypassed it.
+        if (tickets.hasLivePurchaseOrders(ticketId)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลนี้ติดตามการนำเข้าด้วยใบสั่งซื้อโรงงาน — ต้องบันทึกการขนส่งที่ใบสั่งซื้อของแต่ละโรงงาน");
+        }
         if (!FulfilmentStatus.IR_SENT.equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องส่งใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าเริ่มจัดส่งได้");
         }
-        tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.SHIPPING);
-        tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.SHIPPING, s.status(), s.status(), null);
+        applyShipping(s, actor);
         return requireTicket(ticketId);
     }
 
@@ -740,23 +828,94 @@ public class TicketService {
         requireRole(actor, FULFILMENT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
+        // Same refuse-not-delegate reasoning as markShipping above: a ticket-level "goods
+        // received" click cannot say which factory's shipment arrived, and on a PO-tracked deal
+        // the PO rollup is the source of truth for this axis, not this button.
+        if (tickets.hasLivePurchaseOrders(ticketId)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลนี้ติดตามการนำเข้าด้วยใบสั่งซื้อโรงงาน — ต้องบันทึกรับสินค้าที่ใบสั่งซื้อของแต่ละโรงงาน");
+        }
         if (!FulfilmentStatus.SHIPPING.equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "ดีลต้องอยู่ในขั้นตอนจัดส่งก่อนจึงจะทำเครื่องหมายว่าได้รับสินค้าได้");
         }
-        tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.GOODS_RECEIVED);
+        applyGoodsReceived(s, actor);
+        return requireTicket(ticketId);
+    }
+
+    /**
+     * The GOODS_RECEIVED side-effects, factored out of {@link #markGoodsReceived} so that method
+     * and {@link #applyPurchaseOrderRollup} (the PO-tracked path, called from {@code
+     * ProcurementService}) share exactly one implementation and can never drift apart on what
+     * "goods received" means. Behaviour is byte-for-byte what {@code markGoodsReceived} always did
+     * after its status guard — only the guard itself stayed behind in the caller.
+     */
+    private void applyGoodsReceived(TicketSummaryDto s, UserPrincipal actor) {
+        tickets.updateFulfillmentStatus(s.id(), FulfilmentStatus.GOODS_RECEIVED);
         // Also advance payment track to AWAITING_FINAL_PAYMENT if deposit was paid
         if ("DEPOSIT_PAID".equals(s.paymentStatus())) {
-            tickets.updatePaymentStatus(ticketId, "AWAITING_FINAL_PAYMENT");
-            tickets.addEvent(ticketId, actor.id(), actor.name(),
+            int rows = tickets.advancePaymentStatus(
+                s.id(), s.depositPolicy(), s.paymentStatus(), PaymentTrack.AWAITING_FINAL_PAYMENT);
+            requirePaymentAdvanced(rows);
+            tickets.addEvent(s.id(), actor.id(), actor.name(),
                 TicketEventKind.AWAITING_FINAL_PAYMENT, s.status(), s.status(), null);
         }
-        tickets.addEvent(ticketId, actor.id(), actor.name(),
+        tickets.addEvent(s.id(), actor.id(), actor.name(),
             TicketEventKind.GOODS_RECEIVED, s.status(), s.status(), null);
         // Goods are at the warehouse (S17) — advance to DELIVERY_SCHEDULING (S18)
         // so the "schedule delivery / collect balance" step is reached before
         // DELIVERED, instead of the pipeline jumping PROCUREMENT → DELIVERED.
         autoAdvanceStage(s, DealStage.DELIVERY_SCHEDULING, actor);
-        return requireTicket(ticketId);
+    }
+
+    /**
+     * The SHIPPING write + event, factored out of {@link #markShipping} for the same reason as
+     * {@link #applyGoodsReceived} just above.
+     */
+    private void applyShipping(TicketSummaryDto s, UserPrincipal actor) {
+        tickets.updateFulfillmentStatus(s.id(), FulfilmentStatus.SHIPPING);
+        tickets.addEvent(s.id(), actor.id(), actor.name(),
+            TicketEventKind.SHIPPING, s.status(), s.status(), null);
+    }
+
+    /**
+     * Rolls this deal's live factory-PO statuses up into {@code fulfillment_status}. Called by
+     * {@code ProcurementService} at the end of every PO mutation ({@code recordShippingDetail},
+     * {@code recordGoodsReceived}, {@code cancel}) so a PO-tracked deal's ticket-level flag tracks
+     * the PO aggregate automatically — the ticket-level setters above refuse for exactly this
+     * class of deal, so nothing else advances this axis for it.
+     *
+     * <p><strong>Not a controller entry point.</strong> No {@link #requireRole} call here —
+     * authorisation already happened inside {@code ProcurementService} ({@code RAW_PO_ROLES =
+     * {import, ceo}}), and this method is reachable only from that service, never from any
+     * controller. A future reader adding a controller endpoint onto this method directly must add
+     * its own authorisation check first — do not mistake the absence of one here for "no check
+     * needed".
+     */
+    @Transactional
+    public void applyPurchaseOrderRollup(long ticketId, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        String target = tickets.deriveImportStatus(ticketId);
+        if (target == null) {
+            return;
+        }
+        // Delivery-axis firewall: once the ticket has left the import axis (a delivery has
+        // started, or the deal was always a stock deal) a late PO mutation must never write here
+        // again — this is what protects the FULLY_DELIVERED close gate (deliveryGateComplete
+        // above) from being clobbered back down to GOODS_RECEIVED by a straggling PO.
+        if (!FulfilmentStatus.isImportAxis(s.fulfillmentStatus())) {
+            return;
+        }
+        // Monotonic: only ever advance, never downgrade. importRank is -1 for anything not on the
+        // import axis, but that case is already excluded by the firewall above, so both ranks here
+        // are real positions on IMPORT_SEQUENCE.
+        if (FulfilmentStatus.importRank(target) <= FulfilmentStatus.importRank(s.fulfillmentStatus())) {
+            return;
+        }
+        if (FulfilmentStatus.GOODS_RECEIVED.equals(target)) {
+            applyGoodsReceived(s, actor);
+        } else {
+            applyShipping(s, actor);
+        }
     }
 
     public List<DeliveryRecordDto> listDeliveries(long ticketId, UserPrincipal actor) {
@@ -764,12 +923,71 @@ public class TicketService {
         return tickets.findDeliveriesByTicket(ticketId);
     }
 
+    /**
+     * Declares which line quantities on this deal are covered from stock.
+     *
+     * <p><strong>NOTHING IS RESERVED.</strong> The name, {@link StockReservationRequest}, {@link
+     * TicketEventKind#STOCK_RESERVED} and the {@code stock_note} column all read as inventory
+     * reservation, and none of them is. This records a <em>sales declaration</em>: the rep (or
+     * import, or the CEO) states how many of each line they believe can be supplied from stock.
+     * There is no stock ledger, no on-hand quantity and no availability check anywhere in this
+     * codebase — nothing is decremented (V54 says the same thing on the column itself) and nothing
+     * validates the declared quantity against real availability. The sole constraint is the
+     * V-migration CHECK {@code qty_from_stock >= 0 AND qty_from_stock <= qty}, i.e. "no more than
+     * was ordered", which is arithmetic on this deal and says nothing about a warehouse.
+     *
+     * <p><strong>Why it exists at all:</strong> the number is a commission input. {@code
+     * CommissionRepository#sumActiveStockActualReceived} computes the owning rep's STOCK_BONUS as
+     * {@code SUM(actual_received × SUM(qty_from_stock)/SUM(qty))}, so this field is the {@code
+     * stockShare} half of that formula and nothing else reads it as inventory.
+     *
+     * <p><strong>Inventory tracking is deliberately out of scope</strong> (owner ruling) — a future
+     * reader must not "fix" this by building a stock ledger, and must not assume the declaration
+     * has been corroborated against one. The dangerous version of the misreading is exactly that
+     * assumption; it has already caused two wrong readings of this codebase. Nothing is renamed
+     * because the method name is on the API contract ({@link TicketController}) and mirrored in
+     * {@code frontend/src/api/mockApi.js} under a contract test.
+     *
+     * <p><strong>Stage floor (2026-08-13).</strong> Because nothing corroborates the claim, and
+     * because full coverage reroutes the deal (below: {@code FROM_STOCK} plus a jump to {@code
+     * DELIVERY_SCHEDULING}, which in turn blocks {@link #issueImportRequest}), a declaration is
+     * refused below {@link DealStage#ORDER_RECEIVED} — see {@link #stockCoverageStageReached}.
+     *
+     * <p><strong>Deliberate authorisation change — owner ruling 2026-08-13, "Sales declares,
+     * Import can correct."</strong> This was gated to {@link #FULFILMENT_ROLES} alone, so the one
+     * person whose money depends on the number could not supply it: {@code
+     * CommissionRepository#sumActiveStockActualReceived} computes the rep's STOCK_BONUS input as
+     * {@code SUM(actual_received × SUM(qty_from_stock)/SUM(qty))}, i.e. entirely from what another
+     * department typed in. The deal owner may now declare what they know about their own deal;
+     * import and ceo keep the identical ability and can correct a rep's figure afterwards, since
+     * they are the ones who know what is actually on the shelf.
+     *
+     * <p><strong>Only the gate moved.</strong> The commission formula is untouched — this changes
+     * who may supply its input, never how it is computed. Everything below the gate is
+     * deliberately identical whoever declares: the same per-line write, the same {@code
+     * STOCK_RESERVED} event, the same {@code allCovered → FROM_STOCK → DELIVERY_SCHEDULING}
+     * routing, the same {@link #requireActive} guard. One code path and one meaning for the
+     * field: routing follows the facts, not the declarer.
+     *
+     * <p>Two gates, in the order {@link #requireViewAccess} uses. The coarse {@link
+     * #STOCK_DECLARATION_ROLES} check runs BEFORE the ticket is loaded so that widening this
+     * endpoint cannot turn it into an existence probe — a role that can never declare (hr,
+     * employee, account, sales_manager) still gets 403 without a row being read, exactly as
+     * before. {@link #canDeclareStockCoverage} then applies the per-row rule.
+     */
     @Transactional
     public TicketDto reserveStock(long ticketId, StockReservationRequest request, UserPrincipal actor) {
-        requireRole(actor, FULFILMENT_ROLES);
+        requireRole(actor, STOCK_DECLARATION_ROLES);
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
+        if (!canDeclareStockCoverage(s, actor)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
         requireActive(s);
+        if (!stockCoverageStageReached(s)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ประกาศสินค้าจากสต็อกได้หลังจากยืนยันคำสั่งซื้อของลูกค้าแล้วเท่านั้น (ตั้งแต่ขั้นตอน ORDER_RECEIVED)");
+        }
         List<StockReservationRequest.Line> lines = request == null ? List.of() : request.lines();
         if (lines == null || lines.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุรายการสินค้า");
@@ -921,7 +1139,12 @@ public class TicketService {
         BigDecimal outstanding = payableAmount(ticket).subtract(nullToZero(tickets.sumPaid(ticketId)));
         if (outstanding.signum() <= 0) {
             if (!"FULLY_PAID".equals(s.paymentStatus())) {
-                tickets.updatePaymentStatus(ticketId, "FULLY_PAID");
+                // Multi-hop walk: DEPOSIT_PAID -> AWAITING_FINAL_PAYMENT -> FULLY_PAID (REQUIRED)
+                // or CUSTOMER_CONFIRMED -> AWAITING_FINAL_PAYMENT -> FULLY_PAID (bypass) — both
+                // admitted by canConfirmFinalPaymentNow below, both walked in one call.
+                int rows = tickets.advancePaymentStatus(
+                    ticketId, s.depositPolicy(), s.paymentStatus(), PaymentTrack.FULLY_PAID);
+                requirePaymentAdvanced(rows);
                 tickets.addEvent(ticketId, actor.id(), actor.name(),
                     TicketEventKind.FULLY_PAID, s.status(), s.status(), null);
                 maybeAdvanceClosedPaid(s, true, actor);
@@ -1010,8 +1233,28 @@ public class TicketService {
         BigDecimal payable = payableAmount(ticket);
         BigDecimal paid = nullToZero(tickets.sumPaid(ticketId));
         if (payable.signum() > 0 && paid.compareTo(payable) >= 0) {
-            if (!"FULLY_PAID".equals(s.paymentStatus())) {
-                tickets.updatePaymentStatus(ticketId, "FULLY_PAID");
+            // Rule 4/5 tightening: null may only advance to CUSTOMER_CONFIRMED. A payment
+            // recorded (by account) before the customer was ever confirmed must not silently
+            // promote payment_status straight to FULLY_PAID — it stays null until confirmCustomer
+            // eventually runs. Deliberate behaviour change; see the branch report.
+            if (s.paymentStatus() != null && !"FULLY_PAID".equals(s.paymentStatus())) {
+                // The walk PERSISTS every hop, so a REQUIRED deal jumping from DEPOSIT_PAID goes
+                // through AWAITING_FINAL_PAYMENT on the way. The column moves on immediately, so
+                // without an event nothing durable records that the state was ever reached —
+                // emit one per intermediate hop so the deal's payment history shows the passage
+                // rather than appearing to leap. The final hop keeps its own FULLY_PAID event
+                // below, so intermediates are every hop except the last.
+                List<String> hops = PaymentTrack.stepsBetween(
+                    s.depositPolicy(), s.paymentStatus(), PaymentTrack.FULLY_PAID);
+                int rows = tickets.advancePaymentStatus(
+                    ticketId, s.depositPolicy(), s.paymentStatus(), PaymentTrack.FULLY_PAID);
+                requirePaymentAdvanced(rows);
+                for (String hop : hops.subList(0, Math.max(0, hops.size() - 1))) {
+                    if (PaymentTrack.AWAITING_FINAL_PAYMENT.equals(hop)) {
+                        tickets.addEvent(ticketId, actor.id(), actor.name(),
+                            TicketEventKind.AWAITING_FINAL_PAYMENT, s.status(), s.status(), null);
+                    }
+                }
                 tickets.addEvent(ticketId, actor.id(), actor.name(),
                     TicketEventKind.FULLY_PAID, s.status(), s.status(), null);
                 maybeAdvanceClosedPaid(s, true, actor);
@@ -1021,18 +1264,59 @@ public class TicketService {
         if (paid.signum() <= 0 || "FULLY_PAID".equals(s.paymentStatus())) {
             return;
         }
+        // Rule 5: null is no longer a valid starting point for anything but CUSTOMER_CONFIRMED.
+        // A bare drop of the old "s.paymentStatus() == null ||" leading clause would NOT be
+        // enough on its own: the bypass-policy clause below is unconditional on paymentStatus, so
+        // it would silently re-admit a null paymentStatus for any bypass-policy deal (an account
+        // payment recorded before confirmCustomer ever ran) straight into an illegal
+        // null -> AWAITING_FINAL_PAYMENT call below. Guarded explicitly instead.
         boolean eligibleForDepositAdvance =
-            s.paymentStatus() == null
-                || "CUSTOMER_CONFIRMED".equals(s.paymentStatus())
-                || "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
-                || DepositPolicy.bypassesDepositNotice(s.depositPolicy());
-        if (eligibleForDepositAdvance && !"DEPOSIT_PAID".equals(s.paymentStatus())) {
-            tickets.updatePaymentStatus(ticketId, "DEPOSIT_PAID");
+            s.paymentStatus() != null
+                && ("CUSTOMER_CONFIRMED".equals(s.paymentStatus())
+                    || "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
+                    || DepositPolicy.bypassesDepositNotice(s.depositPolicy()));
+        // The idempotency guard MUST compare against the policy-resolved target, not the
+        // DEPOSIT_PAID literal. On a bypass policy the target is AWAITING_FINAL_PAYMENT, so a
+        // literal comparison never matches and a SECOND partial payment re-enters this block,
+        // asking PaymentTrack for an AWAITING_FINAL_PAYMENT -> AWAITING_FINAL_PAYMENT self-loop
+        // it correctly refuses -> IllegalStateException -> 500, and because recordPayment is
+        // @Transactional the receipt insert rolls back too, so the instalment cannot be recorded
+        // at all. Found by adversarial review; the pre-existing test records only ONE partial
+        // payment, which is why the suite was green.
+        String depositTarget = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
+            ? PaymentTrack.AWAITING_FINAL_PAYMENT
+            : PaymentTrack.DEPOSIT_PAID;
+        if (eligibleForDepositAdvance && !depositTarget.equals(s.paymentStatus())) {
+            // ⚠ Semantic change (site 6): the bypass path has no DEPOSIT_PAID state at all — a
+            // bypass deal's first payment now targets AWAITING_FINAL_PAYMENT, the corresponding
+            // state on that path, instead of the DEPOSIT_PAID literal PaymentTrack now refuses
+            // for a bypass policy. This makes a partially-paid bypass deal visible to the
+            // account role's list scope (ACCOUNT_PENDING_PAYMENT_STATUSES contains
+            // AWAITING_FINAL_PAYMENT, not DEPOSIT_PAID) where it previously was not — see
+            // PaymentTrackIntegrationTest for the real-DB proof. Deliberate; see the branch report.
+            //
+            // Event emission is UNCHANGED from before this branch (per the branch plan: "event
+            // emission stays exactly as it is today at all 7 sites") — TicketEventKind.DEPOSIT_PAID
+            // fires regardless of which literal the walk actually targets, since the business
+            // event is the same ("the deposit-equivalent first payment arrived"); only the
+            // persisted payment_status value differs by policy.
+            int rows = tickets.advancePaymentStatus(
+                ticketId, s.depositPolicy(), s.paymentStatus(), depositTarget);
+            requirePaymentAdvanced(rows);
             tickets.addEvent(ticketId, actor.id(), actor.name(),
                 TicketEventKind.DEPOSIT_PAID, s.status(), s.status(), null);
             autoAdvanceStage(s, DealStage.DEPOSIT_RECEIVED, actor);
-            if ("GOODS_RECEIVED".equals(s.fulfillmentStatus())) {
-                tickets.updatePaymentStatus(ticketId, "AWAITING_FINAL_PAYMENT");
+            // Site 7: only reachable when site 6 targeted DEPOSIT_PAID (REQUIRED policy) — a
+            // bypass deal already landed on AWAITING_FINAL_PAYMENT above, and PaymentTrack has no
+            // AWAITING_FINAL_PAYMENT -> AWAITING_FINAL_PAYMENT self-loop, so this block must not
+            // run again for it. "expected" below is depositTarget — the value JUST written above
+            // in this same method — never the stale s.paymentStatus() read before it (a stale
+            // expected would make the compare-and-set return 0 and wrongly 409 a legitimate flow).
+            if (PaymentTrack.DEPOSIT_PAID.equals(depositTarget)
+                    && "GOODS_RECEIVED".equals(s.fulfillmentStatus())) {
+                int rows2 = tickets.advancePaymentStatus(
+                    ticketId, s.depositPolicy(), depositTarget, PaymentTrack.AWAITING_FINAL_PAYMENT);
+                requirePaymentAdvanced(rows2);
                 tickets.addEvent(ticketId, actor.id(), actor.name(),
                     TicketEventKind.AWAITING_FINAL_PAYMENT, s.status(), s.status(), null);
             }
@@ -1103,8 +1387,13 @@ public class TicketService {
     }
 
     private boolean canConfirmFinalPaymentNow(TicketSummaryDto s) {
+        // Rule 4/5 (payment-track state machine): null may only advance to CUSTOMER_CONFIRMED —
+        // it no longer qualifies as "deposit bypassed" here, even on a bypass policy. A bypass
+        // deal must have confirmCustomer's CUSTOMER_CONFIRMED write behind it before final
+        // payment can walk it on to AWAITING_FINAL_PAYMENT -> FULLY_PAID. Deliberate behaviour
+        // change; see the branch report.
         boolean depositBypassed = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
-            && (s.paymentStatus() == null || "CUSTOMER_CONFIRMED".equals(s.paymentStatus()));
+            && "CUSTOMER_CONFIRMED".equals(s.paymentStatus());
         return "AWAITING_FINAL_PAYMENT".equals(s.paymentStatus())
             || "DEPOSIT_PAID".equals(s.paymentStatus())
             || depositBypassed;
@@ -1116,18 +1405,12 @@ public class TicketService {
     // are the deliberate, user-approved exception — following up the team's deals
     // is exactly this role's job. Never extend it beyond these three methods.
 
-    /** Stages whose manual fallback belongs to the deal owner / sales_manager / ceo. */
-    private static final Set<String> SALES_TARGET_STAGES = Set.of(
-        DealStage.LEAD_APPROACH, DealStage.PRESENTATION, DealStage.SPEC_APPROVED,
-        DealStage.QUOTE_DESIGN_SIDE, DealStage.OWNER_SIGNOFF, DealStage.AWAITING_BUYER,
-        DealStage.QUOTE_BUYER, DealStage.NEGOTIATION, DealStage.ORDER_RECEIVED,
-        DealStage.DELIVERY_SCHEDULING, DealStage.DELIVERED);
-    /** Money stages — manual fallback for account/ceo (normally auto from payment track). */
-    private static final Set<String> ACCOUNT_TARGET_STAGES = Set.of(
-        DealStage.DEPOSIT_RECEIVED, DealStage.CLOSED_PAID);
-    /** Import stage — manual fallback for import/ceo (normally auto from the IR). */
-    private static final Set<String> IMPORT_TARGET_STAGES = Set.of(
-        DealStage.PROCUREMENT);
+    // The three target-stage sets moved to DealStage (SALES_TARGET_STAGES / ACCOUNT_TARGET_STAGES
+    // / IMPORT_TARGET_STAGES) so that the gate a client is TOLD about and the gate that is
+    // ENFORCED are the same object. They are still a permission surface and
+    // requireStageWriteAccess still keys off exactly them; only their home changed. The client's
+    // copy used to be a hand-maintained literal in the frontend's stageMeta.js, which is the drift
+    // this refactor exists to end.
 
     @Transactional
     public TicketDto updateStage(long ticketId, String targetStage, String note, UserPrincipal actor) {
@@ -1135,6 +1418,60 @@ public class TicketService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับสถานะขั้นตอนการขาย '" + targetStage + "'");
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireStageMoveAllowed(s, targetStage, actor);
+        // ONE decision, two messages. This used to be two independent rules — a backward check
+        // with an isRoutineBackwardMove exception bolted on, and a raw `indexOf(target) -
+        // indexOf(current) > 1` skip check. The second one demanded a written justification for
+        // three of the business's four normal routes (an owner buying direct skips S3/S4/S7/S8; a
+        // contractor arriving with a BOQ starts at S8; an in-stock deal skips PROCUREMENT), i.e.
+        // friction on the default path — the same defect isRoutineBackwardMove had already been
+        // patched by hand to fix for exactly one pair. DealStage.requiresJustification now owns
+        // both directions, so there is no second mechanism to keep in step.
+        boolean backward = DealStage.indexOf(targetStage) < DealStage.indexOf(s.salesStage());
+        if (DealStage.requiresJustification(s.salesStage(), targetStage)
+                && (note == null || note.isBlank())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                backward ? "การย้อนสถานะกลับต้องระบุเหตุผล" : "การข้ามขั้นตอนต้องระบุเหตุผล");
+        }
+        // Slice B1 "kill the weekly report" gate (handoff 103): real forward progress on a MANUAL
+        // updateStage — genuinely advancing (target index strictly greater than current) — is
+        // blocked unless the rep has kept the deal's tracking fields current. Deliberately keyed
+        // off a strictly-greater index and nothing else: `backward` above is now purely a message
+        // selector (it no longer carries the isRoutineBackwardMove exception, which moved inside
+        // DealStage.requiresJustification), so this gate must not be expressed as "!backward" —
+        // that would flip the routine QUOTE_DESIGN_SIDE -> SPEC_APPROVED move into the gate. It is
+        // index-wise backward and therefore not forward progress, which is exactly what excludes
+        // it here. autoAdvanceStage (the system-driven path) is a separate method entirely and
+        // never runs through here, so it is never gated by this block.
+        if (DealStage.indexOf(targetStage) > DealStage.indexOf(s.salesStage())) {
+            requireStageAdvanceReadiness(s, tickets.hasActivitySinceLastStageChange(ticketId));
+        }
+        tickets.updateSalesStage(ticketId, targetStage);
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.STAGE_CHANGED, s.salesStage(), targetStage, blankToNull(note));
+        return requireTicket(ticketId);
+    }
+
+    /**
+     * Every gate a manual stage move must clear that does not depend on the note, in the order
+     * {@link #updateStage} has always run them.
+     *
+     * <p>Extracted so that {@link #stageDecisions} can ask the question by <em>calling this and
+     * catching</em> rather than by re-deriving it. That is the whole point of the extraction: a
+     * client that renders "may I move there?" and a server that answers it must not be two
+     * implementations. The frontend previously carried its own copy of the write gate and its own
+     * copy of the note rule, and both had silently gone stale — the copy of the note rule was
+     * still the pre-#704 single hardcoded pair, so the UI demanded a written reason for exactly
+     * the routes this service had just started accepting without one.
+     *
+     * <p>The note rule ({@link DealStage#requiresJustification}) is deliberately NOT here: it is
+     * not a question of whether the move is permitted, only of what must accompany it, and it
+     * surfaces on the decision as {@code requiresReason} rather than as a refusal. The forward
+     * readiness gate is not here either, because {@link #updateStage} runs it AFTER the note rule
+     * and moving it earlier would change which of two 400s a caller sees; see
+     * {@link #requireStageAdvanceReadiness}.
+     */
+    private void requireStageMoveAllowed(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
         requireStageWriteAccess(s, targetStage, actor);
         // Keyed on the lifecycle, not on lost_reason: since V58 the reason SURVIVES
         // a reopen, so a live reopened deal still carries one. Checked before
@@ -1147,38 +1484,222 @@ public class TicketService {
         if (targetStage.equals(s.salesStage())) {
             throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้อยู่ในขั้นตอน " + targetStage + " อยู่แล้ว");
         }
-        boolean backward = DealStage.indexOf(targetStage) < DealStage.indexOf(s.salesStage())
-            && !DealStage.isRoutineBackwardMove(s.salesStage(), targetStage);
-        boolean skipForward = DealStage.indexOf(targetStage) - DealStage.indexOf(s.salesStage()) > 1;
-        if (backward && (note == null || note.isBlank())) {
+        // The fact gate. Deliberately BEFORE the note and tracking-field rules: those two ask
+        // "has the rep done the paperwork?", and a deal whose facts do not support the target stage
+        // must be refused whatever the paperwork says. Ordering it after them would have produced
+        // the misleading pair "write a note" -> "…now the fact is missing", and would have let a
+        // reader mistake the note rule for the thing doing the work.
+        requireStageFactsHold(s, targetStage);
+    }
+
+    /**
+     * The Slice B1 "kill the weekly report" readiness gate, extracted for the same reason as
+     * {@link #requireStageMoveAllowed} — {@link #stageDecisions} calls it and catches.
+     *
+     * <p>{@code hasRecentActivity} is passed in rather than read here so the decision builder can
+     * make the repository round-trip <strong>once</strong> for all fifteen stages instead of
+     * fifteen times; it is the same {@code tickets.hasActivitySinceLastStageChange(ticketId)}
+     * value either way. Deliberately independent of the target stage: the gate asks about the
+     * deal's own bookkeeping, not about where it is going, so every forward target shares one
+     * answer.
+     */
+    private void requireStageAdvanceReadiness(TicketSummaryDto s, boolean hasRecentActivity) {
+        if (s.nextFollowUpAt() == null || !hasRecentActivity) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
-                "การย้อนสถานะกลับต้องระบุเหตุผล");
+                "เลื่อนสถานะไม่ได้: ต้องระบุวันติดตามครั้งถัดไป และบันทึกกิจกรรมอย่างน้อย 1 รายการหลังเปลี่ยนสถานะล่าสุด");
         }
-        if (skipForward && (note == null || note.isBlank())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST,
-                "การข้ามขั้นตอนต้องระบุเหตุผล");
-        }
-        // Slice B1 "kill the weekly report" gate (handoff 103): real forward progress on a MANUAL
-        // updateStage — genuinely advancing (target index strictly greater than current) — is
-        // blocked unless the rep has kept the deal's tracking fields current. Deliberately keyed
-        // off "forward" rather than "!backward": the routine QUOTE_DESIGN_SIDE -> SPEC_APPROVED
-        // move is index-wise backward and so is already excluded by `backward` being false for it,
-        // but it is also not forward progress, so this condition alone (not "!backward") is what
-        // correctly excludes it too. autoAdvanceStage (the system-driven path) is a separate
-        // method entirely and never runs through here, so it is never gated by this block.
-        boolean forward = DealStage.indexOf(targetStage) > DealStage.indexOf(s.salesStage());
-        if (forward) {
-            boolean hasFollowUp = s.nextFollowUpAt() != null;
-            boolean hasRecentActivity = tickets.hasActivitySinceLastStageChange(ticketId);
-            if (!hasFollowUp || !hasRecentActivity) {
-                throw new ApiException(HttpStatus.BAD_REQUEST,
-                    "เลื่อนสถานะไม่ได้: ต้องระบุวันติดตามครั้งถัดไป และบันทึกกิจกรรมอย่างน้อย 1 รายการหลังเปลี่ยนสถานะล่าสุด");
+    }
+
+    /**
+     * Per-stage verdicts for this caller on this deal — one entry for every stage in
+     * {@link DealStage#ORDER}, including the deal's current one.
+     *
+     * <p><strong>This is the client's answer to "where may I move this deal, and what will it
+     * cost me?", and it is produced by running the real gates.</strong> Each entry comes from
+     * calling {@link #requireStageMoveAllowed} (plus {@link #requireStageAdvanceReadiness} for a
+     * forward target) inside a try/catch and reading the verdict off whether an
+     * {@link ApiException} came back — the same technique the removed {@code canSetStage} used for
+     * the write gate alone. There is therefore exactly one implementation of "can this stage be
+     * reached", and a UI rendering these decisions cannot drift from it, because it has nothing
+     * of its own to drift with.
+     *
+     * <p>{@code blockedReason} is the refused call's own message, so the tooltip a rep reads
+     * before clicking is verbatim the error they would have got by clicking. That makes it the one
+     * deliberate exception to "user-facing Thai copy lives in the frontend": only this service
+     * knows <em>why</em> a specific stage is refused, and duplicating fifteen reasons client-side
+     * would recreate the problem this method exists to remove.
+     *
+     * <p>{@code requiresReason} is {@link DealStage#requiresJustification} — not a refusal, a
+     * cost. It is reported even for a blocked stage: whether a note would be needed does not
+     * depend on the gates, and suppressing it would make the field's meaning conditional.
+     *
+     * <p>Cost: one extra {@code hasActivitySinceLastStageChange} query per {@link #actions} call,
+     * hoisted out of the loop. The gates themselves touch no repository — and that is now
+     * <em>enforced</em> rather than merely claimed here:
+     * {@code TicketActionsQueryCountIntegrationTest} counts the SQL a real {@code actions} call
+     * issues against a real Postgres, and fails if any statement runs twice or if the total varies
+     * with the deal's stage. Measured there, the fifteen evaluations cost ~21µs against a ~2.4ms
+     * call — under 1% of the endpoint, about a tenth of a single query round trip — so the loop is
+     * deliberately left as it is. The guard exists for the next edit: a repository call added to
+     * any gate below turns one query into fifteen on the hottest sales endpoint, and every
+     * behavioural test stays green while it happens.
+     */
+    private List<StageDecisionDto> stageDecisions(TicketSummaryDto s, UserPrincipal actor) {
+        boolean hasRecentActivity = tickets.hasActivitySinceLastStageChange(s.id());
+        List<StageDecisionDto> decisions = new ArrayList<>(DealStage.ORDER.size());
+        for (String target : DealStage.ORDER) {
+            String blockedReason = null;
+            try {
+                requireStageMoveAllowed(s, target, actor);
+                if (DealStage.indexOf(target) > DealStage.indexOf(s.salesStage())) {
+                    requireStageAdvanceReadiness(s, hasRecentActivity);
+                }
+            } catch (ApiException e) {
+                blockedReason = e.getMessage();
             }
+            decisions.add(new StageDecisionDto(target, DealStage.displayNoOf(target),
+                blockedReason == null,
+                DealStage.requiresJustification(s.salesStage(), target),
+                blockedReason));
         }
-        tickets.updateSalesStage(ticketId, targetStage);
-        tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.STAGE_CHANGED, s.salesStage(), targetStage, blankToNull(note));
-        return requireTicket(ticketId);
+        return decisions;
+    }
+
+    /**
+     * The four back-half stages a MANUAL {@link #updateStage} may not claim unless the deal's own
+     * recorded fact already holds.
+     *
+     * <p><strong>Why a fact gate and not a transition table.</strong> {@code updateStage} validated
+     * membership only ({@link DealStage#isValid}), so any stage could reach any other — {@code
+     * LEAD_APPROACH -> CLOSED_PAID} in one call cost a note, a follow-up date and one logged
+     * activity, and nothing about the deal's actual state was consulted. A transition table cannot
+     * fix that: the business's real routes branch heavily (the owner buys direct and S3/S4/S7/S8
+     * never happen; a contractor arrives with a BOQ and the deal OPENS at S8; everything ships from
+     * stock and PROCUREMENT is skipped), so a table faithful to them has to permit almost every
+     * forward edge in the front half, including the long jumps. Gating on the fact behind the stage
+     * does what the table cannot, and stays correct when the next route is discovered.
+     *
+     * <p><strong>Exactly four stages, and only these four.</strong> Each already auto-advances FROM
+     * its fact, so the fact is recorded state, not a new concept:
+     *
+     * <ul>
+     *   <li>{@link DealStage#ORDER_RECEIVED} — {@link #confirmCustomer} writes {@code
+     *       CUSTOMER_CONFIRMED}, see {@link #customerOrderVerified};
+     *   <li>{@link DealStage#DEPOSIT_RECEIVED} — {@code reconcilePaymentStatus} advances the
+     *       payment track when money first lands, see {@link #depositReceived};
+     *   <li>{@link DealStage#DELIVERED} — {@code recordDeliveryInternal} advances on
+     *       {@code FULLY_DELIVERED}, i.e. {@link #deliveryGateComplete};
+     *   <li>{@link DealStage#CLOSED_PAID} — {@code FULLY_PAID} <em>and</em> {@code FULLY_DELIVERED},
+     *       see {@link #closedPaidFactsHold}.
+     * </ul>
+     *
+     * <p><strong>Each gate is the same bar its automatic counterpart clears — never a lower one.</strong>
+     * {@link #maybeAdvanceClosedPaid} requires payment AND delivery, so this does too; a manual path
+     * able to claim a stage the automatic path would refuse would invert the whole point.
+     *
+     * <p>{@link DealStage#NEGOTIATION}, {@link DealStage#PROCUREMENT} and {@link
+     * DealStage#DELIVERY_SCHEDULING} stay ungated on purpose: they are operational stages where the
+     * manual fallback is genuinely useful and a wrong value misreports nothing financial. The four
+     * above are the ones where a wrong stage misstates revenue or fulfilment.
+     *
+     * <p><strong>{@link #autoAdvanceStage} is NOT routed through here</strong>, and must never be:
+     * it is the path that fires <em>because</em> the fact just became true, so gating it would be
+     * circular and would break every automatic advance. Only the manual path is affected.
+     *
+     * <p><strong>Keyed on the TARGET only, in both directions.</strong> Landing on {@code DELIVERED}
+     * with nothing delivered misstates fulfilment whether the deal arrived from below or is being
+     * corrected from above, so this does not consult {@code from}. A deal that needs walking back
+     * out of a wrong stage can still be moved to any of the eleven ungated ones.
+     *
+     * <p><strong>Accepted cost:</strong> the manual fallback for these four stages is gone. A deal
+     * whose automation genuinely did not fire can no longer be nudged into them by hand — the
+     * underlying fact has to be recorded first. That is the intended trade, and there is
+     * deliberately no CEO break-glass override: it was not asked for, and it would be a new
+     * capability rather than a repair.
+     */
+    private void requireStageFactsHold(TicketSummaryDto s, String targetStage) {
+        if (DealStage.ORDER_RECEIVED.equals(targetStage) && !customerOrderVerified(s)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "เลื่อนไปขั้นตอน ORDER_RECEIVED ไม่ได้: ยังไม่ได้ยืนยันคำสั่งซื้อของลูกค้า");
+        }
+        if (DealStage.DEPOSIT_RECEIVED.equals(targetStage) && !depositReceived(s)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "เลื่อนไปขั้นตอน DEPOSIT_RECEIVED ไม่ได้: ยังไม่ได้รับชำระมัดจำ");
+        }
+        if (DealStage.DELIVERED.equals(targetStage) && !deliveryGateComplete(s)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "เลื่อนไปขั้นตอน DELIVERED ไม่ได้: ยังส่งมอบสินค้าไม่ครบ");
+        }
+        if (DealStage.CLOSED_PAID.equals(targetStage) && !closedPaidFactsHold(s)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "เลื่อนไปขั้นตอน CLOSED_PAID ไม่ได้: ต้องรับชำระเงินครบและส่งมอบสินค้าครบก่อน");
+        }
+    }
+
+    /**
+     * The fact behind {@link DealStage#ORDER_RECEIVED} (S10): the customer's order is verified.
+     *
+     * <p>There was no existing predicate for this — {@link #canConfirmCustomer} asks the opposite
+     * question ("may this deal still BE confirmed?") — so it is derived from the write the
+     * auto-advance itself keys off: {@link #confirmCustomer} is the one method that both advances
+     * the deal to ORDER_RECEIVED and moves {@code payment_status} to {@code CUSTOMER_CONFIRMED}.
+     *
+     * <p>A non-null payment track is therefore the fact, not merely a correlate of it:
+     * {@code payment_status} starts NULL (V6/V39/V44) and {@link PaymentTrack#canTransition}
+     * admits exactly one edge out of null — to {@code CUSTOMER_CONFIRMED} — on either policy path,
+     * a rule {@code reconcilePaymentStatus} re-states explicitly so a payment recorded before the
+     * customer was confirmed cannot promote the column either. Deliberately expressed through
+     * {@link PaymentTrack#isValid} rather than a bare {@code != null} so that only the five real
+     * states count.
+     */
+    private static boolean customerOrderVerified(TicketSummaryDto s) {
+        return PaymentTrack.isValid(s.paymentStatus());
+    }
+
+    /**
+     * The fact behind {@link DealStage#CLOSED_PAID} (S20), and deliberately the SAME test {@link
+     * #maybeAdvanceClosedPaid} makes: paid in full <em>and</em> the goods actually delivered to the
+     * customer.
+     *
+     * <p>Both halves are required because both halves are what the stage claims. An earlier draft
+     * of this gate tested {@code FULLY_PAID} alone, which left the manual path able to claim a
+     * stage the automatic path would have refused — a fully-paid deal with goods still undelivered.
+     * That inverted the principle this whole gate rests on: a manual move must clear the bar the
+     * automatic move already clears, never a lower one.
+     *
+     * <p>The delivery half is {@link #deliveryGateComplete}, reused rather than re-tested against
+     * the status literal, so this and {@link #requireClosePrerequisites}'s close gate cannot drift
+     * apart on what "delivered" means — the exact drift that predicate was tightened to end.
+     */
+    private boolean closedPaidFactsHold(TicketSummaryDto s) {
+        return PaymentTrack.FULLY_PAID.equals(s.paymentStatus()) && deliveryGateComplete(s);
+    }
+
+    /**
+     * The payment-track states that mean the deposit (or, on a bypass policy, the first money
+     * against the deal) has actually been received — the fact behind {@link
+     * DealStage#DEPOSIT_RECEIVED} (S11).
+     *
+     * <p>Read off the auto-advance site rather than invented: {@code reconcilePaymentStatus}
+     * advances the stage immediately after writing {@code depositTarget}, which is {@code
+     * DEPOSIT_PAID} on the REQUIRED path and {@code AWAITING_FINAL_PAYMENT} on a bypass policy
+     * (that path has no DEPOSIT_PAID state at all). {@code FULLY_PAID} is included because it is
+     * strictly later on both paths — a deal paid in full has necessarily passed this point.
+     *
+     * <p>{@code DEPOSIT_NOTICE_ISSUED} is deliberately absent: issuing the notice is a document,
+     * not a receipt, and {@code confirmDepositPaid} exists precisely because the money is a
+     * separate event.
+     */
+    private static final Set<String> DEPOSIT_RECEIVED_STATES = Set.of(
+        PaymentTrack.DEPOSIT_PAID, PaymentTrack.AWAITING_FINAL_PAYMENT, PaymentTrack.FULLY_PAID);
+
+    /**
+     * See {@link #DEPOSIT_RECEIVED_STATES}. Null-checked before the lookup: {@code Set.of(...)}
+     * is an immutable set whose {@code contains(null)} throws NPE rather than returning false —
+     * the same trap {@link DealStage#requiresJustification} documents for {@code List.of().indexOf}.
+     */
+    private static boolean depositReceived(TicketSummaryDto s) {
+        return s.paymentStatus() != null && DEPOSIT_RECEIVED_STATES.contains(s.paymentStatus());
     }
 
     // ── Deal tracking + activity (V83, Slice B1 "kill the weekly report" — handoff 103) ──────
@@ -1288,11 +1809,34 @@ public class TicketService {
     @Transactional
     public void advanceStageForCustomerQuotationIssue(long ticketId, String recipientType, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
-        if (QuotationRecipient.DESIGNER.equals(recipientType) || QuotationRecipient.OWNER.equals(recipientType)) {
-            autoAdvanceStage(s, DealStage.QUOTE_DESIGN_SIDE, actor);
-        } else if (QuotationRecipient.BUYER.equals(recipientType)) {
-            autoAdvanceStage(s, DealStage.QUOTE_BUYER, actor);
+        String stage = stageForQuotationRecipient(recipientType);
+        if (stage != null) {
+            autoAdvanceStage(s, stage, actor);
         }
+    }
+
+    /**
+     * The one recipient → {@link DealStage} mapping, shared by {@link #generateQuotation} and
+     * {@link #advanceStageForCustomerQuotationIssue}. Those two used to carry a hand-copied
+     * {@code if/else if} each — the second one's Javadoc even claimed they "share one
+     * implementation and can never drift apart", which was not true of duplicated literals.
+     *
+     * <p>V143 splits the recipients that used to collapse together: {@code DESIGNER -> S4},
+     * {@code OWNER -> S5}, {@code BUYER -> S8}. Returns {@code null} for {@code UNSPECIFIED} and
+     * for anything unrecognised — the same "advance nothing" behaviour the old {@code else if}
+     * chain produced by falling off the end.
+     */
+    private static String stageForQuotationRecipient(String recipientType) {
+        if (QuotationRecipient.DESIGNER.equals(recipientType)) {
+            return DealStage.QUOTE_DESIGN_SIDE;
+        }
+        if (QuotationRecipient.OWNER.equals(recipientType)) {
+            return DealStage.QUOTE_OWNER;
+        }
+        if (QuotationRecipient.BUYER.equals(recipientType)) {
+            return DealStage.QUOTE_BUYER;
+        }
+        return null;
     }
 
     private void autoAdvanceStage(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
@@ -1374,19 +1918,29 @@ public class TicketService {
 
     @Transactional
     public TicketDto setEntryChannel(long ticketId, String value, String note, UserPrincipal actor) {
-        if (!EntryChannel.isValid(value)) {
+        // UNSPECIFIED is valid as STORED but never as INPUT: once a channel has been stated it must
+        // not be possible to un-state it. Same guard shape as generateQuotation's
+        // QuotationRecipient.UNSPECIFIED check above — see EntryChannel's Javadoc and V144.
+        if (!EntryChannel.isValid(value) || EntryChannel.UNSPECIFIED.equals(value)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับช่องทางรับงาน '" + value + "'");
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         requireActive(s);
-        boolean changingExistingNonDefault = s.entryChannel() != null
-            && !EntryChannel.DESIGNER_LED.equals(s.entryChannel())
-            && !s.entryChannel().equals(value);
+        // "Changing a STATED channel needs a reason." Both DESIGNER_LED and UNSPECIFIED count as
+        // unstated here and neither requires a note: UNSPECIFIED is the V144 default, and
+        // DESIGNER_LED is the pre-V144 default that was never backfilled (V144's data cutoff), so
+        // an untouched deal reads one or the other purely by age. Dropping UNSPECIFIED from this
+        // list would make the FIRST statement of a channel on every new deal demand a reason.
+        boolean changingExistingNonDefault =
+            entryChannelIsStated(s) && !s.entryChannel().equals(value);
         if (changingExistingNonDefault && (note == null || note.isBlank())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "การเปลี่ยน entry channel ต้องระบุเหตุผล");
         }
         tickets.updateEntryChannel(ticketId, value);
+        // Do not inline this back into setEntryChannel: addPolicyActions reads the SAME predicate
+        // to tell the client whether SET_ENTRY_CHANNEL needs a note, so the advertisement and the
+        // 400 cannot disagree. See entryChannelIsStated.
         String message = "entry_channel → " + value
             + (note != null && !note.isBlank() ? " — " + note.trim() : "");
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -1405,6 +1959,15 @@ public class TicketService {
         requireRole(actor, ACCOUNT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
+        // Rule 4 (payment-track state machine): once a deposit invoice has actually been issued
+        // (or paid, or further), waiving the deposit policy after the fact is no longer a policy
+        // change a rep/account can make retroactively — the customer already has a real document
+        // in hand quoting a deposit; undoing that is a credit note, not a policy flip. Only a
+        // not-yet-started payment track (null) or one still at CUSTOMER_CONFIRMED may waive.
+        if (s.paymentStatus() != null && !PaymentTrack.CUSTOMER_CONFIRMED.equals(s.paymentStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ยกเลิกนโยบายมัดจำไม่ได้: มีการออกใบแจ้งรับมัดจำแล้ว — การแก้ไขต้องออกเป็นใบลดหนี้ ไม่ใช่การเปลี่ยนนโยบาย");
+        }
         tickets.updateDepositPolicy(ticketId, policy, reason.trim(), actor.id());
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(),
@@ -1417,18 +1980,18 @@ public class TicketService {
         if ("ceo".equals(role)) {
             return;
         }
-        if (SALES_TARGET_STAGES.contains(targetStage)) {
+        if (DealStage.SALES_TARGET_STAGES.contains(targetStage)) {
             if ("sales_manager".equals(role)) {
                 return;
             }
             if (SALES_ROLES.contains(role) && s.createdById() == actor.id()) {
                 return;
             }
-        } else if (ACCOUNT_TARGET_STAGES.contains(targetStage)) {
+        } else if (DealStage.ACCOUNT_TARGET_STAGES.contains(targetStage)) {
             if ("account".equals(role)) {
                 return;
             }
-        } else if (IMPORT_TARGET_STAGES.contains(targetStage)) {
+        } else if (DealStage.IMPORT_TARGET_STAGES.contains(targetStage)) {
             if (IMPORT_ROLES.contains(role)) {
                 return;
             }
@@ -1483,6 +2046,10 @@ public class TicketService {
         String message = blankToNull(note) == null
             ? "ยกเลิกดีล (" + reason + ")"
             : "ยกเลิกดีล (" + reason + ") — " + note.trim();
+        // The guard above already excluded the two terminal statuses, which are the only two
+        // TicketStatus.ALLOWED does not let reach CANCELLED.
+        requireStatusAdvanced(
+            tickets.transitionStatus(ticketId, currentStatus, TicketStatus.CANCELLED));
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.CANCELLED, currentStatus, TicketStatus.CANCELLED, message);
         tickets.updateLifecycle(ticketId, DealLifecycle.CANCELLED);
@@ -1659,10 +2226,11 @@ public class TicketService {
         TicketDto ticket = requireViewAccess(ticketId, actor);
         TicketSummaryDto s = ticket.summary();
         List<TicketActionDto> actions = new ArrayList<>();
+        List<StageDecisionDto> decisions = stageDecisions(s, actor);
         boolean active = DealLifecycle.ACTIVE.equals(s.lifecycle());
         if (active) {
             addOperationalActions(actions, ticket, actor);
-            addStageActions(actions, s, actor);
+            addStageActions(actions, decisions);
             addPolicyActions(actions, s, actor);
             // Slice S1 "engine collapse": addQuotationActions (MARK_QUOTATION_SENT/
             // ACCEPTED/REJECTED) was removed — those verbs pointed at retired
@@ -1685,7 +2253,7 @@ public class TicketService {
         }
         TicketActionState state = new TicketActionState(s.lifecycle(), s.salesStage(), s.paymentStatus(),
             s.fulfillmentStatus(), s.status());
-        return new TicketActionsResponse(state, actions);
+        return new TicketActionsResponse(state, actions, decisions);
     }
 
     private void addOperationalActions(List<TicketActionDto> actions, TicketDto ticket, UserPrincipal actor) {
@@ -1749,22 +2317,60 @@ public class TicketService {
         if (canEditItems(s, actor)) actions.add(new TicketActionDto("EDIT_ITEMS", "operational", "แก้ไขรายการ"));
     }
 
-    private void addStageActions(List<TicketActionDto> actions, TicketSummaryDto s, UserPrincipal actor) {
-        for (String target : DealStage.ORDER) {
-            if (target.equals(s.salesStage())) continue;
-            if (canSetStage(s, target, actor)) {
-                actions.add(new TicketActionDto("ADVANCE_STAGE", "stage", "เลื่อนสถานะ", target));
+    /**
+     * ADVANCE_STAGE / UPDATE_STAGE, derived from {@link #stageDecisions} rather than from a second
+     * reading of the gates.
+     *
+     * <p>This used to consult {@code canSetStage} alone — the write gate and nothing else — so it
+     * advertised ADVANCE_STAGE into all four fact-gated stages regardless of whether the fact
+     * held. Clicking one 409'd on {@code requireStageFactsHold}. Advertising an action that dies
+     * on click is worse than not offering it, the same discipline {@link #addOperationalActions}
+     * already documents for the removed legacy actions and {@link #canIssueImportRequest} enforces
+     * by hand; deriving both verbs from the decisions makes it structural instead of remembered.
+     */
+    private void addStageActions(List<TicketActionDto> actions, List<StageDecisionDto> decisions) {
+        boolean any = false;
+        for (StageDecisionDto decision : decisions) {
+            if (decision.allowed()) {
+                actions.add(new TicketActionDto("ADVANCE_STAGE", "stage", "เลื่อนสถานะ", decision.stage()));
+                any = true;
             }
         }
-        if (DealStage.ORDER.stream().anyMatch(target -> !target.equals(s.salesStage()) && canSetStage(s, target, actor))) {
+        if (any) {
             actions.add(new TicketActionDto("UPDATE_STAGE", "stage", "แก้ไขสถานะ", List.of("stage")));
         }
+    }
+
+    /**
+     * "A channel has actually been STATED on this deal" — the state half of
+     * {@link #setEntryChannel}'s {@code changingExistingNonDefault} rule, extracted so the rule has
+     * exactly one definition.
+     *
+     * <p>Both {@link EntryChannel#DESIGNER_LED} and {@link EntryChannel#UNSPECIFIED} count as
+     * UNSTATED: UNSPECIFIED is the V144 column default, and DESIGNER_LED is the pre-V144 default
+     * that was deliberately never backfilled, so an untouched deal reads one or the other purely by
+     * age (see {@link EntryChannel}'s data-cutoff note).
+     *
+     * <p>{@link #addPolicyActions} reads this to advertise whether {@code SET_ENTRY_CHANNEL} needs
+     * a {@code note}, which is the point of extracting it: the client is TOLD the rule instead of
+     * keeping its own copy, and the advertisement cannot drift from the 400 that enforces it.
+     */
+    private static boolean entryChannelIsStated(TicketSummaryDto s) {
+        return s.entryChannel() != null
+            && !EntryChannel.DESIGNER_LED.equals(s.entryChannel())
+            && !EntryChannel.UNSPECIFIED.equals(s.entryChannel());
     }
 
     private void addPolicyActions(List<TicketActionDto> actions, TicketSummaryDto s, UserPrincipal actor) {
         if (canDealOwnership(s, actor)) {
             actions.add(new TicketActionDto("SET_TENDER_REQUIREMENT", "policy", "ตั้งค่าสถานะประมูล", List.of("value")));
-            actions.add(new TicketActionDto("SET_ENTRY_CHANNEL", "policy", "ตั้งค่า entry channel", List.of("value")));
+            // requiredFields is how this action tells the client what setEntryChannel will demand.
+            // A deal whose channel was never stated (UNSPECIFIED, or the pre-V144 DESIGNER_LED
+            // default) may be corrected without a reason; changing a channel someone actually chose
+            // needs one. Advertising it means the UI does not need — and must not keep — its own
+            // copy of that rule. Issue #740.
+            actions.add(new TicketActionDto("SET_ENTRY_CHANNEL", "policy", "ตั้งค่า entry channel",
+                entryChannelIsStated(s) ? List.of("value", "note") : List.of("value")));
         }
         if (ACCOUNT_ROLES.contains(actor.role())) {
             actions.add(new TicketActionDto("WAIVE_DEPOSIT", "policy", "นโยบายมัดจำ", List.of("policy", "reason")));
@@ -1789,9 +2395,17 @@ public class TicketService {
             && !DepositPolicy.bypassesDepositNotice(s.depositPolicy());
     }
 
+    /**
+     * Mirrors {@link #issueImportRequest}'s own deposit-readiness check EXACTLY (down to the
+     * rule-5 null tightening) — this predicate exists only to decide whether to advertise
+     * ISSUE_IMPORT_REQUEST in {@link #actions}. Letting the two drift would advertise an action
+     * that immediately 409s on click, which is worse than not offering it at all (same "never
+     * offer a dead action" discipline {@link #addOperationalActions} already documents for the
+     * removed legacy actions).
+     */
     private boolean canIssueImportRequest(TicketSummaryDto s) {
         boolean depositPolicyBypassesNotice = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
-            && (s.paymentStatus() == null || "CUSTOMER_CONFIRMED".equals(s.paymentStatus()));
+            && "CUSTOMER_CONFIRMED".equals(s.paymentStatus());
         boolean depositReady = "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
             || "DEPOSIT_PAID".equals(s.paymentStatus())
             || depositPolicyBypassesNotice;
@@ -1805,8 +2419,61 @@ public class TicketService {
             && !PaymentStage.FULLY_PAID.equals(s.paymentStage());
     }
 
-    private boolean canReserveStock(TicketDto ticket, UserPrincipal actor) {
+    /**
+     * Who may declare stock coverage on THIS deal — the single source of truth for {@link
+     * #reserveStock}'s gate and for whether {@link #actions} advertises RESERVE_STOCK, so the two
+     * cannot drift into offering an action that immediately 403s (the same discipline {@link
+     * #canIssueImportRequest} documents for 409s).
+     *
+     * <p>Ownership is expressed exactly as {@link #requireDealOwnership}, {@link
+     * #canManageQuotation} and {@link #canConfirmCustomer} express it: a {@code sales} role that
+     * created this deal. {@code sales_manager} is deliberately NOT included even though {@link
+     * #requireDealOwnership} grants it — the ruling is "Sales declares", and the declaration feeds
+     * the owning rep's own STOCK_BONUS input, so letting oversight write another rep's commission
+     * input is a wider grant than was asked for. {@code ceo} keeps access through {@link
+     * #FULFILMENT_ROLES}, not through ownership.
+     */
+    private boolean canDeclareStockCoverage(TicketSummaryDto s, UserPrincipal actor) {
         return FULFILMENT_ROLES.contains(actor.role())
+            || (SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id());
+    }
+
+    /**
+     * The stage floor a stock-coverage declaration must clear, and the single source of truth for
+     * it — {@link #reserveStock}'s 409 and {@link #canReserveStock} (which decides whether {@link
+     * #actions} advertises RESERVE_STOCK) both read this one predicate, exactly as they both read
+     * {@link #canDeclareStockCoverage} for the authorisation half. Applying the floor to only one
+     * of them would put the capability back in the state the widening was careful to avoid: live
+     * but invisible, or advertised and then refused on click.
+     *
+     * <p><strong>Why ORDER_RECEIVED (S10), and why a floor is needed at all.</strong> The
+     * declaration is uncorroborated (see {@link #reserveStock}), yet a full-coverage one reroutes
+     * the deal: {@code fulfillment_status} becomes {@code FROM_STOCK} and {@link #autoAdvanceStage}
+     * — which checks only lifecycle and stage index — jumps it to {@code DELIVERY_SCHEDULING} from
+     * wherever it was, {@code LEAD_APPROACH} included. That also blocks {@link
+     * #issueImportRequest}, whose own guard requires {@code fulfillmentStatus == null}. So on one
+     * rep's word an untouched lead could skip the entire import journey.
+     *
+     * <p>S10 is not an invented threshold: it is where the owner's own flows put the declaration.
+     * The all-from-stock route runs {@code S8 -> S9 -> S10 PO verified -> (deposit?) -> declare
+     * stock -> S18}, and the mixed route runs {@code S10 PO verified -> stock check -> declare or
+     * IR}. Both declare only after the order is verified, which is the substantive reason as well
+     * as the procedural one — before S10 the quantities are not final, so a coverage declaration
+     * is meaningless.
+     *
+     * <p>Nothing above the floor changes: a full-coverage declaration still sets {@code FROM_STOCK}
+     * and still advances to {@code DELIVERY_SCHEDULING}, whoever declares.
+     *
+     * <p>Fails closed on an unknown or null stage ({@link DealStage#indexOf} returns -1), which
+     * {@code sales_stage NOT NULL} since V50 should already make unreachable.
+     */
+    private static boolean stockCoverageStageReached(TicketSummaryDto s) {
+        return DealStage.indexOf(s.salesStage()) >= DealStage.indexOf(DealStage.ORDER_RECEIVED);
+    }
+
+    private boolean canReserveStock(TicketDto ticket, UserPrincipal actor) {
+        return canDeclareStockCoverage(ticket.summary(), actor)
+            && stockCoverageStageReached(ticket.summary())
             && !ticket.items().isEmpty()
             && hasRemainingDelivery(ticket)
             && !FulfilmentStatus.FULLY_DELIVERED.equals(ticket.summary().fulfillmentStatus());
@@ -1905,14 +2572,11 @@ public class TicketService {
                       TicketStatus.PRICE_PROPOSED).contains(s.status());
     }
 
-    private boolean canSetStage(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
-        try {
-            requireStageWriteAccess(s, targetStage, actor);
-            return true;
-        } catch (ApiException e) {
-            return false;
-        }
-    }
+    // canSetStage(s, targetStage, actor) — a try/catch around requireStageWriteAccess — is gone.
+    // It answered a strictly weaker question than the one its only caller (addStageActions) needed:
+    // "may this role write this stage?" rather than "can this deal reach it?", which is why
+    // ADVANCE_STAGE was advertised into fact-gated stages that 409 on click. stageDecisions runs
+    // the full gate chain by the same try/catch technique and addStageActions now reads it.
 
     private TicketDto requireTicket(long id) {
         return tickets.findById(id)
