@@ -18,11 +18,19 @@ test.describe('real data reaches the browser', () => {
   test('hr sees the employee directory served from Postgres', async ({ page }) => {
     await loginAs(page, 'hr');
 
-    // captureJson, not waitForResponse + a later .json(): HR's shell already fetches
-    // /api/employees on the `/` landing (App.jsx:126 → useHrData.js:22), so this waiter can bind
-    // to a response belonging to the document goto() is about to replace — and a deferred read of
-    // an evicted body is the flake this suite hit on 2026-08-08. helpers/network.js has the full
-    // account. Keep the body read eager; do not "simplify" this back to a bare waitForResponse.
+    // Let the landing page's OWN /api/employees settle before we start waiting for ours.
+    // HR's shell fetches it on `/` (App.jsx:126 → useHrData.js:22), so without this the waiter
+    // below binds to that response — one belonging to the document goto() is about to replace —
+    // and Chromium evicts its body during teardown. Reading eagerly inside the predicate (see
+    // helpers/network.js) narrows that window but cannot close it: the predicate itself can run
+    // after teardown has begun. This is the flake that hit on 2026-08-08 and again on 2026-08-14,
+    // where a re-run did NOT clear it — twice on one PR, on a request that answered 200 both times.
+    // Draining first means the only match left is the one /employees itself issues.
+    await page.waitForLoadState('networkidle');
+
+    // captureJson, not waitForResponse + a later .json(): the eager read is still the right
+    // default for anything raced against a navigation. Do not "simplify" this back to a bare
+    // waitForResponse, and do not drop the drain above — they address different halves.
     const [{ status, json }] = await Promise.all([
       // Matched on the exact pathname, not a substring: /employees is also the prefix of
       // several other endpoints, and a substring match silently binds to whichever fires
