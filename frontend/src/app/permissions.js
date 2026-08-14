@@ -133,6 +133,13 @@ const PATH_GUARDS = [
   // "ceo") exactly. This is frontend gating only — see ROLE_PERMISSIONS.canManageAttendanceCalendar
   // in routes.js for the same caveat.
   { test: (p) => p === '/settings/attendance-calendar', can: (u) => hasPermission(u.role, 'canManageAttendanceCalendar') },
+  // §5 announcement PDF upload (LeaveController#uploadPolicyDocument's requireAnyRole(user, "hr",
+  // "ceo") — PR #494's write API, this branch's UI). Its own entry is required, not optional:
+  // canAccessPath fails OPEN for any path no guard claims, and `/settings/attendance-calendar`
+  // above is an EXACT match, so a second `/settings/*` route without its own line would be
+  // reachable by every authenticated role. Frontend gating only — see
+  // ROLE_PERMISSIONS.canManageLeavePolicyDocument for the same caveat.
+  { test: (p) => p === '/settings/leave-policy', can: (u) => hasPermission(u.role, 'canManageLeavePolicyDocument') },
 ];
 
 export function canAccessPath(path, user) {

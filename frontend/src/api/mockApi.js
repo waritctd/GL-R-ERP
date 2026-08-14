@@ -261,6 +261,37 @@ db.deductionShortfalls = db.deductionShortfalls?.length
 // Rows appear the same way they do in production: by someone recording one through the register's
 // PUT half.
 db.deductionConsents = db.deductionConsents || [];
+// §5 announcement PDF store (V133's hr.leave_policy_document + _blob, collapsed into one array
+// since the mock has no reason to split metadata from bytes for I/O cost).
+//
+// EMPTY for the same reason as the register above, and V133 says so outright: rows reach that table
+// only through POST /api/leave/policy-document, which had no client until #744. The table is
+// necessarily empty in EVERY environment, production included — nobody has ever uploaded one.
+db.leavePolicyDocuments = db.leavePolicyDocuments || [];
+db.leavePolicyDocumentSeq = db.leavePolicyDocumentSeq || 1;
+// LeaveController.MAX_POLICY_DOCUMENT_BYTES (10 * 1024 * 1024). Mirrored by value, so it is pinned
+// against the Java constant by mockApi.leavePolicyDocument.test.js — contract.test.js compares
+// method names and parameter counts, never values.
+const MAX_POLICY_DOCUMENT_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Mirrors LeavePolicyDocumentRepository#findCurrent: the latest `effective_from` that is NOT in the
+ * future, tie-broken by document_id DESC.
+ *
+ * The `<= today` half is the load-bearing part and the easy one to drop. A document uploaded with a
+ * FUTURE effective date is stored and returns 200, yet is deliberately not "current" — the previous
+ * version keeps being served until that date arrives. An upload that appears to have done nothing
+ * is exactly the outcome a user would misread as a failure, so the mock reproduces it rather than
+ * treating "most recently uploaded" as current.
+ */
+function currentLeavePolicyDocument() {
+  const today = bangkokTodayIso();
+  return [...db.leavePolicyDocuments]
+    .filter((doc) => doc.effectiveFrom <= today)
+    .sort((a, b) => (
+      b.effectiveFrom.localeCompare(a.effectiveFrom) || b.documentId - a.documentId
+    ))[0] || null;
+}
 db.deductionConsentSeq = db.deductionConsentSeq || 1;
 // Mirrors DeductionWrittenConsentService.CONSENT_APPLICABLE_KINDS, which is itself V107's
 // `CHECK (deduction_kind IN (...))` constraint. The other four PayrollDeductionKind values are
@@ -5440,20 +5471,64 @@ export const api = {
       });
     },
 
-    // Leave-surface IA rebuild, Phase A3: mirrors LeaveController#policyDocument's SHAPE only, not
-    // its authority. The real endpoint's answer depends on server-side storage this mock has no
-    // equivalent of and no file to actually serve — "not supported in mock mode" is the honest
-    // answer here (CLAUDE.md: prefer that over inventing a fake success path), so this always
-    // reports "not uploaded", exactly the state a fresh/unconfigured real deployment is in too. Do
-    // not read an "available" render under mocks as evidence the real endpoint works — verify a
-    // configured deployment against the real backend.
+    // Mirrors LeaveController#policyDocument + LeavePolicyDocumentRepository#findCurrent.
+    //
+    // ── WHY THIS IS NO LONGER A FLAT `false` (2026-08-14, issue #744) ────────
+    // It used to return `false` unconditionally, on the sound reasoning that the mock had no
+    // storage and no file to serve. Adding the UPLOAD half (below) retires that reasoning: the mock
+    // now has exactly one way to hold a document — someone uploading one — which is also the ONLY
+    // way a real environment gets one (V133: rows reach the table through that endpoint alone).
+    //
+    // The DEFAULT is unchanged and deliberately so: with nothing uploaded this still answers
+    // `false`, which is the state production, UAT and a fresh mock session are all in today. It can
+    // only become `true` by way of a real upload in the same session, so this is strictly more
+    // faithful, never more permissive. Availability is computed by findCurrent's own rule rather
+    // than "something was uploaded" — see currentLeavePolicyDocument().
+    //
+    // Still NOT evidence the real endpoint works: no bytes cross a network here.
     async policyDocumentAvailable() {
       requireSession();
-      return delay(false);
+      return delay(!!currentLeavePolicyDocument());
     },
     async downloadPolicyDocument() {
       requireSession();
-      fail('ยังไม่มีการอัปโหลดเอกสารประกาศฉบับนี้ กรุณาติดต่อฝ่ายบุคคล', 404);
+      const current = currentLeavePolicyDocument();
+      // Same message and same 404 the controller raises when findCurrent has nothing to serve —
+      // including the case where a document EXISTS but is future-dated, which is not "current".
+      if (!current) fail('ยังไม่มีการอัปโหลดเอกสารประกาศฉบับนี้ กรุณาติดต่อฝ่ายบุคคล', 404);
+      // NOT wrapped in delay(): that helper round-trips through structuredClone, which does not
+      // preserve a Blob — it arrives as a bare `{}` with no size, type or bytes. Every other
+      // blob-returning method in this file returns directly for the same reason.
+      return new Blob([current.content], { type: current.mimeType });
+    },
+
+    // Mirrors LeaveController#uploadPolicyDocument (issue #744). hr + ceo — `requireAnyRole(user,
+    // "hr", "ceo")` — which is NARROWER than the read above (any authenticated employee).
+    async uploadPolicyDocument(file, effectiveFrom) {
+      hasRole('hr', 'ceo');
+      // The controller's three 400s, in its own order, with its own messages.
+      if (!file || !file.size) fail('ไฟล์ว่างเปล่า', 400);
+      // Mirrors `MediaType.APPLICATION_PDF_VALUE.equals(file.getContentType())` — the CLIENT-DECLARED
+      // type, exactly as weak on the real backend as it is here. The mock deliberately does not
+      // sniff the bytes: being STRICTER than production would hide a request production accepts.
+      if (file.type !== 'application/pdf') fail('รองรับเฉพาะไฟล์ PDF', 400);
+      if (file.size > MAX_POLICY_DOCUMENT_BYTES) fail('ไฟล์มีขนาดใหญ่เกินไป', 400);
+
+      // INSERT, never UPDATE — LeavePolicyDocumentRepository#insert keeps every superseded version
+      // (V133), so this appends rather than replacing. `content` stands in for the blob table.
+      const document = {
+        documentId: db.leavePolicyDocumentSeq++,
+        fileName: file.name || 'leave-policy-announcement.pdf',
+        mimeType: file.type,
+        fileSize: file.size,
+        effectiveFrom,
+        uploadedAt: new Date().toISOString(),
+        content: file,
+      };
+      db.leavePolicyDocuments.push(document);
+      // The controller returns Map.of("document", saved) — metadata only, never the bytes.
+      const { content, ...metadata } = document;
+      return delay({ document: metadata });
     },
 
     // Leave-request composer, Phase C: mirrors LeaveController#calendarContext's SHAPE only, NOT

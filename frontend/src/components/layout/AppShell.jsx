@@ -200,6 +200,11 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // Attendance calendar admin (PR #480's API, this branch's UI): hr.holiday CRUD + the manual
     // BOT-fetch trigger, hr.work_schedule_assignment CRUD. HR/CEO only.
     { path: '/settings/attendance-calendar', label: 'ปฏิทินวันหยุด & ตารางงาน', helper: 'Holiday & work-schedule calendar', icon: 'calendar', group: 'hr', show: hasPermission(user.role, 'canManageAttendanceCalendar') },
+    // §5 announcement PDF upload (issue #744). Sits beside the calendar admin above because they are
+    // the same job — HR/CEO maintaining the rules that govern time and leave — and the same audience.
+    // `fileText` matches the glyph the leave page's own reference bar uses for this document, so the
+    // nav item and the thing it administers read as the same object.
+    { path: '/settings/leave-policy', label: 'ประกาศวันลา (PDF)', helper: 'Leave policy announcement', icon: 'fileText', group: 'hr', show: hasPermission(user.role, 'canManageLeavePolicyDocument') },
     // Split (issue #390): nav visibility follows read access (hr+ceo); CEO lands on a read-only
     // view of the same page (PayrollPage.jsx gates writes on canManagePayroll internally).
     // `exact` because /payroll/deduction-shortfalls below is a SIBLING item, not a detail page of

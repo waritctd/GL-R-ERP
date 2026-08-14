@@ -63,6 +63,7 @@ const PricingRequestDetailPage = lazy(() => import('./features/pricingRequests/P
 // API with no UI at all) — HR/CEO only, gated via canManageAttendanceCalendar. Never gated on
 // SALES_ENABLED: this is attendance/HR-core, not the sales/CRM stack.
 const AttendanceCalendarPage = lazy(() => import('./features/attendanceCalendar/AttendanceCalendarPage.jsx').then(toDefault('AttendanceCalendarPage')));
+const LeavePolicyDocumentPage = lazy(() => import('./features/leave/LeavePolicyDocumentPage.jsx').then(toDefault('LeavePolicyDocumentPage')));
 // e2e-only fixture (#safe-form-primitive review round, F2) — see the component's own doc comment
 // for why it exists. Route registration below is gated on VITE_USE_MOCKS, so this is unreachable
 // in a production build (no VITE_ vars are set there at all) even though the lazy chunk itself
@@ -401,6 +402,13 @@ export function App() {
             <Route
               path="/settings/attendance-calendar"
               element={<AttendanceCalendarPage user={user} showToast={showToast} />}
+            />
+            {/* §5 announcement PDF upload (PR #494's API, this branch's UI, issue #744) — HR/CEO
+                only. A settings route rather than a control on /leave: that page is guarded for
+                every employee, and this is an administrative write on the document governing them. */}
+            <Route
+              path="/settings/leave-policy"
+              element={<LeavePolicyDocumentPage showToast={showToast} />}
             />
             {/* Frozen sales stack — param-wired to keep working / URL-addressable. */}
             {SALES_ENABLED && (

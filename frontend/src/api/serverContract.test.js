@@ -241,12 +241,11 @@ const SERVER_ONLY = {
   // /api/payroll/deduction-consents went in the same week — DeductionConsentsPage.jsx now reaches
   // the read half and DeductionConsentFormModal.jsx the write half (issue #744). The stale-entry
   // test below is what deletes an entry once its endpoint gains a caller.
-  'POST /api/leave/policy-document':
-    'The UPLOAD half of the §5 announcement PDF (PR #494). It has never had a frontend client. V133 says rows reach '
-    + 'the table only through this endpoint, so the table is necessarily empty in every environment. Covered by '
-    + 'LeaveControllerPolicyDocumentIntegrationTest. NOTE the GET half is still called by hrApi — but only by '
-    + 'policyDocumentAvailable/downloadPolicyDocument, which LeavePolicyBar.jsx no longer calls since the PDF was '
-    + 'bundled at frontend/public/policy/ (2026-08-11 owner ruling).',
+  // POST /api/leave/policy-document was the last entry in this block until 2026-08-14 —
+  // LeavePolicyDocumentPage.jsx now reaches it (issue #744), which also re-wires the GET half's
+  // policyDocumentAvailable/downloadPolicyDocument to a screen for the first time since the PDF was
+  // bundled at frontend/public/policy/ (2026-08-11 owner ruling). That bundled copy is still what
+  // the leave page links; this endpoint is the server-side archive of record, not that reader.
 
   // GET/PUT /api/deal-estimate-markup were the two entries here until 2026-08-14. They are gone
   // rather than re-worded: issue #748's owner ruling deleted the controller, repository, DTOs, both
@@ -497,7 +496,10 @@ const UNREACHABLE_FROM_UI = new Set([
   'GET /api/deposit-notices/{}',
   'GET /api/factory-configs',
   'GET /api/factory-quotes/{}',
-  'GET /api/leave/policy-document',
+  // 'GET /api/leave/policy-document' left this list on 2026-08-14: LeavePolicyDocumentPage.jsx
+  // calls policyDocumentAvailable (the HEAD probe the GET mapping answers) and
+  // downloadPolicyDocument, so a screen reaches it again for the first time since the reader bar
+  // switched to the bundled PDF.
   'GET /api/leave/review-summary',
   'GET /api/payroll/deduction-obligations',
   'GET /api/payroll/deduction-obligations/me',

@@ -168,6 +168,23 @@ describe('canAccessPath', () => {
     }
   });
 
+  // Same fail-open shape one directory over: `/settings/attendance-calendar` is an EXACT match, so
+  // a second `/settings/*` route with no PATH_GUARDS entry of its own would be reachable by every
+  // authenticated role. Mirrors LeaveController#uploadPolicyDocument's requireAnyRole(hr, ceo).
+  //
+  // FRONTEND ROUTING ONLY — the server enforces its own gate, and that is not tested here.
+  it('refuses everyone but hr/ceo on the leave-policy upload settings route', () => {
+    expect(canAccessPath('/settings/leave-policy', employee)).toBe(false);
+    expect(canAccessPath('/settings/leave-policy', sales)).toBe(false);
+    expect(canAccessPath('/settings/leave-policy', importer)).toBe(false);
+    expect(canAccessPath('/settings/leave-policy', account)).toBe(false);
+  });
+
+  it('lets hr and ceo reach the leave-policy upload settings route', () => {
+    expect(canAccessPath('/settings/leave-policy', hr)).toBe(true);
+    expect(canAccessPath('/settings/leave-policy', ceo)).toBe(true);
+  });
+
   it('scopes ticket paths to ticket roles', () => {
     expect(canAccessPath('/tickets', sales)).toBe(true);
     expect(canAccessPath('/tickets/12', sales)).toBe(true);

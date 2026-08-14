@@ -191,6 +191,42 @@ export const api = {
       if (!res.ok) throw new Error('Download failed');
       return res.blob();
     },
+    // Uploads a new version of the §5 announcement PDF (issue #744). SAME PATH as the GET above,
+    // different verb — LeaveController maps both onto /policy-document.
+    //
+    // hr + ceo (`requireAnyRole(user, "hr", "ceo")`), unlike the GET, which every authenticated
+    // employee may call: reading the rules that bind you is not the same question as replacing them.
+    //
+    // NEVER overwrites. Each call INSERTs a new row keyed on the `effectiveFrom` given here, so a
+    // superseded announcement stays retrievable by id; only which row answers "current" changes.
+    // "Current" is the latest effective_from that is <= today, so an upload dated in the FUTURE is
+    // stored and returns 200, yet the GET keeps serving the previous version until that date.
+    //
+    // The server accepts only `application/pdf` and caps the body at 10 MB. Both checks read the
+    // CLIENT-DECLARED content type (`MultipartFile#getContentType`), so neither is a guarantee about
+    // the bytes — see LeavePolicyDocumentPage.jsx, which is careful not to promise otherwise.
+    //
+    // Resolves `{ document }` — a LeavePolicyDocumentDto (documentId, fileName, mimeType, fileSize,
+    // effectiveFrom, uploadedAt). Bare fetch() rather than apiRequest because the body is multipart;
+    // csrfHeaders is still required, since CsrfCookieFilter rejects any unsafe /api/ method without
+    // a matching X-XSRF-TOKEN (a leave-submit regression proved a hand-rolled fetch that forgets it
+    // 403s on the real backend while passing under mocks, which never enforce CSRF).
+    uploadPolicyDocument: async (file, effectiveFrom) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('effectiveFrom', effectiveFrom);
+      const res = await fetch(API_ROUTES.leave.policyDocument, {
+        method: 'POST',
+        credentials: 'include',
+        headers: csrfHeaders('POST'),
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'อัปโหลดเอกสารประกาศไม่สำเร็จ');
+      }
+      return res.json();
+    },
     // Phase A4: certificate download for a review row (ReviewQueueTab.jsx) or the requester's own
     // expanded row (MyLeaveTab.jsx). Access (owning employee, or a canReviewEmployee reviewer of
     // them) is enforced entirely server-side — see LeaveService#resolveAttachmentForDownload and
