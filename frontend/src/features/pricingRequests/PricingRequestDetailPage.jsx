@@ -1165,7 +1165,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <strong>{costing.costingCode}</strong>
                   <StatusBadge tone="neutral">เวอร์ชัน {costing.versionNo}</StatusBadge>
                   {(() => {
-                    const status = pricingCostingStatusLabel(costing.status, { stale: costing.stale });
+                    const status = pricingCostingStatusLabel(costing.status);
                     return <StatusBadge tone={status.tone}>{status.label}</StatusBadge>;
                   })()}
                   <span className="text-xs text-text-muted">{costing.totalLandedCostThb != null ? formatCurrency(costing.totalLandedCostThb, 'THB') : '-'}</span>

@@ -212,16 +212,18 @@ export function factoryQuoteStatusLabel(status) {
   return map[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
-export function pricingCostingStatusLabel(status, options = {}) {
+// Status only. There is no header-level staleness to fold in any more: V141 dropped
+// pricing_costing.stale/stale_reason (a cost computed at CEO-review time is current by
+// construction), so the second `options` parameter this took had nothing left to read. The
+// surviving per-LINE staleness is PricingCostingItemDto.overrideStale, rendered elsewhere.
+export function pricingCostingStatusLabel(status) {
   const map = {
     DRAFT: { label: 'ร่างต้นทุน', tone: 'neutral' },
     CALCULATED: { label: 'คำนวณแล้ว', tone: 'warning' },
     SUBMITTED: { label: 'ส่งให้ CEO แล้ว', tone: 'success' },
     CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },
   };
-  const info = map[status] ?? { label: status || '-', tone: 'neutral' };
-  if (!options.stale) return info;
-  return { label: `${info.label} · ต้องคำนวณใหม่`, tone: 'warning' };
+  return map[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
 export function pricingDecisionStatusLabel(status) {
