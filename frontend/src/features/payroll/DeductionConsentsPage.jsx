@@ -247,7 +247,10 @@ export function DeductionConsentsPage({ user, showToast }) {
           <Icon name="info" className="mt-[2px] shrink-0 text-icon-muted" />
           <div className="grid gap-2 text-text-secondary leading-normal">
             <p className="m-0">
-              ทะเบียนนี้บันทึกว่า<strong>ฝ่ายบุคคลมีหนังสือยินยอมของพนักงานเก็บไว้ในแฟ้มหรือไม่</strong>
+              {/* Explicit {' '} after a <strong> that ends a line: JSX strips the newline between an
+                  element and the text line following it, which would run two Thai SENTENCES
+                  together. Thai has no inter-word spaces but does separate clauses this way. */}
+              ทะเบียนนี้บันทึกว่า<strong>ฝ่ายบุคคลมีหนังสือยินยอมของพนักงานเก็บไว้ในแฟ้มหรือไม่</strong>{' '}
               สำหรับการหักเงิน 4 ประเภทที่ต้องขอความยินยอมเป็นหนังสือตาม พ.ร.บ. คุ้มครองแรงงาน ม.76
             </p>
             <p className="m-0">
@@ -256,7 +259,7 @@ export function DeductionConsentsPage({ user, showToast }) {
               การเพิ่มหรือแก้ไขรายการที่นี่ไม่เปลี่ยนสลิปเงินเดือนของใคร
             </p>
             <p className="m-0">
-              โดยเฉพาะคำว่า <strong>“ยังไม่มีหนังสือยินยอม”</strong> เป็นการบันทึกข้อเท็จจริงว่ายังไม่ได้เอกสารมาเก็บเข้าแฟ้ม
+              โดยเฉพาะคำว่า <strong>“ยังไม่มีหนังสือยินยอม”</strong> เป็นการบันทึกข้อเท็จจริงว่ายังไม่ได้เอกสารมาเก็บเข้าแฟ้ม{' '}
               <strong>ไม่ได้ระงับหรือหยุดการหักเงินรายการใด</strong> และไม่ได้แจ้งเตือนไปยังการประมวลผลเงินเดือน
             </p>
             <p className="m-0">
@@ -271,11 +274,24 @@ export function DeductionConsentsPage({ user, showToast }) {
         columns={columns}
         rows={rows}
         getRowKey={(row) => row.id}
-        // `nav-drawer:min-w-[840px] reflow-cards`: the 721-1040px tablet band sits above
-        // useIsMobile's 720px breakpoint, so `mobileCard` does not apply there. Without the
-        // reflow the grid's own minmax() floors would force a bare horizontal scroll at that
-        // width instead of the stacked, data-label-prefixed cards every other DataTable page
-        // gets — see CLAUDE.md's "tablet band hides data two opposite ways" note.
+        // Two separate mechanisms, for two separate bands — verified in a real browser at 768px
+        // rather than assumed, because the obvious reading of `reflow-cards` is wrong:
+        //
+        //   ≤720px         `reflow-cards` + `mobileCard`. styles.css defines `.reflow-cards`
+        //                  ONLY inside `@media (max-width: 720px)`, so this class does nothing
+        //                  above that width. Its own comment there says the table→card fallback
+        //                  is deliberately kept at 720px and that "tablet keeps rendering these
+        //                  as tables".
+        //   721-1040px     stays a TABLE, by that same deliberate decision. The
+        //                  `nav-drawer:min-w-[...]` floor keeps columns readable instead of
+        //                  crushing them, and `Panel`'s `overflow-x: auto` makes the overflow a
+        //                  CONTAINED horizontal scroll (DESIGN.md §13) rather than lost data.
+        //                  Measured at 768px: panel scrollWidth 1012 vs clientWidth 702, every
+        //                  column including both row buttons reachable, and the page body itself
+        //                  does not overflow (documentElement scrollWidth == clientWidth).
+        //
+        // The floor must therefore be wide enough that nothing is CRUSHED, not narrow enough to
+        // avoid scrolling — see CLAUDE.md's "tablet band hides data two opposite ways" note.
         // Tracks must match the column COUNT, which differs by role: HR gets an extra 44px edit
         // column that CEO does not. One template for both would leave CEO's grid a track short of
         // its cells and silently wrap the last column onto a new row.

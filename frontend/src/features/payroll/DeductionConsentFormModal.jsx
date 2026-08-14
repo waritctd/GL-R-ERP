@@ -143,8 +143,12 @@ export function DeductionConsentFormModal({
             มีหนังสือยินยอมของพนักงานเก็บไว้ในแฟ้มแล้ว
           </label>
           <p className="m-0 text-xs text-text-secondary leading-normal">
-            เป็นการบันทึกว่าฝ่ายบุคคลได้เอกสารมาเก็บไว้แล้วหรือยัง
-            <strong>การติ๊กหรือไม่ติ๊กช่องนี้ไม่มีผลต่อการหักเงิน</strong>
+            {/* Explicit {' '} before and after: JSX strips the whitespace between a text line and an
+                element on the next line, which would run two Thai SENTENCES together. Thai has no
+                inter-word spaces but does separate clauses this way, so losing it costs the reader
+                the sentence boundary — on the one sentence that carries the no-effect guarantee. */}
+            เป็นการบันทึกว่าฝ่ายบุคคลได้เอกสารมาเก็บไว้แล้วหรือยัง{' '}
+            <strong>การติ๊กหรือไม่ติ๊กช่องนี้ไม่มีผลต่อการหักเงิน</strong>{' '}
             และไม่เปลี่ยนสลิปเงินเดือนของพนักงาน
           </p>
         </div>

@@ -144,6 +144,22 @@ describe('LeavePolicyDocumentPage', () => {
     expect(screen.queryByText(/ยังไม่ถือเป็นฉบับปัจจุบัน/)).toBeNull();
   });
 
+  // Found by clicking through the real app, not by a failing test: clearing the input's `value`
+  // empties the real <input type="file"> but not FileUploadField's own display state, so the
+  // control kept naming a file it had already consumed while the input behind it was empty — and
+  // the next submit would complain about a missing file the user could still see on screen.
+  it('clears the file field after a successful upload, name and input together', async () => {
+    renderPage();
+    await screen.findByText(/ยังไม่เคยมีการอัปโหลดไฟล์เข้ามาเลย/);
+
+    await fillAndSubmit({ file: pdf('policy-2568.pdf'), date: '2026-08-01' });
+    await screen.findByText('announcement.pdf'); // the success panel, i.e. the upload resolved
+
+    expect(screen.queryByText('policy-2568.pdf')).toBeNull();
+    expect(screen.getByText('ยังไม่ได้เลือกไฟล์')).not.toBeNull();
+    expect(document.getElementById('leave-policy-file').files.length).toBe(0);
+  });
+
   it('surfaces the backend refusal verbatim and keeps the form filled in', async () => {
     api.leave.uploadPolicyDocument.mockRejectedValue(new Error('รองรับเฉพาะไฟล์ PDF'));
     renderPage();

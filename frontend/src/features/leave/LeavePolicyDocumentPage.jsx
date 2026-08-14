@@ -74,6 +74,12 @@ export function LeavePolicyDocumentPage({ showToast }) {
   // probe) — never its name or effective date. There is no metadata endpoint to call; saying less
   // is better than inventing a field, so the detail panel appears only just after an upload.
   const [justUploaded, setJustUploaded] = useState(null);
+  // Remount key for FileUploadField. Clearing `fileRef.current.value` empties the real input but
+  // NOT the field's own internal `fileNames` display state, so after a successful upload the
+  // control went on showing the filename it had just consumed while the input behind it was empty
+  // — submitting again would then complain "กรุณาเลือกไฟล์ PDF" about a file the user could still
+  // see named on screen. Bumping the key remounts the field and resets both together.
+  const [fileFieldKey, setFileFieldKey] = useState(0);
 
   const availabilityQuery = useQuery({
     queryKey: queryKeys.leavePolicyDocumentAvailable(),
@@ -90,6 +96,8 @@ export function LeavePolicyDocumentPage({ showToast }) {
       setEffectiveFrom('');
       setFormError('');
       if (fileRef.current) fileRef.current.value = '';
+      setFileFieldKey((key) => key + 1);
+      setFileError('');
       queryClient.invalidateQueries({ queryKey: queryKeys.leavePolicyDocumentAvailable() });
       showToast?.('อัปโหลดเอกสารประกาศแล้ว');
     },
@@ -148,7 +156,9 @@ export function LeavePolicyDocumentPage({ showToast }) {
           <Icon name="info" className="mt-[2px] shrink-0 text-icon-muted" />
           <div className="grid gap-2 text-text-secondary leading-normal">
             <p className="m-0">
-              หน้านี้ใช้เก็บ<strong>ไฟล์ประกาศฉบับจริงไว้บนเซิร์ฟเวอร์</strong>
+              {/* Explicit {' '}: JSX strips the newline between an element and the following text
+                  line, which would run two Thai SENTENCES together. */}
+              หน้านี้ใช้เก็บ<strong>ไฟล์ประกาศฉบับจริงไว้บนเซิร์ฟเวอร์</strong>{' '}
               ระบบจะเก็บทุกฉบับที่อัปโหลดไว้ตามวันที่มีผลบังคับใช้ ไม่มีการเขียนทับฉบับเดิม
               ทำให้ย้อนดูได้ว่าวันใดใช้ประกาศฉบับไหน
             </p>
@@ -256,6 +266,7 @@ export function LeavePolicyDocumentPage({ showToast }) {
             required
           >
             <FileUploadField
+              key={fileFieldKey}
               id="leave-policy-file"
               ref={fileRef}
               accept="application/pdf,.pdf"
