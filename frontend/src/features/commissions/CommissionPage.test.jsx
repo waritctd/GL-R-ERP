@@ -24,6 +24,11 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         createFromDeal: vi.fn(),
         monthlySummary: vi.fn(),
         simulate: vi.fn(),
+        // Default empty, same reasoning as tickets.list below: every sales_manager/ceo render
+        // (canCreateManual) fires this effect on mount regardless of what a given test is
+        // actually checking, so an unconfigured vi.fn() (resolving to undefined) would throw on
+        // `.then()` in tests that never touch the rep picker at all.
+        reps: vi.fn().mockResolvedValue({ reps: [] }),
       },
       tickets: {
         list: vi.fn().mockResolvedValue({ tickets: [] }),
@@ -57,6 +62,7 @@ function renderPage(user) {
 const hrUser = { id: 900, employeeId: 900, name: 'HR Test', role: 'hr' };
 const salesUser = { id: 10, employeeId: 10, name: 'พนักงานขาย ทดสอบ', role: 'sales' };
 const salesManagerUser = { id: 30, employeeId: 30, name: 'ผู้จัดการฝ่ายขาย ทดสอบ', role: 'sales_manager' };
+const ceoUser = { id: 50, employeeId: 50, name: 'CEO ทดสอบ', role: 'ceo' };
 
 function invoiceDetails(overrides = {}) {
   return {
@@ -554,5 +560,81 @@ describe('CommissionPage — edit-deductions pencil gated on reviewable status (
 
     expect(screen.getByRole('button', { name: 'แก้ไขค่าหัก' })).not.toBeNull();
     expect(screen.getByRole('button', { name: 'ผู้จัดการอนุมัติ' })).not.toBeNull();
+  });
+});
+
+// Issue #737: the manual-commission rep picker used to be derived from api.tickets.list({})'s
+// distinct createdById values, so a rep who owned zero deals -- e.g. a sales manager receiving a
+// MANAGER-kind commission -- never appeared, with no message saying the list was partial. It is
+// now served by a dedicated endpoint, api.commissions.reps() (CommissionController#reps),
+// independent of tickets entirely.
+//
+// This is a MOCK-DRIVEN test: it proves the frontend wiring (the effect calls the new endpoint
+// and renders what it returns), NOT the authorization boundary. Per CLAUDE.md, a stubbed
+// api.commissions.reps is not evidence about who the real backend lets call
+// GET /api/commissions/reps -- that is CommissionRepLookupIntegrationTest's job, against real
+// Postgres.
+describe('CommissionPage — manual-commission rep picker (issue #737)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders a rep who owns no deal at all, and selecting it writes the rep\'s id into salesRepId', async () => {
+    api.commissions.list.mockResolvedValue({ commissions: [] });
+    // No employeeCode: CommissionRepOptionDto dropped it (review fix, #737) -- the option shows
+    // ONLY the name now, precisely so there is nothing on screen that could be mistaken for the
+    // separate numeric Employee ID field.
+    api.commissions.reps.mockResolvedValue({
+      reps: [{ id: 777, name: 'ผู้จัดการ ไม่มีดีลเลย' }],
+    });
+
+    renderPage(salesManagerUser);
+
+    await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
+    await waitFor(() => expect(api.commissions.reps).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มค่าคอมด้วยตนเอง/ }));
+
+    // Present by name alone -- proves the rep with no deal reached the option list.
+    expect(await screen.findByText('ผู้จัดการ ไม่มีดีลเลย')).not.toBeNull();
+
+    // api.tickets.list resolves { tickets: [] } by default (top-level mock) -- the OLD
+    // ticket-derived picker could never have shown a rep with no deal. This picker never calls
+    // it at all any more, for any role: proof the rep list no longer depends on tickets.
+    expect(api.tickets.list).not.toHaveBeenCalled();
+
+    // The load-bearing behaviour (review fix, #737): choosing the option must write the rep's
+    // real `id` -- the value createManualCommission actually submits as salesRepId -- into the
+    // numeric Employee ID field. Falsifiable by construction: this asserts the field equals the
+    // STUBBED id (777) verbatim, so a wiring regression that writes anything else (a hardcoded
+    // value, an index, undefined) fails this exact assertion rather than a value coincidentally
+    // matching it.
+    fireEvent.change(screen.getByLabelText(/หรือเลือกจากพนักงานขาย/), { target: { value: '777' } });
+    expect(screen.getByLabelText(/รหัสพนักงาน \(Employee ID\)/).value).toBe('777');
+  });
+
+  // Scope change (owner ruling 2026-08-14, 2nd ruling): ceo and sales_manager now get the
+  // IDENTICAL ฝ่ายขาย list, so there is exactly one picker label -- no more role branching to
+  // distinguish. Proven through ceoUser specifically (the other test above already covers
+  // salesManagerUser) so both roles are exercised somewhere in this file, even though the label
+  // itself no longer varies.
+  it('shows the single ฝ่ายขาย picker label, still pointing at the numeric field, for ceo too', async () => {
+    api.commissions.list.mockResolvedValue({ commissions: [] });
+    api.commissions.reps.mockResolvedValue({
+      reps: [{ id: 888, name: 'พนักงานขาย ตัวอย่าง' }],
+    });
+
+    renderPage(ceoUser);
+
+    await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
+    await waitFor(() => expect(api.commissions.reps).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มค่าคอมด้วยตนเอง/ }));
+
+    expect(await screen.findByText('พนักงานขาย ตัวอย่าง')).not.toBeNull();
+    // Concise (Ploy's request) but still names the scope (ฝ่ายขาย) and still points at the
+    // numeric Employee-ID field for anyone the picker excludes -- dropping either would either
+    // overclaim completeness or silently strand a caller with no way to reach someone.
+    expect(screen.getByText('หรือเลือกจากพนักงานขาย (นอกฝ่ายขายให้กรอกรหัสพนักงานด้านบน)')).not.toBeNull();
   });
 });

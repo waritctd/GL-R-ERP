@@ -426,26 +426,30 @@ export function CommissionPage({ user, showToast }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount, driven by the URL.
   }, [canCreateFromDeal]);
 
-  // Manual commission entry (feat/commission-manual-adjustments): sales_manager/ceo has no
-  // /api/employees access (that's hr-only, see ROLE_PERMISSIONS.canViewEmployees), so the rep
-  // picker is a best-effort convenience list derived from tickets sales_manager/ceo can already
-  // see (canViewTickets), same pattern as AccountCreateFromDeal's eligibleTickets above. It will
-  // not include every employee (e.g. a manager who owns no deals) — the numeric Employee ID
-  // field in the form below is always the authoritative, primary path.
+  // Manual commission entry (feat/commission-manual-adjustments, issue #737): sales_manager/ceo
+  // has no /api/employees access (that's hr-only, see ROLE_PERMISSIONS.canViewEmployees), so the
+  // rep picker is served by a purpose-built read endpoint, GET /api/commissions/reps
+  // (CommissionController#reps), gated to the same sales_manager/ceo roles as this form.
+  //
+  // Owner ruling 2026-08-14 (2nd ruling on this endpoint, after per-caller division scoping):
+  // ceo and sales_manager get the IDENTICAL list -- every ACTIVE employee in ฝ่ายขาย, i.e. the
+  // people who actually earn commission (CommissionService#listManualCommissionRepOptions).
+  // Division MEMBERSHIP, not "has a commission record" -- a brand-new rep, or a manager never
+  // yet paid one, still appears. Still narrower than what POST /api/commissions/manual itself
+  // accepts (that write path's only real restriction is still the sales_rep_id foreign key --
+  // ANY hr.employee id, any division): the numeric Employee ID field below is how to reach
+  // someone the picker excludes on purpose (inactive, or outside ฝ่ายขาย entirely) -- see
+  // ManualCommissionForm's picker label, which says so rather than leaving the limit silent.
   useEffect(() => {
     if (!canCreateManual) return;
     let cancelled = false;
-    api.tickets.list({}).then((response) => {
+    api.commissions.reps().then((response) => {
       if (cancelled) return;
-      const seen = new Map();
-      (response.tickets ?? []).forEach((ticket) => {
-        if (ticket.createdById && !seen.has(ticket.createdById)) {
-          seen.set(ticket.createdById, ticket.createdByName || `#${ticket.createdById}`);
-        }
-      });
-      setRepOptions([...seen.entries()]
-        .map(([id, name]) => ({ id, name }))
-        .sort((a, b) => String(a.name).localeCompare(String(b.name), 'th')));
+      // Do NOT re-sort here. `reps` already arrives ordered by the backend's own ORDER BY
+      // (display name, then id -- CommissionRepository#findActiveSalesRepOptions); a second,
+      // client-side sort could silently disagree with it (e.g. a different locale collation)
+      // rather than being the harmless no-op it looks like.
+      setRepOptions(response.reps ?? []);
     }).catch(() => { if (!cancelled) setRepOptions([]); });
     return () => { cancelled = true; };
   }, [canCreateManual]);
@@ -1389,6 +1393,14 @@ function AccountCreateFromDeal({
  * APPROVED immediately — see CommissionService#createManualCommission. Either way it then flows
  * through the exact same approve/reject controls as a SALE commission (no parallel UI here).
  */
+// Issue #737 scope (owner ruling 2026-08-14, 2nd ruling): ceo and sales_manager now see the
+// IDENTICAL ฝ่ายขาย list, so one label serves both roles -- a role-keyed map would be dead
+// branching now that there is nothing left to branch on. Ploy asked for this copy to be concise;
+// it still has to say the list is scoped (not "everyone") and still has to point at the numeric
+// field above as the way to reach anyone outside ฝ่ายขาย -- dropping either would either overclaim
+// completeness or silently strand a caller with no way to find someone the picker excludes.
+const REP_PICKER_LABEL = 'หรือเลือกจากพนักงานขาย (นอกฝ่ายขายให้กรอกรหัสพนักงานด้านบน)';
+
 function ManualCommissionForm({ form, onChange, repOptions, onSubmit, onCancel, saving }) {
   const isAdjustment = form.kind === 'ADJUSTMENT';
   return (
@@ -1416,7 +1428,7 @@ function ManualCommissionForm({ form, onChange, repOptions, onSubmit, onCancel, 
         </label>
         {repOptions.length > 0 && (
           <label className={formGridSpan2}>
-            หรือเลือกจากรายชื่อ (รายการนี้มาจากดีลที่มีอยู่ อาจไม่ครบทุกคน)
+            {REP_PICKER_LABEL}
             <select value="" onChange={(event) => { if (event.target.value) onChange('salesRepId', event.target.value); }}>
               <option value="">— เลือกพนักงานขาย —</option>
               {repOptions.map((rep) => (
