@@ -11,9 +11,23 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class NotificationRepository {
     private final NamedParameterJdbcTemplate jdbc;
+    /**
+     * Sales-pipeline notifications are emailed as well as shown in-app, and these four {@code
+     * notify*} methods are the only route every one of them takes — see {@link
+     * SalesNotificationMailer} for why the dispatch hangs off the repository rather than the nine
+     * sales services. This collaborator decides nothing about mailboxes; it is told what was
+     * written and routes from there.
+     *
+     * <p>There is deliberately <b>no</b> single-argument constructor. Wiring
+     * {@link SalesNotificationMailer#NO_OP} is how a test says "in-app only", and it has to say so
+     * out loud at the wiring site — a convenience constructor would let a test assert "no mail was
+     * sent" against a collaborator that can never send, which is a green test that proves nothing.
+     */
+    private final SalesNotificationMailer salesMailer;
 
-    public NotificationRepository(NamedParameterJdbcTemplate jdbc) {
+    public NotificationRepository(NamedParameterJdbcTemplate jdbc, SalesNotificationMailer salesMailer) {
         this.jdbc = jdbc;
+        this.salesMailer = salesMailer;
     }
 
     public List<NotificationDto> findByEmployeeId(long employeeId) {
@@ -153,19 +167,15 @@ public class NotificationRepository {
     );
 
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {
-        jdbc.update("""
-            INSERT INTO hr.notification (employee_id, type, title, message, link)
-            VALUES (:employeeId, :type, :title, :message, :link)
-            """,
-            new MapSqlParameterSource()
-                .addValue("employeeId", employeeId)
-                .addValue("type", type)
-                .addValue("title", ticketEventTitle(type))
-                .addValue("message", message)
-                .addValue("link", "/tickets/" + ticketId));
+        notifyEmployeeAt(employeeId, type, message, "/tickets/" + ticketId);
     }
 
     public void notifyEmployeeForPricingRequest(long employeeId, long pricingRequestId, String type, String message) {
+        notifyEmployeeAt(employeeId, type, message, "/pricing-requests/" + pricingRequestId);
+    }
+
+    private void notifyEmployeeAt(long employeeId, String type, String message, String link) {
+        String title = ticketEventTitle(type);
         jdbc.update("""
             INSERT INTO hr.notification (employee_id, type, title, message, link)
             VALUES (:employeeId, :type, :title, :message, :link)
@@ -173,9 +183,14 @@ public class NotificationRepository {
             new MapSqlParameterSource()
                 .addValue("employeeId", employeeId)
                 .addValue("type", type)
-                .addValue("title", ticketEventTitle(type))
+                .addValue("title", title)
                 .addValue("message", message)
-                .addValue("link", "/pricing-requests/" + pricingRequestId));
+                .addValue("link", link));
+        // The Thai TITLE, never `type`. `type` is a machine code (PRICING_DECISION_APPROVED) and
+        // mailing it would put a raw enum in a subject line at real people — the exact defect a
+        // previous round shipped when TRAVEL_PER_DIEM reached employees. Passing the same string the
+        // in-app row stores also means the bell and the inbox can never disagree about what happened.
+        salesMailer.emailForEmployee(employeeId, title, message, link);
     }
 
     /**
@@ -208,21 +223,31 @@ public class NotificationRepository {
             case "sales"  -> "d.source_code ILIKE 'SA%'";
             default -> null;
         };
+        // An unrecognised role writes nothing and mails nothing — the two channels stay in step even
+        // on the do-nothing path.
         if (divisionFilter == null) return;
 
-        jdbc.update("""
+        String title = ticketEventTitle(type);
+        // RETURNING, so the mail router is handed the employees that ACTUALLY received a row rather
+        // than a second query's guess at them. Only the `sales` branch reads the ids (it delivers per
+        // rep); import/account/ceo route to a fixed address and deliberately mail even when this
+        // comes back empty — see SalesNotificationMailRouter.
+        List<Long> notified = jdbc.queryForList("""
             INSERT INTO hr.notification (employee_id, type, title, message, link)
             SELECT e.employee_id, :type, :title, :message, :link
               FROM hr.employee e
               LEFT JOIN hr.division d ON d.division_id = e.division_id
               LEFT JOIN hr.position p ON p.position_id = e.position_id
              WHERE (%s) AND e.is_active = TRUE
+            RETURNING employee_id
             """.formatted(divisionFilter),
             new MapSqlParameterSource()
                 .addValue("type", type)
-                .addValue("title", ticketEventTitle(type))
+                .addValue("title", title)
                 .addValue("message", message)
-                .addValue("link", link));
+                .addValue("link", link),
+            Long.class);
+        salesMailer.emailForRole(role, notified, title, message, link);
     }
 
     private String ticketEventTitle(String type) {

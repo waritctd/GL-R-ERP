@@ -6,8 +6,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 
@@ -65,18 +63,11 @@ public class NotificationService {
         }
     }
 
+    // Behaviour unchanged — the deferral moved verbatim into AfterCommit so the sales-pipeline mail
+    // router shares one implementation with this path instead of copying it.
     private void sendEmailAfterCommit(long employeeId, String to, String recipientName, String subject, String body,
                                       String link) {
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            emailService.send(employeeId, to, recipientName, subject, body, link);
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                emailService.send(employeeId, to, recipientName, subject, body, link);
-            }
-        });
+        AfterCommit.run(() -> emailService.send(employeeId, to, recipientName, subject, body, link));
     }
 
     private void validate(long employeeId, String type, String subject, String body) {

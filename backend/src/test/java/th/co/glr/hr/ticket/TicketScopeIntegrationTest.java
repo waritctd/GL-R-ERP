@@ -34,6 +34,7 @@ import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PriceCalcConfigRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
@@ -74,7 +75,7 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
     @BeforeEach
     void wireRealCollaborators() {
         tickets = new TicketRepository(jdbc);
-        NotificationRepository notifications = new NotificationRepository(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         CustomerRepository customers = new CustomerRepository(jdbc);
         PricingRequestRepository pricingRequests = new PricingRequestRepository(jdbc);
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);

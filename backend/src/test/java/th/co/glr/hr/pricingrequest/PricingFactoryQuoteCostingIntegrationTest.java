@@ -52,6 +52,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRequests.StartNegotiationRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PriceCalcConfigRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
@@ -110,7 +111,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     void wireServicesAndCreateDeal() {
         tickets = new TicketRepository(jdbc);
         pricingRequests = new PricingRequestRepository(jdbc);
-        NotificationRepository notifications = new NotificationRepository(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         CustomerRepository customers = new CustomerRepository(jdbc);
         ProjectRepository projects = new ProjectRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(
@@ -629,7 +630,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         assertThat(factoryQuoteService.claimDispatch(dispatchId)).isTrue();
         factoryQuoteService.attemptSend(dispatchId);
 
-        NotificationRepository throwingNotifications = new NotificationRepository(jdbc) {
+        NotificationRepository throwingNotifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP) {
             @Override
             public void notifyByRoleForPricingRequest(String role, long pricingRequestIdArg, String type, String message) {
                 throw new RuntimeException("simulated notification failure");
