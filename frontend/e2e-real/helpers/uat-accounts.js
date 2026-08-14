@@ -9,9 +9,9 @@
 // and none of the @demo.invalid accounts exist there.
 //
 // ── This table is a HAND-COPY, and that is a real risk ───────────────────────────────────────
-// The UAT seed (V900 + V908) lives ONLY on the `uat` branch. A branch cut from `main` cannot
-// import it, diff against it, or verify it — unlike accounts.js, which sits next to the seed it
-// mirrors. Two failure modes follow, and only one is caught cheaply:
+// The UAT seed (V912) lives ONLY on the `uat` branch. A branch cut from `main` cannot import it,
+// diff against it, or verify it — unlike accounts.js, which sits next to the seed it mirrors.
+// Two failure modes follow, and only one is caught cheaply:
 //
 //   • An employee's DIVISION changes → the persona resolves to a different role. CAUGHT: the
 //     session capture in global-setup.js asserts `user.role === role` and aborts naming both.
@@ -21,7 +21,7 @@
 //     why global-setup aborts on the FIRST login failure instead of trying all five.
 //
 // If UAT's seed is re-authored, re-derive this table from
-// `git show uat:backend/src/main/resources/db/migration-uat/V900__uat_reference_and_employees.sql`.
+// `git show uat:backend/src/main/resources/db/migration-uat/V912__uat_e2e_test_personas.sql`.
 //
 // ── Roles are DERIVED, never stored ──────────────────────────────────────────────────────────
 // DivisionAccessPolicy.roleFor() computes the role at login from the employee's division code and
@@ -47,36 +47,46 @@
  */
 export const UAT_SALES_ROLES = ['sales', 'import', 'ceo', 'account', 'sales_manager'];
 
-/** Mirrors db/migration-uat/V900 (+V908) on the `uat` branch. See the header on drift. */
+/**
+ * Mirrors db/migration-uat/V912__uat_e2e_test_personas.sql on the `uat` branch.
+ *
+ * NOT V900's @uat.glr personas — those are GONE from the deployed UAT database. Measured
+ * 2026-08-15: zero rows match '%@uat.glr' while flyway_schema_history still records V900–V911 as
+ * applied, because UAT's hr.employee was rebuilt from PRODUCTION on top of the seed. This table
+ * previously named them, and no password could ever have worked.
+ *
+ * V912 exists so this suite never logs in as a real employee: UAT now carries 207 production-
+ * derived people, personal gmail/hotmail addresses included. `.invalid` is reserved by RFC 2606
+ * and can never receive mail, which is the point.
+ */
 export const UAT_PERSONAS = {
-  sales: { email: 'sales@uat.glr', employeeCode: 'GLR-0005', division: 'SA' },
+  sales: { email: 'e2e-sales@e2e.invalid', employeeCode: 'E2E-0001', division: 'SA' },
   // SA + a position containing ผู้จัดการ — that position string is the ONLY thing separating this
-  // persona from `sales` above, and it is what DivisionAccessPolicy.isManager() keys on.
-  sales_manager: { email: 'salesmgr@uat.glr', employeeCode: 'GLR-0007', division: 'SA' },
-  import: { email: 'import@uat.glr', employeeCode: 'GLR-0004', division: 'PCIM' },
-  ceo: { email: 'ceo@uat.glr', employeeCode: 'GLR-0001', division: 'MD' },
-  account: { email: 'account@uat.glr', employeeCode: 'GLR-0013', division: 'AC' },
+  // persona from `sales` above, and it is what DivisionAccessPolicy.isManager() keys on. V912's
+  // own final DO block asserts this derives `sales_manager` and refuses to seed if it does not:
+  // a sales rep silently promoted to manager would invert every "a plain rep cannot" assertion.
+  sales_manager: { email: 'e2e-salesmgr@e2e.invalid', employeeCode: 'E2E-0002', division: 'SA' },
+  import: { email: 'e2e-import@e2e.invalid', employeeCode: 'E2E-0003', division: 'PCIM' },
+  ceo: { email: 'e2e-ceo@e2e.invalid', employeeCode: 'E2E-0005', division: 'MD' },
+  account: { email: 'e2e-account@e2e.invalid', employeeCode: 'E2E-0004', division: 'AC' },
 };
 
 /**
  * The shared UAT persona password, from E2E_UAT_PASSWORD.
  *
- * ⚠️ HONESTY NOTE — this is hygiene, NOT secrecy, and the distinction matters because writing it
- * down as a secret would be a lie a future reader could act on. A shared UAT password is already
- * published in plaintext on the `uat` branch: in V900's header, in the `htpasswd -nbBC 10` line of
- * V907__uat_clear_forced_password_change.sql, in V908's comment, and in UAT_Accounts.md. This
- * repository is public. Nothing in this file can make it secret, and nobody should believe it has.
+ * ⚠️ THIS ONE IS ACTUALLY A SECRET, unlike the old @uat.glr shared password.
  *
- * Do not "helpfully" default this function to the seed's value anyway. Not because the seed is
- * known wrong — V907 is the migration that sets the shared hash and is the best written record —
- * but because a DEFAULT converts "someone forgot the env var" into a silent login attempt with a
- * possibly-stale value, spending the 5-per-account / 20-per-IP budget to discover it. An explicit
- * error costs nothing and says what to do. Whoever runs UAT is the authority on the live value.
+ * That distinction is the whole reason V912 exists in the shape it does. V900/V907/V908 published
+ * a working UAT password in plaintext in a PUBLIC repository. That was survivable only while UAT
+ * held synthetic data; it stopped being survivable when UAT was rebuilt from production and began
+ * holding 207 real people's records. V912 therefore seeds its personas with password_hash NULL —
+ * they authenticate to nothing until someone sets one by hand — and that value is never committed
+ * anywhere.
  *
- * Keeping it out of the checked-in suite buys two real things and no more:
- *   1. Rotating it is an environment change, not a code change plus a merge.
- *   2. The harness does not add a SECOND copy for someone to find, grep, and mirror again — the
- *      same "a constant mirrored into a second file has no guard" shape this repo keeps hitting.
+ * So do not default this function, and do not "restore" a published value into it. A default
+ * converts "someone forgot the env var" into a silent login attempt, spending the 5-per-account /
+ * 20-per-IP budget to discover it; a committed value hands anyone with repo access a session on a
+ * database full of personal data. An explicit error costs nothing and says what to do.
  */
 export function uatPassword() {
   const value = process.env.E2E_UAT_PASSWORD;
@@ -88,14 +98,14 @@ export function uatPassword() {
         '      E2E_BASE_URL=https://<uat-frontend-host> \\\n' +
         '      E2E_UAT_PASSWORD=... \\\n' +
         '      npm run test:e2e:uat\n\n' +
-        '  It is the shared password for the @uat.glr personas. The best written record is\n' +
-        '  db/migration-uat/V907__uat_clear_forced_password_change.sql on the `uat` branch --\n' +
-        '  it is the migration that resets every persona to the shared hash, and it documents\n' +
-        '  the plaintext it was generated from.\n\n' +
-        '  ⚠️ But a MIGRATION describes the seed, not necessarily the running database. V907\n' +
-        '  itself notes it overwrites any password a tester has since chosen -- which is only\n' +
-        '  true if someone re-runs it. If the documented value is refused, ask whoever runs UAT\n' +
-        '  rather than trying variations: each attempt spends part of the budget below.\n\n' +
+        '  This is the password set on the E2E-* personas that V912 seeds. It is deliberately\n' +
+        '  NOT in the repository and never will be: V912 leaves password_hash NULL, and whoever\n' +
+        '  runs UAT sets it once by hand (see that migration\'s header for the UPDATE). A working\n' +
+        '  credential committed here would be a public access path to a database holding\n' +
+        '  production-derived personal data.\n\n' +
+        '  If you do not have it, ask whoever runs UAT -- do not try the values published in\n' +
+        '  V900/V907 for the old @uat.glr personas. Those accounts no longer exist in that\n' +
+        '  database, so every attempt is a guaranteed 401 that spends the budget below.\n\n' +
         '  ⚠️ Do NOT guess it. LoginRateLimitFilter counts 5 failures per account and 20 per\n' +
         '  client IP inside a 900-second window, counting 401s AND 403s. A lockout on UAT hits\n' +
         '  real testers and cannot be cleared by restarting anything you control — the tracker is\n' +
