@@ -184,6 +184,10 @@ export const API_ROUTES = {
   pricingFormulaConfig: {
     get: '/api/pricing-formula-config',
     update: '/api/pricing-formula-config',
+    // Per-row freight add/delete (issue #436, PR #455). Both return the WHOLE config as a NEW
+    // version — every freightRateId is reissued. Mirrors PricingFormulaConfigController.
+    freightRates: '/api/pricing-formula-config/freight-rates',
+    freightRate: (freightRateId) => `/api/pricing-formula-config/freight-rates/${freightRateId}`,
   },
   attachments: {
     list: (ticketId) => `/api/tickets/${ticketId}/attachments`,
@@ -333,6 +337,11 @@ export const API_ROUTES = {
     pricingDecisionRecalculate: (id) => `/api/pricing-decisions/${id}/recalculate`,
     pricingDecisionApprove: (id) => `/api/pricing-decisions/${id}/approve`,
     pricingDecisionReturnToImport: (id) => `/api/pricing-decisions/${id}/return-to-import`,
+    // V141 "CEO owns costing" (PR #702). recalculate-cost is the CEO-side successor to the
+    // severed /pricing-costings/{}/recalculate; cost-override is genuinely new per-line behaviour.
+    pricingDecisionRecalculateCost: (id) => `/api/pricing-decisions/${id}/recalculate-cost`,
+    pricingDecisionItemCostOverride: (decisionId, itemId) =>
+      `/api/pricing-decisions/${decisionId}/items/${itemId}/cost-override`,
     // Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationController.
     customerQuotations: (id) => `/api/pricing-requests/${id}/quotations`,
     customerQuotation: (id) => `/api/customer-quotations/${id}`,

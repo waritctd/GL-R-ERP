@@ -334,6 +334,8 @@ export const api = {
   pricingFormulaConfig: {
     get: () => apiRequest(API_ROUTES.pricingFormulaConfig.get),
     update: (payload) => apiRequest(API_ROUTES.pricingFormulaConfig.update, { method: 'POST', body: payload }),
+    addFreightRate: (payload) => apiRequest(API_ROUTES.pricingFormulaConfig.freightRates, { method: 'POST', body: payload }),
+    deleteFreightRate: (freightRateId) => apiRequest(API_ROUTES.pricingFormulaConfig.freightRate(freightRateId), { method: 'DELETE' }),
   },
   attachments: {
     list: (ticketId) => apiRequest(API_ROUTES.attachments.list(ticketId)),
@@ -721,6 +723,11 @@ export const api = {
     recalculatePricingDecision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionRecalculate(id), { method: 'POST', body: payload }),
     approvePricingDecision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionApprove(id), { method: 'POST', body: payload }),
     returnPricingDecisionToImport: (id, payload) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionReturnToImport(id), { method: 'POST', body: payload }),
+    // V141 "CEO owns costing" (PR #702). No request body — PricingDecisionController.recalculateCost
+    // takes none.
+    recalculatePricingDecisionCost: (id) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionRecalculateCost(id), { method: 'POST' }),
+    overridePricingDecisionItemCost: (decisionId, itemId, payload) =>
+      apiRequest(API_ROUTES.pricingRequests.pricingDecisionItemCostOverride(decisionId, itemId), { method: 'PUT', body: payload }),
     // Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationController.
     createCustomerQuotation: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotations(id), { method: 'POST', body: payload }),
     listCustomerQuotations: (id) => apiRequest(API_ROUTES.pricingRequests.customerQuotations(id)),

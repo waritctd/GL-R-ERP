@@ -236,20 +236,6 @@ const SERVER_ONLY = {
   'POST /api/pricing-requests/{}/factory-purchase-orders': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
 
   // ── Built backend-first; the UI pass has not landed ───────────────────────
-  'POST /api/pricing-decisions/{}/recalculate-cost':
-    'V141 "CEO owns costing" (PR #702, 2026-08-13). This REPLACES the severed POST /api/pricing-costings/{}/recalculate '
-    + 'that hrApi still calls — see CALLS_DEPRECATED below, which is the other half of the same unfinished migration. '
-    + 'Covered by PricingDecisionIntegrationTest and PricingCostingAuthzIntegrationTest.',
-  'PUT /api/pricing-decisions/{}/items/{}/cost-override':
-    'V141 (PR #702). Genuinely new behaviour, not a duplicate: a per-line manual cost sitting BESIDE the computed '
-    + 'figure, which it never destroys, with a mandatory reason and staleness re-stamping. No routes.js entry, so '
-    + 'e2e-real\'s API_ROUTES-derived sweep cannot see it either. Awaiting the frontend pass.',
-  'POST /api/pricing-formula-config/freight-rates': 'Freight-row add/delete, PR #455. See the DELETE entry below.',
-  'DELETE /api/pricing-formula-config/freight-rates/{}':
-    'Per-row add/delete for the freight matrix (issue #436, PR #455 — which touched 3 backend files and 0 frontend). '
-    + 'CeoSettingsPage.jsx still edits freight AMOUNT ONLY through the whole-config write, so V109\'s six blank cells '
-    + 'remain unfillable and a new origin country still needs a migration — the exact gap #436 set out to close. '
-    + 'Covered by PricingFormulaConfigControllerTest and PricingFormulaConfigFreightRowIntegrationTest.',
   'GET /api/payroll/deduction-consents': 'Written-consent record, issue #376. See the PUT entry below.',
   'PUT /api/payroll/deduction-consents':
     'HR bookkeeping of which deductions have written employee consent on file (issue #376, PR #411). Deliberately a '

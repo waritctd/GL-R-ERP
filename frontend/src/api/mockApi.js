@@ -576,6 +576,138 @@ function sortedFormulaConfig(config) {
   };
 }
 
+// ── Freight-row add/delete (issue #436, PR #455) — mirrors PricingFormulaConfigController's new
+// endpoints exactly, including the fact that neither mutates in place: both derive the full
+// freight list from the current version and write a COMPLETE NEW version, reissuing a fresh id
+// for EVERY row (freight AND duty AND clearance) — never just the freight rows that changed. This
+// validation is a NON-AUTHORITATIVE approximation of the server's; a green run here is never
+// evidence the real endpoint would also accept the payload.
+
+/**
+ * Rebuilds the whole config as a NEW version, substituting `freightRows` in for the freight
+ * child list. Every scalar (buffers, margin, effectiveFrom, ...) and every duty/clearance row
+ * carries over from `current` verbatim in VALUE — but duty/clearance rows are still re-keyed with
+ * a fresh id via formulaDutyRow/formulaClearanceRow, same as pricingFormulaConfig.update above,
+ * because "never mutate an existing version's children in place" applies to every child table,
+ * not just the one this call happens to be touching.
+ */
+function createNewFormulaConfigVersion(current, freightRows) {
+  const maxVersion = Math.max(0, ...mockPricingFormulaConfigVersions.map((c) => c.version));
+  mockPricingFormulaConfigVersions.forEach((c) => { c.isCurrent = false; });
+  const newConfig = {
+    formulaConfigId: mockFormulaConfigSeq++,
+    version: maxVersion + 1,
+    insuranceValueFactor: current.insuranceValueFactor,
+    insuranceRate: current.insuranceRate,
+    insuranceBuffer: current.insuranceBuffer,
+    costBuffer: current.costBuffer,
+    sellingBuffer: current.sellingBuffer,
+    defaultMarginPct: current.defaultMarginPct,
+    sellingPriceRoundUpTo: current.sellingPriceRoundUpTo,
+    isCurrent: true,
+    effectiveFrom: current.effectiveFrom,
+    updatedAt: new Date().toISOString(),
+    freightRates: freightRows.map((r) => formulaFreightRow(
+      r.originCountry, r.thicknessMinMm, r.thicknessMaxMm, r.qtyMinSqm, r.qtyMaxSqm, r.amountThb)),
+    dutyRates: current.dutyRates.map((d) => formulaDutyRow(d.productType, d.productLabel, d.dutyPct)),
+    clearanceFees: current.clearanceFees.map((c) => formulaClearanceRow(c.qtyMinSqm, c.qtyMaxSqm, c.amountThb)),
+  };
+  mockPricingFormulaConfigVersions.push(newConfig);
+  return newConfig;
+}
+
+/**
+ * Half-open [min, max) overlap test — mirrors PricingFormulaConfigController#bandsOverlap
+ * exactly, including the strict "<" that keeps contiguous bands ([1,101) and [101,451)) from
+ * being flagged as overlapping.
+ */
+function freightBandsOverlap(aMin, aMax, bMin, bMax) {
+  const aMinLtBMax = bMax == null || aMin < bMax;
+  const bMinLtAMax = aMax == null || bMin < aMax;
+  return aMinLtBMax && bMinLtAMax;
+}
+
+/** Mirrors PricingFormulaConfigController#validate's band-ordering + per-country pairwise overlap
+ * check, run against the WHOLE resulting matrix (not just the row being added). */
+function validateFreightRates(rows) {
+  for (const row of rows) {
+    if (row.thicknessMinMm >= row.thicknessMaxMm) {
+      fail(`ช่วงความหนาไม่ถูกต้อง: ${row.originCountry} ${row.thicknessMinMm}-${row.thicknessMaxMm}`, 400);
+    }
+    if (row.qtyMaxSqm != null && row.qtyMinSqm >= row.qtyMaxSqm) {
+      fail(`ช่วงจำนวน (ตร.ม.) ไม่ถูกต้อง: ${row.originCountry} ${row.thicknessMinMm}-${row.thicknessMaxMm}`, 400);
+    }
+  }
+  const byCountry = new Map();
+  for (const row of rows) {
+    if (!byCountry.has(row.originCountry)) byCountry.set(row.originCountry, []);
+    byCountry.get(row.originCountry).push(row);
+  }
+  for (const [country, group] of byCountry) {
+    for (let i = 0; i < group.length; i += 1) {
+      for (let j = i + 1; j < group.length; j += 1) {
+        const a = group[i];
+        const b = group[j];
+        const thicknessOverlap = freightBandsOverlap(a.thicknessMinMm, a.thicknessMaxMm, b.thicknessMinMm, b.thicknessMaxMm);
+        const qtyOverlap = freightBandsOverlap(a.qtyMinSqm, a.qtyMaxSqm, b.qtyMinSqm, b.qtyMaxSqm);
+        if (thicknessOverlap && qtyOverlap) {
+          fail(
+            `ช่วงความหนาและช่วงจำนวน (ตร.ม.) ซ้อนทับกัน: ${country} `
+            + `หนา ${a.thicknessMinMm}-${a.thicknessMaxMm} มม. (${a.qtyMinSqm}-${a.qtyMaxSqm ?? 'ไม่จำกัด'} ตร.ม.) `
+            + `กับ ${b.thicknessMinMm}-${b.thicknessMaxMm} มม. (${b.qtyMinSqm}-${b.qtyMaxSqm ?? 'ไม่จำกัด'} ตร.ม.)`,
+            400,
+          );
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Mirrors PricingFormulaConfigController#validateRemovalLeavesNoInteriorGap: a row is deletable
+ * only at the lowest or highest qtyMinSqm of its (country, thickness) ladder — and, only when it
+ * is the last row of its thickness band, that thickness band must itself be the lowest or highest
+ * for the country. Trimming an edge is how V109's own seed is shaped (every existing hole is a
+ * trailing one); punching a hole in the middle would silently mis-price an order that lands there.
+ */
+function validateFreightRemovalLeavesNoInteriorGap(all, target) {
+  const sameThicknessBand = all
+    .filter((r) => r.originCountry === target.originCountry
+      && r.thicknessMinMm === target.thicknessMinMm && r.thicknessMaxMm === target.thicknessMaxMm)
+    .sort((a, b) => a.qtyMinSqm - b.qtyMinSqm);
+
+  if (sameThicknessBand.length > 1) {
+    // Compare by id, not by value: two rows can share a qtyMinSqm only if they overlap, which
+    // validateFreightRates already rejects, but an id comparison cannot be fooled either way.
+    const lowestId = sameThicknessBand[0].freightRateId;
+    const highestId = sameThicknessBand[sameThicknessBand.length - 1].freightRateId;
+    if (target.freightRateId !== lowestId && target.freightRateId !== highestId) {
+      fail(
+        `ลบไม่ได้: จะทำให้ช่วงจำนวน (ตร.ม.) ขาดตอนตรงกลาง — ${target.originCountry} `
+        + `หนา ${target.thicknessMinMm}-${target.thicknessMaxMm} มม. ช่วง `
+        + `${target.qtyMinSqm}-${target.qtyMaxSqm ?? 'ไม่จำกัด'} ตร.ม. ลบได้เฉพาะช่วงบนสุดหรือล่างสุด`,
+        400,
+      );
+    }
+    return;
+  }
+
+  // The row is the last one in its thickness band, so removing it empties that band. Apply the
+  // same edge-only rule one level up, across the country's thickness ladder.
+  const thicknessMins = [...new Set(
+    all.filter((r) => r.originCountry === target.originCountry).map((r) => r.thicknessMinMm),
+  )].sort((a, b) => a - b);
+  if (thicknessMins.length > 1
+    && thicknessMins[0] !== target.thicknessMinMm
+    && thicknessMins[thicknessMins.length - 1] !== target.thicknessMinMm) {
+    fail(
+      `ลบไม่ได้: จะทำให้ช่วงความหนาขาดตอนตรงกลาง — ${target.originCountry} `
+      + `หนา ${target.thicknessMinMm}-${target.thicknessMaxMm} มม. ลบได้เฉพาะช่วงความหนาบนสุดหรือล่างสุด`,
+      400,
+    );
+  }
+}
+
 // R5: Attachments
 const mockAttachments = [];
 let mockAttachSeq = 1;
@@ -720,6 +852,11 @@ let mockFactoryQuoteItemSeq = 1;
 let mockFactoryQuoteAttachmentSeq = 1;
 let mockPricingRequestAttachmentSeq = 1;
 let mockPricingCostingSeq = 1;
+// PricingCostingItemDto's own id (sales.pricing_costing_item.id) — distinct from
+// pricingRequestItemId, which is a FK a costing item merely CARRIES. PricingDecisionItemDto's
+// pricingCostingItemId points at THIS, not at pricingRequestItemId (see startPricingDecision
+// below and PricingDecisionDtos.PricingDecisionItemDto's own field list).
+let mockPricingCostingItemSeq = 1;
 // Step 3: CEO Selling Price Decision (sales.pricing_decision / pricing_decision_item).
 const mockPricingDecisions = [];
 let mockPricingDecisionSeq = 1;
@@ -757,6 +894,7 @@ let mockCustomerQuotationItemSeq = 1;
   mockFactoryQuoteItemSeq = salesSeed.nextSeq.factoryQuoteItem;
   mockPricingCostings.push(...salesSeed.pricingCostings);
   mockPricingCostingSeq = salesSeed.nextSeq.pricingCosting;
+  mockPricingCostingItemSeq = salesSeed.nextSeq.pricingCostingItem;
   mockPricingDecisions.push(...salesSeed.pricingDecisions);
   mockPricingDecisionSeq = salesSeed.nextSeq.pricingDecision;
   mockPricingDecisionItemSeq = salesSeed.nextSeq.pricingDecisionItem;
@@ -1371,6 +1509,31 @@ function mockQuantityToPieces(requestedQty, requestedUnitBasis, factors, pricing
     case 'PER_LINEAR_M': return Number(requestedQty) / mockRequireConversionFactor(factors.linearMPerUnit, pricingRequestItemId, 'linearMPerUnit');
     default: fail(`ไม่รองรับหน่วยนับที่ขอ '${requestedUnitBasis}'`, 422); return null;
   }
+}
+
+// V141 ("CEO owns costing") — mirrors PricingCostingRepository#mapItem's three DERIVED, NEVER
+// STORED fields: recomputed fresh every time a costing item is read, never cached on the item
+// itself, so none of the three can drift out of sync with the raw columns they describe. Applied
+// wherever a costing (or a costing item) is returned to a caller — see listCostings/getCosting
+// below — and reused directly inside recalculatePricingDecisionCost/overridePricingDecisionItemCost
+// to re-derive a decision item's frozen cost right after mutating the bound costing item.
+function deriveCostingItemEffective(item) {
+  const effectiveLandedCostPerUnitThb = item.manualLandedCostPerUnitThb != null
+    ? item.manualLandedCostPerUnitThb
+    : item.landedCostPerUnitThb;
+  const effectiveTotalLandedCostThb = effectiveLandedCostPerUnitThb * (item.normalizedQuantityPieces ?? 0);
+  const overrideStale = item.manualLandedCostPerUnitThb != null
+    && (item.overrideFxRate == null || item.overrideCalcConfigVersion == null
+        || item.overrideFxRate !== item.fxRate || item.overrideCalcConfigVersion !== item.calculationConfigVersion);
+  return { effectiveLandedCostPerUnitThb, effectiveTotalLandedCostThb, overrideStale };
+}
+
+function withDerivedCostingItemFields(item) {
+  return { ...item, ...deriveCostingItemEffective(item) };
+}
+
+function withDerivedCosting(costing) {
+  return { ...costing, items: (costing.items ?? []).map(withDerivedCostingItemFields) };
 }
 
 function buildMockDoc(doc) {
@@ -7562,12 +7725,46 @@ export const api = {
   // endpoint, distinct from priceCalcConfigs above (which keeps serving the separate catalog
   // price calculator, untouched). get() mirrors READ_ROLES = ceo/import (same #388-style
   // rationale: this config IS the margin policy). update stays CEO-only.
+  //
+  // addFreightRate/deleteFreightRate (issue #436, PR #455) mirror
+  // PricingFormulaConfigController.addFreightRate/deleteFreightRate — also CEO-only, also strictly
+  // additive to the whole-config POST above (same versioning model: neither one UPDATEs or
+  // DELETEs a stored row in place, both write a complete new version). Their validation is a
+  // NON-AUTHORITATIVE approximation; the server decides.
   pricingFormulaConfig: {
     async get() {
       hasRole('ceo', 'import');
       const current = currentFormulaConfig();
       if (!current) fail('ไม่พบสูตรคำนวณราคาขาย', 404);
       return delay({ formulaConfig: sortedFormulaConfig(current) });
+    },
+    async addFreightRate(payload) {
+      hasRole('ceo');
+      const current = currentFormulaConfig();
+      if (!current) fail('ไม่พบสูตรคำนวณราคาขาย', 404);
+      const newRow = {
+        originCountry: payload.originCountry,
+        thicknessMinMm: Number(payload.thicknessMinMm),
+        thicknessMaxMm: Number(payload.thicknessMaxMm),
+        qtyMinSqm: Number(payload.qtyMinSqm),
+        qtyMaxSqm: payload.qtyMaxSqm == null ? null : Number(payload.qtyMaxSqm),
+        amountThb: Number(payload.amountThb),
+      };
+      validateFreightRates([...current.freightRates, newRow]);
+      const newConfig = createNewFormulaConfigVersion(current, [...current.freightRates, newRow]);
+      return delay({ formulaConfig: sortedFormulaConfig(newConfig) });
+    },
+    async deleteFreightRate(freightRateId) {
+      hasRole('ceo');
+      const current = currentFormulaConfig();
+      if (!current) fail('ไม่พบสูตรคำนวณราคาขาย', 404);
+      const target = current.freightRates.find((r) => r.freightRateId === Number(freightRateId));
+      if (!target) fail('ไม่พบค่าขนส่งที่ต้องการลบในสูตรปัจจุบัน', 404);
+      if (current.freightRates.length === 1) fail('ต้องมีค่าขนส่งอย่างน้อย 1 รายการ', 400);
+      validateFreightRemovalLeavesNoInteriorGap(current.freightRates, target);
+      const remaining = current.freightRates.filter((r) => r.freightRateId !== target.freightRateId);
+      const newConfig = createNewFormulaConfigVersion(current, remaining);
+      return delay({ formulaConfig: sortedFormulaConfig(newConfig) });
     },
     async update(payload) {
       hasRole('ceo');
@@ -8639,14 +8836,16 @@ export const api = {
 
     async listCostings(id) {
       hasRole('import', 'ceo');
-      return delay({ items: mockPricingCostings.filter((c) => c.pricingRequestId === Number(id)) });
+      return delay({
+        items: mockPricingCostings.filter((c) => c.pricingRequestId === Number(id)).map(withDerivedCosting),
+      });
     },
 
     async getCosting(id) {
       hasRole('import', 'ceo');
       const costing = mockPricingCostings.find((c) => c.id === Number(id));
       if (!costing) fail('ไม่พบการคำนวณต้นทุนนี้', 404);
-      return delay({ costing });
+      return delay({ costing: withDerivedCosting(costing) });
     },
 
     async recalculateCosting(id, payload = {}) {
@@ -8669,6 +8868,9 @@ export const api = {
         const pricePerPiece = mockPricePerPiece(raw, quoteItem.unitBasis, factors, item.id);
         const normalizedQuantityPieces = mockQuantityToPieces(item.requestedQty, item.requestedUnitBasis, factors, item.id);
         return {
+          // PricingCostingItemDto's own id (distinct from pricingRequestItemId below, which this
+          // row merely carries as a FK) — see mockPricingCostingItemSeq's own comment.
+          id: mockPricingCostingItemSeq++,
           pricingRequestItemId: item.id,
           factoryQuoteId: quote.id,
           factoryQuoteItemId: quoteItem.id,
@@ -8688,6 +8890,20 @@ export const api = {
           goodsCostThb: pricePerPiece,
           landedCostPerUnitThb: pricePerPiece,
           totalLandedCostThb: pricePerPiece * normalizedQuantityPieces,
+          // V141 ("CEO owns costing") cost-override provenance — mirrors PricingCostingItemDto.
+          // The mock's FX is always 1 (no BOT lookup in mock mode, same simplification the rest of
+          // this costing builder already makes), so only the calculationConfigVersion half of
+          // overrideStale is reachable under VITE_USE_MOCKS=true: override -> CEO saves a new
+          // formula-config version -> recalculate cost -> stale. Do not fake the FX half.
+          fxRate: 1,
+          fxSource: 'THB',
+          calculationConfigVersion: currentFormulaConfig()?.version ?? 1,
+          manualLandedCostPerUnitThb: null,
+          overrideReason: null,
+          overriddenBy: null,
+          overriddenAt: null,
+          overrideFxRate: null,
+          overrideCalcConfigVersion: null,
         };
       });
       costing.totalLandedCostThb = costing.items.reduce((sum, item) => sum + item.totalLandedCostThb, 0);
@@ -8781,7 +8997,14 @@ export const api = {
             // reason — see its own comment) fixes it up once decision.id is known.
             pricingDecisionId: null,
             pricingRequestItemId: costingItem.pricingRequestItemId,
-            pricingCostingItemId: costingItem.pricingRequestItemId,
+            // costingItem.id, NOT pricingRequestItemId — PricingDecisionItemDto.pricingCostingItemId
+            // is a FK to pricing_costing_item.id (see PricingDecisionService.overrideItemCost's own
+            // lookup). The two used to be silently interchangeable here only because every mock
+            // costing item lacked its own id at all; now that recalculateCosting/makeCosting mint
+            // one, this must point at it or the CEO cost-override UI's join
+            // (costing.items.find(ci => ci.id === decisionItem.pricingCostingItemId)) never matches
+            // under VITE_USE_MOCKS=true.
+            pricingCostingItemId: costingItem.id,
             brand: prItem?.brand ?? null,
             model: prItem?.model ?? null,
             productDescription: prItem?.productDescription ?? null,
@@ -8894,6 +9117,99 @@ export const api = {
       return delay({ decision });
     },
 
+    // V141 ("CEO owns costing", PR #702). Mirrors PricingDecisionService.recalculateCost: DRAFT
+    // decision AND CEO_REVIEWING request (recalculatePricingDecision above only checks DRAFT —
+    // that is a real gap in the OLDER sibling method, not a pattern to copy here). Refreshes the
+    // bound costing items' COMPUTED provenance (fxRate/calculationConfigVersion), preserving every
+    // override column, then re-derives each decision item's frozen cost from the resulting
+    // EFFECTIVE cost — this is what can make an existing override STALE without destroying it.
+    // Does not reimplement the landed-cost engine — landedCostPerUnitThb itself is untouched.
+    async recalculatePricingDecisionCost(id) {
+      hasRole('ceo');
+      const decision = mockPricingDecisions.find((d) => d.id === Number(id));
+      if (!decision) fail('ไม่พบมติราคานี้', 404);
+      if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่แก้ไขได้', 409);
+      const pr = findPricingRequestRaw(decision.pricingRequestId);
+      if (pr.status !== 'CEO_REVIEWING') fail('คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
+
+      const costing = mockPricingCostings.find((c) => c.id === decision.pricingCostingId);
+      const currentVersion = currentFormulaConfig()?.version ?? 1;
+      for (const costingItem of costing?.items ?? []) {
+        costingItem.fxRate = 1;
+        costingItem.calculationConfigVersion = currentVersion;
+      }
+      for (const item of decision.items) {
+        const costingItem = costing?.items.find((ci) => ci.id === item.pricingCostingItemId);
+        if (!costingItem) continue;
+        const { effectiveLandedCostPerUnitThb, effectiveTotalLandedCostThb } = deriveCostingItemEffective(costingItem);
+        item.frozenLandedCostPerPieceThb = effectiveLandedCostPerUnitThb;
+        item.frozenLandedCostPerRequestedUnitThb = Number(item.requestedQuantity) > 0
+          ? effectiveTotalLandedCostThb / Number(item.requestedQuantity)
+          : effectiveLandedCostPerUnitThb;
+        if (item.proposedMarginPct != null) {
+          item.proposedSellingPricePerRequestedUnit =
+            item.frozenLandedCostPerRequestedUnitThb * (1 + Number(item.proposedMarginPct));
+        }
+        item.updatedAt = new Date().toISOString();
+      }
+      decision.updatedAt = new Date().toISOString();
+      return delay({ decision });
+    },
+
+    // V141 (PR #702). Mirrors PricingDecisionService.overrideItemCost, including its check ORDER:
+    // role -> reason (mandatory in BOTH directions, checked before anything else) -> negative
+    // amount -> decision open-for-mutation -> item-belongs-to-decision -> bound-costing-item-found.
+    // `itemId` is the pricingDecisionItemId, resolved here to its bound pricingCostingItemId.
+    async overridePricingDecisionItemCost(decisionId, itemId, payload) {
+      const user = hasRole('ceo');
+      if (!payload?.reason || !payload.reason.trim()) {
+        fail('ต้องระบุเหตุผลในการปรับต้นทุน ไม่ว่าจะปรับหรือยกเลิกการปรับก็ตาม', 400);
+      }
+      const manualCost = payload.manualLandedCostPerUnitThb;
+      if (manualCost != null && Number(manualCost) < 0) {
+        fail('ต้นทุนที่ปรับต้องไม่ติดลบ', 400);
+      }
+      const decision = mockPricingDecisions.find((d) => d.id === Number(decisionId));
+      if (!decision) fail('ไม่พบมติราคานี้', 404);
+      if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่แก้ไขได้', 409);
+      const pr = findPricingRequestRaw(decision.pricingRequestId);
+      if (pr.status !== 'CEO_REVIEWING') fail('คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
+      const item = decision.items.find((i) => i.id === Number(itemId));
+      if (!item) fail(`รายการที่ ${itemId} ไม่ได้เป็นของมติราคานี้`, 400);
+      const costing = mockPricingCostings.find((c) => c.id === decision.pricingCostingId);
+      const costingItem = costing?.items.find((ci) => ci.id === item.pricingCostingItemId);
+      if (!costingItem) fail('ไม่พบรายการต้นทุนที่ผูกกับมติราคานี้', 409);
+
+      costingItem.overrideReason = payload.reason;
+      costingItem.overriddenBy = user.id;
+      costingItem.overriddenAt = new Date().toISOString();
+      if (manualCost != null) {
+        costingItem.manualLandedCostPerUnitThb = Number(manualCost);
+        // Re-stamp: snapshot THIS row's CURRENT computed provenance. Re-confirming the SAME value
+        // after a recalculate re-stamps these to whatever is current then — that is how staleness
+        // clears, and it is the CEO's only escape hatch besides clearing the override outright.
+        costingItem.overrideFxRate = costingItem.fxRate;
+        costingItem.overrideCalcConfigVersion = costingItem.calculationConfigVersion;
+      } else {
+        costingItem.manualLandedCostPerUnitThb = null;
+        costingItem.overrideFxRate = null;
+        costingItem.overrideCalcConfigVersion = null;
+      }
+
+      const { effectiveLandedCostPerUnitThb, effectiveTotalLandedCostThb } = deriveCostingItemEffective(costingItem);
+      item.frozenLandedCostPerPieceThb = effectiveLandedCostPerUnitThb;
+      item.frozenLandedCostPerRequestedUnitThb = Number(item.requestedQuantity) > 0
+        ? effectiveTotalLandedCostThb / Number(item.requestedQuantity)
+        : effectiveLandedCostPerUnitThb;
+      if (item.proposedMarginPct != null) {
+        item.proposedSellingPricePerRequestedUnit =
+          item.frozenLandedCostPerRequestedUnitThb * (1 + Number(item.proposedMarginPct));
+      }
+      item.updatedAt = new Date().toISOString();
+      decision.updatedAt = new Date().toISOString();
+      return delay({ decision });
+    },
+
     async approvePricingDecision(id, payload = {}) {
       const user = hasRole('ceo');
       const decision = mockPricingDecisions.find((d) => d.id === Number(id));
@@ -8905,6 +9221,23 @@ export const api = {
       if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่รออนุมัติ', 409);
       const pr = findPricingRequestRaw(decision.pricingRequestId);
       if (pr.status !== 'CEO_REVIEWING') fail('คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
+      // V141: refuse while ANY line of the bound costing carries a stale override — mirrors
+      // PricingDecisionService.approve's staleItemIds guard, including its message shape. Keeps
+      // the mock from being MORE PERMISSIVE than production, which is the dangerous direction
+      // (CLAUDE.md "Mock API contract") — approvePricingDecision must never accept here what the
+      // real service would 409 on.
+      const costing = mockPricingCostings.find((c) => c.id === decision.pricingCostingId);
+      const decisionItemIdByCostingItemId = new Map(decision.items.map((i) => [i.pricingCostingItemId, i.id]));
+      const staleItemIds = (costing?.items ?? [])
+        .filter((ci) => deriveCostingItemEffective(ci).overrideStale)
+        .map((ci) => decisionItemIdByCostingItemId.get(ci.id) ?? ci.id);
+      if (staleItemIds.length) {
+        fail(
+          'ไม่สามารถอนุมัติได้ เนื่องจากมีรายการที่ปรับต้นทุนเองล้าสมัย (อัตราแลกเปลี่ยนหรือค่าคำนวณเปลี่ยนไปหลังปรับ) '
+          + `กรุณาคำนวณต้นทุนใหม่หรือยืนยันค่าที่ปรับอีกครั้งก่อนอนุมัติ — รายการที่ล้าสมัย: [${staleItemIds}]`,
+          409,
+        );
+      }
       const missingMargin = decision.items.filter((i) => i.proposedMarginPct == null).map((i) => i.id);
       const missingMinimum = decision.items.filter((i) => i.minimumSellingPricePerRequestedUnit == null).map((i) => i.id);
       if (missingMargin.length || missingMinimum.length) {
