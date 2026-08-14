@@ -68,6 +68,12 @@ export const ANONYMOUS_ALLOWLIST = [
   // POST /api/attendance/punch — scanner devices authenticate with X-GLR-Agent-Token, not a
   // session, so the filter chain cannot gate it.
   '/api/attendance/punch',
+  // GET /api/public/brand/logo.png — the requester is a MAIL CLIENT rendering a notification
+  // email, so there is no session to present and none can be obtained: Gmail and Outlook fetch an
+  // image URL with no credentials. Anonymous by necessity, not by oversight. Serves one static
+  // asset and reads nothing. Exists only on uat, because the whole th.co.glr.hr.mail package does
+  // — Render blocks outbound SMTP on main. Owner-confirmed to keep, 2026-08-13.
+  '/api/public/brand/logo.png',
 ];
 
 // Endpoints excluded from the per-role authenticated sweep (they are still covered by the
