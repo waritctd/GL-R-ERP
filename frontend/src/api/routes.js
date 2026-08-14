@@ -294,6 +294,14 @@ export const API_ROUTES = {
     // Read-only garnishment shortfall ledger (issue #376). Mirrors
     // PayrollDeductionShortfallController. Optional employeeId / kind query params.
     deductionShortfalls: '/api/payroll/deduction-shortfalls',
+    // Written-consent register (issue #376, exposed for #744). ONE path, two verbs — mirrors
+    // DeductionWrittenConsentController, whose @GetMapping and @PutMapping both sit on the bare
+    // class-level @RequestMapping. GET takes optional employeeId / kind query params; PUT takes a
+    // JSON body and upserts one (employee, kind) row.
+    //
+    // A RECORD, NOT A GATE: nothing in PayrollCalculator reads the row this writes — see
+    // DeductionWrittenConsentService's own javadoc and V107's COMMENT ON TABLE.
+    deductionConsents: '/api/payroll/deduction-consents',
   },
   priceImport: {
     factories: '/api/price-import/factories',
@@ -505,4 +513,13 @@ export const ROLE_PERMISSIONS = {
   // decides who sees the SCREEN, it grants nothing itself. See CLAUDE.md's "Mock API contract" on
   // why a frontend permission key is never itself evidence of a backend authorization change.
   canManageAttendanceCalendar: ['hr', 'ceo'],
+  // §5 announcement PDF upload (/settings/leave-policy — PR #494 shipped the write API with no UI
+  // at all, issue #744). Mirrors LeaveController#uploadPolicyDocument's `requireAnyRole(user, "hr",
+  // "ceo")` exactly. Deliberately NOT the same question as reading the document: the GET is open to
+  // every authenticated employee (`sessions.requireUser` only), because the rules that bind you are
+  // yours to read — replacing them is not. FRONTEND GATING ONLY: LeaveController enforces this
+  // independently, and this key decides who sees the SCREEN; it grants nothing on its own. See
+  // CLAUDE.md's "Mock API contract" on why a frontend permission key is never itself evidence of a
+  // backend authorization change.
+  canManageLeavePolicyDocument: ['hr', 'ceo'],
 };

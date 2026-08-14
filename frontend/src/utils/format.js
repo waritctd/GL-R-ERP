@@ -573,6 +573,27 @@ export function payrollDeductionKindLabel(kind) {
   return map[kind] ?? kind ?? '-';
 }
 
+// The four PayrollDeductionKind values the written-consent register may record (issue #376,
+// exposed for #744) — the deduction kinds where "did the employee sign a consent letter?" is even
+// a question. Mirrors DeductionWrittenConsentService.CONSENT_APPLICABLE_KINDS, which is itself
+// V107's `CHECK (deduction_kind IN (...))` constraint on hr.deduction_written_consent.
+//
+// The other four are excluded by the backend, which 400s on them, so offering them would build a
+// picker whose options the server rejects:
+//   WITHHOLDING_TAX / SOCIAL_SECURITY / STUDENT_LOAN — ม.76 item (1); deductible without consent.
+//   LEGAL_EXECUTION_GARNISHMENT                      — a court order; consent is irrelevant to it.
+//
+// mockApi.js keeps its own mirror of this list (it mirrors the Java service independently, by
+// design). The two are pinned to each other by mockApi.deductionConsents.test.js, because a value
+// mirrored into mockApi.js otherwise has NO guard — contract.test.js compares names and parameter
+// counts, never values.
+export const CONSENT_APPLICABLE_DEDUCTION_KINDS = [
+  'WARNING_LETTER',
+  'CUSTOMER_RETURN',
+  'OTHER_PRETAX',
+  'OTHER_POST_TAX',
+];
+
 // Bangkok is the business zone for every attendance/leave/overtime date. Deriving "today" from
 // the browser's zone instead makes a late-evening session disagree with the server about which
 // day it is — which matters most on the attendance page, whose primary control is a date stepper.

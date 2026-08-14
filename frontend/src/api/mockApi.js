@@ -245,6 +245,64 @@ db.deductionObligationRemittances = db.deductionObligationRemittances || [];
 // nothing here reimplements the ป.วิ.พ. ม.302 cap — the numbers are fixtures, not a calculation.
 db.deductionShortfalls = db.deductionShortfalls?.length
   ? db.deductionShortfalls : buildDemoDeductionShortfalls(db.employees);
+// Written-consent register (issue #376, exposed for #744). SEEDED EMPTY, ON PURPOSE — and this is
+// the honest fixture, not a lazy one.
+//
+// hr.deduction_written_consent is written by exactly one code path: DeductionWrittenConsentRepository
+// #upsert, reached only from DeductionWrittenConsentService#upsert, reached only from
+// DeductionWrittenConsentController's PUT — which had no client at all until this branch. V107
+// creates the table and seeds nothing, and no other migration or service touches it (verified by
+// grep across backend/src/main). So the table is necessarily EMPTY in every environment, production
+// included — exactly like hr.leave_policy_document (V133).
+//
+// Seeding demo rows here would therefore invert CLAUDE.md's warning: the fixture would be more
+// populated than production, and the EMPTY state — the only state any real deployment has today,
+// and so the one a reader will actually meet — would never be rendered by the default mock session.
+// Rows appear the same way they do in production: by someone recording one through the register's
+// PUT half.
+db.deductionConsents = db.deductionConsents || [];
+// §5 announcement PDF store (V133's hr.leave_policy_document + _blob, collapsed into one array
+// since the mock has no reason to split metadata from bytes for I/O cost).
+//
+// EMPTY for the same reason as the register above, and V133 says so outright: rows reach that table
+// only through POST /api/leave/policy-document, which had no client until #744. The table is
+// necessarily empty in EVERY environment, production included — nobody has ever uploaded one.
+db.leavePolicyDocuments = db.leavePolicyDocuments || [];
+db.leavePolicyDocumentSeq = db.leavePolicyDocumentSeq || 1;
+// LeaveController.MAX_POLICY_DOCUMENT_BYTES (10 * 1024 * 1024). Mirrored by value, so it is pinned
+// against the Java constant by mockApi.leavePolicyDocument.test.js — contract.test.js compares
+// method names and parameter counts, never values.
+const MAX_POLICY_DOCUMENT_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Mirrors LeavePolicyDocumentRepository#findCurrent: the latest `effective_from` that is NOT in the
+ * future, tie-broken by document_id DESC.
+ *
+ * The `<= today` half is the load-bearing part and the easy one to drop. A document uploaded with a
+ * FUTURE effective date is stored and returns 200, yet is deliberately not "current" — the previous
+ * version keeps being served until that date arrives. An upload that appears to have done nothing
+ * is exactly the outcome a user would misread as a failure, so the mock reproduces it rather than
+ * treating "most recently uploaded" as current.
+ */
+function currentLeavePolicyDocument() {
+  const today = bangkokTodayIso();
+  return [...db.leavePolicyDocuments]
+    .filter((doc) => doc.effectiveFrom <= today)
+    .sort((a, b) => (
+      b.effectiveFrom.localeCompare(a.effectiveFrom) || b.documentId - a.documentId
+    ))[0] || null;
+}
+db.deductionConsentSeq = db.deductionConsentSeq || 1;
+// Mirrors DeductionWrittenConsentService.CONSENT_APPLICABLE_KINDS, which is itself V107's
+// `CHECK (deduction_kind IN (...))` constraint. The other four PayrollDeductionKind values are
+// excluded on purpose: WITHHOLDING_TAX / SOCIAL_SECURITY / STUDENT_LOAN are ม.76 item (1), where no
+// consent question arises, and LEGAL_EXECUTION_GARNISHMENT is compelled by court order regardless
+// of consent.
+//
+// A value mirrored into this file has NO automatic guard — contract.test.js compares method names
+// and parameter COUNTS, never values — so this list is pinned against the one the UI offers by
+// mockApi.deductionConsents.test.js.
+const CONSENT_APPLICABLE_KINDS = ['WARNING_LETTER', 'CUSTOMER_RETURN', 'OTHER_PRETAX', 'OTHER_POST_TAX'];
 // §5 leave-rules-as-data (V116, extended V119/V120): paidDaysCap/advanceNoticeDays/
 // minServiceMonths/maxConsecutiveDays/oncePerEmployment/dayCountBasis/proratedFirstYear/
 // firstYearMaxDays mirror the hr.leave_type columns for SHAPE parity only (contract.test.js checks
@@ -5413,20 +5471,64 @@ export const api = {
       });
     },
 
-    // Leave-surface IA rebuild, Phase A3: mirrors LeaveController#policyDocument's SHAPE only, not
-    // its authority. The real endpoint's answer depends on server-side storage this mock has no
-    // equivalent of and no file to actually serve — "not supported in mock mode" is the honest
-    // answer here (CLAUDE.md: prefer that over inventing a fake success path), so this always
-    // reports "not uploaded", exactly the state a fresh/unconfigured real deployment is in too. Do
-    // not read an "available" render under mocks as evidence the real endpoint works — verify a
-    // configured deployment against the real backend.
+    // Mirrors LeaveController#policyDocument + LeavePolicyDocumentRepository#findCurrent.
+    //
+    // ── WHY THIS IS NO LONGER A FLAT `false` (2026-08-14, issue #744) ────────
+    // It used to return `false` unconditionally, on the sound reasoning that the mock had no
+    // storage and no file to serve. Adding the UPLOAD half (below) retires that reasoning: the mock
+    // now has exactly one way to hold a document — someone uploading one — which is also the ONLY
+    // way a real environment gets one (V133: rows reach the table through that endpoint alone).
+    //
+    // The DEFAULT is unchanged and deliberately so: with nothing uploaded this still answers
+    // `false`, which is the state production, UAT and a fresh mock session are all in today. It can
+    // only become `true` by way of a real upload in the same session, so this is strictly more
+    // faithful, never more permissive. Availability is computed by findCurrent's own rule rather
+    // than "something was uploaded" — see currentLeavePolicyDocument().
+    //
+    // Still NOT evidence the real endpoint works: no bytes cross a network here.
     async policyDocumentAvailable() {
       requireSession();
-      return delay(false);
+      return delay(!!currentLeavePolicyDocument());
     },
     async downloadPolicyDocument() {
       requireSession();
-      fail('ยังไม่มีการอัปโหลดเอกสารประกาศฉบับนี้ กรุณาติดต่อฝ่ายบุคคล', 404);
+      const current = currentLeavePolicyDocument();
+      // Same message and same 404 the controller raises when findCurrent has nothing to serve —
+      // including the case where a document EXISTS but is future-dated, which is not "current".
+      if (!current) fail('ยังไม่มีการอัปโหลดเอกสารประกาศฉบับนี้ กรุณาติดต่อฝ่ายบุคคล', 404);
+      // NOT wrapped in delay(): that helper round-trips through structuredClone, which does not
+      // preserve a Blob — it arrives as a bare `{}` with no size, type or bytes. Every other
+      // blob-returning method in this file returns directly for the same reason.
+      return new Blob([current.content], { type: current.mimeType });
+    },
+
+    // Mirrors LeaveController#uploadPolicyDocument (issue #744). hr + ceo — `requireAnyRole(user,
+    // "hr", "ceo")` — which is NARROWER than the read above (any authenticated employee).
+    async uploadPolicyDocument(file, effectiveFrom) {
+      hasRole('hr', 'ceo');
+      // The controller's three 400s, in its own order, with its own messages.
+      if (!file || !file.size) fail('ไฟล์ว่างเปล่า', 400);
+      // Mirrors `MediaType.APPLICATION_PDF_VALUE.equals(file.getContentType())` — the CLIENT-DECLARED
+      // type, exactly as weak on the real backend as it is here. The mock deliberately does not
+      // sniff the bytes: being STRICTER than production would hide a request production accepts.
+      if (file.type !== 'application/pdf') fail('รองรับเฉพาะไฟล์ PDF', 400);
+      if (file.size > MAX_POLICY_DOCUMENT_BYTES) fail('ไฟล์มีขนาดใหญ่เกินไป', 400);
+
+      // INSERT, never UPDATE — LeavePolicyDocumentRepository#insert keeps every superseded version
+      // (V133), so this appends rather than replacing. `content` stands in for the blob table.
+      const document = {
+        documentId: db.leavePolicyDocumentSeq++,
+        fileName: file.name || 'leave-policy-announcement.pdf',
+        mimeType: file.type,
+        fileSize: file.size,
+        effectiveFrom,
+        uploadedAt: new Date().toISOString(),
+        content: file,
+      };
+      db.leavePolicyDocuments.push(document);
+      // The controller returns Map.of("document", saved) — metadata only, never the bytes.
+      const { content, ...metadata } = document;
+      return delay({ document: metadata });
     },
 
     // Leave-request composer, Phase C: mirrors LeaveController#calendarContext's SHAPE only, NOT
@@ -7378,6 +7480,75 @@ export const api = {
         b.payrollMonth.localeCompare(a.payrollMonth) || a.employeeCode.localeCompare(b.employeeCode)
       ));
       return delay({ items });
+    },
+
+    // Written-consent register (issue #376). Mirrors DeductionWrittenConsentController +
+    // DeductionWrittenConsentService + DeductionWrittenConsentRepository.
+    //
+    // READ is hr + ceo (VIEW_ROLES); WRITE is hr ONLY (EDIT_ROLES) — the asymmetry is the point,
+    // and matching it here is what keeps the mock from being more permissive than production.
+    async getDeductionConsents(params = {}) {
+      hasRole('hr', 'ceo');
+      let items = db.deductionConsents;
+      if (params.employeeId) items = items.filter((row) => row.employeeId === Number(params.employeeId));
+      if (params.kind) items = items.filter((row) => row.deductionKind === params.kind);
+      // Mirrors DeductionWrittenConsentRepository#findAll's `ORDER BY e.employee_code,
+      // c.deduction_kind` — and its absence of any LIMIT, so every matching row comes back.
+      items = [...items].sort((a, b) => (
+        a.employeeCode.localeCompare(b.employeeCode) || a.deductionKind.localeCompare(b.deductionKind)
+      ));
+      return delay({ items });
+    },
+
+    // hr ONLY — DeductionWrittenConsentService.EDIT_ROLES is Set.of("hr"), NARROWER than the read
+    // gate above (hr + ceo). Getting that asymmetry wrong in the permissive direction is the
+    // failure CLAUDE.md warns about (issue #199 was exactly it), so CEO is refused here on purpose
+    // even though CEO may read the very same rows.
+    async upsertDeductionConsent(payload = {}) {
+      const actor = hasRole('hr');
+      // The real service validates the kind BEFORE checking the employee exists, and returns 400
+      // rather than silently ignoring the row. Order matters for a caller that sends both wrong.
+      if (!CONSENT_APPLICABLE_KINDS.includes(payload.deductionKind)) {
+        fail(
+          `ประเภทการหัก ${payload.deductionKind} ไม่ใช่ประเภทที่ต้องมีหนังสือยินยอม `
+          + '(item (1) หรือคำสั่งศาล/บังคับคดี ไม่ต้องขอความยินยอม)',
+          400,
+        );
+      }
+      const employee = db.employees.find((row) => row.id === Number(payload.employeeId));
+      if (!employee) fail('ไม่พบข้อมูลพนักงาน', 404);
+
+      const now = new Date().toISOString();
+      // ON CONFLICT (employee_id, deduction_kind) DO UPDATE — one row per pair, so re-recording the
+      // same pair overwrites rather than appending. recorded_by_id / recorded_at are set on INSERT
+      // only and deliberately NOT re-stamped on update, matching the repository's DO UPDATE SET
+      // column list exactly (it lists consent_on_file, consent_document_reference, consent_date,
+      // notes, updated_by_id, updated_at — and nothing else).
+      const existing = db.deductionConsents.find((row) => (
+        row.employeeId === employee.id && row.deductionKind === payload.deductionKind
+      ));
+      const row = existing || {
+        id: db.deductionConsentSeq++,
+        employeeId: employee.id,
+        employeeCode: employee.code,
+        employeeName: employee.nameTh,
+        deductionKind: payload.deductionKind,
+        recordedById: actor.employeeId ?? null,
+        recordedAt: now,
+      };
+      row.consentOnFile = !!payload.consentOnFile;
+      row.consentDocumentReference = payload.consentDocumentReference ?? null;
+      row.consentDate = payload.consentDate ?? null;
+      row.notes = payload.notes ?? null;
+      row.updatedById = actor.employeeId ?? null;
+      row.updatedAt = now;
+      if (!existing) db.deductionConsents.push(row);
+
+      // ⚠️ Returns findAll(employeeId, deductionKind) — the ONE row just written, NOT the whole
+      // register. Mirrored exactly, because a caller that treated this as the full list would blank
+      // its own table; see hrApi.upsertDeductionConsent's note. Nothing in any payroll calculation
+      // reads what this just wrote.
+      return delay({ items: [row] });
     },
   },
 

@@ -191,6 +191,42 @@ export const api = {
       if (!res.ok) throw new Error('Download failed');
       return res.blob();
     },
+    // Uploads a new version of the §5 announcement PDF (issue #744). SAME PATH as the GET above,
+    // different verb — LeaveController maps both onto /policy-document.
+    //
+    // hr + ceo (`requireAnyRole(user, "hr", "ceo")`), unlike the GET, which every authenticated
+    // employee may call: reading the rules that bind you is not the same question as replacing them.
+    //
+    // NEVER overwrites. Each call INSERTs a new row keyed on the `effectiveFrom` given here, so a
+    // superseded announcement stays retrievable by id; only which row answers "current" changes.
+    // "Current" is the latest effective_from that is <= today, so an upload dated in the FUTURE is
+    // stored and returns 200, yet the GET keeps serving the previous version until that date.
+    //
+    // The server accepts only `application/pdf` and caps the body at 10 MB. Both checks read the
+    // CLIENT-DECLARED content type (`MultipartFile#getContentType`), so neither is a guarantee about
+    // the bytes — see LeavePolicyDocumentPage.jsx, which is careful not to promise otherwise.
+    //
+    // Resolves `{ document }` — a LeavePolicyDocumentDto (documentId, fileName, mimeType, fileSize,
+    // effectiveFrom, uploadedAt). Bare fetch() rather than apiRequest because the body is multipart;
+    // csrfHeaders is still required, since CsrfCookieFilter rejects any unsafe /api/ method without
+    // a matching X-XSRF-TOKEN (a leave-submit regression proved a hand-rolled fetch that forgets it
+    // 403s on the real backend while passing under mocks, which never enforce CSRF).
+    uploadPolicyDocument: async (file, effectiveFrom) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('effectiveFrom', effectiveFrom);
+      const res = await fetch(API_ROUTES.leave.policyDocument, {
+        method: 'POST',
+        credentials: 'include',
+        headers: csrfHeaders('POST'),
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'อัปโหลดเอกสารประกาศไม่สำเร็จ');
+      }
+      return res.json();
+    },
     // Phase A4: certificate download for a review row (ReviewQueueTab.jsx) or the requester's own
     // expanded row (MyLeaveTab.jsx). Access (owning employee, or a canReviewEmployee reviewer of
     // them) is enforced entirely server-side — see LeaveService#resolveAttachmentForDownload and
@@ -638,6 +674,28 @@ export const api = {
     // DeductionObligationService#recordGarnishmentShortfalls during a payroll run. Optional
     // `employeeId` / `kind` params; the server applies no LIMIT and no pagination.
     getDeductionShortfalls: (params) => apiRequest(withQuery(API_ROUTES.payroll.deductionShortfalls, params)),
+    // Written-consent register (issue #376). hr + ceo may read (DeductionWrittenConsentService
+    // .VIEW_ROLES); only hr may write (EDIT_ROLES). Optional `employeeId` / `kind` params; the
+    // server applies no LIMIT and no pagination, and orders by employee_code then deduction_kind.
+    //
+    // Resolves `{ items }` — a record of which deductions HR holds written employee consent for on
+    // paper. It is NOT an enforcement gate: no payroll calculation reads it.
+    getDeductionConsents: (params) => apiRequest(withQuery(API_ROUTES.payroll.deductionConsents, params)),
+    // Upserts ONE (employeeId, deductionKind) row — the table's UNIQUE key, so re-recording the
+    // same pair overwrites rather than appending (V107). The audit log carries the history; this
+    // row only ever holds the current fact. hr ONLY (hasRole('HR') / EDIT_ROLES), narrower than the
+    // read above, which CEO also gets.
+    //
+    // ⚠️ The response is NOT the whole register. DeductionWrittenConsentService#upsert returns
+    // `repository.findAll(employeeId, deductionKind)` — the rows for the pair just written, i.e.
+    // exactly one row. A caller that assigned it over its list state would blank the table, so
+    // DeductionConsentsPage invalidates and refetches instead of writing the response through.
+    //
+    // 400 when deductionKind is outside CONSENT_APPLICABLE_KINDS (WARNING_LETTER / CUSTOMER_RETURN
+    // / OTHER_PRETAX / OTHER_POST_TAX — V107's CHECK constraint); 404 when the employee does not
+    // exist. Recording a row changes no payroll figure: nothing reads this table back.
+    upsertDeductionConsent: (payload) =>
+      apiRequest(API_ROUTES.payroll.deductionConsents, { method: 'PUT', body: payload }),
   },
   priceImport: {
     factories: () => apiRequest(API_ROUTES.priceImport.factories),
