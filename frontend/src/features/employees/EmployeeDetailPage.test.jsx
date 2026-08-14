@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EmployeeDetailPage } from './EmployeeDetailPage.jsx';
 import { api } from '../../api/index.js';
@@ -13,7 +13,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   return {
     ...actual,
     api: {
-      employees: { get: vi.fn() },
+      employees: { get: vi.fn(), resetPassword: vi.fn() },
       payroll: {
         getTaxAllowanceDeclarations: vi.fn(),
         getTaxAllowanceCaps: vi.fn(),
@@ -66,7 +66,7 @@ const declaration = {
   reviewerNote: null,
 };
 
-function renderDetail(user) {
+function renderDetail(user, { showToast = vi.fn() } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -76,7 +76,7 @@ function renderDetail(user) {
         <Routes>
           <Route
             path="/employees/:id"
-            element={<EmployeeDetailPage user={user} onUpdateEmployee={vi.fn()} />}
+            element={<EmployeeDetailPage user={user} onUpdateEmployee={vi.fn()} showToast={showToast} />}
           />
         </Routes>
       </MemoryRouter>
@@ -121,5 +121,115 @@ describe('EmployeeDetailPage — ล.ย.01 section', () => {
     expect(screen.queryByRole('button', { name: /ข้อมูลอ่อนไหว/ })).toBeNull();
     expect(screen.queryByText('ค่าลดหย่อนภาษี (ล.ย.01)')).toBeNull();
     expect(api.payroll.getTaxAllowanceDeclarations).not.toHaveBeenCalled();
+  });
+});
+
+describe('EmployeeDetailPage — ตั้งรหัสผ่านชั่วคราว (issue #744)', () => {
+  const TEMP_PASSWORD = 'Kbn7RtWq3xZmDp';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.employees.get.mockResolvedValue({ employee });
+    api.payroll.getTaxAllowanceDeclarations.mockResolvedValue({ items: [declaration] });
+    api.payroll.getTaxAllowanceCaps.mockResolvedValue({ caps: [] });
+    api.employees.resetPassword.mockResolvedValue({ temporaryPassword: TEMP_PASSWORD });
+  });
+
+  // The overflow item is role="menuitem" (OverflowMenu), while ConfirmDialog's confirm control is a
+  // real button carrying the same Thai label — so the roles are what keep the two apart here.
+  async function openResetMenu() {
+    fireEvent.click(await screen.findByRole('button', { name: /การดำเนินการเพิ่มเติม/ }));
+    return screen.findByRole('menuitem', { name: 'ตั้งรหัสผ่านชั่วคราว' });
+  }
+
+  // The control is HR-only client-side; EmployeeController#resetPassword is the enforcing gate.
+  // Written wrong-way-round: the case that matters is that a non-HR viewer is NOT offered it.
+  it.each(['employee', 'ceo', 'sales'])('does not offer the control to role=%s', async (role) => {
+    renderDetail({ role, employeeId: 9 });
+    await screen.findByRole('heading', { name: 'สมชาย ใจดี' });
+
+    expect(screen.queryByRole('button', { name: /การดำเนินการเพิ่มเติม/ })).toBeNull();
+    expect(screen.queryByText('ตั้งรหัสผ่านชั่วคราว')).toBeNull();
+    expect(api.employees.resetPassword).not.toHaveBeenCalled();
+  });
+
+  it('asks for confirmation before firing the request', async () => {
+    renderDetail({ role: 'hr', employeeId: 1 });
+    fireEvent.click(await openResetMenu());
+
+    // Confirm step is up, and nothing has been sent yet — the reset is destructive.
+    expect(await screen.findByText(/รหัสผ่านเดิมจะใช้ไม่ได้ทันที/)).not.toBeNull();
+    expect(api.employees.resetPassword).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('temporary-password-value')).toBeNull();
+  });
+
+  it('shows the temporary password once confirmed, with the one-time warning', async () => {
+    renderDetail({ role: 'hr', employeeId: 1 });
+    fireEvent.click(await openResetMenu());
+    fireEvent.click(await screen.findByRole('button', { name: 'ตั้งรหัสผ่านชั่วคราว' }));
+
+    const value = await screen.findByTestId('temporary-password-value');
+    expect(value.textContent).toBe(TEMP_PASSWORD);
+    expect(api.employees.resetPassword).toHaveBeenCalledWith(9);
+    expect(screen.getByText(/ระบบจะแสดงรหัสผ่านนี้เพียงครั้งเดียว/)).not.toBeNull();
+    expect(screen.getByText(/บังคับให้ตั้งรหัสผ่านใหม่/)).not.toBeNull();
+  });
+
+  it('copies the password to the clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+    renderDetail({ role: 'hr', employeeId: 1 });
+    fireEvent.click(await openResetMenu());
+    fireEvent.click(await screen.findByRole('button', { name: 'ตั้งรหัสผ่านชั่วคราว' }));
+    await screen.findByTestId('temporary-password-value');
+    fireEvent.click(screen.getByRole('button', { name: /คัดลอก/ }));
+
+    expect(writeText).toHaveBeenCalledWith(TEMP_PASSWORD);
+    expect(await screen.findByRole('button', { name: /คัดลอกแล้ว/ })).not.toBeNull();
+  });
+
+  it('keeps the password out of the toast', async () => {
+    const showToast = vi.fn();
+    renderDetail({ role: 'hr', employeeId: 1 }, { showToast });
+    fireEvent.click(await openResetMenu());
+    fireEvent.click(await screen.findByRole('button', { name: 'ตั้งรหัสผ่านชั่วคราว' }));
+    await screen.findByTestId('temporary-password-value');
+
+    expect(showToast).toHaveBeenCalled();
+    // Toast text is retained and re-rendered by the app shell, well outside this dialog's life.
+    for (const [, message] of showToast.mock.calls) {
+      expect(message).not.toContain(TEMP_PASSWORD);
+    }
+  });
+
+  it('retains nothing after the dialog closes, and re-opens on the confirm step', async () => {
+    renderDetail({ role: 'hr', employeeId: 1 });
+    fireEvent.click(await openResetMenu());
+    fireEvent.click(await screen.findByRole('button', { name: 'ตั้งรหัสผ่านชั่วคราว' }));
+    await screen.findByTestId('temporary-password-value');
+
+    fireEvent.click(screen.getByRole('button', { name: 'เสร็จสิ้น' }));
+
+    await waitFor(() => expect(screen.queryByTestId('temporary-password-value')).toBeNull());
+    // The value must be gone from the document entirely, not merely hidden.
+    expect(document.body.textContent).not.toContain(TEMP_PASSWORD);
+
+    // Re-opening starts at the confirm step again rather than replaying the old value.
+    fireEvent.click(await openResetMenu());
+    expect(await screen.findByText(/รหัสผ่านเดิมจะใช้ไม่ได้ทันที/)).not.toBeNull();
+    expect(screen.queryByTestId('temporary-password-value')).toBeNull();
+    expect(document.body.textContent).not.toContain(TEMP_PASSWORD);
+  });
+
+  it('surfaces a failed reset without closing or revealing anything', async () => {
+    api.employees.resetPassword.mockRejectedValue(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'));
+
+    renderDetail({ role: 'hr', employeeId: 1 });
+    fireEvent.click(await openResetMenu());
+    fireEvent.click(await screen.findByRole('button', { name: 'ตั้งรหัสผ่านชั่วคราว' }));
+
+    expect(await screen.findByText('ไม่มีสิทธิ์เข้าถึงรายการนี้')).not.toBeNull();
+    expect(screen.queryByTestId('temporary-password-value')).toBeNull();
   });
 });

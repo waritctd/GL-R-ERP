@@ -265,11 +265,6 @@ const SERVER_ONLY = {
     + 'LeaveControllerPolicyDocumentIntegrationTest. NOTE the GET half is still called by hrApi — but only by '
     + 'policyDocumentAvailable/downloadPolicyDocument, which LeavePolicyBar.jsx no longer calls since the PDF was '
     + 'bundled at frontend/public/policy/ (2026-08-11 owner ruling).',
-  'POST /api/employees/{}/reset-password':
-    'HR-only temporary-password issue, covered by EmployeeControllerTest and EmployeeServiceResetPasswordTest. '
-    + 'Operationally significant: README.md and PasswordBackfillRunner both designate this as THE onboarding path '
-    + 'for a new employee\'s first password (it replaced employee-code-derived passwords, removed for security in '
-    + 'PR #150), yet there is no button and no documented curl recipe. Onboarding needs a hand-crafted POST today.',
 
   // GET/PUT /api/deal-estimate-markup were the two entries here until 2026-08-14. They are gone
   // rather than re-worded: issue #748's owner ruling deleted the controller, repository, DTOs, both

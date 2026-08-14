@@ -323,7 +323,7 @@ export function App() {
             />
             <Route
               path="/employees/:id"
-              element={<EmployeeDetailPage user={user} onUpdateEmployee={updateEmployee} />}
+              element={<EmployeeDetailPage user={user} onUpdateEmployee={updateEmployee} showToast={showToast} />}
             />
             <Route
               path="/requests"

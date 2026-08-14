@@ -9,6 +9,8 @@ export const API_ROUTES = {
     list: '/api/employees',
     create: '/api/employees',
     detail: (id) => `/api/employees/${id}`,
+    // HR-only temporary-password issue. Mirrors EmployeeController#resetPassword.
+    resetPassword: (id) => `/api/employees/${id}/reset-password`,
   },
   profileRequests: {
     list: '/api/profile-requests',

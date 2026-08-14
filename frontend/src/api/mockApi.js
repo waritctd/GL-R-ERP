@@ -3737,6 +3737,19 @@ function findEmployee(id) {
   return employee;
 }
 
+// Mirrors TemporaryPasswordGenerator's alphabet and length exactly (14 chars, alphanumeric with
+// the visually ambiguous O/0/I/l/1 removed) so ResetPasswordDialog is exercised against a
+// realistic value. Uses Math.random, NOT SecureRandom — this is a demo-fixture generator for
+// exercising the UI, not a security-grade one; only the real backend's SecureRandom is that.
+const TEMPORARY_PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+function mockTemporaryPassword() {
+  let password = '';
+  for (let i = 0; i < 14; i += 1) {
+    password += TEMPORARY_PASSWORD_ALPHABET[Math.floor(Math.random() * TEMPORARY_PASSWORD_ALPHABET.length)];
+  }
+  return password;
+}
+
 function applyApprovedProfileRequest(request) {
   const employee = findEmployee(request.employeeId);
   if (request.fieldKey === 'phone') employee.phone = request.newValue;
@@ -4014,6 +4027,24 @@ export const api = {
         }
       }
       return delay({ employee: employeeWithRequestMeta(employee) });
+    },
+    // Mirrors EmployeeController#resetPassword + EmployeeService#resetPassword.
+    // hr ONLY — the Java side is `sessions.requireAnyRole(user, "hr")`, so ceo is deliberately NOT
+    // allowed here either. 404s on an unknown employee exactly as the service does.
+    async resetPassword(id) {
+      hasRole('hr');
+      const employee = findEmployee(id);
+      const temporaryPassword = mockTemporaryPassword();
+      // Mirrors EmployeeAuthRepository#setTemporaryPassword: the row's password is replaced and
+      // must_change_password is set, so the next login is forced through ChangePasswordModal.
+      // The real backend writes hr.employee directly, so an employee with no login row is still a
+      // successful reset — hence the optional match rather than a failure.
+      const account = db.users.find((user) => user.employeeId === employee.id);
+      if (account) {
+        account.password = temporaryPassword;
+        account.mustChangePassword = true;
+      }
+      return delay({ temporaryPassword });
     },
   },
   // Mirrors ProfileRequestController + ProfileRequestService (profile/).
