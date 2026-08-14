@@ -6535,6 +6535,80 @@ export const api = {
     },
 
     /**
+     * Issue #737 — SHAPE MIRROR ONLY, read this before trusting it for anything else.
+     *
+     * The real endpoint (CommissionController#reps / CommissionService
+     * #listManualCommissionRepOptions) returns hr.employee rows in ฝ่ายขาย, keyed by employee_id.
+     * This mock returns db.users rows instead, keyed by db.users id — NOT the same identity
+     * space. That divergence is deliberate, not sloppy: createManualCommission() below resolves
+     * its salesRepId against `db.users.find(item => item.id === salesRepId)`, not db.employees,
+     * so a picker built from db.employees ids would select values that never resolve to a name
+     * in mock mode.
+     *
+     * SCOPE (owner ruling, 2026-08-14 — 2nd ruling on this endpoint, superseding a brief
+     * per-caller-division-scoped design in between): ceo and sales_manager now get the IDENTICAL
+     * list — every ACTIVE employee in ฝ่ายขาย, division MEMBERSHIP rather than "has a commission
+     * record", so a brand-new rep still appears. No per-caller scoping is left to mirror.
+     *
+     * HOW THIS MOCK IDENTIFIES ฝ่ายขาย, AND WHY IT IS db.users' `role`, NOT db.employees'
+     * `divisionId`. The real query joins hr.employee to hr.division and matches the division's
+     * code — but this fixture's db.employees divisions ('SAL'/'WHL'/'PRC'/'FIN'/'HRD'/'IT', see
+     * demoData.js's `divisions` array) are a SEPARATE, hand-authored coding scheme that does not
+     * correspond to the real hr.division.source_code values ('SA'/'WH'/'PCIM'/'AC'/'HR'/'QC'/'MD')
+     * at all — there is no live DivisionAccessPolicy-style derivation running in mock mode to
+     * bridge the two. A division-based filter (`employeeForUser(item)?.divisionId === 'SAL'`) was
+     * tried and rejected here: TWO of db.users' three sales-role personas — sales@glr.co.th and
+     * sales2@glr.co.th — carry `employeeId: null`, so a division-based filter would silently drop
+     * the two actual sales-rep demo accounts from a "list everyone in sales" picker, leaving only
+     * the manager. Backwards. Filtering on `role === 'sales' || role === 'sales_manager'` instead
+     * is this fixture's own faithful stand-in: DivisionAccessPolicy.roleFor derives exactly those
+     * two role strings FROM ฝ่ายขาย membership and nothing else in the real system, and every
+     * db.users row's role here is hand-authored to match what it is meant to represent — "has a
+     * sales-shaped role" is the closest signal this data model actually has, not a loose
+     * approximation reached for lack of a better one.
+     *
+     * THIS STILL UNDERCOUNTS relative to the real endpoint, and structurally now, not by fixture
+     * accident: the real query has no login-account precondition at all — it reads hr.employee
+     * directly, so an active ฝ่ายขาย employee who has never had a login created still appears.
+     * This mock can only ever surface db.users rows, so anyone belonging to sales without one of
+     * the 3 sales-role personas here (sales, sales2, sales.manager) is invisible in mock mode.
+     * That is the safe direction (CLAUDE.md: a mock less populated than production is the same
+     * class of lie as one more permissive, but it never shows someone who should not be visible)
+     * — do not read mock-mode picker population as a rehearsal of the real ฝ่ายขาย roster size.
+     *
+     * A SECOND, OPPOSITE axis is live and is NOT safe, so it is named rather than left implicit:
+     * the filter above reads `item.active`, which is the db.users LOGIN row's flag, and never
+     * consults the linked employee's employment status. demoData's employees[] carry a real
+     * `status` (indices 3/17/28 probation, 24/29 resigned) that this method cannot see. Today no
+     * sales-role persona points at one of those rows, so the undercount above holds — but that is
+     * a fixture accident, not a property of this code. Point sales.manager@glr.co.th at a
+     * non-"ACT" employee and this mock lists someone the real `WHERE e.is_active` excludes: an
+     * OVERCOUNT, the dangerous direction. Mirror the employment-status filter here before relying
+     * on mock mode for anything that turns on who is currently employed.
+     *
+     * This mock sorts with JS `localeCompare('th')`; the real endpoint's ORDER BY sorts under
+     * Postgres's collation. The two are different implementations of "Thai order" and are not
+     * guaranteed to agree on every input. The sort stays (a picker has to render in SOME order),
+     * but do not treat mock-mode ordering as a rehearsal for the real one.
+     *
+     * No employeeCode field: the real DTO does not have one either (see CommissionRepOptionDto's
+     * javadoc for why it was removed — showing a second id-shaped value next to the real
+     * employee_id field invited a user to type the wrong one in).
+     *
+     * Authz here only APPROXIMATES the Java gate (CLAUDE.md "Mock API contract") — the real
+     * boundary (only sales_manager/ceo may call this) is proven by
+     * CommissionRepLookupIntegrationTest against real Postgres, not by this check.
+     */
+    async reps() {
+      hasRole('sales_manager', 'ceo');
+      const reps = db.users
+        .filter((item) => item.active && (item.role === 'sales' || item.role === 'sales_manager'))
+        .map((item) => ({ id: item.id, name: item.name }))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name), 'th') || a.id - b.id);
+      return delay({ reps });
+    },
+
+    /**
      * Manual commission entries (feat/commission-manual-adjustments): sales_manager/CEO adds a
      * hand-typed, signed amount for kind ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE against
      * salesRepId's payrollMonth — no invoice, never touches the commission tier calculation.

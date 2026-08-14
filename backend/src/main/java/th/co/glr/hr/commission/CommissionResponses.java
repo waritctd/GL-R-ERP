@@ -11,4 +11,6 @@ public final class CommissionResponses {
     public record CommissionSimulationResponse(CommissionSimulationDto simulation) {}
     public record PayrollSummaryResponse(PayrollCommissionSummaryDto summary) {}
     public record CommissionMonthlySummaryResponse(CommissionMonthlySummaryDto summary) {}
+    // Issue #737 — the manual-commission rep picker. See CommissionController#reps.
+    public record CommissionRepOptionsResponse(List<CommissionRepOptionDto> reps) {}
 }

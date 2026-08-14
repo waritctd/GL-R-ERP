@@ -85,6 +85,17 @@ const GATES = [
     // that updates this line, rather than a silent regression against a documented ruling.
     source: 'CatalogController (product decision #205)',
   },
+  {
+    name: 'GET /api/commissions/reps — the manual-commission rep picker',
+    path: '/api/commissions/reps',
+    allowed: ['sales_manager', 'ceo'],
+    denied: except('sales_manager', 'ceo'),
+    // CommissionController#reps / CommissionService.MANUAL_CREATE_ROLES: the identical gate as
+    // POST /api/commissions/manual (issue #737). hr is in the denied set on purpose: hr is the
+    // ONLY role that can read /api/employees (the row above), and it deliberately cannot read
+    // this narrower, purpose-built list — the same asymmetry the row above's comment calls out.
+    source: 'CommissionController#reps / CommissionService.MANUAL_CREATE_ROLES',
+  },
 ];
 
 test.describe('backend authorization (real Java services)', () => {

@@ -19,6 +19,7 @@ import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
+import th.co.glr.hr.auth.DivisionAccessPolicy;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.notification.NotificationService;
@@ -636,6 +637,49 @@ public class CommissionService {
         auditService.record(actor, "CREATE_MANUAL_COMMISSION", "commission_record", commissionId, null, created);
         notifyManualCreated(created);
         return created;
+    }
+
+    /**
+     * Issue #737, SCOPE per owner ruling 2026-08-14 (2nd ruling — Ploy, after PR #767 was already
+     * open: "sales_manager and ceo should see every sales who get their commission", confirmed
+     * explicit: division MEMBERSHIP, not "has a commission record", so a brand-new rep still
+     * appears). Supersedes the per-caller division scoping this method briefly had. The frontend
+     * originally derived this list from {@code api.tickets.list({})}'s distinct {@code
+     * createdById} values, which silently omitted anyone who owned no deal — e.g. a sales manager
+     * receiving a MANAGER-kind entry, or a rep who had not yet closed one. Replaced with a
+     * purpose-built read: ACTIVE employees in ฝ่ายขาย, the SAME list for {@code sales_manager} and
+     * {@code ceo} — no per-role branching left.
+     *
+     * <p>ฝ่ายขาย is identified by {@link th.co.glr.hr.auth.DivisionAccessPolicy#SALES_DIVISION_CODE},
+     * never a hardcoded {@code 'SA'} literal here — that constant is also what {@code
+     * DivisionAccessPolicy.roleFor} itself derives {@code sales}/{@code sales_manager} from, so the
+     * picker's population cannot silently drift from the login system's own definition of who is a
+     * salesperson. See {@link CommissionRepository#findActiveSalesRepOptions(String)} for the SQL,
+     * which reproduces {@code DivisionAccessPolicy#divisionCode}'s exact fallback semantics rather
+     * than approximating them.
+     *
+     * <p>See {@link CommissionRepOptionDto}'s javadoc for why the DTO carries only id + display
+     * name. The numeric Employee-ID field on {@code ManualCommissionForm} stays the authoritative
+     * input for anyone the picker excludes on purpose (an inactive employee, or anyone outside
+     * ฝ่ายขาย entirely) — a narrower list is a visible, explained limit rather than issue #737's
+     * original silent one; see {@code CommissionPage.jsx}'s picker label.
+     *
+     * <p>Same {@code MANUAL_CREATE_ROLES} gate as {@link #createManualCommission}, checked HERE in
+     * the service rather than relying on {@code @PreAuthorize} alone: this repo's integration
+     * harness hand-wires {@code new CommissionService(...)} with no Spring AOP proxy, so
+     * {@code @PreAuthorize} never runs there — a controller-only gate would make the required
+     * real-DB authz test ({@code CommissionRepLookupIntegrationTest}) vacuous.
+     * {@link CommissionController#reps} carries the identical {@code @PreAuthorize} as
+     * defence-in-depth, but this check is the authoritative one.
+     */
+    public List<CommissionRepOptionDto> listManualCommissionRepOptions(UserPrincipal actor) {
+        if (!MANUAL_CREATE_ROLES.contains(actor.role())) {
+            // Same roles as createManualCommission's gate, but a different action -- this refuses
+            // a READ (viewing the rep list), not a create, so the message says so rather than
+            // reusing the create-flow wording verbatim.
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะผู้จัดการฝ่ายขายหรือ CEO เท่านั้นที่ดูรายชื่อนี้ได้");
+        }
+        return commissions.findActiveSalesRepOptions(DivisionAccessPolicy.SALES_DIVISION_CODE);
     }
 
     public CommissionSimulationDto simulate(CommissionSimulatorRequest request, UserPrincipal actor) {

@@ -22,6 +22,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.commission.CommissionResponses.CommissionDetailResponse;
 import th.co.glr.hr.commission.CommissionResponses.CommissionListResponse;
 import th.co.glr.hr.commission.CommissionResponses.CommissionMonthlySummaryResponse;
+import th.co.glr.hr.commission.CommissionResponses.CommissionRepOptionsResponse;
 import th.co.glr.hr.commission.CommissionResponses.CommissionSimulationResponse;
 import th.co.glr.hr.commission.CommissionResponses.PayrollSummaryResponse;
 import th.co.glr.hr.common.ApiException;
@@ -198,6 +199,32 @@ public class CommissionController {
             request.payrollMonth(),
             user
         ));
+    }
+
+    /**
+     * Issue #737: the manual-commission rep picker's data source (id and display name only).
+     * Placed next to {@code createManual} deliberately: same role gate, same purpose. Per owner
+     * ruling 2026-08-14, {@code ceo} and {@code sales_manager} get the IDENTICAL list — every
+     * ACTIVE employee in ฝ่ายขาย, division membership rather than "has a commission record" so a
+     * brand-new rep still appears. {@link CommissionService#listManualCommissionRepOptions} is the
+     * authoritative statement of that rule — read it there, not here, so this comment cannot drift
+     * out of sync with the one that actually enforces it.
+     *
+     * <p>Defence in depth, not the authority: {@link CommissionService#listManualCommissionRepOptions}
+     * repeats this exact role check itself and IS the authoritative gate — this repo's integration
+     * test harness hand-wires the service directly with no Spring AOP proxy, so
+     * {@code @PreAuthorize} is never exercised there. In production this annotation IS live and
+     * independently refuses a wrong-role request: {@code SecurityConfig}'s {@code
+     * @EnableMethodSecurity} wraps this bean in a method-security AOP proxy that evaluates
+     * {@code @PreAuthorize} before the method body runs — a second, separate mechanism from the
+     * servlet filter chain (which only gets as far as "is there a session" via {@code
+     * .anyRequest().authenticated()}, and never sees a role at all).
+     */
+    @GetMapping("/reps")
+    @PreAuthorize("hasAnyRole('SALES_MANAGER','CEO')")
+    public CommissionRepOptionsResponse reps(HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new CommissionRepOptionsResponse(commissionService.listManualCommissionRepOptions(user));
     }
 
     @PostMapping("/simulator")

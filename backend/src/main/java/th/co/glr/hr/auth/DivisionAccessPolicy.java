@@ -28,6 +28,26 @@ public final class DivisionAccessPolicy {
     private static final String MANAGER_TITLE = "ผู้จัดการ";      // includes ผู้ช่วยผู้จัดการ
     private static final String EXECUTIVE_TITLE = "กรรมการ";      // ประธานกรรมการ, กรรมการ, กรรมการผู้จัดการ
 
+    /**
+     * ฝ่ายขาย's division code, shared by this class's own {@code sales}/{@code sales_manager}
+     * derivation and by {@code CommissionRepository#findActiveSalesRepOptions} (issue #737's
+     * manual-commission rep picker), so the picker cannot drift from the role derivation. Exposed
+     * for that reason — the {@code "md"}/{@code "hr"}/... literals below have no second caller and
+     * stay inline.
+     *
+     * <p><b>Not the only ฝ่ายขาย predicate in the codebase</b>, and saying otherwise would send the
+     * next reader looking for a guarantee that does not exist: {@code CommissionRepository
+     * #findSalesManagerApproverEmployeeIds} matches {@code d.source_code ILIKE 'SA%'}, which also
+     * catches {@code SA2}/{@code SALES…} and has no name-prefix fallback. That predicate predates
+     * this constant and is deliberately left alone here — unifying it would change who approves a
+     * commission, which is not issue #737's business.
+     *
+     * <p>Note this is ฝ่ายขาย <em>membership</em>, a superset of who {@link #roleFor} labels
+     * {@code sales}/{@code sales_manager}: an executive-titled ฝ่ายขาย member short-circuits to
+     * {@code ceo} above. The picker deliberately lists membership.
+     */
+    public static final String SALES_DIVISION_CODE = "sa";
+
     private DivisionAccessPolicy() {
     }
 
@@ -51,7 +71,7 @@ public final class DivisionAccessPolicy {
         if ("qc".equals(code)) {
             return "qc";
         }
-        if ("sa".equals(code)) {
+        if (SALES_DIVISION_CODE.equals(code)) {
             return isManager(employee) ? "sales_manager" : "sales";
         }
         return "employee";

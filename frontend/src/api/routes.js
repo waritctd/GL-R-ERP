@@ -208,6 +208,9 @@ export const API_ROUTES = {
     // Manual commission entries (feat/commission-manual-adjustments). Mirrors
     // CommissionController's POST /api/commissions/manual.
     manual: '/api/commissions/manual',
+    // Issue #737: the manual-commission rep picker's data source -- active employees in ฝ่ายขาย,
+    // the same list for sales_manager and ceo alike. Mirrors CommissionController#reps.
+    reps: '/api/commissions/reps',
     simulator: '/api/commissions/simulator',
     payrollReady: '/api/commissions/payroll-ready',
     // fix/commission-figures-from-backend: a rep's own live monthly commission estimate, computed
