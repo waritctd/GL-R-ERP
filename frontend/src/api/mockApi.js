@@ -7767,7 +7767,16 @@ export const api = {
       ticket.updatedAt = doc.updatedAt;
       pushEvent(ticket, user, 'DEPOSIT_NOTICE_ISSUED', ticket.status, ticket.status, `เอกสาร ${doc.docNumber} ออกแล้ว`);
 
-      return delay({ depositNotice: structuredClone(doc) });
+      // Mirrors DepositNoticeService.issue's renderAfterCommit (PR #721 moved the PDF/XLSX
+      // render into an afterCommit callback): the DTO issue() itself returns still reports
+      // the PRE-render state, and only a subsequent read sees hasPdf/hasXlsx true. ORDER IS
+      // LOAD-BEARING — clone the response BEFORE flipping the stored doc's flags, or the
+      // response would lie about what production actually returns (issue #752).
+      const response = structuredClone(doc);
+      doc.hasPdf = true;
+      doc.hasXlsx = true;
+
+      return delay({ depositNotice: response });
     },
 
     async downloadXlsx(docId) {
