@@ -20,6 +20,8 @@ vi.mock('../../api/index.js', () => ({
     pricingFormulaConfig: {
       get: vi.fn(),
       update: vi.fn(),
+      addFreightRate: vi.fn(),
+      deleteFreightRate: vi.fn(),
     },
   },
 }));
@@ -49,6 +51,24 @@ function sampleFormulaConfig() {
     ],
     clearanceFees: [
       { clearanceFeeId: 1, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 8000 },
+    ],
+  };
+}
+
+// Issue #436: extends sampleFormulaConfig with two more rows that leave ONE cell genuinely blank
+// (China thickness [7,12) x qty [100, null)) -- mirrors V109's own "trailing blank, never an
+// interior hole" seed shape. A DISTINCT fixture, not a mutation of sampleFormulaConfig's shared
+// default, so the existing "saves with the exact payload" test's exact 1-row freightRates
+// assertion is untouched by this file.
+function sampleFormulaConfigWithBlankCell() {
+  const base = sampleFormulaConfig();
+  return {
+    ...base,
+    freightRates: [
+      ...base.freightRates,
+      { freightRateId: 2, originCountry: 'China', thicknessMinMm: 3, thicknessMaxMm: 7, qtyMinSqm: 100, qtyMaxSqm: null, amountThb: 70000 },
+      { freightRateId: 3, originCountry: 'China', thicknessMinMm: 7, thicknessMaxMm: 12, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 65000 },
+      // China [7,12) x [100, null) is DELIBERATELY missing -- the blank cell under test.
     ],
   };
 }
@@ -89,6 +109,10 @@ describe('CeoSettingsPage', () => {
     api.priceCalcConfigs.update.mockResolvedValue({});
     api.pricingFormulaConfig.get.mockResolvedValue({ formulaConfig: sampleFormulaConfig() });
     api.pricingFormulaConfig.update.mockResolvedValue({ formulaConfig: { ...sampleFormulaConfig(), version: 2 } });
+    api.pricingFormulaConfig.addFreightRate.mockResolvedValue({ formulaConfig: { ...sampleFormulaConfig(), version: 2 } });
+    api.pricingFormulaConfig.deleteFreightRate.mockResolvedValue({
+      formulaConfig: { ...sampleFormulaConfig(), version: 2, freightRates: [] },
+    });
   });
 
   it('renders fx rates from a mocked api.fxRates.list', async () => {
@@ -290,6 +314,146 @@ describe('CeoSettingsPage', () => {
           { qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 8000 },
         ],
       });
+    });
+  });
+
+  // Issue #436, commit 3: freight-row ADD. Lives on the READ-ONLY matrix panel — see
+  // AddFreightRateModal's own doc comment for why it is never inside FormulaConfigEditModal.
+  describe('freight-row add (issue #436)', () => {
+    it('renders an add control on a blank matrix cell; clicking it opens the modal prefilled with that cell\'s coordinates', async () => {
+      api.pricingFormulaConfig.get.mockResolvedValue({ formulaConfig: sampleFormulaConfigWithBlankCell() });
+      renderCeoSettingsPage();
+
+      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+      const addCellButton = await screen.findByRole(
+        'button',
+        { name: 'เพิ่มค่าขนส่ง China หนา 7 – <12 มม. ช่วง ≥100 ตร.ม.' },
+      );
+      fireEvent.click(addCellButton);
+
+      const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
+      expect(within(dialog).getByLabelText('ประเทศต้นทาง').value).toBe('China');
+      expect(within(dialog).getByLabelText('ความหนาตั้งแต่ (มม.)').value).toBe('7');
+      expect(within(dialog).getByLabelText('ถึง (<) (มม.)').value).toBe('12');
+      expect(within(dialog).getByLabelText('จำนวนตั้งแต่ (ตร.ม.)').value).toBe('100');
+      // qtyMaxSqm is null on the target cell (open-ended top band) -- prefilled BLANK, not '0'
+      // and not the string 'null'.
+      expect(within(dialog).getByLabelText('ถึง (<) (ตร.ม.)').value).toBe('');
+    });
+
+    it('submits with the right types, sending qtyMaxSqm: null when the field is left blank', async () => {
+      renderCeoSettingsPage();
+      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+
+      fireEvent.click(screen.getByRole('button', { name: '+ เพิ่มค่าขนส่ง' }));
+      const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
+
+      fireEvent.change(within(dialog).getByLabelText('ประเทศต้นทาง'), { target: { value: 'Spain' } });
+      fireEvent.change(within(dialog).getByLabelText('ความหนาตั้งแต่ (มม.)'), { target: { value: '21' } });
+      fireEvent.change(within(dialog).getByLabelText('ถึง (<) (มม.)'), { target: { value: '25' } });
+      fireEvent.change(within(dialog).getByLabelText('จำนวนตั้งแต่ (ตร.ม.)'), { target: { value: '1' } });
+      // qtyMax deliberately left blank.
+      fireEvent.change(within(dialog).getByLabelText('ค่าขนส่ง (บาท)'), { target: { value: '90000' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'เพิ่มค่าขนส่ง' }));
+
+      await waitFor(() => expect(api.pricingFormulaConfig.addFreightRate).toHaveBeenCalledWith({
+        originCountry: 'Spain',
+        thicknessMinMm: 21,
+        thicknessMaxMm: 25,
+        qtyMinSqm: 1,
+        qtyMaxSqm: null,
+        amountThb: 90000,
+      }));
+    });
+
+    it('rejects a blank required field inline and never calls addFreightRate', async () => {
+      renderCeoSettingsPage();
+      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+
+      fireEvent.click(screen.getByRole('button', { name: '+ เพิ่มค่าขนส่ง' }));
+      const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'เพิ่มค่าขนส่ง' }));
+
+      expect(await within(dialog).findByText('กรุณากรอกประเทศต้นทาง')).not.toBeNull();
+      expect(api.pricingFormulaConfig.addFreightRate).not.toHaveBeenCalled();
+    });
+
+    it('surfaces a server 400 (overlap) through showToast', async () => {
+      const showToast = vi.fn();
+      api.pricingFormulaConfig.addFreightRate.mockRejectedValue(
+        new Error('ช่วงความหนาและช่วงจำนวน (ตร.ม.) ซ้อนทับกัน: China หนา 3-7 มม. (1-100 ตร.ม.) กับ 3-7 มม. (1-100 ตร.ม.)'),
+      );
+      renderCeoSettingsPage(showToast);
+      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+
+      fireEvent.click(screen.getByRole('button', { name: '+ เพิ่มค่าขนส่ง' }));
+      const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
+      fireEvent.change(within(dialog).getByLabelText('ประเทศต้นทาง'), { target: { value: 'China' } });
+      fireEvent.change(within(dialog).getByLabelText('ความหนาตั้งแต่ (มม.)'), { target: { value: '3' } });
+      fireEvent.change(within(dialog).getByLabelText('ถึง (<) (มม.)'), { target: { value: '7' } });
+      fireEvent.change(within(dialog).getByLabelText('จำนวนตั้งแต่ (ตร.ม.)'), { target: { value: '1' } });
+      fireEvent.change(within(dialog).getByLabelText('ค่าขนส่ง (บาท)'), { target: { value: '60000' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'เพิ่มค่าขนส่ง' }));
+
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('ซ้อนทับกัน')));
+    });
+  });
+
+  // Issue #436, commit 4: freight-row DELETE. Same read-only-matrix-only placement as add.
+  // sampleFormulaConfig's single populated cell (China, freightRateId 1) is the row under test in
+  // every case below -- its delete control's accessible name is matched by PREFIX regex rather
+  // than the literal en-dash-bearing band labels, so a transcription slip in a dash character
+  // cannot make these tests pass or fail for the wrong reason.
+  describe('freight-row delete (issue #436)', () => {
+    async function openDeleteConfirm() {
+      const deleteButton = await screen.findByRole('button', { name: /^ลบค่าขนส่ง China/ });
+      fireEvent.click(deleteButton);
+      return screen.findByRole('dialog', { name: 'ยืนยันการลบค่าขนส่ง' });
+    }
+
+    it('renders a delete control on a populated cell; clicking it opens a confirmation naming that row', async () => {
+      renderCeoSettingsPage();
+      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+
+      const dialog = await openDeleteConfirm();
+      expect(within(dialog).getByText(/China/)).not.toBeNull();
+      expect(within(dialog).getByText(/60,000\.00 บาท/)).not.toBeNull();
+    });
+
+    it("confirming calls deleteFreightRate with that row's freightRateId exactly once", async () => {
+      renderCeoSettingsPage();
+      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+
+      const dialog = await openDeleteConfirm();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ลบค่าขนส่ง' }));
+
+      await waitFor(() => expect(api.pricingFormulaConfig.deleteFreightRate).toHaveBeenCalledWith(1));
+      expect(api.pricingFormulaConfig.deleteFreightRate).toHaveBeenCalledTimes(1);
+    });
+
+    it('cancelling the confirmation calls nothing', async () => {
+      renderCeoSettingsPage();
+      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+
+      const dialog = await openDeleteConfirm();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
+
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันการลบค่าขนส่ง' })).toBeNull());
+      expect(api.pricingFormulaConfig.deleteFreightRate).not.toHaveBeenCalled();
+    });
+
+    it('surfaces a server 400 (interior gap) through showToast', async () => {
+      const showToast = vi.fn();
+      api.pricingFormulaConfig.deleteFreightRate.mockRejectedValue(new Error(
+        'ลบไม่ได้: จะทำให้ช่วงจำนวน (ตร.ม.) ขาดตอนตรงกลาง — China หนา 3-7 มม. ช่วง 1-100 ตร.ม. ลบได้เฉพาะช่วงบนสุดหรือล่างสุด',
+      ));
+      renderCeoSettingsPage(showToast);
+      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+
+      const dialog = await openDeleteConfirm();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ลบค่าขนส่ง' }));
+
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('ขาดตอนตรงกลาง')));
     });
   });
 

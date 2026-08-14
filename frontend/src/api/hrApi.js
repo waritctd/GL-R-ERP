@@ -22,6 +22,12 @@ export const api = {
     create: (payload) => apiRequest(API_ROUTES.employees.create, { method: 'POST', body: payload }),
     get: (id) => apiRequest(API_ROUTES.employees.detail(id)),
     update: (id, payload) => apiRequest(API_ROUTES.employees.detail(id), { method: 'PATCH', body: payload }),
+    // HR-only. Mints a fresh temporary password, stores only its BCrypt hash, and sets
+    // must_change_password = TRUE (EmployeeAuthRepository#setTemporaryPassword), so the employee is
+    // forced through ChangePasswordModal at next login. Resolves `{ temporaryPassword }` —
+    // the plaintext is returned ONCE and is not retrievable afterwards, so the caller must show it
+    // to the operator immediately and must never log, cache or persist it.
+    resetPassword: (id) => apiRequest(API_ROUTES.employees.resetPassword(id), { method: 'POST' }),
   },
   profileRequests: {
     list: () => apiRequest(API_ROUTES.profileRequests.list),
@@ -172,18 +178,98 @@ export const api = {
     // see LeaveRequestPage.jsx's own comment on why that matters.
     preview: (payload, options = {}) =>
       apiRequest(API_ROUTES.leave.preview, { method: 'POST', body: payload, signal: options.signal }),
-    // Leave-surface IA rebuild, Phase A3: the §5 announcement PDF link on the "กฎการลา" tab.
-    // HEAD-probes first (no body transfer) so LeavePolicyBar.jsx can render a disabled/explained state
-    // when the backend has no path configured, instead of a broken link the user only discovers by
-    // clicking — see LeaveController#policyDocument's Javadoc for why the same route answers both.
+    // Leave-surface IA rebuild, Phase A3 (2026-08-10) → reversed 2026-08-14 (issue #774 shipped the
+    // upload UI, LeavePolicyDocumentPage.jsx — see LeavePolicyBar.jsx's header comment for the full
+    // history). HEAD-probes (no body transfer) so LeavePolicyBar.jsx can prefer a real uploaded
+    // document over its bundled fallback WITHOUT ever presenting an unverified answer as verified.
+    //
+    // `fetch` resolves if and only if an HTTP response actually came back — that is what separates
+    // "the server answered" from "nothing answered". But the DOCUMENT ITSELF is served in every
+    // case: a leave policy is reference material, so withholding it is the worse failure. The four
+    // rows below differ only in the STRENGTH OF THE WARNING the caller shows next to it, never in
+    // whether the document is offered —
+    //
+    //   2xx + content-type: application/pdf     -> 'available'      a current document exists; no warning
+    //   404                                      -> 'absent'         the server ANSWERED "nothing stored" --
+    //                                                                 that confirms the bundled copy IS
+    //                                                                 current, so this is an answer, not a
+    //                                                                 failure; no warning
+    //   2xx, but NOT a PDF (a static host's SPA -> 'unverified'      learned nothing about whether a real
+    //     catch-all serving index.html), OR                          API exists behind this path; mild
+    //     fetch REJECTS (network/DNS/CORS --                         warning
+    //     no HTTP response at all)
+    //   any other status (500/401/403/502/…)    -> 'check-failed'    POSITIVE evidence a backend exists and
+    //                                                                 refused to answer; strong warning + retry
+    //
+    // Why a 500 warns harder than a rejection: a 500 tells you a backend exists, could be holding a
+    // newer announcement, and is failing to say so. Treating that the same as "learned nothing" would
+    // under-warn about the one row with real reason for suspicion. A transport rejection or a non-PDF
+    // 200 carries no such evidence — neither says anything about whether a backend exists at all — so
+    // those two share the milder 'unverified' label instead.
+    //
+    // Why this never throws for an HTTP reason: every row above still has a document to fall back to
+    // (the bundled copy), so raising here would only force the caller to catch and fall back anyway.
+    // This function does the falling back itself and hands the caller a label to render, not an error
+    // to recover from.
+    //
+    // HEAD keeps the response's headers and drops only the body (Spring's DispatcherServlet answers
+    // HEAD on a @GetMapping this way — see LeaveController#policyDocument's Javadoc), which is what
+    // makes the content-type check below possible without transferring the PDF's bytes just to check
+    // availability. The check itself exists because a plain static host's SPA catch-all answers
+    // `200 text/html` for ANY unmatched path — a bare `res.ok` would read that as "available" and hand
+    // the reader an HTML page as if it were the announcement PDF.
     policyDocumentAvailable: async () => {
-      const res = await fetch(API_ROUTES.leave.policyDocument, { method: 'HEAD', credentials: 'include' });
-      return res.ok;
+      let res;
+      try {
+        res = await fetch(API_ROUTES.leave.policyDocument, { method: 'HEAD', credentials: 'include' });
+      } catch {
+        return 'unverified';
+      }
+      if (res.status === 404) return 'absent';
+      if (!res.ok) return 'check-failed';
+      const contentType = res.headers.get('content-type') ?? '';
+      return contentType.includes('application/pdf') ? 'available' : 'unverified';
     },
     downloadPolicyDocument: async () => {
       const res = await fetch(API_ROUTES.leave.policyDocument, { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');
       return res.blob();
+    },
+    // Uploads a new version of the §5 announcement PDF (issue #744). SAME PATH as the GET above,
+    // different verb — LeaveController maps both onto /policy-document.
+    //
+    // hr + ceo (`requireAnyRole(user, "hr", "ceo")`), unlike the GET, which every authenticated
+    // employee may call: reading the rules that bind you is not the same question as replacing them.
+    //
+    // NEVER overwrites. Each call INSERTs a new row keyed on the `effectiveFrom` given here, so a
+    // superseded announcement stays retrievable by id; only which row answers "current" changes.
+    // "Current" is the latest effective_from that is <= today, so an upload dated in the FUTURE is
+    // stored and returns 200, yet the GET keeps serving the previous version until that date.
+    //
+    // The server accepts only `application/pdf` and caps the body at 10 MB. Both checks read the
+    // CLIENT-DECLARED content type (`MultipartFile#getContentType`), so neither is a guarantee about
+    // the bytes — see LeavePolicyDocumentPage.jsx, which is careful not to promise otherwise.
+    //
+    // Resolves `{ document }` — a LeavePolicyDocumentDto (documentId, fileName, mimeType, fileSize,
+    // effectiveFrom, uploadedAt). Bare fetch() rather than apiRequest because the body is multipart;
+    // csrfHeaders is still required, since CsrfCookieFilter rejects any unsafe /api/ method without
+    // a matching X-XSRF-TOKEN (a leave-submit regression proved a hand-rolled fetch that forgets it
+    // 403s on the real backend while passing under mocks, which never enforce CSRF).
+    uploadPolicyDocument: async (file, effectiveFrom) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('effectiveFrom', effectiveFrom);
+      const res = await fetch(API_ROUTES.leave.policyDocument, {
+        method: 'POST',
+        credentials: 'include',
+        headers: csrfHeaders('POST'),
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'อัปโหลดเอกสารประกาศไม่สำเร็จ');
+      }
+      return res.json();
     },
     // Phase A4: certificate download for a review row (ReviewQueueTab.jsx) or the requester's own
     // expanded row (MyLeaveTab.jsx). Access (owning employee, or a canReviewEmployee reviewer of
@@ -328,6 +414,8 @@ export const api = {
   pricingFormulaConfig: {
     get: () => apiRequest(API_ROUTES.pricingFormulaConfig.get),
     update: (payload) => apiRequest(API_ROUTES.pricingFormulaConfig.update, { method: 'POST', body: payload }),
+    addFreightRate: (payload) => apiRequest(API_ROUTES.pricingFormulaConfig.freightRates, { method: 'POST', body: payload }),
+    deleteFreightRate: (freightRateId) => apiRequest(API_ROUTES.pricingFormulaConfig.freightRate(freightRateId), { method: 'DELETE' }),
   },
   attachments: {
     list: (ticketId) => apiRequest(API_ROUTES.attachments.list(ticketId)),
@@ -425,6 +513,11 @@ export const api = {
     // hand-typed { salesRepId, kind, amount, reason, payrollMonth } — no invoice, never touches
     // the tier calc. Mirrors CommissionController#createManual / ManualCommissionRequest verbatim.
     createManualCommission: (payload) => apiRequest(API_ROUTES.commissions.manual, { method: 'POST', body: payload }),
+    // Issue #737: the manual-commission rep picker's data source -- active employees in ฝ่ายขาย,
+    // the SAME list for sales_manager and ceo alike (owner ruling). The full rule lives on
+    // CommissionService#listManualCommissionRepOptions, not repeated here.
+    // Mirrors CommissionController#reps.
+    reps: () => apiRequest(API_ROUTES.commissions.reps),
     approve: (id) => apiRequest(API_ROUTES.commissions.approve(id), { method: 'POST' }),
     reject: (id, payload = {}) => apiRequest(API_ROUTES.commissions.reject(id), { method: 'POST', body: payload }),
     clawback: (id, payload) => apiRequest(API_ROUTES.commissions.clawback(id), { method: 'POST', body: payload }),
@@ -621,6 +714,32 @@ export const api = {
       apiRequest(API_ROUTES.payroll.deductionObligations.overrideContinue(id), { method: 'POST', body: { reason } }),
     clearDeductionObligationOverride: (id) =>
       apiRequest(API_ROUTES.payroll.deductionObligations.clearOverride(id), { method: 'POST' }),
+    // Garnishment shortfall ledger (issue #376). hr + ceo, read-only — rows are written only by
+    // DeductionObligationService#recordGarnishmentShortfalls during a payroll run. Optional
+    // `employeeId` / `kind` params; the server applies no LIMIT and no pagination.
+    getDeductionShortfalls: (params) => apiRequest(withQuery(API_ROUTES.payroll.deductionShortfalls, params)),
+    // Written-consent register (issue #376). hr + ceo may read (DeductionWrittenConsentService
+    // .VIEW_ROLES); only hr may write (EDIT_ROLES). Optional `employeeId` / `kind` params; the
+    // server applies no LIMIT and no pagination, and orders by employee_code then deduction_kind.
+    //
+    // Resolves `{ items }` — a record of which deductions HR holds written employee consent for on
+    // paper. It is NOT an enforcement gate: no payroll calculation reads it.
+    getDeductionConsents: (params) => apiRequest(withQuery(API_ROUTES.payroll.deductionConsents, params)),
+    // Upserts ONE (employeeId, deductionKind) row — the table's UNIQUE key, so re-recording the
+    // same pair overwrites rather than appending (V107). The audit log carries the history; this
+    // row only ever holds the current fact. hr ONLY (hasRole('HR') / EDIT_ROLES), narrower than the
+    // read above, which CEO also gets.
+    //
+    // ⚠️ The response is NOT the whole register. DeductionWrittenConsentService#upsert returns
+    // `repository.findAll(employeeId, deductionKind)` — the rows for the pair just written, i.e.
+    // exactly one row. A caller that assigned it over its list state would blank the table, so
+    // DeductionConsentsPage invalidates and refetches instead of writing the response through.
+    //
+    // 400 when deductionKind is outside CONSENT_APPLICABLE_KINDS (WARNING_LETTER / CUSTOMER_RETURN
+    // / OTHER_PRETAX / OTHER_POST_TAX — V107's CHECK constraint); 404 when the employee does not
+    // exist. Recording a row changes no payroll figure: nothing reads this table back.
+    upsertDeductionConsent: (payload) =>
+      apiRequest(API_ROUTES.payroll.deductionConsents, { method: 'PUT', body: payload }),
   },
   priceImport: {
     factories: () => apiRequest(API_ROUTES.priceImport.factories),
@@ -711,6 +830,11 @@ export const api = {
     recalculatePricingDecision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionRecalculate(id), { method: 'POST', body: payload }),
     approvePricingDecision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionApprove(id), { method: 'POST', body: payload }),
     returnPricingDecisionToImport: (id, payload) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionReturnToImport(id), { method: 'POST', body: payload }),
+    // V141 "CEO owns costing" (PR #702). No request body — PricingDecisionController.recalculateCost
+    // takes none.
+    recalculatePricingDecisionCost: (id) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionRecalculateCost(id), { method: 'POST' }),
+    overridePricingDecisionItemCost: (decisionId, itemId, payload) =>
+      apiRequest(API_ROUTES.pricingRequests.pricingDecisionItemCostOverride(decisionId, itemId), { method: 'PUT', body: payload }),
     // Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationController.
     createCustomerQuotation: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotations(id), { method: 'POST', body: payload }),
     listCustomerQuotations: (id) => apiRequest(API_ROUTES.pricingRequests.customerQuotations(id)),

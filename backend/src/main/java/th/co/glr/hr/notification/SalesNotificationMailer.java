@@ -27,11 +27,13 @@ public interface SalesNotificationMailer {
      * A sales-pipeline notification was fanned out to a role.
      *
      * @param role                 the role as passed to {@code NotificationRepository#notifyByRole}
-     *                             — {@code import}, {@code account}, {@code ceo} or {@code sales}
+     *                             — {@code import}, {@code account}, {@code ceo}, {@code sales} or
+     *                             {@code sales_manager}
      * @param notifiedEmployeeIds  the employees that actually received an in-app row, straight from
      *                             the {@code INSERT ... RETURNING}. Used only by the {@code sales}
-     *                             branch, which delivers per rep; the shared-box and CEO branches
-     *                             deliberately ignore it (see {@link SalesNotificationMailRouter})
+     *                             and {@code sales_manager} branches, which each deliver per
+     *                             recipient; the shared-box and CEO branches deliberately ignore it
+     *                             (see {@link SalesNotificationMailRouter})
      * @param title                the Thai title stored on the in-app row — becomes the mail
      *                             subject, so the two channels always read the same
      * @param message              the Thai body stored on the in-app row

@@ -26,6 +26,10 @@ public record DepositNoticeDto(
     BigDecimal        vatAmount,
     BigDecimal        totalPayable,
     List<String>      notes,
+    // One-render gap (issue #752): DepositNoticeService.issue defers the PDF/XLSX render to an
+    // afterCommit callback (renderAfterCommit, PR #721), so the DTO returned by issue() itself
+    // still reports these false — built before the render runs — even though the document is
+    // otherwise fully ISSUED. Only a SUBSEQUENT read of the same document reports both true.
     boolean           hasPdf,
     boolean           hasXlsx,
     String            issuedByName,

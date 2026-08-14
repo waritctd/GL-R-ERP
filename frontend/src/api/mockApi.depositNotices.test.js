@@ -153,3 +153,50 @@ describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notic
     expect(depositNotice.projectName).toBe(project.name);
   });
 });
+
+// Issue #752: the mock must reproduce production's one-render gap. Per
+// DepositNoticeService.issue (backend/src/main/java/th/co/glr/hr/deposit/DepositNoticeService.java
+// ~L200-225), PR #721 moved the PDF/XLSX render into an afterCommit callback — so the DTO
+// issue() itself returns still reports hasPdf/hasXlsx FALSE (built before the render runs),
+// and only a SUBSEQUENT read of the same document reports both true. Before this fix the mock
+// never touched hasPdf/hasXlsx in issue() at all, so they stayed false forever and a developer
+// wiring a download button to these flags could never observe, under VITE_USE_MOCKS=true, the
+// one-render gap that exists in production.
+describe('mockApi.depositNotices.issue hasPdf/hasXlsx (issue #752: mock reproduces the one-render gap)', () => {
+  it('issue() response reports hasPdf/hasXlsx false; a subsequent read of the same doc reports both true', async () => {
+    const { ticketId } = await driveTicketToAcceptedQuotation();
+
+    const { depositNotice: draft } = await api.depositNotices.createDraft(ticketId, {
+      notes: [],
+      depositPercent: 0.5,
+    });
+    expect(draft.hasPdf).toBe(false);
+    expect(draft.hasXlsx).toBe(false);
+
+    // Advances the payment track to CUSTOMER_CONFIRMED — the precondition depositNotices.issue
+    // checks (mirrors TicketService.confirmCustomer).
+    await api.tickets.confirmCustomer(ticketId);
+
+    const { depositNotice: issued } = await api.depositNotices.issue(draft.id);
+    expect(issued.status).toBe('ISSUED');
+    expect(issued.docNumber).not.toBeNull();
+    // The issue() RESPONSE mirrors the pre-render committed state — false/false — even
+    // though the document IS now ISSUED. This assertion already holds on the unfixed mock
+    // too (it never sets these true anywhere), so it is not by itself evidence of the fix;
+    // it pins the response contract precisely because the next assertion changes it.
+    expect(issued.hasPdf).toBe(false);
+    expect(issued.hasXlsx).toBe(false);
+
+    // A SUBSEQUENT read of the SAME document (i.e. after the "render" has "happened") must
+    // see both true. This is the assertion that fails on the unfixed mock, because issue()
+    // never flips the stored doc's flags at all — they stay false forever.
+    const { depositNotice: reread } = await api.depositNotices.get(draft.id);
+    expect(reread.hasPdf).toBe(true);
+    expect(reread.hasXlsx).toBe(true);
+
+    const { depositNotices: relist } = await api.depositNotices.listByTicket(ticketId);
+    const relisted = relist.find((d) => d.id === draft.id);
+    expect(relisted.hasPdf).toBe(true);
+    expect(relisted.hasXlsx).toBe(true);
+  });
+});

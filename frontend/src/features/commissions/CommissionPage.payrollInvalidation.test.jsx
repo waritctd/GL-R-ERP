@@ -35,6 +35,10 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         createFromDeal: vi.fn(),
         createManualCommission: vi.fn(),
         updateDeductions: vi.fn(),
+        // salesManagerUser below satisfies canCreateManual, which fires this on mount regardless
+        // of what this file's own tests exercise -- default empty so it resolves rather than
+        // throwing on an unconfigured vi.fn(). Issue #737.
+        reps: vi.fn().mockResolvedValue({ reps: [] }),
       },
       tickets: {
         list: vi.fn(),

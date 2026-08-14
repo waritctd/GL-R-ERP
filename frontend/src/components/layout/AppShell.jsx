@@ -200,9 +200,28 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // Attendance calendar admin (PR #480's API, this branch's UI): hr.holiday CRUD + the manual
     // BOT-fetch trigger, hr.work_schedule_assignment CRUD. HR/CEO only.
     { path: '/settings/attendance-calendar', label: 'ปฏิทินวันหยุด & ตารางงาน', helper: 'Holiday & work-schedule calendar', icon: 'calendar', group: 'hr', show: hasPermission(user.role, 'canManageAttendanceCalendar') },
+    // §5 announcement PDF upload (issue #744). Sits beside the calendar admin above because they are
+    // the same job — HR/CEO maintaining the rules that govern time and leave — and the same audience.
+    // `fileText` matches the glyph the leave page's own reference bar uses for this document, so the
+    // nav item and the thing it administers read as the same object.
+    { path: '/settings/leave-policy', label: 'ประกาศวันลา (PDF)', helper: 'Leave policy announcement', icon: 'fileText', group: 'hr', show: hasPermission(user.role, 'canManageLeavePolicyDocument') },
     // Split (issue #390): nav visibility follows read access (hr+ceo); CEO lands on a read-only
     // view of the same page (PayrollPage.jsx gates writes on canManagePayroll internally).
-    { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canViewPayroll') },
+    // `exact` because /payroll/deduction-shortfalls below is a SIBLING item, not a detail page of
+    // this one — without it prefix matching would light both rows at once (see Sidebar.jsx).
+    { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', group: 'finance', exact: true, show: hasPermission(user.role, 'canViewPayroll') },
+    // Garnishment shortfall ledger (issue #376's read surface). Same audience as /payroll —
+    // canViewPayroll is hr+ceo, mirroring the endpoint's own hasAnyRole('HR','CEO').
+    // `fileText`, not `triangleAlert`: that glyph already means "live warning" across six feature
+    // surfaces (PayrollPage, TaxAllowanceReviewPage, SpecialMoneyPanel …), and no other nav item
+    // uses it. Permanent navigation chrome pointing at a routine ledger would dilute it.
+    { path: '/payroll/deduction-shortfalls', label: 'ยอดค้างหักตามหมายบังคับคดี', helper: 'Deduction shortfalls', icon: 'fileText', group: 'finance', show: hasPermission(user.role, 'canViewPayroll') },
+    // Written-consent register (issue #376's other read surface). Same audience as its two siblings
+    // — canViewPayroll is hr+ceo, mirroring the GET's own hasAnyRole('HR','CEO'); HR alone gets the
+    // record action once inside. `clipboard`, not `shield` or `badgeCheck`: this is HR's filing
+    // record of a signed letter, and a shield/check glyph would imply the app is verifying or
+    // clearing something, which is precisely what this register does NOT do.
+    { path: '/payroll/deduction-consents', label: 'ทะเบียนหนังสือยินยอมหักเงิน', helper: 'Written deduction consents', icon: 'clipboard', group: 'finance', show: hasPermission(user.role, 'canViewPayroll') },
     { path: '/attendance', label: 'เวลาทำงาน', helper: 'Attendance', icon: 'calendar', group: 'self', show: true },
     // Combined OT + welfare/special-money page (RequestsPage.jsx, tabs carried
     // in ?tab=). `match` keeps this item highlighted on both /employee-requests and

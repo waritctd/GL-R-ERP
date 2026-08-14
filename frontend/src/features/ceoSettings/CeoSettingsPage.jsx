@@ -330,7 +330,8 @@ function FormulaConfigEditModal({ config, saving, onClose, onSubmit }) {
           <section>
             <h3 className="m-0 mb-1 text-sm font-bold">ค่าขนส่ง (THB ต่อรอบขนส่งจากโรงงาน)</h3>
             <p className="m-0 mb-2 text-2xs text-text-muted">
-              ช่อง &quot;— ว่าง&quot; หมายถึงไม่กำหนดค่าขนส่งไว้ในตารางของ CEO (ไม่ใช่ 0 บาท) และไม่สามารถแก้ไขในหน้านี้ได้
+              ช่อง &quot;— ว่าง&quot; หมายถึงไม่กำหนดค่าขนส่งไว้ในตารางของ CEO (ไม่ใช่ 0 บาท) — แก้ไขได้เฉพาะค่าที่มีอยู่แล้วในหน้านี้
+              เพิ่ม/ลบรายการค่าขนส่งได้จากตารางในหน้าตั้งค่า (ไม่ใช่จากหน้าต่างนี้)
             </p>
             <div className="overflow-x-auto">
               <table className="w-full border-collapse text-xs">
@@ -445,6 +446,184 @@ function FormulaConfigEditModal({ config, saving, onClose, onSubmit }) {
   );
 }
 
+// ── Freight-row add (issue #436, PR #455) ───────────────────────────────────────────────────────
+// Lives on the READ-ONLY matrix panel, not FormulaConfigEditModal above — every freight add/delete
+// reissues EVERY freightRateId (a whole new config version), and that modal's own fields are named
+// `freight_${rate.freightRateId}`. Opening the amount-edit modal at the same moment a freightRateId
+// changes underneath it would silently orphan its form state.
+const addFreightRateSchema = z.object({
+  originCountry: z.string().trim().min(1, 'กรุณากรอกประเทศต้นทาง'),
+  thicknessMinMm: numberFieldSchema,
+  thicknessMaxMm: numberFieldSchema,
+  qtyMinSqm: numberFieldSchema,
+  // Blank = open-ended top band (qty_max_sqm IS NULL), same "blank is meaningful, not rejected"
+  // idiom as clearanceFeeRowSchema above -- must send null, never '' and never coerced to 0.
+  qtyMaxSqm: z.string().refine((value) => value === '' || !Number.isNaN(Number(value)), 'กรอกตัวเลข หรือเว้นว่างไว้สำหรับไม่จำกัด'),
+  amountThb: numberFieldSchema,
+}).refine(
+  (v) => Number(v.thicknessMinMm) < Number(v.thicknessMaxMm),
+  { message: 'ช่วงความหนาต้องเรียงจากน้อยไปมาก (ตั้งแต่ < ถึง)', path: ['thicknessMaxMm'] },
+).refine(
+  (v) => v.qtyMaxSqm === '' || Number(v.qtyMinSqm) < Number(v.qtyMaxSqm),
+  { message: 'ช่วงจำนวนต้องเรียงจากน้อยไปมาก (ตั้งแต่ < ถึง)', path: ['qtyMaxSqm'] },
+);
+
+/**
+ * `prefill` seeds the form from a clicked blank cell's coordinates (country + both bands) so the
+ * CEO only has to type the amount; the header's own "+ เพิ่มค่าขนส่ง" button opens this with an
+ * empty `prefill` instead. Every field stays editable either way — a misclicked cell is not a
+ * dead end.
+ *
+ * Client-side validation covers only what is LOCAL and unambiguous: required fields, non-negative,
+ * and min < max on each axis (both via addFreightRateSchema above). The overlap rule
+ * (PricingFormulaConfigController#validate, run against the WHOLE resulting matrix, not just this
+ * row) is deliberately NOT reimplemented here -- mirroring it would be a second implementation
+ * with nothing guarding it against drifting from the real one. Its 400 surfaces verbatim through
+ * the existing showToast('error', ...) path below.
+ */
+function AddFreightRateModal({ prefill, saving, onClose, onSubmit }) {
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+  } = useForm({
+    resolver: zodResolver(addFreightRateSchema),
+    defaultValues: {
+      originCountry: prefill.originCountry ?? '',
+      thicknessMinMm: prefill.thicknessMinMm != null ? String(prefill.thicknessMinMm) : '',
+      thicknessMaxMm: prefill.thicknessMaxMm != null ? String(prefill.thicknessMaxMm) : '',
+      qtyMinSqm: prefill.qtyMinSqm != null ? String(prefill.qtyMinSqm) : '',
+      qtyMaxSqm: prefill.qtyMaxSqm != null ? String(prefill.qtyMaxSqm) : '',
+      amountThb: '',
+    },
+    mode: 'onChange',
+    reValidateMode: 'onChange',
+  });
+
+  function submit(values) {
+    onSubmit({
+      originCountry: values.originCountry.trim(),
+      thicknessMinMm: Number(values.thicknessMinMm),
+      thicknessMaxMm: Number(values.thicknessMaxMm),
+      qtyMinSqm: Number(values.qtyMinSqm),
+      qtyMaxSqm: values.qtyMaxSqm === '' ? null : Number(values.qtyMaxSqm),
+      amountThb: Number(values.amountThb),
+    });
+  }
+
+  return (
+    <Modal
+      title="เพิ่มค่าขนส่ง"
+      subtitle="(จะบันทึกเป็นเวอร์ชันใหม่ของสูตรคำนวณราคาขาย)"
+      onClose={onClose}
+      footer={
+        <>
+          <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
+          <Button type="submit" form="add-freight-rate-form" variant="primary" disabled={saving}>
+            {saving ? 'กำลังบันทึก…' : 'เพิ่มค่าขนส่ง'}
+          </Button>
+        </>
+      }
+    >
+      <SafeForm id="add-freight-rate-form" onSubmit={handleSubmit(submit)} noValidate>
+        <div className="grid gap-3">
+          <FormField label="ประเทศต้นทาง" htmlFor="freight-add-country" error={errors.originCountry?.message}>
+            <input
+              id="freight-add-country"
+              aria-invalid={errors.originCountry ? true : undefined}
+              aria-describedby={errors.originCountry ? fieldErrorId('freight-add-country') : undefined}
+              {...register('originCountry')}
+            />
+          </FormField>
+          <div className="grid gap-3 md:grid-cols-2">
+            <FormField label="ความหนาตั้งแต่ (มม.)" htmlFor="freight-add-thickness-min" error={errors.thicknessMinMm?.message}>
+              <input
+                id="freight-add-thickness-min" type="number" step="0.01" min="0"
+                aria-invalid={errors.thicknessMinMm ? true : undefined}
+                aria-describedby={errors.thicknessMinMm ? fieldErrorId('freight-add-thickness-min') : undefined}
+                {...register('thicknessMinMm')}
+              />
+            </FormField>
+            <FormField label="ถึง (<) (มม.)" htmlFor="freight-add-thickness-max" error={errors.thicknessMaxMm?.message}>
+              <input
+                id="freight-add-thickness-max" type="number" step="0.01" min="0"
+                aria-invalid={errors.thicknessMaxMm ? true : undefined}
+                aria-describedby={errors.thicknessMaxMm ? fieldErrorId('freight-add-thickness-max') : undefined}
+                {...register('thicknessMaxMm')}
+              />
+            </FormField>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <FormField label="จำนวนตั้งแต่ (ตร.ม.)" htmlFor="freight-add-qty-min" error={errors.qtyMinSqm?.message}>
+              <input
+                id="freight-add-qty-min" type="number" step="1" min="0"
+                aria-invalid={errors.qtyMinSqm ? true : undefined}
+                aria-describedby={errors.qtyMinSqm ? fieldErrorId('freight-add-qty-min') : undefined}
+                {...register('qtyMinSqm')}
+              />
+            </FormField>
+            <FormField
+              label="ถึง (<) (ตร.ม.)" htmlFor="freight-add-qty-max" error={errors.qtyMaxSqm?.message}
+              hint="เว้นว่าง = ไม่จำกัด"
+            >
+              <input
+                id="freight-add-qty-max" type="number" step="1" min="0"
+                aria-invalid={errors.qtyMaxSqm ? true : undefined}
+                aria-describedby={errors.qtyMaxSqm ? fieldErrorId('freight-add-qty-max') : undefined}
+                {...register('qtyMaxSqm')}
+              />
+            </FormField>
+          </div>
+          <FormField label="ค่าขนส่ง (บาท)" htmlFor="freight-add-amount" error={errors.amountThb?.message}>
+            <input
+              id="freight-add-amount" type="number" step="1" min="0"
+              aria-invalid={errors.amountThb ? true : undefined}
+              aria-describedby={errors.amountThb ? fieldErrorId('freight-add-amount') : undefined}
+              {...register('amountThb')}
+            />
+          </FormField>
+          <p className="m-0 text-2xs text-text-muted">
+            ช่วงเป็นแบบ [ตั้งแต่, ถึง) — รวมค่าตั้งแต่ แต่ไม่รวมค่าถึง เช่น 1–&lt;101 มม. ครอบคลุม 1 ถึง 100.99 มม.
+          </p>
+        </div>
+      </SafeForm>
+    </Modal>
+  );
+}
+
+/**
+ * Issue #436: freight-row delete confirmation. Deliberately does NOT compute deletability
+ * client-side — "only the top or bottom band of a ladder can be removed" lives in
+ * validateRemovalLeavesNoInteriorGap (mirrored in mockApi.js from
+ * PricingFormulaConfigController), and reimplementing it here would be a second, unguarded
+ * copy. The server's Thai 400/404 surfaces verbatim through the existing showToast('error', ...)
+ * path if this row turns out not to be an edge row after all.
+ */
+function DeleteFreightRateModal({ rate, deleting, onClose, onConfirm }) {
+  return (
+    <Modal
+      title="ยืนยันการลบค่าขนส่ง"
+      onClose={onClose}
+      footer={
+        <>
+          <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
+          <Button type="button" variant="danger" disabled={deleting} onClick={onConfirm}>
+            {deleting ? 'กำลังลบ…' : 'ลบค่าขนส่ง'}
+          </Button>
+        </>
+      }
+    >
+      <p className="m-0 text-sm">
+        ลบค่าขนส่ง <strong>{rate.originCountry}</strong> หนา {thicknessBandLabel(rate.thicknessMinMm, rate.thicknessMaxMm)}{' '}
+        ช่วง {qtyBandLabel(rate.qtyMinSqm, rate.qtyMaxSqm)} จำนวน <strong>{moneyDisplay(rate.amountThb)} บาท</strong> ใช่หรือไม่?
+      </p>
+      <p className="m-0 mt-2 text-2xs text-text-muted">
+        ลบได้เฉพาะช่วงบนสุดหรือล่างสุดของแต่ละช่วงความหนา/จำนวนเท่านั้น — หากลบช่วงกลางไม่ได้ ระบบจะแจ้งเหตุผลให้ทราบ
+      </p>
+    </Modal>
+  );
+}
+
 export function CeoSettingsPage({ showToast }) {
   const queryClient = useQueryClient();
 
@@ -459,6 +638,12 @@ export function CeoSettingsPage({ showToast }) {
 
   // BRANCH 1: pricing-formula-config edit modal state
   const [editingFormulaConfig, setEditingFormulaConfig] = useState(false);
+
+  // Issue #436: freight-row add. null = closed; an object (possibly {}) = open, with the object's
+  // fields prefilling the form when opened from a specific blank cell.
+  const [addFreightPrefill, setAddFreightPrefill] = useState(null);
+  // Issue #436: freight-row delete confirmation. null = closed; the freight row object = open.
+  const [deletingFreightRate, setDeletingFreightRate] = useState(null);
 
   const fxRatesQuery = useQuery({
     queryKey: queryKeys.fxRates(),
@@ -553,6 +738,31 @@ export function CeoSettingsPage({ showToast }) {
       setEditingFormulaConfig(false);
     },
     onError: (e) => showToast('error', e.message || 'บันทึกไม่สำเร็จ'),
+  });
+
+  // Issue #436: adds one freight row as a new config version. setQueryData (not
+  // invalidateQueries) because the response already IS the whole new config — refetching would
+  // just be a race against the same data this response already carries.
+  const addFreightRateMutation = useMutation({
+    mutationFn: (payload) => api.pricingFormulaConfig.addFreightRate(payload),
+    onSuccess: (data) => {
+      queryClient.setQueryData(queryKeys.pricingFormulaConfig(), data.formulaConfig);
+      showToast('success', 'เพิ่มค่าขนส่งแล้ว');
+      setAddFreightPrefill(null);
+    },
+    onError: (e) => showToast('error', e.message || 'เพิ่มค่าขนส่งไม่สำเร็จ'),
+  });
+
+  // Issue #436: deletes one freight row as a new config version. Remember every freightRateId has
+  // changed after this — setQueryData (not invalidateQueries), same reasoning as add above.
+  const deleteFreightRateMutation = useMutation({
+    mutationFn: (freightRateId) => api.pricingFormulaConfig.deleteFreightRate(freightRateId),
+    onSuccess: (data) => {
+      queryClient.setQueryData(queryKeys.pricingFormulaConfig(), data.formulaConfig);
+      showToast('success', 'ลบค่าขนส่งแล้ว');
+      setDeletingFreightRate(null);
+    },
+    onError: (e) => showToast('error', e.message || 'ลบค่าขนส่งไม่สำเร็จ'),
   });
 
   if (loading) return <div className="p-10 text-text-muted">กำลังโหลดการตั้งค่าการคำนวณราคา…</div>;
@@ -756,9 +966,19 @@ export function CeoSettingsPage({ showToast }) {
             </div>
 
             <div className="pt-0 px-[18px] pb-3">
-              <h3 className="m-0 mb-1.5 text-xs font-bold text-icon-muted">ค่าขนส่ง (THB ต่อรอบขนส่งจากโรงงาน)</h3>
+              <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                <h3 className="m-0 text-xs font-bold text-icon-muted">ค่าขนส่ง (THB ต่อรอบขนส่งจากโรงงาน)</h3>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="text-2xs px-2 py-[3px]"
+                  onClick={() => setAddFreightPrefill({})}
+                >
+                  + เพิ่มค่าขนส่ง
+                </Button>
+              </div>
               <p className="m-0 mb-1.5 text-[10px] text-text-muted">
-                &quot;— ว่าง&quot; หมายถึงไม่กำหนดค่าไว้ในตารางของ CEO (ไม่ใช่ 0 บาท)
+                &quot;— ว่าง&quot; หมายถึงไม่กำหนดค่าไว้ในตารางของ CEO (ไม่ใช่ 0 บาท) — กดปุ่ม + ในช่องว่างเพื่อเพิ่มค่าขนส่งช่องนั้นโดยตรง
               </p>
               {(() => {
                 const matrix = buildFreightMatrixDims(formulaConfig.freightRates);
@@ -784,9 +1004,43 @@ export function CeoSettingsPage({ showToast }) {
                             {matrix.qtyBands.map((qty) => {
                               const cellKey = `${country}|${matrix.bandKey(thickness.min, thickness.max)}|${matrix.bandKey(qty.min, qty.max)}`;
                               const rate = matrix.byCell.get(cellKey);
+                              const cellLabel = `${country} หนา ${thicknessBandLabel(thickness.min, thickness.max)} ช่วง ${qtyBandLabel(qty.min, qty.max)}`;
                               return (
-                                <td key={cellKey} className={rate ? 'px-2.5 py-1.5' : 'px-2.5 py-1.5 text-text-muted italic'}>
-                                  {rate ? moneyDisplay(rate.amountThb) : '— ว่าง'}
+                                <td key={cellKey} className="px-2.5 py-1.5">
+                                  {rate ? (
+                                    <span className="flex items-center gap-1.5 whitespace-nowrap">
+                                      <span>{moneyDisplay(rate.amountThb)}</span>
+                                      {/* Always visible, not hover-only — hover does not exist on
+                                          touch. Deletability (edge rows only) is NOT computed here;
+                                          see validateRemovalLeavesNoInteriorGap's mirror in
+                                          mockApi.js and the confirm modal's own comment for why. */}
+                                      <Button
+                                        type="button"
+                                        variant="secondary"
+                                        className="px-1 py-0 text-2xs leading-none text-danger"
+                                        aria-label={`ลบค่าขนส่ง ${cellLabel}`}
+                                        onClick={() => setDeletingFreightRate(rate)}
+                                      >
+                                        ×
+                                      </Button>
+                                    </span>
+                                  ) : (
+                                    <Button
+                                      type="button"
+                                      variant="secondary"
+                                      className="text-2xs px-1.5 py-[1px] text-text-muted italic"
+                                      aria-label={`เพิ่มค่าขนส่ง ${cellLabel}`}
+                                      onClick={() => setAddFreightPrefill({
+                                        originCountry: country,
+                                        thicknessMinMm: thickness.min,
+                                        thicknessMaxMm: thickness.max,
+                                        qtyMinSqm: qty.min,
+                                        qtyMaxSqm: qty.max,
+                                      })}
+                                    >
+                                      + ว่าง
+                                    </Button>
+                                  )}
                                 </td>
                               );
                             })}
@@ -857,6 +1111,28 @@ export function CeoSettingsPage({ showToast }) {
           saving={saveFormulaConfigMutation.isPending}
           onClose={() => setEditingFormulaConfig(false)}
           onSubmit={(payload) => saveFormulaConfigMutation.mutate(payload)}
+        />
+      )}
+
+      {/* Issue #436: Add Freight Rate Modal — read-only matrix panel only, see the block comment
+          on addFreightRateSchema for why this never lives inside FormulaConfigEditModal. */}
+      {addFreightPrefill && (
+        <AddFreightRateModal
+          prefill={addFreightPrefill}
+          saving={addFreightRateMutation.isPending}
+          onClose={() => setAddFreightPrefill(null)}
+          onSubmit={(payload) => addFreightRateMutation.mutate(payload)}
+        />
+      )}
+
+      {/* Issue #436: Delete Freight Rate confirmation — same read-only-matrix-only placement as
+          the add modal above. */}
+      {deletingFreightRate && (
+        <DeleteFreightRateModal
+          rate={deletingFreightRate}
+          deleting={deleteFreightRateMutation.isPending}
+          onClose={() => setDeletingFreightRate(null)}
+          onConfirm={() => deleteFreightRateMutation.mutate(deletingFreightRate.freightRateId)}
         />
       )}
     </PageStack>
