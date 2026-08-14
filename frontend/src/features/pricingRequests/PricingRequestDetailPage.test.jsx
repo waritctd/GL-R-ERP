@@ -48,6 +48,8 @@ vi.mock('../../api/index.js', () => ({
       getPricingDecisionSalesView: vi.fn(),
       startPricingDecision: vi.fn(),
       updatePricingDecision: vi.fn(),
+      recalculatePricingDecisionCost: vi.fn(),
+      overridePricingDecisionItemCost: vi.fn(),
       approvePricingDecision: vi.fn(),
       returnPricingDecisionToImport: vi.fn(),
       // Step 4: Customer Quotation Generation and Issuance.
@@ -184,6 +186,36 @@ function buildCosting(overrides = {}) {
   };
 }
 
+// V141 ("CEO owns costing", PR #702) fixture. Mirrors PricingCostingItemDto's override/provenance
+// fields — see PricingCostingDtos.java. Deliberately a DIFFERENT id (5001, not buildCosting's
+// default 211) and a DIFFERENT landedCostPerUnitThb (55, not buildDecisionItem's
+// frozenLandedCostPerRequestedUnitThb of 60) — a test pairing this with
+// buildDecisionItem({ pricingCostingItemId: 5001 }) exercises the REAL join
+// (costing.items.find(ci => ci.id === decisionItem.pricingCostingItemId)) rather than an
+// accidental id/number collision with buildCosting's own default fixture.
+function buildCostingItemWithOverride(overrides = {}) {
+  return {
+    id: 5001,
+    factoryName: 'SCG Ceramics',
+    factoryQuoteRevisionNo: 1,
+    rawUnitPrice: 45,
+    rawCurrency: 'THB',
+    landedCostPerUnitThb: 55,
+    normalizedQuantityPieces: 20,
+    fxRate: 1,
+    fxSource: 'THB',
+    calculationConfigVersion: 1,
+    manualLandedCostPerUnitThb: null,
+    overrideReason: null,
+    overriddenBy: null,
+    overriddenAt: null,
+    overrideFxRate: null,
+    overrideCalcConfigVersion: null,
+    overrideStale: false,
+    ...overrides,
+  };
+}
+
 function setApiDefaults() {
   api.pricingRequests.get.mockResolvedValue({ pricingRequest: buildRequest() });
   api.pricingRequests.listFactoryQuotes.mockResolvedValue({ items: [] });
@@ -211,6 +243,8 @@ function setApiDefaults() {
   api.pricingRequests.getPricingDecisionSalesView.mockRejectedValue(new Error('No approved pricing decision yet'));
   api.pricingRequests.startPricingDecision.mockResolvedValue({});
   api.pricingRequests.updatePricingDecision.mockResolvedValue({});
+  api.pricingRequests.recalculatePricingDecisionCost.mockResolvedValue({});
+  api.pricingRequests.overridePricingDecisionItemCost.mockResolvedValue({});
   api.pricingRequests.approvePricingDecision.mockResolvedValue({});
   api.pricingRequests.returnPricingDecisionToImport.mockResolvedValue({});
   api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [] });
@@ -923,6 +957,162 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
         items: [expect.objectContaining({ pricingDecisionItemId: 8001, marginPct: 0.35, minimumSellingPrice: 65 })],
       }),
     ));
+  });
+
+  // V141 ("CEO owns costing", PR #702, commit 1).
+  it('lets the CEO recalculate the decision cost, calling recalculatePricingDecisionCost with the decision id and nothing else', async () => {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+    await screen.findByText('PCD-2026-0001');
+
+    fireEvent.click(screen.getByTestId('pcr-ceo-recalculate-cost'));
+
+    await waitFor(() => expect(api.pricingRequests.recalculatePricingDecisionCost).toHaveBeenCalledWith(7001));
+    expect(api.pricingRequests.recalculatePricingDecisionCost).toHaveBeenCalledTimes(1);
+  });
+
+  // Wrong-way-round: the whole CEO decision panel is import-excluded (canSeeRawPricingDecision(user)
+  // && !isImport(user)), so this is not a narrower gate than the panel itself — it must be absent
+  // for the same reason every other control in this panel is absent for Import.
+  it('does not offer "คำนวณต้นทุนใหม่" to Import — the whole CEO decision panel is import-excluded', async () => {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    expect(screen.queryByTestId('pcr-ceo-recalculate-cost')).toBeNull();
+  });
+
+  // Wrong-way-round: editable = isDraft && canActOnPricingDecision(...) — an APPROVED decision is
+  // read-only even for the CEO who approved it.
+  it('does not offer "คำนวณต้นทุนใหม่" to the CEO on an APPROVED decision (not DRAFT)', async () => {
+    const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({
+      items: [buildDecision({ status: 'APPROVED', approvedBy: 4, approvedAt: '2026-07-21T00:00:00Z' })],
+    });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+    await screen.findByText('PCD-2026-0001');
+
+    expect(screen.queryByTestId('pcr-ceo-recalculate-cost')).toBeNull();
+  });
+
+  // V141 ("CEO owns costing", PR #702, commit 2) — per-line cost override.
+  describe('CEO per-line cost override', () => {
+    function renderWithCostingItem(costingItemOverrides = {}, { user = ceoUser } = {}) {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      const costingItem = buildCostingItemWithOverride(costingItemOverrides);
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [buildDecisionItem({ pricingCostingItemId: costingItem.id })] })],
+      });
+      // buildDecision()'s default pricingCostingId (601) does NOT match buildCosting()'s default
+      // id (21) — id: 601 here is deliberate, not incidental, so the decision-to-costing join
+      // (costings.find(c => c.id === currentDecision.pricingCostingId)) actually has to match
+      // rather than silently landing on an empty decisionCostingItems map.
+      return renderDetailPage({ user, request, costings: [buildCosting({ id: 601, items: [costingItem] })] });
+    }
+
+    it('shows the CEO the computed cost per piece, and on an overridden line the override value, "ปรับเอง" caption, and reason', async () => {
+      renderWithCostingItem({
+        manualLandedCostPerUnitThb: 75, overrideReason: 'ราคาต้นทุนจริงจากใบขนสินค้า',
+      });
+      await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
+      await screen.findByText('PCD-2026-0001');
+
+      // ต้นทุนคำนวณ/ชิ้น (computed, info) — never destroyed by the override.
+      expect(screen.getByText('฿55.00')).not.toBeNull();
+      // ต้นทุนที่ปรับ/ชิ้น (override, purple) + caption + reason.
+      expect(screen.getByText('฿75.00')).not.toBeNull();
+      expect(screen.getByText('ปรับเอง')).not.toBeNull();
+      expect(screen.getByText('(ราคาต้นทุนจริงจากใบขนสินค้า)')).not.toBeNull();
+      // The per-requested-unit basis (a different number, 60) still renders, labelled distinctly
+      // ("ต้นทุน/หน่วยที่ขอ", not wrapped in its own <code> like the per-piece figures above, so
+      // this is a substring match against the combined "label: value" text of that line).
+      expect(screen.getByText(/ต้นทุน\/หน่วยที่ขอ.*฿60\.00/)).not.toBeNull();
+    });
+
+    it('refuses to SAVE an override with a blank reason, client-side, without calling the API', async () => {
+      renderWithCostingItem();
+      await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
+      await screen.findByText('PCD-2026-0001');
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-cost-override-8001'));
+      const dialog = await screen.findByRole('dialog', { name: 'ปรับต้นทุนเอง' });
+      fireEvent.change(within(dialog).getByLabelText('ต้นทุนที่ปรับ (บาท/ชิ้น)'), { target: { value: '80' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกต้นทุนที่ปรับ' }));
+
+      expect(await within(dialog).findByText('กรุณาระบุเหตุผลในการปรับต้นทุน')).not.toBeNull();
+      expect(api.pricingRequests.overridePricingDecisionItemCost).not.toHaveBeenCalled();
+    });
+
+    // The direction that is easy to miss (per CLAUDE.md's own note on this endpoint): clearing is
+    // money-affecting too, so it needs the same reason gate as setting — not a lighter one.
+    it('refuses to CLEAR an override with a blank reason, client-side, without calling the API', async () => {
+      renderWithCostingItem({ manualLandedCostPerUnitThb: 75, overrideReason: 'เหตุผลเดิม' });
+      await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
+      await screen.findByText('PCD-2026-0001');
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-cost-override-8001'));
+      const dialog = await screen.findByRole('dialog', { name: 'แก้ไขต้นทุนที่ปรับ' });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ล้างค่าที่ปรับ' }));
+
+      expect(await within(dialog).findByText('กรุณาระบุเหตุผลในการปรับต้นทุน')).not.toBeNull();
+      expect(api.pricingRequests.overridePricingDecisionItemCost).not.toHaveBeenCalled();
+    });
+
+    it('saves a new cost override — happy path SET', async () => {
+      renderWithCostingItem();
+      await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
+      await screen.findByText('PCD-2026-0001');
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-cost-override-8001'));
+      const dialog = await screen.findByRole('dialog', { name: 'ปรับต้นทุนเอง' });
+      fireEvent.change(within(dialog).getByLabelText('ต้นทุนที่ปรับ (บาท/ชิ้น)'), { target: { value: '80' } });
+      fireEvent.change(within(dialog).getByLabelText(/^เหตุผล/), { target: { value: 'ราคาจริงจากใบขนสินค้า' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกต้นทุนที่ปรับ' }));
+
+      await waitFor(() => expect(api.pricingRequests.overridePricingDecisionItemCost).toHaveBeenCalledWith(
+        7001, 8001, { manualLandedCostPerUnitThb: 80, reason: 'ราคาจริงจากใบขนสินค้า' },
+      ));
+    });
+
+    it('clears an existing cost override — happy path CLEAR', async () => {
+      renderWithCostingItem({ manualLandedCostPerUnitThb: 75, overrideReason: 'เหตุผลเดิม' });
+      await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
+      await screen.findByText('PCD-2026-0001');
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-cost-override-8001'));
+      const dialog = await screen.findByRole('dialog', { name: 'แก้ไขต้นทุนที่ปรับ' });
+      fireEvent.change(within(dialog).getByLabelText(/^เหตุผล/), { target: { value: 'คำนวณใหม่แล้วถูกต้อง' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ล้างค่าที่ปรับ' }));
+
+      await waitFor(() => expect(api.pricingRequests.overridePricingDecisionItemCost).toHaveBeenCalledWith(
+        7001, 8001, { manualLandedCostPerUnitThb: null, reason: 'คำนวณใหม่แล้วถูกต้อง' },
+      ));
+    });
+
+    it('renders the stale-override warning badge and disables approval when a fixture has overrideStale: true', async () => {
+      renderWithCostingItem({
+        manualLandedCostPerUnitThb: 75, overrideReason: 'เหตุผลเดิม',
+        overrideFxRate: 1, overrideCalcConfigVersion: 1, calculationConfigVersion: 2, overrideStale: true,
+      });
+      await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.getByText('ต้นทุนที่ปรับล้าสมัย')).not.toBeNull();
+      expect(screen.getByRole('button', { name: 'อนุมัติราคาขาย' }).disabled).toBe(true);
+    });
+
+    // Wrong-way-round: the whole CEO decision panel is import-excluded, same as commit 1's own
+    // recalculate button — this is not a narrower gate than the panel itself.
+    it('shows Import no cost-override button anywhere', async () => {
+      renderWithCostingItem({}, { user: importUser });
+      await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
+
+      expect(screen.queryByTestId('pcr-ceo-cost-override-8001')).toBeNull();
+    });
   });
 
   it('disables approval until every item has a margin and a minimum selling price (mirrors the server 422 gate)', async () => {
