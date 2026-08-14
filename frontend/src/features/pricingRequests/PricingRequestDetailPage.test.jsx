@@ -195,7 +195,10 @@ function setApiDefaults() {
   api.pricingRequests.receiveFactoryQuote.mockResolvedValue({});
   api.pricingRequests.startFactoryNegotiation.mockResolvedValue({});
   api.pricingRequests.markFactoryQuoteReady.mockResolvedValue({});
-  // submitToCeo chains createCosting -> recalculate -> submit and needs the new row's id.
+  // Nothing on the page calls these any more — submitToCeo stopped chaining them in PR #760, and
+  // #747 deleted the last four controls that drove them. They stay mocked ONLY so the
+  // "must not come back" assertions below have something that would record a call if one happened;
+  // an unmocked vi.fn() would throw instead of recording, which is a worse failure to read.
   api.pricingRequests.createCosting.mockResolvedValue({ costing: { id: 21 } });
   api.pricingRequests.recalculateCosting.mockResolvedValue({});
   api.pricingRequests.submitCosting.mockResolvedValue({});
@@ -514,7 +517,9 @@ describe('PricingRequestDetailPage role-scoped raw quote/costing visibility (UI-
     expect(screen.getByText('SCG Ceramics')).not.toBeNull();
     expect(screen.getByText('COST-2026-0001')).not.toBeNull();
 
-    // But every mutating control is Import-only (isImport(user)) and must be absent for CEO.
+    // But every mutating control on the factory-quote panel is Import-only (isImport(user)) and
+    // must be absent for CEO. The three costing ones (สร้างร่างต้นทุน / คำนวณใหม่ / ส่งให้ CEO ตรวจ)
+    // are absent for a stronger reason since #747: they no longer exist for any role.
     expect(screen.queryByRole('button', { name: 'สร้างร่างอีเมล' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'สร้างร่างต้นทุน' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'ส่ง' })).toBeNull();
@@ -570,8 +575,10 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     renderDetailPage({ user: importUser, factoryQuotes: [quote] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
-    // costingClientRequestId is minted once on mount (useState(() => generateClientRequestId())),
-    // unrelated to the send flow under test — baseline off that instead of asserting 0.
+    // Several client-request ids are minted once on mount (useState(() => generateClientRequestId())),
+    // all unrelated to the send flow under test — baseline off whatever mount produced rather than
+    // asserting an absolute count, which would be a hostage to how many the page happens to hold.
+    // (One of them, costingClientRequestId, went away with #747; this baseline absorbed that.)
     const callsBeforeAnySend = uuidSpy.mock.calls.length;
 
     // First open: mints and caches a clientRequestId for this quote.
@@ -676,6 +683,96 @@ describe('PricingRequestDetailPage Import costing workflow', () => {
     expect(screen.queryByText('ตอบข้อมูลเพิ่มเติม')).toBeNull();
     // COST-2026-0001 is the costing code — absent because the whole panel is.
     expect(screen.queryByText('COST-2026-0001')).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The shared ConfirmDialog, per action
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// ONE <ConfirmDialog> serves every confirmable action on this page, and its title, message and
+// confirmLabel are each a separate `confirmAction?.type === ...` ternary CHAIN. Removing one
+// action means deleting a branch from the middle of three chains at once, and the failure mode
+// is silent: mis-nest the `message` chain and อนุมัติราคาขาย starts showing ตีกลับ's copy while
+// every existing assertion — which only ever checked that the right mutation fired — stays green.
+//
+// #747 deleted the submitCosting branch (the four Import costing controls were unreachable for
+// their whole existence: the panel is `canSeeRaw && !isImport`, every control inside required
+// `isImport`). These cases pin the copy of the FOUR that remain, so that edit and any future one
+// is falsifiable. Mutation-checked on 2026-08-14: swapping any single branch of any of the three
+// chains turns exactly the matching case below red.
+describe('PricingRequestDetailPage shared ConfirmDialog copy (the four surviving actions)', () => {
+  it('sendQuote — the chain default: ส่งอีเมลถึงโรงงาน / ยืนยันการส่ง… / ส่งอีเมล', async () => {
+    renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ส่งแล้ว' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' });
+    expect(within(dialog).getByText('ยืนยันการส่งคำขอราคาให้โรงงานด้วยรายละเอียดอีเมลนี้')).not.toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'ส่งอีเมล' })).not.toBeNull();
+    // No reason textarea: requireReason is returnDecision-only.
+    expect(within(dialog).queryByLabelText('เหตุผลที่ตีกลับ')).toBeNull();
+  });
+
+  it('approveDecision — อนุมัติราคาขาย / เมื่ออนุมัติแล้ว… / อนุมัติ', async () => {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+    await screen.findByText('PCD-2026-0001');
+
+    fireEvent.click(screen.getByRole('button', { name: 'อนุมัติราคาขาย' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'อนุมัติราคาขาย' });
+    expect(within(dialog).getByText('เมื่ออนุมัติแล้ว ราคาขายจะถูกส่งให้ฝ่ายขายและไม่สามารถแก้ไขราคานี้ได้อีก')).not.toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'อนุมัติ' })).not.toBeNull();
+    expect(within(dialog).queryByLabelText('เหตุผลที่ตีกลับ')).toBeNull();
+  });
+
+  it('returnDecision — ตีกลับ…ต้นทุน / ระบุเหตุผล… / ตีกลับ, and it is the only one that requires a reason', async () => {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+    await screen.findByText('PCD-2026-0001');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไขต้นทุน' });
+    expect(within(dialog).getByText('ระบุเหตุผลที่ตีกลับให้ฝ่ายนำเข้าคำนวณต้นทุนใหม่')).not.toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'ตีกลับ' })).not.toBeNull();
+    // requireReason + reasonLabel, and tone="danger" on the confirm button.
+    expect(within(dialog).getByLabelText('เหตุผลที่ตีกลับ')).not.toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'ตีกลับ' }).className).toMatch(/danger/);
+  });
+
+  it('issueQuotation — ออกใบเสนอราคาลูกค้า / เมื่อออกใบเสนอราคาแล้ว… / ออกใบเสนอราคา', async () => {
+    const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
+    api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [buildCustomerQuotation()] });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText('QT-2026-0001');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ออกใบเสนอราคา' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'ออกใบเสนอราคาลูกค้า' });
+    expect(within(dialog).getByText('เมื่อออกใบเสนอราคาแล้ว จะแก้ไขไม่ได้ — การแก้ไขภายหลังต้องสร้างรอบแก้ไขใหม่')).not.toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'ออกใบเสนอราคา' })).not.toBeNull();
+    expect(within(dialog).queryByLabelText('เหตุผลที่ตีกลับ')).toBeNull();
+  });
+
+  // The deleted branch must not come back through the dialog either: no action on this page can
+  // still produce a submitCosting confirmation, for any role.
+  it('offers no submitCosting confirmation to the CEO, who is the only role the costing panel renders for', async () => {
+    renderDetailPage({ user: ceoUser, costings: [buildCosting()] });
+    await waitForLoaded();
+    await screen.findByText('COST-2026-0001');
+
+    expect(screen.queryByRole('button', { name: 'ส่งให้ CEO ตรวจ' })).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'ส่งต้นทุนให้ CEO ตรวจ' })).toBeNull();
+    expect(screen.queryByText('เมื่อส่งแล้ว เวอร์ชันต้นทุนนี้จะแก้ไขไม่ได้')).toBeNull();
   });
 });
 

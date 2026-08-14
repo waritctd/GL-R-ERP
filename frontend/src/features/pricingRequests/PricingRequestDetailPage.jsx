@@ -183,8 +183,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [responseDrafts, setResponseDrafts] = useState({});
-  const [costingNote, setCostingNote] = useState('');
-  const [costingClientRequestId] = useState(() => generateClientRequestId());
   const [emailDrafts, setEmailDrafts] = useState({});
   const [sendClientRequestIds, setSendClientRequestIds] = useState({});
   const [receiveClientRequestIds, setReceiveClientRequestIds] = useState({});
@@ -350,9 +348,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
     onError: (error) => showToast?.('error', error.message || 'ส่งให้ CEO ไม่สำเร็จ'),
   });
 
-  const createCosting = useActionMutation(() => api.pricingRequests.createCosting(pricingRequestId, { note: costingNote || null, clientRequestId: costingClientRequestId }), 'สร้างร่างต้นทุนแล้ว');
-  const recalculateCosting = useActionMutation((costing) => api.pricingRequests.recalculateCosting(costing.id, { note: costingNote || null }), 'คำนวณต้นทุนแล้ว');
-  const submitCosting = useActionMutation((costing) => api.pricingRequests.submitCosting(costing.id, { note: costingNote || null }), 'ส่งให้ CEO แล้ว');
   const uploadQuoteAttachment = useActionMutation(({ quote, file }) => api.pricingRequests.uploadFactoryQuoteAttachment(quote.id, file), 'แนบไฟล์ราคาโรงงานแล้ว');
   const uploadPricingRequestAttachment = useActionMutation((file) => api.pricingRequests.uploadAttachment(pricingRequestId, file), 'แนบไฟล์แล้ว');
   const deletePricingRequestAttachment = useActionMutation((attachmentId) => api.pricingRequests.deleteAttachment(attachmentId), 'ลบไฟล์แนบแล้ว');
@@ -555,10 +550,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
   );
   const factoryQuotes = useMemo(() => factoryQuery.data ?? [], [factoryQuery.data]);
   const costings = useMemo(() => costingQuery.data ?? [], [costingQuery.data]);
-  const latestOpenCosting = useMemo(
-    () => [...costings].reverse().find((costing) => ['DRAFT', 'CALCULATED'].includes(costing.status)),
-    [costings],
-  );
   const pricingDecisions = useMemo(() => decisionsQuery.data ?? [], [decisionsQuery.data]);
   // The currently-relevant decision: the open DRAFT if one exists (the CEO's active review),
   // else the most recent one (so a just-approved or just-returned decision still renders).
@@ -1021,24 +1012,17 @@ export function PricingRequestDetailPage({ user, showToast }) {
       ) : null}
 
       {/* Import no longer sees the costing aggregate — submitToCeo runs it end to end. CEO keeps
-          the full view (canSeeRaw is import+ceo; only the ceo half is wanted here). */}
+          the full view (canSeeRaw is import+ceo; only the ceo half is wanted here), and it is
+          READ-ONLY: this panel holds no action controls at all.
+
+          It used to hold four — สร้างร่างต้นทุน, the หมายเหตุต้นทุน field feeding it, คำนวณใหม่ and
+          ส่งให้ CEO ตรวจ — each additionally gated on isImport(user). Since this render site is
+          `canSeeRaw(user) && !isImport(user)`, those two conditions were mutually exclusive and no
+          user could ever reach them, for the whole life of the controls. Deleted by issue #747
+          (owner ruling 2026-08-14); the routes they drove were already severed by V141/PR #702. */}
       {canSeeRaw(user) && !isImport(user) ? (
-        <Panel
-          flush
-          title="ต้นทุนนำเข้า"
-          actions={isImport(user) ? <Button type="button" variant="primary" onClick={() => createCosting.mutate()} data-testid="pcr-costing-create">สร้างร่างต้นทุน</Button> : null}
-        >
+        <Panel flush title="ต้นทุนนำเข้า">
           <div className="flex flex-col gap-3 p-4">
-            {isImport(user) ? (
-              <FormField label="หมายเหตุต้นทุน" htmlFor="pcr-costing-note">
-                <input
-                  id="pcr-costing-note"
-                  className="form-input"
-                  value={costingNote}
-                  onChange={(e) => setCostingNote(e.target.value)}
-                />
-              </FormField>
-            ) : null}
             {costings.map((costing) => (
               <div key={costing.id} className="rounded-md border border-border bg-surface p-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -1049,12 +1033,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     return <StatusBadge tone={status.tone}>{status.label}</StatusBadge>;
                   })()}
                   <span className="text-xs text-text-muted">{costing.totalLandedCostThb != null ? formatCurrency(costing.totalLandedCostThb, 'THB') : '-'}</span>
-                  {isImport(user) && costing.id === latestOpenCosting?.id ? (
-                    <Fragment key={`costing-actions-${costing.id}`}>
-                      <Button type="button" variant="secondary" onClick={() => recalculateCosting.mutate(costing)} data-testid="pcr-costing-recalculate">คำนวณใหม่</Button>
-                      <Button type="button" variant="secondary" disabled={costing.status !== 'CALCULATED' || costing.stale} onClick={() => setConfirmAction({ type: 'submitCosting', costing })} data-testid="pcr-costing-submit">ส่งให้ CEO ตรวจ</Button>
-                    </Fragment>
-                  ) : null}
                 </div>
                 {canSeeRaw(user) && costing.items?.length ? (
                   <div className="mt-2 flex flex-col gap-1 text-xs text-text-muted">
@@ -1523,35 +1501,30 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
       <ConfirmDialog
         open={Boolean(confirmAction)}
-        title={confirmAction?.type === 'submitCosting' ? 'ส่งต้นทุนให้ CEO ตรวจ'
-          : confirmAction?.type === 'approveDecision' ? 'อนุมัติราคาขาย'
+        title={confirmAction?.type === 'approveDecision' ? 'อนุมัติราคาขาย'
           : confirmAction?.type === 'returnDecision' ? 'ตีกลับให้ฝ่ายนำเข้าแก้ไขต้นทุน'
           : confirmAction?.type === 'issueQuotation' ? 'ออกใบเสนอราคาลูกค้า'
           : 'ส่งอีเมลถึงโรงงาน'}
-        message={confirmAction?.type === 'submitCosting'
-          ? 'เมื่อส่งแล้ว เวอร์ชันต้นทุนนี้จะแก้ไขไม่ได้'
-          : confirmAction?.type === 'approveDecision'
-            ? 'เมื่ออนุมัติแล้ว ราคาขายจะถูกส่งให้ฝ่ายขายและไม่สามารถแก้ไขราคานี้ได้อีก'
-            : confirmAction?.type === 'returnDecision'
-              ? 'ระบุเหตุผลที่ตีกลับให้ฝ่ายนำเข้าคำนวณต้นทุนใหม่'
-              : confirmAction?.type === 'issueQuotation'
-                ? 'เมื่อออกใบเสนอราคาแล้ว จะแก้ไขไม่ได้ — การแก้ไขภายหลังต้องสร้างรอบแก้ไขใหม่'
-                : 'ยืนยันการส่งคำขอราคาให้โรงงานด้วยรายละเอียดอีเมลนี้'}
-        confirmLabel={confirmAction?.type === 'submitCosting' ? 'ส่งให้ CEO ตรวจ'
-          : confirmAction?.type === 'approveDecision' ? 'อนุมัติ'
+        message={confirmAction?.type === 'approveDecision'
+          ? 'เมื่ออนุมัติแล้ว ราคาขายจะถูกส่งให้ฝ่ายขายและไม่สามารถแก้ไขราคานี้ได้อีก'
+          : confirmAction?.type === 'returnDecision'
+            ? 'ระบุเหตุผลที่ตีกลับให้ฝ่ายนำเข้าคำนวณต้นทุนใหม่'
+            : confirmAction?.type === 'issueQuotation'
+              ? 'เมื่อออกใบเสนอราคาแล้ว จะแก้ไขไม่ได้ — การแก้ไขภายหลังต้องสร้างรอบแก้ไขใหม่'
+              : 'ยืนยันการส่งคำขอราคาให้โรงงานด้วยรายละเอียดอีเมลนี้'}
+        confirmLabel={confirmAction?.type === 'approveDecision' ? 'อนุมัติ'
           : confirmAction?.type === 'returnDecision' ? 'ตีกลับ'
           : confirmAction?.type === 'issueQuotation' ? 'ออกใบเสนอราคา'
           : 'ส่งอีเมล'}
         tone={confirmAction?.type === 'returnDecision' ? 'danger' : 'default'}
         requireReason={confirmAction?.type === 'returnDecision'}
         reasonLabel="เหตุผลที่ตีกลับ"
-        busy={sendQuote.isPending || submitCosting.isPending || approveDecision.isPending
+        busy={sendQuote.isPending || approveDecision.isPending
           || returnDecisionToImport.isPending || issueQuotation.isPending}
         onCancel={() => setConfirmAction(null)}
         onConfirm={(reason) => {
           const action = confirmAction;
           setConfirmAction(null);
-          if (action?.type === 'submitCosting') submitCosting.mutate(action.costing);
           if (action?.type === 'sendQuote') sendQuote.mutate({ quote: action.quote, draft: action.emailDraft });
           if (action?.type === 'approveDecision') approveDecision.mutate(action.decision);
           if (action?.type === 'returnDecision') returnDecisionToImport.mutate({ decision: action.decision, reason });

@@ -291,9 +291,17 @@ const SERVER_ONLY = {
 // SEVERED three write routes rather than deleting them: they are still routed, still match on path
 // and verb, and throw 409 unconditionally. `PricingCostingController`'s own Javadoc says keeping the
 // route shape is deliberate so "the client contract stays stable" while the backend is cleaned
-// first. Meanwhile PricingRequestDetailPage.jsx still drives all three, so against a real backend
-// those three buttons now always fail — invisible under VITE_USE_MOCKS=true, because mockApi never
-// learned they were severed.
+// first.
+//
+// NO SCREEN REACHES THEM ANY MORE (2026-08-14). PR #760 took them out of Import's ส่งให้ CEO
+// อนุมัติราคา chain, and #747 deleted the last four controls that drove them — which were
+// unreachable for their whole existence anyway. What still calls them is hrApi.js, and through it
+// mockApi.js: `mockApi.depositNotices.test.js` drives createCosting -> recalculate -> submit to get
+// a request to READY_FOR_CEO_REVIEW, because mockApi's markFactoryQuoteReady does NOT auto-advance
+// the way FactoryQuoteService.markReadyForCosting does. So finishing this migration means teaching
+// the mock the backend's current behaviour first — a change to the default verification surface,
+// not a deletion — and until then these three stay listed here rather than in SERVER_ONLY. The
+// three matching UNREACHABLE_FROM_UI entries record the screen half of the same state.
 //
 // Listing them as an EXACT expectation, the same shape as api-surface.spec.js's KNOWN_SERVER_ERRORS:
 // a NEW deprecated call site fails this test, and so does finishing the migration without removing
@@ -539,7 +547,15 @@ const UNREACHABLE_FROM_UI = new Set([
   'POST /api/price-import/commit/{}',
   'POST /api/price-import/upload',
   'POST /api/price-import/validate/{}',
+  // The three V141-severed costing writes. These arrived here on 2026-08-14 by DELETION, not by
+  // drift: #747's four controls were the only screen call sites and the owner ruled them out. They
+  // are also the three CALLS_DEPRECATED entries — see that block for why hrApi still declares them
+  // (mockApi.depositNotices.test.js needs the chain until the mock learns markReadyForCosting's
+  // auto-advance) and why that is a separate change from this one.
+  'POST /api/pricing-costings/{}/recalculate',
+  'POST /api/pricing-costings/{}/submit',
   'POST /api/pricing-decisions/{}/recalculate',
+  'POST /api/pricing-requests/{}/costings',
   // 'POST /api/tickets/{}/entry-channel' was here until issue #740 wired DealStagePanel's
   // ช่องทางรับงาน control. The `UNREACHABLE_FROM_UI entry is real and still unreachable` test is
   // what demanded this deletion — it is not an optional tidy-up.
