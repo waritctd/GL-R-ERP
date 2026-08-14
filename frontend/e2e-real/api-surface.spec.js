@@ -113,7 +113,7 @@ test.describe('API surface', () => {
     ).toEqual([]);
   });
 
-  test('the two allowlisted endpoints really are anonymously reachable', async () => {
+  test('the three allowlisted endpoints really are anonymously reachable', async () => {
     // The complement of the sweep above. Silencing a sweep failure by appending a path to
     // ANONYMOUS_ALLOWLIST must not become a quiet way to drop a real endpoint out of the
     // authentication assertion — anything added there has to be justified here too.
@@ -122,7 +122,11 @@ test.describe('API surface', () => {
     // blanket "not 401" would also be satisfied by an endpoint the filter chain had rejected
     // outright. Each path therefore gets an assertion only a request that REACHED ITS
     // CONTROLLER could produce.
-    expect(ANONYMOUS_ALLOWLIST).toEqual(['/api/auth/login', '/api/attendance/punch']);
+    expect(ANONYMOUS_ALLOWLIST).toEqual([
+      '/api/auth/login',
+      '/api/attendance/punch',
+      '/api/public/brand/logo.png',
+    ]);
 
     const anon = await anonApi();
     try {
@@ -149,6 +153,22 @@ test.describe('API surface', () => {
         punch.status(),
         'and it must still refuse an unauthenticated, empty punch'
       ).toBeGreaterThanOrEqual(400);
+
+      // Brand logo: the requester is a mail client rendering a notification email — Gmail's image
+      // proxy fetches with no credentials and no way to obtain any — so it cannot be gated. A 200
+      // carrying image bytes is the assertion only a request that reached BrandController could
+      // produce; a filter-chain rejection would be a 401 with no body. uat-only, because the whole
+      // mail package is (Render blocks outbound SMTP on main).
+      const logo = await anon.get('/api/public/brand/logo.png', { failOnStatusCode: false });
+      expect(
+        logo.status(),
+        'GET /api/public/brand/logo.png is embedded in notification emails, so the filter chain ' +
+          'must not reject it with 401'
+      ).toBe(200);
+      expect(
+        logo.headers()['content-type'],
+        'and it must actually serve the image, not an error page that happens to be 200'
+      ).toContain('image/');
     } finally {
       await anon.dispose();
     }
