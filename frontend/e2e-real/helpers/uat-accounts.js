@@ -67,12 +67,11 @@ export const UAT_PERSONAS = {
  * V907__uat_clear_forced_password_change.sql, in V908's comment, and in UAT_Accounts.md. This
  * repository is public. Nothing in this file can make it secret, and nobody should believe it has.
  *
- * ⚠️ AND THE COMMITTED VALUE IS NOT THE LIVE ONE. Confirmed 2026-08-15: the deployed UAT accepts a
- * different password from the one those migrations record. So the seed files are simultaneously a
- * disclosure (they publish A password) and NOT a source of truth (they publish the WRONG one) —
- * the worst of both. Do not "helpfully" default this function to the seed's value: a wrong guess
- * spends the 5-per-account / 20-per-IP rate-limit budget and can lock out real testers for 900s.
- * Whoever runs UAT is the authority.
+ * Do not "helpfully" default this function to the seed's value anyway. Not because the seed is
+ * known wrong — V907 is the migration that sets the shared hash and is the best written record —
+ * but because a DEFAULT converts "someone forgot the env var" into a silent login attempt with a
+ * possibly-stale value, spending the 5-per-account / 20-per-IP budget to discover it. An explicit
+ * error costs nothing and says what to do. Whoever runs UAT is the authority on the live value.
  *
  * Keeping it out of the checked-in suite buys two real things and no more:
  *   1. Rotating it is an environment change, not a code change plus a merge.
@@ -89,12 +88,14 @@ export function uatPassword() {
         '      E2E_BASE_URL=https://<uat-frontend-host> \\\n' +
         '      E2E_UAT_PASSWORD=... \\\n' +
         '      npm run test:e2e:uat\n\n' +
-        '  It is the shared password for the @uat.glr personas — ASK someone who runs UAT.\n\n' +
-        '  ⚠️ Do NOT read it out of the migrations. V900/V907 (on the `uat` branch) document a\n' +
-        '  value that did NOT match the live deployment as of 2026-08-15: either V907 never\n' +
-        '  applied there, or the personas were rotated out of band afterwards. Those files\n' +
-        '  describe the SEED, not the running environment, and this is exactly the kind of\n' +
-        '  mismatch that costs rate-limit budget to discover.\n\n' +
+        '  It is the shared password for the @uat.glr personas. The best written record is\n' +
+        '  db/migration-uat/V907__uat_clear_forced_password_change.sql on the `uat` branch --\n' +
+        '  it is the migration that resets every persona to the shared hash, and it documents\n' +
+        '  the plaintext it was generated from.\n\n' +
+        '  ⚠️ But a MIGRATION describes the seed, not necessarily the running database. V907\n' +
+        '  itself notes it overwrites any password a tester has since chosen -- which is only\n' +
+        '  true if someone re-runs it. If the documented value is refused, ask whoever runs UAT\n' +
+        '  rather than trying variations: each attempt spends part of the budget below.\n\n' +
         '  ⚠️ Do NOT guess it. LoginRateLimitFilter counts 5 failures per account and 20 per\n' +
         '  client IP inside a 900-second window, counting 401s AND 403s. A lockout on UAT hits\n' +
         '  real testers and cannot be cleared by restarting anything you control — the tracker is\n' +

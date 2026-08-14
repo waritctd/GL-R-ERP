@@ -177,16 +177,24 @@ async function remoteSetup() {
       );
     }
 
+    // HTML is the Deployment Protection signal — a protected preview answers every request with
+    // an SSO challenge PAGE. Checked before the status, because that challenge is itself a 401
+    // and would otherwise sail through the status assertion below looking like a healthy deny.
+    //
+    // Note what is deliberately NOT asserted: that the body is JSON. Spring Security's
+    // HttpStatusEntryPoint answers an unauthenticated /api/auth/me with a bare 401 — zero bytes,
+    // no content-type header at all — and that is the healthy case, confirmed against live UAT
+    // (2026-08-15). An earlier version of this check required JSON and rejected a perfectly good
+    // environment on its first run. "Not JSON" and "not the application" are different claims.
     const contentType = me.headers()['content-type'] ?? '';
-    if (!contentType.includes('application/json')) {
+    if (contentType.includes('text/html')) {
       throw new Error(
-        `UAT e2e: ${REMOTE_BASE_URL}/api/auth/me answered ${me.status()} with content-type ` +
-          `'${contentType}', not JSON.\n\n` +
-          "  If that is text/html, this is almost certainly Vercel's Deployment Protection\n" +
-          '  challenge rather than the application — a protected preview answers every request\n' +
-          '  with an SSO page. Disable Deployment Protection for this preview, or supply a\n' +
-          '  bypass token. Without this check the symptom would be every spec failing on a JSON\n' +
-          '  parse error that names nothing.\n'
+        `UAT e2e: ${REMOTE_BASE_URL}/api/auth/me answered ${me.status()} with an HTML page.\n\n` +
+          "  This is almost certainly Vercel's Deployment Protection challenge rather than the\n" +
+          '  application — a protected preview answers every request with an SSO page, including\n' +
+          '  with a 401. Disable Deployment Protection for this preview, or supply a bypass\n' +
+          '  token. Without this check the symptom would be every spec failing on a JSON parse\n' +
+          '  error that names nothing.\n'
       );
     }
     if (me.status() !== 401) {
