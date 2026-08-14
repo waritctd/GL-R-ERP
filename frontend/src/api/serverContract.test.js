@@ -271,15 +271,12 @@ const SERVER_ONLY = {
     + 'for a new employee\'s first password (it replaced employee-code-derived passwords, removed for security in '
     + 'PR #150), yet there is no button and no documented curl recipe. Onboarding needs a hand-crafted POST today.',
 
-  // ── Orphaned by a frontend removal; the clearest deletion candidate ───────
-  'GET /api/deal-estimate-markup': 'Orphaned by PR #682. See the PUT entry below.',
-  'PUT /api/deal-estimate-markup':
-    'The ราคาตั้ง (ประมาณการ) display multiplier (V112, PR #438), removed from the frontend entirely by PR #682 after '
-    + 'UAT — reps were reading a catalog-price-times-markup figure as a selling price. Two frontend tests now assert '
-    + 'it must NOT come back (TicketCreateModal.test.jsx, CeoSettingsPage.test.jsx). The controller, repository, DTOs, '
-    + 'V112 table and two backend test classes all survive, asserting a contract nothing consumes. This is the one '
-    + 'entry where deletion is the straightforward answer — left for an owner ruling, and note FxRateController cites '
-    + 'this controller as precedent for its own open-read decision.',
+  // GET/PUT /api/deal-estimate-markup were the two entries here until 2026-08-14. They are gone
+  // rather than re-worded: issue #748's owner ruling deleted the controller, repository, DTOs, both
+  // backend test classes and — by V145 — the V112 table itself, so there is no longer an endpoint
+  // to exempt. The two frontend tests asserting the multiplier must NOT come back stay where they
+  // are (TicketCreateModal.test.jsx, CeoSettingsPage.test.jsx); they guard the frontend, which is
+  // where the misreading happened.
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -291,9 +288,17 @@ const SERVER_ONLY = {
 // SEVERED three write routes rather than deleting them: they are still routed, still match on path
 // and verb, and throw 409 unconditionally. `PricingCostingController`'s own Javadoc says keeping the
 // route shape is deliberate so "the client contract stays stable" while the backend is cleaned
-// first. Meanwhile PricingRequestDetailPage.jsx still drives all three, so against a real backend
-// those three buttons now always fail — invisible under VITE_USE_MOCKS=true, because mockApi never
-// learned they were severed.
+// first.
+//
+// NO SCREEN REACHES THEM ANY MORE (2026-08-14). PR #760 took them out of Import's ส่งให้ CEO
+// อนุมัติราคา chain, and #747 deleted the last four controls that drove them — which were
+// unreachable for their whole existence anyway. What still calls them is hrApi.js, and through it
+// mockApi.js: `mockApi.depositNotices.test.js` drives createCosting -> recalculate -> submit to get
+// a request to READY_FOR_CEO_REVIEW, because mockApi's markFactoryQuoteReady does NOT auto-advance
+// the way FactoryQuoteService.markReadyForCosting does. So finishing this migration means teaching
+// the mock the backend's current behaviour first — a change to the default verification surface,
+// not a deletion — and until then these three stay listed here rather than in SERVER_ONLY. The
+// three matching UNREACHABLE_FROM_UI entries record the screen half of the same state.
 //
 // Listing them as an EXACT expectation, the same shape as api-surface.spec.js's KNOWN_SERVER_ERRORS:
 // a NEW deprecated call site fails this test, and so does finishing the migration without removing
@@ -539,7 +544,15 @@ const UNREACHABLE_FROM_UI = new Set([
   'POST /api/price-import/commit/{}',
   'POST /api/price-import/upload',
   'POST /api/price-import/validate/{}',
+  // The three V141-severed costing writes. These arrived here on 2026-08-14 by DELETION, not by
+  // drift: #747's four controls were the only screen call sites and the owner ruled them out. They
+  // are also the three CALLS_DEPRECATED entries — see that block for why hrApi still declares them
+  // (mockApi.depositNotices.test.js needs the chain until the mock learns markReadyForCosting's
+  // auto-advance) and why that is a separate change from this one.
+  'POST /api/pricing-costings/{}/recalculate',
+  'POST /api/pricing-costings/{}/submit',
   'POST /api/pricing-decisions/{}/recalculate',
+  'POST /api/pricing-requests/{}/costings',
   // 'POST /api/tickets/{}/entry-channel' was here until issue #740 wired DealStagePanel's
   // ช่องทางรับงาน control. The `UNREACHABLE_FROM_UI entry is real and still unreachable` test is
   // what demanded this deletion — it is not an optional tidy-up.
