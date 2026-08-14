@@ -49,7 +49,15 @@ const PRICING_IN_FLIGHT_STATUSES = [
 
 // fulfillmentStatus values that mean "physically in transit" — the same set
 // both the "ขนส่ง" conveyor bucket and the "กำลังขนส่ง" tracker use.
-const IN_TRANSIT_STATUSES = ['IR_SENT', 'SHIPPING', 'CUSTOMS_CLEARANCE'];
+//
+// CUSTOMS_CLEARANCE used to sit third here and was removed as dead (issue #749): commit 7991b9f1
+// deleted it from FulfilmentStatus.java as a zero-reference constant, and no code path has ever
+// written it into sales.ticket.fulfillment_status, so the literal could never match a real row.
+// PR #715 removed the same value from utils/format.js's fulfilmentStatusLabel and from
+// features/tickets/stageMeta.js and left a "do not re-add" note in both; this was the third copy
+// it missed. Do not re-add it here for symmetry with the names in FactoryPurchaseOrderStatus or
+// V77's header comment — those describe the factory PO's own sequence, not this column.
+const IN_TRANSIT_STATUSES = ['IR_SENT', 'SHIPPING'];
 
 // The five mutually-exclusive fulfilment-stage buckets a deal can sit in
 // (pricing pickup is a 6th, computed separately since it comes from the
