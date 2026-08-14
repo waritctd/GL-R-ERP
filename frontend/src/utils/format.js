@@ -166,6 +166,25 @@ export function pricingRequestStatusLabel(status) {
     // Step 3 (CEO Selling Price Decision).
     CEO_REVIEWING: { label: 'CEO กำลังพิจารณาราคาขาย', tone: 'info' },
     APPROVED_FOR_QUOTATION: { label: 'อนุมัติราคาขายแล้ว', tone: 'success' },
+    // V141 (db/migration/V141__ceo_owns_pricing_costing.sql) retired this status outright: the
+    // CEO owns costing now, and PricingDecisionService.returnToImport (:438-460) sends the
+    // request straight to AWAITING_FACTORY_RESPONSE, never to a "revise the costing" state.
+    // Kept here for the SAME deploy-before-migration reason as the two neighbours above, and
+    // ONLY that reason: the frontend deploys separately from the backend, so a build can go
+    // live against a backend that still writes this status before V141 has run on the database
+    // it talks to. Delete the entry and such a row falls through to the raw enum string below.
+    //
+    // The OTHER reason one might assume — historical pricing_request_event rows, which V141 §5
+    // deliberately preserves — does NOT currently reach this map: every caller passes a pricing
+    // REQUEST's own status, never an event's from/to status. Verified 2026-08-14:
+    // DealStateHeader.jsx:136, DealQuotationPanel.jsx:299,
+    // PricingRequestQueuePage.jsx:53/98/123, PricingRequestPanel.jsx:134,
+    // PricingRequestDetailPage.jsx:547. If a history view ever renders event statuses through
+    // this function, this entry becomes load-bearing for that too.
+    //
+    // Nothing in mock mode can reach the label either any more: issue #741 stopped mockApi.js's
+    // returnPricingDecisionToImport writing it, and demoSales.js:615 seeds
+    // AWAITING_FACTORY_RESPONSE instead, with a comment explaining why.
     COSTING_REVISION_REQUIRED: { label: 'CEO ตีกลับให้แก้ไขต้นทุน', tone: 'danger' },
     // Step 4/5 (these two were missing — a pre-existing gap fixed alongside adding
     // QUOTATION_ACCEPTED; QUOTATION_ISSUED fell back to the raw status string before).
