@@ -9,6 +9,8 @@ export const API_ROUTES = {
     list: '/api/employees',
     create: '/api/employees',
     detail: (id) => `/api/employees/${id}`,
+    // HR-only temporary-password issue. Mirrors EmployeeController#resetPassword.
+    resetPassword: (id) => `/api/employees/${id}/reset-password`,
   },
   profileRequests: {
     list: '/api/profile-requests',
@@ -286,6 +288,9 @@ export const API_ROUTES = {
       overrideContinue: (id) => `/api/payroll/deduction-obligations/${id}/override-continue`,
       clearOverride: (id) => `/api/payroll/deduction-obligations/${id}/clear-override`,
     },
+    // Read-only garnishment shortfall ledger (issue #376). Mirrors
+    // PayrollDeductionShortfallController. Optional employeeId / kind query params.
+    deductionShortfalls: '/api/payroll/deduction-shortfalls',
   },
   priceImport: {
     factories: '/api/price-import/factories',

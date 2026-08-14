@@ -660,6 +660,55 @@ export function buildDemoDeductionObligations(employees) {
   ];
 }
 
+// ── Garnishment shortfall ledger (db.deductionShortfalls) — mirrors the rows
+// DeductionObligationService#recordGarnishmentShortfalls writes on every payroll run, and read
+// back by PayrollDeductionShortfallController (issue #376).
+//
+// deductionKind is PayrollDeductionKind, which is NOT the same enum as the obligation's `kind`
+// above. Only LEGAL_EXECUTION_GARNISHMENT can ever appear: recordGarnishmentShortfalls writes that
+// value exclusively, and its javadoc excludes STUDENT_LOAN deliberately — no cap is enforced
+// against กยศ., so requested always equals actual and there is nothing to record. Seeding any
+// other kind here would make the fixture more populated than production, which is precisely the
+// lie CLAUDE.md warns about.
+//
+// A row exists only where the ป.วิ.พ. ม.302 cap bit, so shortfallAmount is always
+// requestedAmount - actualAmount and always > 0 (a zero shortfall is DELETED, never stored).
+// shortfallReason reproduces the sentence recordGarnishmentShortfalls actually builds.
+export function buildDemoDeductionShortfalls(employees) {
+  const now = new Date().toISOString();
+  const reason = (type, requested, actual) => (
+    `ป.วิ.พ. ม.302 -- เพดานการอายัดเงินเดือนตามประเภท ${type} (PayrollGarnishmentType): `
+    + `ขอหักงวดนี้ ฿${requested.toFixed(2)} แต่กฎหมายอนุญาตให้หักได้จริงเพียง ฿${actual.toFixed(2)} `
+    + `ส่วนต่าง ฿${(requested - actual).toFixed(2)} ยังไม่ได้ส่งให้เจ้าหนี้ตามหมายบังคับคดี `
+    + 'ต้องพิจารณาในงวดถัดไปหรือแจ้งเจ้าพนักงานบังคับคดี'
+  );
+  const row = ({ id, employee, payrollMonth, requested, actual, garnishmentType, payrollPeriodId }) => ({
+    id,
+    employeeId: employee.id,
+    employeeCode: employee.code,
+    employeeName: employee.nameTh,
+    payrollMonth,
+    deductionKind: 'LEGAL_EXECUTION_GARNISHMENT',
+    requestedAmount: requested,
+    actualAmount: actual,
+    shortfallAmount: Number((requested - actual).toFixed(2)),
+    shortfallReason: reason(garnishmentType, requested, actual),
+    payrollPeriodId,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return [
+    // employees[2] carries obligation #3 (บค-2569-004410) above — the same person short two
+    // months running is the case HR most needs to see.
+    row({ id: 1, employee: employees[2], payrollMonth: '2026-07-01', requested: 5000, actual: 3120.5, garnishmentType: 'SALARY', payrollPeriodId: 7 }),
+    row({ id: 2, employee: employees[2], payrollMonth: '2026-06-01', requested: 5000, actual: 4210, garnishmentType: 'SALARY', payrollPeriodId: 6 }),
+    row({ id: 3, employee: employees[19], payrollMonth: '2026-07-01', requested: 4000, actual: 1875.25, garnishmentType: 'SALARY', payrollPeriodId: 7 }),
+    row({ id: 4, employee: employees[24], payrollMonth: '2026-06-01', requested: 3500, actual: 2940, garnishmentType: 'BONUS', payrollPeriodId: 6 }),
+    row({ id: 5, employee: employees[19], payrollMonth: '2026-05-01', requested: 4000, actual: 2600, garnishmentType: 'SALARY', payrollPeriodId: 5 }),
+  ];
+}
+
 // ── Payroll input drafts (db.payrollInputDrafts, a Map keyed `${employeeId}-${payrollMonth}`) —
 // saving a draft performs no calculation, so this is genuinely fake-able.
 export function buildDemoPayrollInputDrafts(employees) {

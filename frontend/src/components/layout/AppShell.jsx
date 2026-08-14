@@ -202,7 +202,15 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     { path: '/settings/attendance-calendar', label: 'ปฏิทินวันหยุด & ตารางงาน', helper: 'Holiday & work-schedule calendar', icon: 'calendar', group: 'hr', show: hasPermission(user.role, 'canManageAttendanceCalendar') },
     // Split (issue #390): nav visibility follows read access (hr+ceo); CEO lands on a read-only
     // view of the same page (PayrollPage.jsx gates writes on canManagePayroll internally).
-    { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canViewPayroll') },
+    // `exact` because /payroll/deduction-shortfalls below is a SIBLING item, not a detail page of
+    // this one — without it prefix matching would light both rows at once (see Sidebar.jsx).
+    { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', group: 'finance', exact: true, show: hasPermission(user.role, 'canViewPayroll') },
+    // Garnishment shortfall ledger (issue #376's read surface). Same audience as /payroll —
+    // canViewPayroll is hr+ceo, mirroring the endpoint's own hasAnyRole('HR','CEO').
+    // `fileText`, not `triangleAlert`: that glyph already means "live warning" across six feature
+    // surfaces (PayrollPage, TaxAllowanceReviewPage, SpecialMoneyPanel …), and no other nav item
+    // uses it. Permanent navigation chrome pointing at a routine ledger would dilute it.
+    { path: '/payroll/deduction-shortfalls', label: 'ยอดค้างหักตามหมายบังคับคดี', helper: 'Deduction shortfalls', icon: 'fileText', group: 'finance', show: hasPermission(user.role, 'canViewPayroll') },
     { path: '/attendance', label: 'เวลาทำงาน', helper: 'Attendance', icon: 'calendar', group: 'self', show: true },
     // Combined OT + welfare/special-money page (RequestsPage.jsx, tabs carried
     // in ?tab=). `match` keeps this item highlighted on both /employee-requests and

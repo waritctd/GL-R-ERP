@@ -22,6 +22,12 @@ export const api = {
     create: (payload) => apiRequest(API_ROUTES.employees.create, { method: 'POST', body: payload }),
     get: (id) => apiRequest(API_ROUTES.employees.detail(id)),
     update: (id, payload) => apiRequest(API_ROUTES.employees.detail(id), { method: 'PATCH', body: payload }),
+    // HR-only. Mints a fresh temporary password, stores only its BCrypt hash, and sets
+    // must_change_password = TRUE (EmployeeAuthRepository#setTemporaryPassword), so the employee is
+    // forced through ChangePasswordModal at next login. Resolves `{ temporaryPassword }` —
+    // the plaintext is returned ONCE and is not retrievable afterwards, so the caller must show it
+    // to the operator immediately and must never log, cache or persist it.
+    resetPassword: (id) => apiRequest(API_ROUTES.employees.resetPassword(id), { method: 'POST' }),
   },
   profileRequests: {
     list: () => apiRequest(API_ROUTES.profileRequests.list),
@@ -623,6 +629,10 @@ export const api = {
       apiRequest(API_ROUTES.payroll.deductionObligations.overrideContinue(id), { method: 'POST', body: { reason } }),
     clearDeductionObligationOverride: (id) =>
       apiRequest(API_ROUTES.payroll.deductionObligations.clearOverride(id), { method: 'POST' }),
+    // Garnishment shortfall ledger (issue #376). hr + ceo, read-only — rows are written only by
+    // DeductionObligationService#recordGarnishmentShortfalls during a payroll run. Optional
+    // `employeeId` / `kind` params; the server applies no LIMIT and no pagination.
+    getDeductionShortfalls: (params) => apiRequest(withQuery(API_ROUTES.payroll.deductionShortfalls, params)),
   },
   priceImport: {
     factories: () => apiRequest(API_ROUTES.priceImport.factories),
