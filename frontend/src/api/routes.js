@@ -182,9 +182,10 @@ export const API_ROUTES = {
   pricingFormulaConfig: {
     get: '/api/pricing-formula-config',
     update: '/api/pricing-formula-config',
-    // Per-row freight add (issue #436, PR #455). Returns the WHOLE config as a NEW version — every
-    // freightRateId is reissued. Mirrors PricingFormulaConfigController.
+    // Per-row freight add/delete (issue #436, PR #455). Both return the WHOLE config as a NEW
+    // version — every freightRateId is reissued. Mirrors PricingFormulaConfigController.
     freightRates: '/api/pricing-formula-config/freight-rates',
+    freightRate: (freightRateId) => `/api/pricing-formula-config/freight-rates/${freightRateId}`,
   },
   attachments: {
     list: (ticketId) => `/api/tickets/${ticketId}/attachments`,

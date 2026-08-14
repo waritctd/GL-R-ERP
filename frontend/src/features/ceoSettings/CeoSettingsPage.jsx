@@ -591,6 +591,39 @@ function AddFreightRateModal({ prefill, saving, onClose, onSubmit }) {
   );
 }
 
+/**
+ * Issue #436: freight-row delete confirmation. Deliberately does NOT compute deletability
+ * client-side — "only the top or bottom band of a ladder can be removed" lives in
+ * validateRemovalLeavesNoInteriorGap (mirrored in mockApi.js from
+ * PricingFormulaConfigController), and reimplementing it here would be a second, unguarded
+ * copy. The server's Thai 400/404 surfaces verbatim through the existing showToast('error', ...)
+ * path if this row turns out not to be an edge row after all.
+ */
+function DeleteFreightRateModal({ rate, deleting, onClose, onConfirm }) {
+  return (
+    <Modal
+      title="ยืนยันการลบค่าขนส่ง"
+      onClose={onClose}
+      footer={
+        <>
+          <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
+          <Button type="button" variant="danger" disabled={deleting} onClick={onConfirm}>
+            {deleting ? 'กำลังลบ…' : 'ลบค่าขนส่ง'}
+          </Button>
+        </>
+      }
+    >
+      <p className="m-0 text-sm">
+        ลบค่าขนส่ง <strong>{rate.originCountry}</strong> หนา {thicknessBandLabel(rate.thicknessMinMm, rate.thicknessMaxMm)}{' '}
+        ช่วง {qtyBandLabel(rate.qtyMinSqm, rate.qtyMaxSqm)} จำนวน <strong>{moneyDisplay(rate.amountThb)} บาท</strong> ใช่หรือไม่?
+      </p>
+      <p className="m-0 mt-2 text-2xs text-text-muted">
+        ลบได้เฉพาะช่วงบนสุดหรือล่างสุดของแต่ละช่วงความหนา/จำนวนเท่านั้น — หากลบช่วงกลางไม่ได้ ระบบจะแจ้งเหตุผลให้ทราบ
+      </p>
+    </Modal>
+  );
+}
+
 export function CeoSettingsPage({ showToast }) {
   const queryClient = useQueryClient();
 
@@ -609,6 +642,8 @@ export function CeoSettingsPage({ showToast }) {
   // Issue #436: freight-row add. null = closed; an object (possibly {}) = open, with the object's
   // fields prefilling the form when opened from a specific blank cell.
   const [addFreightPrefill, setAddFreightPrefill] = useState(null);
+  // Issue #436: freight-row delete confirmation. null = closed; the freight row object = open.
+  const [deletingFreightRate, setDeletingFreightRate] = useState(null);
 
   const fxRatesQuery = useQuery({
     queryKey: queryKeys.fxRates(),
@@ -716,6 +751,18 @@ export function CeoSettingsPage({ showToast }) {
       setAddFreightPrefill(null);
     },
     onError: (e) => showToast('error', e.message || 'เพิ่มค่าขนส่งไม่สำเร็จ'),
+  });
+
+  // Issue #436: deletes one freight row as a new config version. Remember every freightRateId has
+  // changed after this — setQueryData (not invalidateQueries), same reasoning as add above.
+  const deleteFreightRateMutation = useMutation({
+    mutationFn: (freightRateId) => api.pricingFormulaConfig.deleteFreightRate(freightRateId),
+    onSuccess: (data) => {
+      queryClient.setQueryData(queryKeys.pricingFormulaConfig(), data.formulaConfig);
+      showToast('success', 'ลบค่าขนส่งแล้ว');
+      setDeletingFreightRate(null);
+    },
+    onError: (e) => showToast('error', e.message || 'ลบค่าขนส่งไม่สำเร็จ'),
   });
 
   if (loading) return <div className="p-10 text-text-muted">กำลังโหลดการตั้งค่าการคำนวณราคา…</div>;
@@ -960,7 +1007,24 @@ export function CeoSettingsPage({ showToast }) {
                               const cellLabel = `${country} หนา ${thicknessBandLabel(thickness.min, thickness.max)} ช่วง ${qtyBandLabel(qty.min, qty.max)}`;
                               return (
                                 <td key={cellKey} className="px-2.5 py-1.5">
-                                  {rate ? moneyDisplay(rate.amountThb) : (
+                                  {rate ? (
+                                    <span className="flex items-center gap-1.5 whitespace-nowrap">
+                                      <span>{moneyDisplay(rate.amountThb)}</span>
+                                      {/* Always visible, not hover-only — hover does not exist on
+                                          touch. Deletability (edge rows only) is NOT computed here;
+                                          see validateRemovalLeavesNoInteriorGap's mirror in
+                                          mockApi.js and the confirm modal's own comment for why. */}
+                                      <Button
+                                        type="button"
+                                        variant="secondary"
+                                        className="px-1 py-0 text-2xs leading-none text-danger"
+                                        aria-label={`ลบค่าขนส่ง ${cellLabel}`}
+                                        onClick={() => setDeletingFreightRate(rate)}
+                                      >
+                                        ×
+                                      </Button>
+                                    </span>
+                                  ) : (
                                     <Button
                                       type="button"
                                       variant="secondary"
@@ -1058,6 +1122,17 @@ export function CeoSettingsPage({ showToast }) {
           saving={addFreightRateMutation.isPending}
           onClose={() => setAddFreightPrefill(null)}
           onSubmit={(payload) => addFreightRateMutation.mutate(payload)}
+        />
+      )}
+
+      {/* Issue #436: Delete Freight Rate confirmation — same read-only-matrix-only placement as
+          the add modal above. */}
+      {deletingFreightRate && (
+        <DeleteFreightRateModal
+          rate={deletingFreightRate}
+          deleting={deleteFreightRateMutation.isPending}
+          onClose={() => setDeletingFreightRate(null)}
+          onConfirm={() => deleteFreightRateMutation.mutate(deletingFreightRate.freightRateId)}
         />
       )}
     </PageStack>

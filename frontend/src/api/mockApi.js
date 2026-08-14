@@ -657,6 +657,51 @@ function validateFreightRates(rows) {
   }
 }
 
+/**
+ * Mirrors PricingFormulaConfigController#validateRemovalLeavesNoInteriorGap: a row is deletable
+ * only at the lowest or highest qtyMinSqm of its (country, thickness) ladder — and, only when it
+ * is the last row of its thickness band, that thickness band must itself be the lowest or highest
+ * for the country. Trimming an edge is how V109's own seed is shaped (every existing hole is a
+ * trailing one); punching a hole in the middle would silently mis-price an order that lands there.
+ */
+function validateFreightRemovalLeavesNoInteriorGap(all, target) {
+  const sameThicknessBand = all
+    .filter((r) => r.originCountry === target.originCountry
+      && r.thicknessMinMm === target.thicknessMinMm && r.thicknessMaxMm === target.thicknessMaxMm)
+    .sort((a, b) => a.qtyMinSqm - b.qtyMinSqm);
+
+  if (sameThicknessBand.length > 1) {
+    // Compare by id, not by value: two rows can share a qtyMinSqm only if they overlap, which
+    // validateFreightRates already rejects, but an id comparison cannot be fooled either way.
+    const lowestId = sameThicknessBand[0].freightRateId;
+    const highestId = sameThicknessBand[sameThicknessBand.length - 1].freightRateId;
+    if (target.freightRateId !== lowestId && target.freightRateId !== highestId) {
+      fail(
+        `ลบไม่ได้: จะทำให้ช่วงจำนวน (ตร.ม.) ขาดตอนตรงกลาง — ${target.originCountry} `
+        + `หนา ${target.thicknessMinMm}-${target.thicknessMaxMm} มม. ช่วง `
+        + `${target.qtyMinSqm}-${target.qtyMaxSqm ?? 'ไม่จำกัด'} ตร.ม. ลบได้เฉพาะช่วงบนสุดหรือล่างสุด`,
+        400,
+      );
+    }
+    return;
+  }
+
+  // The row is the last one in its thickness band, so removing it empties that band. Apply the
+  // same edge-only rule one level up, across the country's thickness ladder.
+  const thicknessMins = [...new Set(
+    all.filter((r) => r.originCountry === target.originCountry).map((r) => r.thicknessMinMm),
+  )].sort((a, b) => a - b);
+  if (thicknessMins.length > 1
+    && thicknessMins[0] !== target.thicknessMinMm
+    && thicknessMins[thicknessMins.length - 1] !== target.thicknessMinMm) {
+    fail(
+      `ลบไม่ได้: จะทำให้ช่วงความหนาขาดตอนตรงกลาง — ${target.originCountry} `
+      + `หนา ${target.thicknessMinMm}-${target.thicknessMaxMm} มม. ลบได้เฉพาะช่วงความหนาบนสุดหรือล่างสุด`,
+      400,
+    );
+  }
+}
+
 // R5: Attachments
 const mockAttachments = [];
 let mockAttachSeq = 1;
@@ -7628,10 +7673,11 @@ export const api = {
   // price calculator, untouched). get() mirrors READ_ROLES = ceo/import (same #388-style
   // rationale: this config IS the margin policy). update stays CEO-only.
   //
-  // addFreightRate (issue #436, PR #455) mirrors PricingFormulaConfigController.addFreightRate —
-  // also CEO-only, also strictly additive to the whole-config POST above (same versioning model,
-  // never an UPDATE of a stored row). Its validation is a NON-AUTHORITATIVE approximation; the
-  // server decides.
+  // addFreightRate/deleteFreightRate (issue #436, PR #455) mirror
+  // PricingFormulaConfigController.addFreightRate/deleteFreightRate — also CEO-only, also strictly
+  // additive to the whole-config POST above (same versioning model: neither one UPDATEs or
+  // DELETEs a stored row in place, both write a complete new version). Their validation is a
+  // NON-AUTHORITATIVE approximation; the server decides.
   pricingFormulaConfig: {
     async get() {
       hasRole('ceo', 'import');
@@ -7653,6 +7699,18 @@ export const api = {
       };
       validateFreightRates([...current.freightRates, newRow]);
       const newConfig = createNewFormulaConfigVersion(current, [...current.freightRates, newRow]);
+      return delay({ formulaConfig: sortedFormulaConfig(newConfig) });
+    },
+    async deleteFreightRate(freightRateId) {
+      hasRole('ceo');
+      const current = currentFormulaConfig();
+      if (!current) fail('ไม่พบสูตรคำนวณราคาขาย', 404);
+      const target = current.freightRates.find((r) => r.freightRateId === Number(freightRateId));
+      if (!target) fail('ไม่พบค่าขนส่งที่ต้องการลบในสูตรปัจจุบัน', 404);
+      if (current.freightRates.length === 1) fail('ต้องมีค่าขนส่งอย่างน้อย 1 รายการ', 400);
+      validateFreightRemovalLeavesNoInteriorGap(current.freightRates, target);
+      const remaining = current.freightRates.filter((r) => r.freightRateId !== target.freightRateId);
+      const newConfig = createNewFormulaConfigVersion(current, remaining);
       return delay({ formulaConfig: sortedFormulaConfig(newConfig) });
     },
     async update(payload) {

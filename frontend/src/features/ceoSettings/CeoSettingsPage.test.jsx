@@ -21,6 +21,7 @@ vi.mock('../../api/index.js', () => ({
       get: vi.fn(),
       update: vi.fn(),
       addFreightRate: vi.fn(),
+      deleteFreightRate: vi.fn(),
     },
   },
 }));
@@ -109,6 +110,9 @@ describe('CeoSettingsPage', () => {
     api.pricingFormulaConfig.get.mockResolvedValue({ formulaConfig: sampleFormulaConfig() });
     api.pricingFormulaConfig.update.mockResolvedValue({ formulaConfig: { ...sampleFormulaConfig(), version: 2 } });
     api.pricingFormulaConfig.addFreightRate.mockResolvedValue({ formulaConfig: { ...sampleFormulaConfig(), version: 2 } });
+    api.pricingFormulaConfig.deleteFreightRate.mockResolvedValue({
+      formulaConfig: { ...sampleFormulaConfig(), version: 2, freightRates: [] },
+    });
   });
 
   it('renders fx rates from a mocked api.fxRates.list', async () => {
@@ -392,6 +396,64 @@ describe('CeoSettingsPage', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: 'เพิ่มค่าขนส่ง' }));
 
       await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('ซ้อนทับกัน')));
+    });
+  });
+
+  // Issue #436, commit 4: freight-row DELETE. Same read-only-matrix-only placement as add.
+  // sampleFormulaConfig's single populated cell (China, freightRateId 1) is the row under test in
+  // every case below -- its delete control's accessible name is matched by PREFIX regex rather
+  // than the literal en-dash-bearing band labels, so a transcription slip in a dash character
+  // cannot make these tests pass or fail for the wrong reason.
+  describe('freight-row delete (issue #436)', () => {
+    async function openDeleteConfirm() {
+      const deleteButton = await screen.findByRole('button', { name: /^ลบค่าขนส่ง China/ });
+      fireEvent.click(deleteButton);
+      return screen.findByRole('dialog', { name: 'ยืนยันการลบค่าขนส่ง' });
+    }
+
+    it('renders a delete control on a populated cell; clicking it opens a confirmation naming that row', async () => {
+      renderCeoSettingsPage();
+      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+
+      const dialog = await openDeleteConfirm();
+      expect(within(dialog).getByText(/China/)).not.toBeNull();
+      expect(within(dialog).getByText(/60,000\.00 บาท/)).not.toBeNull();
+    });
+
+    it("confirming calls deleteFreightRate with that row's freightRateId exactly once", async () => {
+      renderCeoSettingsPage();
+      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+
+      const dialog = await openDeleteConfirm();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ลบค่าขนส่ง' }));
+
+      await waitFor(() => expect(api.pricingFormulaConfig.deleteFreightRate).toHaveBeenCalledWith(1));
+      expect(api.pricingFormulaConfig.deleteFreightRate).toHaveBeenCalledTimes(1);
+    });
+
+    it('cancelling the confirmation calls nothing', async () => {
+      renderCeoSettingsPage();
+      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+
+      const dialog = await openDeleteConfirm();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
+
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันการลบค่าขนส่ง' })).toBeNull());
+      expect(api.pricingFormulaConfig.deleteFreightRate).not.toHaveBeenCalled();
+    });
+
+    it('surfaces a server 400 (interior gap) through showToast', async () => {
+      const showToast = vi.fn();
+      api.pricingFormulaConfig.deleteFreightRate.mockRejectedValue(new Error(
+        'ลบไม่ได้: จะทำให้ช่วงจำนวน (ตร.ม.) ขาดตอนตรงกลาง — China หนา 3-7 มม. ช่วง 1-100 ตร.ม. ลบได้เฉพาะช่วงบนสุดหรือล่างสุด',
+      ));
+      renderCeoSettingsPage(showToast);
+      await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
+
+      const dialog = await openDeleteConfirm();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ลบค่าขนส่ง' }));
+
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('ขาดตอนตรงกลาง')));
     });
   });
 

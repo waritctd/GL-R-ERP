@@ -236,11 +236,6 @@ const SERVER_ONLY = {
   'POST /api/pricing-requests/{}/factory-purchase-orders': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
 
   // ── Built backend-first; the UI pass has not landed ───────────────────────
-  'DELETE /api/pricing-formula-config/freight-rates/{}':
-    'Per-row add/delete for the freight matrix (issue #436, PR #455 — which touched 3 backend files and 0 frontend). '
-    + 'CeoSettingsPage.jsx still edits freight AMOUNT ONLY through the whole-config write, so V109\'s six blank cells '
-    + 'remain unfillable and a new origin country still needs a migration — the exact gap #436 set out to close. '
-    + 'Covered by PricingFormulaConfigControllerTest and PricingFormulaConfigFreightRowIntegrationTest.',
   'GET /api/payroll/deduction-consents': 'Written-consent record, issue #376. See the PUT entry below.',
   'PUT /api/payroll/deduction-consents':
     'HR bookkeeping of which deductions have written employee consent on file (issue #376, PR #411). Deliberately a '
