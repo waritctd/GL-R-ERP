@@ -433,6 +433,11 @@ export const api = {
     // hand-typed { salesRepId, kind, amount, reason, payrollMonth } — no invoice, never touches
     // the tier calc. Mirrors CommissionController#createManual / ManualCommissionRequest verbatim.
     createManualCommission: (payload) => apiRequest(API_ROUTES.commissions.manual, { method: 'POST', body: payload }),
+    // Issue #737: the manual-commission rep picker's data source -- active employees in ฝ่ายขาย,
+    // the SAME list for sales_manager and ceo alike (owner ruling). The full rule lives on
+    // CommissionService#listManualCommissionRepOptions, not repeated here.
+    // Mirrors CommissionController#reps.
+    reps: () => apiRequest(API_ROUTES.commissions.reps),
     approve: (id) => apiRequest(API_ROUTES.commissions.approve(id), { method: 'POST' }),
     reject: (id, payload = {}) => apiRequest(API_ROUTES.commissions.reject(id), { method: 'POST', body: payload }),
     clawback: (id, payload) => apiRequest(API_ROUTES.commissions.clawback(id), { method: 'POST', body: payload }),

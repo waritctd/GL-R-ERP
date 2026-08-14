@@ -324,6 +324,82 @@ public class CommissionRepository {
         return Boolean.TRUE.equals(value);
     }
 
+    /**
+     * Issue #737, SCOPE per owner ruling 2026-08-14 (2nd ruling, supersedes the per-caller
+     * division scoping this method briefly had): the manual-commission rep picker's data source
+     * for BOTH {@code sales_manager} and {@code ceo} — every ACTIVE employee in ฝ่ายขาย, i.e. the
+     * set of people who actually earn commission. Division MEMBERSHIP, not "has a commission
+     * record on file" — a brand-new rep, or a sales manager never yet paid one, still appears.
+     * See {@link CommissionService#listManualCommissionRepOptions}, which calls this once for
+     * both roles with no other branching left.
+     *
+     * <p><b>Identifying ฝ่ายขาย reproduces {@code DivisionAccessPolicy#roleFor}'s real
+     * derivation, not an approximation of it</b> — {@code salesDivisionCode} must be {@link
+     * th.co.glr.hr.auth.DivisionAccessPolicy#SALES_DIVISION_CODE}, the exact same constant
+     * {@code roleFor} itself uses, so the picker cannot silently drift from who the login system
+     * actually calls {@code sales}/{@code sales_manager}. The comparison mirrors {@code
+     * DivisionAccessPolicy#divisionCode(EmployeeLoginRecord)} statement for statement:
+     * {@code source_code} wins if present ({@code NULLIF(TRIM(...), '')}, matching Java's
+     * blank-is-absent {@code firstText}/{@code isBlank} check); otherwise the division name's
+     * prefix before its first {@code '-'} ({@code split_part(name_th, '-', 1)}, matching Java's
+     * {@code prefix()} — Postgres returns the whole string when the delimiter is absent, exactly
+     * like {@code prefix()} does), lower-cased and trimmed either way. Confirmed against real
+     * code, not assumed: {@code EmployeeAuthRepository} selects {@code d.source_code AS
+     * division_code} and {@code d.name_th AS division_name} — that IS the mapping {@code
+     * DivisionAccessPolicy} runs on.
+     *
+     * <p><b>One known divergence, and it is one-directional.</b> Postgres {@code TRIM()} strips
+     * spaces only, while Java {@code trim()} strips every character {@code <= U+0020} and {@code
+     * isBlank()} uses Unicode whitespace. So a {@code source_code} of {@code "\tSA"} is ฝ่ายขาย to
+     * {@code DivisionAccessPolicy} and NOT ฝ่ายขาย to this query. Divergences of this shape make
+     * the SQL strictly the stricter of the two, so they can only DROP someone from the picker (who
+     * stays reachable via the form's numeric Employee-ID field), never add someone who should not
+     * be listed. A case found in the OTHER direction would be a real disclosure bug and would mean
+     * this paragraph is wrong — treat it that way rather than widening the SQL to match.
+     *
+     * <p><b>{@code JOIN}, not {@code LEFT JOIN}, deliberately.</b> {@code hr.employee.division_id}
+     * is nullable; an employee with no division has no row to join against and is silently
+     * dropped by this {@code JOIN} — which is the CORRECT outcome (they cannot be "in ฝ่ายขาย"
+     * with no division at all), not an accident of the join type. Said here so a future reader
+     * does not "fix" it into a {@code LEFT JOIN} and let a no-division employee leak in as a
+     * NULL-comparison false negative that happens to also exclude them today for a different,
+     * more fragile reason.
+     *
+     * <p>Two load-bearing choices carried over unchanged from the earlier per-role split:
+     * <ul>
+     *   <li><b>No LIMIT, ever.</b> A cap here would truncate the picker silently — the exact
+     *       failure mode issue #737 reports for the ticket-derived list this replaced.</li>
+     *   <li><b>{@code ORDER BY display_name, e.employee_id} is TOTAL</b> (a tie-break on a unique
+     *       column), so the result order never depends on Postgres's undefined tie-break and a
+     *       future LIMIT/paging change cannot silently reorder it. Postgres's default collation
+     *       sorts the Thai {@code display_name} here — the frontend must NOT re-sort client-side
+     *       (see {@code CommissionPage.jsx}'s rep-picker effect).</li>
+     * </ul>
+     *
+     * <p>{@code employee_code} is selected only because {@code display_name}'s {@code COALESCE}
+     * falls back to it for an employee with no Thai name — it is deliberately NOT mapped into its
+     * own {@link CommissionRepOptionDto} component. See that record's javadoc: showing
+     * {@code employee_code} next to {@code employee_id} in the picker let a user mistake one for
+     * the other and hit a raw FK violation (500) instead of a validation message.
+     */
+    public List<CommissionRepOptionDto> findActiveSalesRepOptions(String salesDivisionCode) {
+        return jdbc.query("""
+            SELECT e.employee_id,
+                   e.employee_code,
+                   COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), e.employee_code) AS display_name
+              FROM hr.employee e
+              JOIN hr.division d ON d.division_id = e.division_id
+             WHERE e.is_active
+               AND LOWER(TRIM(COALESCE(NULLIF(TRIM(d.source_code), ''), split_part(d.name_th, '-', 1)))) = :salesDivisionCode
+             ORDER BY display_name, e.employee_id
+            """,
+            new MapSqlParameterSource().addValue("salesDivisionCode", salesDivisionCode),
+            (rs, rowNum) -> new CommissionRepOptionDto(
+                rs.getLong("employee_id"),
+                rs.getString("display_name")
+            ));
+    }
+
     public List<Long> findSalesManagerApproverEmployeeIds() {
         return jdbc.query("""
             SELECT e.employee_id
